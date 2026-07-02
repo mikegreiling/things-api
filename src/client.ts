@@ -5,8 +5,10 @@ import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import { compareToBaseline, observeSchema, type FingerprintStatus } from "./db/fingerprint.ts";
 import { locateThingsDb } from "./db/locate.ts";
-import type { Area, Project, Tag } from "./model/entities.ts";
+import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
+import { byUuid } from "./read/detail.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
+import { snapshotView, type Snapshot } from "./read/snapshot.ts";
 import { areasView, tagsView } from "./read/tags.ts";
 import {
   anytimeView,
@@ -44,6 +46,8 @@ export interface ThingsClient {
     areas(): Area[];
     tags(): Tag[];
     search(query: string, options?: { limit?: number }): ListItem[];
+    byUuid(uuid: string): AnyTask | null;
+    snapshot(): Snapshot;
   };
   close(): void;
 }
@@ -73,6 +77,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),
+      byUuid: (uuid) => byUuid(conn.db, uuid),
+      snapshot: () => snapshotView(conn.db),
     },
     close: () => conn.close(),
   };

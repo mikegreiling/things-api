@@ -123,16 +123,6 @@ export function registerReadCommands(program: Command): void {
       description: "Someday items (incubated, undated)",
       fetch: (c) => c.read.someday(),
     },
-    {
-      name: "logbook",
-      description: "Completed and canceled items, most recent first (--limit)",
-      fetch: (c) => c.read.logbook(),
-    },
-    {
-      name: "trash",
-      description: "Trashed items (trashed=1 flag, any status)",
-      fetch: (c) => c.read.trash(),
-    },
   ];
 
   for (const cmd of listCommands) {
@@ -143,6 +133,36 @@ export function registerReadCommands(program: Command): void {
       .option("--db <path>", "explicit database path")
       .action((opts: GlobalReadOpts) => {
         withClient(opts, cmd.name, cmd.fetch, (cmd.render ?? renderList) as (d: never) => string[]);
+      });
+  }
+
+  for (const cmd of [
+    {
+      name: "logbook",
+      description: "Completed and canceled items, most recent first",
+      fetch: (c: ThingsClient, limit: number) => c.read.logbook({ limit }),
+      defaultLimit: 100,
+    },
+    {
+      name: "trash",
+      description: "Trashed items (trashed=1 flag, any status), most recently modified first",
+      fetch: (c: ThingsClient, limit: number) => c.read.trash({ limit }),
+      defaultLimit: 200,
+    },
+  ]) {
+    program
+      .command(cmd.name)
+      .description(cmd.description)
+      .option("--limit <n>", "maximum items to return", String(cmd.defaultLimit))
+      .option("--json", "emit versioned JSON envelope on stdout")
+      .option("--db <path>", "explicit database path")
+      .action((opts: GlobalReadOpts & { limit: string }) => {
+        withClient(
+          opts,
+          cmd.name,
+          (c) => cmd.fetch(c, Number(opts.limit)),
+          renderList as (d: never) => string[],
+        );
       });
   }
 
