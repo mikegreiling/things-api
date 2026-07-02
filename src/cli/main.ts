@@ -11,6 +11,8 @@ import { Command } from "commander";
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
+import { registerSnapshot } from "./commands/snapshot.ts";
+import { registerTodoCommands } from "./commands/todo.ts";
 import { ExitCode } from "./exit-codes.ts";
 
 const AGENT_NOTES = `
@@ -32,6 +34,8 @@ export function buildProgram(): Command {
   registerDoctor(program);
   registerReadCommands(program);
   registerProjectCommands(program);
+  registerTodoCommands(program);
+  registerSnapshot(program);
   return program;
 }
 
