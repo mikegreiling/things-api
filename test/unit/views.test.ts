@@ -46,6 +46,44 @@ describe("todayView", () => {
     expect(view.today.map((i) => i.title)).toEqual(["t1", "t2", "pending-promotion"]);
     expect(view.evening.map((i) => i.title)).toEqual(["e1"]);
   });
+
+  it("expires stale This Evening assignments back into Today proper (live-verified 2026-07-02)", () => {
+    fx = buildFixtureDb();
+    // Scheduled to This Evening on a PAST day and never done — the UI shows
+    // it in Today proper, not This Evening (the 6 phantom items from 2025-01-13).
+    seedTodo(fx.db, {
+      title: "stale-evening",
+      startDate: "2025-01-13",
+      evening: true,
+      todayIndex: 1,
+    });
+    seedTodo(fx.db, { title: "tonight", startDate: "2026-07-02", evening: true, todayIndex: 2 });
+
+    const view = todayView(fx.db, NOW);
+    expect(view.today.map((i) => i.title)).toEqual(["stale-evening"]);
+    expect(view.evening.map((i) => i.title)).toEqual(["tonight"]);
+    // raw assignment stays visible on the entity for both
+    expect(view.today[0]?.todaySection).toBe("evening");
+  });
+
+  it("badge mirrors the sidebar: deadline due/overdue vs other", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "overdue-dl", startDate: "2026-07-01", deadline: "2026-06-30" });
+    seedTodo(fx.db, { title: "due-today", startDate: "2026-07-01", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "future-dl", startDate: "2026-07-01", deadline: "2026-07-09" });
+    seedTodo(fx.db, { title: "no-dl", startDate: "2026-07-01" });
+
+    const view = todayView(fx.db, NOW);
+    expect(view.badge).toEqual({ dueOrOverdue: 2, other: 2 });
+  });
+
+  it("deadline-only items do NOT enter Today (badge-sum reconciliation finding)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "deadline-only", deadline: "2026-06-30" }); // no startDate
+    const view = todayView(fx.db, NOW);
+    expect(view.today).toHaveLength(0);
+    expect(view.evening).toHaveLength(0);
+  });
 });
 
 describe("list views", () => {

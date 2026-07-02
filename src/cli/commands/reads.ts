@@ -97,10 +97,15 @@ export function registerReadCommands(program: Command): void {
   }> = [
     {
       name: "today",
-      description: "The Today list, split into Today and This Evening, in UI order",
+      description:
+        "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
       fetch: (c) => c.read.today(),
-      render: (data: { today: ListItem[]; evening: ListItem[] }) => [
-        "── Today ──",
+      render: (data: {
+        today: ListItem[];
+        evening: ListItem[];
+        badge: { dueOrOverdue: number; other: number };
+      }) => [
+        `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
         ...renderList(data.today),
         "── This Evening ──",
         ...renderList(data.evening),

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
+import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedTodo } from "../fixtures/seed.ts";
 
@@ -34,7 +35,9 @@ describe("cli end-to-end (fixture db)", () => {
   it("things today --json emits the versioned envelope with split sections", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: "2020-01-01", todayIndex: 1 });
-    seedTodo(fx.db, { title: "tonight", startDate: "2020-01-01", evening: true });
+    // evening membership requires startDate == today exactly (the CLI path
+    // uses the real clock, so seed the actual current date)
+    seedTodo(fx.db, { title: "tonight", startDate: localToday(), evening: true });
 
     const { stdout, exitCode } = runCli(["today", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
