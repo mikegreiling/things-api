@@ -10,3 +10,6 @@ vendor/*
 
 # Lab artifacts (evidence records, screenshots, guest DB copies)
 lab/artifacts/
+
+# Build artifacts (source + build.sh are the record)
+lab/guest/disruption-monitor/disruption-monitor
