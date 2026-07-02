@@ -32,7 +32,11 @@ interface TaskCommon {
   start: StartState;
   /** The "When" date (packed int in DB), null when unscheduled. */
   startDate: IsoDate | null;
-  /** Today vs This Evening; only meaningful when the item qualifies for Today. */
+  /**
+   * Raw This-Evening assignment (startBucket). Effective only while
+   * startDate == today — the UI rolls stale evening items back into Today
+   * proper. Use TodayView.evening for UI-faithful placement.
+   */
   todaySection: TodaySection | null;
   deadline: IsoDate | null;
   area: Ref | null;

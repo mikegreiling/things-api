@@ -5,8 +5,16 @@
  * - inbox:    start=0
  * - today:    startDate <= today AND start IN (1, 2) — start=2 rows with a
  *             past date are "pending promotion" (Things recomputes on launch;
- *             the UI shows them in Today either way). Split by startBucket,
- *             ordered by todayIndex (validated comparator).
+ *             the UI shows them in Today either way; promotion observed live
+ *             2026-07-02). Ordered by todayIndex (validated comparator).
+ *             THIS EVENING expires daily: an item renders in the Evening
+ *             section only when startBucket=1 AND startDate == today exactly;
+ *             overdue bucket=1 items roll back into Today proper (live-
+ *             verified against the UI, 2026-07-02).
+ *             Sidebar badge split: red = items with deadline <= today,
+ *             gray = the rest (exact 270/122 reconciliation on live data).
+ *             Deadline-only items (no qualifying startDate) do NOT enter
+ *             Today — proven by that same badge-sum reconciliation.
  * - anytime:  start=1 AND startDate IS NULL (strictly unscheduled active).
  * - upcoming: start=2 AND startDate > today (matches things.py semantics;
  *             repeating templates' next occurrences are NOT included — they
@@ -46,10 +54,13 @@ function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
 export interface TodayView {
   today: ListItem[];
   evening: ListItem[];
+  /** Mirrors the sidebar badge: red = deadline due/overdue, gray = the rest. */
+  badge: { dueOrOverdue: number; other: number };
 }
 
 export function todayView(db: DatabaseSync, now?: Date): TodayView {
-  const packedToday = encodePackedDate(localToday(now));
+  const todayIso = localToday(now);
+  const packedToday = encodePackedDate(todayIso);
   const rows = fetchTaskRows(
     db,
     `${OPEN} AND t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2)
@@ -57,9 +68,14 @@ export function todayView(db: DatabaseSync, now?: Date): TodayView {
     [packedToday],
   );
   const items = materialize(db, rows);
+  // Evening membership expires daily: raw startBucket=1 counts only while
+  // startDate is exactly today; stale evening items belong to Today proper.
+  const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
+  const dueOrOverdue = items.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
   return {
-    today: items.filter((i) => i.todaySection !== "evening"),
-    evening: items.filter((i) => i.todaySection === "evening"),
+    today: items.filter((i) => !isEvening(i)),
+    evening: items.filter(isEvening),
+    badge: { dueOrOverdue, other: items.length - dueOrOverdue },
   };
 }
 
