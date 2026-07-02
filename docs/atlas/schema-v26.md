@@ -64,7 +64,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 | Inbox | `start=0` — items keep tags/deadline/checklist and stay in Inbox until area/project/when assigned (validated "Inbox exit semantics") |
 | Today | `start IN (1,2) AND startDate <= <today>` — sorted by `todayIndex` ASC. **This Evening expires daily**: an item renders in the Evening section only while `startBucket=1 AND startDate == <today>` exactly; overdue evening items roll back into Today proper (live-verified 2026-07-02 against a UI screenshot — six 2025-01-13 `startBucket=1` stragglers rendered in Today proper, Evening empty). `start=2` rows with past dates are pending promotion; Things promoted them to `start=1` during observation. **Sidebar badge**: red count = Today items with `deadline <= today`, gray = the rest (exact 270/122 reconciliation). **Deadline alone does NOT put an item in Today** — proven by badge-sum reconciliation (12 open deadline-overdue-but-unscheduled items were excluded from the badge total). |
 | Upcoming | future `startDate` (grouped by day at render) |
-| Anytime | `start=1`, no qualifying today/future date; sorted by `index` |
+| Anytime | **All active items** — `start=1` (dated-current or undated) plus pending-promotion rows; **Today members render with a ★** (live-verified via screenshot 2026-07-02: starred = also in Today, unstarred = unscheduled). Sorted by `index` |
 | Someday | `start=2` |
 | Logbook | `status IN (2,3)`, ordered by `stopDate` DESC |
 | Trash | `trashed=1` (any status) |

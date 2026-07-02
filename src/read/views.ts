@@ -15,7 +15,10 @@
  *             gray = the rest (exact 270/122 reconciliation on live data).
  *             Deadline-only items (no qualifying startDate) do NOT enter
  *             Today — proven by that same badge-sum reconciliation.
- * - anytime:  start=1 AND startDate IS NULL (strictly unscheduled active).
+ * - anytime:  ALL active items — unscheduled PLUS Today members (the UI
+ *             renders Today members with a star; live-verified via screenshot
+ *             2026-07-02: starred = in Today, unstarred = unscheduled).
+ *             Star equivalence: startDate != NULL && <= today.
  * - upcoming: start=2 AND startDate > today (matches things.py semantics;
  *             repeating templates' next occurrences are NOT included — they
  *             are template rows, surfaced separately later).
@@ -84,12 +87,24 @@ export function inboxView(db: DatabaseSync): ListItem[] {
   return materialize(db, rows);
 }
 
-export function anytimeView(db: DatabaseSync): ListItem[] {
+export function anytimeView(db: DatabaseSync, now?: Date): ListItem[] {
+  const packedToday = encodePackedDate(localToday(now));
+  // Mirrors UI membership: every active item, including Today members
+  // (starred in the UI) and pending-promotion rows (start=2, past-dated).
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 1 AND t.startDate IS NULL ORDER BY t."index" ASC`,
+    `${OPEN} AND (
+       (t.start = 1 AND (t.startDate IS NULL OR t.startDate <= ?))
+       OR (t.start = 2 AND t.startDate IS NOT NULL AND t.startDate <= ?)
+     ) ORDER BY t."index" ASC`,
+    [packedToday, packedToday],
   );
   return materialize(db, rows);
+}
+
+/** The UI's star marker in Anytime: the item is also a Today member. */
+export function isTodayMember(item: ListItem, now?: Date): boolean {
+  return item.startDate !== null && item.startDate <= localToday(now);
 }
 
 export function upcomingView(db: DatabaseSync, now?: Date): ListItem[] {

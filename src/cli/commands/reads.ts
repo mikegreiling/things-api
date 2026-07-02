@@ -7,7 +7,7 @@ import type { Command } from "commander";
 import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
-import type { ListItem } from "../../read/views.ts";
+import { isTodayMember, type ListItem } from "../../read/views.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../output.ts";
 
@@ -114,8 +114,13 @@ export function registerReadCommands(program: Command): void {
     { name: "inbox", description: "Unprocessed captures (Inbox)", fetch: (c) => c.read.inbox() },
     {
       name: "anytime",
-      description: "Active, unscheduled items (Anytime, strictly unscheduled)",
+      description:
+        "All active items, mirroring the UI: Today members are starred (★), unscheduled items are not",
       fetch: (c) => c.read.anytime(),
+      render: (items: ListItem[]) =>
+        items.length === 0
+          ? ["(empty)"]
+          : items.map((i) => `${isTodayMember(i) ? "★" : " "} ${formatItem(i)}`),
     },
     {
       name: "upcoming",

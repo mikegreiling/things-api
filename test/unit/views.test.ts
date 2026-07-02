@@ -6,6 +6,7 @@ import { fetchTaskByUuid } from "../../src/read/queries.ts";
 import {
   anytimeView,
   inboxView,
+  isTodayMember,
   logbookView,
   somedayView,
   todayView,
@@ -90,14 +91,32 @@ describe("list views", () => {
   it("routes items to inbox/anytime/upcoming/someday by (start, startDate)", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "in-inbox", start: "inbox" });
-    seedTodo(fx.db, { title: "unscheduled", start: "active" });
+    seedTodo(fx.db, { title: "unscheduled", start: "active", index: 1 });
+    seedTodo(fx.db, {
+      title: "scheduled-today",
+      start: "active",
+      startDate: "2026-07-02",
+      index: 2,
+    });
     seedTodo(fx.db, { title: "future", start: "someday", startDate: "2026-07-10" });
     seedTodo(fx.db, { title: "incubating", start: "someday" });
 
     expect(inboxView(fx.db).map((i) => i.title)).toEqual(["in-inbox"]);
-    expect(anytimeView(fx.db).map((i) => i.title)).toEqual(["unscheduled"]);
+    // Anytime mirrors the UI: unscheduled AND Today members (starred in UI)
+    expect(anytimeView(fx.db, NOW).map((i) => i.title)).toEqual(["unscheduled", "scheduled-today"]);
     expect(upcomingView(fx.db, NOW).map((i) => i.title)).toEqual(["future"]);
     expect(somedayView(fx.db).map((i) => i.title)).toEqual(["incubating"]);
+  });
+
+  it("isTodayMember marks the UI star in Anytime", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "unscheduled", start: "active", index: 1 });
+    seedTodo(fx.db, { title: "starred", start: "active", startDate: "2026-07-01", index: 2 });
+    const items = anytimeView(fx.db, NOW);
+    expect(items.map((i) => [i.title, isTodayMember(i, NOW)])).toEqual([
+      ["unscheduled", false],
+      ["starred", true],
+    ]);
   });
 
   it("logbook orders by stopDate desc and excludes trashed", () => {
