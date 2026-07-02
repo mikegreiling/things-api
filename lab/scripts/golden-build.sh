@@ -24,8 +24,12 @@ echo "==> L0: clone + resize"
 tart clone "$LAB_BASE_IMAGE" "$VM"
 tart set "$VM" --cpu 4 --memory 8192
 
+trap 'echo "BUILD FAILED — golden VM left RUNNING for inspection (tart stop $VM when done)" >&2' ERR
+
 echo "==> boot"
-tart run "$VM" --no-graphics &
+# stdout/stderr redirected: an inherited pipe would hold downstream readers
+# open for the VM's whole lifetime (learned the hard way)
+tart run "$VM" --no-graphics >/dev/null 2>&1 &
 RUN_PID=$!
 IP="$(lab_wait_for_ssh "$VM" 240)"
 echo "==> guest IP: $IP"
@@ -54,7 +58,10 @@ lab_ssh "$IP" '
   sudo mv /tmp/things-extract/Things3.app /Applications/Things3.app
   rm -rf /tmp/Things3.zip /tmp/things-extract
   test -d /Applications/Things3.app && echo "Things installed (NOT launched)"
-  sdef /Applications/Things3.app > "$HOME/things-lab/artifacts/Things.sdef" && echo "sdef dumped"
+  # NOT the sdef(1) tool — it requires full Xcode, absent in vanilla guests.
+  # Things ships its dictionary as a bundle resource; copying it is equivalent.
+  cp /Applications/Things3.app/Contents/Resources/Things.sdef "$HOME/things-lab/artifacts/Things.sdef"
+  wc -c "$HOME/things-lab/artifacts/Things.sdef"
 '
 
 echo "==> metadata skeleton"
