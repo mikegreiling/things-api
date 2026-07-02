@@ -104,6 +104,12 @@ export interface ChecklistItem {
 
 export type AnyTask = Todo | Project | Heading;
 
+/** Items grouped under one ISO date (Upcoming days, project "later" groups). */
+export interface IsoDateGroup<T> {
+  date: string;
+  items: T[];
+}
+
 // Raw-value mapping tables (DB integer -> public union), used by mappers.
 export const TASK_TYPE_FROM_DB: Record<number, TaskType> = {
   0: "to-do",

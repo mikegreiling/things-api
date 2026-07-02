@@ -9,6 +9,8 @@
 import { Command } from "commander";
 
 import { registerDoctor } from "./commands/doctor.ts";
+import { registerProjectCommands } from "./commands/project.ts";
+import { registerReadCommands } from "./commands/reads.ts";
 import { ExitCode } from "./exit-codes.ts";
 
 const AGENT_NOTES = `
@@ -28,6 +30,8 @@ export function buildProgram(): Command {
     .version("0.0.1")
     .addHelpText("after", AGENT_NOTES);
   registerDoctor(program);
+  registerReadCommands(program);
+  registerProjectCommands(program);
   return program;
 }
 
