@@ -67,7 +67,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     read: {
       today: () => todayView(conn.db, now()),
       inbox: () => inboxView(conn.db),
-      anytime: () => anytimeView(conn.db),
+      anytime: () => anytimeView(conn.db, now()),
       upcoming: () => upcomingView(conn.db, now()),
       someday: () => somedayView(conn.db),
       logbook: (o) => logbookView(conn.db, o),
