@@ -42,7 +42,8 @@ lab_ssh "$IP" '
   sudo mv /tmp/things-extract/Things3.app /Applications/Things3.app
   open -a /Applications/Things3.app
   sleep 20
-  osascript -e "tell application \"Things3\" to quit" || pkill -x Things3 || true
+  # pkill, not AppleScript quit: no TCC Automation grants exist in a scratch VM
+  pkill -x Things3 || true
   sleep 3
   ls "$HOME/Library/Group Containers/" | grep -i culturedcode || echo "NO CONTAINER YET"
 '
@@ -50,25 +51,27 @@ lab_ssh "$IP" '
 echo "==> probing thingscli command surface"
 lab_ssh "$IP" 'bash -s' <<'GUEST' | tee "$ARTIFACTS/probe-raw.txt"
 CLI=/Applications/Things3.app/Contents/MacOS/thingscli
+# stock macOS has no `timeout`; perl alarm is the portable equivalent
+t() { perl -e 'alarm shift; exec @ARGV' 10 "$@"; }
 echo "### bare invocation"
-"$CLI" 2>&1; echo "exit=$?"
+t "$CLI" 2>&1; echo "exit=$?"
 WORDS="help --help -h version --version defaults settings read write list
 show export import backup restore repair rebuild reindex migrate library
 database db sync token url urls scheme diagnostics doctor debug log logs
 reset check verify info status config get set delete open quicksilver json"
 for w in $WORDS; do
   echo "### thingscli $w"
-  timeout 10 "$CLI" "$w" 2>&1; echo "exit=$?"
+  t "$CLI" "$w" 2>&1; echo "exit=$?"
 done
 echo "### thingscli defaults subcommands"
 for s in read write list delete help dump keys domains; do
   echo "### thingscli defaults $s"
-  timeout 10 "$CLI" defaults "$s" 2>&1; echo "exit=$?"
+  t "$CLI" defaults "$s" 2>&1; echo "exit=$?"
 done
 echo "### thingscli defaults read (known keys from static analysis)"
 for k in calendarEventsEnabled remindersInboxEnabled uriSchemeAuthenticationToken; do
   echo "### thingscli defaults read $k"
-  timeout 10 "$CLI" defaults read "$k" 2>&1; echo "exit=$?"
+  t "$CLI" defaults read "$k" 2>&1; echo "exit=$?"
 done
 GUEST
 
