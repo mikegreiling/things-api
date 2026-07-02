@@ -5,7 +5,8 @@ coverage/
 .DS_Store
 
 # Vendored binaries: manifest is committed, payloads are not
-vendor/*.dmg
+vendor/*
+!vendor/manifest.json
 
 # Lab artifacts (evidence records, screenshots, guest DB copies)
 lab/artifacts/
