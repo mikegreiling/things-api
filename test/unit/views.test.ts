@@ -1,0 +1,128 @@
+import { afterEach, describe, expect, it } from "vitest";
+
+import { projectView } from "../../src/read/project-view.ts";
+import { inheritedTagsFor } from "../../src/read/tags.ts";
+import { fetchTaskByUuid } from "../../src/read/queries.ts";
+import {
+  anytimeView,
+  inboxView,
+  logbookView,
+  somedayView,
+  todayView,
+  upcomingView,
+} from "../../src/read/views.ts";
+import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
+import {
+  seedArea,
+  seedHeading,
+  seedProject,
+  seedTag,
+  seedTodo,
+  tagArea,
+  tagTask,
+} from "../fixtures/seed.ts";
+
+const NOW = new Date(2026, 6, 2, 12, 0); // local 2026-07-02
+
+let fx: FixtureDb;
+afterEach(() => fx?.close());
+
+describe("todayView", () => {
+  it("splits Today vs This Evening and orders each by todayIndex", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "t2", startDate: "2026-07-02", todayIndex: 20 });
+    seedTodo(fx.db, { title: "t1", startDate: "2026-07-01", todayIndex: -50 }); // overdue stays in Today
+    seedTodo(fx.db, { title: "e1", startDate: "2026-07-02", evening: true, todayIndex: 5 });
+    seedTodo(fx.db, { title: "future", startDate: "2026-07-09", start: "someday" });
+    seedTodo(fx.db, {
+      title: "pending-promotion",
+      start: "someday",
+      startDate: "2026-07-01",
+      todayIndex: 99,
+    });
+    seedTodo(fx.db, { title: "template", startDate: "2026-07-02", recurrenceRule: true });
+
+    const view = todayView(fx.db, NOW);
+    expect(view.today.map((i) => i.title)).toEqual(["t1", "t2", "pending-promotion"]);
+    expect(view.evening.map((i) => i.title)).toEqual(["e1"]);
+  });
+});
+
+describe("list views", () => {
+  it("routes items to inbox/anytime/upcoming/someday by (start, startDate)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "in-inbox", start: "inbox" });
+    seedTodo(fx.db, { title: "unscheduled", start: "active" });
+    seedTodo(fx.db, { title: "future", start: "someday", startDate: "2026-07-10" });
+    seedTodo(fx.db, { title: "incubating", start: "someday" });
+
+    expect(inboxView(fx.db).map((i) => i.title)).toEqual(["in-inbox"]);
+    expect(anytimeView(fx.db).map((i) => i.title)).toEqual(["unscheduled"]);
+    expect(upcomingView(fx.db, NOW).map((i) => i.title)).toEqual(["future"]);
+    expect(somedayView(fx.db).map((i) => i.title)).toEqual(["incubating"]);
+  });
+
+  it("logbook orders by stopDate desc and excludes trashed", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "older", status: "completed", stopDate: 100 });
+    seedTodo(fx.db, { title: "newer", status: "canceled", stopDate: 200 });
+    seedTodo(fx.db, { title: "trashed-done", status: "completed", stopDate: 300, trashed: true });
+    expect(logbookView(fx.db).map((i) => i.title)).toEqual(["newer", "older"]);
+  });
+});
+
+describe("projectView", () => {
+  it("segments active/headed/later/logged/trashed and dedupes heading children", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "LAB-AREA-A");
+    const project = seedProject(fx.db, { title: "Launch", area });
+    const heading = seedHeading(fx.db, { title: "Phase 1", project });
+    seedTodo(fx.db, { title: "active-1", project, index: 2 });
+    // DB invariant: headed to-dos have project = NULL
+    seedTodo(fx.db, { title: "headed-1", heading, project: null, index: 1 });
+    seedTodo(fx.db, { title: "sched", project, startDate: "2026-07-05", start: "someday" });
+    seedTodo(fx.db, {
+      title: "sched-same-day",
+      project,
+      startDate: "2026-07-05",
+      start: "someday",
+    });
+    seedTodo(fx.db, { title: "incub", project, start: "someday" });
+    seedTodo(fx.db, { title: "tpl", project, recurrenceRule: true });
+    seedTodo(fx.db, { title: "done", project, status: "completed", stopDate: 50 });
+    seedTodo(fx.db, { title: "junk", project, trashed: true });
+
+    const view = projectView(fx.db, project, NOW);
+    expect(view.project.title).toBe("Launch");
+    expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
+    expect(view.headings).toHaveLength(1);
+    expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["headed-1"]);
+    expect(view.later.scheduled).toEqual([expect.objectContaining({ date: "2026-07-05" })]);
+    expect(view.later.scheduled[0]?.items).toHaveLength(2);
+    expect(view.later.repeating.map((i) => i.title)).toEqual(["tpl"]);
+    expect(view.later.someday.map((i) => i.title)).toEqual(["incub"]);
+    expect(view.logged.map((i) => i.title)).toEqual(["done"]);
+    expect(view.trashed.map((i) => i.title)).toEqual(["junk"]);
+  });
+});
+
+describe("inherited tags", () => {
+  it("collects area + project tags through the heading chain, excluding direct tags", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Area");
+    const areaTag = seedTag(fx.db, "area-tag");
+    tagArea(fx.db, area, areaTag);
+    const project = seedProject(fx.db, { title: "P", area });
+    const projTag = seedTag(fx.db, "proj-tag");
+    tagTask(fx.db, project, projTag);
+    const heading = seedHeading(fx.db, { title: "H", project });
+    const todo = seedTodo(fx.db, { title: "child", heading, project: null });
+    const directTag = seedTag(fx.db, "direct");
+    tagTask(fx.db, todo, directTag);
+
+    const row = fetchTaskByUuid(fx.db, todo);
+    expect(row).not.toBeNull();
+    const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
+    expect(inherited.map((t) => t.title).sort()).toEqual(["area-tag", "proj-tag"]);
+  });
+});

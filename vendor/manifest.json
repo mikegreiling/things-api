@@ -1,0 +1,18 @@
+{
+  "things-trial": {
+    "url": "https://culturedcode.com/things/download/",
+    "resolvedUrl": "https://static.culturedcode.com/things/Things3.zip",
+    "file": "Things3.zip",
+    "sha256": "b334a6478c49484f5abf24b8837000fdd8b75266e394126d504372f3a48b0068",
+    "downloadedAt": "2026-07-02",
+    "cfBundleShortVersionString": "3.22.11",
+    "cfBundleVersion": "32211007",
+    "parity": {
+      "hostMasBuild": "32211507",
+      "sdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
+      "sdefIdenticalToMas": true,
+      "thingscliPresent": true,
+      "note": "Same marketing version as host MAS install; build number differs by distribution channel (007 direct vs 507 MAS). Container-path parity still to be confirmed in-VM (probe P0-3)."
+    }
+  }
+}
