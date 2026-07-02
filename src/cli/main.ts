@@ -8,6 +8,7 @@
  */
 import { Command } from "commander";
 
+import { registerDoctor } from "./commands/doctor.ts";
 import { ExitCode } from "./exit-codes.ts";
 
 const AGENT_NOTES = `
@@ -26,6 +27,7 @@ export function buildProgram(): Command {
     .description("Programmatic interface to Things 3 (Cultured Code)")
     .version("0.0.1")
     .addHelpText("after", AGENT_NOTES);
+  registerDoctor(program);
   return program;
 }
 
