@@ -18,7 +18,28 @@ Things 3 installed and launched once, Node ≥ 24, and a handful of one-time mac
 
 - **Reads** go directly to Things' local SQLite database (read-only, WAL-aware). **Writes** go exclusively through official app surfaces — URL scheme, AppleScript, Shortcuts — never direct DB writes (sync corruption).
 - **Every mutation is verified**: pre-read → hazard guards → execute → poll re-read until the expected delta appears. Silent no-ops are failures.
-- **Every mutation is audited**: JSONL trail with requested vs. observed deltas and rollback hints.
-- **Schema drift is detected**: table/column fingerprints keyed by Things' database version; writes hard-block on mismatch.
+- **Every mutation is audited**: JSONL trail (`~/.local/state/things-api/audit/`) with requested vs. observed deltas; auth tokens structurally redacted.
+- **Schema drift is detected**: table/column fingerprints keyed by Things' database version; writes hard-block on mismatch ([drift runbook](docs/lab/drift-runbook.md)).
 - **Disruption is explicit**: every operation×vector combination carries a disruption tier (0 = invisible → 3 = navigates UI/modals); disruptive operations require explicit opt-in flags.
 - **Nothing is developed against production data**: probing and integration tests run in disposable Tart macOS VMs.
+
+## For agents
+
+The CLI is designed to be driven by coding agents with no out-of-band knowledge. The contract:
+
+1. **Discovery**: `things --help` (ends with AGENT NOTES), per-command `--help` (states each write's vector, disruption tier, hazards, and exact acknowledgement flag names — regression-tested as API), and `things capabilities [--op <op>] --json` (the lab-validated operation × vector support matrix, with probe-evidence ids).
+2. **Structured output**: every command takes `--json` → versioned envelope `{ apiVersion, ok, kind, data|error, meta }` on stdout; human chatter goes to stderr only.
+3. **Stable exit codes**: `0` ok · `2` usage · `3` verify-failed (mutation executed, expected delta never appeared) · `4` blocked (hazard guard or disruption policy; error carries `remediation`) · `5` drift-blocked · `6` unsupported · `7` environment.
+4. **Plan before executing**: every write supports `--dry-run` — compiled invocation (token-redacted), chosen vector, tier, hazards checked, expected delta. Nothing runs, nothing is audited.
+5. **No prompts, ever**: risky semantics are explicit flags — `--children require-resolved|auto-complete` (project completion cascades), `--acknowledge-checklist-reset` (checklist replacement destroys per-item state), `--acknowledge-project-reopen` (open child reopens a resolved project), `--dangerously-permanent` (area/tag delete and empty-trash skip the Trash).
+
+A typical mutation flow:
+
+```sh
+things capabilities --op todo.move --json      # is it possible, which vector, what tier?
+things search "Buy milk" --json                # resolve the uuid
+things todo move <uuid> --project "Errands" --dry-run --json   # inspect the plan
+things todo move <uuid> --project "Errands" --json             # execute, verified
+```
+
+Failure modes are first-class: a `verify-failed:silent-noop` means the app accepted the command and did nothing (a real Things behavior the guards mostly prevent — see [docs/things-app-oddities.md](docs/things-app-oddities.md)); `blocked:*` responses include machine-readable remediation.

@@ -69,11 +69,59 @@ Installed and verified emitting in the Aqua session:
 lab/scripts/install-monitor-agent.sh    # bootstrap + kickstart + emission check
 ```
 
-## 5. Proxy shortcuts — **[CLICK]** (deferred OK)
+## 5. Proxy shortcuts — **[CLICK]** (the L5 sitting, ~30–45 min)
 
-Building the ~8 parameterized proxy shortcuts in Shortcuts.app is only needed for the Lab-5 Shortcuts campaign — **you can defer this to a second short session**. When ready: build each proxy per `docs/design/lab.md` §4.4, run each once (absorb consents), then export signed copies back into the repo (`shortcuts sign`).
+Scoped to the one gap only Shortcuts fills — the **heading lifecycle in existing projects** — plus a structured-output read probe. Four proxies, built by hand in the golden's Shortcuts.app (Apple provides no programmatic import; runtime execution via `shortcuts run` is fully scriptable afterwards).
 
-Minimum for now: **[CLICK]** open Shortcuts.app once, dismiss any first-run dialog, Settings → Advanced → enable **Allow Running Scripts**.
+### 5.1 First-run + settings **[CLICK]**
+
+1. In the golden (Screen Sharing): open **Shortcuts.app**; dismiss any welcome/first-run dialog. Ignore/decline any iCloud sign-in nag — shortcuts stay local.
+2. Shortcuts → Settings → **Advanced** → check **Allow Running Scripts**.
+
+### L5 status (paused 2026-07-03, resume checklist below)
+
+First sitting done through §5.1 + first-draft proxies. **Key finding:** the Things actions' Items/Project fields are **app-entity parameters** — the field's popover is a live picker of existing Things records and does **not** accept a raw string variable (screenshots in session notes). The established pattern is a **Find → act chain**: a `Find Items` action resolves name→entity and its *output* binds into the entity field. The four proxies exist in the golden in draft state (`shortcuts list` confirms) but with picker-bound/static entity fields — **they need restructuring per §5.2, not rebuilding**. Also noted: browsing those pickers launches Things in the golden (entity queries go through the app), so the golden's task data ran one maintenance pass at guest 2026-07-03 — post-sitting `lab:regress` re-validated the golden green. Resume: restructure the three mutation proxies with Find-chains (gestures in §5.2a), check whether Find Items offers an **ID** filter (upgrades addressing from name to uuid), then §5.3 consent runs.
+
+### 5.2 Build the four proxies **[CLICK]**
+
+Each proxy: File → New Shortcut, name it EXACTLY as shown, add the actions listed in order. The pattern is always: take a JSON dictionary as input → feed fields into one Things action → return the result. In each action's field, insert the **Shortcut Input** variable and pick **Get Value for Key** (or insert a "Get Dictionary Value" action) for the named key.
+
+Entity fields (Items/Project) never take raw string variables — always resolve through a **Find Items** action and bind its output (the "Items" magic variable) into the entity field.
+
+**§5.2a — inserting the magic variable into an entity field** (first gesture that works, use everywhere):
+1. Click the field → look at the very top of the popover, above the entity list (empty row = variable slot), scroll up for a "Select Variable" entry.
+2. Right-click (ctrl-click) the blue field chip → "Select Variable"/"Insert Variable".
+3. Click the Find Items action so its result token is visible, then drag the "Items" pill onto the entity field below.
+
+**`things-proxy-create-heading`** — input `{"title": …, "project": …}`
+1. *Get Dictionary from Input*
+2. **Find Items**: (Show More) Type = Project, Name is ← dictionary `project`, Limit 1
+3. **Create Heading**: Title ← dictionary `title`; Project ← step 2's output
+4. Output the result
+
+**`things-proxy-edit-title`** — input `{"find": …, "title": …}`
+1. *Get Dictionary from Input*
+2. **Find Items**: Name is ← dictionary `find`, Limit 1
+3. **Set Title of** ← step 2's output **to** ← dictionary `title`
+4. Output the result
+
+**`things-proxy-delete-items`** — input `{"find": …}`
+1. *Get Dictionary from Input*
+2. **Find Items**: Name is ← dictionary `find`, Limit 1
+3. **Delete** ← step 2's output (leave any "immediately delete" toggle OFF — Trash, not hard delete)
+4. Output the result
+
+**`things-proxy-find-items`** — input `{"search": …}` — built ✓ (search key bound; no filters/sort). The S-campaign inspects what identifiers its structured output carries.
+
+While editing: check whether Find Items' filter list offers **ID** as a filter field and note it. If even Find-chained output refuses to bind into an entity field, stop — that finding means parameterized proxies are infeasible (headings stay UI-only; document and shrink the campaign).
+
+### 5.3 Consent absorption + export (scripted assist)
+
+Run each proxy once so macOS's per-shortcut consents fire; click **Allow** on each prompt in Screen Sharing. The driver creates a sacrificial `L5-CONSENT-PROJ` in Things for the runs and trashes it afterwards (residue: one trashed project — probe assertions tolerate it; recorded in metadata). Then it exports signed copies to `lab/shortcuts/` in the repo.
+
+### 5.4 Freeze checklist (scripted)
+
+Quit Shortcuts + Things, verify `shortcuts list` shows the four proxies, truncate `~/things-lab/events.ndjson`, update `golden-v1-metadata.json` (humanLayersDone += L5, note consent residue), `tart stop`.
 
 ## 6. Seed dataset
 

@@ -38,5 +38,21 @@
   },
   "deferred": [
     "L5: Shortcuts first-run + Allow Running Scripts + proxy imports (second sitting, before S-probe campaign)"
-  ]
+  ],
+  "l5Progress": {
+    "sittingPaused": "2026-07-03",
+    "done": [
+      "Shortcuts first-run dismissed",
+      "Allow Running Scripts enabled",
+      "four draft proxies exist (create-heading, edit-title, delete-items, find-items)"
+    ],
+    "finding": "Things-action entity fields (Items/Project) are app-entity pickers; raw string variables refused \u2014 restructure with Find Items -> bind output (golden-runbook \u00a75.2)",
+    "note": "entity pickers launched Things during the sitting (guest 2026-07-03) \u2014 one app-maintenance pass ran on golden task data; post-sitting lab:regress validated green",
+    "remaining": [
+      "restructure 3 mutation proxies with Find-chains",
+      "check ID filter on Find Items",
+      "\u00a75.3 consent runs + signed exports",
+      "\u00a75.4 freeze checklist"
+    ]
+  }
 }
