@@ -527,7 +527,7 @@
     {
       "id": "U17",
       "legacyRef": "T17",
-      "title": "project child order is readable from the index column (seed order holds)",
+      "title": "index orders siblings within one container scope (headings among headings, children within a heading); cross-scope comparison is meaningless",
       "vector": "sqlite",
       "operation": "read.project-ordering",
       "appState": "running-background",
@@ -536,7 +536,7 @@
           "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:Alpha}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:Beta}')"
         },
         {
-          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-FLAT}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:Alpha}')"
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A1}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A2}')"
         }
       ],
       "settleSeconds": 1,

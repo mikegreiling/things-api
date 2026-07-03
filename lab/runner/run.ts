@@ -79,9 +79,17 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
   let ok = false;
   let exitCode = 1;
   try {
-    log("booting (headless, host-only network)…");
-    tartRunDetached(vm);
-    const ip = await waitForSsh(vm);
+    log("booting (headless, NAT; airgapped guest-side at bootstrap)…");
+    tartRunDetached(vm, join(artifactsDir, "tart-run.log"));
+    let ip: string;
+    try {
+      ip = await waitForSsh(vm);
+    } catch (err) {
+      const bootLog = readFileSync(join(artifactsDir, "tart-run.log"), "utf8").trim();
+      throw new Error(
+        `${(err as Error).message}${bootLog ? `\ntart run output:\n${bootLog}` : ""}`,
+      );
+    }
     log(`ssh up at ${ip}`);
 
     await bootstrap(ip, metadata, artifactsDir);
@@ -154,6 +162,17 @@ async function bootstrap(
   metadata: GoldenMetadata,
   artifactsDir: string,
 ): Promise<void> {
+  // Airgap FIRST: delete the guest's default route. SSH survives (host and
+  // guest share the directly connected vmnet subnet); internet, updaters,
+  // and any phone-home become unroutable. (--net-host would need Softnet
+  // with host root — see tartRunDetached.)
+  log("airgapping guest (deleting default route)…");
+  ssh(ip, "sudo route -n delete default", { allowFailure: true });
+  const net = ssh(ip, "ping -c1 -t2 1.1.1.1 >/dev/null 2>&1 && echo up || echo down");
+  if (net.stdout.trim() !== "down") {
+    throw new Error("bootstrap: guest still has internet access after route deletion");
+  }
+
   // Pin the clock BEFORE Things ever launches in this clone: neutralizes
   // trial expiry and freezes Today/Upcoming semantics (docs/design/lab.md §1.6).
   const [y = "2026", m = "07", d = "05"] = metadata.pinnedDate.split("-");
@@ -257,19 +276,33 @@ function evaluate(
     .filter((l) => l.trim() !== "")
     .map((l) => JSON.parse(l) as ExecutionRecord);
 
+  // A probe that died before snapshotting leaves no/partial files; it is
+  // already red via its recorded guest errors — don't let the file kill
+  // evaluation of the other probes.
+  const loadSnapshot = (path: string): DbSnapshot => {
+    try {
+      return JSON.parse(readFileSync(join(guestRun, path), "utf8")) as DbSnapshot;
+    } catch {
+      return {};
+    }
+  };
   const artifacts = new Map(
     executions.map((execution) => {
-      const before = JSON.parse(
-        readFileSync(join(guestRun, execution.snapshotBefore), "utf8"),
-      ) as DbSnapshot;
-      const after = JSON.parse(
-        readFileSync(join(guestRun, execution.snapshotAfter), "utf8"),
-      ) as DbSnapshot;
+      const before = loadSnapshot(execution.snapshotBefore);
+      const after = loadSnapshot(execution.snapshotAfter);
       return [execution.probe, { execution, before, after }] as const;
     }),
   );
 
-  const events = parseEventLog(readFileSync(join(artifactsDir, "events.ndjson"), "utf8"));
+  // The monitor owns events.ndjson (its FileHandle offset would clobber a
+  // second writer), so the guest writes MARK sentinels to marks.ndjson and
+  // the two streams are merged by timestamp here. Stable sort keeps events
+  // ahead of same-millisecond marks.
+  const monitorEvents = parseEventLog(readFileSync(join(artifactsDir, "events.ndjson"), "utf8"));
+  const marks = parseEventLog(readFileSync(join(guestRun, "marks.ndjson"), "utf8"));
+  const events = [...monitorEvents, ...marks].sort((a, b) =>
+    a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0,
+  );
 
   const context: AssertionContext = {
     seed,

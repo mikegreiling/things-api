@@ -16,8 +16,16 @@ export function tartClone(source: string, target: string): void {
   run(["tart", "clone", source, target]);
 }
 
-export function tartRunDetached(vm: string): void {
-  spawnDetached(["tart", "run", vm, "--no-graphics", "--net-host"]);
+/**
+ * Boot headless on default NAT networking. `--net-host` is NOT used: on this
+ * Tart build it is implemented via Softnet, which requires passwordless root
+ * on the HOST ("root privileges are required … Softnet process terminated
+ * prematurely"). The airgap is instead applied guest-side at bootstrap by
+ * deleting the guest's default route (host↔guest SSH rides the directly
+ * connected vmnet subnet and survives; everything else becomes unroutable).
+ */
+export function tartRunDetached(vm: string, logPath: string): void {
+  spawnDetached(["tart", "run", vm, "--no-graphics"], logPath);
 }
 
 export function tartIp(vm: string): string | null {

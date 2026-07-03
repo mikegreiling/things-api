@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -33,7 +34,11 @@ import time
 from datetime import datetime, timezone
 
 THINGS_PROCESS = "Things3"
-EVENTS_PATH = os.path.expanduser("~/things-lab/events.ndjson")
+# MARK sentinels go to their own file, NOT the monitor's events.ndjson: the
+# monitor's FileHandle keeps a private offset (no O_APPEND), so a second
+# writer's lines get silently overwritten (observed: 13 of 44 marks survived).
+# The host merges the two streams by timestamp at evaluation.
+MARKS_PATH = os.path.expanduser("~/things-lab/run/marks.ndjson")
 DIAG_DIR = os.path.expanduser("~/Library/Logs/DiagnosticReports")
 SNAPSHOT_TABLES = ["TMTask", "TMArea", "TMTag", "TMTaskTag", "TMAreaTag", "TMChecklistItem"]
 TABLE_KEYS = {"TMTaskTag": ("tasks", "tags"), "TMAreaTag": ("areas", "tags")}
@@ -67,6 +72,14 @@ def q(sql: str, args: tuple = ()) -> list:
         conn.close()
 
 
+def encode_cell(value):
+    # BLOB columns (e.g. rt1_recurrenceRule plists) are not JSON-serializable;
+    # the differ only needs equality, so hash them into a stable string.
+    if isinstance(value, bytes):
+        return "blob:sha256:" + hashlib.sha256(value).hexdigest()
+    return value
+
+
 def snapshot() -> dict:
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=5.0)
     conn.row_factory = sqlite3.Row
@@ -75,7 +88,7 @@ def snapshot() -> dict:
         for table in SNAPSHOT_TABLES:
             rows = {}
             for row in conn.execute(f"SELECT * FROM {table}"):
-                d = {k: row[k] for k in row.keys()}
+                d = {k: encode_cell(row[k]) for k in row.keys()}
                 key_cols = TABLE_KEYS.get(table)
                 if key_cols:
                     key = "|".join(str(d[c]) for c in key_cols)
@@ -90,7 +103,7 @@ def snapshot() -> dict:
 
 def emit_mark(probe_id: str, phase: str) -> None:
     line = json.dumps({"ts": now_iso(), "kind": "mark", "detail": {"probe": probe_id, "phase": phase}})
-    with open(EVENTS_PATH, "a") as f:
+    with open(MARKS_PATH, "a") as f:
         f.write(line + "\n")
 
 
@@ -202,15 +215,19 @@ def execute_commands(commands: list, resolver: Resolver, record: dict) -> None:
             result = run_argv(["osascript", "-e", script])
             record["commands"].append(result)
         elif "waitSql" in cmd:
-            sql = resolver.resolve(cmd["waitSql"])
+            # Placeholders may reference rows the preceding command is still
+            # creating ({uuid:TITLE} right after an `open`); resolve on every
+            # poll iteration so "not there yet" is a retry, not a failure.
             timeout = cmd.get("timeoutSeconds", 10.0)
             started = time.time()
             satisfied = False
+            sql = cmd["waitSql"]
             rows: list = []
             while time.time() - started < timeout:
                 try:
+                    sql = resolver.resolve(cmd["waitSql"])
                     rows = q(sql)
-                except sqlite3.Error:
+                except (KeyError, sqlite3.Error):
                     rows = []
                 if rows:
                     satisfied = True
@@ -221,7 +238,7 @@ def execute_commands(commands: list, resolver: Resolver, record: dict) -> None:
                     "sql": sql,
                     "satisfied": satisfied,
                     "waitedMs": int((time.time() - started) * 1000),
-                    "rows": [list(r) for r in rows[:5]],
+                    "rows": [[encode_cell(v) for v in r] for r in rows[:5]],
                 }
             )
         elif "waitCrash" in cmd:
@@ -369,6 +386,7 @@ def main() -> int:
 
     os.makedirs(os.path.join(args.out, "snapshots"), exist_ok=True)
     os.makedirs(os.path.join(args.out, "crash"), exist_ok=True)
+    open(MARKS_PATH, "w").close()  # drop stale marks from any prior run
 
     resolver = Resolver(context)
     probes = suite["probes"]

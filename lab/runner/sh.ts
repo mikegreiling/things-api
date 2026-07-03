@@ -4,6 +4,7 @@
 // is tried — "Too many authentication failures").
 
 import { spawn, spawnSync } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 
 export const TART_HOME = process.env["TART_HOME"] ?? "/Volumes/Workspace/tart";
 export const SSH_USER = "admin";
@@ -72,12 +73,17 @@ export function runStreaming(argv: string[]): Promise<number> {
   });
 }
 
-/** Spawn fully detached (tart run keeps the VM alive until stopped). */
-export function spawnDetached(argv: string[]): void {
+/**
+ * Spawn fully detached (tart run keeps the VM alive until stopped).
+ * Output goes to logPath — a silently-dying boot must leave evidence.
+ */
+export function spawnDetached(argv: string[], logPath: string): void {
   const [cmd, ...rest] = argv;
   if (cmd === undefined) throw new Error("empty argv");
-  const child = spawn(cmd, rest, { detached: true, stdio: "ignore", env: ENV });
+  const fd = openSync(logPath, "a");
+  const child = spawn(cmd, rest, { detached: true, stdio: ["ignore", fd, fd], env: ENV });
   child.unref();
+  closeSync(fd);
 }
 
 function sshArgv(ip: string, command: string): string[] {
@@ -94,8 +100,32 @@ function sshArgv(ip: string, command: string): string[] {
   ];
 }
 
+/**
+ * ssh exits 255 for its own transport/auth errors (remote commands pass their
+ * exit codes through). Fresh clones show transient auth flaps in the first
+ * seconds after boot (opendirectoryd still warming up) — observed once as
+ * "Permission denied (publickey,password,keyboard-interactive)" on the 6th
+ * connection while identical calls before and after succeeded. Retry those.
+ */
+function runWithSshRetry(argv: string[], opts?: { allowFailure?: boolean }): RunResult {
+  let last: RunResult = { exitCode: 255, stdout: "", stderr: "" };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    last = run(argv, { allowFailure: true });
+    if (last.exitCode !== 255) break;
+    if (attempt < 3) spawnSync("sleep", ["2"]);
+  }
+  if (last.exitCode !== 0 && opts?.allowFailure !== true) {
+    throw new ShellError(
+      `${argv.join(" ")} exited ${last.exitCode}: ${last.stderr.trim()}`,
+      last.exitCode,
+      last.stderr,
+    );
+  }
+  return last;
+}
+
 export function ssh(ip: string, command: string, opts?: { allowFailure?: boolean }): RunResult {
-  return run(sshArgv(ip, command), opts);
+  return runWithSshRetry(sshArgv(ip, command), opts);
 }
 
 export function sshStreaming(ip: string, command: string): Promise<number> {
@@ -104,7 +134,7 @@ export function sshStreaming(ip: string, command: string): Promise<number> {
 
 /** scp between host and guest; src/dst use scp syntax (guest side prefixed by caller). */
 export function scp(args: string[]): void {
-  run(["sshpass", "-p", SSH_PASS, "scp", ...SSH_OPTS, "-q", ...args]);
+  runWithSshRetry(["sshpass", "-p", SSH_PASS, "scp", ...SSH_OPTS, "-q", ...args]);
 }
 
 export function sleep(ms: number): Promise<void> {
