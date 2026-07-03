@@ -43,7 +43,12 @@ export type DeltaSpec =
       /** For tags: expected parent uuid (null = must be root). */
       parentUuid?: string | null;
     }
-  | { mode: "trash-emptied" };
+  | { mode: "trash-emptied" }
+  /**
+   * Ordering: the given uuids must read back in strictly ascending rank on
+   * the named key (todayIndex for Today/Evening scopes, index elsewhere).
+   */
+  | { mode: "ordering"; key: "index" | "todayIndex"; sequence: string[] };
 
 /** Movement tripwires captured by the pre-read, keyed by uuid. */
 export type PreModDates = Record<string, number | null>;
@@ -66,6 +71,7 @@ export interface VerifyReader {
   tagExists(uuid: string): boolean;
   areasByTitle(title: string): { uuid: string }[];
   tagsByTitle(title: string): { uuid: string; parent: string | null }[];
+  rankOf(uuid: string, key: "index" | "todayIndex"): number | null;
   trashedCount(): number;
   findCreated(probe: CreateProbe): AnyTask[];
   modDateOf(uuid: string): number | null;
@@ -89,6 +95,13 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
       return db
         .prepare("SELECT uuid, parent FROM TMTag WHERE title = ? COLLATE NOCASE")
         .all(title) as { uuid: string; parent: string | null }[];
+    },
+    rankOf(uuid, key) {
+      const column = key === "todayIndex" ? "todayIndex" : `"index"`;
+      const row = db.prepare(`SELECT ${column} AS rank FROM TMTask WHERE uuid = ?`).get(uuid) as
+        | { rank: number | null }
+        | undefined;
+      return row?.rank ?? null;
     },
     trashedCount() {
       const row = db.prepare("SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 1").get() as {
@@ -258,6 +271,37 @@ export function evaluateDelta(
         movement: fresh.length > 0,
         assertedMovement: fresh.length > 0,
         observed: null,
+      };
+    }
+    case "ordering": {
+      const ranks = spec.sequence.map((uuid) => ({ uuid, rank: reader.rankOf(uuid, spec.key) }));
+      const observed: Record<string, unknown> = {};
+      for (const r of ranks) observed[r.uuid] = r.rank;
+      const missing = ranks.some((r) => r.rank === null);
+      let sorted = !missing;
+      for (let i = 1; i < ranks.length && sorted; i++) {
+        const prev = ranks[i - 1]?.rank;
+        const curr = ranks[i]?.rank;
+        if (
+          prev === null ||
+          prev === undefined ||
+          curr === null ||
+          curr === undefined ||
+          prev >= curr
+        ) {
+          sorted = false;
+        }
+      }
+      // Movement: any rank differs from the captured pre-state.
+      const preRanks = pre.fields["__ordering__"] ?? {};
+      const moved = ranks.some(
+        (r) => preRanks[r.uuid] !== undefined && preRanks[r.uuid] !== r.rank,
+      );
+      return {
+        satisfied: sorted,
+        movement: moved,
+        assertedMovement: moved,
+        observed,
       };
     }
     case "trash-emptied": {

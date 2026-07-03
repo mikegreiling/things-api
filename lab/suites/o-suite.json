@@ -1,0 +1,407 @@
+{
+  "suite": "o",
+  "description": "Ordering campaign: semantics of the private `_private_experimental_ reorder to dos in` command across scopes (Today partial lists, evening-bucket interaction, projects, areas, heading-contained children) plus regression locks for the URL bounce primitive (Today + Evening). Feeds write.reorder (experimental native strategy + verified bounce fallback).",
+  "probes": [
+    {
+      "id": "O01",
+      "title": "private reorder with a PARTIAL ids list in Today: listed items adopt the given order; what happens to unlisted members is the finding",
+      "vector": "applescript",
+      "operation": "order.today-partial",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-A&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-A'"
+        },
+        {
+          "openUrl": "things:///add?title=O-B&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-B'"
+        },
+        {
+          "openUrl": "things:///add?title=O-C&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-C'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Today\" with ids \"{uuid:O-C},{uuid:O-B},{uuid:O-A}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-C') < (SELECT todayIndex FROM TMTask WHERE title='O-B')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-B') < (SELECT todayIndex FROM TMTask WHERE title='O-A')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-TODAY-1"
+            },
+            "fields": ["startBucket", "start", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-A"
+            },
+            "fields": ["startBucket", "start", "startDate", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O03",
+      "title": "DESTRUCTIVE FINDING: including an Evening member in a Today reorder CLEARS its startBucket (silently de-evenings it) \u2014 native reorder normalizes bucket to the targeted list; evening scope is bounce-only and the today-scope guard must reject bucket-1 members",
+      "vector": "applescript",
+      "operation": "order.evening-interaction",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-E&when=evening"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-E' AND startBucket=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-F&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-F'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Today\" with ids \"{uuid:O-E},{uuid:O-F}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-E') < (SELECT todayIndex FROM TMTask WHERE title='O-F')"
+        }
+      ],
+      "expect": {
+        "verdict": "partial",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-E"
+            },
+            "field": "startBucket",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-F"
+            },
+            "field": "startBucket",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "O04",
+      "title": "private reorder against a PROJECT specifier \u2014 native project-child reordering?",
+      "vector": "applescript",
+      "operation": "order.project",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in project \"LAB-PROJ-PLAIN\" with ids \"{seed:LAB-P-3},{seed:LAB-P-1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-P-3}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-P-1}')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-P-1"
+            },
+            "fields": ["project", "status", "start"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-P-3"
+            },
+            "fields": ["project", "status", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O05",
+      "title": "private reorder against an AREA specifier (direct area to-dos)",
+      "vector": "applescript",
+      "operation": "order.area",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-AA1&when=anytime&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-AA1' AND area='{seed:LAB-AREA-A}'"
+        },
+        {
+          "openUrl": "things:///add?title=O-AA2&when=anytime&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-AA2' AND area='{seed:LAB-AREA-A}'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in area \"LAB-AREA-A\" with ids \"{uuid:O-AA2},{uuid:O-AA1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-AA2') < (SELECT \"index\" FROM TMTask WHERE title='O-AA1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AA1"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AA2"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          }
+        ]
+      }
+    },
+    {
+      "id": "O06",
+      "title": "DESTRUCTIVE FINDING: project-scope reorder RIPS heading-contained children out of their heading (heading -> NULL) \u2014 guards must reject headed uuids; heading-scoped ordering remains unautomatable",
+      "vector": "applescript",
+      "operation": "order.heading-children",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in project \"LAB-PROJ-HEADINGS\" with ids \"{seed:LAB-H-A2},{seed:LAB-H-A1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A2}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A1}')"
+        }
+      ],
+      "expect": {
+        "verdict": "partial",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-H-A1"
+            },
+            "field": "heading",
+            "value": null
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-H-A2"
+            },
+            "field": "heading",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "O07",
+      "title": "bounce primitive, Today: evening->today round-trip front-inserts; neighbors untouched (regression lock for the fallback strategy)",
+      "vector": "url",
+      "operation": "order.bounce-today",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-BN1&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BN1'"
+        },
+        {
+          "openUrl": "things:///add?title=O-BN2&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BN2'"
+        },
+        {
+          "openUrl": "things:///add?title=O-BN3&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BN3'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-BN3}&auth-token={ctx:token}&when=evening"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BN3' AND startBucket=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BN3}&auth-token={ctx:token}&when=today"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BN3' AND startBucket=0"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-BN3') < (SELECT todayIndex FROM TMTask WHERE title='O-BN1') AND (SELECT todayIndex FROM TMTask WHERE title='O-BN3') < (SELECT todayIndex FROM TMTask WHERE title='O-BN2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BN3"
+            },
+            "field": "startBucket",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BN3"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BN1"
+            },
+            "fields": ["todayIndex", "startBucket"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BN2"
+            },
+            "fields": ["todayIndex", "startBucket"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O08",
+      "title": "bounce primitive, Evening: today->evening round-trip front-inserts within the evening section",
+      "vector": "url",
+      "operation": "order.bounce-evening",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-BE1&when=evening"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BE1' AND startBucket=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-BE2&when=evening"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BE2' AND startBucket=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-BE3&when=evening"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BE3' AND startBucket=1"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-BE3}&auth-token={ctx:token}&when=today"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BE3' AND startBucket=0"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-BE3}&auth-token={ctx:token}&when=evening"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-BE3' AND startBucket=1"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-BE3') < (SELECT todayIndex FROM TMTask WHERE title='O-BE1') AND (SELECT todayIndex FROM TMTask WHERE title='O-BE3') < (SELECT todayIndex FROM TMTask WHERE title='O-BE2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BE3"
+            },
+            "field": "startBucket",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BE1"
+            },
+            "fields": ["todayIndex", "startBucket"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-BE2"
+            },
+            "fields": ["todayIndex", "startBucket"]
+          }
+        ]
+      }
+    }
+  ]
+}
