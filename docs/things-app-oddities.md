@@ -16,7 +16,7 @@ Everything surprising, inconsistent, or hazardous we found while systematically 
 3. `open "things:///update?id=<uuid>&auth-token=<token>&when=today"`
 
 **Expected:** an error (the item's schedule is owned by its repeat rule), like the AppleScript path produces.
-**Actual:** Things terminates immediately. ~1s after the `open` handoff the process dies; macOS writes a crash report to `~/Library/Logs/DiagnosticReports`.
+**Actual:** Things terminates immediately. ~1s after the `open` handoff the process dies; macOS writes a crash report to `~/Library/Logs/DiagnosticReports`. Crash signature: **`EXC_BREAKPOINT (SIGTRAP)`** ("Trace/BPT trap: 5") — a Swift runtime trap, consistent with an unguarded precondition/force-unwrap in the URL handler path (captured `.ips`: `Things3-2026-07-05-120202.ips`, banked by the harness).
 
 **Contrast — the app already knows how to refuse this.** AppleScript `schedule to do id "<uuid>" for (current date) + 1 * days` on the same row returns a clean scriptable error: `Things3 got an error: Cannot schedule to-do (302)`, exit 1, zero database changes. The guard exists; the URL handler bypasses it.
 
