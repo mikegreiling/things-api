@@ -2,7 +2,13 @@
 
 A typed TypeScript library + CLI (`things`) for programmatic interaction with [Things 3](https://culturedcode.com/things/) by Cultured Code.
 
-**Status: read layer live; write layer in development.** See [docs/design/](docs/design/) for the architecture and VM-lab design, [docs/research/](docs/research/) for the validated capability research this project is grounded in, and [docs/atlas/](docs/atlas/schema-v26.md) for the database↔UI map.
+**Status: read + write layers live.** Reads go straight to the local SQLite database; writes run a verified pipeline over two lab-validated vectors (URL scheme + AppleScript) with hazard guards, disruption-tier policy, and a JSONL audit trail. See [docs/design/](docs/design/) for the architecture and VM-lab design, [docs/lab/](docs/lab/harness.md) for the probe harness and campaign results the write layer is grounded in, and [docs/atlas/](docs/atlas/schema-v26.md) for the database↔UI map.
+
+```sh
+things today --json                # read: your Today list, Evening split, UI order
+things todo add "Buy milk" --when today --tags errands --dry-run   # plan without executing
+things capabilities --op todo.delete   # what's possible, per vector, with evidence
+```
 
 ## Requirements & first-run setup
 

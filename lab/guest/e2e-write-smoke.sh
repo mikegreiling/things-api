@@ -1,0 +1,99 @@
+#!/bin/bash
+# End-to-end write smoke. Runs ON THE GUEST against the real Things app via
+# the real vectors (open -g / osascript) — the same binaries users run.
+# Usage: e2e-write-smoke.sh <node-binary> <app-dir>   (app-dir has dist/)
+set -u
+NODE="$1"
+APP="$2/dist/cli/main.js"
+FAILURES=0
+STEP=0
+
+things() {
+  "$NODE" "$APP" "$@"
+}
+
+# run_step <expected-exit> <description> <args...>
+run_step() {
+  local expect="$1" desc="$2"
+  shift 2
+  STEP=$((STEP + 1))
+  local out
+  out=$(things "$@" --json 2>/dev/null)
+  local code=$?
+  if [ "$code" -ne "$expect" ]; then
+    echo "FAIL [$STEP] $desc — exit $code (expected $expect)"
+    echo "     output: $out"
+    FAILURES=$((FAILURES + 1))
+    return 1
+  fi
+  echo "ok   [$STEP] $desc"
+  LAST_OUT="$out"
+  return 0
+}
+
+json_get() {
+  # json_get <python-expr-on-d> — reads LAST_OUT
+  printf '%s' "$LAST_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"
+}
+
+echo "== doctor =="
+run_step 0 "doctor" doctor
+
+echo "== todo lifecycle (url-scheme + applescript vectors) =="
+run_step 0 "todo add (when=today, existing tag)" todo add "E2E-1" --when today --tags lab-tag-1
+UUID=$(json_get "d['data']['uuid']")
+echo "     created uuid=$UUID"
+run_step 0 "todo update title" todo update "$UUID" --title "E2E-1-RENAMED"
+run_step 0 "todo complete" todo complete "$UUID"
+run_step 0 "todo reopen (applescript status setter)" todo reopen "$UUID" --vector applescript
+run_step 0 "tag add (applescript create)" tag add e2e-tag
+run_step 0 "todo set tags (replacement)" todo tags "$UUID" --set "lab-tag-1,e2e-tag"
+run_step 0 "todo checklist (fresh, no ack needed)" todo checklist "$UUID" --item "Alpha" --item "Bravo"
+
+echo "== project lifecycle with verified cascade =="
+run_step 0 "project add with child in area" project add "E2E-PROJ" --area LAB-AREA-A --todo "E2E-C1"
+PROJ=$(json_get "d['data']['uuid']")
+echo "     created project uuid=$PROJ"
+run_step 4 "project complete requires children policy resolution" project complete "$PROJ" --children require-resolved
+run_step 0 "project complete with verified auto-complete cascade" project complete "$PROJ" --children auto-complete
+
+echo "== deletes =="
+run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
+run_step 0 "area add (applescript)" area add "E2E-AREA"
+run_step 0 "area delete (permanent, acknowledged)" area delete "E2E-AREA" --dangerously-permanent
+run_step 0 "tag delete (permanent, acknowledged)" tag delete e2e-tag --dangerously-permanent
+
+echo "== guard checks against the live app =="
+TEMPLATE_UUID=$(python3 -c "
+import glob, os, sqlite3
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+row = sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute(\"SELECT uuid FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL AND type=0 LIMIT 1\").fetchone()
+print(row[0])
+")
+run_step 4 "repeating-template when= is hard-blocked (would crash Things)" todo update "$TEMPLATE_UUID" --when today
+run_step 4 "empty trash requires --dangerously-permanent" trash empty
+run_step 0 "empty trash (acknowledged, verified)" trash empty --dangerously-permanent
+
+echo "== audit trail =="
+AUDIT_LINES=$(cat ~/.local/state/things-api/audit/*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+echo "     audit records: $AUDIT_LINES"
+if [ "$AUDIT_LINES" -lt 15 ]; then
+  echo "FAIL audit trail too short ($AUDIT_LINES records)"
+  FAILURES=$((FAILURES + 1))
+fi
+TOKEN=$(python3 -c "
+import glob, os, sqlite3
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+row = sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute('SELECT uriSchemeAuthenticationToken FROM TMSettings').fetchone()
+print(row[0] or '')
+")
+if [ -n "$TOKEN" ] && grep -q "$TOKEN" ~/.local/state/things-api/audit/*.jsonl 2>/dev/null; then
+  echo "FAIL auth token leaked into the audit trail"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "ok   audit trail is token-free (structural redaction verified)"
+fi
+
+echo ""
+echo "E2E RESULT: $STEP steps, $FAILURES failures"
+exit $((FAILURES > 0 ? 1 : 0))
