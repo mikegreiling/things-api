@@ -162,11 +162,13 @@ function check(
     case "stdoutMatches": {
       const cmd = context.commands?.[assertion.command];
       if (cmd === undefined) return fail(`no command at index ${assertion.command}`);
-      return new RegExp(assertion.pattern).test(cmd.stdout)
+      // osascript always emits a trailing newline; anchors should see past it.
+      const stdout = cmd.stdout.trim();
+      return new RegExp(assertion.pattern).test(stdout)
         ? pass(`stdout of command ${assertion.command} matches /${assertion.pattern}/`)
         : fail(
             `stdout of command ${assertion.command} does not match /${assertion.pattern}/: ` +
-              JSON.stringify(cmd.stdout.slice(0, 200)),
+              JSON.stringify(stdout.slice(0, 200)),
           );
     }
     default: {

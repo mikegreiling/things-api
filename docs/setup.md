@@ -32,13 +32,14 @@ Reads open the Things database directly, read-only, WAL-aware. Things does **not
 2. **A logged-in GUI session is required.** `things:///…` commands are LaunchServices handoffs into the user's Aqua session. SSH-driven writes work *only when that same user is logged into the Mac's GUI*. Fully headless / logged-out operation is unsupported.
 3. **Disruption expectations:** URL commands can launch Things and may bring it to the foreground. The CLI gates these behaviors behind disruption tiers — on a workstation profile, focus-stealing operations require `--allow-disruptive`.
 
-## Writes — AppleScript vector *(applies when validated by the lab)*
+## Writes — AppleScript vector *(lab-validated 2026-07-03; ships with the write layer)*
 
 1. **One-time Automation consent.** The first AppleEvent to Things from a given controlling app triggers a macOS consent modal ("*X* wants access to control Things3"). Click **Allow** once; the grant persists per controlling app.
    - Terminal use: the grantee is your terminal app. SSH use: the grantee is `sshd-keygen-wrapper`.
    - On a dedicated/remote Mac, this click must happen in a GUI session once — Screen Sharing works fine.
    - Trigger it deliberately during setup: `osascript -e 'tell application "Things3" to get name'` — should return `Things3` with no prompt afterward.
 2. No auth token needed for AppleScript.
+3. **Disruption expectation:** AppleScript operations are invisible (tier 0) when Things is already running — but an AppleEvent to a *closed* Things launches it **and steals focus**. The CLI/library handles this by background-launching Things (`open -g`) before dispatching AppleScript operations.
 
 ## Writes — Shortcuts vector *(applies if/when the lab validates it)*
 

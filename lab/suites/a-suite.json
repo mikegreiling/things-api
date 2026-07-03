@@ -643,7 +643,7 @@
     },
     {
       "id": "A24B",
-      "title": "delete project: project and children both land in Trash",
+      "title": "delete project is SHALLOW in the DB: only the project row is trashed; children keep trashed=0 and their project link (trash membership is derived)",
       "vector": "applescript",
       "operation": "project.delete",
       "appState": "running-background",
@@ -679,7 +679,7 @@
             "table": "TMTask",
             "where": { "title": "A24B-CHILD" },
             "field": "trashed",
-            "value": 1
+            "value": 0
           },
           {
             "kind": "fieldEquals",
@@ -693,7 +693,7 @@
     },
     {
       "id": "A25",
-      "title": "delete area: PERMANENT (row gone, tombstone written) — not Trash",
+      "title": "delete area: PERMANENT (row gone; NO tombstone with sync off) — not Trash",
       "vector": "applescript",
       "operation": "area.delete",
       "appState": "running-background",
@@ -712,11 +712,7 @@
         "tier": 0,
         "assertions": [
           { "kind": "deleted", "table": "TMArea", "where": { "title": "A25-AREA" } },
-          {
-            "kind": "rowExists",
-            "table": "TMTombstone",
-            "where": { "deletedObjectUUID": "@uuidOfBefore:TMArea:title=A25-AREA" }
-          }
+          { "kind": "notInserted", "table": "TMTombstone" }
         ]
       }
     },
@@ -914,7 +910,7 @@
     },
     {
       "id": "A40",
-      "title": "AppleEvent read to CLOSED Things: auto-launches in background (no focus steal)",
+      "title": "AppleEvent read to CLOSED Things auto-launches it AND STEALS FOCUS (hypothesis refuted: pre-launch with open -g to stay tier 0)",
       "vector": "applescript",
       "operation": "read.lists-autolaunch",
       "appState": "not-running",
@@ -928,7 +924,7 @@
       "settleSeconds": 3,
       "expect": {
         "verdict": "supported",
-        "tier": 1,
+        "tier": 2,
         "assertions": [
           { "kind": "stdoutMatches", "command": 0, "pattern": "^\\d+" },
           { "kind": "deltaEmpty" }
@@ -937,7 +933,7 @@
     },
     {
       "id": "A41",
-      "title": "AppleEvent write to CLOSED Things: auto-launch + mutation, still background",
+      "title": "AppleEvent write to CLOSED Things: auto-launch + mutation, focus stolen (same as A40)",
       "vector": "applescript",
       "operation": "todo.create-autolaunch",
       "appState": "not-running",
@@ -951,7 +947,7 @@
       "settleSeconds": 3,
       "expect": {
         "verdict": "supported",
-        "tier": 1,
+        "tier": 2,
         "assertions": [{ "kind": "inserted", "table": "TMTask", "where": { "title": "A41-TODO" } }]
       }
     },
@@ -1128,7 +1124,7 @@
     },
     {
       "id": "A27",
-      "title": "empty trash: PERMANENT delete of all trashed rows, tombstones written",
+      "title": "empty trash: PERMANENT delete of all trashed rows (NO tombstones with sync off)",
       "vector": "applescript",
       "operation": "app.empty-trash",
       "appState": "running-background",
@@ -1142,18 +1138,14 @@
         "tier": 0,
         "assertions": [
           { "kind": "deleted", "table": "TMTask", "where": { "uuid": "@seed:LAB-TRASH-ME" } },
-          {
-            "kind": "rowExists",
-            "table": "TMTombstone",
-            "where": { "deletedObjectUUID": "@seed:LAB-TRASH-ME" }
-          },
+          { "kind": "notInserted", "table": "TMTombstone" },
           { "kind": "rowCount", "table": "TMTask", "where": { "trashed": 1 }, "count": 0 }
         ]
       }
     },
     {
       "id": "A21",
-      "title": "HAZARD: schedule on a repeating template — the AppleScript T12 analogue",
+      "title": "schedule on a repeating template is GUARDED: 'Cannot schedule to-do (302)' error, zero delta — where the URL when= crashes, AppleScript refuses",
       "vector": "applescript",
       "operation": "todo.schedule-repeating",
       "appState": "running-background",
@@ -1163,13 +1155,13 @@
           "osascript": "tell application \"Things3\" to schedule to do id \"{seed:LAB-REPEAT-DAILY}\" for (current date) + 1 * days",
           "timeoutSeconds": 30
         },
-        { "waitCrash": true, "timeoutSeconds": 20 }
+        { "sleep": 3 }
       ],
       "settleSeconds": 3,
       "expect": {
-        "verdict": "crash",
+        "verdict": "unsupported",
         "tier": 0,
-        "crash": true,
+        "crash": false,
         "allowNonzeroExit": true,
         "assertions": [
           {
@@ -1177,7 +1169,8 @@
             "table": "TMTask",
             "where": { "uuid": "@seed:LAB-REPEAT-DAILY" },
             "fields": ["rt1_recurrenceRule", "start", "startDate", "status"]
-          }
+          },
+          { "kind": "deltaEmpty" }
         ]
       }
     }

@@ -65,14 +65,15 @@ export function computeDisruption(slice: MonitorEvent[]): Disruption {
     }
   }
 
-  // A Things launch deterministically surfaces TWO CGWindowList entries —
-  // the main window (titled, e.g. "Today") and one untitled companion
-  // (observed on every launch; evidence run u-20260703-062903, probe U01).
-  // Those don't count as UI disruption; anything beyond them is a
-  // modal/new window. Error modals appear as untitled window-new events
-  // withOUT a launch (U02/U05: one window; U10/U14: two windows plus an
-  // activation — the json command's error modal steals focus).
-  const windowBudget = signals.launch ? 2 : 0;
+  // Launches and activations surface bookkeeping windows that are not UI
+  // disruption: a launch shows the main window plus (sometimes) an untitled
+  // companion (U01), and an activation of an already-running app can
+  // surface that untitled companion on its own (A42). Budget: launch = 2,
+  // bare activation = 1. Anything beyond the budget is a modal/new window.
+  // Error modals appear as window-new events withOUT a launch (U02/U05:
+  // one window, no activation; U10/U14: two windows plus activation — the
+  // json command's error modal steals focus, so budget 1 still flags them).
+  const windowBudget = signals.launch ? 2 : signals.activated ? 1 : 0;
   let tier: 0 | 1 | 2 | 3 = 0;
   if (signals.launch) tier = 1;
   if (signals.activated) tier = 2;

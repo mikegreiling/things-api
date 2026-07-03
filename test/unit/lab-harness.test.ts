@@ -109,6 +109,24 @@ describe("tier", () => {
     expect(d.tier).toBe(3);
   });
 
+  it("tier 2 when bare activation surfaces the untitled companion window", () => {
+    const d = computeDisruption([
+      ev("activate", { bundleId: THINGS }),
+      ev("frontmost", { bundleId: THINGS }),
+      ev("window-new", { window: 4, title: "" }),
+    ]);
+    expect(d.tier).toBe(2);
+  });
+
+  it("tier 3 when activation comes with windows beyond its budget", () => {
+    const d = computeDisruption([
+      ev("activate", { bundleId: THINGS }),
+      ev("window-new", { window: 4, title: "" }),
+      ev("window-new", { window: 5, title: "" }),
+    ]);
+    expect(d.tier).toBe(3);
+  });
+
   it("tier 3 when a launch spawns more windows than its budget", () => {
     const d = computeDisruption([
       ev("launch", { bundleId: THINGS }),
