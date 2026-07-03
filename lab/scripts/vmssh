@@ -1,0 +1,27 @@
+#!/bin/bash
+# Interactive SSH into a lab VM (defaults to the golden), password auth,
+# IP auto-resolved per boot. Version-controlled so the throwaway credential
+# and lab logic stay with the lab, not in global dotfiles.
+#
+#   lab/scripts/vmssh                       # interactive shell into the golden
+#   lab/scripts/vmssh 'some command'        # run a command
+#   lab/scripts/vmssh --vm <name> [cmd...]  # target another lab VM
+#
+# If you want a global shortcut, alias to THIS path (not the raw ssh line):
+#   alias vmssh='/Volumes/Workspace/Projects/things-api/lab/scripts/vmssh'
+set -euo pipefail
+cd "$(dirname "$0")"
+# shellcheck source=env.sh
+source ./env.sh
+
+VM="things-lab-golden-v1"
+if [ "${1:-}" = "--vm" ]; then
+  VM="$2"
+  shift 2
+fi
+IP="$(tart ip "$VM")"
+
+if [ "$#" -eq 0 ]; then
+  exec sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" "$LAB_SSH_USER@$IP"
+fi
+exec sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" "$LAB_SSH_USER@$IP" "$@"

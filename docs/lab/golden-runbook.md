@@ -36,47 +36,38 @@ alias vmssh='sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsF
    lab/scripts/record-l2.sh '<AUTH-TOKEN>'
    ```
 
-## 3. TCC grants — **[CLICK]** (clones inherit these forever)
+## 3. TCC grants
 
-Push the monitor binary first (host):
+**Empirically revised (2026-07-03):** the two grants that matter — **AppleEvents automation** (sshd → Things3 + System Events) and **Full Disk Access** (sshd, for DB reads) — are **already present in the Cirrus vanilla image** (`auth_value=2`, SIP enabled, so genuine). Both `osascript` calls return prompt-free; no clicks were needed. **Accessibility is not needed** — the disruption-monitor uses CGWindowList + NSWorkspace, not the AX API.
+
+Verify (host), no clicks expected:
 ```sh
-sshpass -p admin scp -o StrictHostKeyChecking=no lab/guest/disruption-monitor/disruption-monitor admin@$IP:/Users/admin/things-lab/bin/
+lab/scripts/tcc-check.sh            # asserts AppleEvents + FDA present; reports Screen Recording
 ```
 
-1. **Automation (AppleEvents), sshd → Things + System Events.** From the host run:
-   ```sh
-   vmssh 'osascript -e "tell application \"Things3\" to get name"'          # triggers prompt
-   vmssh 'osascript -e "tell application \"System Events\" to get name of first process"'
-   ```
-   **[CLICK]** In Screen Sharing, click **Allow** on each consent dialog. Re-run the commands; both must return values with no prompt.
-2. **Accessibility + Screen Recording for the monitor and sshd.** **[CLICK]** System Settings → Privacy & Security:
-   - Accessibility → **+** → add `/Users/admin/things-lab/bin/disruption-monitor` and `/usr/libexec/sshd-keygen-wrapper`
-   - Screen & System Audio Recording → **+** → add both again
-   - Full Disk Access → **+** → add `/usr/libexec/sshd-keygen-wrapper`
-3. **Neutralize Sequoia's monthly screen-capture re-consent** (host):
-   ```sh
-   vmssh 'defaults write ~/Library/Group\ Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist "/Users/admin/things-lab/bin/disruption-monitor" -date "4321-01-01 00:00:00 +0000"'
-   ```
-4. Verify monitor runs and emits events:
-   ```sh
-   vmssh 'nohup ~/things-lab/bin/disruption-monitor >/dev/null 2>&1 & sleep 2; tail -2 ~/things-lab/events.ndjson; pkill -x disruption-monitor'
-   ```
-
-## 4. LaunchAgent for the monitor (host, no clicks)
-
+Push the monitor binary (host) — scripted; run from the repo root:
 ```sh
-vmssh 'cat > ~/Library/LaunchAgents/com.thingslab.disruption-monitor.plist <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.thingslab.disruption-monitor</string>
-  <key>ProgramArguments</key><array><string>/Users/admin/things-lab/bin/disruption-monitor</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-</dict></plist>
-PLIST
-launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.thingslab.disruption-monitor.plist
-launchctl print gui/501/com.thingslab.disruption-monitor | head -3'
+source lab/scripts/env.sh; IP="$(tart ip things-lab-golden-v1)"
+lab_scp lab/guest/disruption-monitor/disruption-monitor "admin@$IP:/Users/admin/things-lab/bin/"
+```
+
+### Screen Recording — **[CLICK]**, OPTIONAL (window titles + screenshots only)
+
+Without it, the monitor still captures every NSWorkspace event (launch/activate/terminate/frontmost = tier 0/1/2) **and** window-new/window-close (a modal/window appeared = tier 3). What it *cannot* do without it: read window **title strings** (they come back `""`) or take `screencapture` screenshots. DB-delta verdicts and disruption tiers do not depend on it, so **the U-probe campaign can run without this.**
+
+To enable (recommended before the AppleScript/Shortcuts campaigns, where modal-title identification and screenshot evidence add real value):
+1. **[CLICK]** System Settings → Privacy & Security → **Screen & System Audio Recording** → **+** → add both `/Users/admin/things-lab/bin/disruption-monitor` and `/usr/libexec/sshd-keygen-wrapper` (⌘⇧G to type the paths).
+2. Neutralize Sequoia's monthly re-consent (host):
+   ```sh
+   lab/scripts/suppress-screencapture-nag.sh
+   ```
+
+## 4. LaunchAgent for the monitor — scripted, done (2026-07-03)
+
+Installed and verified emitting in the Aqua session:
+```sh
+lab/scripts/install-monitor-agent.sh    # bootstrap + kickstart + emission check
+```
 ```
 
 ## 5. Proxy shortcuts — **[CLICK]** (deferred OK)
