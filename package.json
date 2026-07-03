@@ -1,6 +1,6 @@
 {
   "name": "things-api",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
   "license": "UNLICENSED",
@@ -20,6 +20,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run check && npm run build",
+    "smoke:pack": "bash scripts/pack-smoke.sh",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "fmt": "oxfmt",

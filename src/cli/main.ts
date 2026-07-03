@@ -6,6 +6,8 @@
  * (writes). Contracts that already bind: exit codes (./exit-codes.ts) and
  * the --json envelope (./output.ts).
  */
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
 import { registerDoctor } from "./commands/doctor.ts";
@@ -23,6 +25,11 @@ AGENT NOTES:
     5 drift-blocked, 6 unsupported, 7 environment.
   - No command ever prompts interactively; risky operations require explicit
     acknowledgement flags documented in their --help.
+  - Discover the operation x vector support matrix with: things capabilities --json
+  - Every write supports --dry-run: inspect the compiled invocation, disruption
+    tier, hazards, and expected delta without executing anything.
+  - Every mutation is verified by read-after-write and recorded in the audit
+    trail (~/.local/state/things-api/audit/); blocked errors carry remediation.
 `;
 
 export function buildProgram(): Command {
@@ -41,7 +48,19 @@ export function buildProgram(): Command {
   return program;
 }
 
-const isDirectRun = process.argv[1]?.endsWith("main.ts") || process.argv[1]?.endsWith("main.js");
+// Direct-run detection must survive the npm .bin symlink (argv[1] ends with
+// "things", not "main.js") — resolve through realpath and compare to this
+// module. Caught by scripts/pack-smoke.sh: a name-suffix check made the
+// installed bin a silent no-op.
+const isDirectRun = ((): boolean => {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  try {
+    return realpathSync(invoked) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
 if (isDirectRun) {
   const program = buildProgram();
   program.exitOverride((err) => {
