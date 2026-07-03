@@ -1,12 +1,45 @@
 /**
  * things-api — typed library for programmatic interaction with Things 3.
  *
- * Read layer (Phase 1) is live; write layer lands in Phase 5.
+ * Reads via direct SQLite; writes via the verified mutation pipeline over
+ * official app surfaces (URL scheme + AppleScript, both lab-validated).
  * See docs/design/architecture.md.
  */
 
 export { openThings } from "./client.ts";
 export type { OpenOptions, ThingsClient } from "./client.ts";
+
+export type {
+  Acknowledgements,
+  AreaAddParams,
+  ContainerRef,
+  OperationKind,
+  OperationParamsMap,
+  ProjectAddParams,
+  ProjectCompleteParams,
+  ProjectUpdateParams,
+  TagAddParams,
+  TodoAddParams,
+  TodoMoveParams,
+  TodoUpdateParams,
+  WhenValue,
+} from "./write/operations.ts";
+export { OPERATION_KINDS } from "./write/operations.ts";
+export type { MutationPlan, MutationResult, WriteOptions } from "./write/pipeline.ts";
+export type { HazardId } from "./write/guards.ts";
+export { HAZARD_IDS } from "./write/guards.ts";
+export type {
+  CompiledInvocation,
+  VectorId,
+  VectorMatrix,
+  VectorSupport,
+  WriteVector,
+} from "./write/vectors/types.ts";
+export { APPLESCRIPT_MATRIX } from "./write/vectors/applescript.ts";
+export { URL_SCHEME_MATRIX } from "./write/vectors/url-scheme.ts";
+export type { DeltaSpec, FieldAssertion } from "./write/verify/delta.ts";
+export type { AuditRecord } from "./audit/schema.ts";
+export type { DisruptionTier, Profile, ThingsApiConfig } from "./config.ts";
 
 export type {
   AnyTask,
