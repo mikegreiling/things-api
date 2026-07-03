@@ -18,13 +18,7 @@
   },
   "schemaFingerprint": "sha256:e4267e1bd2017d0955cf03fc54409ac6fe7809bdb4509b4e91bfe00518352364",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
-  "humanLayersDone": [
-    "L2",
-    "L3-appleevents",
-    "L3-fulldisk",
-    "L4-launchagent",
-    "L6-seed-dataset"
-  ],
+  "humanLayersDone": ["L2", "L3-appleevents", "L3-fulldisk", "L4-launchagent", "L6-seed-dataset"],
   "tcc": {
     "appleEvents_sshd": "granted (image default; both Things3 + System Events work prompt-free)",
     "fullDiskAccess_sshd": "granted (image default; kTCCServiceSystemPolicyAllFiles)",
