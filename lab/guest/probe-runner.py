@@ -325,9 +325,17 @@ def run_probe(probe: dict, resolver: Resolver, out_dir: str) -> dict:
         expected_running = probe["appState"] != "not-running" or any(
             "openUrl" in c or "osascript" in c for c in probe["commands"]
         )
+        pid_died = (not pid_alive) and expected_running and record["appRunningBefore"]
         new_ips = sorted(list_ips() - ips_before)
+        if pid_died and not new_ips:
+            # ReportCrash writes the .ips several seconds after process death;
+            # wait for it — the crash log is bug-report evidence.
+            deadline = time.time() + 25.0
+            while time.time() < deadline and not new_ips:
+                time.sleep(1.0)
+                new_ips = sorted(list_ips() - ips_before)
         record["crash"] = {
-            "pidDied": (not pid_alive) and expected_running and record["appRunningBefore"],
+            "pidDied": pid_died,
             "ipsFiles": new_ips,
         }
         for name in new_ips:

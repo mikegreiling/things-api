@@ -29,6 +29,7 @@
     "lab:run": "node lab/runner/main.ts run",
     "lab:compare": "node lab/runner/main.ts compare",
     "lab:gc": "node lab/runner/main.ts gc",
+    "lab:regress": "bash lab/scripts/regress.sh",
     "check": "npm run typecheck && npm run lint && npm run fmt:check && npm run test"
   },
   "dependencies": {
