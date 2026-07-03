@@ -197,6 +197,8 @@ Regression mode = same harness, expectations locked to capability-matrix-v2.json
 
 Golden-frozen dataset + pinned clock + airgapped `--net-host` + updaters/indexers disabled + serialized probes + app-state reset between probes (`pkill Things3` is the canonical modal-clear/reset primitive) + versioned golden with fingerprint asserted at bootstrap.
 
+> **Empirical correction (2026-07-03, Lab-3):** `--net-host` on current Tart is implemented via Softnet and requires passwordless root on the **host** ("root privileges are required … Softnet process terminated prematurely"); the Lab-1 smoke only verified the flag existed, not that it boots. Everywhere this document says "airgapped `--net-host`", the shipped harness instead boots on default NAT and airgaps **guest-side** at bootstrap: `sudo route -n delete default` (SSH survives on the directly connected vmnet subnet; internet becomes unroutable, verified by a failed ping every run). See docs/lab/harness.md.
+
 ### 5.3 Intentional-drift workflow (new Things release)
 
 1. Download new trial DMG → `vendor/manifest.json` update.

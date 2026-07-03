@@ -85,7 +85,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 
 | Column | Meaning |
 |---|---|
-| `index` | Sparse sortable rank within the structural context (project/area/list). Moving one item rewrites only that item (validated). Collision tie-break is view-specific and deliberately unmodeled. |
+| `index` | Sparse sortable rank within the structural context (project/area/list). Moving one item rewrites only that item (validated). Collision tie-break is view-specific and deliberately unmodeled. **Scope is the immediate container** (lab U17, 2026-07-03): heading rows order among themselves and to-dos order within their heading, but comparing across scopes is meaningless — a headed child's `index` can be lower than its own heading's (observed −609 under a −409 heading), and flat items don't share a scale with headings. Sort per scope when mirroring the project view. |
 | `todayIndex` | Sparse rank within Today/This Evening sections, relative to `todayIndexReferenceDate`. Today order = `(startBucket, todayIndex)` (validated against UI). Independent of `index`. |
 
 ### Repeating (`rt1_*`)

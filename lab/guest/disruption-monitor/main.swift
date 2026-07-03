@@ -2,8 +2,10 @@
 //
 // Emits NDJSON events to ~/things-lab/events.ndjson:
 //   {"ts":"…","kind":"launch|activate|terminate|frontmost|window-new|window-close|title-change","detail":{…}}
-// The probe runner brackets probes with MARK sentinels by appending its own
-// lines to the same file; evidence extraction is a log slice between marks.
+// This process is the file's ONLY writer: the FileHandle keeps a private
+// offset (no O_APPEND), so any second writer's lines would be silently
+// overwritten. The probe runner writes its MARK sentinels to a separate
+// marks.ndjson; the host merges the streams by timestamp at evaluation.
 //
 // Requires (granted once in the golden image, clones inherit):
 //   - Accessibility (window/title introspection via CGWindowList)

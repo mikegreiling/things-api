@@ -1,0 +1,748 @@
+{
+  "suite": "u",
+  "description": "URL-scheme re-validation: T01–T20 findings from docs/research/validation-notes-step3.md re-encoded as instrumented probes. Canonical transport is `open -g` (background-open) except U01, which deliberately re-tests plain-open launch/foreground behavior. U10/U11/U15 are discovery cells (T10 never ran; T11/T15 were evidence-based); their expectations were locked from the first observed run. Hazard-group probes run last.",
+  "probes": [
+    {
+      "id": "U01",
+      "legacyRef": "T01",
+      "title": "version command launches Things and steals focus (plain open)",
+      "vector": "url",
+      "operation": "app.version-probe",
+      "appState": "not-running",
+      "commands": [{ "openUrl": "things:///version", "foreground": true }, { "sleep": 5 }],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "supported",
+        "tier": 2,
+        "assertions": [{ "kind": "deltaEmpty" }]
+      }
+    },
+    {
+      "id": "U02",
+      "legacyRef": "T02",
+      "title": "update without auth-token: modal error, no mutation",
+      "vector": "url",
+      "operation": "todo.update-unauthenticated",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U02-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U02-TARGET'" }
+      ],
+      "commands": [{ "openUrl": "things:///update?id={uuid:U02-TARGET}&title=U02-RENAMED" }],
+      "settleSeconds": 4,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 3,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U02-TARGET" },
+            "fields": ["title", "status", "notes"]
+          },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "U02-RENAMED" } }
+        ]
+      }
+    },
+    {
+      "id": "U03",
+      "legacyRef": "T03",
+      "title": "add with unknown tag: to-do created, tag silently ignored",
+      "vector": "url",
+      "operation": "todo.create",
+      "appState": "running-background",
+      "commands": [
+        { "openUrl": "things:///add?title=U03-TagProbe&tags=U03-NoSuchTag" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U03-TagProbe'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "U03-TagProbe" } },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U03-TagProbe" },
+            "field": "start",
+            "value": 0
+          },
+          { "kind": "rowAbsent", "table": "TMTag", "where": { "title": "U03-NoSuchTag" } },
+          {
+            "kind": "rowCount",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@uuidOf:TMTask:title=U03-TagProbe" },
+            "count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "U04",
+      "legacyRef": "T04",
+      "title": "tags param is full-set replacement; matching is case-insensitive",
+      "vector": "url",
+      "operation": "todo.tags-replace",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U04-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U04-TARGET'" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U04-TARGET}&auth-token={ctx:token}&tags=lab-tag-1,lab-tag-2"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTag t ON tt.tags=t.uuid WHERE tt.tasks='{uuid:U04-TARGET}' AND t.title='lab-tag-2'"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:U04-TARGET}&auth-token={ctx:token}&tags=LAB-TAG-1"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTaskTag tt JOIN TMTag t ON tt.tags=t.uuid WHERE tt.tasks='{uuid:U04-TARGET}' AND t.title='lab-tag-2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@uuidOf:TMTask:title=U04-TARGET" },
+            "count": 1
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@uuidOf:TMTask:title=U04-TARGET", "tags": "@seed:lab-tag-1" }
+          },
+          { "kind": "rowAbsent", "table": "TMTag", "where": { "title": "LAB-TAG-1" } }
+        ]
+      }
+    },
+    {
+      "id": "U05",
+      "legacyRef": "T05",
+      "title": "add-area is not a URL command: modal error, no area created",
+      "vector": "url",
+      "operation": "area.create",
+      "appState": "running-background",
+      "commands": [{ "openUrl": "things:///add-area?title=U05-ShouldFail" }],
+      "settleSeconds": 4,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 3,
+        "assertions": [
+          { "kind": "rowAbsent", "table": "TMArea", "where": { "title": "U05-ShouldFail" } },
+          { "kind": "notInserted", "table": "TMArea" }
+        ]
+      }
+    },
+    {
+      "id": "U06",
+      "legacyRef": "T06",
+      "title": "update list=<unknown area>: silent no-op",
+      "vector": "url",
+      "operation": "todo.move-to-area",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U06-TARGET&when=today" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U06-TARGET'" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U06-TARGET}&auth-token={ctx:token}&list=U06-NoSuchArea"
+        },
+        { "sleep": 3 }
+      ],
+      "expect": {
+        "verdict": "silent-noop",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U06-TARGET" },
+            "fields": ["area", "project", "start", "startDate"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U06-TARGET" },
+            "field": "area",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "U06B",
+      "legacyRef": "T06",
+      "title": "update list=<existing area, case-insensitive>: moves, preserves when",
+      "vector": "url",
+      "operation": "todo.move-to-area",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U06-TARGET}&auth-token={ctx:token}&list=lab-area-a"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U06-TARGET' AND area='{seed:LAB-AREA-A}'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U06-TARGET" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U06-TARGET" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U06-TARGET" },
+            "fields": ["startDate"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U07",
+      "legacyRef": "T07",
+      "title": "checklist-items is wholesale replacement (destructive to item state)",
+      "vector": "url",
+      "operation": "todo.checklist-replace",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=U07-TARGET&when=anytime&checklist-items=Alpha%0ABravo%0ACharlie"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMChecklistItem WHERE task='{uuid:U07-TARGET}')=3"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U07-TARGET}&auth-token={ctx:token}&checklist-items=Delta%0AEcho"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMChecklistItem WHERE task='{uuid:U07-TARGET}')=2"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMChecklistItem",
+            "where": { "task": "@uuidOf:TMTask:title=U07-TARGET" },
+            "count": 2
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMChecklistItem",
+            "where": { "task": "@uuidOf:TMTask:title=U07-TARGET", "title": "Delta" }
+          },
+          {
+            "kind": "rowAbsent",
+            "table": "TMChecklistItem",
+            "where": { "task": "@uuidOf:TMTask:title=U07-TARGET", "title": "Alpha" }
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U07-TARGET" },
+            "fields": ["title", "notes", "status", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U08",
+      "legacyRef": "T08",
+      "title": "project completion auto-completes open children, no prompt (unlike UI)",
+      "vector": "url",
+      "operation": "project.complete",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add-project?title=U08-PROJ&to-dos=U08-C1%0AU08-C2" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U08-C2'" },
+        { "openUrl": "things:///update?id={uuid:U08-C2}&auth-token={ctx:token}&canceled=true" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U08-C2' AND status=2" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:U08-PROJ}&auth-token={ctx:token}&completed=true"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U08-PROJ' AND status=3" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U08-PROJ" },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U08-C1" },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U08-C2" },
+            "field": "status",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "U09",
+      "legacyRef": "T09",
+      "title": "heading= on add does not create a missing heading (placement-only param)",
+      "vector": "url",
+      "operation": "heading.create-via-add-param",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=U09-HeadProbe&list=LAB-PROJ-PLAIN&heading=U09-NoSuchHeading"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U09-HeadProbe'" }
+      ],
+      "expect": {
+        "verdict": "partial",
+        "tier": 0,
+        "assertions": [
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "U09-HeadProbe" } },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U09-HeadProbe" },
+            "field": "project",
+            "value": "@seed:LAB-PROJ-PLAIN"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U09-HeadProbe" },
+            "field": "heading",
+            "value": null
+          },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "U09-NoSuchHeading" } }
+        ]
+      }
+    },
+    {
+      "id": "U10",
+      "legacyRef": "T10",
+      "title": "json update op against an existing heading (discovery: T10 never ran)",
+      "vector": "url",
+      "operation": "heading.update-via-json",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22heading%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{seed:Alpha}%22%2C%22attributes%22%3A%7B%22title%22%3A%22U10-AlphaRenamed%22%7D%7D%5D"
+        }
+      ],
+      "settleSeconds": 4,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 3,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:Alpha" },
+            "fields": ["title", "status", "type"]
+          },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "U10-AlphaRenamed" } }
+        ]
+      }
+    },
+    {
+      "id": "U11",
+      "legacyRef": "T11",
+      "title": "undocumented index param is silently ignored",
+      "vector": "url",
+      "operation": "todo.reorder-via-index",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U11-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U11-TARGET'" }
+      ],
+      "commands": [
+        { "openUrl": "things:///update?id={uuid:U11-TARGET}&auth-token={ctx:token}&index=1" },
+        { "sleep": 3 }
+      ],
+      "expect": {
+        "verdict": "silent-noop",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U11-TARGET" },
+            "fields": ["title", "status", "start", "index", "todayIndex"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U13",
+      "legacyRef": "T13",
+      "title": "valid update executes while an unsupported-command modal is open",
+      "vector": "url",
+      "operation": "todo.update-during-modal",
+      "appState": "modal-open",
+      "setup": [
+        { "openUrl": "things:///add?title=U13-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U13-TARGET'" },
+        { "openUrl": "things:///add-area?title=U13-ModalTrigger" },
+        { "sleep": 3 }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U13-TARGET}&auth-token={ctx:token}&title=U13-RENAMED"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U13-RENAMED'" }
+      ],
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "U13-RENAMED" } },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "U13-TARGET" } },
+          { "kind": "notInserted", "table": "TMTask" }
+        ]
+      }
+    },
+    {
+      "id": "U14",
+      "legacyRef": "T14",
+      "title": "delete is not a URL command: modal error, target intact",
+      "vector": "url",
+      "operation": "todo.delete",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U14-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U14-TARGET'" }
+      ],
+      "commands": [{ "openUrl": "things:///delete?id={uuid:U14-TARGET}" }],
+      "settleSeconds": 4,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 3,
+        "assertions": [
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "U14-TARGET" } },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U14-TARGET" },
+            "fields": ["status", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U15",
+      "legacyRef": "T15",
+      "title": "no URL path promotes a to-do to a project (discovery: bogus type param)",
+      "vector": "url",
+      "operation": "todo.promote-to-project",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U15-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U15-TARGET'" }
+      ],
+      "commands": [
+        { "openUrl": "things:///update?id={uuid:U15-TARGET}&auth-token={ctx:token}&type=project" },
+        { "sleep": 3 }
+      ],
+      "expect": {
+        "verdict": "silent-noop",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U15-TARGET" },
+            "field": "type",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "U15-TARGET" },
+            "fields": ["type", "title", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U16",
+      "legacyRef": "T16",
+      "title": "repeating template shape: rt1_recurrenceRule blob, start=2, instances separate",
+      "vector": "sqlite",
+      "operation": "read.repeating-template",
+      "appState": "running-background",
+      "commands": [
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}' AND rt1_recurrenceRule IS NOT NULL AND start=2 AND repeater IS NULL"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='LAB-REPEAT-DAILY' AND uuid<>'{seed:LAB-REPEAT-DAILY}' AND rt1_recurrenceRule IS NULL"
+        }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [{ "kind": "deltaEmpty" }]
+      }
+    },
+    {
+      "id": "U17",
+      "legacyRef": "T17",
+      "title": "index orders siblings within one container scope (headings among headings, children within a heading); cross-scope comparison is meaningless",
+      "vector": "sqlite",
+      "operation": "read.project-ordering",
+      "appState": "running-background",
+      "commands": [
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:Alpha}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:Beta}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A1}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A2}')"
+        }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [{ "kind": "deltaEmpty" }]
+      }
+    },
+    {
+      "id": "U18",
+      "legacyRef": "T18",
+      "title": "tag inheritance is traversal-based: no materialized child TMTaskTag rows",
+      "vector": "sqlite",
+      "operation": "read.tag-inheritance",
+      "appState": "running-background",
+      "commands": [
+        {
+          "waitSql": "SELECT 1 FROM TMAreaTag WHERE areas='{seed:LAB-AREA-A}' AND tags='{seed:lab-tag-1}'"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTaskTag WHERE tasks='{seed:LAB-P-2}')"
+        }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@seed:LAB-P-1", "tags": "@seed:lab-tag-1" }
+          },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "U19",
+      "legacyRef": "T19",
+      "title": "adding an open child to a completed project reopens it",
+      "vector": "url",
+      "operation": "project.reopen-via-new-child",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add-project?title=U19-PROJ&to-dos=U19-C1" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U19-PROJ' AND type=1" },
+        {
+          "openUrl": "things:///update-project?id={uuid:U19-PROJ}&auth-token={ctx:token}&completed=true"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U19-PROJ' AND status=3" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U19-C1' AND status=3" }
+      ],
+      "commands": [
+        { "openUrl": "things:///add?title=U19-C2&list-id={uuid:U19-PROJ}" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U19-PROJ' AND status=0" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U19-PROJ" },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U19-C2" },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U19-C2" },
+            "field": "project",
+            "value": "@uuidOf:TMTask:title=U19-PROJ"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U19-C1" },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "U20",
+      "legacyRef": "T20",
+      "title": "checklist items can be added to a completed to-do without reopening it",
+      "vector": "url",
+      "operation": "todo.checklist-on-completed",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=U20-TARGET&when=anytime" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U20-TARGET'" },
+        {
+          "openUrl": "things:///update?id={uuid:U20-TARGET}&auth-token={ctx:token}&completed=true"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U20-TARGET' AND status=3" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U20-TARGET}&auth-token={ctx:token}&checklist-items=U20-X%0AU20-Y"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMChecklistItem WHERE task='{uuid:U20-TARGET}')=2"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U20-TARGET" },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "rowCount",
+            "table": "TMChecklistItem",
+            "where": { "task": "@uuidOf:TMTask:title=U20-TARGET" },
+            "count": 2
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMChecklistItem",
+            "where": { "task": "@uuidOf:TMTask:title=U20-TARGET", "title": "U20-X", "status": 0 }
+          }
+        ]
+      }
+    },
+    {
+      "id": "U12B",
+      "legacyRef": "T12",
+      "title": "non-scheduling mutation (title) on a repeating template succeeds",
+      "vector": "url",
+      "operation": "todo.update-repeating-nonschedule",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={seed:LAB-REPEAT-DAILY}&auth-token={ctx:token}&title=LAB-REPEAT-DAILY-RENAMED"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}' AND title='LAB-REPEAT-DAILY-RENAMED'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "crash": false,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:LAB-REPEAT-DAILY" },
+            "field": "title",
+            "value": "LAB-REPEAT-DAILY-RENAMED"
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:LAB-REPEAT-DAILY" },
+            "fields": ["rt1_recurrenceRule", "start", "startDate", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "U12",
+      "legacyRef": "T12",
+      "title": "when= on a repeating template crashes Things; item left unchanged",
+      "vector": "url",
+      "operation": "todo.update-repeating-when",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={seed:LAB-REPEAT-DAILY}&auth-token={ctx:token}&when=today"
+        },
+        { "waitCrash": true, "timeoutSeconds": 20 }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "crash",
+        "tier": 0,
+        "crash": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:LAB-REPEAT-DAILY" },
+            "fields": ["rt1_recurrenceRule", "start", "startDate", "status"]
+          }
+        ]
+      }
+    }
+  ]
+}
