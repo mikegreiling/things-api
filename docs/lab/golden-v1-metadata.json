@@ -1,0 +1,48 @@
+{
+  "golden": "things-lab-golden-v1",
+  "builtAt": "2026-07-02T16:09:00Z",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "thingsVersion": "3.22.11",
+  "thingsZipSha256": "b334a6478c49484f5abf24b8837000fdd8b75266e394126d504372f3a48b0068",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:e4267e1bd2017d0955cf03fc54409ac6fe7809bdb4509b4e91bfe00518352364",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L4-launchagent",
+    "L6-seed-dataset"
+  ],
+  "tcc": {
+    "appleEvents_sshd": "granted (image default; both Things3 + System Events work prompt-free)",
+    "fullDiskAccess_sshd": "granted (image default; kTCCServiceSystemPolicyAllFiles)",
+    "accessibility": "not needed (monitor uses CGWindowList, not AX API)",
+    "screenRecording": "NOT granted \u2014 gates window TITLES and screenshots only; window existence/geometry + all NSWorkspace events work without it"
+  },
+  "disruptionMonitor": "LaunchAgent com.thingslab.disruption-monitor running in Aqua session; emits launch/activate/terminate/frontmost/window-new/window-close",
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "deferred": [
+    "L5: Shortcuts first-run + Allow Running Scripts + proxy imports (second sitting, before S-probe campaign)"
+  ]
+}

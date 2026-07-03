@@ -78,14 +78,14 @@ Minimum for now: **[CLICK]** open Shortcuts.app once, dismiss any first-run dial
 
 ## 6. Seed dataset
 
-Mostly scripted (I run it via URL scheme once Things URLs are enabled), except UI-only structures:
+Mostly scripted, with a 3-item UI-only remainder:
 
-1. Scripted part (host; I do this): areas, tags + hierarchy, projects, to-dos in every state, evening items, checklists, completed/trashed items — via `things:///json` with the auth token, then verified by `things snapshot --db` against the guest DB.
-2. **[CLICK]** UI-only part (you, ~10 min, exact spec provided at session time):
-   - Headings: in project `LAB-PROJ-HEADINGS`, add headings `Alpha` and `Beta`; drag two seeded to-dos under each.
-   - Repeating: create `LAB-REPEAT-DAILY` (to-do, repeats every day) and `LAB-REPEAT-WEEKLY-PROJ` (project, repeats weekly).
-   - Complete one project via UI (choose "complete all" at the prompt) so a logged project exists.
-3. Quit Things cleanly (⌘Q). I then record the schema fingerprint + UUID→role manifest into metadata.json.
+1. Scripted part: `lab/guest/seed-dataset.py <auth-token>` (pushed + run over SSH) — areas + tag hierarchy via AppleScript (URL scheme can't create them), projects/to-dos in every list state via URL scheme incl. **headings inside the new-project `things:///json` payload** (works — no dragging needed), status updates via token, delete-to-trash via AppleScript. Every mutation DB-verified; emits `~/things-lab/seed-manifest.json`.
+2. **[CLICK]** UI-only remainder (~5 min):
+   - `LAB-REPEAT-DAILY`: new to-do → Items → Repeat… → every 1 day (fixed schedule, no reminders/deadline).
+   - `LAB-REPEAT-WEEKLY-PROJ`: new project → Items → Repeat… → every 1 week (v1: Sundays, starting 2026-07-05).
+   - Complete `LAB-PROJ-COMPLETED` via its completion circle → prompt appears (open children) → choose **"mark as completed"**.
+3. Quit Things cleanly (⌘Q). Verify + record: repeat templates land as `rt1_recurrenceRule` blobs with `start=2`; fingerprint the pulled guest DB with `things doctor --db`; update manifest + metadata (see session transcript for the exact queries — fold into a `record-l6.sh` for v2).
 
 ## 7. Freeze
 
@@ -102,4 +102,9 @@ Golden is never booted again — every run clones it. Rebuilds (new Things versi
 - [ ] Both osascript commands run prompt-free
 - [ ] Monitor LaunchAgent emits `frontmost` events after a fresh login (`tart stop` + `tart run` + check events.ndjson)
 - [ ] Seed dataset present; `things snapshot --db <guest path>` counts match the seed manifest
+- [ ] `events.ndjson` truncated (seeding-session noise removed)
 - [ ] Things is QUIT and the VM stopped
+
+## Golden v1 status (completed 2026-07-03)
+
+Layers done: L2 (trial + settings + token), L3 (AppleEvents + Full Disk Access were **image defaults**; Screen Recording granted for monitor + sshd; Accessibility proved unnecessary — monitor uses CGWindowList), L4 (monitor LaunchAgent verified), L6 (37-record scripted seed + 3 UI items, all DB-verified). **Deferred: L5** (Shortcuts first-run + Allow Running Scripts + proxy imports — second sitting, required before the S-probe campaign). Repo copies: [`seed-manifest.json`](seed-manifest.json), [`golden-v1-metadata.json`](golden-v1-metadata.json).

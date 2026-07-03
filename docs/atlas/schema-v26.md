@@ -94,8 +94,8 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 |---|---|
 | `rt1_recurrenceRule` | BLOB (plist) on **templates**. `IS NOT NULL` ⇒ this row is a repeating template (91 observed). Templates are invisible in normal list views. |
 | `rt1_repeatingTemplate` | uuid on **instances** pointing at their template (1,936 observed). |
-| `rt1_instanceCreation*`, `rt1_nextInstanceStartDate`, `rt1_afterCompletionReferenceDate` | Instance-generation bookkeeping. |
-| `repeater`, `repeaterMigrationDate` | Newer repeater representation (BLOB) + migration marker. Relationship to `rt1_*` is a lab probe topic. |
+| `rt1_instanceCreation*`, `rt1_nextInstanceStartDate`, `rt1_afterCompletionReferenceDate` | Instance-generation bookkeeping. `rt1_nextInstanceStartDate` uses the packed-date encoding (lab-verified: decodes to the configured next occurrence). |
+| `repeater`, `repeaterMigrationDate` | Newer repeater representation (BLOB) + migration marker. **Lab-verified (3.22.11): new repeat rules are authored into `rt1_recurrenceRule`; `repeater` stays NULL.** Templates live in `start=2` (why list views never show them); spawned instances materialize as `start=2 + startDate=<occurrence>` and get promoted to `start=1` by app maintenance (same pending-promotion mechanics observed on live data). |
 
 **Hazard tie-in:** scheduling writes (`when`) against rows with recurrence fields crash Things (T12). Guard `H-REPEAT-SCHEDULE` keys off `rt1_recurrenceRule`/`rt1_repeatingTemplate`/`repeater`.
 
@@ -127,8 +127,8 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 ## Open questions (lab probe backlog)
 
 1. `reminderTime` bit layout (safe to derive from fixtures: set reminders at known times in the lab VM, read back).
-2. `repeater` BLOB vs `rt1_recurrenceRule` — which does 3.22.x actually author? (`repeaterMigrationDate` suggests a migration.)
+2. ~~`repeater` BLOB vs `rt1_recurrenceRule`~~ **ANSWERED (lab, 2026-07-03): 3.22.11 authors `rt1_recurrenceRule`; `repeater` stays NULL.**
 3. Heading `status` semantics when a heading is archived in UI (no non-open headings existed in the probed library).
-4. `TMAreaTag` population conditions (0 rows despite historical area-tag use).
+4. ~~`TMAreaTag` population conditions~~ **PARTIALLY ANSWERED (lab): AppleScript `set tag names of area` populates `TMAreaTag` immediately. Why Mike's production table is empty despite historical area-tag use remains a curiosity.**
 5. Tombstone lifecycle: when exactly `leavesTombstone` rows produce `TMTombstone` entries (delete-to-trash vs empty-trash vs sync).
 6. Logbook timing: `logInterval`/`manualLogDate` interaction with when completed items visually move to Logbook (research "Logbook timing" ancillary finding).

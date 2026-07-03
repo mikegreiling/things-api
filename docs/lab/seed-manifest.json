@@ -1,0 +1,162 @@
+{
+  "LAB-AREA-A": {
+    "uuid": "7Ck4hAXU36jyaBsy2Fkije",
+    "role": "area (created via AppleScript)"
+  },
+  "LAB-AREA-B": {
+    "uuid": "2piYxp6UzasLDSvkwY747J",
+    "role": "area (created via AppleScript)"
+  },
+  "lab-tag-1": {
+    "uuid": "9sGML65oKbzxcdwpxNPw9K",
+    "role": "tag"
+  },
+  "lab-tag-2": {
+    "uuid": "HvoQhoPrTn6WTPvoR2GJEa",
+    "role": "tag"
+  },
+  "prio": {
+    "uuid": "PSWunZizGiUCx4e2scBGP4",
+    "role": "tag"
+  },
+  "high": {
+    "uuid": "VAn6HVzXDtHUhC273S4GYV",
+    "role": "tag (child of prio)"
+  },
+  "low": {
+    "uuid": "E4nxiWWbKVawWfgXfkfHgm",
+    "role": "tag (child of prio)"
+  },
+  "LAB-PROJ-PLAIN": {
+    "uuid": "933TCvzMgM3MLvpKPcjheC",
+    "role": "project in LAB-AREA-A"
+  },
+  "LAB-PROJ-MIXED": {
+    "uuid": "Mnwp9RvB4yAB8G5cmhkukZ",
+    "role": "project in LAB-AREA-B"
+  },
+  "LAB-PROJ-COMPLETED": {
+    "uuid": "LExZb5peX2knyK9JJDZB3g",
+    "role": "project (Mike completes via UI)"
+  },
+  "LAB-C-1": {
+    "uuid": "HKQ2JCSvtZn6zCdUq6FfWE",
+    "role": "child of LAB-PROJ-COMPLETED"
+  },
+  "LAB-C-2": {
+    "uuid": "TpVSVvTs2d7tjpEuftUrn2",
+    "role": "child of LAB-PROJ-COMPLETED"
+  },
+  "LAB-PROJ-HEADINGS": {
+    "uuid": "Dwr1MiANqMFvAWddgGgzVX",
+    "role": "project with headings"
+  },
+  "Alpha": {
+    "uuid": "5saDdJcodvWARN9Ct2nQsT",
+    "role": "heading"
+  },
+  "Beta": {
+    "uuid": "M7QEqPbk6v9jZZ6CBiyaP3",
+    "role": "heading"
+  },
+  "LAB-H-FLAT": {
+    "uuid": "LJgkeEgo3wRaLSFD7gGgAr",
+    "role": "unheaded child"
+  },
+  "LAB-H-A1": {
+    "uuid": "A4iVBLBVuybv9GLYnFaCos",
+    "role": "child under Alpha"
+  },
+  "LAB-H-A2": {
+    "uuid": "V4SRirFAm2SBxNQCrsJ2KG",
+    "role": "child under Alpha"
+  },
+  "LAB-H-B1": {
+    "uuid": "Sf1wgmRWW4VdZkUAT2i4Ai",
+    "role": "child under Beta"
+  },
+  "LAB-P-1": {
+    "uuid": "95tovetAyq9R58hp5714D6",
+    "role": "todo tagged lab-tag-1"
+  },
+  "LAB-P-2": {
+    "uuid": "4CuMPDWiGViGSNkBjkXAfa",
+    "role": "todo with deadline"
+  },
+  "LAB-P-3": {
+    "uuid": "CobKw2dfHfrsiF9U2HNfu1",
+    "role": "todo with unicode notes"
+  },
+  "LAB-M-OPEN": {
+    "uuid": "EyLMeg97U51xmKLAe9eGbd",
+    "role": "child of LAB-PROJ-MIXED"
+  },
+  "LAB-M-DONE": {
+    "uuid": "KbDM9GgXnmQCxF8gFc8zND",
+    "role": "child of LAB-PROJ-MIXED"
+  },
+  "LAB-M-CANCEL": {
+    "uuid": "HqdYLTciizrqTYMxmXR9fq",
+    "role": "child of LAB-PROJ-MIXED"
+  },
+  "LAB-INBOX-1": {
+    "uuid": "2Zgf538GeSJDroZX1cFdEU",
+    "role": "inbox plain"
+  },
+  "LAB-INBOX-2": {
+    "uuid": "6Ktbr5h588NPa9zbcEVpei",
+    "role": "inbox with checklist"
+  },
+  "LAB-TODAY-1": {
+    "uuid": "3oWa6dwGTaxQkrWQX71wiq",
+    "role": "today"
+  },
+  "LAB-EVENING-1": {
+    "uuid": "HKwNrHZYZL48yuNS6X3pCz",
+    "role": "this evening"
+  },
+  "LAB-ANYTIME-1": {
+    "uuid": "87tz6tZQq3uJgDCTeZjMvj",
+    "role": "anytime"
+  },
+  "LAB-PINNED-TODAY": {
+    "uuid": "Z3NGaTnMwsuTvBK2YcVZq",
+    "role": "today-exact at pinned date"
+  },
+  "LAB-UPCOMING-1": {
+    "uuid": "TjHdxYnQsgQa8TJM9H4WXB",
+    "role": "upcoming"
+  },
+  "LAB-SOMEDAY-1": {
+    "uuid": "U9Ho5HiBsXAfEVte9rrPm2",
+    "role": "someday"
+  },
+  "LAB-DEADLINE-ONLY": {
+    "uuid": "EEFM2Tu6twHG2e7u7wGokF",
+    "role": "anytime w/ deadline (not-in-today check)"
+  },
+  "LAB-TAGGED-BOTH": {
+    "uuid": "3dbo33EBJwoNkKVsUFPSDz",
+    "role": "anytime w/ tag hierarchy"
+  },
+  "LAB-LOGGED-1": {
+    "uuid": "S9n3EA6wZaGPxvQGJBsKm2",
+    "role": "to be completed via URL"
+  },
+  "LAB-TRASH-ME": {
+    "uuid": "XoLzymngkUcVDYUvgU7bhD",
+    "role": "to be trashed via AppleScript (probe A24)"
+  },
+  "LAB-REPEAT-DAILY": {
+    "uuid": "W3PZB9e7W6BEtKmEKP4deG",
+    "role": "repeating template (rt1_recurrenceRule; daily)"
+  },
+  "LAB-REPEAT-DAILY (instance)": {
+    "uuid": "11NNVsNH9gyTEAiG554nQ",
+    "role": "spawned daily instance"
+  },
+  "LAB-REPEAT-WEEKLY-PROJ": {
+    "uuid": "759yS6xe6d3a3h2dfVxoMZ",
+    "role": "repeating PROJECT template (weekly, Sundays)"
+  }
+}
