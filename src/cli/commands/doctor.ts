@@ -5,6 +5,7 @@
 import { existsSync } from "node:fs";
 import type { Command } from "commander";
 
+import { loadConfig } from "../../config.ts";
 import { BASELINES } from "../../db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "../../db/connection.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "../../db/locate.ts";
@@ -22,7 +23,7 @@ export interface DoctorReport {
     databaseVersion: number | null;
   };
   fingerprint: {
-    status: "ok" | "drift" | "unknown-version";
+    status: "ok" | "drift" | "user-accepted" | "unknown-version";
     value: string;
     expected: string | null;
     detail: string[];
@@ -84,9 +85,18 @@ export function runDoctor(dbPath?: string): {
   try {
     const observation = observeSchema(conn.db);
     const status = compareToBaseline(observation, BASELINES);
-    const fingerprintStatus =
-      status.kind === "ok" ? "ok" : status.kind === "drift" ? "drift" : "unknown-version";
-    const writesEnabled = status.kind === "ok";
+    // The pipeline honors a user-accepted drifted fingerprint (loud escape
+    // hatch, design §6) — doctor must report what will actually happen.
+    const accepted =
+      status.kind === "drift" && loadConfig().acceptedFingerprint === observation.fingerprint;
+    const fingerprintStatus = accepted
+      ? "user-accepted"
+      : status.kind === "ok"
+        ? "ok"
+        : status.kind === "drift"
+          ? "drift"
+          : "unknown-version";
+    const writesEnabled = status.kind === "ok" || accepted;
     const extraColumns: Record<string, string[]> = {};
     for (const t of observation.tables) {
       if (t.extraColumns.length > 0) extraColumns[t.table] = t.extraColumns;
@@ -108,11 +118,14 @@ export function runDoctor(dbPath?: string): {
       app: { installed: existsSync(THINGS_APP) },
       writes: {
         enabled: writesEnabled,
-        reason: writesEnabled
-          ? "schema fingerprint matches shipped baseline"
-          : status.kind === "drift"
-            ? "schema fingerprint deviates from baseline — writes disabled until revalidated"
-            : "unknown databaseVersion — update things-api or revalidate",
+        reason: accepted
+          ? "DRIFTED fingerprint accepted by user config (accepted-fingerprint) — writes " +
+            "enabled AT YOUR OWN RISK; every audit record carries fingerprint:user-accepted"
+          : writesEnabled
+            ? "schema fingerprint matches shipped baseline"
+            : status.kind === "drift"
+              ? "schema fingerprint deviates from baseline — writes disabled until revalidated"
+              : "unknown databaseVersion — update things-api or revalidate",
       },
     };
     return {
