@@ -2,7 +2,11 @@
 
 A typed TypeScript library + CLI (`things`) for programmatic interaction with [Things 3](https://culturedcode.com/things/) by Cultured Code.
 
-**Status: Phase 0 (bootstrap).** See [docs/design/](docs/design/) for the architecture and VM-lab design, and [docs/research/](docs/research/) for the validated capability research this project is grounded in.
+**Status: read layer live; write layer in development.** See [docs/design/](docs/design/) for the architecture and VM-lab design, [docs/research/](docs/research/) for the validated capability research this project is grounded in, and [docs/atlas/](docs/atlas/schema-v26.md) for the database↔UI map.
+
+## Requirements & first-run setup
+
+Things 3 installed and launched once, Node ≥ 24, and a handful of one-time macOS consents / Things settings depending on what you use (file-access consent for reads; "Enable Things URLs" + Automation consents for writes). **See [docs/setup.md](docs/setup.md)** — including the dedicated-automation-Mac checklist. `things doctor` validates your setup and prints remediation for anything missing.
 
 ## Core principles
 
