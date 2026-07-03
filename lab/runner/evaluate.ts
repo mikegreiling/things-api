@@ -107,7 +107,11 @@ export function evaluateProbe(
     failures.push(`tier ${disruption.tier} observed, expected ${probe.expect.tier}`);
   }
 
-  const results = evaluateAssertions(probe.expect.assertions, before, after, delta, context);
+  const results = evaluateAssertions(probe.expect.assertions, before, after, delta, {
+    ...context,
+    commands: execution.commands,
+    before,
+  });
   for (const r of results) {
     if (!r.ok) failures.push(`assertion ${r.assertion.kind} failed: ${r.detail}`);
   }

@@ -217,6 +217,75 @@ describe("assertions", () => {
     expect(clean[0]?.ok).toBe(true);
   });
 
+  it("deleted: before-row must be gone from after", () => {
+    const gone: DbSnapshot = { TMTask: {} };
+    const d = diffSnapshots(before, gone);
+    const [a, b] = evaluateAssertions(
+      [
+        { kind: "deleted", table: "TMTask", where: { title: "Target" } },
+        { kind: "deleted", table: "TMTask", where: { title: "Ghost" } },
+      ],
+      before,
+      gone,
+      d,
+      context,
+    );
+    expect(a?.ok).toBe(true);
+    expect(b?.ok).toBe(false); // never existed
+    const [c] = run([{ kind: "deleted", table: "TMTask", where: { title: "Target" } }]);
+    expect(c?.ok).toBe(false); // still present in after
+  });
+
+  it("@uuidOfBefore resolves against the before snapshot", () => {
+    const gone: DbSnapshot = {
+      TMTask: {},
+      TMTombstone: { tomb1: { uuid: "tomb1", deletedObjectUUID: "t1" } },
+    };
+    const [a] = evaluateAssertions(
+      [
+        {
+          kind: "rowExists",
+          table: "TMTombstone",
+          where: { deletedObjectUUID: "@uuidOfBefore:TMTask:title=Target" },
+        },
+      ],
+      before,
+      gone,
+      diffSnapshots(before, gone),
+      { ...context, before },
+    );
+    expect(a?.ok).toBe(true);
+  });
+
+  it("stdoutMatches checks command transport output", () => {
+    const withCommands = {
+      ...context,
+      commands: [
+        {
+          resolved: "osascript …",
+          exitCode: 0,
+          stdout: "to do id ABC123",
+          stderr: "",
+          durationMs: 5,
+        },
+      ],
+    };
+    const [a, b, c] = evaluateAssertions(
+      [
+        { kind: "stdoutMatches", command: 0, pattern: "to do id \\w+" },
+        { kind: "stdoutMatches", command: 0, pattern: "^nope$" },
+        { kind: "stdoutMatches", command: 9, pattern: "." },
+      ],
+      before,
+      after,
+      delta,
+      withCommands,
+    );
+    expect(a?.ok).toBe(true);
+    expect(b?.ok).toBe(false);
+    expect(c?.ok).toBe(false); // no such command index
+  });
+
   it("@seed and @ctx refs resolve; ambiguous selectors fail loudly", () => {
     const [a] = run([{ kind: "rowAbsent", table: "TMTask", where: { area: "@seed:LAB-AREA-A" } }]);
     expect(a?.ok).toBe(true);

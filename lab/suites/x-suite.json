@@ -1,0 +1,94 @@
+{
+  "suite": "x",
+  "description": "Cross-vector probes (docs/design/lab.md §4.6). X02 (AppleScript during URL-error modal) lives in the A-suite as A43. X05 (cold-start races) is deliberately omitted: it is inherently nondeterministic and would break the identical-verdicts acceptance gate; race behavior is bounded instead by the serialized-probe rule in the write API design.",
+  "probes": [
+    {
+      "id": "X01",
+      "title": "cross-vector identity: create via AppleScript, mutate via URL, verify via SQLite — one stable uuid",
+      "vector": "applescript",
+      "operation": "cross.identity",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"X01-ITEM\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='X01-ITEM'" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:X01-ITEM}&auth-token={ctx:token}&title=X01-RENAMED&when=today"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X01-RENAMED' AND start=1" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTask",
+            "where": { "title": "X01-RENAMED", "start": 1 }
+          },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "X01-ITEM" } },
+          { "kind": "notInserted", "table": "TMTask" }
+        ]
+      }
+    },
+    {
+      "id": "X03",
+      "title": "rapid interleave across vectors: three back-to-back mutations, no waits between — all land",
+      "vector": "applescript",
+      "operation": "cross.interleave",
+      "appState": "running-background",
+      "commands": [
+        { "openUrl": "things:///add?title=X03-A" },
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"X03-B\"}"
+        },
+        { "openUrl": "things:///add?title=X03-C" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X03-A'" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X03-B'" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X03-C'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "X03-A" } },
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "X03-B" } },
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "X03-C" } }
+        ]
+      }
+    },
+    {
+      "id": "X04",
+      "title": "delete + re-add same title: identity is NOT reused — two rows, one trashed",
+      "vector": "applescript",
+      "operation": "cross.delete-readd",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=X04-ITEM" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='X04-ITEM'" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete to do id \"{uuid:X04-ITEM}\"" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X04-ITEM' AND trashed=1" },
+        { "openUrl": "things:///add?title=X04-ITEM" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='X04-ITEM' AND trashed=0" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "rowCount", "table": "TMTask", "where": { "title": "X04-ITEM" }, "count": 2 },
+          {
+            "kind": "rowExists",
+            "table": "TMTask",
+            "where": { "title": "X04-ITEM", "trashed": 1 }
+          },
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "X04-ITEM", "trashed": 0 } }
+        ]
+      }
+    }
+  ]
+}
