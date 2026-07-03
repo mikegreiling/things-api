@@ -5,25 +5,29 @@ LAB_BASE_IMAGE="ghcr.io/cirruslabs/macos-sequoia-vanilla:latest"
 LAB_SSH_USER="admin"
 LAB_SSH_PASS="admin"
 
+# Password-only auth: a loaded ssh-agent can exhaust the server's auth
+# attempts with key offers before sshpass's password is ever tried
+# ("Too many authentication failures").
+LAB_SSH_OPTS=(
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o LogLevel=ERROR
+  -o PreferredAuthentications=password
+  -o PubkeyAuthentication=no
+  -o IdentitiesOnly=yes
+)
+
 lab_ssh() {
   # lab_ssh <ip> <command...>
   local ip="$1"
   shift
-  sshpass -p "$LAB_SSH_PASS" ssh \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o LogLevel=ERROR \
-    -o ConnectTimeout=10 \
+  sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" -o ConnectTimeout=10 \
     "$LAB_SSH_USER@$ip" "$@"
 }
 
 lab_scp() {
   # lab_scp <src> <ip>:<dst>  (or any scp arg pair)
-  sshpass -p "$LAB_SSH_PASS" scp \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o LogLevel=ERROR \
-    "$@"
+  sshpass -p "$LAB_SSH_PASS" scp "${LAB_SSH_OPTS[@]}" "$@"
 }
 
 lab_wait_for_ssh() {

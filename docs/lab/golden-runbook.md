@@ -17,34 +17,24 @@ Open **Screen Sharing** → connect to `$IP` → user `admin` / password `admin`
 ## 1. One terminal helper on the host
 
 ```sh
-alias vmssh='sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null admin@'"$IP"
+alias vmssh='sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password -o PubkeyAuthentication=no -o IdentitiesOnly=yes admin@'"$IP"
 ```
+
+(The password-only options matter: a loaded ssh-agent can exhaust the server's auth attempts with key offers before the password is tried — "Too many authentication failures".)
 
 ## 2. Things first launch + settings — **[CLICK]**
 
-1. In the VM: launch Things (Dock/Spotlight or `vmssh 'open -a Things3'`). **Record the timestamp**:
-   ```sh
-   vmssh '/Applications/Things3.app/Contents/MacOS/thingscli defaults read firstAppLaunchDate'
-   ```
+1. In the VM: launch Things (Dock/Spotlight or `vmssh 'open -a Things3'`). This starts the 15-day trial clock (guest wall-clock — the guest free-runs with network time off; that's fine, clones pin to it).
 2. **[CLICK]** Walk the welcome flow. **Decline / skip Things Cloud** (no account).
 3. **[CLICK]** Things → Settings…:
-   - General: **Enable Things URLs** → after enabling, click **Manage** under the URL scheme section and copy the auth token (or read it later from SQLite — both work; record it in metadata).
+   - General: **Enable Things URLs** → click **Manage** and copy the auth token (needed for step 4).
    - General: uncheck any "check for updates automatically" option.
-   - Today: leave "Group to-dos in the Today list by project or area" **ON** (record whatever you choose — it affects probe screenshots).
-4. Quit Things (⌘Q).
-5. Update metadata (host):
+   - Today: leave "Group to-dos in the Today list by project or area" **OFF** (flat list = cleaner ordering probes; matches production).
+   - Shortcuts/General: CHECK "Allow Shortcuts app to edit large amounts of data without confirmation" (a confirmation dialog mid-probe is a harness wedge; the unchecked behavior is a deferred S-probe).
+4. Quit Things (⌘Q), then record everything from the host — reads the trial clock via thingscli, computes the pinned date, stores token + settings:
    ```sh
-   vmssh 'python3 - <<PY
-   import json,subprocess,datetime
-   p="/Users/admin/things-lab/metadata.json"
-   m=json.load(open(p))
-   m["trialFirstLaunch"]="<PASTE ISO TIMESTAMP>"
-   m["pinnedDate"]="<trialFirstLaunch + 2 days, YYYY-MM-DD>"
-   m["humanLayersDone"]=m.get("humanLayersDone",[])+["L2"]
-   json.dump(m,open(p,"w"),indent=2)
-   PY'
+   lab/scripts/record-l2.sh '<AUTH-TOKEN>'
    ```
-   (Or just edit the file over Screen Sharing — content matters, method doesn't.)
 
 ## 3. TCC grants — **[CLICK]** (clones inherit these forever)
 
