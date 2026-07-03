@@ -68,7 +68,6 @@ Installed and verified emitting in the Aqua session:
 ```sh
 lab/scripts/install-monitor-agent.sh    # bootstrap + kickstart + emission check
 ```
-```
 
 ## 5. Proxy shortcuts — **[CLICK]** (deferred OK)
 
