@@ -42,7 +42,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 | `type` | `0` to-do · `1` project · `2` heading | What kind of row this is. Headings observed only with `status=0`. |
 | `status` | `0` open · `2` canceled · `3` completed | Canceled and completed both land in **Logbook** (with `stopDate`). There is no status `1`. |
 | `stopDate` | epoch REAL or NULL | When completed/canceled. Logbook ordering key (indexed). Logbook *grouping* into days happens at render time. |
-| `trashed` | `0` / `1` | **Trash is a flag, not a list.** Trashed rows keep their `project`/`area` links. |
+| `trashed` | `0` / `1` | **Trash is a flag, not a list.** Trashed rows keep their `project`/`area` links. **Project deletion is shallow** (lab A24B, 2026-07-03): only the project row gets `trashed=1`; its children keep `trashed=0` + the `project` link — children's Trash membership is *derived through the parent*. Any Trash mirror/restore must traverse, not just filter `trashed=1`. Area deletion is the inverse: the TMArea row is hard-deleted and contained to-dos get `trashed=1` (A25/A25B). No `TMTombstone` rows are written for any delete while sync is off (A25/A27) — tombstones are a sync artifact. |
 | `creationDate`, `userModificationDate` | epoch REAL | `userModificationDate` is the verification engine's cheap "did anything happen" tripwire. |
 
 ### Scheduling — what puts a task in which list
@@ -97,7 +97,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 | `rt1_instanceCreation*`, `rt1_nextInstanceStartDate`, `rt1_afterCompletionReferenceDate` | Instance-generation bookkeeping. `rt1_nextInstanceStartDate` uses the packed-date encoding (lab-verified: decodes to the configured next occurrence). |
 | `repeater`, `repeaterMigrationDate` | Newer repeater representation (BLOB) + migration marker. **Lab-verified (3.22.11): new repeat rules are authored into `rt1_recurrenceRule`; `repeater` stays NULL.** Templates live in `start=2` (why list views never show them); spawned instances materialize as `start=2 + startDate=<occurrence>` and get promoted to `start=1` by app maintenance (same pending-promotion mechanics observed on live data). |
 
-**Hazard tie-in:** scheduling writes (`when`) against rows with recurrence fields crash Things (T12). Guard `H-REPEAT-SCHEDULE` keys off `rt1_recurrenceRule`/`rt1_repeatingTemplate`/`repeater`.
+**Hazard tie-in:** scheduling writes against rows with recurrence fields are vector-dependent (lab, 2026-07-03): URL `when=` **crashes Things** (T12/U12, reproduced deterministically); AppleScript `schedule` is **guarded** — clean error `Cannot schedule to-do (302)`, zero DB delta (A21). Guard `H-REPEAT-SCHEDULE` keys off `rt1_recurrenceRule`/`rt1_repeatingTemplate`/`repeater`; the URL path stays hard-blocked, the AppleScript path can surface the app's own error. Templates are invisible to AppleScript list reads but directly addressable by id (A12); the private `_private_experimental_ json` property exposes their recurrence config (A51).
 
 ### Misc
 

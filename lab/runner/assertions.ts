@@ -1,15 +1,28 @@
 // Declarative assertion evaluation against before/after snapshots + delta.
 //
 // Where-clause values may be literals or refs:
-//   "@uuidOf:TMTask:title=U04-TARGET"  uuid of the row matching col=value (after snapshot)
-//   "@seed:LAB-AREA-A"                 uuid from the golden seed manifest
-//   "@ctx:token"                       value from the run context
+//   "@uuidOf:TMTask:title=U04-TARGET"        uuid of the row matching col=value (after snapshot)
+//   "@uuidOfBefore:TMArea:title=A25-AREA"    same, against the before snapshot (deleted rows)
+//   "@seed:LAB-AREA-A"                       uuid from the golden seed manifest
+//   "@ctx:token"                             value from the run context
 
-import type { Assertion, CellValue, DbDelta, DbSnapshot, TableSnapshot, Where } from "./types.ts";
+import type {
+  Assertion,
+  CellValue,
+  CommandResult,
+  DbDelta,
+  DbSnapshot,
+  TableSnapshot,
+  Where,
+} from "./types.ts";
 
 export interface AssertionContext {
   seed: Record<string, { uuid: string }>;
   ctx: Record<string, string>;
+  /** Probe command transport results, for stdoutMatches assertions. */
+  commands?: CommandResult[];
+  /** Before-snapshot, for @uuidOfBefore refs (rows deleted by the probe). */
+  before?: DbSnapshot;
 }
 
 export interface AssertionResult {
@@ -128,6 +141,36 @@ function check(
               `${delta.deleted.length} deleted, ${delta.changed.length} changed`,
           );
     }
+    case "deleted": {
+      // Match against the BEFORE snapshot (the row is gone from after).
+      const keys = matchRows(before[assertion.table], assertion.where, before, context);
+      if (keys.length === 0) {
+        return fail(
+          `no before-row in ${assertion.table} matches ${JSON.stringify(assertion.where)}`,
+        );
+      }
+      const gone = keys.filter((k) =>
+        delta.deleted.some((d) => d.table === assertion.table && d.key === k),
+      );
+      return gone.length === keys.length
+        ? pass(`deleted: ${gone.join(", ")}`)
+        : fail(
+            `row(s) still present in ${assertion.table}: ` +
+              keys.filter((k) => !gone.includes(k)).join(", "),
+          );
+    }
+    case "stdoutMatches": {
+      const cmd = context.commands?.[assertion.command];
+      if (cmd === undefined) return fail(`no command at index ${assertion.command}`);
+      // osascript always emits a trailing newline; anchors should see past it.
+      const stdout = cmd.stdout.trim();
+      return new RegExp(assertion.pattern).test(stdout)
+        ? pass(`stdout of command ${assertion.command} matches /${assertion.pattern}/`)
+        : fail(
+            `stdout of command ${assertion.command} does not match /${assertion.pattern}/: ` +
+              JSON.stringify(stdout.slice(0, 200)),
+          );
+    }
     default: {
       const exhaustive: never = assertion;
       return { assertion: exhaustive, ok: false, detail: "unknown assertion kind" };
@@ -189,10 +232,11 @@ export function resolveValue(
 ): CellValue {
   if (typeof value !== "string" || !value.startsWith("@")) return value;
 
-  const uuidOf = value.match(/^@uuidOf:([^:]+):([^=]+)=(.*)$/);
+  const uuidOf = value.match(/^@uuidOf(Before)?:([^:]+):([^=]+)=(.*)$/);
   if (uuidOf !== null) {
-    const [, table = "", col = "", literal = ""] = uuidOf;
-    const rows = after[table] ?? {};
+    const [, inBefore, table = "", col = "", literal = ""] = uuidOf;
+    const source = inBefore !== undefined ? (context.before ?? {}) : after;
+    const rows = source[table] ?? {};
     const keys = Object.keys(rows)
       .filter((k) => cellEquals(rows[k]?.[col] ?? null, literal))
       .sort();

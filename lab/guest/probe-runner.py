@@ -40,7 +40,15 @@ THINGS_PROCESS = "Things3"
 # The host merges the two streams by timestamp at evaluation.
 MARKS_PATH = os.path.expanduser("~/things-lab/run/marks.ndjson")
 DIAG_DIR = os.path.expanduser("~/Library/Logs/DiagnosticReports")
-SNAPSHOT_TABLES = ["TMTask", "TMArea", "TMTag", "TMTaskTag", "TMAreaTag", "TMChecklistItem"]
+SNAPSHOT_TABLES = [
+    "TMTask",
+    "TMArea",
+    "TMTag",
+    "TMTaskTag",
+    "TMAreaTag",
+    "TMChecklistItem",
+    "TMTombstone",  # permanent deletes (area/tag/empty-trash) leave tombstones
+]
 TABLE_KEYS = {"TMTaskTag": ("tasks", "tags"), "TMAreaTag": ("areas", "tags")}
 
 

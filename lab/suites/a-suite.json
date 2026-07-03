@@ -1,0 +1,1178 @@
+{
+  "suite": "a",
+  "description": "AppleScript campaign (docs/design/lab.md §4.3): creation, reads, mutation, launch behavior, and the private sdef surfaces, each verified row-level against the DB. Reads run first (pristine golden+warm-up state, so counts are regression-locked). Hazard group (empty trash; schedule-on-repeating crash probe) runs last. A00 (sdef inventory) is covered statically by design doc §8 + vendor/manifest.json (trial sdef byte-identical to MAS).",
+  "probes": [
+    {
+      "id": "A10",
+      "title": "built-in list enumeration incl. Logbook and Trash (counts locked to golden state)",
+      "vector": "applescript",
+      "operation": "read.lists",
+      "appState": "running-background",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Inbox\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Today\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Anytime\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Someday\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Upcoming\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Logbook\"" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Trash\"" }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 1, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 2, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 3, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 4, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 5, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 6, "pattern": "^\\d+" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A11",
+      "title": "project children read: does 'to dos of project' include heading-contained children?",
+      "vector": "applescript",
+      "operation": "read.project-children",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to name of to dos of project \"LAB-PROJ-HEADINGS\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to name of to dos of project \"LAB-PROJ-PLAIN\""
+        },
+        { "osascript": "tell application \"Things3\" to name of to dos of area \"LAB-AREA-A\"" }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "LAB-H-FLAT" },
+          { "kind": "stdoutMatches", "command": 0, "pattern": "LAB-H-A1" },
+          { "kind": "stdoutMatches", "command": 1, "pattern": "LAB-P-1" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A12",
+      "title": "repeating-template visibility: list reads vs direct id fetch (the things.py blind spot)",
+      "vector": "applescript",
+      "operation": "read.repeating-template",
+      "appState": "running-background",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to name of to dos of list \"Someday\"" },
+        {
+          "osascript": "tell application \"Things3\" to name of to do id \"{seed:LAB-REPEAT-DAILY}\""
+        },
+        { "osascript": "tell application \"Things3\" to name of to dos of list \"Upcoming\"" }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "LAB-SOMEDAY-1" },
+          { "kind": "stdoutMatches", "command": 0, "pattern": "^((?!LAB-REPEAT-DAILY)[\\s\\S])*$" },
+          { "kind": "stdoutMatches", "command": 1, "pattern": "LAB-REPEAT-DAILY" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A13",
+      "title": "tag reads: direct tags only — inherited area/project tags are not materialized",
+      "vector": "applescript",
+      "operation": "read.tags",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to tag names of to do id \"{seed:LAB-TAGGED-BOTH}\""
+        },
+        { "osascript": "tell application \"Things3\" to tag names of to do id \"{seed:LAB-P-1}\"" },
+        { "osascript": "tell application \"Things3\" to tag names of area \"LAB-AREA-A\"" },
+        { "osascript": "tell application \"Things3\" to name of tags" }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "lab-tag-2" },
+          { "kind": "stdoutMatches", "command": 0, "pattern": "high" },
+          { "kind": "stdoutMatches", "command": 1, "pattern": "^lab-tag-1$" },
+          { "kind": "stdoutMatches", "command": 2, "pattern": "lab-tag-1" },
+          { "kind": "stdoutMatches", "command": 3, "pattern": "prio" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A14",
+      "title": "selected to dos: UI-coupled read returns empty without a user selection",
+      "vector": "applescript",
+      "operation": "read.selection",
+      "appState": "running-background",
+      "commands": [{ "osascript": "tell application \"Things3\" to count of selected to dos" }],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "^0$" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A01",
+      "title": "make new to do (default locus) — where does it land?",
+      "vector": "applescript",
+      "operation": "todo.create",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A01-TODO\", notes:\"created via applescript\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A01-TODO'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "to do id" },
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "A01-TODO" } },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A01-TODO" },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A01-TODO" },
+            "field": "notes",
+            "value": "created via applescript"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A01B",
+      "title": "make new to do at a specific locus (beginning of list Today)",
+      "vector": "applescript",
+      "operation": "todo.create-at-locus",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do at beginning of list \"Today\" with properties {name:\"A01B-TODO\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A01B-TODO' AND start=1" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "inserted", "table": "TMTask", "where": { "title": "A01B-TODO" } },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A01B-TODO" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A01B-TODO" },
+            "field": "startDate",
+            "value": 132805248
+          }
+        ]
+      }
+    },
+    {
+      "id": "A02",
+      "title": "make new project (plain + directly into an area)",
+      "vector": "applescript",
+      "operation": "project.create",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new project with properties {name:\"A02-PROJ\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A02-PROJ' AND type=1" },
+        {
+          "osascript": "tell application \"Things3\" to make new project with properties {name:\"A02-PROJ-AREA\", area:area \"LAB-AREA-A\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A02-PROJ-AREA' AND type=1" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A02-PROJ" },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A02-PROJ-AREA" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A03",
+      "title": "make new area — the URL scheme cannot do this",
+      "vector": "applescript",
+      "operation": "area.create",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new area with properties {name:\"A03-AREA\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMArea WHERE title='A03-AREA'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [{ "kind": "inserted", "table": "TMArea", "where": { "title": "A03-AREA" } }]
+      }
+    },
+    {
+      "id": "A04",
+      "title": "make new tag — the URL scheme cannot do this",
+      "vector": "applescript",
+      "operation": "tag.create",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"a04-tag\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTag WHERE title='a04-tag'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [{ "kind": "inserted", "table": "TMTag", "where": { "title": "a04-tag" } }]
+      }
+    },
+    {
+      "id": "A05",
+      "title": "tag hierarchy via parent tag property",
+      "vector": "applescript",
+      "operation": "tag.set-parent",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"a04-tag\" to tag \"prio\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTag WHERE title='a04-tag' AND parent='{seed:prio}'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTag",
+            "where": { "title": "a04-tag" },
+            "field": "parent",
+            "value": "@seed:prio"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A06",
+      "title": "create with full properties bundle (notes, due date, existing tags)",
+      "vector": "applescript",
+      "operation": "todo.create-full",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A06-TODO\", notes:\"bundle\", due date:(current date) + 5 * days, tag names:\"lab-tag-1, high\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A06-TODO' AND deadline IS NOT NULL" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A06-TODO" },
+            "field": "deadline",
+            "value": 132805888
+          },
+          {
+            "kind": "rowCount",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@uuidOf:TMTask:title=A06-TODO" },
+            "count": 2
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@uuidOf:TMTask:title=A06-TODO", "tags": "@seed:high" }
+          }
+        ]
+      }
+    },
+    {
+      "id": "A20",
+      "title": "rename + notes via property setters",
+      "vector": "applescript",
+      "operation": "todo.update",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A20-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A20-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set name of to do id \"{uuid:A20-TARGET}\" to \"A20-RENAMED\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A20-RENAMED'" },
+        {
+          "osascript": "tell application \"Things3\" to set notes of to do id \"{uuid:A20-RENAMED}\" to \"edited notes\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A20-RENAMED' AND notes='edited notes'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTask",
+            "where": { "title": "A20-RENAMED", "notes": "edited notes" }
+          },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "A20-TARGET" } }
+        ]
+      }
+    },
+    {
+      "id": "A21B",
+      "title": "schedule a normal to-do into Upcoming (the gap 'move' cannot fill)",
+      "vector": "applescript",
+      "operation": "todo.schedule",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A21B-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A21B-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to schedule to do id \"{uuid:A21B-TARGET}\" for (current date) + 2 * days"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='A21B-TARGET' AND start=2 AND startDate=132805504"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A21B-TARGET" },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A21B-TARGET" },
+            "field": "startDate",
+            "value": 132805504
+          }
+        ]
+      }
+    },
+    {
+      "id": "A22",
+      "title": "move between built-in lists (Today, Someday)",
+      "vector": "applescript",
+      "operation": "todo.move-list",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A22-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A22-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:A22-TARGET}\" to list \"Today\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='A22-TARGET' AND start=1 AND startDate=132805248"
+        },
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:A22-TARGET}\" to list \"Someday\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A22-TARGET' AND start=2" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A22-TARGET" },
+            "field": "start",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "A22B",
+      "title": "assign project/area via property setters (move's documented gap)",
+      "vector": "applescript",
+      "operation": "todo.move-container",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A22B-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A22B-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set project of to do id \"{uuid:A22B-TARGET}\" to project \"LAB-PROJ-PLAIN\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='A22B-TARGET' AND project='{seed:LAB-PROJ-PLAIN}'"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set area of to do id \"{uuid:A22B-TARGET}\" to area \"LAB-AREA-B\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A22B-TARGET' AND area='{seed:LAB-AREA-B}'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A22B-TARGET" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-B"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A22B-TARGET" },
+            "field": "project",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "A22C",
+      "title": "move to list Upcoming fails (documented: schedule is the only path)",
+      "vector": "applescript",
+      "operation": "todo.move-upcoming",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A22C-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A22C-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:A22C-TARGET}\" to list \"Upcoming\""
+        },
+        { "sleep": 2 }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "A22C-TARGET" },
+            "fields": ["start", "startDate"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "A23",
+      "title": "status setters: completed / canceled; Logbook membership timing",
+      "vector": "applescript",
+      "operation": "todo.set-status",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A23-DONE\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A23-CANCEL\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A23-CANCEL'" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Logbook\"" },
+        {
+          "osascript": "tell application \"Things3\" to set status of to do id \"{uuid:A23-DONE}\" to completed"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A23-DONE' AND status=3" },
+        {
+          "osascript": "tell application \"Things3\" to set status of to do id \"{uuid:A23-CANCEL}\" to canceled"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A23-CANCEL' AND status=2" },
+        { "osascript": "tell application \"Things3\" to count of to dos of list \"Logbook\"" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A23-DONE" },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A23-CANCEL" },
+            "field": "status",
+            "value": 2
+          },
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "A23-DONE", "status": 3 } },
+          { "kind": "stdoutMatches", "command": 0, "pattern": "^\\d+" },
+          { "kind": "stdoutMatches", "command": 3, "pattern": "^\\d+" }
+        ]
+      }
+    },
+    {
+      "id": "A23B",
+      "title": "reopen: status open clears stopDate",
+      "vector": "applescript",
+      "operation": "todo.reopen",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set status of to do id \"{uuid:A23-DONE}\" to open"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A23-DONE' AND status=0" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A23-DONE" },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A23-DONE" },
+            "field": "stopDate",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "A24",
+      "title": "delete to-do: moves to Trash (trashed=1), links intact, no tombstone",
+      "vector": "applescript",
+      "operation": "todo.delete",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A24-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A24-TARGET'" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete to do id \"{uuid:A24-TARGET}\"" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A24-TARGET' AND trashed=1" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A24-TARGET" },
+            "field": "trashed",
+            "value": 1
+          },
+          { "kind": "notInserted", "table": "TMTombstone" }
+        ]
+      }
+    },
+    {
+      "id": "A24B",
+      "title": "delete project is SHALLOW in the DB: only the project row is trashed; children keep trashed=0 and their project link (trash membership is derived)",
+      "vector": "applescript",
+      "operation": "project.delete",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new project with properties {name:\"A24B-PROJ\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A24B-PROJ' AND type=1" },
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A24B-CHILD\", project:project \"A24B-PROJ\"}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='A24B-CHILD' AND project='{uuid:A24B-PROJ}'"
+        }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete project \"A24B-PROJ\"" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A24B-PROJ' AND trashed=1" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A24B-PROJ" },
+            "field": "trashed",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A24B-CHILD" },
+            "field": "trashed",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A24B-CHILD" },
+            "field": "project",
+            "value": "@uuidOf:TMTask:title=A24B-PROJ"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A25",
+      "title": "delete area: PERMANENT (row gone; NO tombstone with sync off) — not Trash",
+      "vector": "applescript",
+      "operation": "area.delete",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new area with properties {name:\"A25-AREA\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMArea WHERE title='A25-AREA'" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete area \"A25-AREA\"" },
+        { "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMArea WHERE title='A25-AREA')" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "deleted", "table": "TMArea", "where": { "title": "A25-AREA" } },
+          { "kind": "notInserted", "table": "TMTombstone" }
+        ]
+      }
+    },
+    {
+      "id": "A25B",
+      "title": "delete area containing a task: what happens to the task?",
+      "vector": "applescript",
+      "operation": "area.delete-with-contents",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new area with properties {name:\"A25B-AREA\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMArea WHERE title='A25B-AREA'" },
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A25B-CHILD\", area:area \"A25B-AREA\"}"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A25B-CHILD' AND area IS NOT NULL" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete area \"A25B-AREA\"" },
+        { "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMArea WHERE title='A25B-AREA')" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "deleted", "table": "TMArea", "where": { "title": "A25B-AREA" } },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A25B-CHILD" },
+            "field": "trashed",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "A26",
+      "title": "delete tag: permanent, assignments cascade",
+      "vector": "applescript",
+      "operation": "tag.delete",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"a26-tag\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTag WHERE title='a26-tag'" },
+        {
+          "osascript": "tell application \"Things3\" to set tag names of to do id \"{seed:LAB-ANYTIME-1}\" to \"a26-tag\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTag t ON tt.tags=t.uuid WHERE tt.tasks='{seed:LAB-ANYTIME-1}' AND t.title='a26-tag'"
+        }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to delete tag \"a26-tag\"" },
+        { "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTag WHERE title='a26-tag')" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "deleted", "table": "TMTag", "where": { "title": "a26-tag" } },
+          {
+            "kind": "rowCount",
+            "table": "TMTaskTag",
+            "where": { "tasks": "@seed:LAB-ANYTIME-1" },
+            "count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "A28",
+      "title": "log completed now: forces Logbook collection of completed items",
+      "vector": "applescript",
+      "operation": "app.log-completed-now",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A28-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A28-TARGET'" },
+        {
+          "osascript": "tell application \"Things3\" to set status of to do id \"{uuid:A28-TARGET}\" to completed"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A28-TARGET' AND status=3" }
+      ],
+      "commands": [
+        { "osascript": "tell application \"Things3\" to log completed now" },
+        { "sleep": 2 }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A28-TARGET" },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "A29",
+      "title": "to-do to project conversion attempts are unsupported (class is immutable)",
+      "vector": "applescript",
+      "operation": "todo.promote-to-project",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A29-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A29-TARGET'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set class of to do id \"{uuid:A29-TARGET}\" to project"
+        },
+        { "sleep": 2 }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A29-TARGET" },
+            "field": "type",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "title": "A29-TARGET" },
+            "fields": ["type", "title"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "A30",
+      "title": "checklist access: no checklist class in the sdef — errors out",
+      "vector": "applescript",
+      "operation": "checklist.read",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to checklist items of to do id \"{seed:LAB-INBOX-2}\""
+        },
+        { "sleep": 1 }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          { "kind": "unchanged", "table": "TMTask", "where": { "uuid": "@seed:LAB-INBOX-2" } },
+          {
+            "kind": "rowCount",
+            "table": "TMChecklistItem",
+            "where": { "task": "@seed:LAB-INBOX-2" },
+            "count": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "A31",
+      "title": "heading access: no heading class in the sdef — errors out",
+      "vector": "applescript",
+      "operation": "heading.read",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to first heading of project \"LAB-PROJ-HEADINGS\""
+        },
+        { "sleep": 1 }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          { "kind": "unchanged", "table": "TMTask", "where": { "uuid": "@seed:Alpha" } }
+        ]
+      }
+    },
+    {
+      "id": "A40",
+      "title": "AppleEvent read to CLOSED Things auto-launches it AND STEALS FOCUS (hypothesis refuted: pre-launch with open -g to stay tier 0)",
+      "vector": "applescript",
+      "operation": "read.lists-autolaunch",
+      "appState": "not-running",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to count of to dos of list \"Inbox\"",
+          "timeoutSeconds": 60
+        },
+        { "sleep": 3 }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "supported",
+        "tier": 2,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "^\\d+" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A41",
+      "title": "AppleEvent write to CLOSED Things: auto-launch + mutation, focus stolen (same as A40)",
+      "vector": "applescript",
+      "operation": "todo.create-autolaunch",
+      "appState": "not-running",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A41-TODO\"}",
+          "timeoutSeconds": 60
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A41-TODO'" }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "supported",
+        "tier": 2,
+        "assertions": [{ "kind": "inserted", "table": "TMTask", "where": { "title": "A41-TODO" } }]
+      }
+    },
+    {
+      "id": "A42",
+      "title": "explicit activate: the only AppleScript path that steals focus",
+      "vector": "applescript",
+      "operation": "app.activate",
+      "appState": "running-background",
+      "commands": [{ "osascript": "tell application \"Things3\" to activate" }, { "sleep": 2 }],
+      "expect": {
+        "verdict": "supported",
+        "tier": 2,
+        "assertions": [{ "kind": "deltaEmpty" }]
+      }
+    },
+    {
+      "id": "A43",
+      "title": "AppleScript mutation while a URL-error modal is open (T13 cross-vector)",
+      "vector": "applescript",
+      "operation": "todo.update-during-modal",
+      "appState": "modal-open",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new to do with properties {name:\"A43-TARGET\"}"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A43-TARGET'" },
+        { "openUrl": "things:///add-area?title=A43-ModalTrigger" },
+        { "sleep": 3 }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set name of to do id \"{uuid:A43-TARGET}\" to \"A43-RENAMED\""
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='A43-RENAMED'" }
+      ],
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "A43-RENAMED" } },
+          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "A43-TARGET" } }
+        ]
+      }
+    },
+    {
+      "id": "A50",
+      "title": "PRIVATE: _private_experimental_ reorder to dos in — native reorder (would obsolete the bounce hack)",
+      "vector": "applescript",
+      "operation": "todo.reorder-native",
+      "appState": "running-background",
+      "setup": [
+        { "openUrl": "things:///add?title=A50-X&when=today" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A50-X'" },
+        { "openUrl": "things:///add?title=A50-Y&when=today" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='A50-Y'" }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Today\" with ids \"{uuid:A50-Y},{uuid:A50-X}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='A50-Y') < (SELECT todayIndex FROM TMTask WHERE title='A50-X')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A50-X" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "A50-Y" },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "A51",
+      "title": "PRIVATE: _private_experimental_ json property — exposes checklist + recurrence data invisible elsewhere?",
+      "vector": "applescript",
+      "operation": "read.private-json",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ json of to do id \"{seed:LAB-INBOX-2}\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ json of to do id \"{seed:LAB-REPEAT-DAILY}\""
+        }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "LAB-INBOX-2" },
+          { "kind": "stdoutMatches", "command": 1, "pattern": "LAB-REPEAT-DAILY" },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    },
+    {
+      "id": "A52",
+      "title": "parse quicksilver input: quick-capture syntax creates a to-do",
+      "vector": "applescript",
+      "operation": "todo.create-quicksilver",
+      "appState": "running-background",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to parse quicksilver input \"A52-QS\"" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title LIKE 'A52-QS%'" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "stdoutMatches", "command": 0, "pattern": "to do id" },
+          { "kind": "rowExists", "table": "TMTask", "where": { "title": "A52-QS" } }
+        ]
+      }
+    },
+    {
+      "id": "A53",
+      "title": "show quick entry panel: spawns a panel window (tier 3, documented for completeness)",
+      "vector": "applescript",
+      "operation": "app.quick-entry-panel",
+      "appState": "running-background",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to show quick entry panel" },
+        { "sleep": 3 }
+      ],
+      "settleSeconds": 3,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "disruptive-only",
+        "tier": 3,
+        "assertions": [{ "kind": "deltaEmpty" }]
+      }
+    },
+    {
+      "id": "A54",
+      "title": "edit command: opens the item for editing in the UI (disruptive)",
+      "vector": "applescript",
+      "operation": "todo.edit-ui",
+      "appState": "running-background",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to edit to do id \"{seed:LAB-ANYTIME-1}\"" },
+        { "sleep": 3 }
+      ],
+      "settleSeconds": 3,
+      "cleanup": [{ "exec": ["pkill", "-x", "Things3"] }],
+      "expect": {
+        "verdict": "disruptive-only",
+        "tier": 3,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:LAB-ANYTIME-1" },
+            "fields": ["title", "notes", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "A27",
+      "title": "empty trash: PERMANENT delete of all trashed rows (NO tombstones with sync off)",
+      "vector": "applescript",
+      "operation": "app.empty-trash",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        { "osascript": "tell application \"Things3\" to empty trash" },
+        { "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTask WHERE trashed=1)" }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          { "kind": "deleted", "table": "TMTask", "where": { "uuid": "@seed:LAB-TRASH-ME" } },
+          { "kind": "notInserted", "table": "TMTombstone" },
+          { "kind": "rowCount", "table": "TMTask", "where": { "trashed": 1 }, "count": 0 }
+        ]
+      }
+    },
+    {
+      "id": "A21",
+      "title": "schedule on a repeating template is GUARDED: 'Cannot schedule to-do (302)' error, zero delta — where the URL when= crashes, AppleScript refuses",
+      "vector": "applescript",
+      "operation": "todo.schedule-repeating",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to schedule to do id \"{seed:LAB-REPEAT-DAILY}\" for (current date) + 1 * days",
+          "timeoutSeconds": 30
+        },
+        { "sleep": 3 }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "crash": false,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": { "uuid": "@seed:LAB-REPEAT-DAILY" },
+            "fields": ["rt1_recurrenceRule", "start", "startDate", "status"]
+          },
+          { "kind": "deltaEmpty" }
+        ]
+      }
+    }
+  ]
+}

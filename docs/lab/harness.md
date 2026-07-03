@@ -42,7 +42,7 @@ Every probe yields one evidence record (`docs/design/lab.md` §4.2): resolved co
 
 A probe is **green** iff: transport clean (unless `allowNonzeroExit`) ∧ all waits satisfied ∧ observed tier == expected ∧ crash state == expected ∧ all assertions pass. Assertions are declarative (`rowExists`, `inserted`, `fieldEquals`, `fieldUnchanged`, `unchanged`, `rowCount`, `rowAbsent`, `notInserted`, `deltaEmpty`) with `@uuidOf:` / `@seed:` / `@ctx:` refs. Command strings support `{uuid:TITLE}` / `{seed:NAME}` / `{ctx:KEY}` placeholders resolved on the guest at execution time.
 
-Disruption tiers: 0 = no observable effect · 1 = background launch (a launch deterministically surfaces the main window + one untitled companion; both are budgeted, not tier 3) · 2 = focus steal (Things became frontmost) · 3 = new window/modal beyond the launch budget, or a title change. Error modals show up as untitled `window-new` events without a launch; the `json` command's error modal additionally steals focus.
+Disruption tiers: 0 = no observable effect · 1 = background launch · 2 = focus steal (Things became frontmost) · 3 = new window/modal beyond the window budget, or a title change. Window budget: a launch surfaces the main window plus (sometimes) an untitled companion (budget 2); a bare activation can surface that companion alone (budget 1); anything beyond is a modal/new window. Error modals show up as `window-new` events without a launch; the `json` command's error modal additionally steals focus. Note: AppleEvents to a *closed* Things auto-launch it **with focus steal** (tier 2, A40/A41) — pre-launch with `open -g` to keep AppleScript operations at tier 0.
 
 ## Suite conventions (u-suite)
 

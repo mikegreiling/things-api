@@ -74,7 +74,11 @@ export type Assertion =
   | { kind: "fieldUnchanged"; table: string; where: Where; fields: string[] }
   | { kind: "unchanged"; table: string; where: Where }
   | { kind: "rowCount"; table: string; where: Where; count: number }
-  | { kind: "deltaEmpty" };
+  | { kind: "deltaEmpty" }
+  /** Row existed before and is gone after (delta.deleted); refs resolve against the BEFORE snapshot. */
+  | { kind: "deleted"; table: string; where: Where }
+  /** Regex against the stdout of commands[command] (probe commands only, 0-based). */
+  | { kind: "stdoutMatches"; command: number; pattern: string };
 
 export type Verdict =
   | "supported"
