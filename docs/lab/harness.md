@@ -42,7 +42,7 @@ Every probe yields one evidence record (`docs/design/lab.md` §4.2): resolved co
 
 A probe is **green** iff: transport clean (unless `allowNonzeroExit`) ∧ all waits satisfied ∧ observed tier == expected ∧ crash state == expected ∧ all assertions pass. Assertions are declarative (`rowExists`, `inserted`, `fieldEquals`, `fieldUnchanged`, `unchanged`, `rowCount`, `rowAbsent`, `notInserted`, `deltaEmpty`) with `@uuidOf:` / `@seed:` / `@ctx:` refs. Command strings support `{uuid:TITLE}` / `{seed:NAME}` / `{ctx:KEY}` placeholders resolved on the guest at execution time.
 
-Disruption tiers: 0 = no observable effect · 1 = background launch (a launch may surface one main window without counting as tier 3) · 2 = focus steal (Things became frontmost) · 3 = new window/modal beyond the launch budget, or a title change.
+Disruption tiers: 0 = no observable effect · 1 = background launch (a launch deterministically surfaces the main window + one untitled companion; both are budgeted, not tier 3) · 2 = focus steal (Things became frontmost) · 3 = new window/modal beyond the launch budget, or a title change. Error modals show up as untitled `window-new` events without a launch; the `json` command's error modal additionally steals focus.
 
 ## Suite conventions (u-suite)
 

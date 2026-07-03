@@ -23,7 +23,7 @@
     "appleEvents_sshd": "granted (image default; both Things3 + System Events work prompt-free)",
     "fullDiskAccess_sshd": "granted (image default; kTCCServiceSystemPolicyAllFiles)",
     "accessibility": "not needed (monitor uses CGWindowList, not AX API)",
-    "screenRecording": "NOT granted \u2014 gates window TITLES and screenshots only; window existence/geometry + all NSWorkspace events work without it"
+    "screenRecording": "granted (monitor + sshd) \u2014 confirmed empirically 2026-07-03: window titles readable in probe evidence (run u-20260703-062903, U01 saw title 'Today'). Gates window TITLES and screenshots only; window existence/geometry + all NSWorkspace events work without it"
   },
   "disruptionMonitor": "LaunchAgent com.thingslab.disruption-monitor running in Aqua session; emits launch/activate/terminate/frontmost/window-new/window-close",
   "seedCounts": {

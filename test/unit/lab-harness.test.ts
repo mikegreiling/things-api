@@ -85,13 +85,14 @@ describe("tier", () => {
     expect(computeDisruption([]).tier).toBe(0);
   });
 
-  it("tier 1 for background launch (one accompanying window allowed)", () => {
+  it("tier 1 for background launch (main window + untitled companion allowed)", () => {
     const d = computeDisruption([
       ev("launch", { bundleId: THINGS }),
-      ev("window-new", { window: 1, title: "" }),
+      ev("window-new", { window: 1, title: "Today" }),
+      ev("window-new", { window: 2, title: "" }),
     ]);
     expect(d.tier).toBe(1);
-    expect(d.signals).toMatchObject({ launch: true, activated: false, windowNew: 1 });
+    expect(d.signals).toMatchObject({ launch: true, activated: false, windowNew: 2 });
   });
 
   it("tier 2 when Things becomes frontmost", () => {
@@ -111,8 +112,9 @@ describe("tier", () => {
   it("tier 3 when a launch spawns more windows than its budget", () => {
     const d = computeDisruption([
       ev("launch", { bundleId: THINGS }),
-      ev("window-new", { window: 1, title: "" }),
+      ev("window-new", { window: 1, title: "Today" }),
       ev("window-new", { window: 2, title: "" }),
+      ev("window-new", { window: 3, title: "" }),
     ]);
     expect(d.tier).toBe(3);
   });
