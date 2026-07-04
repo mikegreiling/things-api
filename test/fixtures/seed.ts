@@ -24,9 +24,13 @@ export interface SeedTaskOpts {
   /** HH:mm; encoded to the packed reminderTime int. */
   reminder?: string | null;
   deadline?: string | null;
+  /** ISO date; dismissed-deadline suppression marker. */
+  deadlineSuppressionDate?: string | null;
   trashed?: boolean;
   index?: number;
   todayIndex?: number;
+  /** ISO date for todayIndexReferenceDate (cohort ordering). */
+  todayIndexReferenceDate?: string | null;
   area?: string | null;
   project?: string | null;
   heading?: string | null;
@@ -49,13 +53,13 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     `INSERT INTO TMTask (
        uuid, type, status, stopDate, trashed, title, notes,
        creationDate, userModificationDate,
-       start, startDate, startBucket, reminderTime, deadline,
-       "index", todayIndex, area, project, heading,
+       start, startDate, startBucket, reminderTime, deadline, deadlineSuppressionDate,
+       "index", todayIndex, todayIndexReferenceDate, area, project, heading,
        untrashedLeafActionsCount, openUntrashedLeafActionsCount,
        checklistItemsCount, openChecklistItemsCount,
        rt1_repeatingTemplate, rt1_recurrenceRule,
        rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, ?, NULL)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -71,8 +75,10 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     opts.evening ? 1 : 0,
     opts.reminder ? encodeReminderTime(opts.reminder) : null,
     opts.deadline ? encodePackedDate(opts.deadline) : null,
+    opts.deadlineSuppressionDate ? encodePackedDate(opts.deadlineSuppressionDate) : null,
     opts.index ?? 0,
     opts.todayIndex ?? 0,
+    opts.todayIndexReferenceDate ? encodePackedDate(opts.todayIndexReferenceDate) : null,
     opts.area ?? null,
     opts.project ?? null,
     opts.heading ?? null,

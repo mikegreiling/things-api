@@ -16,7 +16,7 @@
     "shortcutsBulkEditWithoutConfirmation": true,
     "thingsAutoUpdateDisabled": true
   },
-  "schemaFingerprint": "sha256:902537feef1a0c96893b077b77e018726830d44cb731ac75f22d2c9b27093709",
+  "schemaFingerprint": "sha256:5526059b10ffffe1b67f796d031857d030403bd5b747374646a2803a55c0e5c3",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
   "humanLayersDone": ["L2", "L3-appleevents", "L3-fulldisk", "L4-launchagent", "L6-seed-dataset"],
   "tcc": {
