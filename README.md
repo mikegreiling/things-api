@@ -32,6 +32,7 @@ The CLI is designed to be driven by coding agents with no out-of-band knowledge.
 3. **Stable exit codes**: `0` ok · `2` usage · `3` verify-failed (mutation executed, expected delta never appeared) · `4` blocked (hazard guard or disruption policy; error carries `remediation`) · `5` drift-blocked · `6` unsupported · `7` environment.
 4. **Plan before executing**: every write supports `--dry-run` — compiled invocation (token-redacted), chosen vector, tier, hazards checked, expected delta. Nothing runs, nothing is audited.
 5. **No prompts, ever**: risky semantics are explicit flags — `--children require-resolved|auto-complete` (project completion cascades), `--acknowledge-checklist-reset` (checklist replacement destroys per-item state), `--acknowledge-project-reopen` (open child reopens a resolved project), `--dangerously-permanent` (area/tag delete and empty-trash skip the Trash).
+6. **Experimental surfaces are opt-in**: `things reorder` (ordering within Today/a project/an area) rides an undocumented AppleScript command that any Things update may remove. It requires `things config set allow-experimental true` and re-checks the app's sdef declaration before every dispatch; `things doctor` reports both gates. Evening reorders never touch it — they use verified `when=` round-trips (the "bounce", ≤10 items) instead.
 
 A typical mutation flow:
 

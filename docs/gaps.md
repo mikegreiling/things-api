@@ -31,10 +31,10 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 | `log completed now` | Probed (A28), trivial to expose. |
 | Project scheduling evidence | `project update --when` compiles but only `completed=true` was specifically probed (U08) — firm up with one probe. |
 
-## Ordering (Phase 8, in flight)
+## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
 
-- Landing now: Today (native, bucket-0 members only — O03: evening members get silently de-eveninged), project + area scopes (native, un-headed children only — O06), Evening via verified bounce (O07/O08).
-- Still unprobed: sidebar ordering (areas among areas; projects within an area), checklist-item order (likely unautomatable — no granular checklist surface anywhere).
+- Shipped: Today (native, bucket-0 members incl. scheduled projects — O01/O12), project + area scopes (native, un-headed children only — O06), Evening via verified bounce (O07/O08). Native is experimental-gated (config `allow-experimental` + sdef canary); see [docs/lab/o-suite-results.md](lab/o-suite-results.md).
+- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar ordering (areas among areas; projects within an area) unprobed; checklist-item order (likely unautomatable — no granular checklist surface anywhere).
 
 ## Read-layer gaps
 
@@ -55,7 +55,7 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 
 ## Roadmap (agreed 2026-07-04; tracked as tasks #23–#27)
 
-1. **Phase 8 (in flight)** — `write.reorder`: today (native, bucket-0 only), evening (bounce), project/area (native, un-headed only); experimental gate + sdef canary; H-REORDER-SCOPE guard. Task #23.
+1. **Phase 8 (DONE 2026-07-04)** — `write.reorder` landed: today/project/area native + evening bounce, experimental gate + sdef canary, H-REORDER-SCOPE guard, e2e-validated in the VM.
 2. **Phase 9a** — R-suite (reminders: `when=today@18:00` set/clear/encoding, repeating-template hazard, reminderTime codec) + E-suite (area/tag rename, tag re-parent, notes append/prepend, move-to-inbox, duplicate, log-completed-now, project-when firm-up, sidebar-ordering discovery). Task #24.
 3. **Phase 9b** — implement the ops the R+E evidence validates (reminder vocabulary, area.update, tag.update, notes modes, inbox move, duplicate, …). Task #25.
 4. **Phase 10** — read-layer batch, host-only: tag-filtered reads (incl. inherited), Today ordering fidelity (todayIndexReferenceDate), upcoming repeat occurrences, checklist per-item state. Task #26.
