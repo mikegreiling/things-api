@@ -16,14 +16,14 @@
     "shortcutsBulkEditWithoutConfirmation": true,
     "thingsAutoUpdateDisabled": true
   },
-  "schemaFingerprint": "sha256:e4267e1bd2017d0955cf03fc54409ac6fe7809bdb4509b4e91bfe00518352364",
+  "schemaFingerprint": "sha256:902537feef1a0c96893b077b77e018726830d44cb731ac75f22d2c9b27093709",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
   "humanLayersDone": ["L2", "L3-appleevents", "L3-fulldisk", "L4-launchagent", "L6-seed-dataset"],
   "tcc": {
     "appleEvents_sshd": "granted (image default; both Things3 + System Events work prompt-free)",
     "fullDiskAccess_sshd": "granted (image default; kTCCServiceSystemPolicyAllFiles)",
     "accessibility": "not needed (monitor uses CGWindowList, not AX API)",
-    "screenRecording": "granted (monitor + sshd) \u2014 confirmed empirically 2026-07-03: window titles readable in probe evidence (run u-20260703-062903, U01 saw title 'Today'). Gates window TITLES and screenshots only; window existence/geometry + all NSWorkspace events work without it"
+    "screenRecording": "granted (monitor + sshd) — confirmed empirically 2026-07-03: window titles readable in probe evidence (run u-20260703-062903, U01 saw title 'Today'). Gates window TITLES and screenshots only; window existence/geometry + all NSWorkspace events work without it"
   },
   "disruptionMonitor": "LaunchAgent com.thingslab.disruption-monitor running in Aqua session; emits launch/activate/terminate/frontmost/window-new/window-close",
   "seedCounts": {
@@ -46,13 +46,13 @@
       "Allow Running Scripts enabled",
       "four draft proxies exist (create-heading, edit-title, delete-items, find-items)"
     ],
-    "finding": "Things-action entity fields (Items/Project) are app-entity pickers; raw string variables refused \u2014 restructure with Find Items -> bind output (golden-runbook \u00a75.2)",
-    "note": "entity pickers launched Things during the sitting (guest 2026-07-03) \u2014 one app-maintenance pass ran on golden task data; post-sitting lab:regress validated green",
+    "finding": "Things-action entity fields (Items/Project) are app-entity pickers; raw string variables refused — restructure with Find Items -> bind output (golden-runbook §5.2)",
+    "note": "entity pickers launched Things during the sitting (guest 2026-07-03) — one app-maintenance pass ran on golden task data; post-sitting lab:regress validated green",
     "remaining": [
       "restructure 3 mutation proxies with Find-chains",
       "check ID filter on Find Items",
-      "\u00a75.3 consent runs + signed exports",
-      "\u00a75.4 freeze checklist"
+      "§5.3 consent runs + signed exports",
+      "§5.4 freeze checklist"
     ]
   }
 }

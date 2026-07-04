@@ -19,9 +19,11 @@
  *             renders Today members with a star; live-verified via screenshot
  *             2026-07-02: starred = in Today, unstarred = unscheduled).
  *             Star equivalence: startDate != NULL && <= today.
- * - upcoming: start=2 AND startDate > today (matches things.py semantics;
- *             repeating templates' next occurrences are NOT included — they
- *             are template rows, surfaced separately later).
+ * - upcoming: start=2 AND startDate > today, PLUS each fixed repeating
+ *             template's next occurrence synthesized from
+ *             rt1_nextInstanceStartDate (UI parity; opt out via
+ *             repeats:false). Occurrence deadline = start − rule.ts
+ *             (instance-validated 2026-07-04).
  * - someday:  start=2 AND startDate IS NULL
  * - logbook:  status IN (2,3), by stopDate DESC
  * - trash:    trashed=1
@@ -31,9 +33,10 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { encodePackedDate, localToday } from "../model/dates.ts";
+import { addDaysIso, encodePackedDate, localToday } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
+import { decodeRecurrenceRule } from "../model/recurrence.ts";
 import {
   fetchTagsForTasks,
   fetchTaskRows,
@@ -137,7 +140,12 @@ export function isTodayMember(item: ListItem, now?: Date): boolean {
   return item.startDate !== null && item.startDate <= localToday(now);
 }
 
-export function upcomingView(db: DatabaseSync, now?: Date, filter?: ViewFilter): ListItem[] {
+export interface UpcomingFilter extends ViewFilter {
+  /** Include repeating templates' next occurrences (UI parity; default true). */
+  repeats?: boolean;
+}
+
+export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
   const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
@@ -146,7 +154,47 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: ViewFilter):
      ORDER BY t.startDate ASC, t."index" ASC`,
     [packedToday, ...tf.binds],
   );
-  return materialize(db, rows);
+  const items = materialize(db, rows);
+  if (filter?.repeats === false) return items;
+
+  // UI parity: repeating templates surface at their app-materialized next
+  // occurrence (rt1_nextInstanceStartDate). Fixed rules only — after-
+  // completion templates carry no next date until the prior instance
+  // resolves; paused templates are excluded. The occurrence deadline follows
+  // the instance-validated model: deadline = startDate − rule.startOffsetDays.
+  const templateRows = fetchTaskRows(
+    db,
+    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0
+     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
+     AND t.rt1_instanceCreationPaused = 0
+     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${tf.sql}
+     ORDER BY t.rt1_nextInstanceStartDate ASC, t."index" ASC`,
+    [packedToday, ...tf.binds],
+  );
+  const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
+  const occurrences = materialize(db, templateRows).map((template) => {
+    const startDate = template.repeating.nextOccurrence ?? null;
+    // Only the rule-derived deadline is real: the template row's own deadline
+    // column carries app-internal sentinels (4001-01-01 observed live).
+    let deadline: string | null = null;
+    const raw = rawByUuid.get(template.uuid);
+    if (startDate !== null && raw !== null && raw !== undefined) {
+      try {
+        const rule = decodeRecurrenceRule(raw);
+        if (rule.startOffsetDays < 0) deadline = addDaysIso(startDate, -rule.startOffsetDays);
+      } catch {
+        // undecodable rule (future Things build) → occurrence without a derived deadline
+      }
+    }
+    return { ...template, startDate, deadline };
+  });
+
+  return [...items, ...occurrences].toSorted(
+    (a, b) =>
+      (a.startDate ?? "").localeCompare(b.startDate ?? "") ||
+      a.index - b.index ||
+      a.uuid.localeCompare(b.uuid),
+  );
 }
 
 export function somedayView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {

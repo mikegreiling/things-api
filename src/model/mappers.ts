@@ -45,6 +45,8 @@ export interface TaskRow {
   openChecklistItemsCount: number | null;
   rt1_repeatingTemplate: string | null;
   rt1_recurrenceRule: unknown;
+  rt1_nextInstanceStartDate: number | null;
+  rt1_instanceCreationPaused: number | null;
   repeater: unknown;
 }
 
@@ -94,7 +96,12 @@ function mapTodaySection(row: { startBucket: number | null; uuid: string }): Tod
 function mapRepeating(row: TaskRow): RepeatingInfo {
   const isTemplate = row.rt1_recurrenceRule !== null || row.repeater !== null;
   const templateUuid = row.rt1_repeatingTemplate;
-  return { isTemplate, isInstance: templateUuid !== null, templateUuid };
+  const info: RepeatingInfo = { isTemplate, isInstance: templateUuid !== null, templateUuid };
+  if (isTemplate) {
+    info.nextOccurrence = decodePackedDate(row.rt1_nextInstanceStartDate);
+    info.paused = row.rt1_instanceCreationPaused === 1;
+  }
+  return info;
 }
 
 function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {

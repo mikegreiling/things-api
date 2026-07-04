@@ -33,6 +33,11 @@ export interface SeedTaskOpts {
   stopDate?: number | null;
   /** Marks the row as a repeating template. */
   recurrenceRule?: boolean;
+  /** Real XML plist rule blob (implies template); overrides recurrenceRule. */
+  recurrenceRuleXml?: string;
+  /** ISO date for rt1_nextInstanceStartDate (templates). */
+  nextInstanceStartDate?: string | null;
+  instanceCreationPaused?: boolean;
   repeatingTemplate?: string | null;
   creationDate?: number;
   modificationDate?: number;
@@ -48,8 +53,9 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
        "index", todayIndex, area, project, heading,
        untrashedLeafActionsCount, openUntrashedLeafActionsCount,
        checklistItemsCount, openChecklistItemsCount,
-       rt1_repeatingTemplate, rt1_recurrenceRule, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, NULL)`,
+       rt1_repeatingTemplate, rt1_recurrenceRule,
+       rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -71,7 +77,13 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     opts.project ?? null,
     opts.heading ?? null,
     opts.repeatingTemplate ?? null,
-    opts.recurrenceRule ? new Uint8Array([0x62, 0x70]) : null,
+    opts.recurrenceRuleXml !== undefined
+      ? new TextEncoder().encode(opts.recurrenceRuleXml)
+      : opts.recurrenceRule
+        ? new Uint8Array([0x62, 0x70])
+        : null,
+    opts.nextInstanceStartDate ? encodePackedDate(opts.nextInstanceStartDate) : null,
+    opts.instanceCreationPaused ? 1 : 0,
   );
   return uuid;
 }

@@ -90,6 +90,14 @@ export function reminderUrlToken(time: ReminderTime): string {
   return `${h}:${mm}`;
 }
 
+/** Calendar arithmetic on timezone-less ISO dates (UTC-anchored). */
+export function addDaysIso(iso: IsoDate, days: number): IsoDate {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) throw new RangeError(`not an ISO date: ${iso}`);
+  const d = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return `${String(d.getUTCFullYear()).padStart(4, "0")}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
 /**
  * Today's date in the machine's local timezone, as Things computes it.
  * The Today list boundary is local-midnight; injectable `now` for tests.

@@ -40,8 +40,8 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 | Gap | Detail |
 |---|---|
 | ~~Tag-filtered list reads~~ | **SHIPPED 2026-07-04 (Phase 10a)**: `--tag <ref>` on today/inbox/anytime/upcoming/someday/logbook — direct OR inherited via the heading→project→area chain (single SQL predicate mirroring `inheritedTagsFor`). Tag-HIERARCHY descendant matching (filter by parent matches child-tagged items, as the UI does) is unvalidated — not offered yet. |
-| Today ordering fidelity | `todayIndexReferenceDate` re-bucketing unresolved — our Today order can mismatch the UI for stale-referenceDate items. Matters more now that we WRITE order. Research-heavy (needs live UI comparison probes). |
-| Upcoming repeat occurrences | Templates' future instances aren't synthesized into `upcoming` (the UI shows them). Research-heavy (rt1_recurrenceRule bplist decode, read-only). |
+| Today ordering fidelity | `todayIndexReferenceDate` re-bucketing unresolved — our Today order can mismatch the UI for stale-referenceDate items. Matters more now that we WRITE order. Needs a lab-harness extension (mid-suite clock re-pin) to observe the app's launch-time renumbering — the one remaining read-layer research item. |
+| ~~Upcoming repeat occurrences~~ | **SHIPPED 2026-07-04 (Phase 10b)**: `upcoming` now synthesizes each fixed template's next occurrence from `rt1_nextInstanceStartDate` (paused/after-completion excluded), with the deadline derived from the decoded rule (`deadline = start − ts`, instance-validated). Rule plist fully decoded READ-ONLY (`src/model/recurrence.ts`; schema in the atlas); `byUuid` exposes `repeating.rule`/`nextOccurrence`/`paused`. Not yet done: occurrences BEYOND the next one (needs a full occurrence generator — evidence exists in the rule model if ever needed). |
 | ~~Checklist state granularity~~ | **Already covered** — `byUuid` returns the checklist with per-item `status` from TMChecklistItem (the old register entry was stale). Writes stay wholesale-replace everywhere (app limitation, all surfaces). |
 
 ## Deliberately excluded (not gaps)
@@ -57,7 +57,7 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 1. **Phase 8 (DONE 2026-07-04)** — `write.reorder` landed: today/project/area native + evening bounce, experimental gate + sdef canary, H-REORDER-SCOPE guard, e2e-validated in the VM.
 2. **Phase 9a (DONE 2026-07-04)** — R-suite (16 probes) + E-suite (12 probes) locked; reminderTime codec closed; parser trap pinned (oddity 2d).
 3. **Phase 9b (DONE 2026-07-04)** — reminder vocabulary, area.update, tag.update, notes modes, inbox move, todo.duplicate; e2e 43/43.
-4. **Phase 10a (DONE 2026-07-04)** — tag-filtered reads shipped; checklist per-item state confirmed already covered. **Phase 10b (open)** — Today ordering fidelity (todayIndexReferenceDate re-bucketing probes) + upcoming repeat occurrences (recurrence-rule bplist decode); both research-heavy, no app-write risk.
+4. **Phase 10a (DONE 2026-07-04)** — tag-filtered reads shipped; checklist per-item state confirmed already covered. **Phase 10b (DONE 2026-07-04 except one item)** — recurrence rules decoded + upcoming occurrence synthesis shipped; Today ordering fidelity (todayIndexReferenceDate) remains — needs a mid-suite clock-re-pin harness extension to observe launch-time renumbering.
 5. **Phase 11 (blocked on Mike's L5 sitting)** — S-campaign → Shortcuts vector → heading ops in existing projects; plus `project.add` json-payload headings (small win, independent of Shortcuts). Task #27.
 
 Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes.

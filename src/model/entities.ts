@@ -3,6 +3,7 @@
  * (verified live against schema v26).
  */
 import type { IsoDate, ReminderTime } from "./dates.ts";
+import type { RepeatRule } from "./recurrence.ts";
 
 export type TaskStatus = "open" | "canceled" | "completed"; // status 0 | 2 | 3
 export type StartState = "inbox" | "active" | "someday"; // start 0 | 1 | 2
@@ -21,6 +22,12 @@ export interface RepeatingInfo {
   /** This row was generated from a template. */
   isInstance: boolean;
   templateUuid: string | null;
+  /** Templates: the app-materialized next occurrence date (null for after-completion rules until spawned). */
+  nextOccurrence?: IsoDate | null;
+  /** Templates: instance creation paused in the app UI. */
+  paused?: boolean;
+  /** Templates, detail reads only: the decoded repeat rule (read-only; undecodable rules are omitted). */
+  rule?: RepeatRule;
 }
 
 interface TaskCommon {

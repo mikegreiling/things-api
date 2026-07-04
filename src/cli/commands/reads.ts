@@ -68,6 +68,7 @@ export function withClient(
 export function formatItem(item: ListItem): string {
   const marks = [
     item.type === "project" ? "P" : "-",
+    item.repeating.isTemplate ? "↻" : null,
     item.deadline ? `!${item.deadline}` : null,
     item.startDate ? `@${item.startDate}` : null,
     item.tags.length > 0 ? `#${item.tags.map((t) => t.title).join(",#")}` : null,
@@ -125,7 +126,8 @@ export function registerReadCommands(program: Command): void {
     {
       name: "upcoming",
       description:
-        "Future-scheduled items grouped chronologically (repeating occurrences not yet included)",
+        "Future-scheduled items in date order, INCLUDING each repeating item's next " +
+        "occurrence (↻ marker; deadline derived from the repeat rule)",
       fetch: (c, tag) => c.read.upcoming(tag === undefined ? undefined : { tag }),
     },
     {

@@ -28,6 +28,8 @@ function row(overrides: Partial<TaskRow> = {}): TaskRow {
     startBucket: 1,
     reminderTime: null,
     deadline: null,
+    rt1_nextInstanceStartDate: null,
+    rt1_instanceCreationPaused: null,
     index: -1731,
     todayIndex: 6000626,
     area: "area-1",

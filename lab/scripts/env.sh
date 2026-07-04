@@ -18,11 +18,18 @@ LAB_SSH_OPTS=(
 )
 
 lab_ssh() {
-  # lab_ssh <ip> <command...>
-  local ip="$1"
+  # lab_ssh <ip> <command...> — fresh clones flap password auth in their
+  # first seconds (exit 255); retry that specific failure like the TS runner.
+  local ip="$1" attempt code
   shift
-  sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" -o ConnectTimeout=10 \
-    "$LAB_SSH_USER@$ip" "$@"
+  for attempt in 1 2 3; do
+    sshpass -p "$LAB_SSH_PASS" ssh "${LAB_SSH_OPTS[@]}" -o ConnectTimeout=10 \
+      "$LAB_SSH_USER@$ip" "$@"
+    code=$?
+    [ "$code" -ne 255 ] && return "$code"
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
+  return 255
 }
 
 lab_scp() {
