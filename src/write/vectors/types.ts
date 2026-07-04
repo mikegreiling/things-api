@@ -28,6 +28,12 @@ export interface VectorSupport {
   validation: "validated" | "assumed" | "unvalidated";
   /** Probe ids backing this entry (u-suite / a-suite evidence). */
   evidence?: string[];
+  /**
+   * Rides an UNDOCUMENTED app surface (e.g. `_private_experimental_` sdef
+   * commands). Requires config allowExperimental AND the pipeline's sdef
+   * canary — the surface can vanish in any Things update.
+   */
+  experimental?: boolean;
   notes?: string;
 }
 

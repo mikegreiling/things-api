@@ -57,6 +57,36 @@ echo "     created project uuid=$PROJ"
 run_step 4 "project complete requires children policy resolution" project complete "$PROJ" --children require-resolved
 run_step 0 "project complete with verified auto-complete cascade" project complete "$PROJ" --children auto-complete
 
+echo "== reorder (native experimental + bounce) =="
+run_step 0 "seed today R1" todo add "E2E-R1" --when today
+R1=$(json_get "d['data']['uuid']")
+run_step 0 "seed today R2" todo add "E2E-R2" --when today
+R2=$(json_get "d['data']['uuid']")
+run_step 0 "seed today R3" todo add "E2E-R3" --when today
+R3=$(json_get "d['data']['uuid']")
+run_step 6 "native reorder is gated until allow-experimental" reorder --scope today --strategy native "$R3" "$R1"
+STEP=$((STEP + 1))
+if things config set allow-experimental true >/dev/null 2>&1; then
+  echo "ok   [$STEP] enable allow-experimental"
+else
+  echo "FAIL [$STEP] enable allow-experimental"
+  FAILURES=$((FAILURES + 1))
+fi
+run_step 0 "native today reorder (partial list, verified ordering)" reorder --scope today "$R3" "$R1"
+run_step 0 "seed evening RE1" todo add "E2E-RE1" --when evening
+RE1=$(json_get "d['data']['uuid']")
+run_step 0 "seed evening RE2" todo add "E2E-RE2" --when evening
+RE2=$(json_get "d['data']['uuid']")
+run_step 4 "today reorder rejects evening members (O03 guard)" reorder --scope today "$RE1" "$R1"
+run_step 0 "evening bounce reorder (verified when= round-trips)" reorder --scope evening "$RE2" "$RE1"
+run_step 0 "seed project for ordering" project add "E2E-RPROJ"
+RPROJ=$(json_get "d['data']['uuid']")
+run_step 0 "seed project child P1" todo add "E2E-RP1" --project "$RPROJ"
+RP1=$(json_get "d['data']['uuid']")
+run_step 0 "seed project child P2" todo add "E2E-RP2" --project "$RPROJ"
+RP2=$(json_get "d['data']['uuid']")
+run_step 0 "native project reorder (uuid specifier)" reorder --scope project --project "$RPROJ" "$RP2" "$RP1"
+
 echo "== deletes =="
 run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
 run_step 0 "area add (applescript)" area add "E2E-AREA"

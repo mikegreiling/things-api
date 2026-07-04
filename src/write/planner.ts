@@ -32,6 +32,8 @@ export function planVector(
     maxDisruption: DisruptionTier;
     appRunning: boolean;
     forcedVector?: VectorId;
+    /** Config gate for `experimental: true` matrix entries (default off). */
+    allowExperimental?: boolean;
   },
 ): Plan {
   const considered: { vector: VectorId; why: string }[] = [];
@@ -55,6 +57,15 @@ export function planVector(
       considered.push({
         vector: vector.id,
         why: `capability is ${support.validation} — not lab-validated`,
+      });
+      continue;
+    }
+    if (support.experimental === true && options.allowExperimental !== true) {
+      considered.push({
+        vector: vector.id,
+        why:
+          "rides an undocumented app surface — enable it with " +
+          "`things config set allow-experimental true`",
       });
       continue;
     }

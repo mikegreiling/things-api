@@ -12,6 +12,7 @@ import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
+import { sdefDeclaresPrivateReorder } from "./experimental.ts";
 import { evaluateGuards, type GuardBlock, type HazardId } from "./guards.ts";
 import { acquireMutationLock, MutationLockError } from "./lock.ts";
 import type { Acknowledgements, OperationKind, OperationParamsMap } from "./operations.ts";
@@ -90,6 +91,8 @@ export interface WriteDeps {
   /** Injectable for tests/lab: returns true when Things is up (launching if needed). */
   ensureRunning?: (alreadyRunning: boolean) => Promise<boolean>;
   isAppRunning?: () => boolean;
+  /** Canary seam: does the installed sdef still declare the private command? */
+  sdefProbe?: () => boolean;
   now?: () => Date;
   poller?: PollerDeps;
   pkgVersion?: string;
@@ -250,7 +253,7 @@ export async function runMutation<K extends OperationKind>(
 
   try {
     // 3. Pre-read + guards.
-    const pre = spec.preRead(deps.db, params);
+    const pre = spec.preRead(deps.db, params, deps.now?.() ?? new Date());
     const acks: Acknowledgements = {
       ...(options.acknowledgeChecklistReset !== undefined && {
         acknowledgeChecklistReset: options.acknowledgeChecklistReset,
@@ -285,6 +288,7 @@ export async function runMutation<K extends OperationKind>(
     const plan = planVector(op, deps.vectors, {
       maxDisruption,
       appRunning,
+      allowExperimental: config.allowExperimental,
       ...(options.vector !== undefined && { forcedVector: options.vector }),
     });
     if (plan.kind === "unsupported") {
@@ -305,6 +309,26 @@ export async function runMutation<K extends OperationKind>(
       };
     }
     const { vector, effectiveTier } = plan.candidate;
+
+    // 4b. Experimental canary: the private sdef command can vanish in any
+    // Things update — re-check the declaration before every dispatch.
+    if (plan.candidate.support.experimental === true) {
+      const declared = (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+      if (!declared) {
+        audit({ result: "blocked:environment" });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail:
+            "the installed Things no longer declares the private reorder command in its " +
+            "sdef — the experimental surface has likely been removed by an app update",
+          remediation:
+            "check `things doctor`, file/track the change, and fall back to the bounce " +
+            "strategy where available",
+        };
+      }
+    }
 
     // 5. Compile + expected delta.
     const nowEpoch = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
@@ -416,7 +440,7 @@ export async function runMutation<K extends OperationKind>(
   }
 }
 
-function fingerprintLabel(
+export function fingerprintLabel(
   fp: FingerprintStatus,
   config: ThingsApiConfig,
 ): "ok" | "drift" | "user-accepted" | "unknown" {

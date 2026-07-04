@@ -9,8 +9,14 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { saveConfigKey, type DisruptionTier } from "../../config.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
-import { OPERATION_KINDS, type OperationKind } from "../../write/operations.ts";
-import type { MutationResult, WriteOptions } from "../../write/pipeline.ts";
+import {
+  OPERATION_KINDS,
+  type OperationKind,
+  type ReorderScope,
+  type ReorderStrategy,
+} from "../../write/operations.ts";
+import type { WriteOptions } from "../../write/pipeline.ts";
+import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
 import { defaultVectors } from "../../write/vectors/registry.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
 import { ExitCode } from "../exit-codes.ts";
@@ -72,7 +78,7 @@ function splitCsv(value: string | undefined): string[] | undefined {
 
 async function runWrite(
   opts: WriteFlagOpts,
-  fn: (client: ThingsClient) => Promise<MutationResult>,
+  fn: (client: ThingsClient) => Promise<ReorderResult>,
 ): Promise<void> {
   const started = Date.now();
   let client: ThingsClient | null = null;
@@ -107,8 +113,32 @@ async function runWrite(
   }
 }
 
-function emitResult(result: MutationResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
+function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
   switch (result.kind) {
+    case "bounce-aborted": {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: "bounce-aborted",
+                message: result.detail,
+                detail: { placed: result.placed, remaining: result.remaining, cause: result.cause },
+              },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(
+          `BOUNCE ABORTED: ${result.detail}\n` +
+            `  placed (now at the top, in order): ${result.placed.join(", ") || "none"}\n` +
+            `  not placed: ${result.remaining.join(", ")}\n`,
+        );
+      }
+      process.exitCode = ExitCode.VerifyFailed;
+      return;
+    }
     case "ok": {
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(okEnvelope("mutation-result", result, meta))}\n`);
@@ -592,6 +622,42 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
+  addWriteFlags(
+    program
+      .command("reorder <uuids...>")
+      .description(
+        "Reorder items within Today, This Evening, a project, or an area — uuids are placed " +
+          "at the TOP in the given order; unlisted members keep their relative order below. " +
+          "Strategies: native (private sdef command — EXPERIMENTAL, requires `things config " +
+          "set allow-experimental true`; today/project/area) and bounce (verified when= " +
+          `round-trips; today/evening, max ${BOUNCE_MAX_ITEMS} items). Evening is bounce-only: ` +
+          "the native command silently de-evenings items (O03). Headed project children are " +
+          "rejected (O06). Hazard: H-REORDER-SCOPE.",
+      )
+      .requiredOption("--scope <scope>", "today | evening | project | area")
+      .option("--project <ref>", "project (uuid or unique name) — scope=project")
+      .option("--area <ref>", "area (uuid or unique name) — scope=area")
+      .option("--strategy <name>", "force native | bounce (default: per-scope)"),
+  ).action(async (uuids: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const scope = opts["scope"] as ReorderScope;
+    const container = containerRef(
+      (opts["project"] as string | undefined) ?? (opts["area"] as string | undefined),
+    );
+    await runWrite(opts, (c) =>
+      c.write.reorder(
+        {
+          scope,
+          uuids,
+          ...(container !== undefined && { container }),
+          ...(opts["strategy"] !== undefined && {
+            strategy: opts["strategy"] as ReorderStrategy,
+          }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
   program
     .command("capabilities")
     .description(
@@ -652,7 +718,8 @@ export function registerWriteCommands(program: Command): void {
   config
     .command("set <key> <value>")
     .description(
-      "Persist a config key: profile | maxDisruption | actor | auditEnabled | accepted-fingerprint",
+      "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
+        "accepted-fingerprint | allow-experimental",
     )
     .action((key: string, value: string) => {
       const map: Record<string, string> = {
@@ -661,6 +728,7 @@ export function registerWriteCommands(program: Command): void {
         actor: "actor",
         auditEnabled: "auditEnabled",
         "accepted-fingerprint": "acceptedFingerprint",
+        "allow-experimental": "allowExperimental",
       };
       const target = map[key];
       if (target === undefined) {
@@ -671,7 +739,7 @@ export function registerWriteCommands(program: Command): void {
       const parsed: string | number | boolean =
         target === "maxDisruption"
           ? Number(value)
-          : target === "auditEnabled"
+          : target === "auditEnabled" || target === "allowExperimental"
             ? value === "true"
             : value;
       saveConfigKey(target as never, parsed);

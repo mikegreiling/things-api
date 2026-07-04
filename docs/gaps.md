@@ -52,3 +52,13 @@ UI navigation (`show`, quick entry panel — tier 2–3, probed A53/A54); Things
 ## Shortcuts verdict (for planning)
 
 Fills: **headings in existing projects** (unique), maybe heading-archive + reminder property (S-probes). Does NOT fill: repeat rules, checklist granularity, area/tag editing (AppleScript already better at tier 0). Everything else it offers is redundant with validated tier-0 vectors.
+
+## Roadmap (agreed 2026-07-04; tracked as tasks #23–#27)
+
+1. **Phase 8 (in flight)** — `write.reorder`: today (native, bucket-0 only), evening (bounce), project/area (native, un-headed only); experimental gate + sdef canary; H-REORDER-SCOPE guard. Task #23.
+2. **Phase 9a** — R-suite (reminders: `when=today@18:00` set/clear/encoding, repeating-template hazard, reminderTime codec) + E-suite (area/tag rename, tag re-parent, notes append/prepend, move-to-inbox, duplicate, log-completed-now, project-when firm-up, sidebar-ordering discovery). Task #24.
+3. **Phase 9b** — implement the ops the R+E evidence validates (reminder vocabulary, area.update, tag.update, notes modes, inbox move, duplicate, …). Task #25.
+4. **Phase 10** — read-layer batch, host-only: tag-filtered reads (incl. inherited), Today ordering fidelity (todayIndexReferenceDate), upcoming repeat occurrences, checklist per-item state. Task #26.
+5. **Phase 11 (blocked on Mike's L5 sitting)** — S-campaign → Shortcuts vector → heading ops in existing projects; plus `project.add` json-payload headings (small win, independent of Shortcuts). Task #27.
+
+Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes.

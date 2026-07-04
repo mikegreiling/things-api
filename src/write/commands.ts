@@ -10,6 +10,7 @@ import type { IsoDate } from "../model/dates.ts";
 import type { HazardId } from "./guards.ts";
 import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "./operations.ts";
 import {
+  computeReorderPre,
   emptyPreState,
   loadTarget,
   missingTagTitles,
@@ -22,6 +23,7 @@ import {
   trashedCount,
   type PreState,
 } from "./pre-state.ts";
+import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import type { CompiledInvocation, VectorId } from "./vectors/types.ts";
 import type { DeltaSpec, FieldAssertion } from "./verify/delta.ts";
@@ -40,7 +42,7 @@ export interface DeltaCtx {
 export interface CommandSpec<K extends OperationKind = OperationKind> {
   op: K;
   hazards: HazardId[];
-  preRead(db: DatabaseSync, params: OperationParamsMap[K]): PreState;
+  preRead(db: DatabaseSync, params: OperationParamsMap[K], now: Date): PreState;
   expectedDelta(pre: PreState, params: OperationParamsMap[K], ctx: DeltaCtx): DeltaSpec;
   compile(
     params: OperationParamsMap[K],
@@ -625,6 +627,48 @@ const tagDelete: CommandSpec<"tag.delete"> = {
   },
 };
 
+const reorder: CommandSpec<"reorder"> = {
+  op: "reorder",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REORDER-SCOPE"],
+  preRead(db, params, now) {
+    const pre = emptyPreState();
+    let containerUuid: string | null = null;
+    if (params.scope === "project") {
+      pre.destProject = resolveProject(db, params.container ?? {});
+      containerUuid = pre.destProject.resolved?.uuid ?? null;
+    }
+    if (params.scope === "area") {
+      pre.destArea = resolveArea(db, params.container ?? {});
+      containerUuid = pre.destArea.resolved?.uuid ?? null;
+    }
+    pre.reorder = computeReorderPre(db, params, containerUuid, now);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    // Verify the REQUESTED sequence (strictly ascending ranks). The wire
+    // list pins the unrequested tail too, but the caller's contract is the
+    // requested prefix; tail members are covered by pre-rank tripwires.
+    return {
+      mode: "ordering",
+      key:
+        pre.reorder?.key ??
+        (params.scope === "project" || params.scope === "area" ? "index" : "todayIndex"),
+      sequence: params.uuids,
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const specifier =
+      params.scope === "project"
+        ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
+        : params.scope === "area"
+          ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
+          : `list "Today"`;
+    const ids = (pre.reorder?.wireList ?? params.uuids).join(",");
+    return osa(`${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(ids)}`);
+  },
+};
+
 const trashEmpty: CommandSpec<"trash.empty"> = {
   op: "trash.empty",
   hazards: ["H-PERMANENT-DELETE"],
@@ -661,4 +705,5 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "tag.add": tagAdd,
   "tag.delete": tagDelete,
   "trash.empty": trashEmpty,
+  reorder,
 };

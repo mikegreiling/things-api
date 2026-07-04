@@ -24,6 +24,7 @@ export const OPERATION_KINDS = [
   "tag.add",
   "tag.delete",
   "trash.empty",
+  "reorder",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -123,6 +124,30 @@ export interface NameOrUuidParams {
   target: string;
 }
 
+export type ReorderScope = "today" | "evening" | "project" | "area";
+export type ReorderStrategy = "native" | "bounce";
+
+export interface ReorderParams {
+  scope: ReorderScope;
+  /** Required for project/area scopes; must be omitted for today/evening. */
+  container?: ContainerRef;
+  /**
+   * Desired order, top-first. May be a SUBSET of the scope's members: the
+   * requested uuids are placed at the top in this order and every remaining
+   * member keeps its current relative order below them (the wire list sent
+   * to the app is always the full member list — O01 proved partial sends
+   * work but leave placement underdetermined).
+   */
+  uuids: string[];
+  /**
+   * Omit for the default per scope: native for today/project/area (requires
+   * allowExperimental + the sdef canary), bounce for evening. Today accepts
+   * an explicit "bounce" fallback; project/area are native-only; evening is
+   * bounce-only (O03: native reorder silently de-evenings bucket-1 members).
+   */
+  strategy?: ReorderStrategy;
+}
+
 export type EmptyParams = Record<string, never>;
 
 export interface OperationParamsMap {
@@ -144,6 +169,7 @@ export interface OperationParamsMap {
   "tag.add": TagAddParams;
   "tag.delete": NameOrUuidParams;
   "trash.empty": EmptyParams;
+  reorder: ReorderParams;
 }
 
 /** Explicit acknowledgements for guarded operations (never defaulted). */

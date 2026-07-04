@@ -402,6 +402,181 @@
           }
         ]
       }
+    },
+    {
+      "id": "O09",
+      "title": "private reorder with a PROJECT ID specifier (production form: uuid addressing avoids title-collision ambiguity; O04 only proved the name form)",
+      "vector": "applescript",
+      "operation": "order.project-id-specifier",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in project id \"{seed:LAB-PROJ-PLAIN}\" with ids \"{seed:LAB-P-1},{seed:LAB-P-3}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-P-1}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-P-3}')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-P-1"
+            },
+            "fields": ["project", "status", "start", "heading"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-P-3"
+            },
+            "fields": ["project", "status", "start", "heading"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O10",
+      "title": "private reorder with an AREA ID specifier (production form: uuid addressing; O05 only proved the name form)",
+      "vector": "applescript",
+      "operation": "order.area-id-specifier",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in area id \"{seed:LAB-AREA-A}\" with ids \"{uuid:O-AA1},{uuid:O-AA2}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-AA1') < (SELECT \"index\" FROM TMTask WHERE title='O-AA2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AA1"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AA2"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          }
+        ]
+      }
+    },
+    {
+      "id": "O11",
+      "title": "production wire-list shape in a MIXED project: full un-headed-children ids list (headings + headed children excluded) — heading rows and headed children must be untouched. Depends on post-O06 state (LAB-H-A1/A2 are un-headed by now).",
+      "vector": "applescript",
+      "operation": "order.project-mixed-unheaded",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in project id \"{seed:LAB-PROJ-HEADINGS}\" with ids \"{seed:LAB-H-A2},{seed:LAB-H-FLAT},{seed:LAB-H-A1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A2}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-FLAT}') AND (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-FLAT}') < (SELECT \"index\" FROM TMTask WHERE uuid='{seed:LAB-H-A1}')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:Alpha"
+            },
+            "fields": ["project", "status", "trashed", "index"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:Beta"
+            },
+            "fields": ["project", "status", "trashed", "index"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-H-B1"
+            },
+            "field": "heading",
+            "value": "@seed:Beta"
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-H-B1"
+            },
+            "fields": ["index", "status", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O12",
+      "title": "PROJECT rows in Today: the ids list accepts a project uuid (project inherits from `to do` in the sdef) — required so the today-scope wire list can pin scheduled projects instead of leaving their placement underdetermined",
+      "vector": "applescript",
+      "operation": "order.today-project-row",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-PROJ-TODAY&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PROJ-TODAY' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Today\" with ids \"{uuid:O-PROJ-TODAY},{uuid:O-A}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-PROJ-TODAY') < (SELECT todayIndex FROM TMTask WHERE title='O-A')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PROJ-TODAY"
+            },
+            "fields": ["start", "startDate", "startBucket", "status", "trashed", "area", "type"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-B"
+            },
+            "fields": ["todayIndex", "startBucket"]
+          }
+        ]
+      }
     }
   ]
 }

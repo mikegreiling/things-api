@@ -24,7 +24,7 @@ function check<K extends OperationKind>(
   acks: Acknowledgements = {},
 ): GuardBlock | null {
   const spec = COMMANDS[op];
-  const pre = spec.preRead(fixture.db, params);
+  const pre = spec.preRead(fixture.db, params, new Date());
   return evaluateGuards(spec.hazards, {
     op,
     params: params as Record<string, unknown>,
