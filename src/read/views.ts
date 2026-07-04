@@ -34,9 +34,32 @@ import type { DatabaseSync } from "node:sqlite";
 import { encodePackedDate, localToday } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
-import { fetchTagsForTasks, fetchTaskRows, makeRefResolver, NOT_TEMPLATE } from "./queries.ts";
+import {
+  fetchTagsForTasks,
+  fetchTaskRows,
+  makeRefResolver,
+  NOT_TEMPLATE,
+  resolveTagUuid,
+  TAG_SCOPE,
+  TAG_SCOPE_BINDS,
+} from "./queries.ts";
 
 export type ListItem = Todo | Project;
+
+/** Optional list-view filters. */
+export interface ViewFilter {
+  /** Tag (uuid or unique title): direct OR inherited membership (UI semantics). */
+  tag?: string;
+}
+
+function tagFilter(
+  db: DatabaseSync,
+  filter: ViewFilter | undefined,
+): { sql: string; binds: string[] } {
+  if (filter?.tag === undefined) return { sql: "", binds: [] };
+  const uuid = resolveTagUuid(db, filter.tag);
+  return { sql: ` AND ${TAG_SCOPE}`, binds: Array.from({ length: TAG_SCOPE_BINDS }, () => uuid) };
+}
 
 const LIVE = `t.type IN (0, 1) AND t.trashed = 0 AND ${NOT_TEMPLATE}`;
 const OPEN = `${LIVE} AND t.status = 0`;
@@ -61,14 +84,15 @@ export interface TodayView {
   badge: { dueOrOverdue: number; other: number };
 }
 
-export function todayView(db: DatabaseSync, now?: Date): TodayView {
+export function todayView(db: DatabaseSync, now?: Date, filter?: ViewFilter): TodayView {
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
+  const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2)
+    `${OPEN} AND t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2)${tf.sql}
      ORDER BY t.startBucket ASC, t.todayIndex ASC`,
-    [packedToday],
+    [packedToday, ...tf.binds],
   );
   const items = materialize(db, rows);
   // Evening membership expires daily: raw startBucket=1 counts only while
@@ -82,13 +106,19 @@ export function todayView(db: DatabaseSync, now?: Date): TodayView {
   };
 }
 
-export function inboxView(db: DatabaseSync): ListItem[] {
-  const rows = fetchTaskRows(db, `${OPEN} AND t.start = 0 ORDER BY t."index" ASC`);
+export function inboxView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {
+  const tf = tagFilter(db, filter);
+  const rows = fetchTaskRows(
+    db,
+    `${OPEN} AND t.start = 0${tf.sql} ORDER BY t."index" ASC`,
+    tf.binds,
+  );
   return materialize(db, rows);
 }
 
-export function anytimeView(db: DatabaseSync, now?: Date): ListItem[] {
+export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
+  const tf = tagFilter(db, filter);
   // Mirrors UI membership: every active item, including Today members
   // (starred in the UI) and pending-promotion rows (start=2, past-dated).
   const rows = fetchTaskRows(
@@ -96,8 +126,8 @@ export function anytimeView(db: DatabaseSync, now?: Date): ListItem[] {
     `${OPEN} AND (
        (t.start = 1 AND (t.startDate IS NULL OR t.startDate <= ?))
        OR (t.start = 2 AND t.startDate IS NOT NULL AND t.startDate <= ?)
-     ) ORDER BY t."index" ASC`,
-    [packedToday, packedToday],
+     )${tf.sql} ORDER BY t."index" ASC`,
+    [packedToday, packedToday, ...tf.binds],
   );
   return materialize(db, rows);
 }
@@ -107,31 +137,38 @@ export function isTodayMember(item: ListItem, now?: Date): boolean {
   return item.startDate !== null && item.startDate <= localToday(now);
 }
 
-export function upcomingView(db: DatabaseSync, now?: Date): ListItem[] {
+export function upcomingView(db: DatabaseSync, now?: Date, filter?: ViewFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
+  const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?
+    `${OPEN} AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${tf.sql}
      ORDER BY t.startDate ASC, t."index" ASC`,
-    [packedToday],
+    [packedToday, ...tf.binds],
   );
   return materialize(db, rows);
 }
 
-export function somedayView(db: DatabaseSync): ListItem[] {
+export function somedayView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {
+  const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 2 AND t.startDate IS NULL ORDER BY t."index" ASC`,
+    `${OPEN} AND t.start = 2 AND t.startDate IS NULL${tf.sql} ORDER BY t."index" ASC`,
+    tf.binds,
   );
   return materialize(db, rows);
 }
 
-export function logbookView(db: DatabaseSync, options?: { limit?: number }): ListItem[] {
+export function logbookView(
+  db: DatabaseSync,
+  options?: { limit?: number; tag?: string },
+): ListItem[] {
   const limit = options?.limit ?? 100;
+  const tf = tagFilter(db, options);
   const rows = fetchTaskRows(
     db,
-    `${LIVE} AND t.status IN (2, 3) ORDER BY t.stopDate DESC LIMIT ?`,
-    [limit],
+    `${LIVE} AND t.status IN (2, 3)${tf.sql} ORDER BY t.stopDate DESC LIMIT ?`,
+    [...tf.binds, limit],
   );
   return materialize(db, rows);
 }

@@ -27,6 +27,7 @@ import {
   upcomingView,
   type ListItem,
   type TodayView,
+  type ViewFilter,
 } from "./read/views.ts";
 import type {
   AreaAddParams,
@@ -78,12 +79,12 @@ export interface ThingsClient {
   config: ThingsApiConfig;
   fingerprint(): FingerprintStatus;
   read: {
-    today(): TodayView;
-    inbox(): ListItem[];
-    anytime(): ListItem[];
-    upcoming(): ListItem[];
-    someday(): ListItem[];
-    logbook(options?: { limit?: number }): ListItem[];
+    today(filter?: ViewFilter): TodayView;
+    inbox(filter?: ViewFilter): ListItem[];
+    anytime(filter?: ViewFilter): ListItem[];
+    upcoming(filter?: ViewFilter): ListItem[];
+    someday(filter?: ViewFilter): ListItem[];
+    logbook(options?: { limit?: number; tag?: string }): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
     projectView(uuid: string): ProjectView;
@@ -216,11 +217,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     config,
     fingerprint,
     read: {
-      today: () => todayView(conn.db, now()),
-      inbox: () => inboxView(conn.db),
-      anytime: () => anytimeView(conn.db, now()),
-      upcoming: () => upcomingView(conn.db, now()),
-      someday: () => somedayView(conn.db),
+      today: (f) => todayView(conn.db, now(), f),
+      inbox: (f) => inboxView(conn.db, f),
+      anytime: (f) => anytimeView(conn.db, now(), f),
+      upcoming: (f) => upcomingView(conn.db, now(), f),
+      someday: (f) => somedayView(conn.db, f),
       logbook: (o) => logbookView(conn.db, o),
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),
