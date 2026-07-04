@@ -24,7 +24,7 @@ Everything surprising, inconsistent, or hazardous we found while systematically 
 
 **Also affected:** non-scheduling updates on the same repeating item work fine (`title`, checklist items), so the crash is specific to schedule-class fields via URL.
 
-**Evidence:** first isolated 2026-03-12 on the MAS build (validation notes T12, reproducible across repeat configs); re-reproduced deterministically 2026-07-03 in clean-room VMs on the trial build — probe `U12` (crash detector: process death + `.ips` capture + row-unchanged assertion, green in every acceptance run), guard contrast probe `A21`. Repo refs: `docs/research/validation-notes-step3.md` (T12), `docs/lab/u-suite-results.md`, `docs/lab/a-suite-results.md`, `lab/suites/u-suite.json` (U12), `lab/suites/a-suite.json` (A21).
+**Evidence:** first isolated 2026-03-12 on the MAS build (validation notes T12, reproducible across repeat configs); re-reproduced deterministically 2026-07-03 in clean-room VMs on the trial build — probe `U12` (crash detector: process death + `.ips` capture + row-unchanged assertion, green in every acceptance run), guard contrast probe `A21`. The reminder-flavored form `when=today@18:00` crashes identically (probe `R09`, 2026-07-04) — the whole `when=` family is affected. Repo refs: `docs/research/validation-notes-step3.md` (T12), `docs/lab/u-suite-results.md`, `docs/lab/a-suite-results.md`, `lab/suites/u-suite.json` (U12), `lab/suites/a-suite.json` (A21), `lab/suites/r-suite.json` (R09).
 
 ---
 
@@ -42,6 +42,10 @@ Commands that fail *silently* — the caller gets no signal that nothing (or onl
 On `add`, a `heading=` value that doesn't match an existing heading in the target project is dropped: the to-do is created un-headed. Heading placement works only against pre-existing headings (and matching is by name, so duplicate heading names are ambiguous). *(T09/U09)*
 
 ---
+
+### 2d. Reminder times with bare hours 1–11 are silently reinterpreted
+
+`when=today@10:05` does not set a 10:05 AM reminder — it sets **22:05**. The parser treats an hour of 1–11 *without* an am/pm suffix as a 12-hour time and resolves it to the next upcoming occurrence relative to the current clock (at a noon wall-clock, `10:05` → 22:05 and `6:45` → 18:45, both verified). Meanwhile a **leading-zero** hour is taken as a 24-hour literal (`06:45` → 06:45 exactly), hours ≥ 12 are literal (`14:10`, `22:30`), and explicit suffixes are honored (`10:05am` → 10:05, `6pm` → 18:00). Because `10` and `11` have no leading-zero spelling, **10:xx/11:xx AM cannot be expressed without the `am` suffix** — a caller composing "HH:mm" strings gets a silently different reminder for two hours of the day. Same behavior on `add` and `update`. Evidence: probes R01–R16 (13 known-time samples), 2026-07-04.
 
 ## 3. UI vs. URL behavioral divergence: project completion
 

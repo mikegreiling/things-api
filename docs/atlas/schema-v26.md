@@ -52,7 +52,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 | `start` | `0` Inbox · `1` Anytime/Today · `2` Someday | Coarse placement bucket. |
 | `startDate` | packed int or NULL | The "When" date. **Packing: `y<<16 \| m<<12 \| d<<7`** (verified: `132803712` → 2026-06-25). |
 | `startBucket` | `0` Today · `1` This Evening | Sub-placement within Today. things.py cannot see this; we expose it as `todaySection`. |
-| `reminderTime` | packed int or NULL | Time-of-day for the reminder. Bit layout TBD — samples (557842432, 589299712, …) suggest hour/minute in high bits. **Phase-1 codec TODO.** |
+| `reminderTime` | packed int or NULL | Time-of-day for the reminder. **Packing: `hour<<26 \| minute<<20`** (i.e. `(hour*64 + minute) << 20`; verified against 13 known-time lab samples, R-suite 2026-07-04 — e.g. `1207959552` → 18:00, `434110464` → 06:30, `15728640` → 00:15). Set/cleared via URL `when=<list>@<time>`; a bare `when=today` on update CLEARS it (R07). |
 | `deadline` | packed int or NULL | Hard due date, independent of `startDate`. Same packing. |
 | `deadlineSuppressionDate` | packed int | Suppresses deadline nagging after user dismissal. |
 | `todayIndexReferenceDate` | packed int | The day a `todayIndex` value is relative to (Today re-sorts daily). |

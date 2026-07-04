@@ -1,0 +1,393 @@
+{
+  "suite": "e",
+  "description": "Editing-completeness campaign: the cheap gaps from docs/gaps.md — area/tag rename, tag re-parent + keyboard shortcut, URL append-/prepend-notes, move-to-inbox, duplicate (URL + AppleScript), project scheduling firm-up. All fresh entities are created in setup so seed records other probes rely on stay pristine.",
+  "probes": [
+    {
+      "id": "E01",
+      "title": "area rename via `set name of area` — standard setter, previously unprobed",
+      "vector": "applescript",
+      "operation": "area.rename",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new area with properties {name:\"E-AREA-RN\"}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMArea WHERE title='E-AREA-RN'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set name of area \"E-AREA-RN\" to \"E-AREA-RN2\""
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMArea WHERE title='E-AREA-RN2'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMArea",
+            "where": {
+              "title": "E-AREA-RN2"
+            }
+          },
+          {
+            "kind": "rowAbsent",
+            "table": "TMArea",
+            "where": {
+              "title": "E-AREA-RN"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "E02",
+      "title": "tag rename via `set name of tag` — do existing assignments survive the rename?",
+      "vector": "applescript",
+      "operation": "tag.rename",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"E-TAG-RN\"}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTag WHERE title='E-TAG-RN'"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set tag names of to do id \"{seed:LAB-INBOX-1}\" to \"E-TAG-RN\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTag t ON tt.tags=t.uuid WHERE t.title='E-TAG-RN' AND tt.tasks='{seed:LAB-INBOX-1}'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set name of tag \"E-TAG-RN\" to \"E-TAG-RN2\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTag t ON tt.tags=t.uuid WHERE t.title='E-TAG-RN2' AND tt.tasks='{seed:LAB-INBOX-1}'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTag",
+            "where": {
+              "title": "E-TAG-RN2"
+            }
+          },
+          {
+            "kind": "rowAbsent",
+            "table": "TMTag",
+            "where": {
+              "title": "E-TAG-RN"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "E03",
+      "title": "re-parent an EXISTING root tag via `set parent tag` (only creation-time parenting was validated, A05)",
+      "vector": "applescript",
+      "operation": "tag.reparent",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"E-TAG-P\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"E-TAG-C\"}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag WHERE title='E-TAG-C' AND parent IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"E-TAG-C\" to tag \"E-TAG-P\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='E-TAG-C' AND p.title='E-TAG-P'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTag",
+            "where": {
+              "title": "E-TAG-C"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "E04",
+      "title": "URL append-notes — documented param, unprobed; separator behavior is the finding",
+      "vector": "url",
+      "operation": "notes.append",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-NOTES&notes=BASE"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-NOTES' AND notes='BASE'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:E-NOTES}&auth-token={ctx:token}&append-notes=TAIL"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-NOTES' AND notes LIKE 'BASE%TAIL'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "E-NOTES"
+            },
+            "fields": ["title", "status", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "E05",
+      "title": "URL prepend-notes on the same item",
+      "vector": "url",
+      "operation": "notes.prepend",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:E-NOTES}&auth-token={ctx:token}&prepend-notes=HEAD"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-NOTES' AND notes LIKE 'HEAD%BASE%TAIL'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "E-NOTES"
+            },
+            "fields": ["title", "status", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "E06",
+      "title": "move a scheduled to-do back to the Inbox via AppleScript `move ... to list \"Inbox\"`",
+      "vector": "applescript",
+      "operation": "todo.move-inbox",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-INBOXMV&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-INBOXMV' AND start=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:E-INBOXMV}\" to list \"Inbox\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-INBOXMV' AND start=0"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-INBOXMV"
+            },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-INBOXMV"
+            },
+            "field": "startDate",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "E07",
+      "title": "URL duplicate=true on update — does the documented-ish duplicate param exist?",
+      "vector": "url",
+      "operation": "todo.duplicate-url",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-DUP&notes=DUPBODY"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-DUP'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:E-DUP}&auth-token={ctx:token}&duplicate=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask GROUP BY title HAVING title='E-DUP' AND COUNT(*)=2"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMTask",
+            "where": {
+              "title": "E-DUP"
+            },
+            "count": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "E08",
+      "title": "AppleScript `duplicate to do` is REFUSED by the app: 'Selected to dos can not be copied. (-1717)' — the URL duplicate=true param (E07) is the only automation path",
+      "vector": "applescript",
+      "operation": "todo.duplicate-applescript",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-DUP2&notes=DUP2BODY"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-DUP2'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to duplicate to do id \"{uuid:E-DUP2}\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMTask",
+            "where": {
+              "title": "E-DUP2"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "E09",
+      "title": "project scheduling firm-up: update-project when=<future date> (only completed=true was probed on projects, U08)",
+      "vector": "url",
+      "operation": "project.schedule",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=E-PROJ-WHEN"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-PROJ-WHEN' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:E-PROJ-WHEN}&auth-token={ctx:token}&when=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-PROJ-WHEN' AND start=2 AND startDate IS NOT NULL"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-PROJ-WHEN"
+            },
+            "field": "start",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "E10",
+      "title": "tag keyboard shortcut setter — does the sdef expose `keyboard shortcut` for tags? (pure discovery)",
+      "vector": "applescript",
+      "operation": "tag.shortcut",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set keyboard shortcut of tag \"E-TAG-P\" to \"9\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag WHERE title='E-TAG-P' AND shortcut IS NOT NULL"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTag",
+            "where": {
+              "title": "E-TAG-P"
+            },
+            "field": "shortcut",
+            "value": "9"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -15,21 +15,22 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 - What works: safe template edits (title/notes/checklist — U12B/T12), full editing of spawned instances (guards only block templates), reading rule presence + config via the private `json` property (A51).
 - **Path:** none. Document; guard (done); revisit per Things release.
 
-### 3. Reminders (time-of-day) — documented URL feature, never probed, unexposed
-- `when=today@18:00` style reminders exist in the URL docs; `TMTask.reminderTime` codec is an open atlas item.
-- **Path:** probe suite (encoding + set/clear semantics + repeating hazard interaction) → extend `when` vocabulary. Probably the most user-visible gap after headings. Check whether Shortcuts' Edit Items exposes a Reminder property while S-probing.
+### 3. Reminders (time-of-day) — PROBED 2026-07-04 (R-suite, 16 probes locked); implementation pending
+- Codec CLOSED: `reminderTime = hour<<26 | minute<<20`. Set on add/update via `when=<list>@<time>`; bare `when` on update CLEARS the reminder; repeating-template hazard confirmed (crashes, R09 — H-REPEAT-SCHEDULE already blocks).
+- Parser trap (oddity 2d): bare hours 1–11 get 12-hour "next upcoming" treatment — deterministic emitter derived (leading-zero 24h for 0–9, am/pm suffix for 10–11, literal for 12–23). See [docs/lab/r-suite-results.md](lab/r-suite-results.md).
+- **Path:** Phase 9b — extend the `when` vocabulary + verification with the codec.
 
-## Editing-completeness gaps (all cheap: AppleScript setters + one probe suite)
+## Editing-completeness gaps — PROBED 2026-07-04 (E-suite, 10 probes locked); implementation pending
 
-| Gap | Evidence/path |
+| Gap | Evidence (see [docs/lab/e-suite-results.md](lab/e-suite-results.md)) |
 |---|---|
-| `area.update` — rename; change tags post-creation | `set name of area` unprobed (standard setter); `set tag names of area` already validated (seeding). |
-| `tag.update` — rename, re-parent existing, keyboard shortcut | `set parent tag` validated at creation (A05); rename unprobed. |
-| Notes append/prepend | URL `append-notes`/`prepend-notes` params documented, unprobed; we only replace. |
-| Move to Inbox | `todo.move` covers project/area/heading only; AppleScript `move to list "Inbox"` unprobed. |
-| Duplicate to-do/project | Exists on all three surfaces (URL `duplicate=true`, AppleScript `duplicate`, Shortcuts); never probed. |
+| `area.update` — rename | `set name of area` works (E01). |
+| `tag.update` — rename, re-parent, keyboard shortcut | All three work; assignments survive rename (E02/E03/E10). |
+| Notes append/prepend | URL params work, newline separator (E04/E05). |
+| Move to Inbox | AppleScript `move to list "Inbox"` de-schedules cleanly (E06). |
+| Duplicate to-do | URL `duplicate=true` works (E07); AppleScript duplicate REFUSED by the app (E08) — URL is the only path. |
 | `log completed now` | Probed (A28), trivial to expose. |
-| Project scheduling evidence | `project update --when` compiles but only `completed=true` was specifically probed (U08) — firm up with one probe. |
+| Project scheduling evidence | `update-project?when=<date>` firm (E09). |
 
 ## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
 
