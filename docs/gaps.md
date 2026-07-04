@@ -15,12 +15,10 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 - What works: safe template edits (title/notes/checklist — U12B/T12), full editing of spawned instances (guards only block templates), reading rule presence + config via the private `json` property (A51).
 - **Path:** none. Document; guard (done); revisit per Things release.
 
-### 3. Reminders (time-of-day) — PROBED 2026-07-04 (R-suite, 16 probes locked); implementation pending
-- Codec CLOSED: `reminderTime = hour<<26 | minute<<20`. Set on add/update via `when=<list>@<time>`; bare `when` on update CLEARS the reminder; repeating-template hazard confirmed (crashes, R09 — H-REPEAT-SCHEDULE already blocks).
-- Parser trap (oddity 2d): bare hours 1–11 get 12-hour "next upcoming" treatment — deterministic emitter derived (leading-zero 24h for 0–9, am/pm suffix for 10–11, literal for 12–23). See [docs/lab/r-suite-results.md](lab/r-suite-results.md).
-- **Path:** Phase 9b — extend the `when` vocabulary + verification with the codec.
+### 3. Reminders (time-of-day) — SHIPPED 2026-07-04 (Phase 9b)
+- `--reminder HH:mm` on todo add/update (when today|evening only — H-REMINDER-SCOPE), auto-preserve on re-schedule, `--clear-reminder`; codec-verified read-after-write; e2e-validated. Remaining edge: reminders on date-scheduled items (`when=2026-07-08@time`) unprobed — guard rejects.
 
-## Editing-completeness gaps — PROBED 2026-07-04 (E-suite, 10 probes locked); implementation pending
+## Editing-completeness gaps — SHIPPED 2026-07-04 (Phase 9b: area update, tag update, notes append/prepend, move-to-inbox, todo duplicate; `log completed now` still unexposed — DB delta unclear, low value)
 
 | Gap | Evidence (see [docs/lab/e-suite-results.md](lab/e-suite-results.md)) |
 |---|---|
@@ -57,8 +55,8 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 ## Roadmap (agreed 2026-07-04; tracked as tasks #23–#27)
 
 1. **Phase 8 (DONE 2026-07-04)** — `write.reorder` landed: today/project/area native + evening bounce, experimental gate + sdef canary, H-REORDER-SCOPE guard, e2e-validated in the VM.
-2. **Phase 9a** — R-suite (reminders: `when=today@18:00` set/clear/encoding, repeating-template hazard, reminderTime codec) + E-suite (area/tag rename, tag re-parent, notes append/prepend, move-to-inbox, duplicate, log-completed-now, project-when firm-up, sidebar-ordering discovery). Task #24.
-3. **Phase 9b** — implement the ops the R+E evidence validates (reminder vocabulary, area.update, tag.update, notes modes, inbox move, duplicate, …). Task #25.
+2. **Phase 9a (DONE 2026-07-04)** — R-suite (16 probes) + E-suite (12 probes) locked; reminderTime codec closed; parser trap pinned (oddity 2d).
+3. **Phase 9b (DONE 2026-07-04)** — reminder vocabulary, area.update, tag.update, notes modes, inbox move, todo.duplicate; e2e 43/43.
 4. **Phase 10** — read-layer batch, host-only: tag-filtered reads (incl. inherited), Today ordering fidelity (todayIndexReferenceDate), upcoming repeat occurrences, checklist per-item state. Task #26.
 5. **Phase 11 (blocked on Mike's L5 sitting)** — S-campaign → Shortcuts vector → heading ops in existing projects; plus `project.add` json-payload headings (small win, independent of Shortcuts). Task #27.
 
