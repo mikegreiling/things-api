@@ -43,9 +43,29 @@ On `add`, a `heading=` value that doesn't match an existing heading in the targe
 
 ---
 
-### 2d. Reminder times with bare hours 1–11 are silently reinterpreted
+### 2d. Reminder times with bare hours 1–11 are silently reinterpreted (am/pm heuristic)
 
-`when=today@10:05` does not set a 10:05 AM reminder — it sets **22:05**. The parser treats an hour of 1–11 *without* an am/pm suffix as a 12-hour time and resolves it to the next upcoming occurrence relative to the current clock (at a noon wall-clock, `10:05` → 22:05 and `6:45` → 18:45, both verified). Meanwhile a **leading-zero** hour is taken as a 24-hour literal (`06:45` → 06:45 exactly), hours ≥ 12 are literal (`14:10`, `22:30`), and explicit suffixes are honored (`10:05am` → 10:05, `6pm` → 18:00). Because `10` and `11` have no leading-zero spelling, **10:xx/11:xx AM cannot be expressed without the `am` suffix** — a caller composing "HH:mm" strings gets a silently different reminder for two hours of the day. Same behavior on `add` and `update`. Evidence: probes R01–R16 (13 known-time samples), 2026-07-04.
+**Report-ready.** `when=today@10:05` does not set a 10:05 AM reminder — it silently sets **22:05**. There is no error, no signal; the caller only finds out by reading the item back.
+
+**Reproduce** (any afternoon wall-clock, e.g. 12:30 PM):
+1. `open "things:///add?title=T1&when=today@10:05"` → reminder stored as **22:05** (10:05 PM).
+2. `open "things:///add?title=T2&when=today@06:45"` → reminder stored as **06:45** — exact.
+3. `open "things:///add?title=T3&when=today@6:45"` → reminder stored as **18:45** (6:45 PM).
+
+**The rule** (pinned across 13 known-time probes, R01–R16, identical on `add` and `update`):
+
+| Time spelling | Parsed as | Example (at a ~noon clock) |
+|---|---|---|
+| Leading-zero hour (`06:45`, `00:15`) | 24-hour LITERAL | `06:45` → 06:45 |
+| Hour ≥ 12 (`12:30`, `14:10`, `22:30`) | 24-hour literal | `14:10` → 14:10 |
+| **Bare hour 1–11** (`6:45`, `10:05`) | 12-hour, resolved to the **next upcoming occurrence** vs. the current clock | `10:05` → 22:05 |
+| Explicit suffix (`6pm`, `10:05am`) | honored | `10:05am` → 10:05 |
+
+**Why it bites:** the three lexical classes look interchangeable, and the dangerous one is time-of-day dependent — the same URL stores a different reminder depending on when it runs. Worse, `10` and `11` have no leading-zero spelling, so a caller emitting canonical `HH:mm` strings still gets silently PM-shifted for two hours of the day. **Expected:** either parse `H:mm`/`HH:mm` uniformly as 24-hour, or reject ambiguous times; a silent, clock-dependent reinterpretation is neither.
+
+**Workaround** (what things-api's compiler does — every branch probe-verified): emit hours 0–9 zero-padded 24h (`06:45`), hours 10–11 with an explicit suffix (`10:05am`), hours 12–23 as literals (`14:10`). Never emit a bare 1–11 hour.
+
+**Evidence:** R-suite (`lab/suites/r-suite.json`, R01–R16), clean-room VM, Things 3.22.11 trial build, 2026-07-04; every probe locks the exact stored `reminderTime` int (packing: `hour<<26 | minute<<20`). Results: `docs/lab/r-suite-results.md`.
 
 ## 3. UI vs. URL behavioral divergence: project completion
 

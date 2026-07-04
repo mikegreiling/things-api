@@ -12,6 +12,7 @@ import {
   mapTodo,
   type TaskRow,
 } from "../model/mappers.ts";
+import { decodeRecurrenceRule } from "../model/recurrence.ts";
 import {
   fetchChecklistRows,
   fetchTagsForTasks,
@@ -30,15 +31,18 @@ function materializeOne(db: DatabaseSync, row: TaskRow): AnyTask {
   const refs = makeRefResolver(db);
   if (row.type === 2) return mapHeading(row, refs);
   const tags = fetchTagsForTasks(db, [row.uuid]).get(row.uuid) ?? [];
-  if (row.type === 1) {
-    const project = mapProject(row, refs, tags);
-    project.inheritedTags = inheritedTagsFor(db, row);
-    return project;
+  const entity = row.type === 1 ? mapProject(row, refs, tags) : mapTodo(row, refs, tags);
+  entity.inheritedTags = inheritedTagsFor(db, row);
+  if (entity.type === "to-do") entity.checklist = checklistFor(db, row.uuid);
+  if (entity.repeating.isTemplate && row.rt1_recurrenceRule !== null) {
+    try {
+      entity.repeating.rule = decodeRecurrenceRule(row.rt1_recurrenceRule);
+    } catch {
+      // Unknown rule schema (future Things build) — surface the template
+      // without a decoded rule rather than failing the whole read.
+    }
   }
-  const todo = mapTodo(row, refs, tags);
-  todo.inheritedTags = inheritedTagsFor(db, row);
-  todo.checklist = checklistFor(db, row.uuid);
-  return todo;
+  return entity;
 }
 
 export function checklistFor(db: DatabaseSync, taskUuid: string): ChecklistItem[] {

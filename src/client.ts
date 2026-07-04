@@ -27,6 +27,7 @@ import {
   upcomingView,
   type ListItem,
   type TodayView,
+  type UpcomingFilter,
   type ViewFilter,
 } from "./read/views.ts";
 import type {
@@ -82,7 +83,7 @@ export interface ThingsClient {
     today(filter?: ViewFilter): TodayView;
     inbox(filter?: ViewFilter): ListItem[];
     anytime(filter?: ViewFilter): ListItem[];
-    upcoming(filter?: ViewFilter): ListItem[];
+    upcoming(filter?: UpcomingFilter): ListItem[];
     someday(filter?: ViewFilter): ListItem[];
     logbook(options?: { limit?: number; tag?: string }): ListItem[];
     trash(options?: { limit?: number }): ListItem[];

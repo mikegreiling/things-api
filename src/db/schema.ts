@@ -37,6 +37,7 @@ export const DEPENDED_TABLES = {
     "rt1_repeatingTemplate",
     "rt1_recurrenceRule",
     "rt1_nextInstanceStartDate",
+    "rt1_instanceCreationPaused",
     "repeater",
   ],
   TMArea: ["uuid", "title", "visible", "index"],
