@@ -264,6 +264,10 @@ export function registerWriteCommands(program: Command): void {
       )
       .option("--notes <text>", "notes body")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+      .option(
+        "--reminder <HH:mm>",
+        "time-of-day reminder (24h); requires --when today|evening (R-suite scope)",
+      )
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--tags <list>", "comma-separated EXISTING tag names")
       .option("--checklist-item <text>", "checklist item (repeatable)", collect, [])
@@ -282,6 +286,7 @@ export function registerWriteCommands(program: Command): void {
           title,
           ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
           ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
           ...(tags !== undefined && { tags }),
           ...(checklist.length > 0 && { checklistItems: checklist }),
@@ -302,23 +307,50 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("update <uuid>")
       .description(
-        "Update title/notes/when/deadline (vector: url-scheme, tier 0). " +
+        "Update title/notes/when/reminder/deadline (vector: url-scheme, tier 0). " +
           "Hazard: H-REPEAT-SCHEDULE — when/deadline on a repeating template is hard-blocked " +
-          "(the URL write crashes Things); title/notes stay allowed.",
+          "(the URL write crashes Things); title/notes stay allowed. " +
+          "Reminders (H-REMINDER-SCOPE): --reminder needs --when today|evening; when " +
+          "re-scheduling WITHOUT --reminder an existing reminder is auto-preserved " +
+          "(a bare when= would silently clear it — R07); --clear-reminder clears explicitly. " +
+          "--append-notes/--prepend-notes join with a newline (exclusive with --notes).",
       )
       .option("--title <text>", "new title")
       .option("--notes <text>", "replace notes")
+      .option("--append-notes <text>", "append to existing notes (newline-joined)")
+      .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+      .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening")
+      .option("--clear-reminder", "clear the reminder (requires --when today|evening)")
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--clear-deadline", "remove the deadline"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
+      (k) => opts[k] !== undefined,
+    );
+    if (notesModes.length > 1) {
+      process.stderr.write("error: --notes, --append-notes, --prepend-notes are exclusive\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
+      process.stderr.write("error: pass at most one of --reminder / --clear-reminder\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     await runWrite(opts, (c) =>
       c.write.updateTodo(
         uuid,
         {
           ...(opts["title"] !== undefined && { title: opts["title"] as string }),
           ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+          ...(opts["appendNotes"] !== undefined && { appendNotes: opts["appendNotes"] as string }),
+          ...(opts["prependNotes"] !== undefined && {
+            prependNotes: opts["prependNotes"] as string,
+          }),
           ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
+          ...(opts["clearReminder"] === true && { reminder: null }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
           ...(opts["clearDeadline"] === true && { deadline: null }),
         },
@@ -355,10 +387,17 @@ export function registerWriteCommands(program: Command): void {
       .option("--project <ref>", "destination project (uuid or unique name)")
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--heading <name>", "existing heading in the destination project")
+      .option("--inbox", "move back to the Inbox — de-schedules (vector: applescript, E06)")
       .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const project = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
+    const inbox = opts["inbox"] === true;
+    if (inbox && (project !== undefined || area !== undefined || opts["heading"] !== undefined)) {
+      process.stderr.write("error: --inbox is exclusive with --project/--area/--heading\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     await runWrite(opts, (c) =>
       c.write.moveTodo(
         uuid,
@@ -366,14 +405,28 @@ export function registerWriteCommands(program: Command): void {
           ...(project !== undefined && { project }),
           ...(area !== undefined && { area }),
           ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+          ...(inbox && { inbox: true }),
         },
         writeOptionsFrom(opts, {
+          ...(inbox && { vector: "applescript" as const }),
           ...(opts["acknowledgeProjectReopen"] !== undefined && {
             acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
           }),
         }),
       ),
     );
+  });
+
+  addWriteFlags(
+    todo
+      .command("duplicate <uuid>")
+      .description(
+        "Duplicate a to-do (vector: url-scheme, tier 0; validated E07 — exact copy of " +
+          "title/notes, new uuid discovered by verification). AppleScript refuses duplication " +
+          "(E08). Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates (unvalidated).",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.duplicateTodo(uuid, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -540,6 +593,34 @@ export function registerWriteCommands(program: Command): void {
   });
   addWriteFlags(
     area
+      .command("update <target>")
+      .description(
+        "Rename an area and/or replace its tags (vector: applescript, tier 0; E01). " +
+          "Target by uuid or unique name. Hazard: H-UNKNOWN-TAG for --tags.",
+      )
+      .option("--title <text>", "new name")
+      .option("--tags <list>", "comma-separated EXISTING tag names (full replacement)"),
+  ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const tags = splitCsv(opts["tags"] as string | undefined);
+    if (opts["title"] === undefined && tags === undefined) {
+      process.stderr.write("error: pass --title and/or --tags\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    await runWrite(opts, (c) =>
+      c.write.updateArea(
+        target,
+        {
+          ...(opts["title"] !== undefined && { title: opts["title"] as string }),
+          ...(tags !== undefined && { tags }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addWriteFlags(
+    area
       .command("delete <target>")
       .description(
         "Delete an area PERMANENTLY (vector: applescript, tier 0). Areas skip the Trash " +
@@ -576,6 +657,40 @@ export function registerWriteCommands(program: Command): void {
       ),
     );
   });
+  addWriteFlags(
+    tag
+      .command("update <target>")
+      .description(
+        "Rename a tag (assignments survive — E02), nest it under an existing tag (E03), " +
+          "and/or set its keyboard shortcut (E10). Vector: applescript, tier 0. " +
+          "Un-nesting to root and clearing a shortcut are unprobed — not offered.",
+      )
+      .option("--title <text>", "new name")
+      .option("--parent <name>", "existing tag to nest under")
+      .option("--shortcut <char>", "keyboard shortcut character"),
+  ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    if (
+      opts["title"] === undefined &&
+      opts["parent"] === undefined &&
+      opts["shortcut"] === undefined
+    ) {
+      process.stderr.write("error: pass --title, --parent, and/or --shortcut\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    await runWrite(opts, (c) =>
+      c.write.updateTag(
+        target,
+        {
+          ...(opts["title"] !== undefined && { title: opts["title"] as string }),
+          ...(opts["parent"] !== undefined && { parent: opts["parent"] as string }),
+          ...(opts["shortcut"] !== undefined && { shortcut: opts["shortcut"] as string }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
   addWriteFlags(
     tag
       .command("delete <target>")

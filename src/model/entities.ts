@@ -2,7 +2,7 @@
  * Public entity types. Enum encodings per docs/atlas/schema-v26.md
  * (verified live against schema v26).
  */
-import type { IsoDate } from "./dates.ts";
+import type { IsoDate, ReminderTime } from "./dates.ts";
 
 export type TaskStatus = "open" | "canceled" | "completed"; // status 0 | 2 | 3
 export type StartState = "inbox" | "active" | "someday"; // start 0 | 1 | 2
@@ -39,6 +39,8 @@ interface TaskCommon {
    */
   todaySection: TodaySection | null;
   deadline: IsoDate | null;
+  /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
+  reminder: ReminderTime | null;
   area: Ref | null;
   /** Direct tags only — mirrors DB truth (inherited tags are computed; see inheritedTags). */
   tags: Ref[];

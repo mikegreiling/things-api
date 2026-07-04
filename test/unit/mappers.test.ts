@@ -26,6 +26,7 @@ function row(overrides: Partial<TaskRow> = {}): TaskRow {
     start: 1,
     startDate: 132803712, // 2026-06-25, live-verified vector
     startBucket: 1,
+    reminderTime: null,
     deadline: null,
     index: -1731,
     todayIndex: 6000626,

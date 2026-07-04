@@ -16,6 +16,7 @@ export const HAZARD_IDS = [
   "H-AMBIGUOUS-HEADING",
   "H-PERMANENT-DELETE",
   "H-REORDER-SCOPE",
+  "H-REMINDER-SCOPE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -42,6 +43,7 @@ const REPEAT_SENSITIVE: OperationKind[] = [
   "todo.reopen",
   "todo.move",
   "todo.delete",
+  "todo.duplicate", // unvalidated on templates (E07 probed a plain to-do)
 ];
 
 const GUARDS: Record<HazardId, GuardFn> = {
@@ -145,6 +147,22 @@ const GUARDS: Record<HazardId, GuardFn> = {
           ? "multiple headings with that name exist in the destination project"
           : "heading not found in the destination project (the heading param never creates one — T09/U09)",
       remediation: "rename the duplicate headings, or omit --heading",
+    };
+  },
+  "H-REMINDER-SCOPE": ({ op, params }) => {
+    if (op !== "todo.add" && op !== "todo.update") return null;
+    if (!("reminder" in params) || params["reminder"] === undefined) return null;
+    const when = params["when"];
+    if (when === "today" || when === "evening") return null;
+    return {
+      hazard: "H-REMINDER-SCOPE",
+      detail:
+        params["reminder"] === null
+          ? "clearing a reminder IS a bare when= write (R07) — when: today|evening must be " +
+            "re-stated in the same call"
+          : "reminders are only validated with when: today|evening (R-suite); date-scheduled " +
+            "reminders are unprobed",
+      remediation: "pass when today|evening together with the reminder",
     };
   },
   "H-REORDER-SCOPE": ({ op, params, pre }) => {

@@ -48,7 +48,9 @@ export type DeltaSpec =
    * Ordering: the given uuids must read back in strictly ascending rank on
    * the named key (todayIndex for Today/Evening scopes, index elsewhere).
    */
-  | { mode: "ordering"; key: "index" | "todayIndex"; sequence: string[] };
+  | { mode: "ordering"; key: "index" | "todayIndex"; sequence: string[] }
+  /** Area/tag property updates (TMArea/TMTag rows aren't tasks). */
+  | { mode: "entity-updated"; entity: "area" | "tag"; uuid: string; assert: FieldAssertion[] };
 
 /** Movement tripwires captured by the pre-read, keyed by uuid. */
 export type PreModDates = Record<string, number | null>;
@@ -75,6 +77,11 @@ export interface VerifyReader {
   trashedCount(): number;
   findCreated(probe: CreateProbe): AnyTask[];
   modDateOf(uuid: string): number | null;
+  /**
+   * Assertable fields of a TMArea/TMTag row: title, tags (areas, sorted
+   * titles), parent (tags, uuid or null), shortcut (tags). Null = row gone.
+   */
+  entityFields(entity: "area" | "tag", uuid: string): Record<string, unknown> | null;
 }
 
 export function createDbReader(db: DatabaseSync): VerifyReader {
@@ -130,6 +137,27 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
         | { userModificationDate: number | null }
         | undefined;
       return row?.userModificationDate ?? null;
+    },
+    entityFields(entity, uuid) {
+      if (entity === "area") {
+        const row = db.prepare("SELECT title FROM TMArea WHERE uuid = ?").get(uuid) as
+          | { title: string | null }
+          | undefined;
+        if (row === undefined) return null;
+        const tags = db
+          .prepare(
+            "SELECT t.title FROM TMAreaTag at JOIN TMTag t ON at.tags = t.uuid WHERE at.areas = ?",
+          )
+          .all(uuid) as { title: string }[];
+        return { title: row.title ?? "", tags: tags.map((t) => t.title).toSorted() };
+      }
+      const row = db
+        .prepare("SELECT title, parent, shortcut FROM TMTag WHERE uuid = ?")
+        .get(uuid) as
+        | { title: string | null; parent: string | null; shortcut: string | null }
+        | undefined;
+      if (row === undefined) return null;
+      return { title: row.title ?? "", parent: row.parent, shortcut: row.shortcut };
     },
   };
 }
@@ -300,6 +328,28 @@ export function evaluateDelta(
       return {
         satisfied: sorted,
         movement: moved,
+        assertedMovement: moved,
+        observed,
+      };
+    }
+    case "entity-updated": {
+      const fields = reader.entityFields(spec.entity, spec.uuid);
+      const observed: Record<string, unknown> = {};
+      let pass = fields !== null;
+      for (const a of spec.assert) {
+        const actual = fields?.[a.field];
+        observed[a.field] = actual === undefined ? null : actual;
+        if (!valuesEqual(actual, a.equals)) pass = false;
+      }
+      // TMArea/TMTag carry no modification date: movement = any asserted
+      // field departed from its captured pre-value.
+      const preFields = pre.fields[spec.uuid] ?? {};
+      const moved = Object.entries(observed).some(
+        ([field, value]) => field in preFields && !valuesEqual(preFields[field], value),
+      );
+      return {
+        satisfied: pass,
+        movement: moved || fields === null,
         assertedMovement: moved,
         observed,
       };

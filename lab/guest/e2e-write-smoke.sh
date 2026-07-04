@@ -87,6 +87,20 @@ run_step 0 "seed project child P2" todo add "E2E-RP2" --project "$RPROJ"
 RP2=$(json_get "d['data']['uuid']")
 run_step 0 "native project reorder (uuid specifier)" reorder --scope project --project "$RPROJ" "$RP2" "$RP1"
 
+echo "== phase 9b: reminders, notes modes, duplicate, entity updates =="
+run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-REM" --when today --reminder 10:05
+REM=$(json_get "d['data']['uuid']")
+run_step 0 "re-schedule preserves the reminder (auto-preserve)" todo update "$REM" --when evening
+run_step 0 "clear the reminder (bare when=)" todo update "$REM" --when evening --clear-reminder
+run_step 4 "reminder without when today|evening is blocked" todo update "$REM" --when 2026-07-08 --reminder 09:00
+run_step 0 "append-notes (newline separator verified)" todo update "$REM" --append-notes "appended"
+run_step 0 "prepend-notes" todo update "$REM" --prepend-notes "prepended"
+run_step 0 "duplicate (url-only, copy discovered)" todo duplicate "$REM"
+run_step 0 "move back to Inbox (de-schedules)" todo move "$REM" --inbox
+run_step 0 "area update: rename + tags" area update LAB-AREA-B --title "E2E-AREA-RENAMED" --tags lab-tag-1
+run_step 0 "tag add for update tests" tag add e2e-parent
+run_step 0 "tag update: re-parent + shortcut" tag update lab-tag-2 --parent e2e-parent --shortcut 8
+
 echo "== deletes =="
 run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
 run_step 0 "area add (applescript)" area add "E2E-AREA"

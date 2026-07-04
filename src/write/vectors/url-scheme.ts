@@ -13,15 +13,20 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["U03", "U04", "U07", "U09"],
-    notes: "unknown tags silently ignored by the app — H-UNKNOWN-TAG guards pre-write",
+    evidence: ["U03", "U04", "U07", "U09", "R01", "R04"],
+    notes:
+      "unknown tags silently ignored by the app — H-UNKNOWN-TAG guards pre-write; " +
+      "reminders via when=<list>@<time> (deterministic emitter — oddity 2d)",
   },
   "todo.update": {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["U04", "U13", "U12B"],
-    notes: "when= on a repeating template CRASHES Things (U12) — H-REPEAT-SCHEDULE hard-blocks",
+    evidence: ["U04", "U13", "U12B", "R06", "R07", "E04", "E05", "E11", "E12"],
+    notes:
+      "when= on a repeating template CRASHES Things (U12/R09) — H-REPEAT-SCHEDULE hard-blocks; " +
+      "reminders set/auto-preserved/cleared via when=@time (R06/R07); " +
+      "append-/prepend-notes newline-joined (E04/E05/E11/E12)",
   },
   "todo.complete": {
     support: "yes",
@@ -52,6 +57,13 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     notes: "wholesale replacement — destroys per-item state (H-CHECKLIST-REPLACE)",
   },
   "todo.delete": { support: "no", disruption: 3, validation: "validated", evidence: ["U14"] },
+  "todo.duplicate": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E07"],
+    notes: "update?duplicate=true — exact copy (title/notes), fresh uuid + creationDate",
+  },
   "project.add": {
     support: "yes",
     disruption: 0,

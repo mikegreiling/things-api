@@ -30,9 +30,10 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "partial",
     disruption: 0,
     validation: "validated",
-    evidence: ["A22", "A22B", "A22C"],
+    evidence: ["A22", "A22B", "A22C", "E06"],
     notes:
-      "list moves + project/area property setters; cannot target Upcoming (schedule instead); no heading placement",
+      "list moves + project/area property setters + move to Inbox (de-schedules, E06); " +
+      "cannot target Upcoming (schedule instead); no heading placement",
   },
   "todo.set-tags": {
     support: "yes",
@@ -46,6 +47,13 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     disruption: 0,
     validation: "validated",
     evidence: ["A30"],
+  },
+  "todo.duplicate": {
+    support: "no",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E08"],
+    notes: "the app refuses: 'Selected to dos can not be copied. (-1717)'",
   },
   "todo.delete": {
     support: "yes",
@@ -75,6 +83,13 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     notes: "SHALLOW: only the project row is trashed; children keep links (derived membership)",
   },
   "area.add": { support: "yes", disruption: 0, validation: "validated", evidence: ["A03"] },
+  "area.update": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E01"],
+    notes: "rename via `set name`; tag replacement via `set tag names`",
+  },
   "area.delete": {
     support: "yes",
     disruption: 0,
@@ -83,6 +98,13 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     notes: "PERMANENT — the area row is hard-deleted; contained to-dos land in Trash",
   },
   "tag.add": { support: "yes", disruption: 0, validation: "validated", evidence: ["A04", "A05"] },
+  "tag.update": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E02", "E03", "E10"],
+    notes: "rename (assignments survive), re-parent existing, keyboard shortcut",
+  },
   "tag.delete": {
     support: "yes",
     disruption: 0,
