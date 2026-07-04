@@ -24,6 +24,7 @@ export const DEPENDED_TABLES = {
     "startBucket",
     "reminderTime",
     "deadline",
+    "deadlineSuppressionDate",
     "index",
     "todayIndex",
     "todayIndexReferenceDate",

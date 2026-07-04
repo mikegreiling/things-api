@@ -29,8 +29,10 @@ let fx: FixtureDb;
 afterEach(() => fx?.close());
 
 describe("todayView", () => {
-  it("splits Today vs This Evening and orders each by todayIndex", () => {
+  it("splits Today vs This Evening; newer-entry cohorts first, todayIndex within", () => {
     fx = buildFixtureDb();
+    // referenceDate defaults to startDate via COALESCE when unset — the
+    // 07-02 cohort (t2) outranks the overdue 07-01 cohort (t1, promo).
     seedTodo(fx.db, { title: "t2", startDate: "2026-07-02", todayIndex: 20 });
     seedTodo(fx.db, { title: "t1", startDate: "2026-07-01", todayIndex: -50 }); // overdue stays in Today
     seedTodo(fx.db, { title: "e1", startDate: "2026-07-02", evening: true, todayIndex: 5 });
@@ -44,7 +46,7 @@ describe("todayView", () => {
     seedTodo(fx.db, { title: "template", startDate: "2026-07-02", recurrenceRule: true });
 
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["t1", "t2", "pending-promotion"]);
+    expect(view.today.map((i) => i.title)).toEqual(["t2", "t1", "pending-promotion"]);
     expect(view.evening.map((i) => i.title)).toEqual(["e1"]);
   });
 
@@ -78,12 +80,83 @@ describe("todayView", () => {
     expect(view.badge).toEqual({ dueOrOverdue: 2, other: 2 });
   });
 
-  it("deadline-only items do NOT enter Today (badge-sum reconciliation finding)", () => {
+  it("a DUE deadline pulls items into Today, even from the Inbox (UI-oracle 2026-07-04)", () => {
     fx = buildFixtureDb();
-    seedTodo(fx.db, { title: "deadline-only", deadline: "2026-06-30" }); // no startDate
+    seedTodo(fx.db, { title: "deadline-only", deadline: "2026-06-30" }); // overdue, no startDate
+    seedTodo(fx.db, { title: "inbox-due", start: "inbox", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "deadline-future", deadline: "2026-07-09" }); // not yet due
+    // A FUTURE startDate suppresses deadline membership (F-DL-FUTURE-START).
+    seedTodo(fx.db, {
+      title: "suppressed",
+      start: "someday",
+      startDate: "2026-07-10",
+      deadline: "2026-06-30",
+    });
+    // A dismissed nag suppresses too (deadlineSuppressionDate = deadline;
+    // all 12 live absentees carried it). An OLDER suppression from a prior
+    // deadline does not.
+    seedTodo(fx.db, {
+      title: "nag-dismissed",
+      deadline: "2026-06-30",
+      deadlineSuppressionDate: "2026-06-30",
+    });
+    seedTodo(fx.db, {
+      title: "old-suppression",
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-06-20",
+    });
     const view = todayView(fx.db, NOW);
-    expect(view.today).toHaveLength(0);
-    expect(view.evening).toHaveLength(0);
+    expect(view.today.map((i) => i.title).toSorted()).toEqual([
+      "deadline-only",
+      "inbox-due",
+      "old-suppression",
+    ]);
+    expect(view.badge.dueOrOverdue).toBe(3);
+  });
+
+  it("orders by entry cohort (referenceDate DESC), then todayIndex, then uuid", () => {
+    fx = buildFixtureDb();
+    // Older cohort with a manual order; newer cohort added later sits ON TOP
+    // even though its todayIndex values overlap (UI-oracle research runs
+    // things-run-todayorder-20260704-021325 / -021640).
+    seedTodo(fx.db, {
+      uuid: "OLD-A",
+      title: "old-a",
+      startDate: "2026-06-30",
+      todayIndex: -500,
+      todayIndexReferenceDate: "2026-06-30",
+    });
+    seedTodo(fx.db, {
+      uuid: "OLD-B",
+      title: "old-b",
+      startDate: "2026-06-30",
+      todayIndex: 10,
+      todayIndexReferenceDate: "2026-06-30",
+    });
+    seedTodo(fx.db, {
+      uuid: "NEW-1",
+      title: "new-1",
+      startDate: "2026-07-02",
+      todayIndex: -100,
+      todayIndexReferenceDate: "2026-07-02",
+    });
+    // Same cohort + same todayIndex → uuid tiebreak (observed stable).
+    seedTodo(fx.db, {
+      uuid: "TIE-B",
+      title: "tie-b",
+      startDate: "2026-07-02",
+      todayIndex: 0,
+      todayIndexReferenceDate: "2026-07-02",
+    });
+    seedTodo(fx.db, {
+      uuid: "TIE-A",
+      title: "tie-a",
+      startDate: "2026-07-02",
+      todayIndex: 0,
+      todayIndexReferenceDate: "2026-07-02",
+    });
+    const view = todayView(fx.db, NOW);
+    expect(view.today.map((i) => i.title)).toEqual(["new-1", "tie-a", "tie-b", "old-a", "old-b"]);
   });
 });
 

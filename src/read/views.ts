@@ -3,18 +3,24 @@
  * validated research plus live probes (docs/atlas/schema-v26.md):
  *
  * - inbox:    start=0
- * - today:    startDate <= today AND start IN (1, 2) — start=2 rows with a
- *             past date are "pending promotion" (Things recomputes on launch;
- *             the UI shows them in Today either way; promotion observed live
- *             2026-07-02). Ordered by todayIndex (validated comparator).
+ * - today:    (startDate <= today AND start IN (1, 2)) OR a DUE DEADLINE
+ *             with no startDate — a due/overdue deadline pulls an item into
+ *             Today even from the Inbox; a FUTURE startDate suppresses it
+ *             (UI-oracle research, lab 2026-07-04, two reproducing runs —
+ *             docs/lab/today-order-research.md; this CORRECTS the earlier
+ *             "deadline-only items never enter Today" badge inference, which
+ *             held only while no deadline-only item was actually due).
+ *             ORDER: startBucket, then todayIndexReferenceDate DESC (the
+ *             date the item ENTERED Today — newest cohorts on top), then
+ *             todayIndex ASC, then uuid (observed stable tiebreak). start=2
+ *             rows with a past date are "pending promotion" (Things
+ *             recomputes on launch; the UI shows them in Today either way).
  *             THIS EVENING expires daily: an item renders in the Evening
  *             section only when startBucket=1 AND startDate == today exactly;
  *             overdue bucket=1 items roll back into Today proper (live-
  *             verified against the UI, 2026-07-02).
  *             Sidebar badge split: red = items with deadline <= today,
  *             gray = the rest (exact 270/122 reconciliation on live data).
- *             Deadline-only items (no qualifying startDate) do NOT enter
- *             Today — proven by that same badge-sum reconciliation.
  * - anytime:  ALL active items — unscheduled PLUS Today members (the UI
  *             renders Today members with a star; live-verified via screenshot
  *             2026-07-02: starred = in Today, unstarred = unscheduled).
@@ -91,11 +97,28 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: ViewFilter): To
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
   const tf = tagFilter(db, filter);
+  // Membership + comparator per the UI-oracle research (lab, 2026-07-04;
+  // docs/lab/today-order-research.md, two reproducing runs + exact live
+  // reconciliation: 405 − 12 suppressed = 393 = the UI's own count):
+  //  - a DUE DEADLINE pulls an item into Today even from the Inbox, unless a
+  //    FUTURE startDate suppresses it (F-DL-TODAY / F-DL-FUTURE-START) or
+  //    the user dismissed the nag (deadlineSuppressionDate stores the
+  //    dismissed deadline; all 12 live absentees carried it);
+  //  - order = newest-entry cohorts first: todayIndexReferenceDate DESC
+  //    (the date the item ENTERED Today: its startDate, or its deadline for
+  //    deadline-driven members), then todayIndex ASC, then uuid (observed
+  //    stable tiebreak).
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2)${tf.sql}
-     ORDER BY t.startBucket ASC, t.todayIndex ASC`,
-    [packedToday, ...tf.binds],
+    `${OPEN} AND (
+       (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
+       OR (t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
+           AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))
+     )${tf.sql}
+     ORDER BY t.startBucket ASC,
+              COALESCE(t.todayIndexReferenceDate, t.startDate, t.deadline) DESC,
+              t.todayIndex ASC, t.uuid ASC`,
+    [packedToday, packedToday, ...tf.binds],
   );
   const items = materialize(db, rows);
   // Evening membership expires daily: raw startBucket=1 counts only while

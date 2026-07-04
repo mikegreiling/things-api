@@ -8,9 +8,10 @@ import type { Baseline } from "../fingerprint.ts";
  */
 export const DB_V26: Baseline = {
   databaseVersion: 26,
-  // Recomputed 2026-07-04 after adding rt1_instanceCreationPaused to the
-  // manifest (Phase 10b upcoming-occurrence synthesis); verified identical
-  // from the live library and the fixture DDL.
-  fingerprint: "sha256:902537feef1a0c96893b077b77e018726830d44cb731ac75f22d2c9b27093709",
+  // Recomputed 2026-07-04 (Phase 10b/10c): manifest gained
+  // rt1_instanceCreationPaused (occurrence synthesis) and
+  // deadlineSuppressionDate (deadline-driven Today membership); verified
+  // identical from the live library and the fixture DDL.
+  fingerprint: "sha256:5526059b10ffffe1b67f796d031857d030403bd5b747374646a2803a55c0e5c3",
   knownThingsAppVersions: ["3.22.11"],
 };
