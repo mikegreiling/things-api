@@ -1,0 +1,631 @@
+{
+  "suite": "r",
+  "description": "Reminders campaign: the documented-but-unprobed URL `when=<list>@<time>` reminder syntax. Goals: (1) which forms parse (24h, leading zero, 12h suffix, evening combo), (2) set/clear semantics on update, (3) raw TMTask.reminderTime samples at known times to derive the packed codec (atlas open item), (4) private-json cross-check, (5) the repeating-template hazard (schedule-adjacent URL writes crash Things — quarantined last).",
+  "probes": [
+    {
+      "id": "R01",
+      "title": "add with when=today@18:00 — reminder set at a known time (codec sample 18:00)",
+      "vector": "url",
+      "operation": "reminder.add-today-1800",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T1800&when=today@18:00"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T1800' AND reminderTime=1207959552 AND startBucket=0 AND startDate IS NOT NULL"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T1800"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T1800"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T1800"
+            },
+            "field": "reminderTime",
+            "value": 1207959552
+          }
+        ]
+      }
+    },
+    {
+      "id": "R02",
+      "title": "add with when=today@06:30 — leading-zero hour + half-hour minutes (codec sample 06:30)",
+      "vector": "url",
+      "operation": "reminder.add-today-0630",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T0630&when=today@06:30"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T0630' AND reminderTime=434110464"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T0630"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T0630"
+            },
+            "field": "reminderTime",
+            "value": 434110464
+          }
+        ]
+      }
+    },
+    {
+      "id": "R03",
+      "title": "add with when=today@00:15 — midnight-hour edge (codec sample 00:15)",
+      "vector": "url",
+      "operation": "reminder.add-today-0015",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T0015&when=today@00:15"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T0015' AND reminderTime=15728640"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T0015"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T0015"
+            },
+            "field": "reminderTime",
+            "value": 15728640
+          }
+        ]
+      }
+    },
+    {
+      "id": "R04",
+      "title": "add with when=evening@21:15 — does the evening keyword accept a reminder time? (codec sample 21:15)",
+      "vector": "url",
+      "operation": "reminder.add-evening-2115",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-E2115&when=evening@21:15"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-E2115' AND reminderTime=1425014784 AND startBucket=1"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-E2115"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-E2115"
+            },
+            "field": "startBucket",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-E2115"
+            },
+            "field": "reminderTime",
+            "value": 1425014784
+          }
+        ]
+      }
+    },
+    {
+      "id": "R05",
+      "title": "add with 12-hour form when=today@6pm — documented tolerance? Should equal the 18:00 sample if parsed",
+      "vector": "url",
+      "operation": "reminder.add-today-6pm",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T6PM&when=today@6pm"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T6PM' AND reminderTime=1207959552 AND reminderTime=(SELECT reminderTime FROM TMTask WHERE title='R-T1800')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T6PM"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T6PM"
+            },
+            "field": "reminderTime",
+            "value": 1207959552
+          }
+        ]
+      }
+    },
+    {
+      "id": "R06",
+      "title": "update an existing scheduled to-do with when=today@10:05 — reminder SET on update; other fields untouched (codec sample 10:05)",
+      "vector": "url",
+      "operation": "reminder.update-set",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=R-UPD&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-UPD' AND reminderTime IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-UPD}&auth-token={ctx:token}&when=today@10:05"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-UPD' AND reminderTime=1481637888"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD"
+            },
+            "field": "startBucket",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD"
+            },
+            "fields": ["title", "status", "notes"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD"
+            },
+            "field": "reminderTime",
+            "value": 1481637888
+          }
+        ]
+      }
+    },
+    {
+      "id": "R07",
+      "title": "update the same to-do with a bare when=today — does the reminder CLEAR, or persist? (clear-semantics finding)",
+      "vector": "url",
+      "operation": "reminder.update-clear",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-UPD}&auth-token={ctx:token}&when=today"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-UPD' AND reminderTime IS NULL"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD"
+            },
+            "field": "reminderTime",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "R08",
+      "title": "private json of a reminder-bearing to-do — does the payload expose the reminder time in readable form? (codec cross-check)",
+      "vector": "applescript",
+      "operation": "reminder.private-json-read",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ json of to do id \"{uuid:R-T1800}\""
+        }
+      ],
+      "settleSeconds": 1,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "stdoutMatches",
+            "command": 0,
+            "pattern": "R-T1800"
+          },
+          {
+            "kind": "deltaEmpty"
+          }
+        ]
+      }
+    },
+    {
+      "id": "R10",
+      "title": "FINDING chase: update with a PAST morning time (06:45 at pinned-noon) — R06 stored 22:05 for 10:05, hypothesis: update shifts past times to the upcoming PM counterpart",
+      "vector": "url",
+      "operation": "reminder.update-past-am",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=R-UPD2&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-UPD2'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-UPD2}&auth-token={ctx:token}&when=today@06:45"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-UPD2' AND reminderTime=449839104"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD2"
+            },
+            "fields": ["title", "status", "startBucket"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD2"
+            },
+            "field": "reminderTime",
+            "value": 449839104
+          }
+        ]
+      }
+    },
+    {
+      "id": "R11",
+      "title": "FINDING chase: update with an unambiguous 24h afternoon time (14:10, future at pinned-noon) — expect exact storage",
+      "vector": "url",
+      "operation": "reminder.update-future-24h",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=R-UPD3&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-UPD3'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-UPD3}&auth-token={ctx:token}&when=today@14:10"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-UPD3' AND reminderTime=950009856"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD3"
+            },
+            "fields": ["title", "status", "startBucket"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-UPD3"
+            },
+            "field": "reminderTime",
+            "value": 950009856
+          }
+        ]
+      }
+    },
+    {
+      "id": "R12",
+      "title": "FINDING chase: ADD with the same past time R06 used (10:05) — control for add-vs-update parser asymmetry",
+      "vector": "url",
+      "operation": "reminder.add-past-am-control",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-ADD1005&when=today@10:05"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-ADD1005' AND reminderTime=1481637888"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-ADD1005"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-ADD1005"
+            },
+            "field": "reminderTime",
+            "value": 1481637888
+          }
+        ]
+      }
+    },
+    {
+      "id": "R13",
+      "title": "RULE pin: add today@6:45 (no leading zero, past-AM at pinned noon) — 12h heuristic predicts 18:45, 24h literal predicts 06:45",
+      "vector": "url",
+      "operation": "reminder.add-bare-645",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-B645&when=today@6:45"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-B645' AND reminderTime=1255145472"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-B645"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-B645"
+            },
+            "field": "reminderTime",
+            "value": 1255145472
+          }
+        ]
+      }
+    },
+    {
+      "id": "R14",
+      "title": "RULE pin: add today@10:05am (explicit am suffix) — the deterministic escape hatch for morning times?",
+      "vector": "url",
+      "operation": "reminder.add-explicit-am",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-AM1005&when=today@10:05am"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-AM1005' AND reminderTime=676331520"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-AM1005"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-AM1005"
+            },
+            "field": "reminderTime",
+            "value": 676331520
+          }
+        ]
+      }
+    },
+    {
+      "id": "R15",
+      "title": "RULE pin: add today@22:30 (unambiguous 24h evening literal, future at noon) — control",
+      "vector": "url",
+      "operation": "reminder.add-2230",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T2230&when=today@22:30"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T2230' AND reminderTime=1507852288"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T2230"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T2230"
+            },
+            "field": "reminderTime",
+            "value": 1507852288
+          }
+        ]
+      }
+    },
+    {
+      "id": "R16",
+      "title": "RULE pin: add today@12:30 (noon-hour edge at pinned 12:00) — 12h heuristic vs 24h literal both say 12:30, but a past-shift rule could say 00:30 next day",
+      "vector": "url",
+      "operation": "reminder.add-1230",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-T1230&when=today@12:30"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-T1230' AND reminderTime=836763648"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T1230"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-T1230"
+            },
+            "field": "reminderTime",
+            "value": 836763648
+          }
+        ]
+      }
+    },
+    {
+      "id": "R09",
+      "title": "HAZARD: when=today@18:00 on a REPEATING TEMPLATE — expect the schedule-write crash (same family as U12); template untouched",
+      "vector": "url",
+      "operation": "reminder.update-repeating-template",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={seed:LAB-REPEAT-DAILY}&auth-token={ctx:token}&when=today@18:00"
+        },
+        {
+          "waitCrash": true,
+          "timeoutSeconds": 20
+        }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "crash",
+        "tier": 0,
+        "crash": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": ["rt1_recurrenceRule", "start", "startDate", "status", "reminderTime"]
+          }
+        ]
+      }
+    }
+  ]
+}

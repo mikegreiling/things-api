@@ -26,7 +26,7 @@ if margin < 2:
 print(f"[regress] trial window ok: pinned {meta['pinnedDate']}, expiry {expiry:%Y-%m-%d} ({margin} days margin)")
 EOF
 
-for suite in u a x o; do
+for suite in u a x o r e; do
   echo "[regress] === suite: $suite ==="
   npm run lab:run -- --suite "lab/suites/$suite-suite.json"
 done
