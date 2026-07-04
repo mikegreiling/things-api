@@ -3,7 +3,7 @@
  * typed parameter shapes. Vector support for each operation lives in the
  * per-vector matrices (data, produced by the lab), not here.
  */
-import type { IsoDate } from "../model/dates.ts";
+import type { IsoDate, ReminderTime } from "../model/dates.ts";
 
 export const OPERATION_KINDS = [
   "todo.add",
@@ -25,6 +25,9 @@ export const OPERATION_KINDS = [
   "tag.delete",
   "trash.empty",
   "reorder",
+  "todo.duplicate",
+  "area.update",
+  "tag.update",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -42,6 +45,12 @@ export interface TodoAddParams {
   title: string;
   notes?: string;
   when?: WhenValue;
+  /**
+   * Time-of-day reminder, `HH:mm` 24h. Requires when: today|evening (the
+   * only probed combinations, R01–R16); compiled through the deterministic
+   * URL emitter (the app's bare-hour parser is a trap — oddity 2d).
+   */
+  reminder?: ReminderTime;
   deadline?: IsoDate;
   tags?: string[];
   checklistItems?: string[];
@@ -55,7 +64,18 @@ export interface TodoUpdateParams {
   uuid: string;
   title?: string;
   notes?: string;
+  /** Append to the existing notes (newline-joined; E04/E11). Exclusive with notes/prependNotes. */
+  appendNotes?: string;
+  /** Prepend to the existing notes (newline-joined; E05/E12). Exclusive with notes/appendNotes. */
+  prependNotes?: string;
   when?: WhenValue;
+  /**
+   * `HH:mm` sets a reminder (requires when: today|evening in the same call);
+   * null clears it. When `when` is today/evening and this is OMITTED, an
+   * existing reminder is auto-preserved — a bare when= would silently clear
+   * it (R07).
+   */
+  reminder?: ReminderTime | null;
   deadline?: IsoDate | null;
 }
 
@@ -69,6 +89,8 @@ export interface TodoMoveParams {
   area?: ContainerRef;
   /** Existing heading inside the destination project. */
   heading?: string;
+  /** Move back to the Inbox (de-schedules; E06). Exclusive with the others. */
+  inbox?: boolean;
 }
 
 export interface TodoSetTagsParams {
@@ -124,6 +146,24 @@ export interface NameOrUuidParams {
   target: string;
 }
 
+export interface AreaUpdateParams {
+  /** uuid or unique case-insensitive title. */
+  target: string;
+  title?: string;
+  /** Full replacement set of EXISTING tag titles. */
+  tags?: string[];
+}
+
+export interface TagUpdateParams {
+  /** uuid or unique case-insensitive title. */
+  target: string;
+  title?: string;
+  /** Existing tag to nest under (un-nesting to root is unprobed — not offered). */
+  parent?: string;
+  /** Single character (clearing to none is unprobed — not offered). */
+  shortcut?: string;
+}
+
 export type ReorderScope = "today" | "evening" | "project" | "area";
 export type ReorderStrategy = "native" | "bounce";
 
@@ -170,6 +210,9 @@ export interface OperationParamsMap {
   "tag.delete": NameOrUuidParams;
   "trash.empty": EmptyParams;
   reorder: ReorderParams;
+  "todo.duplicate": UuidParams;
+  "area.update": AreaUpdateParams;
+  "tag.update": TagUpdateParams;
 }
 
 /** Explicit acknowledgements for guarded operations (never defaulted). */

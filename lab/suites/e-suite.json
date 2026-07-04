@@ -388,6 +388,82 @@
           }
         ]
       }
+    },
+    {
+      "id": "E11",
+      "title": "append-notes to an EMPTY note — is the newline separator inserted anyway? (exact delta assertions need this pinned)",
+      "vector": "url",
+      "operation": "notes.append-empty",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-NOTES2"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-NOTES2' AND notes=''"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:E-NOTES2}&auth-token={ctx:token}&append-notes=SOLO"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-NOTES2' AND notes LIKE '%SOLO'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-NOTES2"
+            },
+            "field": "notes",
+            "value": "SOLO"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E12",
+      "title": "prepend-notes to an EMPTY note — same separator edge from the other side",
+      "vector": "url",
+      "operation": "notes.prepend-empty",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-NOTES3"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-NOTES3' AND notes=''"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:E-NOTES3}&auth-token={ctx:token}&prepend-notes=SOLO2"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-NOTES3' AND notes LIKE 'SOLO2%'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-NOTES3"
+            },
+            "field": "notes",
+            "value": "SOLO2"
+          }
+        ]
+      }
     }
   ]
 }

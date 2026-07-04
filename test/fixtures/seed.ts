@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { encodePackedDate } from "../../src/model/dates.ts";
+import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
 
 let seq = 0;
 const uid = (prefix: string) => `${prefix}-${(++seq).toString().padStart(4, "0")}`;
@@ -21,6 +21,8 @@ export interface SeedTaskOpts {
   /** ISO date; encoded to the packed int. */
   startDate?: string | null;
   evening?: boolean;
+  /** HH:mm; encoded to the packed reminderTime int. */
+  reminder?: string | null;
   deadline?: string | null;
   trashed?: boolean;
   index?: number;
@@ -42,12 +44,12 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     `INSERT INTO TMTask (
        uuid, type, status, stopDate, trashed, title, notes,
        creationDate, userModificationDate,
-       start, startDate, startBucket, deadline,
+       start, startDate, startBucket, reminderTime, deadline,
        "index", todayIndex, area, project, heading,
        untrashedLeafActionsCount, openUntrashedLeafActionsCount,
        checklistItemsCount, openChecklistItemsCount,
        rt1_repeatingTemplate, rt1_recurrenceRule, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, NULL)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -61,6 +63,7 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     START[opts.start ?? "active"],
     opts.startDate ? encodePackedDate(opts.startDate) : null,
     opts.evening ? 1 : 0,
+    opts.reminder ? encodeReminderTime(opts.reminder) : null,
     opts.deadline ? encodePackedDate(opts.deadline) : null,
     opts.index ?? 0,
     opts.todayIndex ?? 0,

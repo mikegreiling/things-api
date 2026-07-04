@@ -6,7 +6,13 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import type { IsoDate } from "../model/dates.ts";
+import {
+  decodeReminderTime,
+  encodeReminderTime,
+  reminderUrlToken,
+  type IsoDate,
+  type ReminderTime,
+} from "../model/dates.ts";
 import type { HazardId } from "./guards.ts";
 import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "./operations.ts";
 import {
@@ -123,6 +129,20 @@ function sortedTags(tags: string[]): string[] {
   return [...tags].toSorted();
 }
 
+/** Round-trip normalization: "6:5"-style inputs → canonical "06:05". */
+function normalizeReminder(time: ReminderTime): ReminderTime {
+  return decodeReminderTime(encodeReminderTime(time)) ?? time;
+}
+
+/**
+ * The URL `when` value with an optional reminder token appended through the
+ * deterministic emitter (never a bare 1–11 hour — oddity 2d).
+ */
+function whenWithReminder(when: WhenValue, reminder: ReminderTime | null | undefined): string {
+  if (reminder === undefined || reminder === null) return when;
+  return `${when}@${reminderUrlToken(reminder)}`;
+}
+
 function containerGiven(ref: ContainerRef | undefined): boolean {
   return ref !== undefined && (ref.uuid !== undefined || ref.title !== undefined);
 }
@@ -136,6 +156,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
     "H-UNKNOWN-DESTINATION",
     "H-AMBIGUOUS-HEADING",
     "H-REOPEN-RESOLVED-PROJECT",
+    "H-REMINDER-SCOPE",
   ],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -156,6 +177,9 @@ const todoAdd: CommandSpec<"todo.add"> = {
     const assert: FieldAssertion[] = [];
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
     if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
+    if (params.reminder !== undefined) {
+      assert.push({ field: "reminder", equals: normalizeReminder(params.reminder) });
+    }
     if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
     if (params.tags !== undefined) assert.push({ field: "tags", equals: sortedTags(params.tags) });
     if (params.checklistItems !== undefined) {
@@ -184,7 +208,8 @@ const todoAdd: CommandSpec<"todo.add"> = {
       {
         title: params.title,
         notes: params.notes,
-        when: params.when,
+        when:
+          params.when === undefined ? undefined : whenWithReminder(params.when, params.reminder),
         deadline: params.deadline,
         tags: params.tags?.join(","),
         "checklist-items": params.checklistItems?.join("\n"),
@@ -196,23 +221,71 @@ const todoAdd: CommandSpec<"todo.add"> = {
   },
 };
 
+/**
+ * The effective reminder a when-bearing update should leave behind. A bare
+ * `when=` CLEARS an existing reminder (R07), so when the caller re-schedules
+ * without addressing the reminder we auto-preserve the current one; an
+ * explicit null is the intentional clear.
+ */
+function effectiveReminder(
+  pre: PreState,
+  params: { when?: WhenValue; reminder?: ReminderTime | null },
+): ReminderTime | null {
+  if (params.reminder !== undefined) return params.reminder;
+  if (params.when !== "today" && params.when !== "evening") return null;
+  const target = pre.target;
+  if (target === null || target.type === "heading") return null;
+  return target.reminder;
+}
+
+function expectedNotes(pre: PreState, params: { appendNotes?: string; prependNotes?: string }) {
+  const current = pre.target !== null && pre.target.type !== "heading" ? pre.target.notes : "";
+  // Separator semantics probed: newline-joined, no stray newline against an
+  // empty note (E04/E05/E11/E12).
+  if (params.appendNotes !== undefined) {
+    return current === "" ? params.appendNotes : `${current}\n${params.appendNotes}`;
+  }
+  if (params.prependNotes !== undefined) {
+    return current === "" ? params.prependNotes : `${params.prependNotes}\n${current}`;
+  }
+  return undefined;
+}
+
 const todoUpdate: CommandSpec<"todo.update"> = {
   op: "todo.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
   preRead(db, params) {
+    if (
+      params.notes !== undefined &&
+      (params.appendNotes !== undefined || params.prependNotes !== undefined)
+    ) {
+      throw new RangeError("notes (replace) is exclusive with appendNotes/prependNotes");
+    }
+    if (params.appendNotes !== undefined && params.prependNotes !== undefined) {
+      throw new RangeError("appendNotes and prependNotes cannot be combined in one update");
+    }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     return pre;
   },
-  expectedDelta(_pre, params, ctx) {
+  expectedDelta(pre, params, ctx) {
     const assert: FieldAssertion[] = [];
     if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
+    const joined = expectedNotes(pre, params);
+    if (joined !== undefined) assert.push({ field: "notes", equals: joined });
+    if (params.when !== undefined) {
+      assert.push(...whenAssertions(params.when, ctx.todayIso));
+      const reminder = effectiveReminder(pre, params);
+      assert.push({
+        field: "reminder",
+        equals: reminder === null ? null : normalizeReminder(reminder),
+      });
+    }
     if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
     return { mode: "update", uuid: params.uuid, assert };
   },
-  compile(params, vector, _pre, ctx) {
+  compile(params, vector, pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
     return thingsUrl(
       "update",
@@ -220,7 +293,12 @@ const todoUpdate: CommandSpec<"todo.update"> = {
         id: params.uuid,
         title: params.title,
         notes: params.notes,
-        when: params.when,
+        "append-notes": params.appendNotes,
+        "prepend-notes": params.prependNotes,
+        when:
+          params.when === undefined
+            ? undefined
+            : whenWithReminder(params.when, effectiveReminder(pre, params)),
         deadline: params.deadline === null ? "" : params.deadline,
       },
       ctx.token,
@@ -267,6 +345,14 @@ const todoMove: CommandSpec<"todo.move"> = {
     "H-REPEAT-SCHEDULE",
   ],
   preRead(db, params) {
+    if (
+      params.inbox === true &&
+      (containerGiven(params.project) ||
+        containerGiven(params.area) ||
+        params.heading !== undefined)
+    ) {
+      throw new RangeError("inbox is exclusive with project/area/heading destinations");
+    }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     if (containerGiven(params.project)) {
@@ -283,6 +369,11 @@ const todoMove: CommandSpec<"todo.move"> = {
   },
   expectedDelta(pre, params) {
     const assert: FieldAssertion[] = [];
+    if (params.inbox === true) {
+      // De-schedules cleanly (E06): back to the Inbox bucket, no start date.
+      assert.push({ field: "start", equals: "inbox" }, { field: "startDate", equals: null });
+      return { mode: "update", uuid: params.uuid, assert };
+    }
     const heading = pre.destHeading?.resolved;
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
@@ -299,6 +390,10 @@ const todoMove: CommandSpec<"todo.move"> = {
     return { mode: "update", uuid: params.uuid, assert };
   },
   compile(params, vector, pre, ctx) {
+    if (params.inbox === true) {
+      if (vector !== "applescript") unsupportedVector(this.op, vector);
+      return osa(`move to do id ${q(params.uuid)} to list "Inbox"`);
+    }
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
     if (vector === "url-scheme") {
@@ -627,6 +722,122 @@ const tagDelete: CommandSpec<"tag.delete"> = {
   },
 };
 
+const todoDuplicate: CommandSpec<"todo.duplicate"> = {
+  op: "todo.duplicate",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // The copy carries the same title/notes with a fresh uuid + creationDate
+    // (E07) — discover it with the create probe, assert copy fidelity.
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    const notes = target !== null && target.type !== "heading" ? target.notes : "";
+    return {
+      mode: "create",
+      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "notes", equals: notes }],
+    };
+  },
+  compile(params, vector, _pre, ctx) {
+    // AppleScript refuses duplication outright ("can not be copied", E08).
+    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    return thingsUrl("update", { id: params.uuid, duplicate: "true" }, ctx.token);
+  },
+};
+
+const areaUpdate: CommandSpec<"area.update"> = {
+  op: "area.update",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  preRead(db, params) {
+    if (params.title === undefined && params.tags === undefined) {
+      throw new RangeError("area.update needs title and/or tags");
+    }
+    const pre = emptyPreState();
+    pre.entityTarget = resolveArea(db, { title: params.target, uuid: params.target });
+    if (params.tags !== undefined) pre.missingTags = missingTagTitles(db, params.tags);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    const assert: FieldAssertion[] = [];
+    if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
+    if (params.tags !== undefined) assert.push({ field: "tags", equals: sortedTags(params.tags) });
+    return {
+      mode: "entity-updated",
+      entity: "area",
+      uuid: pre.entityTarget?.resolved?.uuid ?? "",
+      assert,
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const id = q(pre.entityTarget?.resolved?.uuid ?? "");
+    const lines: string[] = [];
+    if (params.title !== undefined) lines.push(`set name of area id ${id} to ${q(params.title)}`);
+    if (params.tags !== undefined) {
+      lines.push(`set tag names of area id ${id} to ${q(params.tags.join(", "))}`);
+    }
+    if (lines.length === 1) return osa(lines[0] as string);
+    const payload = `tell application "Things3"\n${lines.map((l) => `  ${l}`).join("\n")}\nend tell`;
+    return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
+  },
+};
+
+const tagUpdate: CommandSpec<"tag.update"> = {
+  op: "tag.update",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  preRead(db, params) {
+    if (
+      params.title === undefined &&
+      params.parent === undefined &&
+      params.shortcut === undefined
+    ) {
+      throw new RangeError("tag.update needs title, parent, and/or shortcut");
+    }
+    const pre = emptyPreState();
+    pre.entityTarget = resolveTag(db, params.target);
+    if (params.parent !== undefined) {
+      pre.parentTag = resolveTag(db, params.parent);
+      if (pre.parentTag.resolved === null) pre.missingTags = [params.parent];
+    }
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    const assert: FieldAssertion[] = [];
+    if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
+    if (params.parent !== undefined) {
+      assert.push({ field: "parent", equals: pre.parentTag?.resolved?.uuid ?? "" });
+    }
+    if (params.shortcut !== undefined) assert.push({ field: "shortcut", equals: params.shortcut });
+    return {
+      mode: "entity-updated",
+      entity: "tag",
+      uuid: pre.entityTarget?.resolved?.uuid ?? "",
+      assert,
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const id = q(pre.entityTarget?.resolved?.uuid ?? "");
+    const lines: string[] = [];
+    if (params.title !== undefined) lines.push(`set name of tag id ${id} to ${q(params.title)}`);
+    if (params.parent !== undefined) {
+      lines.push(
+        `set parent tag of tag id ${id} to tag id ${q(pre.parentTag?.resolved?.uuid ?? "")}`,
+      );
+    }
+    if (params.shortcut !== undefined) {
+      lines.push(`set keyboard shortcut of tag id ${id} to ${q(params.shortcut)}`);
+    }
+    if (lines.length === 1) return osa(lines[0] as string);
+    const payload = `tell application "Things3"\n${lines.map((l) => `  ${l}`).join("\n")}\nend tell`;
+    return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
+  },
+};
+
 const reorder: CommandSpec<"reorder"> = {
   op: "reorder",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REORDER-SCOPE"],
@@ -706,4 +917,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "tag.delete": tagDelete,
   "trash.empty": trashEmpty,
   reorder,
+  "todo.duplicate": todoDuplicate,
+  "area.update": areaUpdate,
+  "tag.update": tagUpdate,
 };

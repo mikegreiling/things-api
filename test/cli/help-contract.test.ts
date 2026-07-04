@@ -95,6 +95,32 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--op");
   });
 
+  it("todo update: reminder contract (scope, auto-preserve, clear)", () => {
+    const help = helpFor("todo", "update");
+    expect(help).toContain("--reminder <HH:mm>");
+    expect(help).toContain("--clear-reminder");
+    expect(help).toContain("H-REMINDER-SCOPE");
+    expect(help).toContain("auto-preserved");
+    expect(help).toContain("--append-notes");
+    expect(help).toContain("--prepend-notes");
+  });
+
+  it("todo duplicate: url-only path + template block", () => {
+    const help = helpFor("todo", "duplicate");
+    expect(help).toContain("url-scheme");
+    expect(help).toContain("H-REPEAT-SCHEDULE");
+  });
+
+  it("area/tag update: setters exist with evidence-scoped caveats", () => {
+    const areaHelp = helpFor("area", "update");
+    expect(areaHelp).toContain("--title");
+    expect(areaHelp).toContain("H-UNKNOWN-TAG");
+    const tagHelp = helpFor("tag", "update");
+    expect(tagHelp).toContain("--parent");
+    expect(tagHelp).toContain("--shortcut");
+    expect(tagHelp).toContain("unprobed");
+  });
+
   it("reorder: experimental gate, bounce cap, scope hazards", () => {
     const help = helpFor("reorder");
     expect(help).toContain("EXPERIMENTAL");

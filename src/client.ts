@@ -30,6 +30,7 @@ import {
 } from "./read/views.ts";
 import type {
   AreaAddParams,
+  AreaUpdateParams,
   OperationKind,
   OperationParamsMap,
   ProjectAddParams,
@@ -37,6 +38,7 @@ import type {
   ProjectUpdateParams,
   ReorderParams,
   TagAddParams,
+  TagUpdateParams,
   TodoAddParams,
   TodoMoveParams,
   TodoUpdateParams,
@@ -122,6 +124,8 @@ export interface ThingsClient {
       options?: WriteOptions,
     ): Promise<MutationResult>;
     deleteTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /** Duplicate via URL `duplicate=true` (E07) — the copy's uuid is discovered by verification. */
+    duplicateTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     addProject(params: ProjectAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateProject(
       uuid: string,
@@ -135,8 +139,18 @@ export interface ThingsClient {
     ): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     addArea(params: AreaAddParams, options?: WriteOptions): Promise<MutationResult>;
+    updateArea(
+      target: string,
+      patch: Omit<AreaUpdateParams, "target">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     deleteArea(target: string, options?: WriteOptions): Promise<MutationResult>;
     addTag(params: TagAddParams, options?: WriteOptions): Promise<MutationResult>;
+    updateTag(
+      target: string,
+      patch: Omit<TagUpdateParams, "target">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     deleteTag(target: string, options?: WriteOptions): Promise<MutationResult>;
     emptyTrash(options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -235,14 +249,17 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       },
       replaceChecklist: (uuid, items, o) => run("todo.replace-checklist", { uuid, items }, o),
       deleteTodo: (uuid, o) => run("todo.delete", { uuid }, o),
+      duplicateTodo: (uuid, o) => run("todo.duplicate", { uuid }, o),
       addProject: (params, o) => run("project.add", params, o),
       updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
       completeProject: (uuid, policy, o) =>
         run("project.complete", { uuid, children: policy.children }, o),
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
       addArea: (params, o) => run("area.add", params, o),
+      updateArea: (target, patch, o) => run("area.update", { target, ...patch }, o),
       deleteArea: (target, o) => run("area.delete", { target }, o),
       addTag: (params, o) => run("tag.add", params, o),
+      updateTag: (target, patch, o) => run("tag.update", { target, ...patch }, o),
       deleteTag: (target, o) => run("tag.delete", { target }, o),
       emptyTrash: (o) => run("trash.empty", {}, o),
       reorder: (params, o) => runReorder(writeDeps, params, o ?? {}),

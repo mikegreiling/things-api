@@ -168,6 +168,12 @@ function capturePre(
     for (const uuid of spec.sequence) preRanks[uuid] = reader.rankOf(uuid, spec.key);
     fields["__ordering__"] = preRanks;
   }
+  if (spec.mode === "entity-updated") {
+    const current = reader.entityFields(spec.entity, spec.uuid);
+    const captured: Record<string, unknown> = {};
+    for (const a of spec.assert) captured[a.field] = current?.[a.field] ?? null;
+    fields[spec.uuid] = captured;
+  }
   if (spec.mode === "trash-emptied") {
     return { modDates, fields, trashedCount: pre.trashedCount };
   }

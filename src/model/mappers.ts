@@ -16,7 +16,7 @@ import {
   type Todo,
   type TodaySection,
 } from "./entities.ts";
-import { decodeEpochReal, decodePackedDate } from "./dates.ts";
+import { decodeEpochReal, decodePackedDate, decodeReminderTime } from "./dates.ts";
 
 /** Raw TMTask row shape (subset per schema manifest). */
 export interface TaskRow {
@@ -32,6 +32,7 @@ export interface TaskRow {
   start: number | null;
   startDate: number | null;
   startBucket: number | null;
+  reminderTime: number | null;
   deadline: number | null;
   index: number | null;
   todayIndex: number | null;
@@ -107,6 +108,7 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
     startDate: decodePackedDate(row.startDate),
     todaySection: mapTodaySection(row),
     deadline: decodePackedDate(row.deadline),
+    reminder: decodeReminderTime(row.reminderTime),
     area: refs(row.area),
     tags,
     repeating: mapRepeating(row),
