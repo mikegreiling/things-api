@@ -10,6 +10,7 @@ import { BASELINES } from "../../db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "../../db/connection.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "../../db/locate.ts";
 import { compareToBaseline, observeSchema } from "../../db/fingerprint.ts";
+import { sdefDeclaresPrivateReorder } from "../../write/experimental.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../output.ts";
 
@@ -34,6 +35,13 @@ export interface DoctorReport {
   };
   writes: {
     enabled: boolean;
+    reason: string;
+  };
+  experimental: {
+    /** config allowExperimental (opt-in for private-surface capabilities). */
+    enabled: boolean;
+    /** sdef canary: the private reorder command is still declared. */
+    sdefDeclaresReorder: boolean;
     reason: string;
   };
 }
@@ -87,8 +95,9 @@ export function runDoctor(dbPath?: string): {
     const status = compareToBaseline(observation, BASELINES);
     // The pipeline honors a user-accepted drifted fingerprint (loud escape
     // hatch, design §6) — doctor must report what will actually happen.
+    const config = loadConfig();
     const accepted =
-      status.kind === "drift" && loadConfig().acceptedFingerprint === observation.fingerprint;
+      status.kind === "drift" && config.acceptedFingerprint === observation.fingerprint;
     const fingerprintStatus = accepted
       ? "user-accepted"
       : status.kind === "ok"
@@ -97,6 +106,7 @@ export function runDoctor(dbPath?: string): {
           ? "drift"
           : "unknown-version";
     const writesEnabled = status.kind === "ok" || accepted;
+    const sdefCanary = sdefDeclaresPrivateReorder();
     const extraColumns: Record<string, string[]> = {};
     for (const t of observation.tables) {
       if (t.extraColumns.length > 0) extraColumns[t.table] = t.extraColumns;
@@ -126,6 +136,16 @@ export function runDoctor(dbPath?: string): {
             : status.kind === "drift"
               ? "schema fingerprint deviates from baseline — writes disabled until revalidated"
               : "unknown databaseVersion — update things-api or revalidate",
+      },
+      experimental: {
+        enabled: config.allowExperimental,
+        sdefDeclaresReorder: sdefCanary,
+        reason: !config.allowExperimental
+          ? "off — native reorder disabled (`things config set allow-experimental true` to opt in)"
+          : sdefCanary
+            ? "on — private reorder command still declared in the app sdef"
+            : "on BUT the app sdef no longer declares the private reorder command (removed by " +
+              "an update?) — native reorder is blocked by the canary",
       },
     };
     return {
@@ -168,6 +188,7 @@ export function registerDoctor(program: Command): void {
           ...report.fingerprint.detail.map((d) => `  drift: ${d}`),
           `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
           `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
+          `experimental: ${report.experimental.reason}`,
         ];
         process.stdout.write(`${lines.join("\n")}\n`);
       } else if (error) {

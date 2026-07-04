@@ -97,6 +97,16 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["A27"],
     notes: "PERMANENT — hard-deletes every trashed row",
   },
+  reorder: {
+    support: "partial",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12"],
+    experimental: true,
+    notes:
+      "`_private_experimental_ reorder to dos in` — today (bucket-0 members), project/area " +
+      "(un-headed children only, O06); evening is bounce-only (O03 de-evenings bucket-1 members)",
+  },
 };
 
 /** Escape a string literal for embedding in AppleScript source. */

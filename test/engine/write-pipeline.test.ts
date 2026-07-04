@@ -77,6 +77,7 @@ const CONFIG: ThingsApiConfig = {
   actor: "test-actor",
   auditEnabled: true,
   acceptedFingerprint: null,
+  allowExperimental: false,
   host: "test-host",
 };
 

@@ -24,6 +24,11 @@ export interface ThingsApiConfig {
   auditEnabled: boolean;
   /** User-accepted drifted fingerprint (loud escape hatch; see design §6). */
   acceptedFingerprint: string | null;
+  /**
+   * Opt-in to capabilities riding undocumented app surfaces (the private
+   * sdef reorder command). Guarded further by the pipeline's sdef canary.
+   */
+  allowExperimental: boolean;
   host: string;
 }
 
@@ -38,6 +43,7 @@ interface ConfigFile {
   actor?: string;
   auditEnabled?: boolean;
   acceptedFingerprint?: string;
+  allowExperimental?: boolean;
 }
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
@@ -80,6 +86,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     actor: env["THINGS_API_ACTOR"] ?? file.actor ?? `${username}@cli`,
     auditEnabled: env["THINGS_API_AUDIT"] === "off" ? false : (file.auditEnabled ?? true),
     acceptedFingerprint: file.acceptedFingerprint ?? null,
+    allowExperimental:
+      env["THINGS_API_ALLOW_EXPERIMENTAL"] === "true" || file.allowExperimental === true,
     host: hostname(),
   };
 }

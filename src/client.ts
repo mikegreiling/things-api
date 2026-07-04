@@ -35,6 +35,7 @@ import type {
   ProjectAddParams,
   ProjectCompleteParams,
   ProjectUpdateParams,
+  ReorderParams,
   TagAddParams,
   TodoAddParams,
   TodoMoveParams,
@@ -47,6 +48,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./write/pipeline.ts";
+import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { defaultVectors } from "./write/vectors/registry.ts";
 import type { WriteVector } from "./write/vectors/types.ts";
 import type { PollerDeps } from "./write/verify/poller.ts";
@@ -65,6 +67,7 @@ export interface OpenOptions {
     isAppRunning?: () => boolean;
     poller?: PollerDeps;
     audit?: AuditWriter;
+    sdefProbe?: () => boolean;
   };
 }
 
@@ -136,6 +139,11 @@ export interface ThingsClient {
     addTag(params: TagAddParams, options?: WriteOptions): Promise<MutationResult>;
     deleteTag(target: string, options?: WriteOptions): Promise<MutationResult>;
     emptyTrash(options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Reorder within Today / This Evening / a project / an area. Partial
+     * uuid lists are placed on top; the rest keep their current order.
+     */
+    reorder(params: ReorderParams, options?: WriteOptions): Promise<ReorderResult>;
   };
   close(): void;
 }
@@ -177,6 +185,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     }),
     ...(options.writeOverrides?.poller !== undefined && {
       poller: options.writeOverrides.poller,
+    }),
+    ...(options.writeOverrides?.sdefProbe !== undefined && {
+      sdefProbe: options.writeOverrides.sdefProbe,
     }),
   };
 
@@ -234,6 +245,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       addTag: (params, o) => run("tag.add", params, o),
       deleteTag: (target, o) => run("tag.delete", { target }, o),
       emptyTrash: (o) => run("trash.empty", {}, o),
+      reorder: (params, o) => runReorder(writeDeps, params, o ?? {}),
     },
     close: () => conn.close(),
   };

@@ -4,10 +4,11 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
+import { encodePackedDate, localToday } from "../model/dates.ts";
 import type { AnyTask, Project, TaskStatus, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
-import type { ContainerRef } from "./operations.ts";
+import type { ContainerRef, ReorderParams } from "./operations.ts";
 
 export interface ResolvedContainer {
   uuid: string;
@@ -18,6 +19,32 @@ export interface ContainerResolution {
   resolved: ResolvedContainer | null;
   /** 0 = not found, 1 = ok, >1 = ambiguous title. */
   matches: number;
+}
+
+export interface ReorderMember {
+  uuid: string;
+  title: string;
+  /** Current rank on the scope's ordering key (todayIndex or "index"). */
+  rank: number;
+  /** Raw startBucket (0 = today, 1 = evening); today/evening scopes only. */
+  startBucket: number | null;
+  /** 0 = to-do, 1 = project. */
+  type: number;
+}
+
+export interface ReorderPre {
+  /** Ordering key the scope ranks on. */
+  key: "index" | "todayIndex";
+  /** Eligible members in current order (wire-list extension source). */
+  members: ReorderMember[];
+  /** Requested uuids that are not eligible members, with the reason. */
+  rejected: { uuid: string; reason: string }[];
+  /** Requested uuids appearing more than once. */
+  duplicates: string[];
+  /** Requested project-type members (bounce cannot move projects). */
+  projectMembers: string[];
+  /** Full wire list: requested order first, remaining members after. */
+  wireList: string[];
 }
 
 export interface PreState {
@@ -42,6 +69,8 @@ export interface PreState {
   trashedCount: number;
   /** Pre-existing uuids for entity-created probes. */
   existingEntityUuids: string[];
+  /** Scope membership + wire list for the reorder operation. */
+  reorder: ReorderPre | null;
 }
 
 export function emptyPreState(): PreState {
@@ -59,6 +88,7 @@ export function emptyPreState(): PreState {
     checklistCount: 0,
     trashedCount: 0,
     existingEntityUuids: [],
+    reorder: null,
   };
 }
 
@@ -166,6 +196,172 @@ export function trashedCount(db: DatabaseSync): number {
 
 export function isRepeatingTemplate(task: AnyTask | null): boolean {
   return task !== null && task.type !== "heading" && task.repeating.isTemplate;
+}
+
+const NOT_TEMPLATE_ROW = "(rt1_recurrenceRule IS NULL AND repeater IS NULL)";
+
+interface MemberRow {
+  uuid: string;
+  title: string;
+  rank: number;
+  startBucket: number | null;
+  type: number;
+}
+
+/**
+ * Scope membership + full wire list for `reorder`. Eligibility mirrors the
+ * lab evidence exactly:
+ *  - today:   Today members with raw startBucket=0, to-dos AND projects
+ *             (O01/O03/O12), by todayIndex. Bucket-1 members are listed as
+ *             rejected candidates — including one silently de-evenings it
+ *             (O03), so the guard refuses.
+ *  - evening: raw startBucket=1 AND startDate == today exactly (evening
+ *             membership expires daily), by todayIndex. Bounce-only (O03).
+ *  - project: un-headed open to-do children, by "index" (O04/O09/O11);
+ *             headed children are rejected candidates (O06 rips them out).
+ *  - area:    direct open area to-dos, by "index" (O05/O10).
+ */
+export function computeReorderPre(
+  db: DatabaseSync,
+  params: ReorderParams,
+  containerUuid: string | null,
+  now: Date,
+): ReorderPre {
+  const todayIso = localToday(now);
+  const packedToday = encodePackedDate(todayIso);
+  const key: "index" | "todayIndex" =
+    params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index";
+
+  const select = (where: string, binds: (string | number)[], rankCol: string): MemberRow[] =>
+    db
+      .prepare(
+        `SELECT uuid, title, ${rankCol} AS rank, startBucket, type FROM TMTask
+         WHERE trashed = 0 AND status = 0 AND ${NOT_TEMPLATE_ROW} AND ${where}
+         ORDER BY ${rankCol} ASC`,
+      )
+      .all(...binds) as unknown as MemberRow[];
+
+  let members: MemberRow[] = [];
+  const rejectedCandidates = new Map<string, string>();
+
+  switch (params.scope) {
+    case "today":
+    case "evening": {
+      const all = select(
+        "type IN (0, 1) AND startDate IS NOT NULL AND startDate <= ? AND start IN (1, 2)",
+        [packedToday],
+        "todayIndex",
+      );
+      if (params.scope === "today") {
+        members = all.filter((m) => m.startBucket === 0);
+        for (const m of all) {
+          if (m.startBucket === 1) {
+            rejectedCandidates.set(
+              m.uuid,
+              "is an evening-bucket item — a native Today reorder would silently de-evening " +
+                "it (O03); use scope 'evening' for it instead",
+            );
+          }
+        }
+      } else {
+        // Evening membership expires daily: only exact-today bucket-1 rows.
+        members = all.filter(
+          (m) => m.startBucket === 1 && rowStartDate(db, m.uuid) === packedToday,
+        );
+        for (const m of all) {
+          if (!members.some((e) => e.uuid === m.uuid)) {
+            rejectedCandidates.set(
+              m.uuid,
+              m.startBucket === 1
+                ? "is a STALE evening item (startDate in the past) — it renders in Today " +
+                    "proper; re-schedule it before reordering"
+                : "is in the Today section, not This Evening — use scope 'today'",
+            );
+          }
+        }
+      }
+      break;
+    }
+    case "project": {
+      members = select(
+        "type = 0 AND heading IS NULL AND project = ?",
+        [containerUuid ?? ""],
+        `"index"`,
+      );
+      const headed = db
+        .prepare(
+          `SELECT t.uuid FROM TMTask t JOIN TMTask h ON t.heading = h.uuid
+           WHERE t.trashed = 0 AND t.type = 0 AND h.project = ?`,
+        )
+        .all(containerUuid ?? "") as { uuid: string }[];
+      for (const r of headed) {
+        rejectedCandidates.set(
+          r.uuid,
+          "is inside a heading — a project-scope reorder RIPS headed children out of " +
+            "their heading (O06); heading-scoped ordering is not automatable",
+        );
+      }
+      break;
+    }
+    case "area": {
+      members = select(
+        "type = 0 AND heading IS NULL AND area = ?",
+        [containerUuid ?? ""],
+        `"index"`,
+      );
+      break;
+    }
+  }
+
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const uuid of params.uuids) {
+    if (seen.has(uuid) && !duplicates.includes(uuid)) duplicates.push(uuid);
+    seen.add(uuid);
+  }
+
+  const memberSet = new Map(members.map((m) => [m.uuid, m]));
+  const rejected: { uuid: string; reason: string }[] = [];
+  const projectMembers: string[] = [];
+  for (const uuid of params.uuids) {
+    const member = memberSet.get(uuid);
+    if (member === undefined) {
+      rejected.push({
+        uuid,
+        reason: rejectedCandidates.get(uuid) ?? "is not an open member of this scope",
+      });
+      continue;
+    }
+    if (member.type === 1) projectMembers.push(uuid);
+  }
+
+  const requested = new Set(params.uuids);
+  const wireList = [
+    ...params.uuids,
+    ...members.filter((m) => !requested.has(m.uuid)).map((m) => m.uuid),
+  ];
+
+  return {
+    key,
+    members: members.map((m) => ({
+      uuid: m.uuid,
+      title: m.title,
+      rank: m.rank,
+      startBucket: m.startBucket,
+      type: m.type,
+    })),
+    rejected,
+    duplicates,
+    projectMembers,
+    wireList,
+  };
+}
+
+function rowStartDate(db: DatabaseSync, uuid: string): number | null {
+  const row = db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(uuid) as
+    | { startDate: number | null }
+    | undefined;
+  return row?.startDate ?? null;
 }
 
 export function projectOf(task: AnyTask | null): Project | null {

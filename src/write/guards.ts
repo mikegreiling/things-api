@@ -15,6 +15,7 @@ export const HAZARD_IDS = [
   "H-UNKNOWN-DESTINATION",
   "H-AMBIGUOUS-HEADING",
   "H-PERMANENT-DELETE",
+  "H-REORDER-SCOPE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -144,6 +145,49 @@ const GUARDS: Record<HazardId, GuardFn> = {
           ? "multiple headings with that name exist in the destination project"
           : "heading not found in the destination project (the heading param never creates one — T09/U09)",
       remediation: "rename the duplicate headings, or omit --heading",
+    };
+  },
+  "H-REORDER-SCOPE": ({ op, params, pre }) => {
+    if (op !== "reorder" || pre.reorder === null) return null;
+    const problems: string[] = [];
+    // The `reorder` operation IS the native private command. Evening must
+    // never reach it: a native reorder normalizes startBucket to the Today
+    // list, silently de-evening-ing members (O03). The evening scope is
+    // served by the bounce orchestrator in reorder.ts instead.
+    if (params["scope"] === "evening") {
+      return {
+        hazard: "H-REORDER-SCOPE",
+        detail:
+          "evening reorder is bounce-only: the native command would silently clear " +
+          "startBucket on every listed item (O03)",
+        remediation: "use write.reorder / `things reorder --scope evening` (bounce strategy)",
+      };
+    }
+    if (
+      (params["scope"] === "today" || params["scope"] === "evening") &&
+      params["container"] !== undefined
+    ) {
+      problems.push("container is only valid for project/area scopes");
+    }
+    const uuids = params["uuids"];
+    if (!Array.isArray(uuids) || uuids.length === 0) {
+      problems.push("no uuids given");
+    }
+    if (pre.reorder.duplicates.length > 0) {
+      problems.push(`duplicated uuid(s): ${pre.reorder.duplicates.join(", ")}`);
+    }
+    for (const r of pre.reorder.rejected) {
+      problems.push(`${r.uuid} ${r.reason}`);
+    }
+    if (problems.length === 0) return null;
+    return {
+      hazard: "H-REORDER-SCOPE",
+      detail:
+        `reorder request rejected — every uuid must be an eligible member of the scope, ` +
+        `exactly once: ${problems.join("; ")}`,
+      remediation:
+        "read the scope first (things today / things project-view / things area) and pass " +
+        "only its eligible members in the desired order",
     };
   },
   "H-PERMANENT-DELETE": ({ op, acks }) => {

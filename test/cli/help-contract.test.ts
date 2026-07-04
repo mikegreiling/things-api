@@ -94,4 +94,16 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("vector");
     expect(help).toContain("--op");
   });
+
+  it("reorder: experimental gate, bounce cap, scope hazards", () => {
+    const help = helpFor("reorder");
+    expect(help).toContain("EXPERIMENTAL");
+    expect(help).toContain("allow-experimental");
+    expect(help).toContain("bounce");
+    expect(help).toContain("Evening is bounce-only");
+    expect(help).toContain("H-REORDER-SCOPE");
+    expect(help).toContain("--scope <scope>");
+    expect(help).toContain("--strategy <name>");
+    expect(help).toContain("--dry-run");
+  });
 });
