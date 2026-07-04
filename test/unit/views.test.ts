@@ -183,3 +183,54 @@ describe("inherited tags", () => {
     expect(inherited.map((t) => t.title).sort()).toEqual(["area-tag", "proj-tag"]);
   });
 });
+
+describe("tag-filtered list views (Phase 10)", () => {
+  function seedTagChain() {
+    fx = buildFixtureDb();
+    const tag = seedTag(fx.db, "focus");
+    const area = seedArea(fx.db, "Work");
+    tagArea(fx.db, area, tag);
+    const proj = seedProject(fx.db, { title: "P", area, startDate: "2026-07-02" });
+    const heading = seedHeading(fx.db, { title: "H", project: proj });
+    // Membership through every hop of the inheritance chain:
+    const direct = seedTodo(fx.db, { title: "direct", startDate: "2026-07-02" });
+    tagTask(fx.db, direct, tag);
+    seedTodo(fx.db, { title: "via-project", project: proj, startDate: "2026-07-02" });
+    seedTodo(fx.db, { title: "via-area", area, startDate: "2026-07-02" });
+    seedTodo(fx.db, { title: "via-heading", heading, startDate: "2026-07-02" });
+    seedTodo(fx.db, { title: "unrelated", startDate: "2026-07-02" });
+    return { tag };
+  }
+
+  it("today: matches direct + inherited through project/area/heading, excludes the rest", () => {
+    seedTagChain();
+    const view = todayView(fx.db, NOW, { tag: "focus" });
+    const titles = [...view.today, ...view.evening].map((i) => i.title).toSorted();
+    // "P" itself is area-tagged too (projects are list items in Today).
+    expect(titles).toEqual(["P", "direct", "via-area", "via-heading", "via-project"]);
+  });
+
+  it("resolves by uuid too, and unfiltered views are unchanged", () => {
+    const { tag } = seedTagChain();
+    const byUuid = todayView(fx.db, NOW, { tag });
+    expect(byUuid.today.map((i) => i.title)).toContain("direct");
+    expect(todayView(fx.db, NOW).today.map((i) => i.title)).toContain("unrelated");
+  });
+
+  it("throws loudly on unknown or ambiguous tag references", () => {
+    seedTagChain();
+    expect(() => todayView(fx.db, NOW, { tag: "nope" })).toThrow(/tag not found/);
+    seedTag(fx.db, "focus"); // duplicate title
+    expect(() => todayView(fx.db, NOW, { tag: "focus" })).toThrow(/ambiguous/);
+  });
+
+  it("filters anytime/someday/logbook the same way", () => {
+    seedTagChain();
+    seedTodo(fx.db, { title: "done-tagged", status: "completed", stopDate: 1_780_000_100 });
+    expect(anytimeView(fx.db, NOW, { tag: "focus" }).map((i) => i.title)).not.toContain(
+      "unrelated",
+    );
+    expect(somedayView(fx.db, { tag: "focus" })).toEqual([]);
+    expect(logbookView(fx.db, { tag: "focus" }).map((i) => i.title)).not.toContain("done-tagged");
+  });
+});
