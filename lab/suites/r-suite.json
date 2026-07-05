@@ -595,6 +595,222 @@
       }
     },
     {
+      "id": "R17",
+      "title": "DATED reminder on add: when=2026-07-09@15:00 — future-scheduled with a reminder (codec sample 15:00)",
+      "vector": "url",
+      "operation": "reminder.add-dated",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-D1500&when=2026-07-09@15:00"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-D1500' AND startDate=132805760 AND reminderTime=1006632960"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-D1500"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-D1500"
+            },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-D1500"
+            },
+            "field": "reminderTime",
+            "value": 1006632960
+          }
+        ]
+      }
+    },
+    {
+      "id": "R18",
+      "title": "DATED reminder on update: set 06:45 on an existing future-scheduled item (leading-zero branch on dates)",
+      "vector": "url",
+      "operation": "reminder.update-dated",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=R-DUPD&when=2026-07-09"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-DUPD' AND startDate=132805760 AND reminderTime IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-DUPD}&auth-token={ctx:token}&when=2026-07-09@06:45"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-DUPD' AND reminderTime=449839104"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "startDate",
+            "value": 132805760
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "reminderTime",
+            "value": 449839104
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "fields": ["title", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "R19",
+      "title": "DATED bare-hour: 2026-07-09@10:05 stores 10:05 EXACTLY — the 12-hour next-upcoming heuristic is today/evening-only (clock-relative); scopes oddity 2d",
+      "vector": "url",
+      "operation": "reminder.add-dated-bare-hour",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///add?title=R-D1005&when=2026-07-09@10:05"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='R-D1005' AND reminderTime=676331520"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "inserted",
+            "table": "TMTask",
+            "where": {
+              "title": "R-D1005"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-D1005"
+            },
+            "field": "reminderTime",
+            "value": 676331520
+          }
+        ]
+      }
+    },
+    {
+      "id": "R20",
+      "title": "DATED bare when= does NOT clear the reminder (asymmetry with today/evening, where it DOES — R07); regression lock of the persistence",
+      "vector": "url",
+      "operation": "reminder.clear-dated-noop",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-DUPD}&auth-token={ctx:token}&when=2026-07-09"
+        },
+        {
+          "sleep": 4
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "reminderTime",
+            "value": 449839104
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "startDate",
+            "value": 132805760
+          }
+        ]
+      }
+    },
+    {
+      "id": "R21",
+      "title": "re-scheduling to a DIFFERENT bare date does NOT clear either — dated reminders are STICKY (ride along to the new date); no URL clear path exists for them",
+      "vector": "url",
+      "operation": "reminder.clear-dated-reschedule-noop",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:R-DUPD}&auth-token={ctx:token}&when=2026-07-10"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='R-DUPD' AND startDate=132805888"
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "startDate",
+            "value": 132805888
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "R-DUPD"
+            },
+            "field": "reminderTime",
+            "value": 449839104
+          }
+        ]
+      }
+    },
+    {
       "id": "R09",
       "title": "HAZARD: when=today@18:00 on a REPEATING TEMPLATE — expect the schedule-write crash (same family as U12); template untouched",
       "vector": "url",

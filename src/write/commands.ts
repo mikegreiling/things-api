@@ -223,16 +223,21 @@ const todoAdd: CommandSpec<"todo.add"> = {
 
 /**
  * The effective reminder a when-bearing update should leave behind. A bare
- * `when=` CLEARS an existing reminder (R07), so when the caller re-schedules
- * without addressing the reminder we auto-preserve the current one; an
- * explicit null is the intentional clear.
+ * `when=` CLEARS an existing reminder (R07/R20), so when the caller
+ * re-schedules to today/evening/a date without addressing the reminder we
+ * auto-preserve the current one; an explicit null is the intentional clear.
  */
 function effectiveReminder(
   pre: PreState,
   params: { when?: WhenValue; reminder?: ReminderTime | null },
 ): ReminderTime | null {
   if (params.reminder !== undefined) return params.reminder;
-  if (params.when !== "today" && params.when !== "evening") return null;
+  const when = params.when;
+  const schedulable =
+    when === "today" ||
+    when === "evening" ||
+    (typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when));
+  if (!schedulable) return null;
   const target = pre.target;
   if (target === null || target.type === "heading") return null;
   return target.reminder;

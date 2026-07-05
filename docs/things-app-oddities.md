@@ -65,7 +65,13 @@ On `add`, a `heading=` value that doesn't match an existing heading in the targe
 
 **Workaround** (what things-api's compiler does — every branch probe-verified): emit hours 0–9 zero-padded 24h (`06:45`), hours 10–11 with an explicit suffix (`10:05am`), hours 12–23 as literals (`14:10`). Never emit a bare 1–11 hour.
 
-**Evidence:** R-suite (`lab/suites/r-suite.json`, R01–R16), clean-room VM, Things 3.22.11 trial build, 2026-07-04; every probe locks the exact stored `reminderTime` int (packing: `hour<<26 | minute<<20`). Results: `docs/lab/r-suite-results.md`.
+**Scope note (2026-07-05):** the heuristic applies to the clock-relative keywords only — on a DATED schedule, `when=2026-07-09@10:05` stores **10:05 exactly** (R19). The trap is `when=today@…` / `when=evening@…`.
+
+**Evidence:** R-suite (`lab/suites/r-suite.json`, R01–R21), clean-room VM, Things 3.22.11 trial build, 2026-07-04/05; every probe locks the exact stored `reminderTime` int (packing: `hour<<26 | minute<<20`). Results: `docs/lab/r-suite-results.md`.
+
+### 2e. Reminder CLEAR semantics are asymmetric between keyword and dated schedules
+
+On `when=today` / `when=evening`, re-sending a bare `when=` (no `@time`) **clears** an existing reminder (R07). On a dated schedule it does NOT: `when=2026-07-09` on an item already dated 07-09 with a reminder leaves the reminder intact (R20), and re-dating to `when=2026-07-10` carries the reminder along to the new date (R21). Consequence: **there is no URL-scheme way to remove a reminder from a date-scheduled item** — a caller must bounce it through `when=today` (which clears) and re-date, or use the UI. Whichever behavior is intended, the keyword/date asymmetry is surprising; callers relying on the today/evening clear behavior silently fail on dates. Evidence: R07/R20/R21, 2026-07-05.
 
 ## 3. UI vs. URL behavioral divergence: project completion
 
@@ -100,7 +106,11 @@ Adding (or moving) an open to-do into a completed, canceled, or even already-log
 ### 5c. Checklist updates are replace-all and reset per-item state
 `checklist-items=` replaces the entire checklist; previously completed/canceled checklist items are recreated as open — even when re-sending an identical item list. There is no additive or patch form. *(T07/U07/U20)*
 
-### 5d. Repeating templates are invisible to AppleScript list reads but fetchable by id
+### 5d. `duplicate=true` on a repeating template: no-op on the data, but opens new windows
+
+The URL update command with `duplicate=true` works on plain to-dos (exact copy — E07). Aimed at a repeating TEMPLATE, it duplicates nothing (zero DB delta, template untouched) but the app opens **new windows** — a disruptive dead-end where either an error or a rule-carrying copy would be reasonable. Evidence: E13, 2026-07-05.
+
+### 5e. Repeating templates are invisible to AppleScript list reads but fetchable by id
 `to dos of list "Someday"` omits repeating templates entirely, yet `to do id "<template-uuid>"` returns them fine. Third-party tooling that enumerates lists (e.g. things.py) can't see repeat rules at all through official read surfaces. *(A12, T16)*
 
 ### 5e. `things:///version` launches and foregrounds the app, shows nothing

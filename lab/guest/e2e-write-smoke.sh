@@ -92,7 +92,10 @@ run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-RE
 REM=$(json_get "d['data']['uuid']")
 run_step 0 "re-schedule preserves the reminder (auto-preserve)" todo update "$REM" --when evening
 run_step 0 "clear the reminder (bare when=)" todo update "$REM" --when evening --clear-reminder
-run_step 4 "reminder without when today|evening is blocked" todo update "$REM" --when 2026-07-08 --reminder 09:00
+run_step 0 "DATED reminder set (Phase 12b)" todo update "$REM" --when 2026-07-09 --reminder 15:00
+run_step 0 "dated re-schedule auto-preserves the reminder" todo update "$REM" --when 2026-07-10
+run_step 4 "clearing a DATED reminder is blocked (sticky, R20/R21)" todo update "$REM" --when 2026-07-10 --clear-reminder
+run_step 0 "re-schedule to today and clear (the documented path)" todo update "$REM" --when today --clear-reminder
 run_step 0 "append-notes (newline separator verified)" todo update "$REM" --append-notes "appended"
 run_step 0 "prepend-notes" todo update "$REM" --prepend-notes "prepended"
 run_step 0 "duplicate (url-only, copy discovered)" todo duplicate "$REM"
