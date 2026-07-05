@@ -28,6 +28,12 @@ Consequence: **10:xx / 11:xx AM are inexpressible without the `am` suffix** (no 
 - The private `json` AppleScript property exposes the reminder on read (R08).
 - **HAZARD (R09)**: `when=today@18:00` on a repeating template crashes Things exactly like the bare `when=` (U12 family, EXC_BREAKPOINT). H-REPEAT-SCHEDULE already blocks this path in the write layer; oddity 1 updated.
 
+## Dated reminders (R17–R21, Phase 12b)
+
+- Setting works on add AND update with `when=YYYY-MM-DD@time` (R17/R18, exact ints locked).
+- The bare-hour 12-hour "next upcoming" heuristic is **today/evening-only**: `2026-07-09@10:05` stores 10:05 EXACTLY (R19) — scopes oddity 2d to clock-relative keywords.
+- **Dated reminders are STICKY**: a bare `when=` does NOT clear them — neither same-date (R20) nor re-dated (R21; the reminder rides along to the new date). Asymmetric with today/evening, where a bare when= clears (R07). No URL clear path exists for dated reminders → H-REMINDER-SCOPE blocks `reminder:null` on dated whens with the re-schedule-via-today remediation. Filed as oddity 2e.
+
 ## Feed into Phase 9b
 
 Extend the `when` vocabulary with `{ when: "today", reminder: "18:00" }` (or `when: "today@18:00"` sugar), compile via the deterministic emitter, verify `reminderTime` with the codec; `reminder: null` compiles to the bare-when clear.

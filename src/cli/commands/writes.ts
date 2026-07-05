@@ -266,7 +266,7 @@ export function registerWriteCommands(program: Command): void {
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option(
         "--reminder <HH:mm>",
-        "time-of-day reminder (24h); requires --when today|evening (R-suite scope)",
+        "time-of-day reminder (24h); requires --when today|evening|YYYY-MM-DD",
       )
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--tags <list>", "comma-separated EXISTING tag names")
@@ -310,9 +310,10 @@ export function registerWriteCommands(program: Command): void {
         "Update title/notes/when/reminder/deadline (vector: url-scheme, tier 0). " +
           "Hazard: H-REPEAT-SCHEDULE — when/deadline on a repeating template is hard-blocked " +
           "(the URL write crashes Things); title/notes stay allowed. " +
-          "Reminders (H-REMINDER-SCOPE): --reminder needs --when today|evening; when " +
-          "re-scheduling WITHOUT --reminder an existing reminder is auto-preserved " +
-          "(a bare when= would silently clear it — R07); --clear-reminder clears explicitly. " +
+          "Reminders (H-REMINDER-SCOPE): --reminder needs --when today|evening|YYYY-MM-DD; " +
+          "when re-scheduling WITHOUT --reminder an existing reminder is auto-preserved. " +
+          "--clear-reminder clears on today|evening only — DATED reminders are sticky " +
+          "(no URL clear path, R20/R21). " +
           "--append-notes/--prepend-notes join with a newline (exclusive with --notes).",
       )
       .option("--title <text>", "new title")
@@ -320,8 +321,8 @@ export function registerWriteCommands(program: Command): void {
       .option("--append-notes <text>", "append to existing notes (newline-joined)")
       .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
-      .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening")
-      .option("--clear-reminder", "clear the reminder (requires --when today|evening)")
+      .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
+      .option("--clear-reminder", "clear the reminder (today|evening only — dated are sticky)")
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--clear-deadline", "remove the deadline"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {

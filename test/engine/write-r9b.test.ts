@@ -148,11 +148,11 @@ describe("reminders through the pipeline", () => {
     expect(calls[0]).toContain(encodeURIComponent("today@10:05am"));
   });
 
-  it("H-REMINDER-SCOPE blocks a reminder without when today|evening", async () => {
+  it("H-REMINDER-SCOPE blocks a reminder without a schedulable when", async () => {
     const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, null);
     const result = await runMutation(deps([vector]), "todo.add", {
       title: "X",
-      when: "2026-07-08",
+      when: "someday",
       reminder: "10:05",
     });
     expect(result.kind).toBe("blocked");
@@ -352,5 +352,76 @@ describe("move to inbox / duplicate / entity updates", () => {
     );
     expect(result.kind).toBe("verify-failed");
     if (result.kind === "verify-failed") expect(result.reason).toBe("silent-noop");
+  });
+});
+
+describe("dated reminders (Phase 12b, R17–R21)", () => {
+  it("todo.add with a dated reminder compiles when=DATE@token and verifies", async () => {
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
+      seedTodo(fixture.db, {
+        uuid: "NEW-D",
+        title: "Dentist",
+        start: "someday",
+        startDate: "2026-07-09",
+        reminder: "15:00",
+        creationDate: NOW_EPOCH,
+      });
+    });
+    const result = await runMutation(deps([vector]), "todo.add", {
+      title: "Dentist",
+      when: "2026-07-09",
+      reminder: "15:00",
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(encodeURIComponent("2026-07-09@15:00"));
+  });
+
+  it("auto-preserves an existing reminder on a dated re-schedule", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "Keep-dated",
+      startDate: TODAY_ISO,
+      reminder: "06:45",
+    });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
+      touch(uuid, "startDate = 132805760, start = 2"); // app re-dates; reminder rides along
+    });
+    const result = await runMutation(deps([vector]), "todo.update", {
+      uuid,
+      when: "2026-07-09",
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(encodeURIComponent("2026-07-09@06:45"));
+  });
+
+  it("blocks clearing a DATED reminder (sticky — no URL clear path, R20/R21)", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "Sticky",
+      start: "someday",
+      startDate: "2026-07-09",
+      reminder: "06:45",
+    });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, null);
+    const result = await runMutation(deps([vector]), "todo.update", {
+      uuid,
+      when: "2026-07-10",
+      reminder: null,
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REMINDER-SCOPE");
+      expect(result.detail).toContain("persist");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still blocks reminders on anytime/someday", async () => {
+    const { vector } = fakeVector("url-scheme", URL_MATRIX, null);
+    const result = await runMutation(deps([vector]), "todo.add", {
+      title: "X",
+      when: "anytime",
+      reminder: "09:00",
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.hazard).toBe("H-REMINDER-SCOPE");
   });
 });

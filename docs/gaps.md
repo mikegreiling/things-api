@@ -12,11 +12,12 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 
 ### 2. Repeating items — creation and rule-editing are UI-only, permanently (until CC ships an API)
 - No surface creates a repeating item or edits a repeat rule: URL crashes on schedule-writes (the bug report), AppleScript refuses (error 302), Shortcuts actions expose no repeat parameters, and the rule plist must never be written directly.
+- The clone-and-rename workaround is DISPROVEN (E13, 2026-07-05): `duplicate=true` on a template duplicates nothing and opens windows (tier 3) — oddity 5d.
 - What works: safe template edits (title/notes/checklist — U12B/T12), full editing of spawned instances (guards only block templates), reading rule presence + config via the private `json` property (A51).
 - **Path:** none. Document; guard (done); revisit per Things release.
 
-### 3. Reminders (time-of-day) — SHIPPED 2026-07-04 (Phase 9b)
-- `--reminder HH:mm` on todo add/update (when today|evening only — H-REMINDER-SCOPE), auto-preserve on re-schedule, `--clear-reminder`; codec-verified read-after-write; e2e-validated. Remaining edge: reminders on date-scheduled items (`when=2026-07-08@time`) unprobed — guard rejects.
+### 3. Reminders (time-of-day) — SHIPPED (Phase 9b + 12b)
+- `--reminder HH:mm` on todo add/update with when today|evening|YYYY-MM-DD (R17/R18); auto-preserve on re-schedule; `--clear-reminder` on today|evening. **Dated reminders are STICKY** (R20/R21): no URL clear path exists — the guard rejects `--clear-reminder` on dated whens with the bounce-via-today remediation (oddity 2e). Bare-hour parser trap is today/evening-only (R19).
 
 ## Editing-completeness gaps — SHIPPED 2026-07-04 (Phase 9b: area update, tag update, notes append/prepend, move-to-inbox, todo duplicate; `log completed now` still unexposed — DB delta unclear, low value)
 

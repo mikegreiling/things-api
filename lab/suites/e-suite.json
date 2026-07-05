@@ -464,6 +464,45 @@
           }
         ]
       }
+    },
+    {
+      "id": "E13",
+      "title": "duplicate=true on a REPEATING TEMPLATE does NOT duplicate — zero DB delta on the family, and the app opens NEW WINDOWS (tier 3). Clone-and-rename repeat creation is dead; regression lock.",
+      "vector": "url",
+      "operation": "todo.duplicate-template",
+      "appState": "running-background",
+      "group": "hazard",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={seed:LAB-REPEAT-DAILY}&auth-token={ctx:token}&duplicate=true"
+        },
+        {
+          "sleep": 5
+        }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 3,
+        "crash": false,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": ["rt1_recurrenceRule", "start", "startDate", "status", "title"]
+          },
+          {
+            "kind": "notInserted",
+            "table": "TMTask",
+            "where": {
+              "title": "LAB-REPEAT-DAILY"
+            }
+          }
+        ]
+      }
     }
   ]
 }

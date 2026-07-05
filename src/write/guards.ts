@@ -153,16 +153,32 @@ const GUARDS: Record<HazardId, GuardFn> = {
     if (op !== "todo.add" && op !== "todo.update") return null;
     if (!("reminder" in params) || params["reminder"] === undefined) return null;
     const when = params["when"];
-    if (when === "today" || when === "evening") return null;
+    const isDate = typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when);
+    if (params["reminder"] === null) {
+      // The clear IS a bare when= write — but only today/evening honor it;
+      // dated reminders are STICKY (persist through same-date AND re-dated
+      // bare when=, R20/R21). No URL clear path exists for them.
+      if (when === "today" || when === "evening") return null;
+      return {
+        hazard: "H-REMINDER-SCOPE",
+        detail: isDate
+          ? "dated reminders cannot be cleared via the URL scheme — they persist through " +
+            "bare when= re-schedules (R20/R21)"
+          : "clearing a reminder IS a bare when= write (R07) — when: today|evening must be " +
+            "re-stated in the same call",
+        remediation: isDate
+          ? "re-schedule with `--when today --clear-reminder` first (then re-date), or clear " +
+            "it in the app"
+          : "pass when today|evening together with --clear-reminder",
+      };
+    }
+    if (when === "today" || when === "evening" || isDate) return null;
     return {
       hazard: "H-REMINDER-SCOPE",
       detail:
-        params["reminder"] === null
-          ? "clearing a reminder IS a bare when= write (R07) — when: today|evening must be " +
-            "re-stated in the same call"
-          : "reminders are only validated with when: today|evening (R-suite); date-scheduled " +
-            "reminders are unprobed",
-      remediation: "pass when today|evening together with the reminder",
+        "reminders require a scheduled when: today|evening|YYYY-MM-DD (R-suite; " +
+        "anytime/someday carry no date for the reminder to attach to)",
+      remediation: "pass when today|evening|YYYY-MM-DD together with the reminder",
     };
   },
   "H-REORDER-SCOPE": ({ op, params, pre }) => {
