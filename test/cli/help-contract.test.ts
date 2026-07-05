@@ -121,6 +121,19 @@ describe("write-command help states the contract", () => {
     expect(tagHelp).toContain("unprobed");
   });
 
+  it("search: open-by-default scope, widening flags, scoping flags", () => {
+    const help = helpFor("search");
+    expect(help).toContain("OPEN + untrashed");
+    expect(help).toContain("--logged");
+    expect(help).toContain("--trashed");
+    expect(help).toContain("--all");
+    expect(help).toContain("--project <ref>");
+    expect(help).toContain("--area <ref>");
+    expect(help).toContain("--tag <ref>");
+    expect(help).toContain("descendant");
+    expect(help).toContain("--limit <n>");
+  });
+
   it("reorder: experimental gate, bounce cap, scope hazards", () => {
     const help = helpFor("reorder");
     expect(help).toContain("EXPERIMENTAL");

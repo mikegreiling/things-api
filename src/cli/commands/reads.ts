@@ -237,10 +237,43 @@ export function registerReadCommands(program: Command): void {
 
   program
     .command("search <query>")
-    .description("Title/notes substring search across all items (most recently modified first)")
+    .description(
+      "Title/notes substring search, most recently modified first. Default scope: OPEN + " +
+        "untrashed items only — widen with --logged / --trashed / --all. Scope with " +
+        "--project / --area / --tag (tag matches include hierarchy descendants) / --type.",
+    )
+    .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
+    .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
+    .option("--tag <ref>", "restrict by tag: direct, inherited, or descendant-tagged")
+    .option("--type <kind>", "todo | project")
+    .option("--logged", "include completed/canceled items")
+    .option("--trashed", "include trashed items")
+    .option("--all", "legacy behavior: everything (open + logged + trashed)")
+    .option("--limit <n>", "maximum results", "50")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((query: string, opts: GlobalReadOpts) => {
-      withClient(opts, "search", (c) => c.read.search(query), renderList as (d: never) => string[]);
+    .action((query: string, opts: GlobalReadOpts & Record<string, unknown>) => {
+      const type = opts["type"] as string | undefined;
+      if (type !== undefined && type !== "todo" && type !== "project") {
+        process.stderr.write("error: --type must be todo or project\n");
+        process.exitCode = 2;
+        return;
+      }
+      withClient(
+        opts,
+        "search",
+        (c) =>
+          c.read.search(query, {
+            limit: Number(opts["limit"] ?? 50),
+            ...(opts["project"] !== undefined && { project: opts["project"] as string }),
+            ...(opts["area"] !== undefined && { area: opts["area"] as string }),
+            ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
+            ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
+            ...(opts["logged"] === true && { logged: true }),
+            ...(opts["trashed"] === true && { trashed: true }),
+            ...(opts["all"] === true && { all: true }),
+          }),
+        renderList as (d: never) => string[],
+      );
     });
 }

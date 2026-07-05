@@ -38,7 +38,7 @@ A typical mutation flow:
 
 ```sh
 things capabilities --op todo.move --json      # is it possible, which vector, what tier?
-things search "Buy milk" --json                # resolve the uuid
+things search "Buy milk" --json                # resolve the uuid (open items; scope with --project/--area/--tag, widen with --logged/--trashed/--all)
 things todo move <uuid> --project "Errands" --dry-run --json   # inspect the plan
 things todo move <uuid> --project "Errands" --json             # execute, verified
 ```

@@ -14,21 +14,47 @@ export const NOT_TEMPLATE = "(t.rt1_recurrenceRule IS NULL AND t.repeater IS NUL
 /**
  * UI-faithful tag membership for list filtering: direct tag, or inherited
  * through the ancestor chain heading → project → area (T18/U18/A13 — the
- * same chain inheritedTagsFor() walks). Binds the tag uuid SIX times.
+ * same chain inheritedTagsFor() walks). Takes a SET of tag uuids (the target
+ * plus its hierarchy descendants) — each of the six clauses gets the full
+ * set, so callers bind `uuids.length * 6` values via tagScopeBinds().
  */
-export const TAG_SCOPE = `(
-  EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid AND tt.tags = ?)
-  OR EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project AND tt.tags = ?)
-  OR EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area AND at.tags = ?)
+export function tagScopeSql(uuidCount: number): string {
+  const set = `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
+  return `(
+  EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid AND tt.tags IN ${set})
+  OR EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project AND tt.tags IN ${set})
+  OR EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area AND at.tags IN ${set})
   OR EXISTS (SELECT 1 FROM TMTask p JOIN TMAreaTag at ON at.areas = p.area
-             WHERE p.uuid = t.project AND at.tags = ?)
+             WHERE p.uuid = t.project AND at.tags IN ${set})
   OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTaskTag tt ON tt.tasks = h.project
-             WHERE h.uuid = t.heading AND tt.tags = ?)
+             WHERE h.uuid = t.heading AND tt.tags IN ${set})
   OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
-             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading AND at.tags = ?)
+             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading AND at.tags IN ${set})
 )`;
+}
 
-export const TAG_SCOPE_BINDS = 6;
+export function tagScopeBinds(uuids: string[]): string[] {
+  return Array.from({ length: 6 }, () => uuids).flat();
+}
+
+/**
+ * A tag plus every hierarchy descendant. Filtering by a parent tag matches
+ * child-tagged items — DOCUMENTED app behavior (the UI's tag filter works
+ * this way), not lab-oracled: the UI's filter clicks aren't automatable.
+ * UNION (not UNION ALL): dedupes, so a parent cycle in TMTag data can't
+ * recurse forever.
+ */
+export function tagWithDescendants(db: DatabaseSync, uuid: string): string[] {
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE d(uuid) AS (
+         SELECT ? UNION
+         SELECT tg.uuid FROM TMTag tg JOIN d ON tg.parent = d.uuid
+       ) SELECT uuid FROM d`,
+    )
+    .all(uuid) as { uuid: string }[];
+  return rows.map((r) => r.uuid);
+}
 
 /** Resolve a tag reference (uuid or unique case-insensitive title) — loud on miss. */
 export function resolveTagUuid(db: DatabaseSync, ref: string): string {
@@ -44,6 +70,40 @@ export function resolveTagUuid(db: DatabaseSync, ref: string): string {
     rows.length === 0
       ? `tag not found: ${ref} (list tags with \`things tags\`)`
       : `tag reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
+  );
+}
+
+/** Resolve a project reference (uuid or unique case-insensitive title) — loud on miss. */
+export function resolveProjectUuid(db: DatabaseSync, ref: string): string {
+  const byId = db
+    .prepare("SELECT uuid FROM TMTask WHERE uuid = ? AND type = 1 AND trashed = 0")
+    .get(ref) as { uuid: string } | undefined;
+  if (byId !== undefined) return byId.uuid;
+  const rows = db
+    .prepare("SELECT uuid FROM TMTask WHERE title = ? COLLATE NOCASE AND type = 1 AND trashed = 0")
+    .all(ref) as { uuid: string }[];
+  if (rows.length === 1 && rows[0] !== undefined) return rows[0].uuid;
+  throw new RangeError(
+    rows.length === 0
+      ? `project not found: ${ref} (list projects with \`things projects\`)`
+      : `project reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
+  );
+}
+
+/** Resolve an area reference (uuid or unique case-insensitive title) — loud on miss. */
+export function resolveAreaUuid(db: DatabaseSync, ref: string): string {
+  const byId = db.prepare("SELECT uuid FROM TMArea WHERE uuid = ?").get(ref) as
+    | { uuid: string }
+    | undefined;
+  if (byId !== undefined) return byId.uuid;
+  const rows = db.prepare("SELECT uuid FROM TMArea WHERE title = ? COLLATE NOCASE").all(ref) as {
+    uuid: string;
+  }[];
+  if (rows.length === 1 && rows[0] !== undefined) return rows[0].uuid;
+  throw new RangeError(
+    rows.length === 0
+      ? `area not found: ${ref} (list areas with \`things areas\`)`
+      : `area reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
   );
 }
 
