@@ -82,3 +82,40 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.error.code).toBe("environment");
   });
 });
+
+describe("cli search (Phase 12 ergonomics)", () => {
+  it("defaults to open+untrashed; --all restores the legacy scope", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "report draft" });
+    seedTodo(fx.db, { title: "report final", status: "completed" });
+    seedTodo(fx.db, { title: "report scrap", trashed: true });
+
+    const open = runCli(["search", "report", "--json", "--db", fx.path]);
+    expect(open.exitCode).toBe(0);
+    expect(JSON.parse(open.stdout).data.map((i: { title: string }) => i.title)).toEqual([
+      "report draft",
+    ]);
+
+    const all = runCli(["search", "report", "--all", "--json", "--db", fx.path]);
+    expect(JSON.parse(all.stdout).data).toHaveLength(3);
+
+    const logged = runCli(["search", "report", "--logged", "--json", "--db", fx.path]);
+    expect(JSON.parse(logged.stdout).data).toHaveLength(2);
+  });
+
+  it("--limit and --type narrow; unknown --tag fails loudly", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "alpha one" });
+    seedTodo(fx.db, { title: "alpha two" });
+
+    const limited = runCli(["search", "alpha", "--limit", "1", "--json", "--db", fx.path]);
+    expect(JSON.parse(limited.stdout).data).toHaveLength(1);
+
+    const typed = runCli(["search", "alpha", "--type", "project", "--json", "--db", fx.path]);
+    expect(JSON.parse(typed.stdout).data).toHaveLength(0);
+
+    const bad = runCli(["search", "alpha", "--tag", "nope", "--json", "--db", fx.path]);
+    expect(bad.exitCode).not.toBe(0);
+    expect(JSON.parse(bad.stdout).error.message).toMatch(/tag not found/);
+  });
+});

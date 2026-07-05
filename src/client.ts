@@ -26,6 +26,7 @@ import {
   trashView,
   upcomingView,
   type ListItem,
+  type SearchOptions,
   type TodayView,
   type UpcomingFilter,
   type ViewFilter,
@@ -91,7 +92,7 @@ export interface ThingsClient {
     projectView(uuid: string): ProjectView;
     areas(): Area[];
     tags(): Tag[];
-    search(query: string, options?: { limit?: number }): ListItem[];
+    search(query: string, options?: SearchOptions): ListItem[];
     byUuid(uuid: string): AnyTask | null;
     snapshot(): Snapshot;
   };

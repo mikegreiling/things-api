@@ -48,16 +48,24 @@ import {
   fetchTaskRows,
   makeRefResolver,
   NOT_TEMPLATE,
+  resolveAreaUuid,
+  resolveProjectUuid,
   resolveTagUuid,
-  TAG_SCOPE,
-  TAG_SCOPE_BINDS,
+  tagScopeBinds,
+  tagScopeSql,
+  tagWithDescendants,
 } from "./queries.ts";
 
 export type ListItem = Todo | Project;
 
 /** Optional list-view filters. */
 export interface ViewFilter {
-  /** Tag (uuid or unique title): direct OR inherited membership (UI semantics). */
+  /**
+   * Tag (uuid or unique title): direct OR inherited membership (UI
+   * semantics), INCLUDING items tagged with a hierarchy descendant of the
+   * given tag (documented app behavior — the UI's tag filter matches
+   * child-tagged items; not lab-oracled).
+   */
   tag?: string;
 }
 
@@ -66,8 +74,8 @@ function tagFilter(
   filter: ViewFilter | undefined,
 ): { sql: string; binds: string[] } {
   if (filter?.tag === undefined) return { sql: "", binds: [] };
-  const uuid = resolveTagUuid(db, filter.tag);
-  return { sql: ` AND ${TAG_SCOPE}`, binds: Array.from({ length: TAG_SCOPE_BINDS }, () => uuid) };
+  const uuids = tagWithDescendants(db, resolveTagUuid(db, filter.tag));
+  return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
 }
 
 const LIVE = `t.type IN (0, 1) AND t.trashed = 0 AND ${NOT_TEMPLATE}`;
@@ -263,18 +271,62 @@ export function projectsView(db: DatabaseSync, options?: { areaUuid?: string }):
   return materialize(db, rows) as Project[];
 }
 
-export function searchView(
-  db: DatabaseSync,
-  query: string,
-  options?: { limit?: number },
-): ListItem[] {
+export interface SearchOptions extends ViewFilter {
+  limit?: number;
+  /** Restrict to one project's children (headed children included). */
+  project?: string;
+  /** Restrict to one area's direct members. */
+  area?: string;
+  type?: "to-do" | "project";
+  /** Include completed/canceled items (default: open only). */
+  logged?: boolean;
+  /** Include trashed items (default: untrashed only). */
+  trashed?: boolean;
+  /** Everything — the legacy behavior (open + logged + trashed). */
+  all?: boolean;
+}
+
+export function searchView(db: DatabaseSync, query: string, options?: SearchOptions): ListItem[] {
   const limit = options?.limit ?? 50;
   const needle = `%${query}%`;
+  const where: string[] = [`${NOT_TEMPLATE} AND (t.title LIKE ? OR t.notes LIKE ?)`];
+  const binds: unknown[] = [needle, needle];
+
+  where.push(
+    options?.type === "to-do"
+      ? "t.type = 0"
+      : options?.type === "project"
+        ? "t.type = 1"
+        : "t.type IN (0, 1)",
+  );
+
+  // Scope: open + untrashed by default; --logged/--trashed widen; --all is
+  // the legacy include-everything behavior.
+  if (options?.all !== true) {
+    const statuses = options?.logged === true ? "(0, 2, 3)" : "(0)";
+    where.push(`t.status IN ${statuses}`);
+    if (options?.trashed !== true) where.push("t.trashed = 0");
+  }
+
+  if (options?.project !== undefined) {
+    const uuid = resolveProjectUuid(db, options.project);
+    // Children incl. headed ones (heading rows carry the project link).
+    where.push(
+      "(t.project = ? OR t.heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?))",
+    );
+    binds.push(uuid, uuid);
+  }
+  if (options?.area !== undefined) {
+    const uuid = resolveAreaUuid(db, options.area);
+    where.push("t.area = ?");
+    binds.push(uuid);
+  }
+  const tf = tagFilter(db, options);
   const rows = fetchTaskRows(
     db,
-    `t.type IN (0, 1) AND ${NOT_TEMPLATE} AND (t.title LIKE ? OR t.notes LIKE ?)
+    `${where.join(" AND ")}${tf.sql}
      ORDER BY t.userModificationDate DESC LIMIT ?`,
-    [needle, needle, limit],
+    [...binds, ...tf.binds, limit],
   );
   return materialize(db, rows);
 }

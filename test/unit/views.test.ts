@@ -8,6 +8,7 @@ import {
   inboxView,
   isTodayMember,
   logbookView,
+  searchView,
   somedayView,
   todayView,
   upcomingView,
@@ -305,5 +306,123 @@ describe("tag-filtered list views (Phase 10)", () => {
     );
     expect(somedayView(fx.db, { tag: "focus" })).toEqual([]);
     expect(logbookView(fx.db, { tag: "focus" }).map((i) => i.title)).not.toContain("done-tagged");
+  });
+});
+
+describe("tag-hierarchy descendants (Phase 12)", () => {
+  it("--tag parent matches child- and grandchild-tagged items (documented UI behavior)", () => {
+    fx = buildFixtureDb();
+    const parent = seedTag(fx.db, "errands");
+    const child = seedTag(fx.db, "groceries", parent);
+    const grandchild = seedTag(fx.db, "farmers-market", child);
+    const sibling = seedTag(fx.db, "calls"); // unrelated root
+
+    const direct = seedTodo(fx.db, { title: "direct", startDate: "2026-07-02" });
+    tagTask(fx.db, direct, parent);
+    const viaChild = seedTodo(fx.db, { title: "via-child", startDate: "2026-07-02" });
+    tagTask(fx.db, viaChild, child);
+    const viaGrandchild = seedTodo(fx.db, { title: "via-grandchild", startDate: "2026-07-02" });
+    tagTask(fx.db, viaGrandchild, grandchild);
+    const unrelated = seedTodo(fx.db, { title: "unrelated", startDate: "2026-07-02" });
+    tagTask(fx.db, unrelated, sibling);
+
+    const titles = todayView(fx.db, NOW, { tag: "errands" })
+      .today.map((i) => i.title)
+      .toSorted();
+    expect(titles).toEqual(["direct", "via-child", "via-grandchild"]);
+    // Filtering by the CHILD does not match parent-tagged items (downward only).
+    expect(
+      todayView(fx.db, NOW, { tag: "groceries" })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["via-child", "via-grandchild"]);
+  });
+});
+
+describe("searchView (Phase 12 ergonomics)", () => {
+  function seedSearchWorld() {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Work");
+    const proj = seedProject(fx.db, { title: "Widget launch", area });
+    const heading = seedHeading(fx.db, { title: "H", project: proj });
+    const tag = seedTag(fx.db, "focus");
+    const open1 = seedTodo(fx.db, { title: "widget spec", project: proj });
+    seedTodo(fx.db, { title: "widget kickoff", heading }); // headed child of proj
+    seedTodo(fx.db, { title: "widget for home", area });
+    const done = seedTodo(fx.db, { title: "widget retro", status: "completed" });
+    seedTodo(fx.db, { title: "widget scrap", trashed: true });
+    seedTodo(fx.db, { title: "unrelated note", notes: "mentions widget here" });
+    seedTodo(fx.db, { title: "widget template", recurrenceRule: true });
+    tagTask(fx.db, open1, tag);
+    return { proj, area, done };
+  }
+
+  it("defaults to OPEN + untrashed; notes match; templates excluded", () => {
+    seedSearchWorld();
+    const titles = searchView(fx.db, "widget")
+      .map((i) => i.title)
+      .toSorted();
+    expect(titles).toEqual([
+      "Widget launch",
+      "unrelated note",
+      "widget for home",
+      "widget kickoff",
+      "widget spec",
+    ]);
+  });
+
+  it("--logged / --trashed / --all widen the scope", () => {
+    seedSearchWorld();
+    expect(searchView(fx.db, "widget", { logged: true }).map((i) => i.title)).toContain(
+      "widget retro",
+    );
+    expect(searchView(fx.db, "widget", { trashed: true }).map((i) => i.title)).toContain(
+      "widget scrap",
+    );
+    const all = searchView(fx.db, "widget", { all: true }).map((i) => i.title);
+    expect(all).toContain("widget retro");
+    expect(all).toContain("widget scrap");
+  });
+
+  it("scopes by project (headed children included), area, tag, and type", () => {
+    const { proj, area } = seedSearchWorld();
+    expect(
+      searchView(fx.db, "widget", { project: proj })
+        .map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["widget kickoff", "widget spec"]);
+    expect(searchView(fx.db, "widget", { project: "Widget launch" })).toHaveLength(2);
+    expect(
+      searchView(fx.db, "widget", { area })
+        .map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["Widget launch", "widget for home"]);
+    expect(searchView(fx.db, "widget", { tag: "focus" }).map((i) => i.title)).toEqual([
+      "widget spec",
+    ]);
+    expect(searchView(fx.db, "widget", { type: "project" }).map((i) => i.title)).toEqual([
+      "Widget launch",
+    ]);
+  });
+
+  it("honors --limit and fails loudly on unknown refs", () => {
+    seedSearchWorld();
+    expect(searchView(fx.db, "widget", { limit: 2 })).toHaveLength(2);
+    expect(() => searchView(fx.db, "widget", { project: "nope" })).toThrow(/project not found/);
+    expect(() => searchView(fx.db, "widget", { area: "nope" })).toThrow(/area not found/);
+    expect(() => searchView(fx.db, "widget", { tag: "nope" })).toThrow(/tag not found/);
+  });
+});
+
+describe("tag descendant closure safety", () => {
+  it("terminates on a parent CYCLE in tag data (UNION dedupe)", () => {
+    fx = buildFixtureDb();
+    const a = seedTag(fx.db, "cycle-a");
+    const b = seedTag(fx.db, "cycle-b", a);
+    fx.db.prepare("UPDATE TMTag SET parent = ? WHERE uuid = ?").run(b, a); // a↔b cycle
+    const item = seedTodo(fx.db, { title: "cycled", startDate: "2026-07-02" });
+    tagTask(fx.db, item, b);
+    const view = todayView(fx.db, NOW, { tag: "cycle-a" });
+    expect(view.today.map((i) => i.title)).toEqual(["cycled"]);
   });
 });
