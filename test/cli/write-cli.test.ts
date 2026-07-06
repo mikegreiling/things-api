@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProgram } from "../../src/cli/main.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedTag, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
 
 let fixture: FixtureDb;
 let stateDir: string;
@@ -82,6 +82,38 @@ describe("dry-run plans", () => {
     expect(plan["vector"]).toBe("applescript");
     expect(String(plan["invocation"])).toContain(`delete to do id "${uuid}"`);
   });
+
+  it("project move --dry-run plans the applescript area setter (E14)", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const proj = seedProject(fixture.db, { title: "Mover" });
+    await run(["project", "move", proj, "--area", "Work", "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["vector"]).toBe("applescript");
+    expect(String(plan["invocation"])).toContain(
+      `set area of project id "${proj}" to area id "${area}"`,
+    );
+  });
+
+  it("project duplicate --dry-run plans the URL duplicate (E17)", async () => {
+    const proj = seedProject(fixture.db, { title: "Copyable" });
+    await run(["project", "duplicate", proj, "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["vector"]).toBe("url-scheme");
+    expect(String(plan["invocation"])).toContain("duplicate=true");
+  });
+
+  it("todo restore --dry-run plans move-to-Inbox for a trashed to-do (E15)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "trashed", trashed: true });
+    await run(["todo", "restore", uuid, "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(String(plan["invocation"])).toContain(`move to do id "${uuid}" to list "Inbox"`);
+  });
 });
 
 describe("blocked paths (exit 4, nothing executed)", () => {
@@ -98,6 +130,16 @@ describe("blocked paths (exit 4, nothing executed)", () => {
     await run(["todo", "update", uuid, "--when", "today", "--json"]);
     const env = envelope();
     expect((env["error"] as Record<string, unknown>)["code"]).toBe("blocked:H-REPEAT-SCHEDULE");
+    expect(process.exitCode).toBe(4);
+  });
+
+  it("todo restore on a non-trashed target", async () => {
+    const uuid = seedTodo(fixture.db, { title: "live" });
+    await run(["todo", "restore", uuid, "--json"]);
+    const env = envelope();
+    const error = env["error"] as Record<string, unknown>;
+    expect(error["code"]).toBe("blocked:H-UNKNOWN-DESTINATION");
+    expect(String(error["message"])).toContain("not in the Trash");
     expect(process.exitCode).toBe(4);
   });
 

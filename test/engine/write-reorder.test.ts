@@ -20,7 +20,7 @@ import { computeReorderPre } from "../../src/write/pre-state.ts";
 import { BOUNCE_MAX_ITEMS, runReorder } from "../../src/write/reorder.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const TODAY_ISO = "2026-07-05";
@@ -179,6 +179,41 @@ describe("native reorder (private command through the pipeline)", () => {
     expect(result.kind).toBe("ok");
     expect(calls[0]).toContain(`project id "${proj}"`);
     expect(calls[0]).toContain(`with ids "${two},${one}"`);
+  });
+
+  it("area scope: PROJECT members reorder natively (O14)", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const p1 = seedProject(fixture.db, { title: "P1", area, index: 1 });
+    const p2 = seedProject(fixture.db, { title: "P2", area, index: 2 });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), {
+      scope: "area",
+      container: { uuid: area },
+      uuids: [p2, p1],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`area id "${area}"`);
+    expect(calls[0]).toContain(`with ids "${p2},${p1}"`);
+    const [r2, r1] = ranks([p2, p1], `"index"`);
+    expect(r2).toBeLessThan(r1 as number);
+  });
+
+  it("H-REORDER-SCOPE rejects a MIXED to-do+project area reorder (unprobed)", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const p = seedProject(fixture.db, { title: "P", area, index: 1 });
+    const t = seedTodo(fixture.db, { title: "T", area, index: 2 });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), {
+      scope: "area",
+      container: { uuid: area },
+      uuids: [t, p],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REORDER-SCOPE");
+      expect(result.detail).toContain("mixes to-dos and projects");
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it("is gated by config.allowExperimental (planner refuses the matrix entry)", async () => {
@@ -454,5 +489,39 @@ describe("computeReorderPre wire lists", () => {
     const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [a, a, "nope"] }, null, NOW);
     expect(pre.duplicates).toEqual([a]);
     expect(pre.rejected.map((r) => r.uuid)).toEqual(["nope"]);
+  });
+
+  it("area scope extends the wire list with SAME-TYPE members only (O14)", () => {
+    const area = seedArea(fixture.db, "Work");
+    const p1 = seedProject(fixture.db, { title: "P1", area, index: 1 });
+    const p2 = seedProject(fixture.db, { title: "P2", area, index: 2 });
+    const t = seedTodo(fixture.db, { title: "T", area, index: 3 });
+    const pre = computeReorderPre(fixture.db, { scope: "area", uuids: [p2] }, area, NOW);
+    // Requested a project → the unrequested project rides along, the to-do
+    // does NOT (mixed wire lists are unprobed).
+    expect(pre.wireList).toEqual([p2, p1]);
+    expect(pre.mixedTypes).toBe(false);
+    expect(pre.members.map((m) => m.uuid)).toEqual([p1, p2, t]);
+  });
+
+  it("area scope flags mixed to-do+project requests", () => {
+    const area = seedArea(fixture.db, "Work");
+    const p = seedProject(fixture.db, { title: "P", area, index: 1 });
+    const t = seedTodo(fixture.db, { title: "T", area, index: 2 });
+    const pre = computeReorderPre(fixture.db, { scope: "area", uuids: [p, t] }, area, NOW);
+    expect(pre.mixedTypes).toBe(true);
+  });
+
+  it("today scope keeps the full mixed wire list (O12 validated)", () => {
+    const p = seedProject(fixture.db, {
+      title: "ProjToday",
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: 5,
+    });
+    const t = seedToday("T", 10);
+    const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [t] }, null, NOW);
+    expect(pre.mixedTypes).toBe(false);
+    expect(pre.wireList).toEqual([t, p]);
   });
 });

@@ -31,10 +31,30 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 | `log completed now` | Probed (A28), trivial to expose. |
 | Project scheduling evidence | `update-project?when=<date>` firm (E09). |
 
+## Tier-2 verdicts (Phase 14, 2026-07-06) — four ops shipped, three dead ends locked
+
+**Shipped (Phase 14b):**
+
+| Capability | Evidence |
+|---|---|
+| `project move --area` — move a project between areas | `set area of project id X to area id Y` works; status/schedule untouched (E14). |
+| `todo restore` — un-trash a to-do (the UI's Put Back, scripted) | `move <trashed to-do> to list "Inbox"` flips trashed→0; lands in the Inbox DE-SCHEDULED — prior list/schedule not restored (E15). To-dos only: project restore is unprobed (move-project-to-Inbox is nonsensical), guard restricts. Unlocks the delete-undo path (Phase 15). |
+| `project duplicate` — copy a project INCLUDING children | `update-project?duplicate=true` (E17); create-probe discovery like todo.duplicate. |
+| `project update --append-notes/--prepend-notes` | Newline-joined, same semantics as to-dos (E18). |
+| `reorder --scope area` now accepts PROJECT members | The private command takes project uuids in an area specifier (O14). Same-type requests only — mixed to-do+project wire lists are unprobed and H-REORDER-SCOPE rejects them. |
+
+**Dead ends (regression-locked unsupported — revisit per Things release):**
+
+| Capability | Why it's dead |
+|---|---|
+| Convert to-do ↔ project | `move to do ... to list "Projects"` errors: `Can't get list "Projects"` — the sidebar entry isn't a scriptable list (E16). No other surface known. |
+| Un-nest a tag to root | `set parent tag ... to missing value` errors (−1700): the property accepts only a tag specifier (E19). Workaround: re-parent under a scratch root tag, or fix in the app. |
+| Sidebar AREA ordering | `move area ... to before area ...` errors (location specifier unsupported, O13); the private reorder command has no area-of-areas form. Areas order by their `"index"` — UI-only. |
+
 ## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
 
 - Shipped: Today (native, bucket-0 members incl. scheduled projects — O01/O12), project + area scopes (native, un-headed children only — O06), Evening via verified bounce (O07/O08). Native is experimental-gated (config `allow-experimental` + sdef canary); see [docs/lab/o-suite-results.md](lab/o-suite-results.md).
-- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar ordering (areas among areas; projects within an area) unprobed; checklist-item order (likely unautomatable — no granular checklist surface anywhere).
+- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar area-among-areas ordering (DEAD — O13, see Tier-2 verdicts); checklist-item order (likely unautomatable — no granular checklist surface anywhere). Projects WITHIN an area now reorder natively (O14, Phase 14b).
 
 ## Read-layer gaps
 
@@ -60,5 +80,8 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 3. **Phase 9b (DONE 2026-07-04)** — reminder vocabulary, area.update, tag.update, notes modes, inbox move, todo.duplicate; e2e 43/43.
 4. **Phase 10 (DONE 2026-07-04, all of it)** — 10a tag-filtered reads; 10b recurrence decode + upcoming occurrence synthesis; 10c Today fidelity (UI-oracle comparator + deadline-driven membership incl. nag suppression, exact 393=393 live reconciliation). The read layer is now UI-faithful.
 5. **Phase 11 (blocked on Mike's L5 sitting)** — S-campaign → Shortcuts vector → heading ops in existing projects; plus `project.add` json-payload headings (small win, independent of Shortcuts). Task #27.
+6. **Phase 12 (DONE 2026-07-05)** — search ergonomics (open+untrashed default, scoping flags, `--exact-tag`), tag-hierarchy descendants on `--tag`, dated reminders, template-duplication verdict (E13: DISPROVEN).
+7. **Phase 13 (DONE 2026-07-06)** — `things batch` (JSONL through the full pipeline) + `things changes --since` (userModificationDate scan).
+8. **Phase 14 (DONE 2026-07-06)** — Tier-2 probe campaign (E14–E19, O13–O14) + ops: project move/duplicate, todo restore, project notes modes, area-scope project reorder; dead ends locked (convert, tag un-nest, sidebar area order). Tasks #32–#33.
 
-Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes.
+Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes; to-do↔project conversion; tag un-nest to root; sidebar area ordering.

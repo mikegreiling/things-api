@@ -64,7 +64,7 @@
     },
     {
       "id": "O03",
-      "title": "DESTRUCTIVE FINDING: including an Evening member in a Today reorder CLEARS its startBucket (silently de-evenings it) \u2014 native reorder normalizes bucket to the targeted list; evening scope is bounce-only and the today-scope guard must reject bucket-1 members",
+      "title": "DESTRUCTIVE FINDING: including an Evening member in a Today reorder CLEARS its startBucket (silently de-evenings it) — native reorder normalizes bucket to the targeted list; evening scope is bounce-only and the today-scope guard must reject bucket-1 members",
       "vector": "applescript",
       "operation": "order.evening-interaction",
       "appState": "running-background",
@@ -117,7 +117,7 @@
     },
     {
       "id": "O04",
-      "title": "private reorder against a PROJECT specifier \u2014 native project-child reordering?",
+      "title": "private reorder against a PROJECT specifier — native project-child reordering?",
       "vector": "applescript",
       "operation": "order.project",
       "appState": "running-background",
@@ -207,7 +207,7 @@
     },
     {
       "id": "O06",
-      "title": "DESTRUCTIVE FINDING: project-scope reorder RIPS heading-contained children out of their heading (heading -> NULL) \u2014 guards must reject headed uuids; heading-scoped ordering remains unautomatable",
+      "title": "DESTRUCTIVE FINDING: project-scope reorder RIPS heading-contained children out of their heading (heading -> NULL) — guards must reject headed uuids; heading-scoped ordering remains unautomatable",
       "vector": "applescript",
       "operation": "order.heading-children",
       "appState": "running-background",
@@ -574,6 +574,95 @@
               "title": "O-B"
             },
             "fields": ["todayIndex", "startBucket"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O13",
+      "title": "SIDEBAR area ordering is IMPOSSIBLE via AppleScript move ('Can't make before area id ... into type location specifier'); no other surface known. Regression lock.",
+      "vector": "applescript",
+      "operation": "order.area-sidebar",
+      "appState": "running-background",
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move area id \"{seed:LAB-AREA-B}\" to before area id \"{seed:LAB-AREA-A}\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMArea",
+            "where": {
+              "uuid": "@seed:LAB-AREA-B"
+            },
+            "fields": ["index", "title"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMArea",
+            "where": {
+              "uuid": "@seed:LAB-AREA-A"
+            },
+            "fields": ["index", "title"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O14",
+      "title": "PROJECTS within an area: private reorder with PROJECT uuids in an area specifier (projects inherit `to do`, O12 analog)",
+      "vector": "applescript",
+      "operation": "order.projects-in-area",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-AP1&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-AP1' AND type=1"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-AP2&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-AP2' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in area id \"{seed:LAB-AREA-B}\" with ids \"{uuid:O-AP2},{uuid:O-AP1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-AP2') < (SELECT \"index\" FROM TMTask WHERE title='O-AP1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AP1"
+            },
+            "fields": ["area", "type", "status"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-AP2"
+            },
+            "fields": ["area", "type", "status"]
           }
         ]
       }

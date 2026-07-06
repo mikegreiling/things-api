@@ -29,6 +29,11 @@ Subject: the private AppleScript command `_private_experimental_ reorder to dos 
 - **Bounce safeguards**: reverse-order bouncing (each round-trip front-inserts), every leg is a fully verified `todo.update`, membership re-checked between items, placed-prefix order re-verified after each item, ≤ 10 items, clean abort with placed/remaining detail. Note: a bounce rewrites `startDate` to today for stale-dated Today members (when= normalization) — semantics-preserving in every view, but it is a stored-field change.
 - **Heading-scoped ordering stays unautomatable** (O06) — tracked in [docs/gaps.md](../gaps.md).
 
+## Sidebar & project ordering (O13–O14, Phase 14a)
+
+- **O13**: moving areas among areas (sidebar order) is IMPOSSIBLE — AppleScript `move area … to before area` errors ('location specifier'); no other surface known.
+- **O14**: **projects WITHIN an area reorder natively** — the private command accepts project uuids in an area specifier (`project` inherits `to do`, O12 analog); area/type membership untouched. Extends write.reorder's area scope to projects.
+
 ## Not probed (future work)
 
 Sidebar ordering (areas among areas; projects within an area), checklist-item order (no granular surface anywhere), reorder behavior on the Anytime/Someday `index` scale outside containers.

@@ -466,6 +466,284 @@
       }
     },
     {
+      "id": "E14",
+      "title": "move a PROJECT to another area via `set area of project id` — no op exposes this today (agents can't reorganize projects)",
+      "vector": "applescript",
+      "operation": "project.move-area",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=E-MVPROJ&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-MVPROJ' AND type=1 AND area='{seed:LAB-AREA-A}'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set area of project id \"{uuid:E-MVPROJ}\" to area id \"{seed:LAB-AREA-B}\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-MVPROJ' AND area='{seed:LAB-AREA-B}'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-MVPROJ"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-B"
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "E-MVPROJ"
+            },
+            "fields": ["status", "start", "title", "type"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "E15",
+      "title": "RESTORE from Trash: does AppleScript `move ... to list \"Inbox\"` un-trash (the UI's Put Back)? No documented restore surface exists",
+      "vector": "applescript",
+      "operation": "todo.restore",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-RESTORE"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-RESTORE'"
+        },
+        {
+          "osascript": "tell application \"Things3\" to delete to do id \"{uuid:E-RESTORE}\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-RESTORE' AND trashed=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:E-RESTORE}\" to list \"Inbox\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-RESTORE' AND trashed=0 AND start=0"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-RESTORE"
+            },
+            "field": "trashed",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-RESTORE"
+            },
+            "field": "status",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "E16",
+      "title": "CONVERT to-do → project is IMPOSSIBLE via AppleScript: 'Can't get list \\\"Projects\\\"' — the Projects sidebar entry is not a scriptable list; no conversion surface exists. Regression lock.",
+      "vector": "applescript",
+      "operation": "todo.convert-to-project",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=E-CONVERT"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-CONVERT' AND type=0"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:E-CONVERT}\" to list \"Projects\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "E-CONVERT"
+            },
+            "field": "type",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "E-CONVERT"
+            },
+            "fields": ["status", "start", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "E17",
+      "title": "duplicate a PROJECT: update-project?duplicate=true (E07 analog) — children copied too?",
+      "vector": "url",
+      "operation": "project.duplicate",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=E-DUPPROJ&to-dos=E-DP-CHILD"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-DUPPROJ' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:E-DUPPROJ}&auth-token={ctx:token}&duplicate=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE type=1 GROUP BY title HAVING title='E-DUPPROJ' AND COUNT(*)=2"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMTask",
+            "where": {
+              "title": "E-DUPPROJ",
+              "type": 1
+            },
+            "count": 2
+          },
+          {
+            "kind": "rowCount",
+            "table": "TMTask",
+            "where": {
+              "title": "E-DP-CHILD"
+            },
+            "count": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "E18",
+      "title": "append-notes / prepend-notes on a PROJECT (E04/E05 probed to-dos only)",
+      "vector": "url",
+      "operation": "project.notes-append",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=E-PNOTES&notes=PBASE"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='E-PNOTES' AND notes='PBASE'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:E-PNOTES}&auth-token={ctx:token}&append-notes=PTAIL"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-PNOTES' AND notes LIKE 'PBASE%PTAIL'"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:E-PNOTES}&auth-token={ctx:token}&prepend-notes=PHEAD"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='E-PNOTES' AND notes LIKE 'PHEAD%PBASE%PTAIL'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "E-PNOTES"
+            },
+            "fields": ["title", "status"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "E19",
+      "title": "UN-NEST a tag to root is IMPOSSIBLE: 'Can't make missing value into type tag (-1700)' — the setter coerces; no nil accepted. Regression lock.",
+      "vector": "applescript",
+      "operation": "tag.unnest",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"E-UNNEST-P\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"E-UNNEST-C\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"E-UNNEST-C\" to tag \"E-UNNEST-P\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='E-UNNEST-C' AND p.title='E-UNNEST-P'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"E-UNNEST-C\" to missing value"
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "rowExists",
+            "table": "TMTag",
+            "where": {
+              "title": "E-UNNEST-C"
+            }
+          }
+        ]
+      }
+    },
+    {
       "id": "E13",
       "title": "duplicate=true on a REPEATING TEMPLATE does NOT duplicate — zero DB delta on the family, and the app opens NEW WINDOWS (tier 3). Clone-and-rename repeat creation is dead; regression lock.",
       "vector": "url",

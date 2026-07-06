@@ -70,7 +70,20 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     validation: "validated",
     evidence: ["U08", "U19"],
   },
-  "project.update": { support: "yes", disruption: 0, validation: "validated", evidence: ["U08"] },
+  "project.update": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["U08", "E18"],
+    notes: "append-/prepend-notes newline-joined, same semantics as to-dos (E18)",
+  },
+  "project.duplicate": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E17"],
+    notes: "update-project?duplicate=true — copies the project INCLUDING its children",
+  },
   "project.complete": {
     support: "yes",
     disruption: 0,

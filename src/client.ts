@@ -36,6 +36,7 @@ import {
 import type {
   AreaAddParams,
   AreaUpdateParams,
+  ContainerRef,
   OperationKind,
   OperationParamsMap,
   ProjectAddParams,
@@ -134,6 +135,8 @@ export interface ThingsClient {
     deleteTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /** Duplicate via URL `duplicate=true` (E07) — the copy's uuid is discovered by verification. */
     duplicateTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /** Restore a TRASHED to-do (E15): un-trashes into the Inbox, de-scheduled. */
+    restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     addProject(params: ProjectAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateProject(
       uuid: string,
@@ -145,6 +148,10 @@ export interface ThingsClient {
       policy: Pick<ProjectCompleteParams, "children">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
+    /** Move a project to another area (E14). */
+    moveProject(uuid: string, area: ContainerRef, options?: WriteOptions): Promise<MutationResult>;
+    /** Duplicate a project INCLUDING children (E17) — copy discovered by verification. */
+    duplicateProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     addArea(params: AreaAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateArea(
@@ -268,10 +275,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       replaceChecklist: (uuid, items, o) => run("todo.replace-checklist", { uuid, items }, o),
       deleteTodo: (uuid, o) => run("todo.delete", { uuid }, o),
       duplicateTodo: (uuid, o) => run("todo.duplicate", { uuid }, o),
+      restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       addProject: (params, o) => run("project.add", params, o),
       updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
       completeProject: (uuid, policy, o) =>
         run("project.complete", { uuid, children: policy.children }, o),
+      moveProject: (uuid, area, o) => run("project.move", { uuid, area }, o),
+      duplicateProject: (uuid, o) => run("project.duplicate", { uuid }, o),
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
       addArea: (params, o) => run("area.add", params, o),
       updateArea: (target, patch, o) => run("area.update", { target, ...patch }, o),
