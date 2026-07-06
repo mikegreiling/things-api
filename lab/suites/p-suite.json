@@ -1,0 +1,955 @@
+{
+  "suite": "p",
+  "description": "Gap-closure campaign (Phase 18, 2026-07-06): project cancel/reopen + cascade semantics and stopDate timing (undo heuristic), trashed-project restore candidates, project/to-do area removal, container-clear + schedule/deadline survival, empty tag/checklist replacement, parent-tag deletion orphan behavior, top-level project ordering, and the json checklist-states unlock (hazard-quarantined). Expectations are DISCOVERY GUESSES until the first run locks them.",
+  "probes": [
+    {
+      "id": "P01",
+      "title": "project cancel via update-project?canceled=true \u2014 does it cascade like complete (T08/U08 analog)? mixed statuses: open child + already-completed child",
+      "vector": "url",
+      "operation": "project.cancel",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-CANCEL&to-dos=P-CN-OPEN%0AP-CN-DONE"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-CANCEL' AND type=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:P-CN-DONE}&auth-token={ctx:token}&completed=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-CN-DONE' AND status=3"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-CANCEL}&auth-token={ctx:token}&canceled=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-CANCEL' AND status=2",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-CANCEL"
+            },
+            "field": "status",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-CN-OPEN"
+            },
+            "field": "status",
+            "value": 2
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-CN-DONE"
+            },
+            "fields": [
+              "status",
+              "stopDate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P02",
+      "title": "project reopen via update-project?completed=false \u2014 do cascaded children stay completed, or come back?",
+      "vector": "url",
+      "operation": "project.reopen-completed",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-REOPEN&to-dos=P-RO-1%0AP-RO-2"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-REOPEN' AND type=1"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:P-REOPEN}&auth-token={ctx:token}&completed=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-RO-2' AND status=3"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-REOPEN}&auth-token={ctx:token}&completed=false"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-REOPEN' AND status=0",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-REOPEN"
+            },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RO-1"
+            },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RO-2"
+            },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "P03",
+      "title": "cascade stopDate timing: completing a project stamps children within <2s of the project row (heuristic window for detecting cascaded children)",
+      "vector": "url",
+      "operation": "project.cascade-timing",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-TIMING&to-dos=P-TM-1"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-TIMING' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-TIMING}&auth-token={ctx:token}&completed=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask p, TMTask c WHERE p.title='P-TIMING' AND c.title='P-TM-1' AND p.status=3 AND c.status=3 AND abs(p.stopDate - c.stopDate) < 2",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TIMING"
+            },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TM-1"
+            },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "P04",
+      "title": "a child completed LONG BEFORE the project keeps its status+stopDate through complete->reopen (the logged-earlier edge)",
+      "vector": "url",
+      "operation": "project.reopen-prelogged",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-PRELOG&to-dos=P-PL-OLD%0AP-PL-NEW"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-PRELOG' AND type=1"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:P-PL-OLD}&auth-token={ctx:token}&completed=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-PL-OLD' AND status=3"
+        },
+        {
+          "sleep": 3
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:P-PRELOG}&auth-token={ctx:token}&completed=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-PL-NEW' AND status=3"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-PRELOG}&auth-token={ctx:token}&completed=false"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-PRELOG' AND status=0",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-PRELOG"
+            },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-PL-OLD"
+            },
+            "fields": [
+              "status",
+              "stopDate"
+            ]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-PL-NEW"
+            },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "P05",
+      "title": "project reopen via update-project?canceled=false (canceled analog of P02)",
+      "vector": "url",
+      "operation": "project.reopen-canceled",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-UNCXL&to-dos=P-UX-1"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-UNCXL' AND type=1"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:P-UNCXL}&auth-token={ctx:token}&canceled=true"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-UNCXL' AND status=2"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-UNCXL}&auth-token={ctx:token}&canceled=false"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-UNCXL' AND status=0",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-UNCXL"
+            },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-UX-1"
+            },
+            "field": "status",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "P06",
+      "title": "restore a TRASHED project: AppleScript `move project ... to list \"Anytime\"` (E15 analog; list \"Projects\" already failed E16)",
+      "vector": "applescript",
+      "operation": "project.restore-anytime",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-RESTORE&to-dos=P-RS-C"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-RESTORE' AND type=1"
+        },
+        {
+          "osascript": "tell application \"Things3\" to delete project id \"{uuid:P-RESTORE}\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-RESTORE' AND trashed=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move project id \"{uuid:P-RESTORE}\" to list \"Anytime\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-RESTORE' AND trashed=0",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RESTORE"
+            },
+            "field": "trashed",
+            "value": 0
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RESTORE"
+            },
+            "fields": [
+              "status",
+              "type"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P07",
+      "title": "restore a TRASHED project to Someday: `move project ... to list \"Someday\"`",
+      "vector": "applescript",
+      "operation": "project.restore-someday",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-RESTORE2"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-RESTORE2' AND type=1"
+        },
+        {
+          "osascript": "tell application \"Things3\" to delete project id \"{uuid:P-RESTORE2}\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-RESTORE2' AND trashed=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move project id \"{uuid:P-RESTORE2}\" to list \"Someday\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-RESTORE2' AND trashed=0 AND start=2",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RESTORE2"
+            },
+            "field": "trashed",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-RESTORE2"
+            },
+            "field": "start",
+            "value": 2
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P08",
+      "title": "remove a project's area via `set area ... to missing value` (the pattern that FAILED for tag un-nest, E19)",
+      "vector": "applescript",
+      "operation": "project.area-missing-value",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-NOAREA&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-NOAREA' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set area of project id \"{uuid:P-NOAREA}\" to missing value"
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-NOAREA"
+            },
+            "fields": [
+              "area"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P09",
+      "title": "does `move project ... to list \"Anytime\"` clear an UNTRASHED project's area? (candidate one-step area removal)",
+      "vector": "applescript",
+      "operation": "project.area-via-list-move",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-LISTAREA&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-LISTAREA' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move project id \"{uuid:P-LISTAREA}\" to list \"Anytime\""
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-LISTAREA"
+            },
+            "field": "area",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-LISTAREA"
+            },
+            "fields": [
+              "status",
+              "trashed"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P10",
+      "title": "remove a to-do's project via `set project ... to missing value`",
+      "vector": "applescript",
+      "operation": "todo.project-missing-value",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-PARENT&to-dos=P-TD-NOPRJ"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-NOPRJ' AND project IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set project of to do id \"{uuid:P-TD-NOPRJ}\" to missing value"
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-NOPRJ"
+            },
+            "fields": [
+              "project"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P11",
+      "title": "remove a to-do's area via `set area ... to missing value`",
+      "vector": "applescript",
+      "operation": "todo.area-missing-value",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-NOAREA&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-NOAREA' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set area of to do id \"{uuid:P-TD-NOAREA}\" to missing value"
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-NOAREA"
+            },
+            "fields": [
+              "area"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P12",
+      "title": "move a SCHEDULED, area-assigned to-do to list \"Anytime\": schedule cleared? area kept? (container-clear semantics)",
+      "vector": "applescript",
+      "operation": "todo.move-anytime-semantics",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-ANY&when=2026-07-09&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-ANY' AND startDate IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:P-TD-ANY}\" to list \"Anytime\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-ANY' AND start=1",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-ANY"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-ANY"
+            },
+            "field": "startDate",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-ANY"
+            },
+            "fields": [
+              "area"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P13",
+      "title": "deadline survives a move-to-Inbox (E06 only asserted start/startDate) \u2014 required by the clear-container composite",
+      "vector": "applescript",
+      "operation": "todo.inbox-deadline-survival",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-DLBNC&when=2026-07-09&deadline=2026-07-20"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-DLBNC' AND deadline IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:P-TD-DLBNC}\" to list \"Inbox\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-DLBNC' AND start=0",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-DLBNC"
+            },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-DLBNC"
+            },
+            "field": "startDate",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-DLBNC"
+            },
+            "fields": [
+              "deadline"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P14",
+      "title": "clear ALL tags via update?tags= (empty replacement \u2014 U04 validated non-empty only)",
+      "vector": "url",
+      "operation": "todo.tags-empty-clear",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-TAGCLR&tags=lab-tag-1"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTask t ON tt.tasks=t.uuid WHERE t.title='P-TD-TAGCLR'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:P-TD-TAGCLR}&auth-token={ctx:token}&tags="
+        },
+        {
+          "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTaskTag tt JOIN TMTask t ON tt.tasks=t.uuid WHERE t.title='P-TD-TAGCLR')",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMTaskTag",
+            "where": {
+              "tasks": "@uuidOf:TMTask:title=P-TD-TAGCLR"
+            },
+            "count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "P15",
+      "title": "clear the WHOLE checklist via update?checklist-items= (empty wholesale replacement)",
+      "vector": "url",
+      "operation": "todo.checklist-empty-clear",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-CLCLR&checklist-items=CA%0ACB"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMChecklistItem ci JOIN TMTask t ON ci.task=t.uuid WHERE t.title='P-TD-CLCLR' AND ci.title='CB'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:P-TD-CLCLR}&auth-token={ctx:token}&checklist-items="
+        },
+        {
+          "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMChecklistItem ci JOIN TMTask t ON ci.task=t.uuid WHERE t.title='P-TD-CLCLR')",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowCount",
+            "table": "TMChecklistItem",
+            "where": {
+              "task": "@uuidOf:TMTask:title=P-TD-CLCLR"
+            },
+            "count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "P16",
+      "title": "delete a PARENT tag: do child tags cascade-delete, dangle, or promote to root? (unlocks the atomic un-nest composite)",
+      "vector": "applescript",
+      "operation": "tag.parent-delete-orphan",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P-TAG-PARENT\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P-TAG-CHILD\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"P-TAG-CHILD\" to tag \"P-TAG-PARENT\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='P-TAG-CHILD' AND p.title='P-TAG-PARENT'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to delete tag \"P-TAG-PARENT\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM TMTag WHERE title='P-TAG-PARENT')",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "rowAbsent",
+            "table": "TMTag",
+            "where": {
+              "title": "P-TAG-PARENT"
+            }
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMTag",
+            "where": {
+              "title": "P-TAG-CHILD"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTag",
+            "where": {
+              "title": "P-TAG-CHILD"
+            },
+            "field": "parent",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "P17",
+      "title": "reorder TOP-LEVEL (area-less) projects: private reorder with an `list \"Anytime\"` specifier (no sidebar container is scriptable \u2014 O13 analog)",
+      "vector": "applescript",
+      "operation": "order.topless-projects",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-TOP-1"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-TOP-1' AND type=1"
+        },
+        {
+          "openUrl": "things:///add-project?title=P-TOP-2"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-TOP-2' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Anytime\" with ids \"{uuid:P-TOP-2},{uuid:P-TOP-1}\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TOP-1"
+            },
+            "fields": [
+              "area",
+              "type",
+              "status"
+            ]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TOP-2"
+            },
+            "fields": [
+              "area",
+              "type",
+              "status"
+            ]
+          }
+        ],
+        "allowNonzeroExit": true
+      }
+    },
+    {
+      "id": "P18",
+      "title": "things:///json checklist update with per-item completed states \u2014 the granular-checklist unlock (json family has crash/modal history: quarantined)",
+      "vector": "url",
+      "operation": "todo.json-checklist-states",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-JSON-CL&checklist-items=One%0ATwo"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMChecklistItem ci JOIN TMTask t ON ci.task=t.uuid WHERE t.title='P-JSON-CL' AND ci.title='Two'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:P-JSON-CL}%22%2C%22attributes%22%3A%7B%22checklist-items%22%3A%5B%7B%22type%22%3A%22checklist-item%22%2C%22attributes%22%3A%7B%22title%22%3A%22One%22%2C%22completed%22%3Atrue%7D%7D%2C%7B%22type%22%3A%22checklist-item%22%2C%22attributes%22%3A%7B%22title%22%3A%22Two%22%2C%22completed%22%3Afalse%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMChecklistItem ci JOIN TMTask t ON ci.task=t.uuid WHERE t.title='P-JSON-CL' AND ci.title='One' AND ci.status=3",
+          "timeoutSeconds": 10
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMChecklistItem",
+            "where": {
+              "task": "@uuidOf:TMTask:title=P-JSON-CL",
+              "title": "One"
+            },
+            "field": "status",
+            "value": 3
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMChecklistItem",
+            "where": {
+              "task": "@uuidOf:TMTask:title=P-JSON-CL",
+              "title": "Two"
+            },
+            "field": "status",
+            "value": 0
+          }
+        ]
+      },
+      "group": "hazard",
+      "settleSeconds": 3
+    }
+  ]
+}

@@ -4,6 +4,10 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 
 ## Headline gaps
 
+### 0. Headings doctrine (DECIDED 2026-07-06, implementation deferred)
+
+Unless the Shortcuts campaign (Phase 11) yields real heading capabilities, the API surface will treat headings as **nonexistent**: project reads return one FLAT to-do list in UI order with heading rows spliced out (walk project rows by `index`; replace each heading row with its children in their own container-scoped order); project reorder accepts ALL children and silently strips heading associations (O06's "rips headed children out" becomes the intended flattening, not a hazard); the `--heading` placement params get removed. Only `byUuid` keeps reporting the raw heading link. **Candidate shape if Shortcuts delivers:** two modes — headings first-class when a Shortcuts vector is configured, silently flattened otherwise. Held until the L5 sitting + S-campaign settle what Shortcuts can actually do.
+
 ### 1. Headings in existing projects — the big one; Shortcuts is the only path
 - Create works ONLY inside a brand-new project via the `things:///json` add-project payload — and `project.add` doesn't expose even that yet (small win available).
 - In an existing project: no create/rename/archive/delete on any validated surface (`heading=` never creates, T09/U09; json update op on headings errors, U10; AppleScript has no heading class, A31).
