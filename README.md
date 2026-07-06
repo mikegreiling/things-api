@@ -41,6 +41,8 @@ things capabilities --op todo.move --json      # is it possible, which vector, w
 things search "Buy milk" --json                # resolve the uuid (open items; scope with --project/--area/--tag, widen with --logged/--trashed/--all)
 things todo move <uuid> --project "Errands" --dry-run --json   # inspect the plan
 things todo move <uuid> --project "Errands" --json             # execute, verified
+things changes --since 2026-07-05T08:00 --json # what changed since the agent last looked
+things batch inbox-triage.jsonl                # N ops, each guarded+verified, JSONL results
 ```
 
 Failure modes are first-class: a `verify-failed:silent-noop` means the app accepted the command and did nothing (a real Things behavior the guards mostly prevent — see [docs/things-app-oddities.md](docs/things-app-oddities.md)); `blocked:*` responses include machine-readable remediation.

@@ -5,6 +5,8 @@
  */
 import type { Command } from "commander";
 
+import { readFileSync } from "node:fs";
+
 import { openThings, type ThingsClient } from "../../client.ts";
 import { saveConfigKey, type DisruptionTier } from "../../config.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
@@ -16,6 +18,7 @@ import {
   type ReorderStrategy,
 } from "../../write/operations.ts";
 import type { WriteOptions } from "../../write/pipeline.ts";
+import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
 import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
 import { defaultVectors } from "../../write/vectors/registry.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
@@ -737,6 +740,98 @@ export function registerWriteCommands(program: Command): void {
       ),
     );
   });
+
+  program
+    .command("batch [file]")
+    .description(
+      "Run MANY mutations from JSONL (file, or stdin when omitted/'-'): one op per line, " +
+        '{"op": "<kind>", "params": {...}, "options": {...}} — see `things capabilities` for ' +
+        "op kinds and params. Every op runs the FULL pipeline (guards, verified " +
+        "read-after-write, audit) sequentially; per-op results stream as JSONL. No " +
+        "transactions. Per-op options carry acknowledgement flags " +
+        "(acknowledgeChecklistReset, acknowledgeProjectReopen, dangerouslyPermanent). " +
+        "--dry-run plans everything without executing; --fail-fast skips the rest after " +
+        "the first failure. Exit: 0 all ok · 3 any verify-failed/invalid · 4 any blocked " +
+        "· 5 any drift-blocked.",
+    )
+    .option("--dry-run", "plan every op; execute nothing")
+    .option("--fail-fast", "skip remaining ops after the first failure")
+    .option("--json", "JSONL results + summary on stdout (also the default)")
+    .option("--db <path>", "explicit database path")
+    .option("--actor <name>", "audit attribution for the whole batch")
+    .action(async (file: string | undefined, opts: WriteFlagOpts & Record<string, unknown>) => {
+      let raw: string;
+      if (file !== undefined && file !== "-") {
+        raw = readFileSync(file, "utf8");
+      } else {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+        raw = Buffer.concat(chunks).toString("utf8");
+      }
+      const lines = raw.split("\n").filter((l) => l.trim() !== "");
+      const ops: BatchOp[] = [];
+      const preInvalid: BatchItemResult[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          ops.push(JSON.parse(lines[i] as string) as BatchOp);
+        } catch (err) {
+          // keep index alignment: a placeholder op that runBatch flags invalid
+          ops.push({ op: "?" as never, params: {} });
+          preInvalid.push({
+            index: i,
+            op: "?",
+            outcome: {
+              kind: "invalid",
+              op: "?",
+              detail: `line ${i + 1} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          });
+        }
+      }
+      let client: ThingsClient | null = null;
+      try {
+        client = openThings(opts.db ? { dbPath: opts.db } : {});
+        const emit = (r: BatchItemResult): void => {
+          process.stdout.write(`${JSON.stringify(r)}\n`);
+        };
+        const results = await client.write.batch(
+          ops,
+          {
+            ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
+            ...(opts["failFast"] === true && { failFast: true }),
+            ...(opts.actor !== undefined && { actor: opts.actor }),
+          },
+          (r) => {
+            const pre = preInvalid.find((p) => p.index === r.index);
+            emit(pre ?? r);
+          },
+        );
+        const merged = results.map((r) => preInvalid.find((p) => p.index === r.index) ?? r);
+        const failed = merged.filter((r) => outcomeFailed(r.outcome));
+        const summary = {
+          summary: {
+            total: merged.length,
+            ok: merged.length - failed.length,
+            failed: failed.filter((r) => r.outcome.kind !== "skipped").length,
+            skipped: merged.filter((r) => r.outcome.kind === "skipped").length,
+          },
+        };
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+        const kinds = new Set(failed.map((r) => r.outcome.kind));
+        const reasons = new Set(
+          failed.map((r) => (r.outcome.kind === "blocked" ? r.outcome.reason : "")),
+        );
+        process.exitCode = reasons.has("drift")
+          ? ExitCode.DriftBlocked
+          : kinds.has("blocked")
+            ? ExitCode.Blocked
+            : failed.length > 0
+              ? ExitCode.VerifyFailed
+              : ExitCode.Ok;
+      } finally {
+        client?.close();
+      }
+    });
 
   addWriteFlags(
     program

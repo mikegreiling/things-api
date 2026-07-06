@@ -17,6 +17,7 @@ import { snapshotView, type Snapshot } from "./read/snapshot.ts";
 import { areasView, tagsView } from "./read/tags.ts";
 import {
   anytimeView,
+  changesView,
   inboxView,
   logbookView,
   projectsView,
@@ -25,6 +26,7 @@ import {
   todayView,
   trashView,
   upcomingView,
+  type ChangedItem,
   type ListItem,
   type SearchOptions,
   type TodayView,
@@ -53,6 +55,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./write/pipeline.ts";
+import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { defaultVectors } from "./write/vectors/registry.ts";
 import type { WriteVector } from "./write/vectors/types.ts";
@@ -93,6 +96,8 @@ export interface ThingsClient {
     areas(): Area[];
     tags(): Tag[];
     search(query: string, options?: SearchOptions): ListItem[];
+    /** Rows created/modified since a moment — incl. trashed/logged/templates. */
+    changes(options: { since: Date; limit?: number }): ChangedItem[];
     byUuid(uuid: string): AnyTask | null;
     snapshot(): Snapshot;
   };
@@ -161,6 +166,15 @@ export interface ThingsClient {
      * uuid lists are placed on top; the rest keep their current order.
      */
     reorder(params: ReorderParams, options?: WriteOptions): Promise<ReorderResult>;
+    /**
+     * Run N ops sequentially through the full pipeline (each guarded,
+     * verified, audited). No transactional semantics — per-op results.
+     */
+    batch(
+      ops: BatchOp[],
+      options?: BatchOptions,
+      onResult?: (result: BatchItemResult) => void,
+    ): Promise<BatchItemResult[]>;
   };
   close(): void;
 }
@@ -231,6 +245,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),
+      changes: (o) => changesView(conn.db, o),
       byUuid: (uuid) => byUuid(conn.db, uuid),
       snapshot: () => snapshotView(conn.db),
     },
@@ -266,6 +281,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       deleteTag: (target, o) => run("tag.delete", { target }, o),
       emptyTrash: (o) => run("trash.empty", {}, o),
       reorder: (params, o) => runReorder(writeDeps, params, o ?? {}),
+      batch: (ops, o, onResult) => runBatch(writeDeps, ops, o ?? {}, onResult),
     },
     close: () => conn.close(),
   };

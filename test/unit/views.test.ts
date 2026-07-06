@@ -5,6 +5,7 @@ import { inheritedTagsFor } from "../../src/read/tags.ts";
 import { fetchTaskByUuid } from "../../src/read/queries.ts";
 import {
   anytimeView,
+  changesView,
   inboxView,
   isTodayMember,
   logbookView,
@@ -459,5 +460,50 @@ describe("exact-tag filtering (Phase 12c)", () => {
     expect(
       searchView(fx.db, "via", { tag: "errands", exactTag: true }).map((i) => i.title),
     ).toEqual(["via-area"]);
+  });
+});
+
+describe("changesView (Phase 13)", () => {
+  it("returns created vs modified since a moment, including trashed/logged/templates", () => {
+    fx = buildFixtureDb();
+    const SINCE = 1_790_000_000; // epoch seconds
+    seedTodo(fx.db, {
+      title: "old-untouched",
+      creationDate: SINCE - 100,
+      modificationDate: SINCE - 50,
+    });
+    seedTodo(fx.db, {
+      title: "edited-after",
+      creationDate: SINCE - 100,
+      modificationDate: SINCE + 10,
+    });
+    seedTodo(fx.db, {
+      title: "born-after",
+      creationDate: SINCE + 20,
+      modificationDate: SINCE + 20,
+    });
+    seedTodo(fx.db, {
+      title: "trashed-after",
+      trashed: true,
+      creationDate: SINCE - 100,
+      modificationDate: SINCE + 30,
+    });
+    seedTodo(fx.db, {
+      title: "template-edited",
+      recurrenceRule: true,
+      creationDate: SINCE - 100,
+      modificationDate: SINCE + 40,
+    });
+
+    const changes = changesView(fx.db, { since: new Date(SINCE * 1000) });
+    expect(changes.map((c) => [c.title, c.changeKind])).toEqual([
+      ["template-edited", "modified"],
+      ["trashed-after", "modified"],
+      ["born-after", "created"],
+      ["edited-after", "modified"],
+    ]);
+    expect(changes.find((c) => c.title === "trashed-after")?.trashed).toBe(true);
+    expect(changes.find((c) => c.title === "template-edited")?.repeating.isTemplate).toBe(true);
+    expect(changesView(fx.db, { since: new Date(SINCE * 1000), limit: 2 })).toHaveLength(2);
   });
 });
