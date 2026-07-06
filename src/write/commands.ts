@@ -16,6 +16,7 @@ import {
 import type { HazardId } from "./guards.ts";
 import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "./operations.ts";
 import {
+  childTagTitles,
   computeReorderPre,
   emptyPreState,
   loadTarget,
@@ -358,13 +359,13 @@ const todoMove: CommandSpec<"todo.move"> = {
     "H-REPEAT-SCHEDULE",
   ],
   preRead(db, params) {
-    if (
-      params.inbox === true &&
-      (containerGiven(params.project) ||
-        containerGiven(params.area) ||
-        params.heading !== undefined)
-    ) {
-      throw new RangeError("inbox is exclusive with project/area/heading destinations");
+    const container =
+      containerGiven(params.project) || containerGiven(params.area) || params.heading !== undefined;
+    if (params.inbox === true && (container || params.detach === true)) {
+      throw new RangeError("inbox is exclusive with project/area/heading/detach");
+    }
+    if (params.detach === true && container) {
+      throw new RangeError("detach is exclusive with project/area/heading destinations");
     }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
@@ -387,6 +388,20 @@ const todoMove: CommandSpec<"todo.move"> = {
       assert.push({ field: "start", equals: "inbox" }, { field: "startDate", equals: null });
       return { mode: "update", uuid: params.uuid, assert };
     }
+    if (params.detach === true) {
+      // P21/P22: empty list-id strips every container link; the schedule is
+      // untouched (pin it — a silent de-schedule would be a contrary write).
+      const target = pre.target;
+      const startDate =
+        target !== null && target.type !== "heading" ? (target.startDate ?? null) : null;
+      assert.push(
+        { field: "project", equals: null },
+        { field: "area", equals: null },
+        { field: "heading", equals: null },
+        { field: "startDate", equals: startDate },
+      );
+      return { mode: "update", uuid: params.uuid, assert };
+    }
     const heading = pre.destHeading?.resolved;
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
@@ -406,6 +421,12 @@ const todoMove: CommandSpec<"todo.move"> = {
     if (params.inbox === true) {
       if (vector !== "applescript") unsupportedVector(this.op, vector);
       return osa(`move to do id ${q(params.uuid)} to list "Inbox"`);
+    }
+    if (params.detach === true) {
+      // Empty list-id = clear the container (P21/P22) — URL only; the other
+      // vectors reject or silently ignore container removal (P10/P11, P26).
+      if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+      return thingsUrl("update", { id: params.uuid, "list-id": "" }, ctx.token);
     }
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
@@ -454,6 +475,20 @@ const todoSetTags: CommandSpec<"todo.set-tags"> = {
   },
 };
 
+/** Normalize the string | spec union; decide whether states force the json form. */
+function checklistSpecs(items: (string | { title: string; completed?: boolean })[]): {
+  specs: { title: string; completed: boolean }[];
+  needsJson: boolean;
+} {
+  const specs = items.map((i) =>
+    typeof i === "string"
+      ? { title: i, completed: false }
+      : { title: i.title, completed: i.completed === true },
+  );
+  const needsJson = items.some((i) => typeof i !== "string" && i.completed !== undefined);
+  return { specs, needsJson };
+}
+
 const todoReplaceChecklist: CommandSpec<"todo.replace-checklist"> = {
   op: "todo.replace-checklist",
   hazards: ["H-UNKNOWN-DESTINATION", "H-CHECKLIST-REPLACE"],
@@ -466,19 +501,45 @@ const todoReplaceChecklist: CommandSpec<"todo.replace-checklist"> = {
     return pre;
   },
   expectedDelta(_pre, params) {
-    return {
-      mode: "update",
-      uuid: params.uuid,
-      assert: [{ field: "checklistTitles", equals: params.items }],
-    };
+    const { specs, needsJson } = checklistSpecs(params.items);
+    const assert: FieldAssertion[] = [
+      { field: "checklistTitles", equals: specs.map((s) => s.title) },
+    ];
+    if (needsJson) {
+      // P18: the json form applies per-item completed states — verify them.
+      assert.push({
+        field: "checklistStates",
+        equals: specs.map((s) => (s.completed ? "completed" : "open")),
+      });
+    }
+    return { mode: "update", uuid: params.uuid, assert };
   },
   compile(params, vector, _pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
-    return thingsUrl(
-      "update",
-      { id: params.uuid, "checklist-items": params.items.join("\n") },
-      ctx.token,
-    );
+    const { specs, needsJson } = checklistSpecs(params.items);
+    if (!needsJson) {
+      return thingsUrl(
+        "update",
+        { id: params.uuid, "checklist-items": specs.map((s) => s.title).join("\n") },
+        ctx.token,
+      );
+    }
+    // things:///json — the only surface that recreates items PRE-CHECKED
+    // (P18). Items are replaced wholesale; their uuids are not stable.
+    const payload = JSON.stringify([
+      {
+        type: "to-do",
+        operation: "update",
+        id: params.uuid,
+        attributes: {
+          "checklist-items": specs.map((s) => ({
+            type: "checklist-item",
+            attributes: { title: s.title, completed: s.completed },
+          })),
+        },
+      },
+    ]);
+    return thingsUrl("json", { data: payload }, ctx.token);
   },
 };
 
@@ -578,22 +639,41 @@ const projectMove: CommandSpec<"project.move"> = {
   op: "project.move",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
+    if ((params.detach === true) === containerGiven(params.area)) {
+      throw new RangeError("project.move needs exactly one of area / detach");
+    }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
-    pre.destArea = resolveArea(db, params.area);
+    if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
     return pre;
   },
   expectedDelta(pre, params) {
-    // Area re-assignment only (E14): status/start/schedule untouched by the
-    // app — the delta pins the new area link.
+    // Area (re/un-)assignment only (E14/P23/P24): status/start/schedule
+    // untouched by the app — the delta pins the new area link.
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: [{ field: "area.uuid", equals: pre.destArea?.resolved?.uuid ?? "" }],
+      assert: [
+        params.detach === true
+          ? { field: "area", equals: null }
+          : { field: "area.uuid", equals: pre.destArea?.resolved?.uuid ?? "" },
+      ],
     };
   },
-  compile(params, vector, pre) {
-    if (vector !== "applescript") unsupportedVector(this.op, vector);
+  compile(params, vector, pre, ctx) {
+    if (vector === "url-scheme") {
+      // P23 (move) / P24 (empty area-id = detach — URL is the ONLY detach
+      // surface: AppleScript rejects missing value/"" and json-null no-ops).
+      return thingsUrl(
+        "update-project",
+        {
+          id: params.uuid,
+          "area-id": params.detach === true ? "" : (pre.destArea?.resolved?.uuid ?? ""),
+        },
+        ctx.token,
+      );
+    }
+    if (params.detach === true) unsupportedVector(this.op, vector);
     return osa(
       `set area of project id ${q(params.uuid)} to area id ` +
         q(pre.destArea?.resolved?.uuid ?? ""),
@@ -689,6 +769,93 @@ const projectComplete: CommandSpec<"project.complete"> = {
   compile(params, vector, _pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
     return thingsUrl("update-project", { id: params.uuid, completed: "true" }, ctx.token);
+  },
+};
+
+const projectCancel: CommandSpec<"project.cancel"> = {
+  op: "project.cancel",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-PROJECT-COMPLETE-CHILDREN"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    if (pre.target !== null && pre.target.type === "project") {
+      const children = projectChildren(db, params.uuid);
+      pre.openChildren = children.filter((c) => c.status === "open");
+      pre.completedChildren = children.filter((c) => c.status === "completed");
+    }
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    // Cancel cascade validated by P01: open children auto-cancel, completed
+    // children keep their status AND stopDate — verified, not assumed.
+    const cascade = [
+      ...pre.openChildren.map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "status", equals: "canceled" }],
+      })),
+      ...pre.completedChildren.map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "status", equals: "completed" }],
+      })),
+    ];
+    return {
+      mode: "state",
+      uuid: params.uuid,
+      assert: [{ field: "status", equals: "canceled" }],
+      ...(cascade.length > 0 && { cascade }),
+    };
+  },
+  compile(params, vector, _pre, ctx) {
+    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    return thingsUrl("update-project", { id: params.uuid, canceled: "true" }, ctx.token);
+  },
+};
+
+const projectReopen: CommandSpec<"project.reopen"> = {
+  op: "project.reopen",
+  hazards: ["H-UNKNOWN-DESTINATION"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Reopens ONLY the project row (P02/P05): cascade-resolved children
+    // stay resolved — restoring them is a separate, explicit concern
+    // (client restoreChildren / undo's audit-exact replay).
+    return { mode: "state", uuid: params.uuid, assert: [{ field: "status", equals: "open" }] };
+  },
+  compile(params, vector, pre, ctx) {
+    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    // The pre status picks the parameter: completed=false vs canceled=false
+    // (each only reverses its own status — P02/P05).
+    const wasCanceled =
+      pre.target !== null && pre.target.type !== "heading" && pre.target.status === "canceled";
+    return thingsUrl(
+      "update-project",
+      { id: params.uuid, ...(wasCanceled ? { canceled: "false" } : { completed: "false" }) },
+      ctx.token,
+    );
+  },
+};
+
+const projectRestore: CommandSpec<"project.restore"> = {
+  op: "project.restore",
+  hazards: ["H-UNKNOWN-DESTINATION"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // P06: the Anytime list-move on a trashed project flips trashed IN
+    // PLACE — schedule, area link, and children all keep their state
+    // (better than the to-do restore, which relocates to the Inbox).
+    return { mode: "update", uuid: params.uuid, assert: [{ field: "trashed", equals: false }] };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    return osa(`move project id ${q(params.uuid)} to list "Anytime"`);
   },
 };
 
@@ -804,10 +971,13 @@ const tagAdd: CommandSpec<"tag.add"> = {
 
 const tagDelete: CommandSpec<"tag.delete"> = {
   op: "tag.delete",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-PERMANENT-DELETE"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-PERMANENT-DELETE", "H-TAG-SUBTREE-DELETE"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.entityTarget = resolveTag(db, params.target);
+    if (pre.entityTarget.resolved !== null) {
+      pre.childTags = childTagTitles(db, pre.entityTarget.resolved.uuid);
+    }
     return pre;
   },
   expectedDelta(pre) {
@@ -1020,4 +1190,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.move": projectMove,
   "todo.restore": todoRestore,
   "project.duplicate": projectDuplicate,
+  "project.cancel": projectCancel,
+  "project.reopen": projectReopen,
+  "project.restore": projectRestore,
 };

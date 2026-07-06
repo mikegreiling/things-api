@@ -17,6 +17,7 @@ export const HAZARD_IDS = [
   "H-PERMANENT-DELETE",
   "H-REORDER-SCOPE",
   "H-REMINDER-SCOPE",
+  "H-TAG-SUBTREE-DELETE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -47,6 +48,9 @@ const REPEAT_SENSITIVE: OperationKind[] = [
   "todo.restore", // unvalidated on templates (E15 probed a plain to-do)
   "project.move", // unvalidated on repeating projects (E14 probed a plain project)
   "project.duplicate", // unvalidated on repeating projects (E17 probed a plain project)
+  "project.cancel", // unvalidated on repeating projects (P01 probed a plain project)
+  "project.reopen", // unvalidated on repeating projects (P02/P05 probed plain projects)
+  "project.restore", // unvalidated on repeating projects (P06 probed a plain project)
 ];
 
 const GUARDS: Record<HazardId, GuardFn> = {
@@ -66,16 +70,17 @@ const GUARDS: Record<HazardId, GuardFn> = {
     };
   },
   "H-PROJECT-COMPLETE-CHILDREN": ({ op, params, pre }) => {
-    if (op !== "project.complete") return null;
+    if (op !== "project.complete" && op !== "project.cancel") return null;
     if (pre.openChildren.length === 0) return null;
-    if (params["children"] === "auto-complete") return null;
+    const auto = op === "project.complete" ? "auto-complete" : "auto-cancel";
+    if (params["children"] === auto) return null;
     return {
       hazard: "H-PROJECT-COMPLETE-CHILDREN",
       detail:
-        `project has ${pre.openChildren.length} open child to-do(s); URL completion would ` +
-        "silently auto-complete them (no prompt, unlike the UI — T08/U08)",
-      remediation:
-        "resolve the children first, or pass children='auto-complete' (--children auto-complete)",
+        `project has ${pre.openChildren.length} open child to-do(s); the URL write would ` +
+        `silently ${op === "project.complete" ? "auto-complete" : "auto-cancel"} them ` +
+        "(no prompt, unlike the UI — T08/U08, P01)",
+      remediation: `resolve the children first, or pass children='${auto}' (--children ${auto})`,
     };
   },
   "H-CHECKLIST-REPLACE": ({ op, pre, acks }) => {
@@ -138,6 +143,34 @@ const GUARDS: Record<HazardId, GuardFn> = {
       // address `project id` / trashed `to do id` specifically (E14/E15/E17).
       if ((op === "project.move" || op === "project.duplicate") && pre.target.type !== "project") {
         problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a project`);
+      }
+      if (
+        (op === "project.cancel" || op === "project.reopen" || op === "project.restore") &&
+        pre.target.type !== "project"
+      ) {
+        problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a project`);
+      } else if (op === "project.cancel" && pre.target.type === "project") {
+        // Only open->canceled is probed (P01); re-canceling resolved
+        // projects is unvalidated.
+        if (pre.target.status !== "open") {
+          problems.push(
+            `target project is already ${pre.target.status} — cancel needs an open project`,
+          );
+        }
+      } else if (op === "project.reopen" && pre.target.type === "project") {
+        if (pre.target.status === "open") {
+          problems.push("target project is already open — nothing to reopen");
+        }
+        if (pre.target.trashed) {
+          problems.push(
+            "target project is in the Trash — restore it first (things project restore)",
+          );
+        }
+      } else if (op === "project.restore" && pre.target.type === "project" && !pre.target.trashed) {
+        problems.push(
+          `target ${String(params["uuid"])} is not in the Trash — restore only applies to ` +
+            "trashed projects",
+        );
       }
       if (op === "todo.restore") {
         if (pre.target.type !== "to-do") {
@@ -251,6 +284,19 @@ const GUARDS: Record<HazardId, GuardFn> = {
       remediation:
         "read the scope first (things today / things project-view / things area) and pass " +
         "only its eligible members in the desired order",
+    };
+  },
+  "H-TAG-SUBTREE-DELETE": ({ op, pre, acks }) => {
+    if (op !== "tag.delete") return null;
+    if (pre.childTags.length === 0 || acks.acknowledgeTagSubtree === true) return null;
+    return {
+      hazard: "H-TAG-SUBTREE-DELETE",
+      detail:
+        `deleting this tag CASCADE-DELETES its ${pre.childTags.length} descendant tag(s) ` +
+        `permanently (P16): ${pre.childTags.join(", ")}`,
+      remediation:
+        "re-parent the children first (things tag update <child> --parent <new>), or pass " +
+        "acknowledgeTagSubtree (--acknowledge-subtree) to delete the whole subtree",
     };
   },
   "H-PERMANENT-DELETE": ({ op, acks }) => {

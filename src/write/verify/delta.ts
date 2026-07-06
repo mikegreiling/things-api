@@ -174,6 +174,9 @@ export function getField(entity: AnyTask, path: string): unknown {
   if (path === "checklistTitles" && entity.type === "to-do") {
     return (entity.checklist ?? []).map((c) => c.title);
   }
+  if (path === "checklistStates" && entity.type === "to-do") {
+    return (entity.checklist ?? []).map((c) => c.status);
+  }
   let current: unknown = entity;
   for (const part of path.split(".")) {
     if (current === null || current === undefined || typeof current !== "object") return undefined;

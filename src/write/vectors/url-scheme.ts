@@ -45,16 +45,27 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["U06", "U06B"],
-    notes: "unknown destinations are silent no-ops — H-UNKNOWN-DESTINATION guards pre-write",
+    evidence: ["U06", "U06B", "P21", "P22"],
+    notes:
+      "unknown destinations are silent no-ops — H-UNKNOWN-DESTINATION guards pre-write; " +
+      "EMPTY list-id detaches from project/area keeping the schedule (P21/P22)",
   },
-  "todo.set-tags": { support: "yes", disruption: 0, validation: "validated", evidence: ["U04"] },
+  "todo.set-tags": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["U04", "P14"],
+    notes: "full replacement; an empty set clears all tags (P14)",
+  },
   "todo.replace-checklist": {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["U07", "U20"],
-    notes: "wholesale replacement — destroys per-item state (H-CHECKLIST-REPLACE)",
+    evidence: ["U07", "U20", "P15", "P18"],
+    notes:
+      "wholesale replacement — destroys per-item state (H-CHECKLIST-REPLACE); empty list " +
+      "clears (P15); stateful items ride things:///json with per-item completed (P18, " +
+      "item uuids not stable across a rewrite)",
   },
   "todo.delete": { support: "no", disruption: 3, validation: "validated", evidence: ["U14"] },
   "todo.duplicate": {
@@ -76,6 +87,33 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     validation: "validated",
     evidence: ["U08", "E18"],
     notes: "append-/prepend-notes newline-joined, same semantics as to-dos (E18)",
+  },
+  "project.move": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P23", "P24"],
+    notes:
+      "update-project?area-id=<uuid> moves between areas (P23); EMPTY area-id detaches " +
+      "from the area — the ONLY detach surface (P24)",
+  },
+  "project.cancel": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P01"],
+    notes:
+      "canceled=true — cascades natively: open children auto-cancel (no prompt), completed " +
+      "children untouched; children policy is mandatory",
+  },
+  "project.reopen": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P02", "P05"],
+    notes:
+      "completed=false / canceled=false per the pre status; reopens ONLY the project row — " +
+      "cascade-resolved children stay resolved (restore them explicitly)",
   },
   "project.duplicate": {
     support: "yes",

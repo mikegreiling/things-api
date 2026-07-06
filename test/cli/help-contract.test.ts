@@ -62,7 +62,8 @@ describe("write-command help states the contract", () => {
     const help = helpFor("todo", "checklist");
     expect(help).toContain("H-CHECKLIST-REPLACE");
     expect(help).toContain("--acknowledge-checklist-reset");
-    expect(help).toContain("Destroys per-item completion state");
+    expect(help).toContain("destroys per-item state");
+    expect(help).toContain("states PRESERVED");
   });
 
   it("project complete: mandatory children policy + verified cascade", () => {
@@ -216,6 +217,41 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("Model Context Protocol");
     expect(help).toContain('args ["mcp"]');
     expect(help).toContain("run_operation");
+  });
+
+  it("project cancel/reopen/restore: lifecycle contract from the P-suite", () => {
+    const cancel = helpFor("project", "cancel");
+    expect(cancel).toContain("--children <policy>");
+    expect(cancel).toContain("auto-cancel");
+    expect(cancel).toContain("H-PROJECT-COMPLETE-CHILDREN");
+    const reopen = helpFor("project", "reopen");
+    expect(reopen).toContain("--restore-children");
+    expect(reopen).toContain("stopDate window");
+    const restore = helpFor("project", "restore");
+    expect(restore).toContain("IN PLACE");
+    expect(restore).toContain("trashed project");
+  });
+
+  it("detach: one-step container removal documented on both move commands", () => {
+    expect(helpFor("todo", "move")).toContain("--detach");
+    expect(helpFor("project", "move")).toContain("--detach");
+    expect(helpFor("project", "move")).toContain("the only surface");
+  });
+
+  it("tag delete: subtree cascade hazard + ack flag", () => {
+    const help = helpFor("tag", "delete");
+    expect(help).toContain("H-TAG-SUBTREE-DELETE");
+    expect(help).toContain("--acknowledge-subtree");
+    expect(help).toContain("CHILD TAGS");
+  });
+
+  it("checklist: granular actions with preserved states", () => {
+    const help = helpFor("todo", "checklist");
+    expect(help).toContain("--check <title>");
+    expect(help).toContain("--uncheck <title>");
+    expect(help).toContain("--add <title>");
+    expect(help).toContain("--rename <title>");
+    expect(help).toContain("not stable");
   });
 
   it("project update: notes modes documented", () => {
