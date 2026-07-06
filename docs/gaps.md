@@ -4,6 +4,10 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 
 ## Headline gaps
 
+### 0. Headings doctrine (DECIDED 2026-07-06, implementation deferred)
+
+Unless the Shortcuts campaign (Phase 11) yields real heading capabilities, the API surface will treat headings as **nonexistent**: project reads return one FLAT to-do list in UI order with heading rows spliced out (walk project rows by `index`; replace each heading row with its children in their own container-scoped order); project reorder accepts ALL children and silently strips heading associations (O06's "rips headed children out" becomes the intended flattening, not a hazard); the `--heading` placement params get removed. Only `byUuid` keeps reporting the raw heading link. **Candidate shape if Shortcuts delivers:** two modes — headings first-class when a Shortcuts vector is configured, silently flattened otherwise. Held until the L5 sitting + S-campaign settle what Shortcuts can actually do.
+
 ### 1. Headings in existing projects — the big one; Shortcuts is the only path
 - Create works ONLY inside a brand-new project via the `things:///json` add-project payload — and `project.add` doesn't expose even that yet (small win available).
 - In an existing project: no create/rename/archive/delete on any validated surface (`heading=` never creates, T09/U09; json update op on headings errors, U10; AppleScript has no heading class, A31).
@@ -86,5 +90,6 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 9. **Phase 15 (DONE 2026-07-06)** — `things undo [--last N]`: inverse mutations replayed from the audit trail's pre-values (status flips, field restores, delete→restore via E15, tag/checklist sets, native-reorder rank restore). Every inverse runs the full guarded+verified pipeline; irreversible ops (permanent deletes, project complete/delete, uncaptured pre-state) are reported honestly, never guessed. Task #34.
 10. **Phase 16 (DONE 2026-07-06)** — occurrence generator over decoded repeat rules + `upcoming --horizon <n>`; v0.2.0 release (changelog, pack-smoke, README refresh). Task #35.
 11. **Phase 17 (DONE 2026-07-06)** — seam hygiene (contracts into core, diagnose()/capabilitiesTable() as library functions) + `things mcp` stdio MCP server (16 tools over the same ThingsClient). Task #36.
+12. **Phase 18 (probes DONE 2026-07-06)** — P-suite (18 probes, [docs/lab/p-suite-results.md](lab/p-suite-results.md)): project cancel/reopen/restore all WORK; granular checklist states via things:///json WORKS; un-schedule + clear-container semantics pinned; empty-replacement clears validated. Closed permanently: project/todo area removal, tag un-nest (parent-delete CASCADE-DELETES children — new tag.delete hazard needed), top-level sidebar ordering. Task #37; implementation = Phase 19 (task #38).
 
 Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes; to-do↔project conversion; tag un-nest to root; sidebar area ordering.

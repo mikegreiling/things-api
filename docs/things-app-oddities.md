@@ -41,6 +41,9 @@ Commands that fail *silently* — the caller gets no signal that nothing (or onl
 ### 2c. `heading=` never creates a heading — silently ignored when missing
 On `add`, a `heading=` value that doesn't match an existing heading in the target project is dropped: the to-do is created un-headed. Heading placement works only against pre-existing headings (and matching is by name, so duplicate heading names are ambiguous). *(T09/U09)*
 
+### 2f. AppleScript `move project … to list "Anytime"` on a non-trashed project → complete silent no-op
+The command returns success and produces literally zero database delta (not even a modification-date bump). The same command on a *trashed* project un-trashes it — so the identical statement is either a restore or a no-op depending on state the caller may not know, with no signal distinguishing the two. *(P06/P09, 2026-07-06)*
+
 ---
 
 ### 2d. Reminder times with bare hours 1–11 are silently reinterpreted (am/pm heuristic)
@@ -115,6 +118,12 @@ The URL update command with `duplicate=true` works on plain to-dos (exact copy �
 
 ### 5e. `things:///version` launches and foregrounds the app, shows nothing
 Without an x-callback, the version command has no visible output — its only observable effect is launching Things and taking focus. *(T01/U01)*
+
+### 5f. AppleScript `delete tag` on a parent tag silently destroys the entire subtree
+Deleting a tag that has child tags cascade-deletes the children too — permanently (no Trash for tags), with no confirmation and no error through the AppleScript channel. Combined with tag deletion already being unrecoverable, one scripted delete of a parent can wipe a whole tag hierarchy the caller never named. *(P16, 2026-07-06)*
+
+### 5g. Removing a container link: three surfaces, three different behaviors
+Detaching a project from its area (or a to-do from its project/area) behaves differently on every automation surface: **AppleScript rejects** `set area/project … to missing value` (and `""`) with an error; **the `json` command silently ignores** `"area-id": null` / `"list-id": null` (zero delta, no signal); and **the URL scheme quietly supports it** via an EMPTY parameter (`update?list-id=` / `update-project?area-id=` clear the link cleanly, matching the empty-`tags=` replacement pattern) — undocumented, discovered by probing. One capability, one error, one silent no-op, one undocumented success. *(P08–P11, P21/P22/P24, P25/P26 — 2026-07-06)*
 
 ---
 
