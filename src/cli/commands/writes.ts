@@ -11,12 +11,7 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { saveConfigKey, type DisruptionTier } from "../../config.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
-import {
-  OPERATION_KINDS,
-  type OperationKind,
-  type ReorderScope,
-  type ReorderStrategy,
-} from "../../write/operations.ts";
+import type { OperationKind, ReorderScope, ReorderStrategy } from "../../write/operations.ts";
 import type { WriteOptions } from "../../write/pipeline.ts";
 import { capabilitiesTable } from "../../write/capabilities.ts";
 import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
