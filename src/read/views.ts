@@ -292,6 +292,36 @@ export interface SearchOptions extends ViewFilter {
   all?: boolean;
 }
 
+export type ChangeKind = "created" | "modified";
+export type ChangedItem = ListItem & { changeKind: ChangeKind };
+
+/**
+ * Everything that changed since a moment — created or modified TMTask rows,
+ * INCLUDING trashed, logged, and repeating-template rows (an agent syncing
+ * state needs to see deletions and template edits too; check `trashed`,
+ * `status`, and `repeating.isTemplate` on each item). Caveats: TMArea/TMTag
+ * carry no modification dates, and checklist-item edits do not bump the
+ * parent task — those changes are invisible here.
+ */
+export function changesView(
+  db: DatabaseSync,
+  options: { since: Date; limit?: number },
+): ChangedItem[] {
+  const limit = options.limit ?? 200;
+  const sinceEpoch = options.since.getTime() / 1000;
+  const rows = fetchTaskRows(
+    db,
+    `t.type IN (0, 1) AND t.userModificationDate > ?
+     ORDER BY t.userModificationDate DESC LIMIT ?`,
+    [sinceEpoch, limit],
+  );
+  return materialize(db, rows).map((item, i) => ({
+    ...item,
+    changeKind:
+      (rows[i]?.creationDate ?? 0) > sinceEpoch ? ("created" as const) : ("modified" as const),
+  }));
+}
+
 export function searchView(db: DatabaseSync, query: string, options?: SearchOptions): ListItem[] {
   const limit = options?.limit ?? 50;
   const needle = `%${query}%`;

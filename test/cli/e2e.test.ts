@@ -138,3 +138,29 @@ describe("cli --exact-tag (Phase 12c)", () => {
     ]);
   });
 });
+
+describe("cli changes (Phase 13)", () => {
+  it("lists created/modified since --since with markers", () => {
+    fx = buildFixtureDb();
+    const SINCE = 1_790_000_000;
+    seedTodo(fx.db, { title: "untouched", creationDate: SINCE - 10, modificationDate: SINCE - 10 });
+    seedTodo(fx.db, { title: "fresh", creationDate: SINCE + 5, modificationDate: SINCE + 5 });
+    const sinceIso = new Date(SINCE * 1000).toISOString();
+    const { stdout, exitCode } = runCli([
+      "changes",
+      "--since",
+      sinceIso,
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(stdout).data;
+    expect(data).toHaveLength(1);
+    expect(data[0].title).toBe("fresh");
+    expect(data[0].changeKind).toBe("created");
+
+    const bad = runCli(["changes", "--since", "not-a-date", "--db", fx.path]);
+    expect(bad.exitCode).toBe(2);
+  });
+});

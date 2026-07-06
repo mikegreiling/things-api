@@ -104,6 +104,19 @@ run_step 0 "area update: rename + tags" area update LAB-AREA-B --title "E2E-AREA
 run_step 0 "tag add for update tests" tag add e2e-parent
 run_step 0 "tag update: re-parent + shortcut" tag update lab-tag-2 --parent e2e-parent --shortcut 8
 
+echo "== batch + changes (Phase 13) =="
+SINCE=$(date -v-2M +%Y-%m-%dT%H:%M:%S)
+cat > /tmp/e2e-batch.jsonl <<'EOB'
+{"op":"todo.add","params":{"title":"E2E-B1","when":"today"}}
+{"op":"todo.add","params":{"title":"E2E-B2","notes":"from batch"}}
+EOB
+run_step 0 "batch: two verified adds via JSONL" batch /tmp/e2e-batch.jsonl
+run_step 0 "changes --since shows the batch adds" changes --since "$SINCE"
+if ! json_get "len([i for i in d['data'] if i['title'].startswith('E2E-B')])" | grep -q "^2$"; then
+  echo "FAIL changes did not include both batch adds"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "== deletes =="
 run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
 run_step 0 "area add (applescript)" area add "E2E-AREA"

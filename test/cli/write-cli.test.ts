@@ -126,3 +126,54 @@ describe("capabilities", () => {
     expect(entry?.vectors.find((v) => v.vector === "applescript")?.support).toBe("yes");
   });
 });
+
+describe("batch (Phase 13)", () => {
+  it("streams per-op JSONL, handles bad lines, exits with worst severity", async () => {
+    const uuid = seedTodo(fixture.db, { title: "batch-target" });
+    const batchFile = join(stateDir, "ops.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({ op: "todo.update", params: { uuid, title: "renamed" } }),
+        "not json at all {",
+        JSON.stringify({ op: "trash.empty", params: {} }),
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(4); // 3 results + summary
+    expect(lines[0].outcome.kind).toBe("dry-run");
+    expect(lines[1].outcome.kind).toBe("invalid");
+    expect(lines[1].outcome.detail).toMatch(/not valid JSON/);
+    // trash.empty dry-run still hits the H-PERMANENT-DELETE guard first
+    expect(lines[2].outcome.kind).toBe("blocked");
+    expect(lines[3].summary).toEqual({ total: 3, ok: 1, failed: 2, skipped: 0 });
+    expect(process.exitCode).toBe(4); // blocked outranks invalid
+  });
+
+  it("--fail-fast skips after the first failure", async () => {
+    const uuid = seedTodo(fixture.db, { title: "ff" });
+    const batchFile = join(stateDir, "ff.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({ op: "trash.empty", params: {} }),
+        JSON.stringify({ op: "todo.update", params: { uuid, title: "x" } }),
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run", "--fail-fast"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines[0].outcome.kind).toBe("blocked");
+    expect(lines[1].outcome.kind).toBe("skipped");
+  });
+});

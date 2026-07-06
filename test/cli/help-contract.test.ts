@@ -121,6 +121,22 @@ describe("write-command help states the contract", () => {
     expect(tagHelp).toContain("unprobed");
   });
 
+  it("batch: pipeline guarantees, no transactions, exit codes", () => {
+    const help = helpFor("batch");
+    expect(help).toContain("FULL pipeline");
+    expect(help).toContain("No transactions");
+    expect(help).toContain("--fail-fast");
+    expect(help).toContain("--dry-run");
+    expect(help).toContain("0 all ok");
+  });
+
+  it("changes: sync semantics and caveats", () => {
+    const help = helpFor("changes");
+    expect(help).toContain("--since <when>");
+    expect(help).toContain("trashed");
+    expect(help).toContain("invisible");
+  });
+
   it("list views + search expose --exact-tag alongside --tag", () => {
     for (const name of ["today", "inbox", "search", "logbook"]) {
       const help = helpFor(name);

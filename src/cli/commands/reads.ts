@@ -262,6 +262,36 @@ export function registerReadCommands(program: Command): void {
     });
 
   program
+    .command("changes")
+    .description(
+      "Everything created or modified since a moment (--since), newest first — INCLUDES " +
+        "trashed, logged, and repeating-template rows so agents can sync state; check " +
+        "trashed/status/repeating on each item. Caveats: tag/area edits and checklist-item " +
+        "edits don't bump tasks and are invisible here.",
+    )
+    .requiredOption("--since <when>", "ISO date/datetime (e.g. 2026-07-05T14:30:00)")
+    .option("--limit <n>", "maximum items", "200")
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((opts: GlobalReadOpts & { since: string; limit: string }) => {
+      const since = new Date(opts.since);
+      if (Number.isNaN(since.getTime())) {
+        process.stderr.write(`error: --since is not a parseable date: ${opts.since}\n`);
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
+      withClient(opts, "changes", (c) => c.read.changes({ since, limit: Number(opts.limit) }), ((
+        items: Array<ListItem & { changeKind: string }>,
+      ) =>
+        items.length === 0
+          ? ["(no changes)"]
+          : items.map(
+              (i) =>
+                `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.trashed ? " [trashed]" : ""}`,
+            )) as (d: never) => string[]);
+    });
+
+  program
     .command("search <query>")
     .description(
       "Title/notes substring search, most recently modified first. Default scope: OPEN + " +
