@@ -58,6 +58,7 @@ import {
 } from "./write/pipeline.ts";
 import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
+import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import { defaultVectors } from "./write/vectors/registry.ts";
 import type { WriteVector } from "./write/vectors/types.ts";
 import type { PollerDeps } from "./write/verify/poller.ts";
@@ -182,6 +183,12 @@ export interface ThingsClient {
       options?: BatchOptions,
       onResult?: (result: BatchItemResult) => void,
     ): Promise<BatchItemResult[]>;
+    /**
+     * Undo the last N successful mutations by replaying inverse ops from the
+     * audit trail (each inverse runs the full guarded+verified pipeline).
+     * Irreversible ops are reported as such, never guessed at.
+     */
+    undo(options?: UndoOptions, onItem?: (item: UndoItemResult) => void): Promise<UndoItemResult[]>;
   };
   close(): void;
 }
@@ -292,6 +299,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       emptyTrash: (o) => run("trash.empty", {}, o),
       reorder: (params, o) => runReorder(writeDeps, params, o ?? {}),
       batch: (ops, o, onResult) => runBatch(writeDeps, ops, o ?? {}, onResult),
+      undo: (o, onItem) => runUndo(writeDeps, auditDir(env), o ?? {}, onItem),
     },
     close: () => conn.close(),
   };

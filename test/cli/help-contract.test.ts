@@ -192,6 +192,16 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("H-REPEAT-SCHEDULE");
   });
 
+  it("undo: audit-replay contract — inverse pipeline, irreversibles, permanent gate", () => {
+    const help = helpFor("undo");
+    expect(help).toContain("INVERSE");
+    expect(help).toContain("IRREVERSIBLE");
+    expect(help).toContain("--last <n>");
+    expect(help).toContain("--dry-run");
+    expect(help).toContain("--dangerously-permanent");
+    expect(help).toContain("undo:<actor>");
+  });
+
   it("project update: notes modes documented", () => {
     const help = helpFor("project", "update");
     expect(help).toContain("--append-notes");
