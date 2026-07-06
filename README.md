@@ -2,11 +2,13 @@
 
 A typed TypeScript library + CLI (`things`) for programmatic interaction with [Things 3](https://culturedcode.com/things/) by Cultured Code.
 
-**Status: read + write layers live.** Reads go straight to the local SQLite database; writes run a verified pipeline over two lab-validated vectors (URL scheme + AppleScript) with hazard guards, disruption-tier policy, and a JSONL audit trail. See [docs/design/](docs/design/) for the architecture and VM-lab design, [docs/lab/](docs/lab/harness.md) for the probe harness and campaign results the write layer is grounded in, and [docs/atlas/](docs/atlas/schema-v26.md) for the database↔UI map.
+**Status: read + write layers live (v0.2.0 — see [CHANGELOG.md](CHANGELOG.md)).** Reads go straight to the local SQLite database (UI-exact Today ordering, decoded repeat rules, occurrence projections); writes run a verified pipeline over two lab-validated vectors (URL scheme + AppleScript) with hazard guards, disruption-tier policy, a JSONL audit trail, batch mode, and audit-replay undo. See [docs/design/](docs/design/) for the architecture and VM-lab design, [docs/lab/](docs/lab/harness.md) for the probe harness and campaign results the write layer is grounded in, and [docs/atlas/](docs/atlas/schema-v26.md) for the database↔UI map.
 
 ```sh
 things today --json                # read: your Today list, Evening split, UI order
+things upcoming --horizon 5       # date plan incl. projected repeat occurrences
 things todo add "Buy milk" --when today --tags errands --dry-run   # plan without executing
+things undo --dry-run              # inverse plan for the last mutation (audit replay)
 things capabilities --op todo.delete   # what's possible, per vector, with evidence
 ```
 

@@ -42,6 +42,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { addDaysIso, encodePackedDate, localToday } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
+import { projectOccurrences } from "../model/occurrences.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
 import {
   fetchTagsForTasks,
@@ -180,6 +181,13 @@ export function isTodayMember(item: ListItem, now?: Date): boolean {
 export interface UpcomingFilter extends ViewFilter {
   /** Include repeating templates' next occurrences (UI parity; default true). */
   repeats?: boolean;
+  /**
+   * Occurrences to surface per repeating template (default 1 = only the
+   * app-materialized next instance, exactly the UI). Higher values PROJECT
+   * later occurrences from the decoded rule (fixed rules only; capped at
+   * 10) — projections are host math the app has not materialized yet.
+   */
+  horizon?: number;
 }
 
 export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
@@ -208,22 +216,36 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
      ORDER BY t.rt1_nextInstanceStartDate ASC, t."index" ASC`,
     [packedToday, ...tf.binds],
   );
+  const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
-  const occurrences = materialize(db, templateRows).map((template) => {
+  const occurrences = materialize(db, templateRows).flatMap((template) => {
     const startDate = template.repeating.nextOccurrence ?? null;
+    if (startDate === null) return [];
     // Only the rule-derived deadline is real: the template row's own deadline
     // column carries app-internal sentinels (4001-01-01 observed live).
-    let deadline: string | null = null;
+    let rule: ReturnType<typeof decodeRecurrenceRule> | null = null;
     const raw = rawByUuid.get(template.uuid);
-    if (startDate !== null && raw !== null && raw !== undefined) {
+    if (raw !== null && raw !== undefined) {
       try {
-        const rule = decodeRecurrenceRule(raw);
-        if (rule.startOffsetDays < 0) deadline = addDaysIso(startDate, -rule.startOffsetDays);
+        rule = decodeRecurrenceRule(raw);
       } catch {
         // undecodable rule (future Things build) → occurrence without a derived deadline
       }
     }
-    return { ...template, startDate, deadline };
+    if (rule === null || horizon === 1 || rule.type !== "fixed") {
+      const deadline =
+        rule !== null && rule.startOffsetDays < 0
+          ? addDaysIso(startDate, -rule.startOffsetDays)
+          : null;
+      return [{ ...template, startDate, deadline }];
+    }
+    // horizon > 1: later occurrences PROJECTED from the decoded rule,
+    // anchored on the app's own materialized next instance.
+    return projectOccurrences(rule, startDate, { count: horizon }).map((o) => ({
+      ...template,
+      startDate: o.startDate,
+      deadline: o.deadline,
+    }));
   });
 
   return [...items, ...occurrences].toSorted(
