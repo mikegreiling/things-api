@@ -19,6 +19,8 @@ Reads open the Things database directly, read-only, WAL-aware. Things does **not
 1. **File access to the Things group container.** macOS may gate access to another app's data depending on the host process:
    - If `things` commands fail with a permission error opening the DB (or macOS shows an "…access data from other apps" consent), either click **Allow**, or grant your terminal/host app **Full Disk Access** (System Settings → Privacy & Security → Full Disk Access). One-time, per host app.
    - For SSH-driven use (e.g. a dedicated automation Mac), the grantee is `/usr/libexec/sshd-keygen-wrapper` — add it to Full Disk Access.
+   - **A read that HANGS (rather than errors) means a consent modal is pending** somewhere it can't be seen — the OS blocks the file read synchronously while the prompt is unanswered. Common when driving the CLI from an agent/remote session with nobody at the screen. Approve the modal (Screen Sharing on a headless box) or pre-grant FDA and it never recurs. Field-diagnosed 2026-07-05: metadata (`ls`) succeeds while data reads block; everything outside the protected container reads fine.
+   - **The grant is per host app and persists** — but macOS may re-prompt after the host app UPDATES (the grant is tied to the app bundle). If reads suddenly hang again after months of working, suspect a host-app update and re-approve once. FDA is the set-and-forget alternative.
 2. That's it. Verify with:
    ```sh
    things doctor        # db found, schema fingerprint ok, app installed
