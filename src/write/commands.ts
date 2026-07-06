@@ -243,6 +243,22 @@ function effectiveReminder(
   return target.reminder;
 }
 
+function assertNotesModesExclusive(params: {
+  notes?: string;
+  appendNotes?: string;
+  prependNotes?: string;
+}): void {
+  if (
+    params.notes !== undefined &&
+    (params.appendNotes !== undefined || params.prependNotes !== undefined)
+  ) {
+    throw new RangeError("notes (replace) is exclusive with appendNotes/prependNotes");
+  }
+  if (params.appendNotes !== undefined && params.prependNotes !== undefined) {
+    throw new RangeError("appendNotes and prependNotes cannot be combined in one update");
+  }
+}
+
 function expectedNotes(pre: PreState, params: { appendNotes?: string; prependNotes?: string }) {
   const current = pre.target !== null && pre.target.type !== "heading" ? pre.target.notes : "";
   // Separator semantics probed: newline-joined, no stray newline against an
@@ -260,15 +276,7 @@ const todoUpdate: CommandSpec<"todo.update"> = {
   op: "todo.update",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
   preRead(db, params) {
-    if (
-      params.notes !== undefined &&
-      (params.appendNotes !== undefined || params.prependNotes !== undefined)
-    ) {
-      throw new RangeError("notes (replace) is exclusive with appendNotes/prependNotes");
-    }
-    if (params.appendNotes !== undefined && params.prependNotes !== undefined) {
-      throw new RangeError("appendNotes and prependNotes cannot be combined in one update");
-    }
+    assertNotesModesExclusive(params);
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     return pre;
@@ -533,14 +541,17 @@ const projectUpdate: CommandSpec<"project.update"> = {
   op: "project.update",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
+    assertNotesModesExclusive(params);
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     return pre;
   },
-  expectedDelta(_pre, params, ctx) {
+  expectedDelta(pre, params, ctx) {
     const assert: FieldAssertion[] = [];
     if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
+    const joined = expectedNotes(pre, params);
+    if (joined !== undefined) assert.push({ field: "notes", equals: joined });
     if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
     if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
     return { mode: "update", uuid: params.uuid, assert };
@@ -553,11 +564,92 @@ const projectUpdate: CommandSpec<"project.update"> = {
         id: params.uuid,
         title: params.title,
         notes: params.notes,
+        "append-notes": params.appendNotes,
+        "prepend-notes": params.prependNotes,
         when: params.when,
         deadline: params.deadline === null ? "" : params.deadline,
       },
       ctx.token,
     );
+  },
+};
+
+const projectMove: CommandSpec<"project.move"> = {
+  op: "project.move",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    pre.destArea = resolveArea(db, params.area);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    // Area re-assignment only (E14): status/start/schedule untouched by the
+    // app — the delta pins the new area link.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "area.uuid", equals: pre.destArea?.resolved?.uuid ?? "" }],
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    return osa(
+      `set area of project id ${q(params.uuid)} to area id ` +
+        q(pre.destArea?.resolved?.uuid ?? ""),
+    );
+  },
+};
+
+const todoRestore: CommandSpec<"todo.restore"> = {
+  op: "todo.restore",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // The UI's "Put Back", scripted (E15): the item un-trashes into the
+    // Inbox, de-scheduled. Prior list/schedule are NOT restored.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [
+        { field: "trashed", equals: false },
+        { field: "start", equals: "inbox" },
+      ],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    return osa(`move to do id ${q(params.uuid)} to list "Inbox"`);
+  },
+};
+
+const projectDuplicate: CommandSpec<"project.duplicate"> = {
+  op: "project.duplicate",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // E17: the copy carries the title, notes AND children; discover it with
+    // the create probe (fresh creationDate, same as the to-do path E07).
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    const notes = target !== null && target.type !== "heading" ? target.notes : "";
+    return {
+      mode: "create",
+      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "notes", equals: notes }],
+    };
+  },
+  compile(params, vector, _pre, ctx) {
+    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    return thingsUrl("update-project", { id: params.uuid, duplicate: "true" }, ctx.token);
   },
 };
 
@@ -925,4 +1017,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "todo.duplicate": todoDuplicate,
   "area.update": areaUpdate,
   "tag.update": tagUpdate,
+  "project.move": projectMove,
+  "todo.restore": todoRestore,
+  "project.duplicate": projectDuplicate,
 };

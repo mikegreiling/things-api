@@ -57,6 +57,19 @@ echo "     created project uuid=$PROJ"
 run_step 4 "project complete requires children policy resolution" project complete "$PROJ" --children require-resolved
 run_step 0 "project complete with verified auto-complete cascade" project complete "$PROJ" --children auto-complete
 
+echo "== phase 14b: project move / duplicate / notes modes, todo restore =="
+run_step 0 "project add for tier-2 ops" project add "E2E-T2PROJ" --area LAB-AREA-A --todo "E2E-T2-CHILD"
+T2PROJ=$(json_get "d['data']['uuid']")
+run_step 0 "project move to another area (E14)" project move "$T2PROJ" --area LAB-AREA-B
+run_step 0 "project append-notes (E18, newline-joined)" project update "$T2PROJ" --append-notes "ptail"
+run_step 0 "project prepend-notes (E18)" project update "$T2PROJ" --prepend-notes "phead"
+run_step 0 "project duplicate incl. children (E17, copy discovered)" project duplicate "$T2PROJ"
+run_step 0 "seed to-do for restore" todo add "E2E-RESTOREME" --when today
+REST=$(json_get "d['data']['uuid']")
+run_step 0 "delete it to the Trash" todo delete "$REST"
+run_step 0 "restore from Trash (E15: un-trash, lands in Inbox)" todo restore "$REST"
+run_step 4 "restore requires a TRASHED target (guard)" todo restore "$REST"
+
 echo "== reorder (native experimental + bounce) =="
 run_step 0 "seed today R1" todo add "E2E-R1" --when today
 R1=$(json_get "d['data']['uuid']")
@@ -86,6 +99,14 @@ RP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed project child P2" todo add "E2E-RP2" --project "$RPROJ"
 RP2=$(json_get "d['data']['uuid']")
 run_step 0 "native project reorder (uuid specifier)" reorder --scope project --project "$RPROJ" "$RP2" "$RP1"
+run_step 0 "seed area project AP1" project add "E2E-AP1" --area LAB-AREA-A
+AP1=$(json_get "d['data']['uuid']")
+run_step 0 "seed area project AP2" project add "E2E-AP2" --area LAB-AREA-A
+AP2=$(json_get "d['data']['uuid']")
+run_step 0 "native area reorder of PROJECTS (O14)" reorder --scope area --area LAB-AREA-A "$AP2" "$AP1"
+run_step 0 "seed area to-do for mixed check" todo add "E2E-AT1" --area LAB-AREA-A
+AT1=$(json_get "d['data']['uuid']")
+run_step 4 "mixed to-do+project area reorder is rejected (guard)" reorder --scope area --area LAB-AREA-A "$AT1" "$AP1"
 
 echo "== phase 9b: reminders, notes modes, duplicate, entity updates =="
 run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-REM" --when today --reminder 10:05

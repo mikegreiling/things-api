@@ -44,6 +44,9 @@ const REPEAT_SENSITIVE: OperationKind[] = [
   "todo.move",
   "todo.delete",
   "todo.duplicate", // unvalidated on templates (E07 probed a plain to-do)
+  "todo.restore", // unvalidated on templates (E15 probed a plain to-do)
+  "project.move", // unvalidated on repeating projects (E14 probed a plain project)
+  "project.duplicate", // unvalidated on repeating projects (E17 probed a plain project)
 ];
 
 const GUARDS: Record<HazardId, GuardFn> = {
@@ -130,6 +133,26 @@ const GUARDS: Record<HazardId, GuardFn> = {
       op !== "project.add" &&
       pre.target === null;
     if (needsTarget) problems.push(`no record with uuid ${String(params["uuid"])}`);
+    if (pre.target !== null) {
+      // Type/state preconditions for the Tier-2 ops: the probed commands
+      // address `project id` / trashed `to do id` specifically (E14/E15/E17).
+      if ((op === "project.move" || op === "project.duplicate") && pre.target.type !== "project") {
+        problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a project`);
+      }
+      if (op === "todo.restore") {
+        if (pre.target.type !== "to-do") {
+          problems.push(
+            `target ${String(params["uuid"])} is a ${pre.target.type} — restore is only ` +
+              "validated for to-dos (E15); restore a trashed project via the app",
+          );
+        } else if (!pre.target.trashed) {
+          problems.push(
+            `target ${String(params["uuid"])} is not in the Trash — restore only applies to ` +
+              "trashed to-dos (a live item would just be de-scheduled into the Inbox)",
+          );
+        }
+      }
+    }
     if (problems.length === 0) return null;
     return {
       hazard: "H-UNKNOWN-DESTINATION",
@@ -209,6 +232,12 @@ const GUARDS: Record<HazardId, GuardFn> = {
     }
     if (pre.reorder.duplicates.length > 0) {
       problems.push(`duplicated uuid(s): ${pre.reorder.duplicates.join(", ")}`);
+    }
+    if (pre.reorder.mixedTypes) {
+      problems.push(
+        "mixes to-dos and projects in one area reorder — only same-type area reorders are " +
+          "validated (O05/O10 to-dos, O14 projects); issue two requests instead",
+      );
     }
     for (const r of pre.reorder.rejected) {
       problems.push(`${r.uuid} ${r.reason}`);

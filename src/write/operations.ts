@@ -28,6 +28,9 @@ export const OPERATION_KINDS = [
   "todo.duplicate",
   "area.update",
   "tag.update",
+  "project.move",
+  "todo.restore",
+  "project.duplicate",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -117,8 +120,18 @@ export interface ProjectUpdateParams {
   uuid: string;
   title?: string;
   notes?: string;
+  /** Append to the existing notes (newline-joined; E18). Exclusive with notes/prependNotes. */
+  appendNotes?: string;
+  /** Prepend to the existing notes (newline-joined; E18). Exclusive with notes/appendNotes. */
+  prependNotes?: string;
   when?: WhenValue;
   deadline?: IsoDate | null;
+}
+
+export interface ProjectMoveParams {
+  uuid: string;
+  /** Destination area (uuid or unique name). The only probed project move (E14). */
+  area: ContainerRef;
 }
 
 export interface ProjectCompleteParams {
@@ -213,6 +226,9 @@ export interface OperationParamsMap {
   "todo.duplicate": UuidParams;
   "area.update": AreaUpdateParams;
   "tag.update": TagUpdateParams;
+  "project.move": ProjectMoveParams;
+  "todo.restore": UuidParams;
+  "project.duplicate": UuidParams;
 }
 
 /** Explicit acknowledgements for guarded operations (never defaulted). */

@@ -43,6 +43,12 @@ export interface ReorderPre {
   duplicates: string[];
   /** Requested project-type members (bounce cannot move projects). */
   projectMembers: string[];
+  /**
+   * Area scope only: the request mixes to-do and project members. Same-type
+   * area reorders are validated (O05/O10 to-dos, O14 projects); a mixed wire
+   * list is unprobed, so the guard rejects it.
+   */
+  mixedTypes: boolean;
   /** Full wire list: requested order first, remaining members after. */
   wireList: string[];
 }
@@ -219,7 +225,9 @@ interface MemberRow {
  *             membership expires daily), by todayIndex. Bounce-only (O03).
  *  - project: un-headed open to-do children, by "index" (O04/O09/O11);
  *             headed children are rejected candidates (O06 rips them out).
- *  - area:    direct open area to-dos, by "index" (O05/O10).
+ *  - area:    direct open area to-dos (O05/O10) AND projects (O14), by
+ *             "index" — but only SAME-TYPE requests; mixed wire lists are
+ *             unprobed and the guard rejects them.
  */
 export function computeReorderPre(
   db: DatabaseSync,
@@ -305,7 +313,7 @@ export function computeReorderPre(
     }
     case "area": {
       members = select(
-        "type = 0 AND heading IS NULL AND area = ?",
+        "type IN (0, 1) AND heading IS NULL AND area = ?",
         [containerUuid ?? ""],
         `"index"`,
       );
@@ -335,10 +343,25 @@ export function computeReorderPre(
     if (member.type === 1) projectMembers.push(uuid);
   }
 
+  const requestedTypes = new Set(
+    params.uuids.map((u) => memberSet.get(u)?.type).filter((t) => t !== undefined),
+  );
+  const mixedTypes = params.scope === "area" && requestedTypes.size > 1;
+
+  // Area scope pins ONLY the requested type's cohort: to-dos and projects
+  // rank on "index" independently in the sidebar, and a mixed wire list is
+  // unprobed (O05/O10 vs O14) — same-type extension keeps the send inside
+  // validated territory. Other scopes extend with every member (today's
+  // mixed to-do+project wire list IS validated, O12).
+  const uniformType = params.scope === "area" && requestedTypes.size === 1;
+  const requestedType = [...requestedTypes][0];
   const requested = new Set(params.uuids);
   const wireList = [
     ...params.uuids,
-    ...members.filter((m) => !requested.has(m.uuid)).map((m) => m.uuid),
+    ...members
+      .filter((m) => !requested.has(m.uuid))
+      .filter((m) => !uniformType || m.type === requestedType)
+      .map((m) => m.uuid),
   ];
 
   return {
@@ -353,6 +376,7 @@ export function computeReorderPre(
     rejected,
     duplicates,
     projectMembers,
+    mixedTypes,
     wireList,
   };
 }

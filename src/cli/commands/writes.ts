@@ -485,11 +485,24 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("delete <uuid>")
       .description(
-        "Move a to-do to the Trash (vector: applescript, tier 0; restorable in the app). " +
-          "Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates.",
+        "Move a to-do to the Trash (vector: applescript, tier 0; restorable via " +
+          "`things todo restore`). Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteTodo(uuid, writeOptionsFrom(opts)));
+  });
+
+  addWriteFlags(
+    todo
+      .command("restore <uuid>")
+      .description(
+        "Restore a TRASHED to-do (vector: applescript, tier 0; validated E15 — the UI's " +
+          "'Put Back', scripted). The item un-trashes into the Inbox, DE-SCHEDULED: its prior " +
+          "list/schedule are not restored. Blocked unless the target is a trashed to-do " +
+          "(H-UNKNOWN-DESTINATION); trashed projects must be restored in the app.",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.restoreTodo(uuid, writeOptionsFrom(opts)));
   });
 
   const project = group(program, "project", "Project-scoped operations");
@@ -524,20 +537,39 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     project
       .command("update <uuid>")
-      .description("Update project title/notes/when/deadline (vector: url-scheme, tier 0)."),
+      .description(
+        "Update project title/notes/when/deadline (vector: url-scheme, tier 0). " +
+          "--append-notes/--prepend-notes join with a newline (E18; exclusive with --notes).",
+      ),
   )
     .option("--title <text>", "new title")
     .option("--notes <text>", "replace notes")
+    .option("--append-notes <text>", "append to existing notes (newline-joined)")
+    .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
     .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
     .option("--deadline <date>", "YYYY-MM-DD")
     .option("--clear-deadline", "remove the deadline")
     .action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
+        (k) => opts[k] !== undefined,
+      );
+      if (notesModes.length > 1) {
+        process.stderr.write("error: --notes, --append-notes, --prepend-notes are exclusive\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
       await runWrite(opts, (c) =>
         c.write.updateProject(
           uuid,
           {
             ...(opts["title"] !== undefined && { title: opts["title"] as string }),
             ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+            ...(opts["appendNotes"] !== undefined && {
+              appendNotes: opts["appendNotes"] as string,
+            }),
+            ...(opts["prependNotes"] !== undefined && {
+              prependNotes: opts["prependNotes"] as string,
+            }),
             ...(opts["when"] !== undefined && { when: opts["when"] as never }),
             ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
             ...(opts["clearDeadline"] === true && { deadline: null }),
@@ -546,6 +578,32 @@ export function registerWriteCommands(program: Command): void {
         ),
       );
     });
+
+  addWriteFlags(
+    project
+      .command("move <uuid>")
+      .description(
+        "Move a project to another area (vector: applescript, tier 0; validated E14). " +
+          "Status and schedule are untouched. Hazard: H-UNKNOWN-DESTINATION.",
+      )
+      .requiredOption("--area <ref>", "destination area (uuid or unique name)"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & { area: string }) => {
+    await runWrite(opts, (c) =>
+      c.write.moveProject(uuid, { uuid: opts.area, title: opts.area }, writeOptionsFrom(opts)),
+    );
+  });
+
+  addWriteFlags(
+    project
+      .command("duplicate <uuid>")
+      .description(
+        "Duplicate a project INCLUDING its children (vector: url-scheme, tier 0; validated " +
+          "E17 — update-project?duplicate=true). The copy's uuid is discovered by " +
+          "verification. Hazard: H-REPEAT-SCHEDULE — blocked on repeating projects (unvalidated).",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.duplicateProject(uuid, writeOptionsFrom(opts)));
+  });
 
   addWriteFlags(
     project
@@ -843,7 +901,8 @@ export function registerWriteCommands(program: Command): void {
           "set allow-experimental true`; today/project/area) and bounce (verified when= " +
           `round-trips; today/evening, max ${BOUNCE_MAX_ITEMS} items). Evening is bounce-only: ` +
           "the native command silently de-evenings items (O03). Headed project children are " +
-          "rejected (O06). Hazard: H-REORDER-SCOPE.",
+          "rejected (O06). Area scope reorders to-dos (O05/O10) OR projects (O14) — never " +
+          "mixed in one request. Hazard: H-REORDER-SCOPE.",
       )
       .requiredOption("--scope <scope>", "today | evening | project | area")
       .option("--project <ref>", "project (uuid or unique name) — scope=project")

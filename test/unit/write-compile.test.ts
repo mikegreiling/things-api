@@ -59,6 +59,29 @@ describe("URL compilation goldens", () => {
     expect(inv.payload).toContain("things:///update-project?id=P1&completed=true");
   });
 
+  it("project.duplicate compiles to update-project duplicate=true", () => {
+    const inv = COMMANDS["project.duplicate"].compile(
+      { uuid: "P1" },
+      "url-scheme",
+      emptyPreState(),
+      {
+        token: TOKEN,
+      },
+    );
+    expect(inv.payload).toBe(`things:///update-project?id=P1&duplicate=true&auth-token=${TOKEN}`);
+    expect(inv.redactedPayload).not.toContain(TOKEN);
+  });
+
+  it("project.update compiles append-/prepend-notes (E18)", () => {
+    const inv = COMMANDS["project.update"].compile(
+      { uuid: "P1", appendNotes: "tail note" },
+      "url-scheme",
+      emptyPreState(),
+      { token: null },
+    );
+    expect(inv.payload).toBe("things:///update-project?id=P1&append-notes=tail%20note");
+  });
+
   it("no token → no auth-token parameter at all", () => {
     const inv = COMMANDS["todo.add"].compile({ title: "T" }, "url-scheme", emptyPreState(), {
       token: null,
@@ -99,6 +122,27 @@ describe("AppleScript compilation goldens", () => {
       token: null,
     });
     expect(inv.payload).toBe('tell application "Things3" to set status of to do id "U-2" to open');
+  });
+
+  it("project.move compiles the area setter with uuid specifiers (E14)", () => {
+    const pre = emptyPreState();
+    pre.destArea = { resolved: { uuid: "AREA-9", title: "Work" }, matches: 1 };
+    const inv = COMMANDS["project.move"].compile(
+      { uuid: "P-1", area: { title: "Work" } },
+      "applescript",
+      pre,
+      { token: null },
+    );
+    expect(inv.payload).toBe(
+      'tell application "Things3" to set area of project id "P-1" to area id "AREA-9"',
+    );
+  });
+
+  it("todo.restore compiles move-to-Inbox (E15)", () => {
+    const inv = COMMANDS["todo.restore"].compile({ uuid: "U-9" }, "applescript", emptyPreState(), {
+      token: null,
+    });
+    expect(inv.payload).toBe('tell application "Things3" to move to do id "U-9" to list "Inbox"');
   });
 
   it("trash.empty compiles to the bare command", () => {

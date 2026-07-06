@@ -168,5 +168,34 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--scope <scope>");
     expect(help).toContain("--strategy <name>");
     expect(help).toContain("--dry-run");
+    expect(help).toContain("never mixed");
+  });
+
+  it("todo restore: trashed-only precondition + de-schedule caveat", () => {
+    const help = helpFor("todo", "restore");
+    expect(help).toContain("TRASHED");
+    expect(help).toContain("DE-SCHEDULED");
+    expect(help).toContain("applescript");
+  });
+
+  it("project move: area destination, evidence-scoped", () => {
+    const help = helpFor("project", "move");
+    expect(help).toContain("--area <ref>");
+    expect(help).toContain("applescript");
+    expect(help).toContain("H-UNKNOWN-DESTINATION");
+  });
+
+  it("project duplicate: children included + template block", () => {
+    const help = helpFor("project", "duplicate");
+    expect(help).toContain("INCLUDING its children");
+    expect(help).toContain("url-scheme");
+    expect(help).toContain("H-REPEAT-SCHEDULE");
+  });
+
+  it("project update: notes modes documented", () => {
+    const help = helpFor("project", "update");
+    expect(help).toContain("--append-notes");
+    expect(help).toContain("--prepend-notes");
+    expect(help).toContain("exclusive with --notes");
   });
 });

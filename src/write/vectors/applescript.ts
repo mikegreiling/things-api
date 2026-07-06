@@ -82,6 +82,22 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["A24B"],
     notes: "SHALLOW: only the project row is trashed; children keep links (derived membership)",
   },
+  "project.move": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E14"],
+    notes: "`set area of project id` — area re-assignment; status/schedule untouched",
+  },
+  "todo.restore": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["E15"],
+    notes:
+      '`move <trashed to-do> to list "Inbox"` un-trashes (the UI\'s Put Back) — lands in the ' +
+      "Inbox de-scheduled; to-dos only (project restore is unprobed)",
+  },
   "area.add": { support: "yes", disruption: 0, validation: "validated", evidence: ["A03"] },
   "area.update": {
     support: "yes",
@@ -123,11 +139,12 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "partial",
     disruption: 0,
     validation: "validated",
-    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12"],
+    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12", "O14"],
     experimental: true,
     notes:
       "`_private_experimental_ reorder to dos in` — today (bucket-0 members), project/area " +
-      "(un-headed children only, O06); evening is bounce-only (O03 de-evenings bucket-1 members)",
+      "(un-headed children only, O06); area also reorders PROJECTS (O14, same-type requests " +
+      "only); evening is bounce-only (O03 de-evenings bucket-1 members)",
   },
 };
 
