@@ -210,6 +210,14 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("undo:<actor>");
   });
 
+  it("mcp: stdio server + client-config recipe documented", () => {
+    const help = helpFor("mcp");
+    expect(help).toContain("stdio");
+    expect(help).toContain("Model Context Protocol");
+    expect(help).toContain('args ["mcp"]');
+    expect(help).toContain("run_operation");
+  });
+
   it("project update: notes modes documented", () => {
     const help = helpFor("project", "update");
     expect(help).toContain("--append-notes");

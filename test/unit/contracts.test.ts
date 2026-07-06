@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ExitCode } from "../../src/cli/exit-codes.ts";
-import { API_VERSION, errorEnvelope, okEnvelope } from "../../src/cli/output.ts";
+import { API_VERSION, errorEnvelope, ExitCode, okEnvelope } from "../../src/contracts.ts";
 
 describe("exit-code contract", () => {
   it("never renumbers published codes", () => {

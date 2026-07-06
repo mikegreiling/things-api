@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **MCP server** (Phase 17): `things mcp` serves the Model Context Protocol over stdio — 16 tools mirroring the library surface (read views incl. occurrence horizon, search, changes, item/project detail, verified mutations via dedicated tools + generic `run_operation`, batch, reorder, undo, capabilities, doctor). Hazard blocks return as structured tool errors with remediation. Exposed from the library as `createThingsMcpServer()`.
+- **Seam hygiene**: machine contracts (JSON envelope, exit codes) moved from `src/cli/` into core (`contracts.ts`); `diagnose()` and `capabilitiesTable()` promoted to library functions (the CLI `doctor`/`capabilities` commands are now thin renderers); `saveConfigKey` and the batch/undo/reorder/view option types exported from the package index.
+
 ## 0.2.0 — 2026-07-06
 
 Everything in this release is grounded in lab evidence (probe ids cite the suites under [docs/lab/](docs/lab/)); reads were additionally reconciled against the live UI.
