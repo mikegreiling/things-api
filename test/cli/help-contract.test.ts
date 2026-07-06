@@ -192,6 +192,14 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("H-REPEAT-SCHEDULE");
   });
 
+  it("upcoming: horizon projections documented as unmaterialized host math", () => {
+    const help = helpFor("upcoming");
+    expect(help).toContain("--horizon <n>");
+    expect(help).toContain("PROJECTS");
+    expect(help).toContain("fixed rules only");
+    expect(help).toContain("--tag <ref>");
+  });
+
   it("undo: audit-replay contract — inverse pipeline, irreversibles, permanent gate", () => {
     const help = helpFor("undo");
     expect(help).toContain("INVERSE");

@@ -137,16 +137,6 @@ export function registerReadCommands(program: Command): void {
           : items.map((i) => `${isTodayMember(i) ? "★" : " "} ${formatItem(i)}`),
     },
     {
-      name: "upcoming",
-      description:
-        "Future-scheduled items in date order, INCLUDING each repeating item's next " +
-        "occurrence (↻ marker; deadline derived from the repeat rule)",
-      fetch: (c, tag, exactTag) =>
-        c.read.upcoming(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
-    },
-    {
       name: "someday",
       description: "Someday items (incubated, undated)",
       fetch: (c, tag, exactTag) =>
@@ -176,6 +166,37 @@ export function registerReadCommands(program: Command): void {
         );
       });
   }
+
+  program
+    .command("upcoming")
+    .description(
+      "Future-scheduled items in date order, INCLUDING each repeating item's next " +
+        "occurrence (↻ marker; deadline derived from the repeat rule). --horizon <n> also " +
+        "PROJECTS the following n-1 occurrences per repeating item from its decoded rule " +
+        "(fixed rules only, max 10) — projections are host math the app has not " +
+        "materialized yet.",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((opts: GlobalReadOpts & { tag?: string; exactTag?: boolean; horizon?: string }) => {
+      withClient(
+        opts,
+        "upcoming",
+        (c) =>
+          c.read.upcoming({
+            ...(opts.tag !== undefined && { tag: opts.tag }),
+            ...(opts.exactTag === true && { exactTag: true }),
+            ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
+          }),
+        renderList as (d: never) => string[],
+      );
+    });
 
   for (const cmd of [
     {
