@@ -83,5 +83,6 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 6. **Phase 12 (DONE 2026-07-05)** — search ergonomics (open+untrashed default, scoping flags, `--exact-tag`), tag-hierarchy descendants on `--tag`, dated reminders, template-duplication verdict (E13: DISPROVEN).
 7. **Phase 13 (DONE 2026-07-06)** — `things batch` (JSONL through the full pipeline) + `things changes --since` (userModificationDate scan).
 8. **Phase 14 (DONE 2026-07-06)** — Tier-2 probe campaign (E14–E19, O13–O14) + ops: project move/duplicate, todo restore, project notes modes, area-scope project reorder; dead ends locked (convert, tag un-nest, sidebar area order). Tasks #32–#33.
+9. **Phase 15 (DONE 2026-07-06)** — `things undo [--last N]`: inverse mutations replayed from the audit trail's pre-values (status flips, field restores, delete→restore via E15, tag/checklist sets, native-reorder rank restore). Every inverse runs the full guarded+verified pipeline; irreversible ops (permanent deletes, project complete/delete, uncaptured pre-state) are reported honestly, never guessed. Task #34.
 
 Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes; to-do↔project conversion; tag un-nest to root; sidebar area ordering.

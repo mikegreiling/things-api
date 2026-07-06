@@ -138,6 +138,17 @@ if ! json_get "len([i for i in d['data'] if i['title'].startswith('E2E-B')])" | 
   FAILURES=$((FAILURES + 1))
 fi
 
+echo "== undo (Phase 15: audit replay) =="
+run_step 0 "seed to-do for undo" todo add "E2E-UNDOME" --when today
+UNDO1=$(json_get "d['data']['uuid']")
+run_step 0 "complete it" todo complete "$UNDO1"
+run_step 0 "undo reopens it (inverse verified)" undo
+run_step 0 "it IS open again (completing works)" todo complete "$UNDO1"
+run_step 0 "undo dry-run plans without executing" undo --dry-run
+run_step 0 "undo the re-completion" undo
+run_step 0 "delete it to the Trash" todo delete "$UNDO1"
+run_step 0 "undo restores it from the Trash (E15 inverse)" undo
+
 echo "== deletes =="
 run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
 run_step 0 "area add (applescript)" area add "E2E-AREA"

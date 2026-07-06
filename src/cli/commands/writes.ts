@@ -20,6 +20,7 @@ import {
 import type { WriteOptions } from "../../write/pipeline.ts";
 import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
 import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
+import type { UndoItemResult } from "../../write/undo.ts";
 import { defaultVectors } from "../../write/vectors/registry.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
 import { ExitCode } from "../exit-codes.ts";
@@ -886,6 +887,68 @@ export function registerWriteCommands(program: Command): void {
             : failed.length > 0
               ? ExitCode.VerifyFailed
               : ExitCode.Ok;
+      } finally {
+        client?.close();
+      }
+    });
+
+  program
+    .command("undo")
+    .description(
+      "Undo the last N successful mutations by replaying INVERSE ops from the audit trail " +
+        "(newest first). Each inverse runs the full pipeline: guards, verified " +
+        "read-after-write, audit (as actor `undo:<actor>` — never itself an undo target). " +
+        "IRREVERSIBLE ops are reported, not guessed: permanent deletes, project " +
+        "complete/delete, ops whose pre-state was not captured. Partial restores carry " +
+        "notes (e.g. a delete-undo lands in the Inbox de-scheduled). --dry-run shows every " +
+        "inverse plan without executing. Undoing a CREATED area/tag deletes it permanently " +
+        "— requires --dangerously-permanent. Unwinding stops at the first failed inverse. " +
+        "Exit: 0 all ok · 3 any failed/partial · 0 with per-item detail otherwise.",
+    )
+    .option("--last <n>", "how many trailing mutations to undo", "1")
+    .option("--dry-run", "show the inverse plans; execute nothing")
+    .option("--dangerously-permanent", "allow inverses that delete areas/tags permanently")
+    .option("--json", "JSONL per-item results + summary on stdout (also the default)")
+    .option("--db <path>", "explicit database path")
+    .option("--verify-timeout <ms>", "read-after-write verification deadline per inverse op")
+    .option("--actor <name>", "audit attribution (recorded as undo:<name>)")
+    .action(async (opts: WriteFlagOpts & Record<string, unknown>) => {
+      let client: ThingsClient | null = null;
+      try {
+        client = openThings(opts.db ? { dbPath: opts.db } : {});
+        const items = await client.write.undo(
+          {
+            last: Number(opts["last"] ?? 1),
+            ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
+            ...(opts["dangerouslyPermanent"] === true && { dangerouslyPermanent: true }),
+            ...(opts.verifyTimeout !== undefined && {
+              verifyTimeoutMs: Number(opts.verifyTimeout),
+            }),
+            ...(opts.actor !== undefined && { actor: opts.actor }),
+          },
+          (item: UndoItemResult) => {
+            process.stdout.write(`${JSON.stringify(item)}\n`);
+          },
+        );
+        const summary = {
+          summary: {
+            targets: items.length,
+            ok: items.filter((i) => i.outcome === "ok").length,
+            irreversible: items.filter((i) => i.outcome === "irreversible").length,
+            failed: items.filter((i) => i.outcome === "failed" || i.outcome === "partial").length,
+            dryRun: items.filter((i) => i.outcome === "dry-run").length,
+          },
+        };
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+        process.exitCode =
+          summary.summary.failed > 0
+            ? ExitCode.VerifyFailed
+            : items.length === 0
+              ? ExitCode.Usage
+              : ExitCode.Ok;
+        if (items.length === 0) {
+          process.stderr.write("error: no undoable mutations found in the audit trail\n");
+        }
       } finally {
         client?.close();
       }
