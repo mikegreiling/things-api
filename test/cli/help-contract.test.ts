@@ -121,6 +121,14 @@ describe("write-command help states the contract", () => {
     expect(tagHelp).toContain("unprobed");
   });
 
+  it("list views + search expose --exact-tag alongside --tag", () => {
+    for (const name of ["today", "inbox", "search", "logbook"]) {
+      const help = helpFor(name);
+      expect(help).toContain("--exact-tag");
+      expect(help).toContain("exclude hierarchy descendants");
+    }
+  });
+
   it("search: open-by-default scope, widening flags, scoping flags", () => {
     const help = helpFor("search");
     expect(help).toContain("OPEN + untrashed");

@@ -86,7 +86,7 @@ export interface ThingsClient {
     anytime(filter?: ViewFilter): ListItem[];
     upcoming(filter?: UpcomingFilter): ListItem[];
     someday(filter?: ViewFilter): ListItem[];
-    logbook(options?: { limit?: number; tag?: string }): ListItem[];
+    logbook(options?: { limit?: number; tag?: string; exactTag?: boolean }): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
     projectView(uuid: string): ProjectView;

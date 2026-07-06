@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli/main.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedTodo } from "../fixtures/seed.ts";
+import { seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
 
 let fx: FixtureDb | null = null;
 afterEach(() => {
@@ -117,5 +117,24 @@ describe("cli search (Phase 12 ergonomics)", () => {
     const bad = runCli(["search", "alpha", "--tag", "nope", "--json", "--db", fx.path]);
     expect(bad.exitCode).not.toBe(0);
     expect(JSON.parse(bad.stdout).error.message).toMatch(/tag not found/);
+  });
+});
+
+describe("cli --exact-tag (Phase 12c)", () => {
+  it("inbox --tag works (12a regression) and --exact-tag narrows", () => {
+    fx = buildFixtureDb();
+    const parent = seedTag(fx.db, "ctx");
+    const child = seedTag(fx.db, "ctx-child", parent);
+    const a = seedTodo(fx.db, { title: "inbox-parent", start: "inbox" });
+    tagTask(fx.db, a, parent);
+    const b = seedTodo(fx.db, { title: "inbox-child", start: "inbox" });
+    tagTask(fx.db, b, child);
+
+    const both = runCli(["inbox", "--tag", "ctx", "--json", "--db", fx.path]);
+    expect(JSON.parse(both.stdout).data).toHaveLength(2);
+    const exact = runCli(["inbox", "--tag", "ctx", "--exact-tag", "--json", "--db", fx.path]);
+    expect(JSON.parse(exact.stdout).data.map((i: { title: string }) => i.title)).toEqual([
+      "inbox-parent",
+    ]);
   });
 });

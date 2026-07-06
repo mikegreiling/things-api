@@ -426,3 +426,38 @@ describe("tag descendant closure safety", () => {
     expect(view.today.map((i) => i.title)).toEqual(["cycled"]);
   });
 });
+
+describe("exact-tag filtering (Phase 12c)", () => {
+  it("exactTag matches the named tag only, excluding descendants", () => {
+    fx = buildFixtureDb();
+    const parent = seedTag(fx.db, "errands");
+    const child = seedTag(fx.db, "groceries", parent);
+    const direct = seedTodo(fx.db, { title: "direct", startDate: "2026-07-02" });
+    tagTask(fx.db, direct, parent);
+    const viaChild = seedTodo(fx.db, { title: "via-child", startDate: "2026-07-02" });
+    tagTask(fx.db, viaChild, child);
+
+    expect(
+      todayView(fx.db, NOW, { tag: "errands", exactTag: true }).today.map((i) => i.title),
+    ).toEqual(["direct"]);
+    // Default (descendants) still matches both.
+    expect(
+      todayView(fx.db, NOW, { tag: "errands" })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["direct", "via-child"]);
+    // exactTag still honors area/project INHERITANCE (orthogonal dimension).
+    const area = seedArea(fx.db, "Work");
+    tagArea(fx.db, area, parent);
+    seedTodo(fx.db, { title: "via-area", area, startDate: "2026-07-02" });
+    expect(
+      todayView(fx.db, NOW, { tag: "errands", exactTag: true })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["direct", "via-area"]);
+    // And search takes it through SearchOptions.
+    expect(
+      searchView(fx.db, "via", { tag: "errands", exactTag: true }).map((i) => i.title),
+    ).toEqual(["via-area"]);
+  });
+});
