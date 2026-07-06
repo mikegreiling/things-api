@@ -1,6 +1,6 @@
 {
   "suite": "p",
-  "description": "Gap-closure campaign (Phase 18, 2026-07-06): project cancel/reopen + cascade semantics and stopDate timing (undo heuristic), trashed-project restore candidates, project/to-do area removal, container-clear + schedule/deadline survival, empty tag/checklist replacement, parent-tag deletion orphan behavior, top-level project ordering, and the json checklist-states unlock (hazard-quarantined). Expectations are DISCOVERY GUESSES until the first run locks them.",
+  "description": "Gap-closure campaign (Phase 18, 2026-07-06): project cancel/reopen + cascade semantics and stopDate timing (undo heuristic), trashed-project restore candidates, project/to-do area removal, container-clear + schedule/deadline survival, empty tag/checklist replacement, parent-tag deletion orphan behavior, top-level project ordering, and the json checklist-states unlock (hazard-quarantined). Expectations are DISCOVERY GUESSES until the first run locks them. EXTENDED 2026-07-06b: sidebar-order read oracle, ephemeral-area chain, URL empty list-id/area-id container clears, update-project?area-id move, AppleScript empty-string nil, json-null container clears (hazard).",
   "probes": [
     {
       "id": "P01",
@@ -59,10 +59,7 @@
             "where": {
               "title": "P-CN-DONE"
             },
-            "fields": [
-              "status",
-              "stopDate"
-            ]
+            "fields": ["status", "stopDate"]
           }
         ]
       }
@@ -235,10 +232,7 @@
             "where": {
               "title": "P-PL-OLD"
             },
-            "fields": [
-              "status",
-              "stopDate"
-            ]
+            "fields": ["status", "stopDate"]
           },
           {
             "kind": "fieldEquals",
@@ -354,10 +348,7 @@
             "where": {
               "title": "P-RESTORE"
             },
-            "fields": [
-              "status",
-              "type"
-            ]
+            "fields": ["status", "type"]
           }
         ],
         "allowNonzeroExit": true
@@ -450,9 +441,7 @@
             "where": {
               "title": "P-NOAREA"
             },
-            "fields": [
-              "area"
-            ]
+            "fields": ["area"]
           }
         ],
         "allowNonzeroExit": true
@@ -460,7 +449,7 @@
     },
     {
       "id": "P09",
-      "title": "does `move project ... to list \"Anytime\"` clear an UNTRASHED project's area? (candidate one-step area removal)",
+      "title": "does `move project ... to list \"Anytime\"` clear an UNTRASHED project's area? NO \u2014 complete silent no-op (zero delta); project area removal is DEAD (with P08)",
       "vector": "applescript",
       "operation": "project.area-via-list-move",
       "appState": "running-background",
@@ -481,28 +470,16 @@
         }
       ],
       "expect": {
-        "verdict": "supported",
+        "verdict": "silent-noop",
         "tier": 0,
         "assertions": [
-          {
-            "kind": "fieldEquals",
-            "table": "TMTask",
-            "where": {
-              "title": "P-LISTAREA"
-            },
-            "field": "area",
-            "value": null
-          },
           {
             "kind": "fieldUnchanged",
             "table": "TMTask",
             "where": {
               "title": "P-LISTAREA"
             },
-            "fields": [
-              "status",
-              "trashed"
-            ]
+            "fields": ["area", "status", "trashed", "start"]
           }
         ],
         "allowNonzeroExit": true
@@ -540,9 +517,7 @@
             "where": {
               "title": "P-TD-NOPRJ"
             },
-            "fields": [
-              "project"
-            ]
+            "fields": ["project"]
           }
         ],
         "allowNonzeroExit": true
@@ -580,9 +555,7 @@
             "where": {
               "title": "P-TD-NOAREA"
             },
-            "fields": [
-              "area"
-            ]
+            "fields": ["area"]
           }
         ],
         "allowNonzeroExit": true
@@ -639,9 +612,7 @@
             "where": {
               "title": "P-TD-ANY"
             },
-            "fields": [
-              "area"
-            ]
+            "fields": ["area"]
           }
         ]
       }
@@ -697,9 +668,7 @@
             "where": {
               "title": "P-TD-DLBNC"
             },
-            "fields": [
-              "deadline"
-            ]
+            "fields": ["deadline"]
           }
         ]
       }
@@ -782,7 +751,7 @@
     },
     {
       "id": "P16",
-      "title": "delete a PARENT tag: do child tags cascade-delete, dangle, or promote to root? (unlocks the atomic un-nest composite)",
+      "title": "delete a PARENT tag: the child tag is CASCADE-DELETED with it (subtree destruction \u2014 un-nest-via-scratch-parent is dead; tag.delete needs a children hazard)",
       "vector": "applescript",
       "operation": "tag.parent-delete-orphan",
       "appState": "running-background",
@@ -821,20 +790,11 @@
             }
           },
           {
-            "kind": "rowExists",
+            "kind": "rowAbsent",
             "table": "TMTag",
             "where": {
               "title": "P-TAG-CHILD"
             }
-          },
-          {
-            "kind": "fieldEquals",
-            "table": "TMTag",
-            "where": {
-              "title": "P-TAG-CHILD"
-            },
-            "field": "parent",
-            "value": null
           }
         ]
       }
@@ -877,11 +837,7 @@
             "where": {
               "title": "P-TOP-1"
             },
-            "fields": [
-              "area",
-              "type",
-              "status"
-            ]
+            "fields": ["area", "type", "status"]
           },
           {
             "kind": "fieldUnchanged",
@@ -889,11 +845,7 @@
             "where": {
               "title": "P-TOP-2"
             },
-            "fields": [
-              "area",
-              "type",
-              "status"
-            ]
+            "fields": ["area", "type", "status"]
           }
         ],
         "allowNonzeroExit": true
@@ -949,6 +901,424 @@
         ]
       },
       "group": "hazard",
+      "settleSeconds": 3
+    },
+    {
+      "id": "P19",
+      "title": "top-level project order: new projects FRONT-INSERT on \"index\", but AppleScript `projects` enumeration is NOT sidebar-ordered (internal order) \u2014 index sort stays the provisional read of sidebar order",
+      "vector": "applescript",
+      "operation": "order.topless-read-oracle",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-ORD-1"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-ORD-1' AND type=1"
+        },
+        {
+          "openUrl": "things:///add-project?title=P-ORD-2"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='P-ORD-2' AND type=1"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to get name of projects"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='P-ORD-2') < (SELECT \"index\" FROM TMTask WHERE title='P-ORD-1')",
+          "timeoutSeconds": 6
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-ORD-1"
+            },
+            "fields": ["type", "status", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P20",
+      "title": "deleting an AREA does NOT trash contained projects \u2014 the project survives with area=NULL (only to-dos are trashed on area delete, A25); ephemeral-area chain works but is superseded by the one-step P24 clear",
+      "vector": "applescript",
+      "operation": "project.area-via-ephemeral-delete",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new area with properties {name:\"P-SCRATCH-AREA\"}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMArea WHERE title='P-SCRATCH-AREA'"
+        },
+        {
+          "openUrl": "things:///add-project?title=P-EPHEM&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-EPHEM' AND area IS NOT NULL"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set area of project id \"{uuid:P-EPHEM}\" to area \"P-SCRATCH-AREA\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='P-EPHEM' AND a.title='P-SCRATCH-AREA'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to delete area \"P-SCRATCH-AREA\""
+        },
+        {
+          "sleep": 3
+        },
+        {
+          "osascript": "tell application \"Things3\" to move project id \"{uuid:P-EPHEM}\" to list \"Anytime\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "rowAbsent",
+            "table": "TMArea",
+            "where": {
+              "title": "P-SCRATCH-AREA"
+            }
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-EPHEM"
+            },
+            "field": "trashed",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-EPHEM"
+            },
+            "field": "area",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "P21",
+      "title": "clear a to-do's AREA via update?list-id= (empty \u2014 the pattern that clears tags/checklists, P14/P15)",
+      "vector": "url",
+      "operation": "todo.container-empty-clear-area",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-TD-LISTCLR&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-LISTCLR' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:P-TD-LISTCLR}&auth-token={ctx:token}&list-id="
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-LISTCLR"
+            },
+            "field": "area",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-LISTCLR"
+            },
+            "fields": ["status", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P22",
+      "title": "clear a to-do's PROJECT via update?list-id= (empty)",
+      "vector": "url",
+      "operation": "todo.container-empty-clear-project",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-LC-PARENT&to-dos=P-TD-LISTCLR2"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-TD-LISTCLR2' AND project IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:P-TD-LISTCLR2}&auth-token={ctx:token}&list-id="
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-LISTCLR2"
+            },
+            "field": "project",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-TD-LISTCLR2"
+            },
+            "fields": ["status", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P23",
+      "title": "URL project move: update-project?area-id=<uuid> (never probed; would give project.move a tier-0 URL vector)",
+      "vector": "url",
+      "operation": "project.move-url",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-URLMV&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-URLMV' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-URLMV}&auth-token={ctx:token}&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-URLMV' AND area='{seed:LAB-AREA-B}'",
+          "timeoutSeconds": 8
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-URLMV"
+            },
+            "field": "area",
+            "value": "@seed:LAB-AREA-B"
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-URLMV"
+            },
+            "fields": ["status", "trashed", "type"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P24",
+      "title": "clear a project's AREA via update-project?area-id= (empty \u2014 THE one-step area-removal candidate)",
+      "vector": "url",
+      "operation": "project.area-empty-clear",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-URLCLR&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-URLCLR' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:P-URLCLR}&auth-token={ctx:token}&area-id="
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "P-URLCLR"
+            },
+            "field": "area",
+            "value": null
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-URLCLR"
+            },
+            "fields": ["status", "trashed"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P27",
+      "title": "AppleScript empty-string as nil: `set area of project ... to \"\"` (missing value already rejected, P08)",
+      "vector": "applescript",
+      "operation": "project.area-empty-string",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-EMPTYSTR&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-EMPTYSTR' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set area of project id \"{uuid:P-EMPTYSTR}\" to \"\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-EMPTYSTR"
+            },
+            "fields": ["area"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P25",
+      "title": "json NULL: project update {\"area-id\": null} \u2014 complete silent no-op (zero delta)",
+      "vector": "url",
+      "operation": "project.json-null-area",
+      "appState": "running-background",
+      "group": "hazard",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=P-JSON-PRJCLR&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-JSON-PRJCLR' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:P-JSON-PRJCLR}%22%2C%22attributes%22%3A%7B%22area-id%22%3Anull%7D%7D%5D"
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "silent-noop",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-JSON-PRJCLR"
+            },
+            "fields": ["area", "status", "trashed", "startDate"]
+          }
+        ]
+      },
+      "settleSeconds": 3
+    },
+    {
+      "id": "P26",
+      "title": "json NULL: to-do update {\"list-id\": null} \u2014 complete silent no-op (zero delta)",
+      "vector": "url",
+      "operation": "todo.json-null-container",
+      "appState": "running-background",
+      "group": "hazard",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=P-JSON-TDCLR&when=2026-07-09&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='P-JSON-TDCLR' AND area IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:P-JSON-TDCLR}%22%2C%22attributes%22%3A%7B%22list-id%22%3Anull%7D%7D%5D"
+        },
+        {
+          "sleep": 3
+        }
+      ],
+      "expect": {
+        "verdict": "silent-noop",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "P-JSON-TDCLR"
+            },
+            "fields": ["area", "status", "trashed", "startDate"]
+          }
+        ]
+      },
       "settleSeconds": 3
     }
   ]
