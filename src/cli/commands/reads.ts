@@ -93,14 +93,17 @@ export function registerReadCommands(program: Command): void {
   const listCommands: Array<{
     name: string;
     description: string;
-    fetch: (client: ThingsClient, tag?: string) => unknown;
+    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => unknown;
     render?: (data: never) => string[];
   }> = [
     {
       name: "today",
       description:
         "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
-      fetch: (c, tag) => c.read.today(tag === undefined ? undefined : { tag }),
+      fetch: (c, tag, exactTag) =>
+        c.read.today(
+          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
+        ),
       render: (data: {
         today: ListItem[];
         evening: ListItem[];
@@ -112,12 +115,22 @@ export function registerReadCommands(program: Command): void {
         ...renderList(data.evening),
       ],
     },
-    { name: "inbox", description: "Unprocessed captures (Inbox)", fetch: (c) => c.read.inbox() },
+    {
+      name: "inbox",
+      description: "Unprocessed captures (Inbox)",
+      fetch: (c, tag, exactTag) =>
+        c.read.inbox(
+          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
+        ),
+    },
     {
       name: "anytime",
       description:
         "All active items, mirroring the UI: Today members are starred (★), unscheduled items are not",
-      fetch: (c, tag) => c.read.anytime(tag === undefined ? undefined : { tag }),
+      fetch: (c, tag, exactTag) =>
+        c.read.anytime(
+          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
+        ),
       render: (items: ListItem[]) =>
         items.length === 0
           ? ["(empty)"]
@@ -128,12 +141,18 @@ export function registerReadCommands(program: Command): void {
       description:
         "Future-scheduled items in date order, INCLUDING each repeating item's next " +
         "occurrence (↻ marker; deadline derived from the repeat rule)",
-      fetch: (c, tag) => c.read.upcoming(tag === undefined ? undefined : { tag }),
+      fetch: (c, tag, exactTag) =>
+        c.read.upcoming(
+          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
+        ),
     },
     {
       name: "someday",
       description: "Someday items (incubated, undated)",
-      fetch: (c, tag) => c.read.someday(tag === undefined ? undefined : { tag }),
+      fetch: (c, tag, exactTag) =>
+        c.read.someday(
+          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
+        ),
     },
   ];
 
@@ -143,15 +162,16 @@ export function registerReadCommands(program: Command): void {
       .description(cmd.description)
       .option(
         "--tag <ref>",
-        "filter by tag (uuid or unique name), direct OR inherited (UI semantics)",
+        "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
       )
+      .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
       .option("--json", "emit versioned JSON envelope on stdout")
       .option("--db <path>", "explicit database path")
-      .action((opts: GlobalReadOpts & { tag?: string }) => {
+      .action((opts: GlobalReadOpts & { tag?: string; exactTag?: boolean }) => {
         withClient(
           opts,
           cmd.name,
-          (c) => cmd.fetch(c, opts.tag),
+          (c) => cmd.fetch(c, opts.tag, opts.exactTag),
           (cmd.render ?? renderList) as (d: never) => string[],
         );
       });
@@ -161,14 +181,19 @@ export function registerReadCommands(program: Command): void {
     {
       name: "logbook",
       description: "Completed and canceled items, most recent first",
-      fetch: (c: ThingsClient, limit: number, tag?: string) =>
-        c.read.logbook({ limit, ...(tag !== undefined && { tag }) }),
+      fetch: (c: ThingsClient, limit: number, tag?: string, exactTag?: boolean) =>
+        c.read.logbook({
+          limit,
+          ...(tag !== undefined && { tag }),
+          ...(exactTag === true && { exactTag }),
+        }),
       defaultLimit: 100,
     },
     {
       name: "trash",
       description: "Trashed items (trashed=1 flag, any status), most recently modified first",
-      fetch: (c: ThingsClient, limit: number, _tag?: string) => c.read.trash({ limit }),
+      fetch: (c: ThingsClient, limit: number, _tag?: string, _exactTag?: boolean) =>
+        c.read.trash({ limit }),
       defaultLimit: 200,
     },
   ]) {
@@ -180,13 +205,14 @@ export function registerReadCommands(program: Command): void {
         "--tag <ref>",
         "filter by tag (uuid or unique name), direct OR inherited — logbook only",
       )
+      .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
       .option("--json", "emit versioned JSON envelope on stdout")
       .option("--db <path>", "explicit database path")
-      .action((opts: GlobalReadOpts & { limit: string; tag?: string }) => {
+      .action((opts: GlobalReadOpts & { limit: string; tag?: string; exactTag?: boolean }) => {
         withClient(
           opts,
           cmd.name,
-          (c) => cmd.fetch(c, Number(opts.limit), opts.tag),
+          (c) => cmd.fetch(c, Number(opts.limit), opts.tag, opts.exactTag),
           renderList as (d: never) => string[],
         );
       });
@@ -245,6 +271,7 @@ export function registerReadCommands(program: Command): void {
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
     .option("--tag <ref>", "restrict by tag: direct, inherited, or descendant-tagged")
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
     .option("--trashed", "include trashed items")
@@ -268,6 +295,7 @@ export function registerReadCommands(program: Command): void {
             ...(opts["project"] !== undefined && { project: opts["project"] as string }),
             ...(opts["area"] !== undefined && { area: opts["area"] as string }),
             ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
+            ...(opts["exactTag"] === true && { exactTag: true }),
             ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
             ...(opts["logged"] === true && { logged: true }),
             ...(opts["trashed"] === true && { trashed: true }),

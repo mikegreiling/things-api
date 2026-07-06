@@ -67,6 +67,11 @@ export interface ViewFilter {
    * child-tagged items; not lab-oracled).
    */
   tag?: string;
+  /**
+   * Match the given tag ONLY — no hierarchy descendants. Useful when a
+   * parent tag has its own direct assignments distinct from its children's.
+   */
+  exactTag?: boolean;
 }
 
 function tagFilter(
@@ -74,7 +79,8 @@ function tagFilter(
   filter: ViewFilter | undefined,
 ): { sql: string; binds: string[] } {
   if (filter?.tag === undefined) return { sql: "", binds: [] };
-  const uuids = tagWithDescendants(db, resolveTagUuid(db, filter.tag));
+  const target = resolveTagUuid(db, filter.tag);
+  const uuids = filter.exactTag === true ? [target] : tagWithDescendants(db, target);
   return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
 }
 
