@@ -1,22 +1,21 @@
 #!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 /**
- * `things` — CLI over the things-api library.
- *
- * Phase 0 scaffold: command surface lands in Phase 1 (reads) and Phase 5
- * (writes). Contracts that already bind: exit codes (./exit-codes.ts) and
- * the --json envelope (./output.ts).
+ * `things` — CLI over the things-api library. A thin surface: every command
+ * routes through ThingsClient (or core functions like diagnose/capabilities);
+ * contracts that bind are the exit codes and --json envelope (../contracts.ts).
  */
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
 import { registerDoctor } from "./commands/doctor.ts";
+import { registerMcp } from "./commands/mcp.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
-import { ExitCode } from "./exit-codes.ts";
+import { ExitCode } from "../contracts.ts";
 
 const AGENT_NOTES = `
 AGENT NOTES:
@@ -45,6 +44,7 @@ export function buildProgram(): Command {
   registerTodoCommands(program);
   registerWriteCommands(program);
   registerSnapshot(program);
+  registerMcp(program);
   return program;
 }
 

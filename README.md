@@ -50,3 +50,17 @@ things undo                                    # execute it — verified like an
 ```
 
 Failure modes are first-class: a `verify-failed:silent-noop` means the app accepted the command and did nothing (a real Things behavior the guards mostly prevent — see [docs/things-app-oddities.md](docs/things-app-oddities.md)); `blocked:*` responses include machine-readable remediation.
+
+## Architecture: one library, thin surfaces
+
+The TypeScript library (`import { openThings } from "things-api"`) is the product; the CLI and the MCP server are thin presentation layers over the same `ThingsClient` — every read view and every verified mutation is a client method first. Shared machine contracts (JSON envelope, exit codes) live in the core (`contracts.ts`), and `diagnose()` / `capabilitiesTable()` are library functions the surfaces merely render.
+
+### MCP server
+
+`things mcp` serves the Model Context Protocol over stdio. Configure it in any MCP client:
+
+```json
+{ "mcpServers": { "things": { "command": "things", "args": ["mcp"] } } }
+```
+
+Tools mirror the client surface: `read_view` (today/inbox/anytime/upcoming with occurrence horizon/someday/logbook/trash), `search`, `changes_since`, `get_item`, `get_project`, `list_collections`, verified mutations (`add_todo`, `update_todo`, `complete_todo`, `add_project`, generic `run_operation` for the full 25-op catalog), `batch`, `reorder`, `undo`, `capabilities`, and `doctor`. Every write tool takes `dry_run`; hazard blocks come back as structured tool errors carrying the same remediation text the CLI prints.

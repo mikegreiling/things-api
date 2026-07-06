@@ -18,13 +18,13 @@ import {
   type ReorderStrategy,
 } from "../../write/operations.ts";
 import type { WriteOptions } from "../../write/pipeline.ts";
+import { capabilitiesTable } from "../../write/capabilities.ts";
 import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
 import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
 import type { UndoItemResult } from "../../write/undo.ts";
-import { defaultVectors } from "../../write/vectors/registry.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
-import { ExitCode } from "../exit-codes.ts";
-import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../output.ts";
+
+import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
 interface WriteFlagOpts {
   json?: boolean;
@@ -1000,12 +1000,7 @@ export function registerWriteCommands(program: Command): void {
     .option("--op <operation>", "limit to one operation kind")
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((opts: { op?: string; json?: boolean }) => {
-      const vectors = defaultVectors();
-      const ops = opts.op !== undefined ? [opts.op as OperationKind] : [...OPERATION_KINDS];
-      const data = ops.map((op) => ({
-        op,
-        vectors: vectors.map((v) => ({ vector: v.id, ...(v.matrix[op] ?? { support: "no" }) })),
-      }));
+      const data = capabilitiesTable(opts.op as OperationKind | undefined);
       if (opts.json) {
         const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
         process.stdout.write(`${JSON.stringify(okEnvelope("capabilities", data, meta))}\n`);

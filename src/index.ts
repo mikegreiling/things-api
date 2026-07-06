@@ -8,6 +8,17 @@
 
 export { openThings } from "./client.ts";
 export type { OpenOptions, ThingsClient } from "./client.ts";
+export { diagnose } from "./diagnose.ts";
+export type { DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
+export { capabilitiesTable } from "./write/capabilities.ts";
+export type { CapabilityEntry } from "./write/capabilities.ts";
+export { saveConfigKey } from "./config.ts";
+export { createThingsMcpServer } from "./mcp/server.ts";
+export type { McpServerOptions } from "./mcp/server.ts";
+export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
+export type { BatchItemResult, BatchOp, BatchOptions } from "./write/batch.ts";
+export type { ReorderResult } from "./write/reorder.ts";
+export type { SearchOptions, UpcomingFilter, ViewFilter, ChangedItem } from "./read/views.ts";
 
 export type {
   Acknowledgements,
@@ -17,8 +28,14 @@ export type {
   OperationParamsMap,
   ProjectAddParams,
   ProjectCompleteParams,
+  ProjectMoveParams,
   ProjectUpdateParams,
+  ReorderParams,
+  ReorderScope,
+  ReorderStrategy,
   TagAddParams,
+  TagUpdateParams,
+  AreaUpdateParams,
   TodoAddParams,
   TodoMoveParams,
   TodoUpdateParams,
@@ -65,6 +82,5 @@ export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 
-export { API_VERSION } from "./cli/output.ts";
-export type { Envelope, EnvelopeMeta, ErrorEnvelope, OkEnvelope } from "./cli/output.ts";
-export { ExitCode } from "./cli/exit-codes.ts";
+export { API_VERSION, ExitCode } from "./contracts.ts";
+export type { Envelope, EnvelopeMeta, ErrorEnvelope, OkEnvelope } from "./contracts.ts";

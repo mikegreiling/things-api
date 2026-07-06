@@ -8,8 +8,8 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem } from "../../read/views.ts";
-import { ExitCode } from "../exit-codes.ts";
-import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../output.ts";
+
+import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
 interface GlobalReadOpts {
   json?: boolean;
