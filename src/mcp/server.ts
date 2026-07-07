@@ -11,6 +11,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type OpenOptions, type ThingsClient } from "../client.ts";
+import { PKG_VERSION } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
 import { capabilitiesTable } from "../write/capabilities.ts";
 import { OPERATION_KINDS, type OperationKind } from "../write/operations.ts";
@@ -84,7 +85,7 @@ const dryRunShape = {
 const containerRef = (ref: string): { uuid: string; title: string } => ({ uuid: ref, title: ref });
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
-  const server = new McpServer({ name: "things-api", version: "0.2.0" });
+  const server = new McpServer({ name: "things-api", version: PKG_VERSION });
 
   // One lazily-opened client for the server's lifetime; SQLite read
   // snapshots are per-statement, so fresh reads see external commits.

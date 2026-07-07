@@ -1,9 +1,39 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-07-07
 
-- **MCP server** (Phase 17): `things mcp` serves the Model Context Protocol over stdio — 16 tools mirroring the library surface (read views incl. occurrence horizon, search, changes, item/project detail, verified mutations via dedicated tools + generic `run_operation`, batch, reorder, undo, capabilities, doctor). Hazard blocks return as structured tool errors with remediation. Exposed from the library as `createThingsMcpServer()`.
-- **Seam hygiene**: machine contracts (JSON envelope, exit codes) moved from `src/cli/` into core (`contracts.ts`); `diagnose()` and `capabilitiesTable()` promoted to library functions (the CLI `doctor`/`capabilities` commands are now thin renderers); `saveConfigKey` and the batch/undo/reorder/view option types exported from the package index.
+The operation catalog grows from 25 to 28 kinds; every new capability is grounded in the 30-probe P-suite campaign ([docs/lab/p-suite-results.md](docs/lab/p-suite-results.md)).
+
+### MCP server (Phase 17)
+
+- `things mcp` serves the Model Context Protocol over stdio — 16 tools mirroring the library surface (read views incl. occurrence horizon, search, changes, item/project detail, verified mutations via dedicated tools + generic `run_operation`, batch, reorder, undo, capabilities, doctor). Hazard blocks return as structured tool errors carrying the guards' remediation text. Exposed from the library as `createThingsMcpServer()`. The SDK loads lazily — every other CLI command boots with a minimal dependency set.
+- Seam hygiene: machine contracts (JSON envelope, exit codes) moved from `src/cli/` into core (`contracts.ts`); `diagnose()` and `capabilitiesTable()` promoted to library functions (the CLI `doctor`/`capabilities` commands are now thin renderers); `saveConfigKey` and the batch/undo/reorder/view option types exported from the package index.
+
+### Project lifecycle (Phases 18–19)
+
+- `things project cancel --children require-resolved|auto-cancel` — the URL write cascades natively (open children → canceled; completed children untouched, P01); the policy is mandatory and the cascade is verified per child, mirroring `project complete`.
+- `things project reopen [--restore-children]` — reopens completed AND canceled projects (P02/P05). The bare op reopens only the project row (exactly the app's behavior — cascade-resolved children stay resolved); `--restore-children` adds verified per-child reopen legs, detecting cascade-resolved children by the <2s stopDate window (P03). Children resolved before the project are never touched (P04).
+- `things project restore` — un-trashes a project IN PLACE (P06): schedule, area link, and children all keep their state.
+- `undo` now reverses project complete/cancel (audit-exact child restore), project delete, and project restore.
+
+### Container detach (Phases 18–19)
+
+- `things todo move <uuid> --detach` — one write clears project/area/heading while the schedule is pinned unchanged (URL empty `list-id=`, P21/P22).
+- `things project move <uuid> --detach` — clears the area (empty `area-id=`, P24); `project move` also gains a URL vector for regular moves (P23). Detach moves are undo-invertible from the captured prior container.
+
+### Granular checklists (Phases 18–19)
+
+- `things todo checklist` gains `--check/--uncheck/--add [--at N]/--remove/--rename/--to`: reads the current items+states from the DB, applies the edit in memory, and writes back through `things:///json` with per-item completed states (P18) — the only surface that recreates items pre-checked. State-preserving edits skip the H-CHECKLIST-REPLACE acknowledgement (nothing is destroyed). Checklist-item uuids are not stable across rewrites; key on title/position.
+- Empty-set clears validated: `todo tags --set ""` and an empty checklist replacement (P14/P15).
+
+### Tags (Phases 18–19)
+
+- `things tag update --unnest` — un-nests a tag to the root of the hierarchy via AppleScript's property-delete form (`delete parent tag of tag X`, P29 — the one spelling that works; `set … to missing value` and `""` error, json `null` silently no-ops). Undo re-nests/un-nests symmetrically.
+- **New hazard `H-TAG-SUBTREE-DELETE`**: deleting a tag that has child tags silently cascade-deletes the whole subtree, permanently (P16) — `tag delete` now blocks unless `--acknowledge-subtree` accompanies `--dangerously-permanent`.
+
+### Closed permanently (documented, guarded)
+
+Container/area removal via AppleScript `missing value`/`""` or json `null` (the URL empty-param is the sole surface); to-do↔project conversion; sidebar ordering (areas, top-level projects — reads stay available via the provisional `"index"` sort); deleting an area orphans its projects to no-area while trashing only its to-dos (P20). The app-oddities catalog (§2f, §5f, §5g) documents the report-worthy inconsistencies for Cultured Code.
 
 ## 0.2.0 — 2026-07-06
 

@@ -15,7 +15,7 @@ import { registerReadCommands } from "./commands/reads.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
-import { ExitCode } from "../contracts.ts";
+import { ExitCode, PKG_VERSION } from "../contracts.ts";
 
 const AGENT_NOTES = `
 AGENT NOTES:
@@ -36,7 +36,7 @@ export function buildProgram(): Command {
   program
     .name("things")
     .description("Programmatic interface to Things 3 (Cultured Code)")
-    .version("0.0.1")
+    .version(PKG_VERSION)
     .addHelpText("after", AGENT_NOTES);
   registerDoctor(program);
   registerReadCommands(program);

@@ -82,5 +82,5 @@ export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 
-export { API_VERSION, ExitCode } from "./contracts.ts";
+export { API_VERSION, ExitCode, PKG_VERSION } from "./contracts.ts";
 export type { Envelope, EnvelopeMeta, ErrorEnvelope, OkEnvelope } from "./contracts.ts";
