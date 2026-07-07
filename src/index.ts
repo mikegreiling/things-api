@@ -9,7 +9,24 @@
 export { openThings } from "./client.ts";
 export type { OpenOptions, ThingsClient } from "./client.ts";
 export { diagnose } from "./diagnose.ts";
-export type { DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
+export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
+export { probeAutomation } from "./write/automation-probe.ts";
+export type {
+  AutomationProbeDeps,
+  AutomationProbeResult,
+  AutomationProbeStatus,
+} from "./write/automation-probe.ts";
+export {
+  createEnvironmentTracker,
+  describeEnvironmentChanges,
+  diffEnvironment,
+} from "./write/environment.ts";
+export type {
+  EnvironmentChange,
+  EnvironmentTracker,
+  EnvironmentTuple,
+} from "./write/environment.ts";
+export type { FailureHint, LikelyCause } from "./write/failure-hints.ts";
 export { capabilitiesTable } from "./write/capabilities.ts";
 export type { CapabilityEntry } from "./write/capabilities.ts";
 export { saveConfigKey } from "./config.ts";

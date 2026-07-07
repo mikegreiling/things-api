@@ -5,26 +5,46 @@
 import type { Command } from "commander";
 
 import { diagnose, type DiagnoseReport, type DiagnoseResult } from "../../diagnose.ts";
+import { describeEnvironmentChanges } from "../../write/environment.ts";
 import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
 // Back-compat aliases for pre-seam consumers of the CLI module.
 export type DoctorReport = DiagnoseReport;
 export const runDoctor: (dbPath?: string) => DiagnoseResult = diagnose;
 
+function environmentLine(env: DiagnoseReport["environment"]): string {
+  if (env.lastVerifiedWrite === null) {
+    return "no verified write recorded yet (the tuple is recorded on the first successful write)";
+  }
+  if (env.changes.length === 0) return "unchanged since the last verified write";
+  return (
+    `CHANGED since the last verified write — ${describeEnvironmentChanges(env.changes)} ` +
+    "(a macOS consent prompt may reappear on the next automation call)"
+  );
+}
+
 export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description(
       "Check environment health: database location, database schema compatibility, app " +
-        "presence, and any one-time setup still needed (macOS permissions, the app's " +
-        "'Enable Things URLs' setting) — with steps to fix. " +
+        "presence, any one-time setup still needed (macOS permissions, the app's " +
+        "'Enable Things URLs' setting), and whether the environment changed since the last " +
+        "successful write — with steps to fix. " +
         "Exit 0 healthy; 5 schema drift (writes disabled); 7 environment problem.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path (overrides THINGS_DB and discovery)")
-    .action((opts: { json?: boolean; db?: string }) => {
+    .option(
+      "--probe-automation",
+      "actively test whether automation of Things is authorized (may show a one-time macOS " +
+        "consent prompt; skipped when Things is not running)",
+    )
+    .action((opts: { json?: boolean; db?: string; probeAutomation?: boolean }) => {
       const started = Date.now();
-      const { report, error, exitCode, meta } = diagnose(opts.db);
+      const { report, error, exitCode, meta } = diagnose(opts.db, {
+        ...(opts.probeAutomation === true && { probeAutomation: true }),
+      });
       const fullMeta: EnvelopeMeta = { ...meta, elapsedMs: Date.now() - started };
       if (opts.json) {
         const envelope = report
@@ -40,6 +60,10 @@ export function registerDoctor(program: Command): void {
           `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
           `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
           `experimental: ${report.experimental.reason}`,
+          `environment: ${environmentLine(report.environment)}`,
+          `automation:  ${report.automation.status}${
+            report.automation.status === "granted" ? "" : ` — ${report.automation.detail}`
+          }`,
         ];
         process.stdout.write(`${lines.join("\n")}\n`);
       } else if (error) {

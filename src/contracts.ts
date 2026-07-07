@@ -69,6 +69,12 @@ export interface ErrorEnvelope {
     /** Stable machine-readable code, mirrors the exit-code family (e.g. "verify-failed", "blocked"). */
     code: string;
     message: string;
+    /**
+     * Advisory attribution when failure signals point somewhere: e.g.
+     * "permission-denied", "permission-pending", "feature-disabled",
+     * "app-updated", "schema-drift", "app-behavior-change".
+     */
+    likelyCause?: string;
     /** Actionable next step for the caller, when one exists. */
     remediation?: string;
     detail?: unknown;

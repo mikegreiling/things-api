@@ -138,6 +138,9 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
       return;
     }
     case "ok": {
+      for (const warning of result.warnings ?? []) {
+        process.stderr.write(`warning: ${warning}\n`);
+      }
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(okEnvelope("mutation-result", result, meta))}\n`);
       } else {
@@ -175,6 +178,8 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
               {
                 code: `verify-failed:${result.reason}`,
                 message: result.detail,
+                ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
+                ...(result.hint !== undefined && { remediation: result.hint }),
                 detail: { expected: result.expected, observed: result.observed },
               },
               meta,
@@ -183,6 +188,11 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
         );
       } else {
         process.stderr.write(`VERIFY FAILED (${result.reason}): ${result.detail}\n`);
+        if (result.likelyCause !== undefined) {
+          process.stderr.write(
+            `  likely cause: ${result.likelyCause}${result.hint !== undefined ? ` — ${result.hint}` : ""}\n`,
+          );
+        }
       }
       process.exitCode = ExitCode.VerifyFailed;
       return;
@@ -196,6 +206,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
               {
                 code: `blocked:${result.hazard ?? result.reason}`,
                 message: result.detail,
+                ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
                 remediation: result.remediation,
               },
               meta,

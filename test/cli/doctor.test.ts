@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runDoctor } from "../../src/cli/commands/doctor.ts";
+import { diagnose } from "../../src/diagnose.ts";
+import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 
 let fixture: FixtureDb | null = null;
@@ -35,5 +37,56 @@ describe("doctor core", () => {
     expect(exitCode).toBe(7);
     expect(report).toBeNull();
     expect(error?.code).toBe("environment");
+  });
+});
+
+const TUPLE_A: EnvironmentTuple = {
+  thingsVersion: "3.22.11",
+  macosVersion: "15.5",
+  pkgVersion: "0.3.0",
+  nodeBinary: "/usr/local/bin/node",
+};
+
+function fixedTracker(
+  recorded: EnvironmentTuple | null,
+  current: EnvironmentTuple,
+): EnvironmentTracker {
+  return { capture: () => current, load: () => recorded, record: () => {} };
+}
+
+describe("doctor environment & automation sections", () => {
+  it("reports tuple changes since the last verified write", () => {
+    fixture = buildFixtureDb();
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(TUPLE_A, { ...TUPLE_A, thingsVersion: "3.22.12" }),
+    });
+    expect(report?.environment.changes).toEqual([
+      { field: "thingsVersion", from: "3.22.11", to: "3.22.12" },
+    ]);
+    expect(report?.environment.lastVerifiedWrite).toEqual(TUPLE_A);
+  });
+
+  it("reports no recorded tuple before the first verified write", () => {
+    fixture = buildFixtureDb();
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+    });
+    expect(report?.environment.lastVerifiedWrite).toBeNull();
+    expect(report?.environment.changes).toEqual([]);
+  });
+
+  it("automation is not-probed by default and probed on request", () => {
+    fixture = buildFixtureDb();
+    const byDefault = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+    });
+    expect(byDefault.report?.automation.status).toBe("not-probed");
+
+    const probed = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+      probeAutomation: true,
+      probeDeps: { isAppRunning: () => false },
+    });
+    expect(probed.report?.automation.status).toBe("app-not-running");
   });
 });
