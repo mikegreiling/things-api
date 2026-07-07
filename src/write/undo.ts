@@ -10,8 +10,7 @@
  *
  * Honesty rules:
  *  - Ops with no validated inverse surface are reported IRREVERSIBLE with
- *    the reason (permanent deletes, project completion cascades, un-nesting
- *    a tag to root — E19, project→no-area — unprobed).
+ *    the reason (permanent deletes, empty-trash, project→no-area — unprobed).
  *  - Partial inversions carry notes (todo.delete undo restores to the Inbox
  *    de-scheduled; checklist per-item state is unrecoverable).
  *  - Inverse mutations are audited under an `undo:`-prefixed actor and are
@@ -610,11 +609,9 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
       const shortcut = preField(record, "shortcut");
       if (title !== undefined) patch["title"] = title;
       if (typeof parent === "string" && parent !== "") patch["parent"] = parent;
-      else if (parent === null) {
-        notes.push(
-          "the tag was un-nested before the op — un-nesting to root is IMPOSSIBLE via " +
-            "automation (E19); fix the parent in the app",
-        );
+      else if (parent === null && record.requested["parent"] !== undefined) {
+        // The op nested a previously-root tag: un-nest it back (P29).
+        patch["unnest"] = true;
       }
       if (typeof shortcut === "string") patch["shortcut"] = shortcut;
       else if (shortcut === null && record.requested["shortcut"] !== undefined) {

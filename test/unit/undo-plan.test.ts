@@ -283,7 +283,7 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
     expect(plan.notes.join(" ")).toContain("unrecoverable");
   });
 
-  it("tag.update with a pre-null parent notes the E19 dead end", () => {
+  it("tag.update that nested a root tag inverts via unnest (P29)", () => {
     const plan = planUndo(
       record({
         op: "tag.update",
@@ -292,9 +292,9 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
       }),
       NOW,
     );
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps[0]?.params["unnest"]).toBe(true);
     expect(plan.steps[0]?.params["title"]).toBe("deep");
-    expect("parent" in (plan.steps[0]?.params ?? {})).toBe(false);
-    expect(plan.notes.join(" ")).toContain("E19");
   });
 
   it("native reorder inverts to the pre-rank sequence", () => {

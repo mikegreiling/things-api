@@ -1060,9 +1060,13 @@ const tagUpdate: CommandSpec<"tag.update"> = {
     if (
       params.title === undefined &&
       params.parent === undefined &&
+      params.unnest === undefined &&
       params.shortcut === undefined
     ) {
-      throw new RangeError("tag.update needs title, parent, and/or shortcut");
+      throw new RangeError("tag.update needs title, parent, unnest, and/or shortcut");
+    }
+    if (params.parent !== undefined && params.unnest === true) {
+      throw new RangeError("parent and unnest are exclusive");
     }
     const pre = emptyPreState();
     pre.entityTarget = resolveTag(db, params.target);
@@ -1078,6 +1082,7 @@ const tagUpdate: CommandSpec<"tag.update"> = {
     if (params.parent !== undefined) {
       assert.push({ field: "parent", equals: pre.parentTag?.resolved?.uuid ?? "" });
     }
+    if (params.unnest === true) assert.push({ field: "parent", equals: null });
     if (params.shortcut !== undefined) assert.push({ field: "shortcut", equals: params.shortcut });
     return {
       mode: "entity-updated",
@@ -1095,6 +1100,12 @@ const tagUpdate: CommandSpec<"tag.update"> = {
       lines.push(
         `set parent tag of tag id ${id} to tag id ${q(pre.parentTag?.resolved?.uuid ?? "")}`,
       );
+    }
+    if (params.unnest === true) {
+      // The property-DELETE form is the only working un-nest spelling (P29):
+      // `set parent tag … to missing value` errors (E19). By NAME, exactly
+      // as probed — resolveTag already guaranteed the title is unique.
+      lines.push(`delete parent tag of tag ${q(pre.entityTarget?.resolved?.title ?? "")}`);
     }
     if (params.shortcut !== undefined) {
       lines.push(`set keyboard shortcut of tag id ${id} to ${q(params.shortcut)}`);
