@@ -114,6 +114,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     acknowledge_checklist_reset?: boolean | undefined;
     acknowledge_project_reopen?: boolean | undefined;
     dangerously_permanent?: boolean | undefined;
+    acknowledge_tag_subtree?: boolean | undefined;
   }): WriteOptions => ({
     actor: "mcp",
     ...(args.dry_run === true && { dryRun: true }),
@@ -121,6 +122,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
     ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
     ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
+    ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
   });
 
   // ------------------------------------------------------------------ reads
@@ -447,6 +449,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe('Operation params, e.g. {"uuid": "..."} — shapes per `capabilities`'),
         acknowledge_checklist_reset: z.boolean().optional(),
         acknowledge_project_reopen: z.boolean().optional(),
+        acknowledge_tag_subtree: z
+          .boolean()
+          .optional()
+          .describe("tag.delete: accept cascade-deletion of ALL descendant tags (P16)"),
         dangerously_permanent: z
           .boolean()
           .optional()
@@ -483,6 +489,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                   acknowledgeChecklistReset: z.boolean().optional(),
                   acknowledgeProjectReopen: z.boolean().optional(),
                   dangerouslyPermanent: z.boolean().optional(),
+                  acknowledgeTagSubtree: z.boolean().optional(),
                 })
                 .optional(),
             }),

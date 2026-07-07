@@ -130,10 +130,10 @@ describe("planUndo — delete / restore", () => {
     expect(plan.steps[0]?.op).toBe("todo.delete");
   });
 
-  it("project.delete is irreversible (E15 covers to-dos only)", () => {
+  it("project.delete inverts to the in-place restore (P06)", () => {
     const plan = planUndo(record({ op: "project.delete" }), NOW);
-    expect(plan.kind).toBe("irreversible");
-    expect(plan.reason).toContain("Put Back");
+    expect(plan.steps).toEqual([{ op: "project.restore", params: { uuid: "U-1" } }]);
+    expect(plan.notes.join(" ")).toContain("IN PLACE");
   });
 });
 
@@ -251,14 +251,17 @@ describe("planUndo — moves", () => {
     expect(plan.kind).toBe("irreversible");
   });
 
-  it("project.move restores the old area; no-area-before is irreversible", () => {
+  it("project.move restores the old area; no-area-before inverts to a detach (P24)", () => {
     const back = planUndo(record({ op: "project.move", pre: { "area.uuid": "A-OLD" } }), NOW);
     expect(back.steps[0]).toEqual({
       op: "project.move",
       params: { uuid: "U-1", area: { uuid: "A-OLD" } },
     });
     const gone = planUndo(record({ op: "project.move", pre: { "area.uuid": null } }), NOW);
-    expect(gone.kind).toBe("irreversible");
+    expect(gone.steps[0]).toEqual({
+      op: "project.move",
+      params: { uuid: "U-1", detach: true },
+    });
   });
 });
 
@@ -320,8 +323,92 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
   });
 
   it("permanent ops are irreversible", () => {
-    for (const op of ["area.delete", "tag.delete", "trash.empty", "project.complete"]) {
+    for (const op of ["area.delete", "tag.delete", "trash.empty"]) {
       expect(planUndo(record({ op }), NOW).kind).toBe("irreversible");
     }
+  });
+});
+
+describe("planUndo — project lifecycle (Phase 19)", () => {
+  it("project.complete inverts to reopen + reopening exactly the cascaded children", () => {
+    const plan = planUndo(
+      record({
+        op: "project.complete",
+        uuid: "P-1",
+        // Nested pre map: the project row + two children; only C-OPEN was
+        // open pre-write (i.e., cascade-resolved by the app).
+        pre: {
+          "P-1": { status: "open" },
+          "C-OPEN": { status: "open" },
+          "C-DONE": { status: "completed" },
+        },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps).toEqual([
+      { op: "project.reopen", params: { uuid: "P-1" } },
+      { op: "todo.reopen", params: { uuid: "C-OPEN" } },
+    ]);
+  });
+
+  it("project.complete with no cascade inverts to a bare reopen", () => {
+    const plan = planUndo(
+      record({ op: "project.complete", uuid: "P-2", pre: { status: "open" } }),
+      NOW,
+    );
+    expect(plan.steps).toEqual([{ op: "project.reopen", params: { uuid: "P-2" } }]);
+  });
+
+  it("project.cancel inverts like complete", () => {
+    const plan = planUndo(
+      record({
+        op: "project.cancel",
+        uuid: "P-3",
+        pre: { "P-3": { status: "open" }, "C-1": { status: "open" } },
+      }),
+      NOW,
+    );
+    expect(plan.steps.map((s) => s.op)).toEqual(["project.reopen", "todo.reopen"]);
+  });
+
+  it("project.reopen inverts to re-complete/re-cancel per the pre status", () => {
+    const done = planUndo(
+      record({ op: "project.reopen", uuid: "P-4", pre: { status: "completed" } }),
+      NOW,
+    );
+    expect(done.steps[0]).toEqual({
+      op: "project.complete",
+      params: { uuid: "P-4", children: "require-resolved" },
+    });
+    const cxl = planUndo(
+      record({ op: "project.reopen", uuid: "P-5", pre: { status: "canceled" } }),
+      NOW,
+    );
+    expect(cxl.steps[0]?.op).toBe("project.cancel");
+  });
+
+  it("project.restore inverts to project.delete", () => {
+    const plan = planUndo(record({ op: "project.restore", uuid: "P-6" }), NOW);
+    expect(plan.steps).toEqual([{ op: "project.delete", params: { uuid: "P-6" } }]);
+  });
+
+  it("todo.move detach inverts to a move back to the captured container", () => {
+    const plan = planUndo(
+      record({
+        op: "todo.move",
+        requested: { detach: true },
+        pre: {
+          project: { uuid: "P-OLD", title: "Old" },
+          area: null,
+          heading: null,
+          startDate: "2026-07-09",
+        },
+      }),
+      NOW,
+    );
+    expect(plan.steps).toEqual([
+      { op: "todo.move", params: { uuid: "U-1", project: { uuid: "P-OLD" } } },
+    ]);
   });
 });

@@ -68,9 +68,12 @@ export interface PreState {
   parentTag: ContainerResolution | null;
   /** area.delete / tag.delete target resolution (TMArea/TMTag). */
   entityTarget: ContainerResolution | null;
-  /** project.complete: children by pre-status. */
+  /** tag.delete: descendant tags that a delete would CASCADE onto (P16). */
+  childTags: string[];
+  /** project.complete / project.cancel: children by pre-status. */
   openChildren: Todo[];
   canceledChildren: Todo[];
+  completedChildren: Todo[];
   checklistCount: number;
   trashedCount: number;
   /** Pre-existing uuids for entity-created probes. */
@@ -89,8 +92,10 @@ export function emptyPreState(): PreState {
     missingTags: [],
     parentTag: null,
     entityTarget: null,
+    childTags: [],
     openChildren: [],
     canceledChildren: [],
+    completedChildren: [],
     checklistCount: 0,
     trashedCount: 0,
     existingEntityUuids: [],
@@ -191,6 +196,23 @@ export function projectChildren(db: DatabaseSync, projectUuid: string): Todo[] {
     if (t !== null && t.type === "to-do") todos.push(t);
   }
   return todos;
+}
+
+/**
+ * Titles of every DESCENDANT tag under the given tag (excluding itself).
+ * Deleting the parent CASCADE-DELETES all of these (P16) — the guard lists
+ * them. UNION (not UNION ALL): a parent cycle must terminate, not hang.
+ */
+export function childTagTitles(db: DatabaseSync, tagUuid: string): string[] {
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE d(uuid) AS (
+         SELECT ? UNION SELECT t.uuid FROM TMTag t JOIN d ON t.parent = d.uuid
+       )
+       SELECT t.title FROM TMTag t JOIN d ON t.uuid = d.uuid WHERE t.uuid != ?`,
+    )
+    .all(tagUuid, tagUuid) as { title: string }[];
+  return rows.map((r) => r.title);
 }
 
 export function trashedCount(db: DatabaseSync): number {

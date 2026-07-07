@@ -114,12 +114,6 @@ const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
-  "project.delete":
-    "no validated surface restores a trashed project (E15 covers to-dos only) — " +
-    "use the app's Trash > Put Back",
-  "project.complete":
-    "no validated surface reopens a completed project (the URL path only completes; " +
-    "the cascade auto-completed children too) — reopen in the app",
 };
 
 function preField(record: AuditRecord, field: string): unknown {
@@ -312,6 +306,75 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
       };
     }
 
+    case "project.delete": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      notes.push("restored IN PLACE (P06) — schedule/area/children keep their state");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.restore", params: { uuid } }],
+        notes,
+      };
+    }
+
+    // Project completion/cancellation: reopen the project (P02/P05), then
+    // reopen exactly the children the cascade resolved — the audit captured
+    // their pre-op statuses (nested pre map when a cascade was asserted).
+    case "project.complete":
+    case "project.cancel": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const steps: UndoStep[] = [{ op: "project.reopen", params: { uuid } }];
+      const pre = record.pre ?? {};
+      if (!("status" in pre)) {
+        for (const [childUuid, fields] of Object.entries(pre)) {
+          if (childUuid === uuid) continue;
+          if (
+            typeof fields === "object" &&
+            fields !== null &&
+            (fields as Record<string, unknown>)["status"] === "open"
+          ) {
+            steps.push({ op: "todo.reopen", params: { uuid: childUuid } });
+          }
+        }
+      }
+      if (steps.length > 1) {
+        notes.push(`${steps.length - 1} cascade-resolved child(ren) will be reopened too`);
+      }
+      return { target, kind: "invertible", steps, notes };
+    }
+
+    case "project.reopen": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const was = preField(record, "status");
+      if (was !== "completed" && was !== "canceled") {
+        return irreversible("the pre-op project status was not captured — cannot restore");
+      }
+      notes.push(
+        "children were untouched by the reopen; require-resolved will block if any were " +
+          "reopened since — resolve them or redo manually",
+      );
+      return {
+        target,
+        kind: "invertible",
+        steps: [
+          was === "completed"
+            ? { op: "project.complete", params: { uuid, children: "require-resolved" } }
+            : { op: "project.cancel", params: { uuid, children: "require-resolved" } },
+        ],
+        notes,
+      };
+    }
+
+    case "project.restore": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.delete", params: { uuid } }],
+        notes,
+      };
+    }
+
     case "todo.update": {
       if (uuid === null) return irreversible("no target uuid recorded");
       const steps: UndoStep[] = [];
@@ -371,6 +434,41 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
 
     case "todo.move": {
       if (uuid === null) return irreversible("no target uuid recorded");
+      if (record.requested["detach"] === true) {
+        // The detach delta captured the old container Refs directly.
+        const projRef = preField(record, "project");
+        const areaRef = preField(record, "area");
+        const oldProj =
+          typeof projRef === "object" && projRef !== null
+            ? (projRef as { uuid?: unknown }).uuid
+            : undefined;
+        const oldArea =
+          typeof areaRef === "object" && areaRef !== null
+            ? (areaRef as { uuid?: unknown }).uuid
+            : undefined;
+        if (preField(record, "heading") !== null && preField(record, "heading") !== undefined) {
+          notes.push(
+            "heading placement cannot be restored — the to-do returns to the project root",
+          );
+        }
+        if (typeof oldProj === "string") {
+          return {
+            target,
+            kind: "invertible",
+            steps: [{ op: "todo.move", params: { uuid, project: { uuid: oldProj } } }],
+            notes,
+          };
+        }
+        if (typeof oldArea === "string") {
+          return {
+            target,
+            kind: "invertible",
+            steps: [{ op: "todo.move", params: { uuid, area: { uuid: oldArea } } }],
+            notes,
+          };
+        }
+        return irreversible("the to-do had no container before the detach — nothing to restore");
+      }
       // A move-to-inbox op asserted start/startDate instead of containers.
       if (record.requested["inbox"] === true) {
         const schedule = scheduleSteps(uuid, record, todayIso);
@@ -425,6 +523,22 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
 
     case "project.move": {
       if (uuid === null) return irreversible("no target uuid recorded");
+      if (record.requested["detach"] === true) {
+        const areaRef = preField(record, "area");
+        const oldArea =
+          typeof areaRef === "object" && areaRef !== null
+            ? (areaRef as { uuid?: unknown }).uuid
+            : undefined;
+        if (typeof oldArea === "string") {
+          return {
+            target,
+            kind: "invertible",
+            steps: [{ op: "project.move", params: { uuid, area: { uuid: oldArea } } }],
+            notes,
+          };
+        }
+        return irreversible("the project had no area before the detach — nothing to restore");
+      }
       const areaPre = preField(record, "area.uuid");
       if (typeof areaPre === "string") {
         return {
@@ -434,10 +548,16 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
           notes,
         };
       }
-      return irreversible(
-        "the project had no area before the move — clearing a project's area is unprobed " +
-          "(no validated surface); move it back in the app",
-      );
+      if (areaPre === null) {
+        // The project had no area before: detach restores that state (P24).
+        return {
+          target,
+          kind: "invertible",
+          steps: [{ op: "project.move", params: { uuid, detach: true } }],
+          notes,
+        };
+      }
+      return irreversible("the pre-op area was not captured");
     }
 
     case "todo.set-tags": {

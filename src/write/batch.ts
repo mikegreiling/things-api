@@ -20,6 +20,7 @@ export interface BatchOp {
     acknowledgeChecklistReset?: boolean;
     acknowledgeProjectReopen?: boolean;
     dangerouslyPermanent?: boolean;
+    acknowledgeTagSubtree?: boolean;
     vector?: WriteOptions["vector"];
     verifyTimeoutMs?: number;
     maxDisruption?: WriteOptions["maxDisruption"];
@@ -95,6 +96,9 @@ export async function runBatch(
         }),
         ...(entry.options?.dangerouslyPermanent !== undefined && {
           dangerouslyPermanent: entry.options.dangerouslyPermanent,
+        }),
+        ...(entry.options?.acknowledgeTagSubtree !== undefined && {
+          acknowledgeTagSubtree: entry.options.acknowledgeTagSubtree,
         }),
         ...(entry.options?.vector !== undefined && { vector: entry.options.vector }),
         ...(entry.options?.verifyTimeoutMs !== undefined && {

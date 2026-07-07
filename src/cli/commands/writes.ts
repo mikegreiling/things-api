@@ -388,13 +388,21 @@ export function registerWriteCommands(program: Command): void {
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--heading <name>", "existing heading in the destination project")
       .option("--inbox", "move back to the Inbox — de-schedules (vector: applescript, E06)")
+      .option(
+        "--detach",
+        "remove ALL container links (project/area/heading) keeping the schedule (P21/P22)",
+      )
       .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const project = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
     const inbox = opts["inbox"] === true;
-    if (inbox && (project !== undefined || area !== undefined || opts["heading"] !== undefined)) {
-      process.stderr.write("error: --inbox is exclusive with --project/--area/--heading\n");
+    const detach = opts["detach"] === true;
+    const dest = project !== undefined || area !== undefined || opts["heading"] !== undefined;
+    if ((inbox && (dest || detach)) || (detach && dest)) {
+      process.stderr.write(
+        "error: --inbox/--detach are exclusive with each other and with --project/--area/--heading\n",
+      );
       process.exitCode = ExitCode.Usage;
       return;
     }
@@ -406,6 +414,7 @@ export function registerWriteCommands(program: Command): void {
           ...(area !== undefined && { area }),
           ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
           ...(inbox && { inbox: true }),
+          ...(detach && { detach: true }),
         },
         writeOptionsFrom(opts, {
           ...(inbox && { vector: "applescript" as const }),
@@ -458,12 +467,78 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("checklist <uuid>")
       .description(
-        "REPLACE the checklist wholesale (tier 0). Destroys per-item completion state — " +
-          "hazard H-CHECKLIST-REPLACE requires --acknowledge-checklist-reset when items exist.",
+        "Checklist operations (tier 0). WHOLESALE: --item (repeatable) replaces the list — " +
+          "destroys per-item state, hazard H-CHECKLIST-REPLACE requires " +
+          "--acknowledge-checklist-reset when items exist. GRANULAR (one per call): " +
+          "--add/--remove/--check/--uncheck/--rename+--to/--move-item+--to-position — " +
+          "reads current items+states and rewrites via things:///json with states PRESERVED " +
+          "(P18; the reset ack is implied). Items are matched by exact title (loud on " +
+          "ambiguity); item uuids are not stable across any rewrite.",
       )
-      .option("--item <text>", "checklist item in order (repeatable)", collect, [])
-      .option("--acknowledge-checklist-reset", "accept wholesale replacement of existing items"),
+      .option("--item <text>", "wholesale: checklist item in order (repeatable)", collect, [])
+      .option("--acknowledge-checklist-reset", "accept wholesale replacement of existing items")
+      .option("--add <title>", "granular: append an item")
+      .option("--at <n>", "with --add: 1-based insert position")
+      .option("--remove <title>", "granular: delete an item")
+      .option("--check <title>", "granular: mark an item completed")
+      .option("--uncheck <title>", "granular: mark an item open")
+      .option("--rename <title>", "granular: rename an item (requires --to)")
+      .option("--move-item <title>", "granular: reposition an item (requires --to-position)")
+      .option("--to <title>", "new title for --rename")
+      .option("--to-position <n>", "1-based position for --move-item"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const granular = ["add", "remove", "check", "uncheck", "rename", "moveItem"].filter(
+      (k) => opts[k] !== undefined,
+    );
+    if (granular.length > 1) {
+      process.stderr.write("error: pass at most ONE granular checklist action per call\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    const action = granular[0];
+    if (action !== undefined) {
+      if ((opts["item"] as string[]).length > 0) {
+        process.stderr.write("error: --item (wholesale) is exclusive with granular actions\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
+      if (action === "rename" && opts["to"] === undefined) {
+        process.stderr.write("error: --rename requires --to <title>\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
+      if (action === "moveItem" && opts["toPosition"] === undefined) {
+        process.stderr.write("error: --move-item requires --to-position <n>\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
+      const edit =
+        action === "add"
+          ? {
+              action: "add" as const,
+              title: opts["add"] as string,
+              ...(opts["at"] !== undefined && { at: Number(opts["at"]) }),
+            }
+          : action === "remove"
+            ? { action: "remove" as const, item: opts["remove"] as string }
+            : action === "check"
+              ? { action: "check" as const, item: opts["check"] as string }
+              : action === "uncheck"
+                ? { action: "uncheck" as const, item: opts["uncheck"] as string }
+                : action === "rename"
+                  ? {
+                      action: "rename" as const,
+                      item: opts["rename"] as string,
+                      title: opts["to"] as string,
+                    }
+                  : {
+                      action: "move" as const,
+                      item: opts["moveItem"] as string,
+                      to: Number(opts["toPosition"]),
+                    };
+      await runWrite(opts, (c) => c.write.editChecklist(uuid, edit, writeOptionsFrom(opts)));
+      return;
+    }
     await runWrite(opts, (c) =>
       c.write.replaceChecklist(
         uuid,
@@ -579,14 +654,119 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("move <uuid>")
       .description(
-        "Move a project to another area (vector: applescript, tier 0; validated E14). " +
-          "Status and schedule are untouched. Hazard: H-UNKNOWN-DESTINATION.",
+        "Move a project to another area (E14/P23, tier 0) or DETACH it from its area " +
+          "(--detach; URL empty area-id, P24 — the only surface that can). Status and " +
+          "schedule are untouched. Hazard: H-UNKNOWN-DESTINATION.",
       )
-      .requiredOption("--area <ref>", "destination area (uuid or unique name)"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & { area: string }) => {
+      .option("--area <ref>", "destination area (uuid or unique name)")
+      .option("--detach", "remove the current area assignment (exclusive with --area)"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & { area?: string; detach?: boolean }) => {
+    if ((opts.detach === true) === (opts.area !== undefined)) {
+      process.stderr.write("error: pass exactly one of --area / --detach\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     await runWrite(opts, (c) =>
-      c.write.moveProject(uuid, { uuid: opts.area, title: opts.area }, writeOptionsFrom(opts)),
+      opts.detach === true
+        ? c.write.detachProject(uuid, writeOptionsFrom(opts))
+        : c.write.moveProject(
+            uuid,
+            { uuid: opts.area as string, title: opts.area as string },
+            writeOptionsFrom(opts),
+          ),
     );
+  });
+
+  addWriteFlags(
+    project
+      .command("cancel <uuid>")
+      .description(
+        "Cancel a project (vector: url-scheme, tier 0; validated P01). The URL write " +
+          "auto-cancels open children with NO prompt — hazard H-PROJECT-COMPLETE-CHILDREN " +
+          "requires an explicit --children policy; completed children are untouched.",
+      )
+      .requiredOption(
+        "--children <policy>",
+        "require-resolved (block if open children) | auto-cancel (verified cascade)",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & { children: string }) => {
+    await runWrite(opts, (c) =>
+      c.write.cancelProject(
+        uuid,
+        { children: opts.children as "require-resolved" | "auto-cancel" },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addWriteFlags(
+    project
+      .command("reopen <uuid>")
+      .description(
+        "Reopen a completed/canceled project (vector: url-scheme, tier 0; validated " +
+          "P02/P05 — completed=false / canceled=false per the current status). Children " +
+          "stay resolved unless --restore-children also reopens the ones the cascade " +
+          "resolved (detected by the <2s stopDate window, P03; children resolved earlier " +
+          "are never touched, P04). Exit 3 if any child restore fails.",
+      )
+      .option("--restore-children", "also reopen cascade-resolved children (verified per child)"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & { restoreChildren?: boolean }) => {
+    const started = Date.now();
+    let client: ThingsClient | null = null;
+    try {
+      client = openThings(opts.db ? { dbPath: opts.db } : {});
+      const outcome = await client.write.reopenProject(uuid, {
+        ...writeOptionsFrom(opts),
+        ...(opts.restoreChildren === true && { restoreChildren: true }),
+      });
+      const failedChildren = outcome.children.filter(
+        (c) => c.result.kind !== "ok" && c.result.kind !== "dry-run",
+      );
+      if (opts.json) {
+        const fp = client.fingerprint();
+        const meta: EnvelopeMeta = {
+          dbVersion: fp.observation.databaseVersion,
+          fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
+          elapsedMs: Date.now() - started,
+        };
+        process.stdout.write(`${JSON.stringify(okEnvelope("project-reopen", outcome, meta))}\n`);
+      } else {
+        emitResult(
+          outcome.project,
+          { ...opts, json: false },
+          {
+            dbVersion: null,
+            fingerprint: "unknown",
+            elapsedMs: Date.now() - started,
+          },
+        );
+        for (const child of outcome.children) {
+          process.stdout.write(
+            `  child ${child.result.kind === "ok" || child.result.kind === "dry-run" ? "reopened" : "FAILED"}: ${child.title} (${child.uuid})\n`,
+          );
+        }
+      }
+      process.exitCode =
+        outcome.project.kind === "ok" || outcome.project.kind === "dry-run"
+          ? failedChildren.length > 0
+            ? ExitCode.VerifyFailed
+            : ExitCode.Ok
+          : process.exitCode;
+    } finally {
+      client?.close();
+    }
+  });
+
+  addWriteFlags(
+    project
+      .command("restore <uuid>")
+      .description(
+        "Restore a TRASHED project IN PLACE (vector: applescript, tier 0; validated P06): " +
+          "only the trashed flag flips — schedule, area, and children keep their state. " +
+          "Blocked unless the target is a trashed project.",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.restoreProject(uuid, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -754,9 +934,12 @@ export function registerWriteCommands(program: Command): void {
       .command("delete <target>")
       .description(
         "Delete a tag PERMANENTLY (vector: applescript, tier 0). Assignments cascade " +
-          "(validated A26). Requires --dangerously-permanent.",
+          "(validated A26) and CHILD TAGS are cascade-deleted too (P16) — hazard " +
+          "H-TAG-SUBTREE-DELETE requires --acknowledge-subtree when children exist. " +
+          "Requires --dangerously-permanent.",
       )
-      .option("--dangerously-permanent", "accept permanent, unrecoverable deletion"),
+      .option("--dangerously-permanent", "accept permanent, unrecoverable deletion")
+      .option("--acknowledge-subtree", "accept cascade-deletion of ALL descendant tags"),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     await runWrite(opts, (c) =>
       c.write.deleteTag(
@@ -765,6 +948,7 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["dangerouslyPermanent"] !== undefined && {
             dangerouslyPermanent: opts["dangerouslyPermanent"] as boolean,
           }),
+          ...(opts["acknowledgeSubtree"] === true && { acknowledgeTagSubtree: true }),
         }),
       ),
     );

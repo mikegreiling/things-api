@@ -70,6 +70,31 @@ run_step 0 "delete it to the Trash" todo delete "$REST"
 run_step 0 "restore from Trash (E15: un-trash, lands in Inbox)" todo restore "$REST"
 run_step 4 "restore requires a TRASHED target (guard)" todo restore "$REST"
 
+echo "== phase 19: project lifecycle, detach, granular checklist, tag subtree =="
+run_step 0 "project add for lifecycle" project add "E2E-P19" --area LAB-AREA-A --todo "E2E-P19-C1"
+P19=$(json_get "d['data']['uuid']")
+run_step 0 "cancel with verified auto-cancel cascade (P01)" project cancel "$P19" --children auto-cancel
+run_step 0 "reopen canceled=false + cascade restore (P05/P03)" project reopen "$P19" --restore-children
+run_step 0 "complete with auto-complete cascade" project complete "$P19" --children auto-complete
+run_step 0 "reopen completed=false + cascade restore (P02)" project reopen "$P19" --restore-children
+run_step 0 "detach project from its area (P24)" project move "$P19" --detach
+run_step 0 "delete project to the Trash" project delete "$P19"
+run_step 0 "restore project IN PLACE (P06)" project restore "$P19"
+run_step 4 "project restore requires a TRASHED target (guard)" project restore "$P19"
+run_step 0 "seed scheduled to-do in the project" todo add "E2E-DETACH" --project "$P19" --when 2026-07-14
+DET=$(json_get "d['data']['uuid']")
+run_step 0 "detach keeps the schedule (P21/P22)" todo move "$DET" --detach
+run_step 0 "seed to-do for granular checklist" todo add "E2E-CLIST"
+CL=$(json_get "d['data']['uuid']")
+run_step 0 "wholesale checklist (fresh)" todo checklist "$CL" --item "Alpha" --item "Bravo"
+run_step 0 "granular CHECK via json states (P18)" todo checklist "$CL" --check "Alpha"
+run_step 0 "granular add at a position (states preserved)" todo checklist "$CL" --add "Charlie" --at 2
+run_step 0 "granular rename" todo checklist "$CL" --rename "Bravo" --to "Bravo2"
+run_step 0 "tag subtree: parent" tag add e2e-sub-parent
+run_step 0 "tag subtree: child" tag add e2e-sub-child --parent e2e-sub-parent
+run_step 4 "parent-tag delete blocked without subtree ack (P16 guard)" tag delete e2e-sub-parent --dangerously-permanent
+run_step 0 "parent-tag delete with subtree ack" tag delete e2e-sub-parent --dangerously-permanent --acknowledge-subtree
+
 echo "== reorder (native experimental + bounce) =="
 run_step 0 "seed today R1" todo add "E2E-R1" --when today
 R1=$(json_get "d['data']['uuid']")

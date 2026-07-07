@@ -270,6 +270,9 @@ export async function runMutation<K extends OperationKind>(
       ...(options.dangerouslyPermanent !== undefined && {
         dangerouslyPermanent: options.dangerouslyPermanent,
       }),
+      ...(options.acknowledgeTagSubtree !== undefined && {
+        acknowledgeTagSubtree: options.acknowledgeTagSubtree,
+      }),
     };
     const block: GuardBlock | null = evaluateGuards(spec.hazards, {
       op,

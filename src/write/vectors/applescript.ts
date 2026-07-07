@@ -87,7 +87,18 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     disruption: 0,
     validation: "validated",
     evidence: ["E14"],
-    notes: "`set area of project id` — area re-assignment; status/schedule untouched",
+    notes:
+      "`set area of project id` — area re-assignment; status/schedule untouched; DETACH is " +
+      'URL-only (missing value/"" rejected — P08/P27)',
+  },
+  "project.restore": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P06"],
+    notes:
+      '`move <trashed project> to list "Anytime"` un-trashes IN PLACE — schedule/area/' +
+      "children untouched; the SAME statement on a non-trashed project is a silent no-op (P09)",
   },
   "todo.restore": {
     support: "yes",

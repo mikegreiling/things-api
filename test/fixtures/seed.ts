@@ -123,3 +123,17 @@ export function tagTask(db: DatabaseSync, taskUuid: string, tagUuid: string): vo
 export function tagArea(db: DatabaseSync, areaUuid: string, tagUuid: string): void {
   db.prepare(`INSERT INTO TMAreaTag (areas, tags) VALUES (?, ?)`).run(areaUuid, tagUuid);
 }
+
+export function seedChecklistItem(
+  db: DatabaseSync,
+  taskUuid: string,
+  title: string,
+  opts: { status?: keyof typeof STATUS; index?: number } = {},
+): string {
+  const uuid = uid("cli");
+  db.prepare(
+    `INSERT INTO TMChecklistItem (uuid, userModificationDate, creationDate, title, status, stopDate, "index", task, leavesTombstone)
+     VALUES (?, 1780000000, 1780000000, ?, ?, NULL, ?, ?, 0)`,
+  ).run(uuid, title, STATUS[opts.status ?? "open"], opts.index ?? 0, taskUuid);
+  return uuid;
+}

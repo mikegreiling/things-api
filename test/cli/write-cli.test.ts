@@ -83,17 +83,15 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain(`delete to do id "${uuid}"`);
   });
 
-  it("project move --dry-run plans the applescript area setter (E14)", async () => {
+  it("project move --dry-run plans the URL area re-assignment (P23)", async () => {
     const area = seedArea(fixture.db, "Work");
     const proj = seedProject(fixture.db, { title: "Mover" });
     await run(["project", "move", proj, "--area", "Work", "--dry-run", "--json"]);
     const env = envelope();
     expect(env["kind"]).toBe("mutation-plan");
     const plan = env["data"] as Record<string, unknown>;
-    expect(plan["vector"]).toBe("applescript");
-    expect(String(plan["invocation"])).toContain(
-      `set area of project id "${proj}" to area id "${area}"`,
-    );
+    expect(plan["vector"]).toBe("url-scheme");
+    expect(String(plan["invocation"])).toContain(`update-project?id=${proj}&area-id=${area}`);
   });
 
   it("project duplicate --dry-run plans the URL duplicate (E17)", async () => {

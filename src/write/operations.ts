@@ -31,6 +31,9 @@ export const OPERATION_KINDS = [
   "project.move",
   "todo.restore",
   "project.duplicate",
+  "project.cancel",
+  "project.reopen",
+  "project.restore",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -94,6 +97,11 @@ export interface TodoMoveParams {
   heading?: string;
   /** Move back to the Inbox (de-schedules; E06). Exclusive with the others. */
   inbox?: boolean;
+  /**
+   * Detach from the current project/area/heading, keeping schedule and
+   * everything else (URL `list-id=` empty, P21/P22). Exclusive with the others.
+   */
+  detach?: boolean;
 }
 
 export interface TodoSetTagsParams {
@@ -102,9 +110,22 @@ export interface TodoSetTagsParams {
   tags: string[];
 }
 
+/** One checklist item in a stateful replacement (P18: json carries states). */
+export interface ChecklistItemSpec {
+  title: string;
+  /** Recreate the item pre-checked (json vector only). */
+  completed?: boolean;
+}
+
 export interface TodoReplaceChecklistParams {
   uuid: string;
-  items: string[];
+  /**
+   * Full replacement list. Plain strings ride the classic `checklist-items=`
+   * URL param (all items recreated OPEN — T07); any object entry switches to
+   * the `things:///json` form, which applies per-item completed states (P18).
+   * Item uuids are NOT stable across a rewrite either way.
+   */
+  items: (string | ChecklistItemSpec)[];
 }
 
 export interface ProjectAddParams {
@@ -130,8 +151,10 @@ export interface ProjectUpdateParams {
 
 export interface ProjectMoveParams {
   uuid: string;
-  /** Destination area (uuid or unique name). The only probed project move (E14). */
-  area: ContainerRef;
+  /** Destination area (uuid or unique name). E14 (AppleScript) / P23 (URL). */
+  area?: ContainerRef;
+  /** Detach from the current area (URL `area-id=` empty, P24). Exclusive with area. */
+  detach?: boolean;
 }
 
 export interface ProjectCompleteParams {
@@ -141,6 +164,15 @@ export interface ProjectCompleteParams {
    * silently auto-completes open children, unlike the UI prompt).
    */
   children: "require-resolved" | "auto-complete";
+}
+
+export interface ProjectCancelParams {
+  uuid: string;
+  /**
+   * Open-children policy — REQUIRED, no default (P01: URL cancellation
+   * silently auto-cancels open children; completed children are untouched).
+   */
+  children: "require-resolved" | "auto-cancel";
 }
 
 export interface AreaAddParams {
@@ -229,6 +261,9 @@ export interface OperationParamsMap {
   "project.move": ProjectMoveParams;
   "todo.restore": UuidParams;
   "project.duplicate": UuidParams;
+  "project.cancel": ProjectCancelParams;
+  "project.reopen": UuidParams;
+  "project.restore": UuidParams;
 }
 
 /** Explicit acknowledgements for guarded operations (never defaulted). */
@@ -239,4 +274,6 @@ export interface Acknowledgements {
   acknowledgeProjectReopen?: boolean;
   /** H-PERMANENT-DELETE: area/tag delete and empty-trash skip the Trash entirely. */
   dangerouslyPermanent?: boolean;
+  /** H-TAG-SUBTREE-DELETE: deleting a parent tag cascade-deletes its children (P16). */
+  acknowledgeTagSubtree?: boolean;
 }
