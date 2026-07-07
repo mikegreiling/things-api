@@ -5,6 +5,7 @@
 import type { AuditWriter } from "./audit/log.ts";
 import { createAuditWriter } from "./audit/log.ts";
 import { loadConfig, type ThingsApiConfig } from "./config.ts";
+import { PKG_VERSION } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import { compareToBaseline, observeSchema, type FingerprintStatus } from "./db/fingerprint.ts";
@@ -59,6 +60,7 @@ import {
   type WriteOptions,
 } from "./write/pipeline.ts";
 import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
+import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
@@ -85,6 +87,7 @@ export interface OpenOptions {
     poller?: PollerDeps;
     audit?: AuditWriter;
     sdefProbe?: () => boolean;
+    environment?: EnvironmentTracker;
   };
 }
 
@@ -324,6 +327,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     ...(options.writeOverrides?.sdefProbe !== undefined && {
       sdefProbe: options.writeOverrides.sdefProbe,
     }),
+    environment: options.writeOverrides?.environment ?? createEnvironmentTracker(PKG_VERSION, env),
   };
 
   const run = <K extends OperationKind>(

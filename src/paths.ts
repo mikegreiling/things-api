@@ -25,3 +25,8 @@ export function auditDir(env: NodeJS.ProcessEnv = process.env): string {
 export function mutationLockPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(stateDir(env), "mutation.lock");
 }
+
+/** Environment tuple recorded at the last verified mutation (consent-churn tripwire). */
+export function environmentStatePath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(stateDir(env), "environment.json");
+}

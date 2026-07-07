@@ -12,7 +12,19 @@ import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
+import {
+  describeEnvironmentChanges,
+  diffEnvironment,
+  type EnvironmentChange,
+  type EnvironmentTracker,
+} from "./environment.ts";
 import { sdefDeclaresPrivateReorder } from "./experimental.ts";
+import {
+  classifyTransportFailure,
+  classifyVerifyFailure,
+  type FailureHint,
+  type LikelyCause,
+} from "./failure-hints.ts";
 import { evaluateGuards, type GuardBlock, type HazardId } from "./guards.ts";
 import { acquireMutationLock, MutationLockError } from "./lock.ts";
 import type { Acknowledgements, OperationKind, OperationParamsMap } from "./operations.ts";
@@ -57,6 +69,8 @@ export type MutationResult =
       observed: Record<string, unknown> | null;
       vector: VectorId;
       tier: DisruptionTier;
+      /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
+      warnings?: string[];
     }
   | {
       kind: "verify-failed";
@@ -65,6 +79,9 @@ export type MutationResult =
       expected: DeltaSpec;
       observed: Record<string, unknown> | null;
       detail: string;
+      /** Advisory attribution when the failure signals point somewhere. */
+      likelyCause?: LikelyCause;
+      hint?: string;
     }
   | {
       kind: "blocked";
@@ -73,6 +90,7 @@ export type MutationResult =
       hazard?: HazardId;
       detail: string;
       remediation: string;
+      likelyCause?: LikelyCause;
     }
   | {
       kind: "unsupported";
@@ -93,6 +111,8 @@ export interface WriteDeps {
   isAppRunning?: () => boolean;
   /** Canary seam: does the installed sdef still declare the private command? */
   sdefProbe?: () => boolean;
+  /** Consent-churn tripwire: tuple recorded per verified mutation (client wires the default). */
+  environment?: EnvironmentTracker;
   now?: () => Date;
   poller?: PollerDeps;
   pkgVersion?: string;
@@ -232,6 +252,7 @@ export async function runMutation<K extends OperationKind>(
       kind: "blocked",
       op,
       reason: "drift",
+      likelyCause: "schema-drift",
       detail,
       remediation:
         "update things-api to a release with a matching baseline, or (at your own risk) " +
@@ -377,10 +398,19 @@ export async function runMutation<K extends OperationKind>(
       };
     }
 
-    // 7. Execute + verify.
+    // 7. Execute + verify. The environment tuple diff feeds failure
+    // attribution (a changed tuple is the classic consent re-prompt trigger)
+    // and, on success, a warning + refreshed recording.
+    const envChanges: EnvironmentChange[] =
+      deps.environment !== undefined
+        ? diffEnvironment(deps.environment.load(), deps.environment.capture())
+        : [];
+    const withHint = <T extends object>(base: T, hint: FailureHint | null): T =>
+      hint === null ? base : { ...base, likelyCause: hint.likelyCause, hint: hint.hint };
+
     const preCapture = capturePre(delta, deps, pre);
     const executeResult = await vector.execute(invocation);
-    if (executeResult.exitCode !== 0) {
+    if (executeResult.exitCode !== 0 || executeResult.timedOut === true) {
       audit({
         result: "verify-failed:silent-noop",
         vector: vector.id,
@@ -388,14 +418,22 @@ export async function runMutation<K extends OperationKind>(
         invocation: invocation.redactedPayload,
         pre: flattenPreFields(preCapture.fields),
       });
-      return {
-        kind: "verify-failed",
-        op,
-        reason: "silent-noop",
-        expected: delta,
-        observed: null,
-        detail: `transport failed (exit ${executeResult.exitCode ?? "?"}): ${executeResult.stderr.trim()}`,
-      };
+      return withHint(
+        {
+          kind: "verify-failed" as const,
+          op,
+          reason: "silent-noop" as const,
+          expected: delta,
+          observed: null,
+          detail: `transport failed (exit ${executeResult.exitCode ?? "?"}${executeResult.timedOut === true ? ", timed out" : ""}): ${executeResult.stderr.trim()}`,
+        },
+        classifyTransportFailure({
+          vector: vector.id,
+          stderr: executeResult.stderr,
+          timedOut: executeResult.timedOut === true,
+          environmentChanges: envChanges,
+        }),
+      );
     }
 
     const reader = createDbReader(deps.db);
@@ -420,6 +458,9 @@ export async function runMutation<K extends OperationKind>(
         outcome.discoveredUuid ??
         (delta.mode === "update" || delta.mode === "state" ? delta.uuid : null);
       audit({ ...auditCommon, result: "ok", uuid });
+      if (deps.environment !== undefined) {
+        deps.environment.record(deps.environment.capture());
+      }
       return {
         kind: "ok",
         op,
@@ -427,23 +468,38 @@ export async function runMutation<K extends OperationKind>(
         observed: outcome.observed,
         vector: vector.id,
         tier: effectiveTier,
+        ...(envChanges.length > 0 && {
+          warnings: [
+            `environment changed since the last verified write: ` +
+              `${describeEnvironmentChanges(envChanges)} — the first use of another ` +
+              `capability may show a macOS consent prompt`,
+          ],
+        }),
       };
     }
 
     audit({ ...auditCommon, result: `verify-failed:${outcome.kind}` });
-    return {
-      kind: "verify-failed",
-      op,
-      reason: outcome.kind,
-      expected: delta,
-      observed: outcome.observed,
-      detail:
-        outcome.kind === "silent-noop"
-          ? "no observable change in the database (the app accepted the command but did nothing)"
-          : outcome.kind === "timeout"
-            ? "something moved but the expected state never appeared within the timeout"
-            : "the database reached a state contradicting the expected delta",
-    };
+    return withHint(
+      {
+        kind: "verify-failed" as const,
+        op,
+        reason: outcome.kind,
+        expected: delta,
+        observed: outcome.observed,
+        detail:
+          outcome.kind === "silent-noop"
+            ? "no observable change in the database (the app accepted the command but did nothing)"
+            : outcome.kind === "timeout"
+              ? "something moved but the expected state never appeared within the timeout"
+              : "the database reached a state contradicting the expected delta",
+      },
+      classifyVerifyFailure({
+        reason: outcome.kind,
+        vector: vector.id,
+        authTokenPresent: token !== null,
+        environmentChanges: envChanges,
+      }),
+    );
   } finally {
     lock.release();
   }

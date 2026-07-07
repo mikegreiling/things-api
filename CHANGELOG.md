@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Environment awareness & failure attribution (Phase 21a)
+
+- **Failure attribution**: mutation failures carry an advisory `likelyCause` + hint when the signals point somewhere — AppleEvent `-1743` → `permission-denied`; a transport hang/deadline kill → `permission-pending` (the shape of an unanswered macOS consent dialog); a URL silent no-op without an authorization token → `feature-disabled` (Enable Things URLs); a Things version change since the last verified write → `app-updated`; drift blocks → `schema-drift`; residual silent no-ops → `app-behavior-change`. Surfaced in CLI stderr, `--json` envelopes (`error.likelyCause`, hint as `remediation`), and MCP tool errors.
+- **Environment tuple tracking**: the Things version, macOS version, things-api version, and resolved node binary are recorded at `~/.local/state/things-api/environment.json` after every verified mutation. A successful write after a change carries a warning (a changed tuple is the classic consent re-prompt trigger), and `things doctor` reports the tuple, the last-recorded one, and the diff.
+- **`things doctor --probe-automation`** (MCP: `doctor {probe_automation}`): opt-in active Automation-consent check — granted / denied (`-1743`) / pending (unanswered dialog) / app-not-running (never launches the app). Opt-in because the probe itself can summon the consent prompt; that is its onboarding use.
+- **docs/setup.md**: new "Hardening against consent prompts" ladder for headless setups — the responsible-process model, FDA-to-host, the sshd identity trick, signed-binary roadmap, MDM/PPPC, and the SIP-off CI pattern.
+
 ### MCP v2 (Phase 20)
 
 - The tool surface grows from 16 to 31 grouped semantic tools: `set_todo_status` / `set_project_status` (status + children policy + restore-children fold), promoted `move_todo` (project/area/heading/inbox/detach) and `move_project` (area/detach), `set_tags` (replace/add), `edit_checklist` (granular add/remove/check/uncheck/rename/move + stateful replace), type-generic `delete_item`/`restore_item`/`duplicate_item`, and full area/tag CRUD (`update_tag` incl. un-nest, `delete_tag` with subtree confirmation). `run_operation` + `capabilities` remain the escape hatch for the long tail.

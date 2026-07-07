@@ -39,7 +39,12 @@ function jsonResult(data: unknown): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
 
-function errorResult(error: { code: string; message: string; remediation?: string }): ToolResult {
+function errorResult(error: {
+  code: string;
+  message: string;
+  likelyCause?: string;
+  remediation?: string;
+}): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(error) }], isError: true };
 }
 
@@ -57,10 +62,16 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
       return errorResult({
         code: `blocked:${result.hazard ?? result.reason}`,
         message: result.detail,
+        ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
         remediation: result.remediation,
       });
     case "verify-failed":
-      return errorResult({ code: `verify-failed:${result.reason}`, message: result.detail });
+      return errorResult({
+        code: `verify-failed:${result.reason}`,
+        message: result.detail,
+        ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
+        ...(result.hint !== undefined && { remediation: result.hint }),
+      });
     case "unsupported":
       return errorResult({
         code: "unsupported",
@@ -1290,14 +1301,26 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Check the environment: whether the Things app and its database are reachable, " +
-        "whether changes can be made, and any one-time setup still needed (macOS " +
-        "permissions, the app's 'Enable Things URLs' setting), with steps to fix.",
-      inputSchema: {},
+        "whether changes can be made, any one-time setup still needed (macOS permissions, " +
+        "the app's 'Enable Things URLs' setting), and whether the environment changed since " +
+        "the last successful write, with steps to fix.",
+      inputSchema: {
+        probe_automation: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also actively test whether automation of Things is authorized. May show a " +
+              "one-time macOS consent prompt on the machine; skipped when Things is not " +
+              "running.",
+          ),
+      },
       annotations: READ_ONLY,
     },
-    async () =>
+    async (args) =>
       guard(() => {
-        const { report, error } = diagnose(options.dbPath);
+        const { report, error } = diagnose(options.dbPath, {
+          ...(args.probe_automation === true && { probeAutomation: true }),
+        });
         return report !== null
           ? jsonResult(report)
           : errorResult(error ?? { code: "unexpected", message: "no report" });

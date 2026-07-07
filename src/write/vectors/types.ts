@@ -43,6 +43,8 @@ export interface ExecuteResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /** The transport was killed by its own deadline — the signature of an unanswered consent dialog. */
+  timedOut?: boolean;
 }
 
 export interface WriteVector {

@@ -169,10 +169,15 @@ export function escapeAppleScript(value: string): string {
 function runOsascript(script: string): Promise<ExecuteResult> {
   return new Promise((resolve) => {
     execFile("osascript", ["-e", script], { timeout: 30_000 }, (err, stdout, stderr) => {
+      // A deadline kill (err.killed) is a distinct signal from a nonzero
+      // exit: an osascript that never returns is the shape of an unanswered
+      // macOS consent dialog — surfaced for failure attribution.
+      const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
       resolve({
         exitCode: err === null ? 0 : ((err as { code?: number }).code ?? 1),
         stdout: String(stdout),
         stderr: String(stderr),
+        ...(timedOut && { timedOut: true }),
       });
     });
   });

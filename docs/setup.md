@@ -60,6 +60,20 @@ For a Mac mini in a closet driven over SSH:
 - [ ] Things URLs enabled in Things settings
 - [ ] Config profile set to `dedicated-server` (raises the default allowed disruption tier — nobody is watching the screen)
 
+## Hardening against consent prompts (headless / automation Macs)
+
+macOS TCC consent is orthogonal to Unix privilege — sudo/root does not bypass it, and there is no user-editable whitelist. What you CAN control is **which identity the grant attaches to**: macOS attributes each request to the outermost *responsible process* (your terminal app, Claude Desktop, sshd, or — for launchd jobs — the binary itself), and grants last as long as that identity is stable. Note the asymmetry: Things updates do NOT churn Automation grants (the target is keyed by bundle id); it's the *requester's* identity and macOS major upgrades (which occasionally add whole consent categories, e.g. Sonoma's "access data from other apps") that re-prompt.
+
+The ladder, cheapest first:
+
+1. **Interactive Macs**: grant Full Disk Access to the terminal hosts you use (Terminal, iTerm, Claude Desktop). Covers database reads and the "data from other apps" prompt for everything they run, and is immune to node/things-api updates because the grant attaches to the host app, not our binary. Approve each host's Automation prompt (host → Things3) once.
+2. **Headless over SSH**: enable Remote Login's "Allow full disk access for remote users" (grants sshd — an Apple-signed identity that never changes). Apple Events prompts cannot render headless (they auto-deny with error `-1743`), so pre-grant by running one Things AppleScript over SSH **while a GUI session is active** and clicking Allow (Screen Sharing works). `ssh localhost things …` is also a legitimate way to launder interactive runs through the stable sshd identity.
+3. **launchd/cron jobs** (no host app shields you): the grant keys on the binary's code requirement, so an unsigned node re-prompts whenever its path or hash changes. Pin the real node binary path (no version-manager shims in the job definition) — or, the durable fix, a compiled `things` binary codesigned with a stable identity, which keeps grants across updates (roadmap).
+4. **MDM + PPPC profile**: the fully supported zero-prompt path — a Privacy Preferences Policy Control payload pre-grants Full Disk Access and Apple Events to a code requirement. Only honored when delivered via user-approved MDM (a self-hosted NanoMDM is viable for a dedicated automation Mac).
+5. **SIP off + direct TCC.db writes**: the CI-image pattern. It works; reserve it for disposable or single-purpose machines.
+
+Operational rules that make grants stick: turn off Things auto-updates on the automation Mac, defer macOS upgrades to scheduled windows, and treat both as re-onboarding events. `things doctor` reports when the environment tuple (Things version, macOS version, things-api version, node binary) changed since the last successful write — the tripwire for "the next call may prompt" — and `things doctor --probe-automation` actively tests the Automation grant (expect it to summon the prompt on an unauthorized machine; that is its onboarding use). Mutation failures carry a `likelyCause` when the signals point at consent (`permission-denied`, `permission-pending`), a disabled feature, or an app update.
+
 ## Ongoing operational notes
 
 - **Things app updates can change the database schema.** When that happens, `things doctor` reports **drift** and all writes hard-block until a things-api release ships a matching baseline — this is deliberate safety, not breakage. Reads keep working with a warning. (Impatient escape hatch: `things config set accepted-fingerprint <hash>` — loud, audited, your responsibility.)

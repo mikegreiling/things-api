@@ -10,8 +10,20 @@ import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
+import {
+  probeAutomation,
+  type AutomationProbeDeps,
+  type AutomationProbeStatus,
+} from "./write/automation-probe.ts";
+import {
+  createEnvironmentTracker,
+  diffEnvironment,
+  type EnvironmentChange,
+  type EnvironmentTracker,
+  type EnvironmentTuple,
+} from "./write/environment.ts";
 import { sdefDeclaresPrivateReorder } from "./write/experimental.ts";
-import { ExitCode, type EnvelopeMeta } from "./contracts.ts";
+import { ExitCode, PKG_VERSION, type EnvelopeMeta } from "./contracts.ts";
 
 const THINGS_APP = "/Applications/Things3.app";
 
@@ -43,6 +55,31 @@ export interface DiagnoseReport {
     sdefDeclaresReorder: boolean;
     reason: string;
   };
+  environment: {
+    /** The identity tuple macOS consent grants key on (docs/setup.md, hardening). */
+    current: EnvironmentTuple;
+    /** Tuple recorded at the last verified mutation; null before the first one. */
+    lastVerifiedWrite: EnvironmentTuple | null;
+    /** Non-empty = re-consent risk: something changed since the last verified write. */
+    changes: EnvironmentChange[];
+  };
+  automation: {
+    status: AutomationProbeStatus | "not-probed";
+    detail: string;
+  };
+}
+
+export interface DiagnoseOptions {
+  /**
+   * Actively test Automation consent by querying Things once. Opt-in: on an
+   * unauthorized machine the probe makes macOS show the consent prompt
+   * (useful during onboarding, unwanted headless). Skipped when Things is
+   * not running so a diagnostic never launches the app.
+   */
+  probeAutomation?: boolean;
+  /** Test seams. */
+  probeDeps?: AutomationProbeDeps;
+  environment?: EnvironmentTracker;
 }
 
 export interface DiagnoseResult {
@@ -52,7 +89,7 @@ export interface DiagnoseResult {
   meta: Pick<EnvelopeMeta, "dbVersion" | "fingerprint">;
 }
 
-export function diagnose(dbPath?: string): DiagnoseResult {
+export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): DiagnoseResult {
   let located: ReturnType<typeof locateThingsDb>;
   try {
     located = locateThingsDb(dbPath ? { dbPath } : undefined);
@@ -108,6 +145,9 @@ export function diagnose(dbPath?: string): DiagnoseResult {
           : "unknown-version";
     const writesEnabled = status.kind === "ok" || accepted;
     const sdefCanary = sdefDeclaresPrivateReorder();
+    const tracker = options.environment ?? createEnvironmentTracker(PKG_VERSION);
+    const currentEnv = tracker.capture();
+    const recordedEnv = tracker.load();
     const extraColumns: Record<string, string[]> = {};
     for (const t of observation.tables) {
       if (t.extraColumns.length > 0) extraColumns[t.table] = t.extraColumns;
@@ -148,6 +188,20 @@ export function diagnose(dbPath?: string): DiagnoseResult {
             : "on BUT the app sdef no longer declares the private reorder command (removed by " +
               "an update?) — native reorder is blocked by the canary",
       },
+      environment: {
+        current: currentEnv,
+        lastVerifiedWrite: recordedEnv,
+        changes: diffEnvironment(recordedEnv, currentEnv),
+      },
+      automation:
+        options.probeAutomation === true
+          ? probeAutomation(options.probeDeps)
+          : {
+              status: "not-probed",
+              detail:
+                "opt-in: pass --probe-automation to actively test Automation consent (may " +
+                "show a one-time macOS prompt; skipped when Things is not running)",
+            },
     };
     return {
       report,
