@@ -1,7 +1,9 @@
 /**
- * Write commands. Every command's --help states its disruption tier, default
- * vector, and the hazards that may block it — help text is the agent API.
- * No interactive prompts: risky semantics require explicit flags.
+ * Write commands. Help text is the agent API: every command's --help states
+ * its behavior, side effects, and required confirmation flags in consumer
+ * voice (docs/design/surface-copy.md) — internals stay in docs/ and the
+ * capabilities/dry-run OUTPUT. No interactive prompts: risky semantics
+ * require explicit flags.
  */
 import type { Command } from "commander";
 
@@ -36,15 +38,12 @@ function addWriteFlags(cmd: Command): Command {
   return cmd
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .option(
-      "--dry-run",
-      "plan only: compiled invocation (token-redacted), tier, hazards, expected delta — nothing executes",
-    )
-    .option("--vector <id>", "force a write vector: url-scheme | applescript")
-    .option("--allow-disruptive", "permit disruption tier 2 (focus steal)")
-    .option("--allow-very-disruptive", "permit disruption tier 3 (UI navigation/modals)")
-    .option("--verify-timeout <ms>", "read-after-write verification deadline")
-    .option("--actor <name>", "audit attribution (default: config/profile actor)");
+    .option("--dry-run", "preview the planned change and its expected effect; nothing executes")
+    .option("--vector <id>", "force how the change is delivered: url-scheme | applescript")
+    .option("--allow-disruptive", "permit changes that briefly steal window focus")
+    .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
+    .option("--verify-timeout <ms>", "how long to wait for the change to take effect")
+    .option("--actor <name>", "author name recorded for this change (default: from config)");
 }
 
 function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}): WriteOptions {
@@ -257,9 +256,10 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("add <title>")
       .description(
-        "Create a to-do (vector: url-scheme, tier 0 with Things running). " +
-          "Hazards: H-UNKNOWN-TAG, H-UNKNOWN-DESTINATION, H-AMBIGUOUS-HEADING, " +
-          "H-REOPEN-RESOLVED-PROJECT (--acknowledge-project-reopen).",
+        "Create a to-do; its uuid is printed on success. Tags, projects, areas, and " +
+          "headings must name existing items — unknown or ambiguous references are " +
+          "rejected. Adding into a completed/canceled project reopens that project — " +
+          "requires --acknowledge-project-reopen.",
       )
       .option("--notes <text>", "notes body")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -306,14 +306,13 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("update <uuid>")
       .description(
-        "Update title/notes/when/reminder/deadline (vector: url-scheme, tier 0). " +
-          "Hazard: H-REPEAT-SCHEDULE — when/deadline on a repeating template is hard-blocked " +
-          "(the URL write crashes Things); title/notes stay allowed. " +
-          "Reminders (H-REMINDER-SCOPE): --reminder needs --when today|evening|YYYY-MM-DD; " +
-          "when re-scheduling WITHOUT --reminder an existing reminder is auto-preserved. " +
-          "--clear-reminder clears on today|evening only — DATED reminders are sticky " +
-          "(no URL clear path, R20/R21). " +
-          "--append-notes/--prepend-notes join with a newline (exclusive with --notes).",
+        "Update title/notes/when/reminder/deadline. Schedule and deadline changes are not " +
+          "available for repeating to-dos (title/notes are). --reminder needs --when " +
+          "today|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing " +
+          "reminder is auto-preserved. --clear-reminder works while the to-do is scheduled " +
+          "for today|evening — a DATED reminder can only be changed, not cleared " +
+          "(re-schedule to today first). --append-notes/--prepend-notes join with a " +
+          "newline (exclusive with --notes).",
       )
       .option("--title <text>", "new title")
       .option("--notes <text>", "replace notes")
@@ -321,7 +320,7 @@ export function registerWriteCommands(program: Command): void {
       .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
-      .option("--clear-reminder", "clear the reminder (today|evening only — dated are sticky)")
+      .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
       .option("--deadline <date>", "YYYY-MM-DD")
       .option("--clear-deadline", "remove the deadline"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -368,8 +367,7 @@ export function registerWriteCommands(program: Command): void {
       todo
         .command(`${verb} <uuid>`)
         .description(
-          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do (tier 0; verified read-after-write). ` +
-            "Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates.",
+          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do. Not available for repeating to-dos.`,
         ),
     ).action(async (uuid: string, opts: WriteFlagOpts) => {
       await runWrite(opts, (c) => c.write[method](uuid, writeOptionsFrom(opts)));
@@ -380,18 +378,16 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("move <uuid>")
       .description(
-        "Move to a project/area (vector: url-scheme; applescript for project/area). " +
-          "Hazards: H-UNKNOWN-DESTINATION (silent no-op otherwise), H-AMBIGUOUS-HEADING, " +
-          "H-REOPEN-RESOLVED-PROJECT, H-REPEAT-SCHEDULE.",
+        "Move a to-do into a project or area (optionally under an existing heading), back " +
+          "to the Inbox, or out of every container. Unknown or ambiguous destinations are " +
+          "rejected. Moving into a completed/canceled project reopens that project — " +
+          "requires --acknowledge-project-reopen.",
       )
       .option("--project <ref>", "destination project (uuid or unique name)")
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--heading <name>", "existing heading in the destination project")
-      .option("--inbox", "move back to the Inbox — de-schedules (vector: applescript, E06)")
-      .option(
-        "--detach",
-        "remove ALL container links (project/area/heading) keeping the schedule (P21/P22)",
-      )
+      .option("--inbox", "move back to the Inbox — removes any schedule")
+      .option("--detach", "remove ALL container links (project/area/heading) keeping the schedule")
       .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const project = containerRef(opts["project"] as string | undefined);
@@ -430,9 +426,8 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("duplicate <uuid>")
       .description(
-        "Duplicate a to-do (vector: url-scheme, tier 0; validated E07 — exact copy of " +
-          "title/notes, new uuid discovered by verification). AppleScript refuses duplication " +
-          "(E08). Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates (unvalidated).",
+        "Duplicate a to-do — an exact copy; the copy's uuid is printed on success. Not " +
+          "available for repeating to-dos.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.duplicateTodo(uuid, writeOptionsFrom(opts)));
@@ -442,9 +437,9 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("tags <uuid>")
       .description(
-        "Set or extend tags (tier 0). --set REPLACES the full tag set (validated semantics); " +
-          "--add merges with current tags. Hazard: H-UNKNOWN-TAG (unknown tags are otherwise " +
-          "silently ignored by the app).",
+        "Set or extend a to-do's tags. --set REPLACES the full tag set (an empty value " +
+          "clears all tags); --add merges with the current tags. Tags must name existing " +
+          "tags — unknown tags are rejected.",
       )
       .option("--set <list>", "comma-separated tag names: full replacement")
       .option("--add <list>", "comma-separated tag names: merge with existing"),
@@ -467,13 +462,13 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("checklist <uuid>")
       .description(
-        "Checklist operations (tier 0). WHOLESALE: --item (repeatable) replaces the list — " +
-          "destroys per-item state, hazard H-CHECKLIST-REPLACE requires " +
+        "Edit a to-do's checklist. WHOLESALE: --item (repeatable) replaces the whole list, " +
+          "discarding the existing items and their checked states — requires " +
           "--acknowledge-checklist-reset when items exist. GRANULAR (one per call): " +
-          "--add/--remove/--check/--uncheck/--rename+--to/--move-item+--to-position — " +
-          "reads current items+states and rewrites via things:///json with states PRESERVED " +
-          "(P18; the reset ack is implied). Items are matched by exact title (loud on " +
-          "ambiguity); item uuids are not stable across any rewrite.",
+          "--add/--remove/--check/--uncheck/--rename+--to/--move-item+--to-position change " +
+          "a single item with every other item's checked state PRESERVED (no reset flag " +
+          "needed). Items are matched by exact title — ambiguous titles are rejected; item " +
+          "uuids are not stable across any edit.",
       )
       .option("--item <text>", "wholesale: checklist item in order (repeatable)", collect, [])
       .option("--acknowledge-checklist-reset", "accept wholesale replacement of existing items")
@@ -556,8 +551,8 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("delete <uuid>")
       .description(
-        "Move a to-do to the Trash (vector: applescript, tier 0; restorable via " +
-          "`things todo restore`). Hazard: H-REPEAT-SCHEDULE — blocked on repeating templates.",
+        "Move a to-do to the Trash (recover with `things todo restore`). Not available " +
+          "for repeating to-dos.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteTodo(uuid, writeOptionsFrom(opts)));
@@ -567,10 +562,9 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("restore <uuid>")
       .description(
-        "Restore a TRASHED to-do (vector: applescript, tier 0; validated E15 — the UI's " +
-          "'Put Back', scripted). The item un-trashes into the Inbox, DE-SCHEDULED: its prior " +
-          "list/schedule are not restored. Blocked unless the target is a trashed to-do " +
-          "(H-UNKNOWN-DESTINATION); trashed projects must be restored in the app.",
+        "Restore a TRASHED to-do: it returns to the Inbox, DE-SCHEDULED — its previous " +
+          "list and schedule are not restored. Only trashed to-dos qualify; for projects " +
+          "use `things project restore`.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.restoreTodo(uuid, writeOptionsFrom(opts)));
@@ -581,7 +575,7 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     project
       .command("add <title>")
-      .description("Create a project (vector: url-scheme, tier 0).")
+      .description("Create a project; its uuid is printed on success.")
       .option("--notes <text>", "notes body")
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -609,8 +603,8 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("update <uuid>")
       .description(
-        "Update project title/notes/when/deadline (vector: url-scheme, tier 0). " +
-          "--append-notes/--prepend-notes join with a newline (E18; exclusive with --notes).",
+        "Update a project's title/notes/when/deadline. --append-notes/--prepend-notes " +
+          "join with a newline (exclusive with --notes).",
       ),
   )
     .option("--title <text>", "new title")
@@ -654,9 +648,8 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("move <uuid>")
       .description(
-        "Move a project to another area (E14/P23, tier 0) or DETACH it from its area " +
-          "(--detach; URL empty area-id, P24 — the only surface that can). Status and " +
-          "schedule are untouched. Hazard: H-UNKNOWN-DESTINATION.",
+        "Move a project to another area, or DETACH it from its current area (--detach). " +
+          "Status and schedule are untouched. Unknown areas are rejected.",
       )
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--detach", "remove the current area assignment (exclusive with --area)"),
@@ -681,13 +674,12 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("cancel <uuid>")
       .description(
-        "Cancel a project (vector: url-scheme, tier 0; validated P01). The URL write " +
-          "auto-cancels open children with NO prompt — hazard H-PROJECT-COMPLETE-CHILDREN " +
-          "requires an explicit --children policy; completed children are untouched.",
+        "Cancel a project. Canceling also cancels its open to-dos, so an explicit " +
+          "--children policy is required; already-completed children are never altered.",
       )
       .requiredOption(
         "--children <policy>",
-        "require-resolved (block if open children) | auto-cancel (verified cascade)",
+        "require-resolved (error if open to-dos remain) | auto-cancel (cancel them too)",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts & { children: string }) => {
     await runWrite(opts, (c) =>
@@ -703,13 +695,12 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("reopen <uuid>")
       .description(
-        "Reopen a completed/canceled project (vector: url-scheme, tier 0; validated " +
-          "P02/P05 — completed=false / canceled=false per the current status). Children " +
-          "stay resolved unless --restore-children also reopens the ones the cascade " +
-          "resolved (detected by the <2s stopDate window, P03; children resolved earlier " +
-          "are never touched, P04). Exit 3 if any child restore fails.",
+        "Reopen a completed/canceled project. Its children stay completed/canceled unless " +
+          "--restore-children also reopens the ones that were resolved together with the " +
+          "project — children resolved earlier are never touched. Exit 3 if any child " +
+          "restore fails.",
       )
-      .option("--restore-children", "also reopen cascade-resolved children (verified per child)"),
+      .option("--restore-children", "also reopen the children resolved with the project"),
   ).action(async (uuid: string, opts: WriteFlagOpts & { restoreChildren?: boolean }) => {
     const started = Date.now();
     let client: ThingsClient | null = null;
@@ -761,9 +752,8 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("restore <uuid>")
       .description(
-        "Restore a TRASHED project IN PLACE (vector: applescript, tier 0; validated P06): " +
-          "only the trashed flag flips — schedule, area, and children keep their state. " +
-          "Blocked unless the target is a trashed project.",
+        "Restore a TRASHED project IN PLACE: schedule, area, and children all keep their " +
+          "state. Only trashed projects qualify.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.restoreProject(uuid, writeOptionsFrom(opts)));
@@ -773,9 +763,8 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("duplicate <uuid>")
       .description(
-        "Duplicate a project INCLUDING its children (vector: url-scheme, tier 0; validated " +
-          "E17 — update-project?duplicate=true). The copy's uuid is discovered by " +
-          "verification. Hazard: H-REPEAT-SCHEDULE — blocked on repeating projects (unvalidated).",
+        "Duplicate a project INCLUDING its children; the copy's uuid is printed on " +
+          "success. Not available for repeating projects.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.duplicateProject(uuid, writeOptionsFrom(opts)));
@@ -785,13 +774,12 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("complete <uuid>")
       .description(
-        "Complete a project (vector: url-scheme, tier 0). The URL write auto-completes open " +
-          "children with NO prompt (validated) — hazard H-PROJECT-COMPLETE-CHILDREN therefore " +
-          "requires an explicit --children policy; the cascade is verified, not assumed.",
+        "Complete a project. Completing also completes its open to-dos, so an explicit " +
+          "--children policy is required.",
       )
       .requiredOption(
         "--children <policy>",
-        "require-resolved (block if open children) | auto-complete (verified cascade)",
+        "require-resolved (error if open to-dos remain) | auto-complete (complete them too)",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts & { children: string }) => {
     await runWrite(opts, (c) =>
@@ -807,8 +795,8 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("delete <uuid>")
       .description(
-        "Move a project to the Trash (vector: applescript, tier 0). DB semantics are shallow " +
-          "(validated A24B): children keep their links; Trash membership is derived.",
+        "Move a project to the Trash; its children go with it (recover with `things " +
+          "project restore`).",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteProject(uuid, writeOptionsFrom(opts)));
@@ -818,10 +806,7 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     area
       .command("add <title>")
-      .description(
-        "Create an area (vector: applescript — the URL scheme cannot; tier 0). " +
-          "Optionally tag it with EXISTING tags.",
-      )
+      .description("Create an area, optionally tagged with EXISTING tags.")
       .option("--tags <list>", "comma-separated existing tag names"),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const tags = splitCsv(opts["tags"] as string | undefined);
@@ -833,8 +818,8 @@ export function registerWriteCommands(program: Command): void {
     area
       .command("update <target>")
       .description(
-        "Rename an area and/or replace its tags (vector: applescript, tier 0; E01). " +
-          "Target by uuid or unique name. Hazard: H-UNKNOWN-TAG for --tags.",
+        "Rename an area and/or replace its tags (the full set; tags must name existing " +
+          "tags). Target by uuid or unique name.",
       )
       .option("--title <text>", "new name")
       .option("--tags <list>", "comma-separated EXISTING tag names (full replacement)"),
@@ -861,8 +846,9 @@ export function registerWriteCommands(program: Command): void {
     area
       .command("delete <target>")
       .description(
-        "Delete an area PERMANENTLY (vector: applescript, tier 0). Areas skip the Trash " +
-          "(validated A25); contained to-dos are trashed. Requires --dangerously-permanent.",
+        "Delete an area PERMANENTLY — areas do not go to the Trash, so this cannot be " +
+          "undone; requires --dangerously-permanent. The area's to-dos move to the Trash; " +
+          "its projects remain, no longer assigned to any area.",
       )
       .option("--dangerously-permanent", "accept permanent, unrecoverable deletion"),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -882,10 +868,7 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     tag
       .command("add <name>")
-      .description(
-        "Create a tag (vector: applescript — the URL scheme cannot; tier 0). " +
-          "--parent nests it under an existing tag.",
-      )
+      .description("Create a tag; --parent nests it under an existing tag.")
       .option("--parent <name>", "existing parent tag"),
   ).action(async (name: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     await runWrite(opts, (c) =>
@@ -899,10 +882,9 @@ export function registerWriteCommands(program: Command): void {
     tag
       .command("update <target>")
       .description(
-        "Rename a tag (assignments survive — E02), nest it under an existing tag (E03), " +
-          "UN-NEST it to root (--unnest, P29 — the property-delete form; exclusive with " +
-          "--parent), and/or set its keyboard shortcut (E10). Vector: applescript, tier 0. " +
-          "Clearing a shortcut is unprobed — not offered.",
+        "Rename a tag (existing assignments follow the rename), nest it under an existing " +
+          "tag, UN-NEST it to the root (--unnest; exclusive with --parent), and/or set its " +
+          "keyboard shortcut. Clearing a shortcut is not supported.",
       )
       .option("--title <text>", "new name")
       .option("--parent <name>", "existing tag to nest under")
@@ -942,10 +924,10 @@ export function registerWriteCommands(program: Command): void {
     tag
       .command("delete <target>")
       .description(
-        "Delete a tag PERMANENTLY (vector: applescript, tier 0). Assignments cascade " +
-          "(validated A26) and CHILD TAGS are cascade-deleted too (P16) — hazard " +
-          "H-TAG-SUBTREE-DELETE requires --acknowledge-subtree when children exist. " +
-          "Requires --dangerously-permanent.",
+        "Delete a tag PERMANENTLY — tags do not go to the Trash, so this cannot be " +
+          "undone; requires --dangerously-permanent. The tag is removed from every item, " +
+          "and ALL of its nested child tags are deleted with it — requires " +
+          "--acknowledge-subtree when children exist.",
       )
       .option("--dangerously-permanent", "accept permanent, unrecoverable deletion")
       .option("--acknowledge-subtree", "accept cascade-deletion of ALL descendant tags"),
@@ -968,8 +950,8 @@ export function registerWriteCommands(program: Command): void {
     trash
       .command("empty")
       .description(
-        "Empty the Trash: PERMANENTLY deletes every trashed row (vector: applescript, tier 0; " +
-          "validated A27 — no tombstones with sync off). Requires --dangerously-permanent.",
+        "Empty the Trash: PERMANENTLY deletes every trashed item — this cannot be undone. " +
+          "Requires --dangerously-permanent.",
       )
       .option("--dangerously-permanent", "accept permanent, unrecoverable deletion"),
   ).action(async (rawOpts: WriteFlagOpts & Record<string, unknown>, cmd: Command) => {
@@ -993,10 +975,10 @@ export function registerWriteCommands(program: Command): void {
     .description(
       "Run MANY mutations from JSONL (file, or stdin when omitted/'-'): one op per line, " +
         '{"op": "<kind>", "params": {...}, "options": {...}} — see `things capabilities` for ' +
-        "op kinds and params. Every op runs the FULL pipeline (guards, verified " +
-        "read-after-write, audit) sequentially; per-op results stream as JSONL. No " +
-        "transactions. Per-op options carry acknowledgement flags " +
-        "(acknowledgeChecklistReset, acknowledgeProjectReopen, dangerouslyPermanent). " +
+        "op kinds and params. Ops run sequentially and independently — NO transactions; a " +
+        "failure does not roll back earlier ops. Per-op results stream as JSONL. Per-op " +
+        "options carry the confirmation flags (acknowledgeChecklistReset, " +
+        "acknowledgeProjectReopen, dangerouslyPermanent, acknowledgeTagSubtree). " +
         "--dry-run plans everything without executing; --fail-fast skips the rest after " +
         "the first failure. Exit: 0 all ok · 3 any verify-failed/invalid · 4 any blocked " +
         "· 5 any drift-blocked.",
@@ -1005,7 +987,7 @@ export function registerWriteCommands(program: Command): void {
     .option("--fail-fast", "skip remaining ops after the first failure")
     .option("--json", "JSONL results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
-    .option("--actor <name>", "audit attribution for the whole batch")
+    .option("--actor <name>", "author name recorded for the whole batch")
     .action(async (file: string | undefined, opts: WriteFlagOpts & Record<string, unknown>) => {
       let raw: string;
       if (file !== undefined && file !== "-") {
@@ -1083,14 +1065,14 @@ export function registerWriteCommands(program: Command): void {
   program
     .command("undo")
     .description(
-      "Undo the last N successful mutations by replaying INVERSE ops from the audit trail " +
-        "(newest first). Each inverse runs the full pipeline: guards, verified " +
-        "read-after-write, audit (as actor `undo:<actor>` — never itself an undo target). " +
-        "IRREVERSIBLE ops are reported, not guessed: permanent deletes, project " +
-        "complete/delete, ops whose pre-state was not captured. Partial restores carry " +
-        "notes (e.g. a delete-undo lands in the Inbox de-scheduled). --dry-run shows every " +
-        "inverse plan without executing. Undoing a CREATED area/tag deletes it permanently " +
-        "— requires --dangerously-permanent. Unwinding stops at the first failed inverse. " +
+      "Undo the last N changes made through things-api, newest first — each undo applies " +
+        "the INVERSE change (recorded as actor `undo:<actor>`, never itself an undo " +
+        "target). Changes made directly in the Things app cannot be undone here. " +
+        "IRREVERSIBLE changes are reported, not guessed: permanent deletes and changes " +
+        "whose prior state is unknown. Partial restores carry notes (e.g. a delete-undo " +
+        "lands in the Inbox de-scheduled). --dry-run shows every inverse plan without " +
+        "executing. Undoing a CREATED area/tag deletes it permanently — requires " +
+        "--dangerously-permanent. Unwinding stops at the first failed inverse. " +
         "Exit: 0 all ok · 3 any failed/partial · 0 with per-item detail otherwise.",
     )
     .option("--last <n>", "how many trailing mutations to undo", "1")
@@ -1098,8 +1080,8 @@ export function registerWriteCommands(program: Command): void {
     .option("--dangerously-permanent", "allow inverses that delete areas/tags permanently")
     .option("--json", "JSONL per-item results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
-    .option("--verify-timeout <ms>", "read-after-write verification deadline per inverse op")
-    .option("--actor <name>", "audit attribution (recorded as undo:<name>)")
+    .option("--verify-timeout <ms>", "how long to wait for each inverse change to take effect")
+    .option("--actor <name>", "author name recorded for the undo (as undo:<name>)")
     .action(async (opts: WriteFlagOpts & Record<string, unknown>) => {
       let client: ThingsClient | null = null;
       try {
@@ -1148,12 +1130,12 @@ export function registerWriteCommands(program: Command): void {
       .description(
         "Reorder items within Today, This Evening, a project, or an area — uuids are placed " +
           "at the TOP in the given order; unlisted members keep their relative order below. " +
-          "Strategies: native (private sdef command — EXPERIMENTAL, requires `things config " +
-          "set allow-experimental true`; today/project/area) and bounce (verified when= " +
-          `round-trips; today/evening, max ${BOUNCE_MAX_ITEMS} items). Evening is bounce-only: ` +
-          "the native command silently de-evenings items (O03). Headed project children are " +
-          "rejected (O06). Area scope reorders to-dos (O05/O10) OR projects (O14) — never " +
-          "mixed in one request. Hazard: H-REORDER-SCOPE.",
+          "Strategies: native (EXPERIMENTAL — requires `things config set allow-experimental " +
+          "true` and may stop working after a Things update; today/project/area) and bounce " +
+          `(today/evening, max ${BOUNCE_MAX_ITEMS} items; an interrupted run reports which ` +
+          "items were placed). Evening is bounce-only. Project children under headings " +
+          "cannot be reordered. Area scope reorders to-dos OR projects — never mixed in " +
+          "one request.",
       )
       .requiredOption("--scope <scope>", "today | evening | project | area")
       .option("--project <ref>", "project (uuid or unique name) — scope=project")
@@ -1182,8 +1164,9 @@ export function registerWriteCommands(program: Command): void {
   program
     .command("capabilities")
     .description(
-      "Dump the operation × vector support matrix (lab-validated data) — what is possible, " +
-        "at which disruption tier, with which caveats",
+      "Reference for every operation kind (used by `things batch` and the MCP " +
+        "run_operation tool): whether it is supported, its caveats, and the confirmation " +
+        "flags it needs — with the underlying support evidence",
     )
     .option("--op <operation>", "limit to one operation kind")
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -1213,7 +1196,7 @@ export function registerWriteCommands(program: Command): void {
   const config = group(program, "config", "things-api configuration");
   config
     .command("show")
-    .description("Show the effective configuration (profile, disruption policy, audit)")
+    .description("Show the effective configuration (profile, disruption policy, actor)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: { json?: boolean; db?: string }) => {

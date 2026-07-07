@@ -15,7 +15,9 @@ export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description(
-      "Check environment health: database location, schema fingerprint vs baseline, app presence. " +
+      "Check environment health: database location, database schema compatibility, app " +
+        "presence, and any one-time setup still needed (macOS permissions, the app's " +
+        "'Enable Things URLs' setting) — with steps to fix. " +
         "Exit 0 healthy; 5 schema drift (writes disabled); 7 environment problem.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")

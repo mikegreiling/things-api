@@ -8,6 +8,7 @@
 - Server `instructions` now carry a live inventory read at server start — areas, tag hierarchy (`parent > child`), open project titles (capped at 100) — plus the reference and scheduling vocabulary, degrading to conventions-only when the database is unreadable.
 - Tools carry MCP annotations (`readOnlyHint` on reads/capabilities/doctor, `destructiveHint` on permanent deletes and the generic mutation entries).
 - New surface-copy contract ([docs/design/surface-copy.md](docs/design/surface-copy.md)): tool descriptions state consumer-visible behavior and side effects only — pipeline/audit/lab vocabulary is banned (regression-tested) and lives in `docs/` and the `capabilities` output. Shared parameter vocabulary moved to `src/surface-copy.ts` so CLI help and MCP schemas cannot drift apart.
+- The same contract now governs the CLI and the library JSDoc: every `--help` string, the AGENT NOTES block, and the exported `ThingsClient`/operation-params docs were rewritten in consumer voice (hazard ids, probe-evidence ids, vector/tier framing, and audit/verification mechanics replaced with the behavior they imply); a help-wide banned-vocabulary test locks it in. The lab evidence remains in `docs/lab/`, the write-layer internals, and the `capabilities` output.
 
 ## 0.3.0 — 2026-07-07
 

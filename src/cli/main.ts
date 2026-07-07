@@ -22,13 +22,13 @@ AGENT NOTES:
   - Every command supports --json: versioned envelope on stdout, logs on stderr.
   - Exit codes are stable: 0 ok, 2 usage, 3 verify-failed, 4 blocked,
     5 drift-blocked, 6 unsupported, 7 environment.
-  - No command ever prompts interactively; risky operations require explicit
-    acknowledgement flags documented in their --help.
-  - Discover the operation x vector support matrix with: things capabilities --json
-  - Every write supports --dry-run: inspect the compiled invocation, disruption
-    tier, hazards, and expected delta without executing anything.
-  - Every mutation is verified by read-after-write and recorded in the audit
-    trail (~/.local/state/things-api/audit/); blocked errors carry remediation.
+  - No command ever prompts interactively; operations with cascading or
+    permanent effects require explicit flags documented in their --help.
+  - Discover the full operation catalog with: things capabilities --json
+  - Every write supports --dry-run: preview the planned change and its
+    expected effect without executing anything.
+  - Failures are loud: a change that does not take effect exits 3; refused
+    changes exit 4 with machine-readable remediation.
 `;
 
 export function buildProgram(): Command {

@@ -52,9 +52,8 @@ export interface TodoAddParams {
   notes?: string;
   when?: WhenValue;
   /**
-   * Time-of-day reminder, `HH:mm` 24h. Requires when: today|evening (the
-   * only probed combinations, R01–R16); compiled through the deterministic
-   * URL emitter (the app's bare-hour parser is a trap — oddity 2d).
+   * Time-of-day reminder, `HH:mm` 24h. Requires a schedulable `when`
+   * (today, evening, or a date) in the same call.
    */
   reminder?: ReminderTime;
   deadline?: IsoDate;
@@ -62,7 +61,7 @@ export interface TodoAddParams {
   checklistItems?: string[];
   project?: ContainerRef;
   area?: ContainerRef;
-  /** Existing heading inside the target project (placement-only; U09). */
+  /** Existing heading inside the target project (placement only). */
   heading?: string;
 }
 
@@ -70,16 +69,16 @@ export interface TodoUpdateParams {
   uuid: string;
   title?: string;
   notes?: string;
-  /** Append to the existing notes (newline-joined; E04/E11). Exclusive with notes/prependNotes. */
+  /** Append to the existing notes (newline-joined). Exclusive with notes/prependNotes. */
   appendNotes?: string;
-  /** Prepend to the existing notes (newline-joined; E05/E12). Exclusive with notes/appendNotes. */
+  /** Prepend to the existing notes (newline-joined). Exclusive with notes/appendNotes. */
   prependNotes?: string;
   when?: WhenValue;
   /**
    * `HH:mm` sets a reminder (requires when: today|evening in the same call);
-   * null clears it. When `when` is today/evening and this is OMITTED, an
-   * existing reminder is auto-preserved — a bare when= would silently clear
-   * it (R07).
+   * null clears it (today/evening only — a dated reminder can only be
+   * changed, not cleared). When re-scheduling with this OMITTED, an existing
+   * reminder is auto-preserved.
    */
   reminder?: ReminderTime | null;
   deadline?: IsoDate | null;
@@ -95,35 +94,34 @@ export interface TodoMoveParams {
   area?: ContainerRef;
   /** Existing heading inside the destination project. */
   heading?: string;
-  /** Move back to the Inbox (de-schedules; E06). Exclusive with the others. */
+  /** Move back to the Inbox — removes any schedule. Exclusive with the others. */
   inbox?: boolean;
   /**
-   * Detach from the current project/area/heading, keeping schedule and
-   * everything else (URL `list-id=` empty, P21/P22). Exclusive with the others.
+   * Detach from the current project/area/heading, keeping the schedule and
+   * everything else. Exclusive with the others.
    */
   detach?: boolean;
 }
 
 export interface TodoSetTagsParams {
   uuid: string;
-  /** Full replacement set (validated semantics, U04). */
+  /** Full replacement set (an empty list clears all tags). */
   tags: string[];
 }
 
-/** One checklist item in a stateful replacement (P18: json carries states). */
+/** One checklist item in a stateful replacement. */
 export interface ChecklistItemSpec {
   title: string;
-  /** Recreate the item pre-checked (json vector only). */
+  /** Recreate the item pre-checked. */
   completed?: boolean;
 }
 
 export interface TodoReplaceChecklistParams {
   uuid: string;
   /**
-   * Full replacement list. Plain strings ride the classic `checklist-items=`
-   * URL param (all items recreated OPEN — T07); any object entry switches to
-   * the `things:///json` form, which applies per-item completed states (P18).
-   * Item uuids are NOT stable across a rewrite either way.
+   * Full replacement list. Plain strings recreate items unchecked; object
+   * entries can recreate items pre-checked. Item uuids are NOT stable
+   * across a rewrite.
    */
   items: (string | ChecklistItemSpec)[];
 }
@@ -141,9 +139,9 @@ export interface ProjectUpdateParams {
   uuid: string;
   title?: string;
   notes?: string;
-  /** Append to the existing notes (newline-joined; E18). Exclusive with notes/prependNotes. */
+  /** Append to the existing notes (newline-joined). Exclusive with notes/prependNotes. */
   appendNotes?: string;
-  /** Prepend to the existing notes (newline-joined; E18). Exclusive with notes/appendNotes. */
+  /** Prepend to the existing notes (newline-joined). Exclusive with notes/appendNotes. */
   prependNotes?: string;
   when?: WhenValue;
   deadline?: IsoDate | null;
@@ -151,17 +149,17 @@ export interface ProjectUpdateParams {
 
 export interface ProjectMoveParams {
   uuid: string;
-  /** Destination area (uuid or unique name). E14 (AppleScript) / P23 (URL). */
+  /** Destination area (uuid or unique name). */
   area?: ContainerRef;
-  /** Detach from the current area (URL `area-id=` empty, P24). Exclusive with area. */
+  /** Detach from the current area. Exclusive with area. */
   detach?: boolean;
 }
 
 export interface ProjectCompleteParams {
   uuid: string;
   /**
-   * Open-children policy — REQUIRED, no default (T08/U08: URL completion
-   * silently auto-completes open children, unlike the UI prompt).
+   * Open-children policy — REQUIRED, no default: completing a project also
+   * completes its open children.
    */
   children: "require-resolved" | "auto-complete";
 }
@@ -169,8 +167,8 @@ export interface ProjectCompleteParams {
 export interface ProjectCancelParams {
   uuid: string;
   /**
-   * Open-children policy — REQUIRED, no default (P01: URL cancellation
-   * silently auto-cancels open children; completed children are untouched).
+   * Open-children policy — REQUIRED, no default: canceling a project also
+   * cancels its open children; completed children are untouched.
    */
   children: "require-resolved" | "auto-cancel";
 }
@@ -182,7 +180,7 @@ export interface AreaAddParams {
 
 export interface TagAddParams {
   title: string;
-  /** Existing parent tag title (hierarchy; A05). */
+  /** Existing parent tag title to nest under. */
   parent?: string;
 }
 
@@ -203,14 +201,11 @@ export interface TagUpdateParams {
   /** uuid or unique case-insensitive title. */
   target: string;
   title?: string;
-  /** Existing tag to nest under (E03). Exclusive with unnest. */
+  /** Existing tag to nest under. Exclusive with unnest. */
   parent?: string;
-  /**
-   * Un-nest to root via the AppleScript property-delete form (P29 — the one
-   * spelling that works; `set parent tag to missing value` errors, E19).
-   */
+  /** Un-nest the tag to the root of the hierarchy. Exclusive with parent. */
   unnest?: boolean;
-  /** Single character (clearing to none is unprobed — not offered). */
+  /** Single character (clearing to none is not supported). */
   shortcut?: string;
 }
 
@@ -224,16 +219,13 @@ export interface ReorderParams {
   /**
    * Desired order, top-first. May be a SUBSET of the scope's members: the
    * requested uuids are placed at the top in this order and every remaining
-   * member keeps its current relative order below them (the wire list sent
-   * to the app is always the full member list — O01 proved partial sends
-   * work but leave placement underdetermined).
+   * member keeps its current relative order below them.
    */
   uuids: string[];
   /**
    * Omit for the default per scope: native for today/project/area (requires
-   * allowExperimental + the sdef canary), bounce for evening. Today accepts
-   * an explicit "bounce" fallback; project/area are native-only; evening is
-   * bounce-only (O03: native reorder silently de-evenings bucket-1 members).
+   * allowExperimental), bounce for evening. Today accepts an explicit
+   * "bounce" fallback; project/area are native-only; evening is bounce-only.
    */
   strategy?: ReorderStrategy;
 }
@@ -271,14 +263,14 @@ export interface OperationParamsMap {
   "project.restore": UuidParams;
 }
 
-/** Explicit acknowledgements for guarded operations (never defaulted). */
+/** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */
 export interface Acknowledgements {
-  /** H-CHECKLIST-REPLACE: checklist replacement destroys per-item state (T07). */
+  /** Confirm a wholesale checklist replacement that discards existing items and their checked states. */
   acknowledgeChecklistReset?: boolean;
-  /** H-REOPEN-RESOLVED-PROJECT: adding an open child reopens a resolved project (T19). */
+  /** Confirm adding/moving an open item into a completed/canceled project (this reopens the project). */
   acknowledgeProjectReopen?: boolean;
-  /** H-PERMANENT-DELETE: area/tag delete and empty-trash skip the Trash entirely. */
+  /** Confirm a permanent deletion: area/tag delete and empty-trash skip the Trash entirely. */
   dangerouslyPermanent?: boolean;
-  /** H-TAG-SUBTREE-DELETE: deleting a parent tag cascade-deletes its children (P16). */
+  /** Confirm that deleting a parent tag permanently deletes ALL of its descendant tags. */
   acknowledgeTagSubtree?: boolean;
 }

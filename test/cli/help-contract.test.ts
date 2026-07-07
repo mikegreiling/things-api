@@ -1,11 +1,14 @@
 /**
  * Help text is the agent API contract (design §3): agents discover the tool
- * through --help, so its load-bearing statements — hazards, ack flag names,
- * vectors, tiers, exit codes — are regression-tested here. These assert the
- * CONTRACT lines, not the full rendering, so cosmetic rewording stays cheap
- * while contract drift fails loudly.
+ * through --help, so its load-bearing statements — behavior, side effects,
+ * confirmation flag names, exit codes — are regression-tested here. These
+ * assert the CONTRACT lines, not the full rendering, so cosmetic rewording
+ * stays cheap while contract drift fails loudly. A companion suite enforces
+ * the consumer-voice rules of docs/design/surface-copy.md.
  */
 import { describe, expect, it } from "vitest";
+
+import type { Command } from "commander";
 
 import { buildProgram } from "../../src/cli/main.ts";
 
@@ -42,35 +45,37 @@ describe("root help", () => {
 });
 
 describe("write-command help states the contract", () => {
-  it("todo add: vector, tier, hazards, ack flag", () => {
+  it("todo add: loud unknown-reference behavior + reopen ack flag", () => {
     const help = helpFor("todo", "add");
-    expect(help).toContain("vector: url-scheme");
-    expect(help).toContain("tier 0");
-    expect(help).toContain("H-UNKNOWN-TAG");
-    expect(help).toContain("H-REOPEN-RESOLVED-PROJECT");
+    expect(help).toContain("unknown or ambiguous references are rejected");
+    expect(help).toContain("reopens that project");
     expect(help).toContain("--acknowledge-project-reopen");
     expect(help).toContain("--dry-run");
   });
 
-  it("todo update: repeating-template hard-block is documented", () => {
+  it("todo update: repeating restriction is documented", () => {
     const help = helpFor("todo", "update");
-    expect(help).toContain("H-REPEAT-SCHEDULE");
-    expect(help).toContain("crashes Things");
+    expect(help).toContain("not available for repeating to-dos");
   });
 
   it("todo checklist: destructive semantics + exact ack flag", () => {
     const help = helpFor("todo", "checklist");
-    expect(help).toContain("H-CHECKLIST-REPLACE");
     expect(help).toContain("--acknowledge-checklist-reset");
-    expect(help).toContain("destroys per-item state");
-    expect(help).toContain("states PRESERVED");
+    expect(help).toContain("discarding the existing items");
+    expect(help).toContain("PRESERVED");
   });
 
-  it("project complete: mandatory children policy + verified cascade", () => {
+  it("project complete: mandatory children policy + cascade behavior", () => {
     const help = helpFor("project", "complete");
     expect(help).toContain("--children <policy>");
-    expect(help).toContain("auto-completes open");
-    expect(help).toContain("verified");
+    expect(help).toContain("also completes its open to-dos");
+  });
+
+  it("project cancel: mandatory children policy + completed-children exemption", () => {
+    const help = helpFor("project", "cancel");
+    expect(help).toContain("--children <policy>");
+    expect(help).toContain("also cancels its open to-dos");
+    expect(help).toContain("never altered");
   });
 
   it("permanent deletes require --dangerously-permanent", () => {
@@ -85,14 +90,27 @@ describe("write-command help states the contract", () => {
     }
   });
 
-  it("doctor: exit-code contract", () => {
-    const help = helpFor("doctor");
-    expect(help).toContain("Exit 0 healthy; 5 schema drift");
+  it("tag delete: subtree cascade + ack flag", () => {
+    const help = helpFor("tag", "delete");
+    expect(help).toContain("nested child tags are deleted with it");
+    expect(help).toContain("--acknowledge-subtree");
   });
 
-  it("capabilities: discovery command exists and mentions vectors", () => {
+  it("area delete: to-dos trashed, projects orphaned", () => {
+    const help = helpFor("area", "delete");
+    expect(help).toContain("to-dos move to the Trash");
+    expect(help).toContain("projects remain");
+  });
+
+  it("doctor: exit-code contract + setup guidance", () => {
+    const help = helpFor("doctor");
+    expect(help).toContain("Exit 0 healthy; 5 schema drift");
+    expect(help).toContain("Enable Things URLs");
+  });
+
+  it("capabilities: discovery command exists", () => {
     const help = helpFor("capabilities");
-    expect(help).toContain("vector");
+    expect(help).toContain("operation kind");
     expect(help).toContain("--op");
   });
 
@@ -100,33 +118,33 @@ describe("write-command help states the contract", () => {
     const help = helpFor("todo", "update");
     expect(help).toContain("--reminder <HH:mm>");
     expect(help).toContain("--clear-reminder");
-    expect(help).toContain("H-REMINDER-SCOPE");
     expect(help).toContain("auto-preserved");
+    expect(help).toContain("can only be changed, not cleared");
     expect(help).toContain("--append-notes");
     expect(help).toContain("--prepend-notes");
   });
 
-  it("todo duplicate: url-only path + template block", () => {
+  it("todo duplicate: exact copy + repeating restriction", () => {
     const help = helpFor("todo", "duplicate");
-    expect(help).toContain("url-scheme");
-    expect(help).toContain("H-REPEAT-SCHEDULE");
+    expect(help).toContain("exact copy");
+    expect(help).toContain("repeating");
   });
 
-  it("area/tag update: setters exist with evidence-scoped caveats", () => {
+  it("area/tag update: setters exist with behavior-scoped caveats", () => {
     const areaHelp = helpFor("area", "update");
     expect(areaHelp).toContain("--title");
-    expect(areaHelp).toContain("H-UNKNOWN-TAG");
+    expect(areaHelp).toContain("must name existing");
     const tagHelp = helpFor("tag", "update");
     expect(tagHelp).toContain("--parent");
     expect(tagHelp).toContain("--unnest");
     expect(tagHelp).toContain("--shortcut");
-    expect(tagHelp).toContain("unprobed");
+    expect(tagHelp).toContain("Clearing a shortcut is not supported");
   });
 
-  it("batch: pipeline guarantees, no transactions, exit codes", () => {
+  it("batch: no transactions, confirmation options, exit codes", () => {
     const help = helpFor("batch");
-    expect(help).toContain("FULL pipeline");
-    expect(help).toContain("No transactions");
+    expect(help).toContain("NO transactions");
+    expect(help).toContain("acknowledgeTagSubtree");
     expect(help).toContain("--fail-fast");
     expect(help).toContain("--dry-run");
     expect(help).toContain("0 all ok");
@@ -160,13 +178,12 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--limit <n>");
   });
 
-  it("reorder: experimental gate, bounce cap, scope hazards", () => {
+  it("reorder: experimental gate, bounce cap, scope restrictions", () => {
     const help = helpFor("reorder");
     expect(help).toContain("EXPERIMENTAL");
     expect(help).toContain("allow-experimental");
     expect(help).toContain("bounce");
     expect(help).toContain("Evening is bounce-only");
-    expect(help).toContain("H-REORDER-SCOPE");
     expect(help).toContain("--scope <scope>");
     expect(help).toContain("--strategy <name>");
     expect(help).toContain("--dry-run");
@@ -177,21 +194,33 @@ describe("write-command help states the contract", () => {
     const help = helpFor("todo", "restore");
     expect(help).toContain("TRASHED");
     expect(help).toContain("DE-SCHEDULED");
-    expect(help).toContain("applescript");
   });
 
-  it("project move: area destination, evidence-scoped", () => {
+  it("todo move: exclusive destinations incl. inbox de-schedule + detach", () => {
+    const help = helpFor("todo", "move");
+    expect(help).toContain("--inbox");
+    expect(help).toContain("removes any schedule");
+    expect(help).toContain("--detach");
+    expect(help).toContain("keeping the schedule");
+  });
+
+  it("project move: area destination or detach", () => {
     const help = helpFor("project", "move");
     expect(help).toContain("--area <ref>");
-    expect(help).toContain("applescript");
-    expect(help).toContain("H-UNKNOWN-DESTINATION");
+    expect(help).toContain("--detach");
+    expect(help).toContain("Unknown areas are rejected");
   });
 
-  it("project duplicate: children included + template block", () => {
+  it("project reopen: children stay resolved unless restored", () => {
+    const help = helpFor("project", "reopen");
+    expect(help).toContain("--restore-children");
+    expect(help).toContain("resolved together with the project");
+  });
+
+  it("project duplicate: children included + repeating restriction", () => {
     const help = helpFor("project", "duplicate");
     expect(help).toContain("INCLUDING its children");
-    expect(help).toContain("url-scheme");
-    expect(help).toContain("H-REPEAT-SCHEDULE");
+    expect(help).toContain("repeating");
   });
 
   it("upcoming: horizon projections documented as unmaterialized host math", () => {
@@ -202,10 +231,11 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--tag <ref>");
   });
 
-  it("undo: audit-replay contract — inverse pipeline, irreversibles, permanent gate", () => {
+  it("undo: own-changes-only scope, irreversibles, permanent gate", () => {
     const help = helpFor("undo");
     expect(help).toContain("INVERSE");
     expect(help).toContain("IRREVERSIBLE");
+    expect(help).toContain("cannot be undone here");
     expect(help).toContain("--last <n>");
     expect(help).toContain("--dry-run");
     expect(help).toContain("--dangerously-permanent");
@@ -219,46 +249,37 @@ describe("write-command help states the contract", () => {
     expect(help).toContain('args ["mcp"]');
     expect(help).toContain("live area/tag/project inventory");
   });
+});
 
-  it("project cancel/reopen/restore: lifecycle contract from the P-suite", () => {
-    const cancel = helpFor("project", "cancel");
-    expect(cancel).toContain("--children <policy>");
-    expect(cancel).toContain("auto-cancel");
-    expect(cancel).toContain("H-PROJECT-COMPLETE-CHILDREN");
-    const reopen = helpFor("project", "reopen");
-    expect(reopen).toContain("--restore-children");
-    expect(reopen).toContain("stopDate window");
-    const restore = helpFor("project", "restore");
-    expect(restore).toContain("IN PLACE");
-    expect(restore).toContain("trashed project");
-  });
+describe("surface copy contract (docs/design/surface-copy.md)", () => {
+  // Rule 2: help text states behavior, never mechanism. Internals live in
+  // docs/ and in the capabilities OUTPUT — not in any --help string.
+  const BANNED = [
+    /\bH-[A-Z][A-Z-]+\b/, // hazard ids
+    /\b[A-Z]\d{2}[A-Z]?\b/, // probe-evidence ids (P16, E06, A24B, ...)
+    /vector:/, // "(vector: url-scheme, ...)" framing
+    /\btier \d\b/i,
+    /\bhazard/i,
+    /read-after-write/,
+    /\baudit\b/i,
+    /\b(?:unprobed|probed|unvalidated|validated)\b/i,
+    /\bsdef\b/,
+  ];
 
-  it("detach: one-step container removal documented on both move commands", () => {
-    expect(helpFor("todo", "move")).toContain("--detach");
-    expect(helpFor("project", "move")).toContain("--detach");
-    expect(helpFor("project", "move")).toContain("the only surface");
-  });
+  function allHelp(cmd: Command, path: string[]): [string, string][] {
+    const own: [string, string][] = [
+      [path.join(" ") || "(root)", cmd.helpInformation().replace(/\s+/g, " ")],
+    ];
+    return [...own, ...cmd.commands.flatMap((c) => allHelp(c, [...path, c.name()]))];
+  }
 
-  it("tag delete: subtree cascade hazard + ack flag", () => {
-    const help = helpFor("tag", "delete");
-    expect(help).toContain("H-TAG-SUBTREE-DELETE");
-    expect(help).toContain("--acknowledge-subtree");
-    expect(help).toContain("CHILD TAGS");
-  });
-
-  it("checklist: granular actions with preserved states", () => {
-    const help = helpFor("todo", "checklist");
-    expect(help).toContain("--check <title>");
-    expect(help).toContain("--uncheck <title>");
-    expect(help).toContain("--add <title>");
-    expect(help).toContain("--rename <title>");
-    expect(help).toContain("not stable");
-  });
-
-  it("project update: notes modes documented", () => {
-    const help = helpFor("project", "update");
-    expect(help).toContain("--append-notes");
-    expect(help).toContain("--prepend-notes");
-    expect(help).toContain("exclusive with --notes");
+  it("no --help string leaks internals", () => {
+    const program = buildProgram();
+    for (const [name, text] of allHelp(program as unknown as Command, [])) {
+      for (const pattern of BANNED) {
+        const match = text.match(pattern);
+        expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
+      }
+    }
   });
 });
