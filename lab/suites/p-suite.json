@@ -1,6 +1,6 @@
 {
   "suite": "p",
-  "description": "Gap-closure campaign (Phase 18, 2026-07-06): project cancel/reopen + cascade semantics and stopDate timing (undo heuristic), trashed-project restore candidates, project/to-do area removal, container-clear + schedule/deadline survival, empty tag/checklist replacement, parent-tag deletion orphan behavior, top-level project ordering, and the json checklist-states unlock (hazard-quarantined). Expectations are DISCOVERY GUESSES until the first run locks them. EXTENDED 2026-07-06b: sidebar-order read oracle, ephemeral-area chain, URL empty list-id/area-id container clears, update-project?area-id move, AppleScript empty-string nil, json-null container clears (hazard).",
+  "description": "Gap-closure campaign (Phase 18, 2026-07-06): project cancel/reopen + cascade semantics and stopDate timing (undo heuristic), trashed-project restore candidates, project/to-do area removal, container-clear + schedule/deadline survival, empty tag/checklist replacement, parent-tag deletion orphan behavior, top-level project ordering, and the json checklist-states unlock (hazard-quarantined). Expectations are DISCOVERY GUESSES until the first run locks them. EXTENDED 2026-07-06b: sidebar-order read oracle, ephemeral-area chain, URL empty list-id/area-id container clears, update-project?area-id move, AppleScript empty-string nil, json-null container clears (hazard). EXTENDED 2026-07-06c: P28-P30 \u2014 the last tag-un-parent stones (empty-string nil, delete-property, move verb; tags have no URL/json surface, so AppleScript spellings are the only remaining candidates).",
   "probes": [
     {
       "id": "P01",
@@ -1320,6 +1320,146 @@
         ]
       },
       "settleSeconds": 3
+    },
+    {
+      "id": "P28",
+      "title": "tag un-parent, empty-string nil: `set parent tag of tag X to \"\"` (P27 tried this on a project's AREA, never on a tag parent)",
+      "vector": "applescript",
+      "operation": "tag.unparent-empty-string",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P28-C-P\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P28-C\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"P28-C\" to tag \"P28-C-P\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='P28-C' AND p.title='P28-C-P'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"P28-C\" to \"\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTag",
+            "where": {
+              "title": "P28-C"
+            },
+            "fields": ["parent"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "P29",
+      "title": "tag un-parent WORKS: `delete parent tag of tag X` sets parent=NULL (the property-delete form succeeds where set-to-missing-value errors, E19 \u2014 un-nest is unlocked)",
+      "vector": "applescript",
+      "operation": "tag.unparent-delete-property",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P29-C-P\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P29-C\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"P29-C\" to tag \"P29-C-P\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='P29-C' AND p.title='P29-C-P'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to delete parent tag of tag \"P29-C\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "allowNonzeroExit": false,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTag",
+            "where": {
+              "title": "P29-C"
+            },
+            "field": "parent",
+            "value": null
+          },
+          {
+            "kind": "rowExists",
+            "table": "TMTag",
+            "where": {
+              "title": "P29-C-P"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "P30",
+      "title": "tag un-parent via the move verb: `move tag X to application` (move is how both trash-restores worked, P06/E15; never pointed at a tag)",
+      "vector": "applescript",
+      "operation": "tag.unparent-move",
+      "appState": "running-background",
+      "setup": [
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P30-C-P\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to make new tag with properties {name:\"P30-C\"}"
+        },
+        {
+          "osascript": "tell application \"Things3\" to set parent tag of tag \"P30-C\" to tag \"P30-C-P\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTag c JOIN TMTag p ON c.parent=p.uuid WHERE c.title='P30-C' AND p.title='P30-C-P'"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move tag \"P30-C\" to application \"Things3\""
+        },
+        {
+          "sleep": 2
+        }
+      ],
+      "expect": {
+        "verdict": "unsupported",
+        "tier": 0,
+        "allowNonzeroExit": true,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTag",
+            "where": {
+              "title": "P30-C"
+            },
+            "fields": ["parent"]
+          }
+        ]
+      }
     }
   ]
 }

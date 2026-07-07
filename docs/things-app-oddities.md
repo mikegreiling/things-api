@@ -122,8 +122,8 @@ Without an x-callback, the version command has no visible output — its only ob
 ### 5f. AppleScript `delete tag` on a parent tag silently destroys the entire subtree
 Deleting a tag that has child tags cascade-deletes the children too — permanently (no Trash for tags), with no confirmation and no error through the AppleScript channel. Combined with tag deletion already being unrecoverable, one scripted delete of a parent can wipe a whole tag hierarchy the caller never named. *(P16, 2026-07-06)*
 
-### 5g. Removing a container link: three surfaces, three different behaviors
-Detaching a project from its area (or a to-do from its project/area) behaves differently on every automation surface: **AppleScript rejects** `set area/project … to missing value` (and `""`) with an error; **the `json` command silently ignores** `"area-id": null` / `"list-id": null` (zero delta, no signal); and **the URL scheme quietly supports it** via an EMPTY parameter (`update?list-id=` / `update-project?area-id=` clear the link cleanly, matching the empty-`tags=` replacement pattern) — undocumented, discovered by probing. One capability, one error, one silent no-op, one undocumented success. *(P08–P11, P21/P22/P24, P25/P26 — 2026-07-06)*
+### 5g. Removing a link (container/parent): four different behaviors for one intent
+Clearing a relationship behaves differently on every automation spelling: **AppleScript rejects** `set area/project/parent tag … to missing value` (E19/P08/P10/P11) and `set … to ""` (P27/P28) with errors; **the `json` command silently ignores** `"area-id": null` / `"list-id": null` (zero delta, no signal — P25/P26); **the URL scheme quietly supports container clears** via an EMPTY parameter (`update?list-id=` / `update-project?area-id=` — P21/P22/P24, undocumented, matches the empty-`tags=` replacement pattern); and **AppleScript's property-DELETE form works for tag parents** (`delete parent tag of tag X` un-nests cleanly, P29 — while the set-form of the very same property errors). One intent family: two error spellings, one silent no-op, two undocumented successes on two different surfaces. *(2026-07-06/07)*
 
 ---
 

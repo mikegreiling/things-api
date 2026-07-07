@@ -52,7 +52,7 @@ Unless the Shortcuts campaign (Phase 11) yields real heading capabilities, the A
 | Capability | Why it's dead |
 |---|---|
 | Convert to-do ↔ project | `move to do ... to list "Projects"` errors: `Can't get list "Projects"` — the sidebar entry isn't a scriptable list (E16). No other surface known. |
-| Un-nest a tag to root | `set parent tag ... to missing value` errors (−1700): the property accepts only a tag specifier (E19). Workaround: re-parent under a scratch root tag, or fix in the app. |
+| Un-nest a tag to root | **SHIPPED 2026-07-07**: `tag update --unnest` via AppleScript's property-DELETE form (P29). The set-form still errors (E19/P28), and the old scratch-parent workaround idea was dead anyway (P16 cascade delete). |
 | Sidebar AREA ordering | `move area ... to before area ...` errors (location specifier unsupported, O13); the private reorder command has no area-of-areas form. Areas order by their `"index"` — UI-only. |
 
 ## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
@@ -92,5 +92,6 @@ Fills: **headings in existing projects** (unique), maybe heading-archive + remin
 11. **Phase 17 (DONE 2026-07-06)** — seam hygiene (contracts into core, diagnose()/capabilitiesTable() as library functions) + `things mcp` stdio MCP server (16 tools over the same ThingsClient). Task #36.
 12. **Phase 18 (DONE 2026-07-06)** — P-suite (18 probes, [docs/lab/p-suite-results.md](lab/p-suite-results.md)): project cancel/reopen/restore all WORK; granular checklist states via things:///json WORKS; un-schedule + clear-container semantics pinned; empty-replacement clears validated. Closed permanently: project/todo area removal, tag un-nest (parent-delete CASCADE-DELETES children — new tag.delete hazard needed), top-level sidebar ordering. Task #37.
 13. **Phase 19 (DONE 2026-07-06)** — the P-suite verdicts shipped: `project cancel/reopen/restore` (reopen composite with the P03 cascade-window `--restore-children`; undo now reverses project complete/cancel/delete), one-step container detach (`todo move --detach`, `project move --detach`; URL empty params), URL vector for project moves, granular checklist ops (`todo checklist --check/--uncheck/--add/--remove/--rename/--move-item` over things:///json with per-item states preserved), empty-set tag/checklist clears, H-TAG-SUBTREE-DELETE guard. Task #38.
+14. **P-suite third sweep (2026-07-07)** — P28–P30: tag un-nest UNLOCKED via the AppleScript property-DELETE form (P29 — `delete parent tag of tag X`); shipped as `tag update --unnest` (undo re-nests / un-nests symmetrically). Empty-string and move-verb spellings rejected (P28/P30). Suite locked at 30 probes.
 
-Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; checklist granular writes; to-do↔project conversion; tag un-nest to root; sidebar area ordering.
+Permanently out of reach (documented + guarded, revisit per Things release): repeat creation/rule-editing; to-do↔project conversion; project/to-do area-removal via AppleScript or json (URL empty-param is the sole path — shipped); sidebar (area + top-level project) ordering. Formerly listed, since CLOSED: checklist granular writes (P18, Phase 19), tag un-nest (P29).

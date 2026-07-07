@@ -149,6 +149,8 @@ run_step 0 "move back to Inbox (de-schedules)" todo move "$REM" --inbox
 run_step 0 "area update: rename + tags" area update LAB-AREA-B --title "E2E-AREA-RENAMED" --tags lab-tag-1
 run_step 0 "tag add for update tests" tag add e2e-parent
 run_step 0 "tag update: re-parent + shortcut" tag update lab-tag-2 --parent e2e-parent --shortcut 8
+run_step 0 "tag update: UN-NEST to root (P29 property-delete)" tag update lab-tag-2 --unnest
+run_step 2 "unnest is exclusive with --parent" tag update lab-tag-2 --parent e2e-parent --unnest
 
 echo "== batch + changes (Phase 13) =="
 SINCE=$(date -v-2M +%Y-%m-%dT%H:%M:%S)

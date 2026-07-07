@@ -118,6 +118,7 @@ describe("write-command help states the contract", () => {
     expect(areaHelp).toContain("H-UNKNOWN-TAG");
     const tagHelp = helpFor("tag", "update");
     expect(tagHelp).toContain("--parent");
+    expect(tagHelp).toContain("--unnest");
     expect(tagHelp).toContain("--shortcut");
     expect(tagHelp).toContain("unprobed");
   });

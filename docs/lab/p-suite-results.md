@@ -45,6 +45,18 @@ Follow-up probes after Mike's "no stone unturned" review: URL empty params, `upd
 
 The empty-URL-parameter replacement pattern (first seen for `tags=`/`checklist-items=`, P14/P15) turns out to generalize to CONTAINERS — undocumented but consistent. Three surfaces now exhibit three behaviors for the same intent (AppleScript errors, json silently ignores, URL empty clears) — oddities §5g.
 
+## Tag un-parenting, third sweep (P28–P30)
+
+The last unturned stones, aimed at the tag `parent` property (tags have no URL/json surface, so AppleScript spellings were the only candidates left):
+
+| Probe | Finding | Verdict |
+|---|---|---|
+| P28 | `set parent tag of tag X to ""` — rejected. | unsupported |
+| P29 | **`delete parent tag of tag X` WORKS: parent → NULL, both tags intact.** The AppleScript property-DELETE form succeeds where `set … to missing value` (E19) and `""` (P28) error. **Un-nesting to root is unlocked** — implemented as `tag update --unnest`. | supported |
+| P30 | `move tag X to application "Things3"` — rejected. | unsupported |
+
+P29 supersedes E19's dead-end verdict and retires P16's motivation for a sacrificial-parent workaround (which was itself dead — cascade delete). The nil-inconsistency picture for oddities §5g grows to four behaviors on one intent family: `set → missing value` errors, `set → ""` errors, json `null` silently no-ops, `delete <property>` works.
+
 To-do "remove all containers keeping the schedule": **one URL write** (`update?list-id=`) per P21/P22 — the two-step Inbox-bounce composite is no longer needed for container clearing (it remains the documented pattern only for clearing a DATED reminder, R20/R21).
 
 ## Empty replacements (P14–P15)

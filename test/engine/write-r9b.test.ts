@@ -329,6 +329,30 @@ describe("move to inbox / duplicate / entity updates", () => {
     expect(calls[0]).toContain(`set parent tag of tag id "${child}" to tag id "${parent}"`);
   });
 
+  it("tag.update --unnest compiles the property-delete form and verifies parent=null (P29)", async () => {
+    const parent = seedTag(fixture.db, "work");
+    const child = seedTag(fixture.db, "deep", parent);
+    const { vector, calls } = fakeVector("applescript", AS_MATRIX, () => {
+      fixture.db.prepare("UPDATE TMTag SET parent = NULL WHERE uuid = ?").run(child);
+    });
+    const result = await runMutation(deps([vector]), "tag.update", {
+      target: "deep",
+      unnest: true,
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain('delete parent tag of tag "deep"');
+    if (result.kind === "ok") expect(result.observed?.["parent"]).toBeNull();
+  });
+
+  it("tag.update rejects parent + unnest together", async () => {
+    seedTag(fixture.db, "work");
+    seedTag(fixture.db, "deep");
+    const { vector } = fakeVector("applescript", AS_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "tag.update", { target: "deep", parent: "work", unnest: true }),
+    ).rejects.toThrow(/exclusive/);
+  });
+
   it("tag.update to an unknown parent is blocked (H-UNKNOWN-TAG)", async () => {
     seedTag(fixture.db, "deep");
     const { vector, calls } = fakeVector("applescript", AS_MATRIX, null);

@@ -203,8 +203,13 @@ export interface TagUpdateParams {
   /** uuid or unique case-insensitive title. */
   target: string;
   title?: string;
-  /** Existing tag to nest under (un-nesting to root is unprobed — not offered). */
+  /** Existing tag to nest under (E03). Exclusive with unnest. */
   parent?: string;
+  /**
+   * Un-nest to root via the AppleScript property-delete form (P29 — the one
+   * spelling that works; `set parent tag to missing value` errors, E19).
+   */
+  unnest?: boolean;
   /** Single character (clearing to none is unprobed — not offered). */
   shortcut?: string;
 }

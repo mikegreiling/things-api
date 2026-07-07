@@ -129,8 +129,10 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["E02", "E03", "E10"],
-    notes: "rename (assignments survive), re-parent existing, keyboard shortcut",
+    evidence: ["E02", "E03", "E10", "P29"],
+    notes:
+      "rename (assignments survive), re-parent existing, keyboard shortcut, un-nest to root " +
+      "via the property-delete form (P29 — `set … to missing value` errors, E19)",
   },
   "tag.delete": {
     support: "yes",

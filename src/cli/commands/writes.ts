@@ -900,19 +900,27 @@ export function registerWriteCommands(program: Command): void {
       .command("update <target>")
       .description(
         "Rename a tag (assignments survive — E02), nest it under an existing tag (E03), " +
-          "and/or set its keyboard shortcut (E10). Vector: applescript, tier 0. " +
-          "Un-nesting to root and clearing a shortcut are unprobed — not offered.",
+          "UN-NEST it to root (--unnest, P29 — the property-delete form; exclusive with " +
+          "--parent), and/or set its keyboard shortcut (E10). Vector: applescript, tier 0. " +
+          "Clearing a shortcut is unprobed — not offered.",
       )
       .option("--title <text>", "new name")
       .option("--parent <name>", "existing tag to nest under")
+      .option("--unnest", "move the tag to the root of the hierarchy")
       .option("--shortcut <char>", "keyboard shortcut character"),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     if (
       opts["title"] === undefined &&
       opts["parent"] === undefined &&
+      opts["unnest"] === undefined &&
       opts["shortcut"] === undefined
     ) {
-      process.stderr.write("error: pass --title, --parent, and/or --shortcut\n");
+      process.stderr.write("error: pass --title, --parent, --unnest, and/or --shortcut\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    if (opts["parent"] !== undefined && opts["unnest"] === true) {
+      process.stderr.write("error: --parent and --unnest are exclusive\n");
       process.exitCode = ExitCode.Usage;
       return;
     }
@@ -922,6 +930,7 @@ export function registerWriteCommands(program: Command): void {
         {
           ...(opts["title"] !== undefined && { title: opts["title"] as string }),
           ...(opts["parent"] !== undefined && { parent: opts["parent"] as string }),
+          ...(opts["unnest"] === true && { unnest: true }),
           ...(opts["shortcut"] !== undefined && { shortcut: opts["shortcut"] as string }),
         },
         writeOptionsFrom(opts),
