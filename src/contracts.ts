@@ -12,6 +12,12 @@
 export const API_VERSION = 1;
 
 /**
+ * Package version, surfaced by `things --version` and the MCP serverInfo.
+ * Kept in lockstep with package.json by a contract test.
+ */
+export const PKG_VERSION = "0.3.0";
+
+/**
  * Stable exit-code contract for the `things` CLI (mirrored by MCP error
  * codes). Part of the public API surface consumed by agents and scripts —
  * values must never be renumbered; add new codes at the end.

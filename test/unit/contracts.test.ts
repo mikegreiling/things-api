@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { API_VERSION, errorEnvelope, ExitCode, okEnvelope } from "../../src/contracts.ts";
+import { readFileSync } from "node:fs";
+
+import {
+  API_VERSION,
+  errorEnvelope,
+  ExitCode,
+  okEnvelope,
+  PKG_VERSION,
+} from "../../src/contracts.ts";
 
 describe("exit-code contract", () => {
   it("never renumbers published codes", () => {
@@ -43,5 +51,16 @@ describe("json envelope contract", () => {
     expect(env.ok).toBe(false);
     expect(env.kind).toBe("error");
     expect(env.error.code).toBe("drift-blocked");
+  });
+});
+
+describe("version lockstep", () => {
+  it("PKG_VERSION matches package.json", () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as {
+      version: string;
+    };
+    expect(PKG_VERSION).toBe(pkg.version);
   });
 });
