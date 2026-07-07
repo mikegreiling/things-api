@@ -9,10 +9,11 @@ export function registerMcp(program: Command): void {
   program
     .command("mcp")
     .description(
-      "Serve the Things MCP server on stdio (Model Context Protocol). Tools mirror the " +
-        "library/CLI surface: read views, search, changes, verified mutations (add/update/" +
-        "complete + generic run_operation), batch, reorder, undo, capabilities, doctor. " +
-        'Configure in an MCP client as command `things` with args ["mcp"].',
+      "Serve the Things MCP server on stdio (Model Context Protocol). Tools cover the full " +
+        "surface: read views, search, changes, item detail, to-do/project/area/tag " +
+        "mutations, batch, reorder, undo, capabilities, doctor; the server instructions " +
+        "carry the user's live area/tag/project inventory. Configure in an MCP client as " +
+        'command `things` with args ["mcp"].',
     )
     .option("--db <path>", "explicit database path")
     .action(async (opts: { db?: string }) => {

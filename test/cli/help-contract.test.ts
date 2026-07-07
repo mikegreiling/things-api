@@ -217,7 +217,7 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("stdio");
     expect(help).toContain("Model Context Protocol");
     expect(help).toContain('args ["mcp"]');
-    expect(help).toContain("run_operation");
+    expect(help).toContain("live area/tag/project inventory");
   });
 
   it("project cancel/reopen/restore: lifecycle contract from the P-suite", () => {

@@ -1,7 +1,9 @@
 /**
- * Phase 17: MCP surface tests — a real MCP client over an in-memory
- * transport against the real server, backed by a fixture DB and fake write
- * vectors. Proves the third surface is a faithful window onto ThingsClient.
+ * MCP surface tests — a real MCP client over an in-memory transport against
+ * the real server, backed by a fixture DB and fake write vectors. Proves the
+ * third surface is a faithful window onto ThingsClient, that the grouped v2
+ * tools route to the right operations, and that every description obeys the
+ * consumer-voice contract (docs/design/surface-copy.md).
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,9 +15,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createThingsMcpServer } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
-import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
+import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedProject, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -24,18 +26,22 @@ let stateDir: string;
 let client: Client;
 let close: () => Promise<void>;
 
-const URL_MATRIX: VectorMatrix = Object.fromEntries(
-  ["todo.add", "todo.update", "todo.complete"].map((op) => [
-    op,
-    { support: "yes", disruption: 0, validation: "validated" },
-  ]),
-) as VectorMatrix;
+const DEFAULT_OPS = ["todo.add", "todo.update", "todo.complete"];
 
-function fakeVector(effect: ((payload: string) => void) | null) {
+function fakeVector(
+  effect: ((payload: string) => void) | null,
+  opts: { id?: VectorId; ops?: string[] } = {},
+) {
+  const matrix = Object.fromEntries(
+    (opts.ops ?? DEFAULT_OPS).map((op) => [
+      op,
+      { support: "yes", disruption: 0, validation: "validated" },
+    ]),
+  ) as VectorMatrix;
   const calls: string[] = [];
   const vector: WriteVector = {
-    id: "url-scheme",
-    matrix: URL_MATRIX,
+    id: opts.id ?? "url-scheme",
+    matrix,
     async execute(invocation) {
       calls.push(invocation.payload);
       effect?.(invocation.payload);
@@ -85,31 +91,52 @@ afterEach(async () => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
+const EXPECTED_TOOLS = [
+  // reads
+  "read_view",
+  "search",
+  "changes_since",
+  "get_item",
+  "get_project",
+  "list_collections",
+  // to-dos
+  "add_todo",
+  "update_todo",
+  "set_todo_status",
+  "move_todo",
+  "set_tags",
+  "edit_checklist",
+  // to-dos AND projects
+  "delete_item",
+  "restore_item",
+  "duplicate_item",
+  // projects
+  "add_project",
+  "update_project",
+  "set_project_status",
+  "move_project",
+  // areas
+  "add_area",
+  "update_area",
+  "delete_area",
+  // tags
+  "add_tag",
+  "update_tag",
+  "delete_tag",
+  // generic + discovery
+  "run_operation",
+  "batch",
+  "reorder",
+  "undo",
+  "capabilities",
+  "doctor",
+];
+
 describe("things MCP server", () => {
   it("exposes the full tool surface", async () => {
     await connect([fakeVector(null).vector]);
     const { tools } = await client.listTools();
-    const names = tools.map((t) => t.name).toSorted();
-    expect(names).toEqual(
-      [
-        "read_view",
-        "search",
-        "changes_since",
-        "get_item",
-        "get_project",
-        "list_collections",
-        "add_todo",
-        "update_todo",
-        "complete_todo",
-        "add_project",
-        "run_operation",
-        "batch",
-        "reorder",
-        "undo",
-        "capabilities",
-        "doctor",
-      ].toSorted(),
-    );
+    expect(tools.map((t) => t.name).toSorted()).toEqual(EXPECTED_TOOLS.toSorted());
   });
 
   it("read_view today returns the split view with seeded members", async () => {
@@ -142,7 +169,7 @@ describe("things MCP server", () => {
     expect((textOf(result) as { code: string }).code).toBe("not-found");
   });
 
-  it("add_todo executes through the verified pipeline and returns the created uuid", async () => {
+  it("add_todo executes and returns the created uuid", async () => {
     const { vector, calls } = fakeVector(() => {
       seedTodo(fixture.db, {
         uuid: "MCP-NEW",
@@ -175,6 +202,126 @@ describe("things MCP server", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("set_todo_status routes each status to the matching operation", async () => {
+    const uuid = seedTodo(fixture.db, { title: "status me" });
+    await connect([
+      fakeVector(null, { ops: ["todo.complete", "todo.cancel", "todo.reopen"] }).vector,
+    ]);
+    for (const [status, op] of [
+      ["completed", "todo.complete"],
+      ["canceled", "todo.cancel"],
+    ] as const) {
+      const outcome = textOf(
+        await client.callTool({
+          name: "set_todo_status",
+          arguments: { uuid, status, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe(op);
+    }
+  });
+
+  it("move_todo demands exactly one destination", async () => {
+    await connect([fakeVector(null).vector]);
+    for (const args of [
+      { uuid: "X" },
+      { uuid: "X", to_inbox: true, detach: true },
+      { uuid: "X", project: "P", detach: true },
+    ]) {
+      const result = await client.callTool({ name: "move_todo", arguments: args });
+      expect(result.isError).toBe(true);
+      expect((textOf(result) as { code: string }).code).toBe("usage");
+    }
+  });
+
+  it("edit_checklist add plans a stateful rewrite; missing fields are usage errors", async () => {
+    const uuid = seedTodo(fixture.db, { title: "listy" });
+    await connect([fakeVector(null, { ops: ["todo.replace-checklist"] }).vector]);
+    const outcome = textOf(
+      await client.callTool({
+        name: "edit_checklist",
+        arguments: { uuid, action: "add", title: "step one", dry_run: true },
+      }),
+    ) as { kind: string; op: string; plan: { invocation: string } };
+    expect(outcome.kind).toBe("dry-run");
+    expect(outcome.op).toBe("todo.replace-checklist");
+    expect(outcome.plan.invocation).toContain("things:///json");
+
+    const missing = await client.callTool({
+      name: "edit_checklist",
+      arguments: { uuid, action: "rename", item: "step one" },
+    });
+    expect(missing.isError).toBe(true);
+    expect((textOf(missing) as { code: string }).code).toBe("usage");
+  });
+
+  it("delete_item dispatches on the item's type", async () => {
+    const todo = seedTodo(fixture.db, { title: "trash to-do" });
+    const proj = seedProject(fixture.db, { title: "trash project" });
+    await connect([
+      fakeVector(null, { id: "applescript", ops: ["todo.delete", "project.delete"] }).vector,
+    ]);
+    for (const [uuid, op] of [
+      [todo, "todo.delete"],
+      [proj, "project.delete"],
+    ] as const) {
+      const outcome = textOf(
+        await client.callTool({ name: "delete_item", arguments: { uuid, dry_run: true } }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe(op);
+    }
+    const unknown = await client.callTool({
+      name: "delete_item",
+      arguments: { uuid: "missing", dry_run: true },
+    });
+    expect(unknown.isError).toBe(true);
+    expect((textOf(unknown) as { code: string }).code).toBe("usage");
+  });
+
+  it("set_project_status enforces the children policy per status", async () => {
+    const proj = seedProject(fixture.db, { title: "lifecycle" });
+    await connect([
+      fakeVector(null, { ops: ["project.complete", "project.cancel", "project.reopen"] }).vector,
+    ]);
+    const noPolicy = await client.callTool({
+      name: "set_project_status",
+      arguments: { uuid: proj, status: "completed" },
+    });
+    expect(noPolicy.isError).toBe(true);
+    expect((textOf(noPolicy) as { message: string }).message).toContain("require-resolved");
+
+    const wrongPolicy = await client.callTool({
+      name: "set_project_status",
+      arguments: { uuid: proj, status: "canceled", children: "auto-complete" },
+    });
+    expect(wrongPolicy.isError).toBe(true);
+
+    const completed = textOf(
+      await client.callTool({
+        name: "set_project_status",
+        arguments: { uuid: proj, status: "completed", children: "auto-complete", dry_run: true },
+      }),
+    ) as { kind: string; op: string };
+    expect(completed.kind).toBe("dry-run");
+    expect(completed.op).toBe("project.complete");
+  });
+
+  it("set_project_status open returns the reopen outcome with children detail", async () => {
+    const proj = seedProject(fixture.db, { title: "reopen me", status: "completed" });
+    await connect([fakeVector(null, { ops: ["project.reopen"] }).vector]);
+    const outcome = textOf(
+      await client.callTool({
+        name: "set_project_status",
+        arguments: { uuid: proj, status: "open", dry_run: true },
+      }),
+    ) as { project: { kind: string; op: string }; children: unknown[] };
+    expect(outcome.project.kind).toBe("dry-run");
+    expect(outcome.project.op).toBe("project.reopen");
+    expect(outcome.children).toEqual([]);
+  });
+
   it("hazard blocks surface as tool errors with remediation", async () => {
     await connect([fakeVector(null).vector]);
     const result = await client.callTool({
@@ -196,7 +343,7 @@ describe("things MCP server", () => {
     expect(result.isError).toBe(true);
   });
 
-  it("capabilities dumps the lab matrix for every op kind", async () => {
+  it("capabilities dumps the support matrix for every op kind", async () => {
     await connect([fakeVector(null).vector]);
     const table = textOf(await client.callTool({ name: "capabilities", arguments: {} })) as {
       op: string;
@@ -222,5 +369,74 @@ describe("things MCP server", () => {
       await client.callTool({ name: "undo", arguments: { dry_run: true } }),
     ) as unknown[];
     expect(items).toEqual([]);
+  });
+
+  it("annotations mark reads read-only and permanent deletes destructive", async () => {
+    await connect([fakeVector(null).vector]);
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    expect(byName.get("read_view")?.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get("capabilities")?.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get("delete_tag")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("delete_area")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("add_todo")?.annotations?.destructiveHint).toBe(false);
+  });
+
+  describe("server instructions", () => {
+    it("carry conventions plus the live area/tag/project inventory", async () => {
+      seedArea(fixture.db, "Home");
+      const parent = seedTag(fixture.db, "energy");
+      seedTag(fixture.db, "low", parent);
+      seedProject(fixture.db, { title: "Renovate kitchen" });
+      await connect([fakeVector(null).vector]);
+      const instructions = client.getInstructions() ?? "";
+      expect(instructions).toContain("dry_run");
+      expect(instructions).toContain("today | evening | anytime | someday | YYYY-MM-DD");
+      expect(instructions).toContain("Areas (1): Home");
+      expect(instructions).toContain("energy > low");
+      expect(instructions).toContain("Renovate kitchen");
+    });
+
+    it("degrade gracefully when the database is unreadable", async () => {
+      const server = createThingsMcpServer({ dbPath: join(stateDir, "nope.sqlite") });
+      const localClient = new Client({ name: "test-client", version: "0.0.0" });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(st), localClient.connect(ct)]);
+      const instructions = localClient.getInstructions() ?? "";
+      expect(instructions).toContain("not readable");
+      expect(instructions).toContain("doctor");
+      await localClient.close();
+      await server.close();
+    });
+  });
+
+  describe("surface copy contract", () => {
+    // docs/design/surface-copy.md rule 2: descriptions state behavior, never
+    // mechanism. Internals belong in docs/ and the capabilities OUTPUT.
+    const BANNED = [
+      /\b(audit|verified|verification|read-after-write|pipeline|hazard|pre-read|drift|fingerprint|probe|sdef)\b/i,
+      /\bH-[A-Z][A-Z-]+\b/, // hazard ids
+      /\b[A-Z]\d{2}\b/, // probe-evidence ids (P16, E06, R20, ...)
+      /\btier\b/i,
+      /\bvector\b/i,
+    ];
+
+    it("no tool description, parameter description, or instruction leaks internals", async () => {
+      await connect([fakeVector(null).vector]);
+      const { tools } = await client.listTools();
+      const surfaces: [string, string][] = [
+        ["instructions", client.getInstructions() ?? ""],
+        ...tools.map((t): [string, string] => [
+          t.name,
+          `${t.description} ${JSON.stringify(t.inputSchema)}`,
+        ]),
+      ];
+      for (const [name, text] of surfaces) {
+        for (const pattern of BANNED) {
+          const match = text.match(pattern);
+          expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
+        }
+      }
+    });
   });
 });

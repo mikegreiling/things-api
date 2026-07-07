@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### MCP v2 (Phase 20)
+
+- The tool surface grows from 16 to 31 grouped semantic tools: `set_todo_status` / `set_project_status` (status + children policy + restore-children fold), promoted `move_todo` (project/area/heading/inbox/detach) and `move_project` (area/detach), `set_tags` (replace/add), `edit_checklist` (granular add/remove/check/uncheck/rename/move + stateful replace), type-generic `delete_item`/`restore_item`/`duplicate_item`, and full area/tag CRUD (`update_tag` incl. un-nest, `delete_tag` with subtree confirmation). `run_operation` + `capabilities` remain the escape hatch for the long tail.
+- Server `instructions` now carry a live inventory read at server start — areas, tag hierarchy (`parent > child`), open project titles (capped at 100) — plus the reference and scheduling vocabulary, degrading to conventions-only when the database is unreadable.
+- Tools carry MCP annotations (`readOnlyHint` on reads/capabilities/doctor, `destructiveHint` on permanent deletes and the generic mutation entries).
+- New surface-copy contract ([docs/design/surface-copy.md](docs/design/surface-copy.md)): tool descriptions state consumer-visible behavior and side effects only — pipeline/audit/lab vocabulary is banned (regression-tested) and lives in `docs/` and the `capabilities` output. Shared parameter vocabulary moved to `src/surface-copy.ts` so CLI help and MCP schemas cannot drift apart.
+
 ## 0.3.0 — 2026-07-07
 
 The operation catalog grows from 25 to 28 kinds; every new capability is grounded in the 30-probe P-suite campaign ([docs/lab/p-suite-results.md](docs/lab/p-suite-results.md)).
