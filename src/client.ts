@@ -131,7 +131,7 @@ export interface ThingsClient {
       dest: Omit<TodoMoveParams, "uuid">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
-    /** Full tag replacement (validated semantics, U04). */
+    /** Replace the full tag set (an empty list clears all tags). */
     setTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     /** Merge: current direct tags + new ones, then replace. */
     addTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
@@ -141,18 +141,17 @@ export interface ThingsClient {
       options?: WriteOptions,
     ): Promise<MutationResult>;
     deleteTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /** Duplicate via URL `duplicate=true` (E07) — the copy's uuid is discovered by verification. */
+    /** Duplicate a to-do; the copy's uuid is on the result. */
     duplicateTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /** Restore a TRASHED to-do (E15): un-trashes into the Inbox, de-scheduled. */
+    /** Restore a TRASHED to-do: it returns to the Inbox, de-scheduled. */
     restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /** Detach a to-do from its project/area/heading, keeping the schedule (P21/P22). */
+    /** Detach a to-do from its project/area/heading, keeping the schedule. */
     detachTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
-     * One granular checklist edit (add/remove/check/uncheck/rename/move) —
-     * reads the current items+states, applies the edit, writes the full list
-     * back via things:///json with per-item states preserved (P18). Item
-     * uuids are NOT stable across the rewrite. The checklist-reset ack is
-     * implied: state is preserved by construction.
+     * One granular checklist edit (add/remove/check/uncheck/rename/move):
+     * changes a single item while every other item and its checked state is
+     * preserved (no reset acknowledgement needed). Items are matched by
+     * exact title; item uuids are NOT stable across an edit.
      */
     editChecklist(
       uuid: string,
@@ -170,24 +169,24 @@ export interface ThingsClient {
       policy: Pick<ProjectCompleteParams, "children">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
-    /** Move a project to another area (E14 AppleScript / P23 URL). */
+    /** Move a project to another area. */
     moveProject(uuid: string, area: ContainerRef, options?: WriteOptions): Promise<MutationResult>;
-    /** Detach a project from its area, one verified write (P24 — URL only). */
+    /** Detach a project from its current area. */
     detachProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /** Cancel a project; the URL write auto-cancels open children (P01) — policy mandatory. */
+    /** Cancel a project — open children are canceled with it, so the children policy is mandatory. */
     cancelProject(
       uuid: string,
       policy: Pick<ProjectCancelParams, "children">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
-     * Reopen a completed/canceled project (P02/P05). Children stay resolved
-     * unless restoreChildren reopens the cascade-resolved ones (P03 window).
+     * Reopen a completed/canceled project. Children stay resolved unless
+     * restoreChildren reopens the ones resolved together with the project.
      */
     reopenProject(uuid: string, options?: ProjectReopenOptions): Promise<ProjectReopenResult>;
-    /** Restore a TRASHED project IN PLACE (P06) — nothing relocates. */
+    /** Restore a TRASHED project IN PLACE — nothing relocates. */
     restoreProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /** Duplicate a project INCLUDING children (E17) — copy discovered by verification. */
+    /** Duplicate a project INCLUDING its children; the copy's uuid is on the result. */
     duplicateProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     addArea(params: AreaAddParams, options?: WriteOptions): Promise<MutationResult>;
@@ -211,8 +210,8 @@ export interface ThingsClient {
      */
     reorder(params: ReorderParams, options?: WriteOptions): Promise<ReorderResult>;
     /**
-     * Run N ops sequentially through the full pipeline (each guarded,
-     * verified, audited). No transactional semantics — per-op results.
+     * Run N ops sequentially and independently — no transactions, a failure
+     * does not roll back earlier ops. Per-op results.
      */
     batch(
       ops: BatchOp[],
@@ -220,16 +219,16 @@ export interface ThingsClient {
       onResult?: (result: BatchItemResult) => void,
     ): Promise<BatchItemResult[]>;
     /**
-     * Undo the last N successful mutations by replaying inverse ops from the
-     * audit trail (each inverse runs the full guarded+verified pipeline).
-     * Irreversible ops are reported as such, never guessed at.
+     * Undo the last N changes made through this client, newest first, by
+     * applying the inverse change. Irreversible changes are reported as
+     * such, never guessed at.
      */
     undo(options?: UndoOptions, onItem?: (item: UndoItemResult) => void): Promise<UndoItemResult[]>;
   };
   close(): void;
 }
 
-/** One granular checklist edit, applied over a stateful wholesale rewrite (P18). */
+/** One granular checklist edit; every other item's checked state is preserved. */
 export type ChecklistEdit =
   | { action: "add"; title: string; /** 1-based insert position (default: append). */ at?: number }
   | { action: "remove"; item: string }

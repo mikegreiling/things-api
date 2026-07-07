@@ -18,7 +18,7 @@ This contract governs every consumer-facing description string: MCP tool descrip
 
 ## Enforcement
 
-A contract test scans every MCP tool description, schema description, and the server instructions for the banned vocabulary of rule 2. When it fails, rewrite the sentence in consumer terms or move the detail into `docs/`.
+Contract tests scan every MCP tool description, schema description, and the server instructions (`test/mcp/server.test.ts`) and every CLI `--help` string (`test/cli/help-contract.test.ts`) for the banned vocabulary of rule 2. When one fails, rewrite the sentence in consumer terms or move the detail into `docs/`.
 
 ## Where the internals live instead
 
