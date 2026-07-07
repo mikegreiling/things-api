@@ -5,10 +5,6 @@
  */
 import type { Command } from "commander";
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-
-import { createThingsMcpServer } from "../../mcp/server.ts";
-
 export function registerMcp(program: Command): void {
   program
     .command("mcp")
@@ -20,6 +16,13 @@ export function registerMcp(program: Command): void {
     )
     .option("--db <path>", "explicit database path")
     .action(async (opts: { db?: string }) => {
+      // LAZY imports: the MCP SDK + zod load only when `things mcp` actually
+      // runs. Every other CLI command must work in environments that ship a
+      // minimal dependency set (the guest e2e bundle carries only commander).
+      const [{ createThingsMcpServer }, { StdioServerTransport }] = await Promise.all([
+        import("../../mcp/server.ts"),
+        import("@modelcontextprotocol/sdk/server/stdio.js"),
+      ]);
       const server = createThingsMcpServer(opts.db !== undefined ? { dbPath: opts.db } : {});
       const transport = new StdioServerTransport();
       await server.connect(transport);
