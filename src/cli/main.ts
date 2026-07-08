@@ -48,10 +48,19 @@ export function buildProgram(): Command {
   return program;
 }
 
+export function runCli(): void {
+  const program = buildProgram();
+  program.exitOverride((err) => {
+    process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);
+  });
+  program.parse();
+}
+
 // Direct-run detection must survive the npm .bin symlink (argv[1] ends with
 // "things", not "main.js") — resolve through realpath and compare to this
 // module. Caught by scripts/pack-smoke.sh: a name-suffix check made the
-// installed bin a silent no-op.
+// installed bin a silent no-op. The bin/things.js launcher bypasses this by
+// calling runCli() explicitly.
 const isDirectRun = ((): boolean => {
   const invoked = process.argv[1];
   if (invoked === undefined) return false;
@@ -62,9 +71,5 @@ const isDirectRun = ((): boolean => {
   }
 })();
 if (isDirectRun) {
-  const program = buildProgram();
-  program.exitOverride((err) => {
-    process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);
-  });
-  program.parse();
+  runCli();
 }

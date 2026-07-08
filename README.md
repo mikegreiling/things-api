@@ -16,6 +16,17 @@ things capabilities --op todo.delete   # what's possible, per vector, with evide
 
 Things 3 installed and launched once, Node ≥ 24, and a handful of one-time macOS consents / Things settings depending on what you use (file-access consent for reads; "Enable Things URLs" + Automation consents for writes). **See [docs/setup.md](docs/setup.md)** — including the dedicated-automation-Mac checklist. `things doctor` validates your setup and prints remediation for anything missing.
 
+### Development install
+
+To get a global `things` command that runs the live TypeScript source (no build step — Node ≥ 24 strips types natively):
+
+```sh
+npm link            # symlink this checkout as the global things-api package
+asdf reshim nodejs  # once, if you use asdf: expose the new `things` shim
+```
+
+Edits under `src/` take effect immediately. The bin launcher ([bin/things.js](bin/things.js)) prefers `src/` when present and falls back to `dist/`, so published installs (`npm i -g things-api`, `npx things-api`) run the compiled output with identical behavior.
+
 ## Core principles
 
 - **Reads** go directly to Things' local SQLite database (read-only, WAL-aware). **Writes** go exclusively through official app surfaces — URL scheme, AppleScript, Shortcuts — never direct DB writes (sync corruption).
