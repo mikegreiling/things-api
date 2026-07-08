@@ -5,9 +5,10 @@
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
   "license": "UNLICENSED",
   "bin": {
-    "things": "./dist/cli/main.js"
+    "things": "./bin/things.js"
   },
   "files": [
+    "bin",
     "dist"
   ],
   "type": "module",
