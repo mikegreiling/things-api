@@ -2,6 +2,8 @@
 
 Living register of Things-app capabilities that are missing, thin, or janky in things-api, with evidence refs and the planned path (or the reason none exists). Assessed 2026-07-04, post-Phase-7, mid-Phase-8 (reorder in flight on `mg/phase8-reorder`).
 
+> The full CRUD × vector picture (everything that works, not just the gaps) lives in **[capability-matrix.md](capability-matrix.md)** — the living wish-list/checklist. Keep both current in the same change (see repo `CLAUDE.md`).
+
 ## Headline gaps
 
 ### 0. Headings doctrine (DECIDED 2026-07-06, implementation deferred)
