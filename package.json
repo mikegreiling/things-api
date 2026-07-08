@@ -1,9 +1,8 @@
 {
   "name": "things-api",
   "version": "0.3.0",
-  "private": true,
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "bin": {
     "things": "./bin/things.js"
   },
