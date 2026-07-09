@@ -1222,16 +1222,21 @@ const reorder: CommandSpec<"reorder"> = {
     const wire = pre.reorder?.wireList ?? params.uuids;
     if (params.scope === "someday") {
       // The Someday handler STACKS each sent id above the list's current top
-      // (the current top itself never moves) — P6h/P7e/P8b. The validated
-      // two-call protocol realizes an exact order: (1) push the desired
-      // BOTTOM item to the top, making it the anchor; (2) send the reversed
-      // wire list — the anchor (first id) stays put and the rest stack above
-      // it in desired order (P8b: exact).
+      // (the current top itself never moves), with OPPOSITE stack directions
+      // by row type: to-dos ascend — later-sent higher (P6h/P7e/P8b) —
+      // while projects DESCEND — earlier-sent higher (P9e, incl. a
+      // predicted-failure control). Both use the same two-call protocol:
+      // (1) push the desired BOTTOM item to the top, making it the anchor;
+      // (2) anchor first, then the rest in the direction that stacks into
+      // the desired order — reversed for to-dos (P8b: exact), FORWARD for
+      // projects (P9e: exact ×2).
       const bottom = wire.at(-1) ?? "";
-      const reversed = wire.toReversed().join(",");
+      const isProjects = pre.reorder?.projectMembers.length ?? 0;
+      const call2 =
+        isProjects > 0 ? [bottom, ...wire.slice(0, -1)].join(",") : wire.toReversed().join(",");
       return osaBlock([
         `${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(bottom)}`,
-        `${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(reversed)}`,
+        `${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(call2)}`,
       ]);
     }
     return osa(`${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(wire.join(","))}`);

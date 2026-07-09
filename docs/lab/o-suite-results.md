@@ -45,6 +45,16 @@ Runs `things-run-p7-20260709-101502` / `things-run-p8-20260709-102315` (`lab/scr
 - **Sidebar order: native writes exhaustively dead** (scf2 P6a–g), **but the BOUNCE works** (Mike's idea): clearing a project's area front-inserts it among top-level projects (P7c), attaching front-inserts within the area (P7c2), and a `when=someday → when=anytime` round-trip front-inserts without residue (P7d; P8e: 3-project sequence in reverse desired order → EXACT target order, `start=1`/`startDate NULL` preserved). Ships as reorder scope **"projects"** (bounce-only, plain anytime undated area-less projects). Areas among areas remain UI-only.
 - **Heading rows reorder natively in a project specifier** (scf P1) — ships as scope **"headings"**; children follow their heading.
 
+## P9 — native ordering pursuit + list discovery (2026-07-09)
+
+Run `things-run-p9-20260709-131559` (`lab/scripts/research-p9.sh`), after host sdef inspection showed the private command's direct parameter is a bare `specifier` and `responds-to` lives on class `list` (inherited by `area`) and class `project`.
+
+- **SOMEDAY PROJECTS: LOCKED + SHIPPED.** Same anchor rule as to-dos (original top never moves) but the stack DESCENDS — earlier-sent = higher (P9e-e1). The inverted two-call protocol (call 1: desired-bottom; call 2: anchor then FORWARD desired order) produced EXACT results in two trials, and the to-do-style ascending protocol failed exactly as the descending model predicts (e4 control). The someday reorder scope now accepts area-less someday projects (same-type requests only) with the per-type protocol.
+- **List discovery (P9a):** `every list` = Inbox, Today, **Tomorrow** (hidden, id `tomorrow`), Anytime, Upcoming, Someday, **Later Projects** (hidden, id `later-projects`), Logbook, Trash, plus every AREA (areas are `list` subclass instances). No list CONTAINS areas — there is no container specifier for areas-among-areas.
+- **Areas: still fully dead** (P9b/P9c). `make new area` appends with `index=0` (the app writes TMArea."index" only on UI drag — PROD carries real distinct values); application-specifier (`it`), Anytime single + two-call, Someday, and area-in-area spellings with area uuids: all zero-delta.
+- **Anytime top-level projects: still native-dead** (P9d — application specifier and Anytime two-call inert). The when= bounce (scope "projects") remains the only surface.
+- **Heading soft-delete is headless (P9f, doctrine input):** `update?list-id=<project>` on a headed child CLEARS its heading link (tier 0, moves to project root), and Shortcuts `edit-title` accepts `""` / `" "` as a heading title. Empty-then-blank = functionally deleted without the delete-class consent modal; true row deletion stays interactive.
+
 ## Not probed (future work)
 
-Areas among areas (every spelling dead); the Anytime list-scope convention (P7b/P8d inconsistent); someday PROJECTS in the Someday scope (P7a/P8c inconsistent); checklist-item order (no granular surface anywhere).
+Areas among areas (every spelling dead — P9c exhausts the sdef-informed candidates); the Anytime list-scope convention for loose to-dos (P7b/P8d inconsistent); the hidden `list "Later Projects"` / `list "Tomorrow"` as reorder specifiers; checklist-item order (no granular surface anywhere).

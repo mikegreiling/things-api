@@ -285,8 +285,9 @@ const GUARDS: Record<HazardId, GuardFn> = {
     }
     if (pre.reorder.mixedTypes) {
       problems.push(
-        "mixes to-dos and projects in one area reorder — only same-type area reorders are " +
-          "validated (O05/O10 to-dos, O14 projects); issue two requests instead",
+        "mixes to-dos and projects in one request — only same-type reorders are validated " +
+          "for the area (O05/O10 vs O14) and someday (P8b vs P9e — the two types even " +
+          "stack in opposite directions) scopes; issue two requests instead",
       );
     }
     for (const r of pre.reorder.rejected) {

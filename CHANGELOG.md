@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **`things reorder --scope someday` now also orders area-less SOMEDAY PROJECTS** (one kind per call — to-dos and projects never mix). Someday projects are sidebar rows, so this orders the sidebar's someday segment natively. The two row types stack in opposite directions inside the app's Someday handler (lab P8b vs P9e), so the compiler emits the matching validated two-call protocol per type.
+- README refreshed: v0.5.0 status, the Shortcuts surface's lab-proven capabilities and roadmap position, and the full reorder scope list.
 
 ## 0.5.0 — 2026-07-09
 
