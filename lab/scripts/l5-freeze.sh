@@ -21,10 +21,11 @@ lab_ssh "$IP" 'osascript -e "tell application \"Shortcuts\" to quit"' 2>&1 || tr
 lab_ssh "$IP" 'osascript -e "tell application \"Things3\" to quit"' 2>&1 || true
 sleep 3
 
-echo "[l5-freeze] verifying the four proxies survive…"
+echo "[l5-freeze] verifying the six proxies survive…"
 LIST=$(lab_ssh "$IP" 'shortcuts list 2>/dev/null')
 OK=1
-for s in things-proxy-create-heading things-proxy-edit-title things-proxy-delete-items things-proxy-find-items; do
+for s in things-proxy-create-heading things-proxy-edit-title things-proxy-delete-items \
+         things-proxy-delete-items-permanently things-proxy-set-detail things-proxy-find-items; do
   if echo "$LIST" | grep -qx "$s"; then echo "  ok: $s"; else echo "  MISSING: $s"; OK=0; fi
 done
 [ "$OK" = 1 ] || { echo "[l5-freeze] refusing to freeze — a proxy is missing" >&2; exit 1; }
@@ -37,12 +38,15 @@ echo "[l5-freeze] ===== APPLY THESE METADATA EDITS BY HAND (docs/lab/golden-v1-m
 cat <<'META'
   - humanLayersDone: append "L5-shortcuts"
   - deferred: remove the "L5: Shortcuts first-run…" entry
-  - l5Progress: set sittingCompleted: "<today>", clear "remaining", record
-      whether Find Items offered an ID filter (Card 1/2 observation) and any
-      Card 5 action-catalog findings (repeat params, tags/reminder fields,
-      convert/move actions, hard-delete toggle wording)
+  - l5Progress: set sittingCompleted: "2026-07-09", clear "remaining"; record
+      the six proxies (create-heading, edit-title, delete-items,
+      delete-items-permanently, set-detail, find-items), ID-filter addressing,
+      and the S-campaign verdicts (see docs/lab/s-campaign-results.md)
   - add: consentResidue: "one trashed L5-CONSENT-PROJ (probe assertions tolerate)"
-  - exported proxies: lab/shortcuts/*.shortcut (git add)
+  - add: shortcutsConsent: "output-class Always-Allowed (headless); delete-class
+      re-prompts every run (no Always-Allow — tier-3, s-campaign-results.md 5j)"
+  - proxies are golden-resident; `shortcuts` CLI has no export subcommand, so
+      repo copies need a manual File > Export if wanted (not blocking)
 META
 echo "[l5-freeze] ================================================================================"
 echo

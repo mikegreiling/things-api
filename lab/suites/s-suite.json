@@ -1,60 +1,41 @@
 {
   "suite": "s",
-  "description": "STAGED / NOT YET RUNNABLE — the Shortcuts campaign. Blocked on the L5 golden sitting (docs/lab/golden-runbook.md §5 + docs/lab/l5-build-cards.md): the four proxy shortcuts (things-proxy-create-heading, -edit-title, -delete-items, -find-items) must exist in the golden before these probes resolve. Vector `shortcuts` runs via `exec` calling `shortcuts run <proxy> -i <json>` (Apple exposes no in-suite Shortcuts step; runtime execution is fully scriptable once the proxies are built). Primary target: the heading lifecycle in EXISTING projects — the one gap only Shortcuts fills (gaps.md §1 + §0 headings doctrine). Expectations below are DISCOVERY GUESSES until the first post-L5 run locks them; each probe self-creates its fixtures so seeds stay pristine. Ordered: read probe first (lowest risk, no mutation), then heading create/rename/delete, then the re-verify sweep (to-do<->project conversion, repeat params, project tags/reminders via Shortcuts).",
+  "description": "The Shortcuts campaign. The L5 golden sitting (2026-07-09) built six proxies and captured FIRST verdicts via lab/scripts/l5-consent-absorb.sh (evidence: docs/lab/s-campaign-results.md, raw lab/artifacts/l5-sitting-20260709/). This JSON is the intended RECURRING regression form — NOT yet auto-runnable: the runner/DSL needs Shortcuts-vector support (write the JSON input to a guest file and invoke `shortcuts run <proxy> --input-path <file>` — NOT inline `-i`; the `shortcuts` CLI takes a path or stdin). Proxies address by uuid via Find Items' ID filter + Find->act chains. CONSENT CONSTRAINT (oddities 5j): output-class proxies (create-heading/edit-title/set-detail/find-items) are Always-Allowed = headless in clones; delete-class proxies (delete-items/delete-items-permanently) have NO Always-Allow and re-prompt EVERY run — they cannot ride autonomous lab:regress and need a human click or SIP-off consent-DB seeding. Verdicts below are LOCKED from the L5 first-run unless marked otherwise.",
   "probes": [
     {
       "id": "S01",
-      "title": "READ probe: what identifiers does things-proxy-find-items structured output carry? (uuid? name only?) — lowest-risk proxy, no mutation",
+      "title": "find-items read probe — structured output carries the item TITLE (text), not the uuid (L5 verdict)",
       "vector": "shortcuts",
       "operation": "shortcuts.find",
       "appState": "running-background",
+      "proxy": "things-proxy-find-items",
+      "input": { "search": "<name>" },
       "setup": [
         { "openUrl": "things:///add?title=S01-FINDME&notes=s-suite-read-probe" },
         { "waitSql": "SELECT uuid FROM TMTask WHERE title='S01-FINDME'" }
       ],
       "commands": [
         {
-          "exec": [
-            "shortcuts",
-            "run",
-            "things-proxy-find-items",
-            "-i",
-            "{\"search\":\"S01-FINDME\"}",
-            "-o",
-            "/tmp/s01-out.txt"
-          ]
-        },
-        { "exec": ["cat", "/tmp/s01-out.txt"] }
+          "note": "PENDING runner support — run: printf '{\"search\":\"S01-FINDME\"}' > in.json; shortcuts run things-proxy-find-items --input-path in.json --output-path out.txt; assert out.txt contains 'S01-FINDME'"
+        }
       ],
-      "expect": {
-        "verdict": "supported",
-        "tier": 0,
-        "assertions": [{ "kind": "stdoutMatches", "command": 1, "pattern": "S01-FINDME" }]
-      }
+      "expect": { "verdict": "supported", "tier": 0, "assertions": [] }
     },
     {
       "id": "S02",
-      "title": "HEADING CREATE in an existing project via things-proxy-create-heading — THE primary S-campaign target (URL/AppleScript both dead, gaps.md §1)",
+      "title": "HEADING CREATE in an existing project — WORKS (L5 S02): Create Heading makes a type=2 row with project=<uuid>",
       "vector": "shortcuts",
       "operation": "heading.add",
       "appState": "running-background",
+      "proxy": "things-proxy-create-heading",
+      "input": { "title": "<str>", "project": "<project uuid>" },
       "setup": [
         { "openUrl": "things:///add-project?title=S02-PROJ" },
         { "waitSql": "SELECT uuid FROM TMTask WHERE title='S02-PROJ' AND type=1" }
       ],
       "commands": [
         {
-          "exec": [
-            "shortcuts",
-            "run",
-            "things-proxy-create-heading",
-            "-i",
-            "{\"title\":\"S02-HEAD\",\"project\":\"S02-PROJ\"}"
-          ]
-        },
-        {
-          "waitSql": "SELECT uuid FROM TMTask WHERE title='S02-HEAD' AND type=2",
-          "timeoutSeconds": 15
+          "note": "PENDING runner support — input {\"title\":\"S02-HEAD\",\"project\":\"<uuid:S02-PROJ>\"}; then assert a type=2 row titled S02-HEAD with project=<uuid:S02-PROJ>"
         }
       ],
       "expect": {
@@ -67,121 +48,74 @@
     },
     {
       "id": "S03",
-      "title": "HEADING RENAME via things-proxy-edit-title (Set Title of a heading entity)",
+      "title": "HEADING RENAME — WORKS (L5 S03): Edit Items -> Set Title renames the type=2 row in place",
       "vector": "shortcuts",
       "operation": "heading.rename",
       "appState": "running-background",
-      "setup": [
-        { "openUrl": "things:///add-project?title=S03-PROJ" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='S03-PROJ' AND type=1" },
-        {
-          "exec": [
-            "shortcuts",
-            "run",
-            "things-proxy-create-heading",
-            "-i",
-            "{\"title\":\"S03-HEAD\",\"project\":\"S03-PROJ\"}"
-          ]
-        },
-        {
-          "waitSql": "SELECT uuid FROM TMTask WHERE title='S03-HEAD' AND type=2",
-          "timeoutSeconds": 15
-        }
-      ],
+      "proxy": "things-proxy-edit-title",
+      "input": { "id": "<heading uuid>", "title": "<str>" },
       "commands": [
         {
-          "exec": [
-            "shortcuts",
-            "run",
-            "things-proxy-edit-title",
-            "-i",
-            "{\"find\":\"S03-HEAD\",\"title\":\"S03-HEAD-RN\"}"
-          ]
-        },
-        {
-          "waitSql": "SELECT uuid FROM TMTask WHERE title='S03-HEAD-RN' AND type=2",
-          "timeoutSeconds": 15
+          "note": "PENDING runner support — input {\"id\":\"<heading uuid>\",\"title\":\"S03-HEAD-RN\"}"
         }
       ],
-      "expect": {
-        "verdict": "supported",
-        "tier": 0,
-        "assertions": [
-          {
-            "kind": "rowExists",
-            "table": "TMTask",
-            "where": { "title": "S03-HEAD-RN", "type": 2 }
-          },
-          { "kind": "rowAbsent", "table": "TMTask", "where": { "title": "S03-HEAD", "type": 2 } }
-        ]
-      }
+      "expect": { "verdict": "supported", "tier": 0, "assertions": [] }
     },
     {
       "id": "S04",
-      "title": "HEADING DELETE via things-proxy-delete-items (Trash, immediately-delete toggle OFF)",
+      "title": "HEADING DELETE — WORKS (L5 S04): removes the heading row (headings don't sit in Trash). DELETE-CLASS = interactive, re-prompts each run.",
       "vector": "shortcuts",
       "operation": "heading.delete",
       "appState": "running-background",
-      "setup": [
-        { "openUrl": "things:///add-project?title=S04-PROJ" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='S04-PROJ' AND type=1" },
-        {
-          "exec": [
-            "shortcuts",
-            "run",
-            "things-proxy-create-heading",
-            "-i",
-            "{\"title\":\"S04-HEAD\",\"project\":\"S04-PROJ\"}"
-          ]
-        },
-        {
-          "waitSql": "SELECT uuid FROM TMTask WHERE title='S04-HEAD' AND type=2",
-          "timeoutSeconds": 15
-        }
-      ],
+      "proxy": "things-proxy-delete-items",
+      "input": { "id": "<heading uuid>" },
       "commands": [
         {
-          "exec": ["shortcuts", "run", "things-proxy-delete-items", "-i", "{\"find\":\"S04-HEAD\"}"]
-        },
-        {
-          "waitSql": "SELECT 1 FROM TMTask WHERE title='S04-HEAD' AND trashed=1",
-          "timeoutSeconds": 15
+          "note": "PENDING + INTERACTIVE — needs a human Delete click; re-probe: child re-parenting on a NON-empty heading (L5 heading was empty)"
         }
       ],
-      "expect": {
-        "verdict": "supported",
-        "tier": 0,
-        "assertions": [
-          {
-            "kind": "fieldEquals",
-            "table": "TMTask",
-            "where": { "title": "S04-HEAD" },
-            "field": "trashed",
-            "value": 1
-          }
-        ]
-      }
+      "expect": { "verdict": "supported", "tier": 3, "assertions": [] }
+    },
+    {
+      "id": "S-detail",
+      "title": "set-detail (generic Edit Items) — Reminder Time INCONCLUSIVE on an unscheduled to-do (L5); re-probe on a SCHEDULED fixture + the dated-reminder CLEAR path (oddity 2e)",
+      "vector": "shortcuts",
+      "operation": "todo.set-detail",
+      "appState": "running-background",
+      "proxy": "things-proxy-set-detail",
+      "input": { "id": "<uuid>", "detail": "<Detail>", "value": "<str>" },
+      "commands": [
+        {
+          "note": "PENDING — probe Reminder Time on a scheduled item; Parent (heading move?); Completion/Creation Date (backdating — no other surface writes these)"
+        }
+      ],
+      "expect": { "verdict": "partial", "tier": 0, "assertions": [] }
+    },
+    {
+      "id": "S-delperm",
+      "title": "PERMANENT single-item delete — WORKS (L5 S-delperm): Delete Immediately hard-deletes one row, NO tombstone. DELETE-CLASS = interactive.",
+      "vector": "shortcuts",
+      "operation": "todo.delete-permanent",
+      "appState": "running-background",
+      "proxy": "things-proxy-delete-items-permanently",
+      "input": { "id": "<uuid>" },
+      "commands": [
+        {
+          "note": "PENDING + INTERACTIVE — needs a human Delete click. Verified: row 1->0, tombstones 0 (oddity 5i)"
+        }
+      ],
+      "expect": { "verdict": "supported", "tier": 3, "assertions": [] }
     },
     {
       "id": "S05",
-      "title": "RE-VERIFY (Shortcuts): to-do -> project conversion. AppleScript/URL both dead (E16). Does a Shortcuts action expose it? DISCOVERY — likely unsupported.",
+      "title": "to-do -> project conversion — DEAD (no Convert action exists in the Shortcuts catalog; L5 sweep). Closed without a probe.",
       "vector": "shortcuts",
       "operation": "todo.convertToProject",
       "appState": "running-background",
-      "setup": [
-        { "openUrl": "things:///add?title=S05-TODO" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='S05-TODO' AND type=0" }
-      ],
       "commands": [
-        {
-          "note": "PLACEHOLDER — no proxy exists for convert; the L5 Card 5 action-catalog sweep decides whether a convert action exists at all. If it does, add a things-proxy-convert and wire it here."
-        }
+        { "note": "no proxy — the Things Shortcuts action catalog has no Convert action" }
       ],
-      "expect": {
-        "verdict": "unsupported",
-        "tier": 0,
-        "assertions": []
-      }
+      "expect": { "verdict": "unsupported", "tier": 0, "assertions": [] }
     }
   ]
 }
