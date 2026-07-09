@@ -39,7 +39,7 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 |---|---|---|---|---|
 | Create (+area, +initial to-dos) | ✅ | ✅ | 🧪 | |
 | Create WITH headings (json payload) | 🧪 | ⛔ | 🧪 | queued small win, independent of Shortcuts (gaps roadmap item 5) |
-| Update title/notes/when/deadline | ✅ (+append/prepend, E18) | 🟡 | 🧪 | 🚫 schedule edits on repeating projects |
+| Update title/notes/when/deadline | ✅ (+append/prepend, E18) | 🟡 (schedule via `schedule ... project id`, P14-A3) | 🧪 | 🚫 schedule edits on repeating projects — URL when= CRASHES the app (oddity §1/§7) |
 | Set reminder on a project | ✅ (`update-project?when=<list>@time`, A3) | ⛔ no property | 🧪 | reminderTime uses the to-do codec (`14<<26\|30<<20`); clear-on-project follows the to-do rules (dated = sticky) |
 | Tags on a project | ✅ (`update-project?tags=`, A1) | ✅ (`set tag names of project id`, A2) | 🧪 | both vectors write `TMTaskTag`; tags must pre-exist (to-do rule presumed) |
 | Complete (children policy) | ✅ cascades, policy mandatory | 🟡 cascade unvalidated | 🧪 | |
