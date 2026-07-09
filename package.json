@@ -4,7 +4,7 @@
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
   "license": "MIT",
   "bin": {
-    "things": "./bin/things.js"
+    "things": "bin/things.js"
   },
   "files": [
     "bin",
