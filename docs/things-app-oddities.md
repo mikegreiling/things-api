@@ -147,6 +147,10 @@ Running a Things Shortcuts action prompts a per-shortcut Shortcuts-Privacy dialo
 
 Setting the `Parent` detail to a project uuid passed as TEXT does not move the to-do and does not error — it silently CLEARS the to-do's project link (`project` → NULL), leaving the item container-less. The text→entity coercion fails and the action writes the empty result. On a heading row the same call is a pure no-op (project unchanged) — two different silent-failure behaviors for one action depending on row type. A destructive wrong-action with exit 0 is the worst of the silent-failure family: the caller asked for a move and got a detach. *(scf P2 / scf2 P2b, 2026-07-09)*
 
+## 6. SUSPECTED CRASH: AppleScript `schedule` on a heading row kills the AppleEvent connection
+
+`tell application "Things3" to schedule to do id "<heading-uuid>" for (current date) + 1 * days` returned `Connection is invalid. (-609)` — the classic signature of the target process dying mid-event (P10b-b5, 2026-07-09; heading rows are addressable via `to do id`, see §5e's by-id pattern). The app recovered on the next event, the heading row was unchanged, and no crash detector ran in that probe, so this is a SUSPICION pending a U12-style verification (process-death watch + `.ips` capture). If confirmed, it is the second unguarded-precondition crash in the schedule-class family (§1 is the URL `when=` on repeating items). things-api hard-blocks every todo-op against non-to-do targets regardless.
+
 ---
 
 ## Suggested report to Cultured Code

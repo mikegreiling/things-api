@@ -384,6 +384,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "get_area",
+    {
+      description:
+        "One area's full contents: metadata plus its direct to-dos (active first), its " +
+        "projects in sidebar order, later (scheduled/repeating/someday), and logged items.",
+      inputSchema: { ref: z.string().describe("Area uuid or unique name") },
+      annotations: READ_ONLY,
+    },
+    async (args) => guard(() => jsonResult(getClient().read.areaView(args.ref))),
+  );
+
+  server.registerTool(
     "list_collections",
     {
       description:

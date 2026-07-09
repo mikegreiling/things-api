@@ -457,10 +457,13 @@ export function trashView(db: DatabaseSync, options?: { limit?: number }): ListI
 }
 
 export function projectsView(db: DatabaseSync, options?: { areaUuid?: string }): Project[] {
-  const where = options?.areaUuid
+  // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
+  // or unknown references throw like every other ref resolver.
+  const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
+  const where = area
     ? `${OPEN} AND t.type = 1 AND t.area = ? ORDER BY t."index" ASC`
     : `${OPEN} AND t.type = 1 ORDER BY t."index" ASC`;
-  const rows = fetchTaskRows(db, where, options?.areaUuid ? [options.areaUuid] : []);
+  const rows = fetchTaskRows(db, where, area ? [area] : []);
   return materialize(db, rows) as Project[];
 }
 

@@ -13,6 +13,7 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
+import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
 import { areasView, tagsView } from "./read/tags.ts";
@@ -109,6 +110,8 @@ export interface ThingsClient {
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
     projectView(uuid: string): ProjectView;
+    /** Composite area view: direct to-dos, projects in sidebar order, later, logged. */
+    areaView(ref: string): AreaView;
     areas(): Area[];
     tags(): Tag[];
     search(query: string, options?: SearchOptions): ListItem[];
@@ -373,6 +376,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),
       projectView: (uuid) => projectView(conn.db, uuid, now()),
+      areaView: (ref) => areaView(conn.db, ref, now()),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),

@@ -100,6 +100,7 @@ export type {
 export type { IsoDate } from "./model/dates.ts";
 export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
 export type { ProjectView } from "./read/project-view.ts";
+export type { AreaView } from "./read/area-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
 export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";

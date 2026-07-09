@@ -8,7 +8,7 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
-import { bold, cyan, dim, magenta, red, yellow } from "../style.ts";
+import { blue, bold, dim, magenta, red, yellow } from "../style.ts";
 
 import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
@@ -77,7 +77,7 @@ export function formatItem(item: ListItem, uuidWidth = 0): string {
   const meta = [
     item.deadline ? red(`!${item.deadline}`) : null,
     item.startDate ? yellow(`@${item.startDate}`) : null,
-    item.tags.length > 0 ? cyan(`#${item.tags.map((t) => t.title).join(",#")}`) : null,
+    item.tags.length > 0 ? blue(`#${item.tags.map((t) => t.title).join(",#")}`) : null,
     item.status !== "open" ? magenta(`[${item.status}]`) : null,
   ].filter((s): s is string => s !== null);
   const context =
@@ -293,7 +293,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("projects")
     .description("Active projects (optionally scoped to --area <uuid>)")
-    .option("--area <uuid>", "filter by area uuid")
+    .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts & { area?: string }) => {

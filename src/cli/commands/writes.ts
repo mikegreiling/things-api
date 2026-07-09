@@ -919,7 +919,10 @@ export function registerWriteCommands(program: Command): void {
           "tags). Target by uuid or unique name.",
       )
       .option("--title <text>", "new name")
-      .option("--tags <list>", "comma-separated EXISTING tag names (full replacement)"),
+      .option(
+        "--tags <list>",
+        'comma-separated EXISTING tag names (full replacement; "" clears all)',
+      ),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const tags = splitCsv(opts["tags"] as string | undefined);
     if (opts["title"] === undefined && tags === undefined) {
