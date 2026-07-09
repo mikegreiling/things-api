@@ -30,6 +30,8 @@ import {
   type ChangedItem,
   type ListItem,
   type SearchOptions,
+  type SidebarSection,
+  type SomedayFilter,
   type TodayView,
   type UpcomingFilter,
   type ViewFilter,
@@ -98,9 +100,9 @@ export interface ThingsClient {
   read: {
     today(filter?: ViewFilter): TodayView;
     inbox(filter?: ViewFilter): ListItem[];
-    anytime(filter?: ViewFilter): ListItem[];
+    anytime(filter?: ViewFilter): SidebarSection[];
     upcoming(filter?: UpcomingFilter): ListItem[];
-    someday(filter?: ViewFilter): ListItem[];
+    someday(filter?: SomedayFilter): SidebarSection[];
     logbook(options?: { limit?: number; tag?: string; exactTag?: boolean }): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
@@ -345,7 +347,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       inbox: (f) => inboxView(conn.db, f),
       anytime: (f) => anytimeView(conn.db, now(), f),
       upcoming: (f) => upcomingView(conn.db, now(), f),
-      someday: (f) => somedayView(conn.db, f),
+      someday: (f) => somedayView(conn.db, now(), f),
       logbook: (o) => logbookView(conn.db, o),
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),

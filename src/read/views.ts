@@ -25,12 +25,20 @@
  *             renders Today members with a star; live-verified via screenshot
  *             2026-07-02: starred = in Today, unstarred = unscheduled).
  *             Star equivalence: startDate != NULL && <= today.
+ *             CONTAINER CASCADE (live-verified 2026-07-09): children of a
+ *             project that is not itself anytime-visible (someday/future/
+ *             logged/trashed) are excluded — the project row represents
+ *             them. Result is grouped in sidebar order (SidebarSection[]).
  * - upcoming: start=2 AND startDate > today, PLUS each fixed repeating
  *             template's next occurrence synthesized from
  *             rt1_nextInstanceStartDate (UI parity; opt out via
  *             repeats:false). Occurrence deadline = start − rule.ts
  *             (instance-validated 2026-07-04).
- * - someday:  start=2 AND startDate IS NULL
+ * - someday:  start=2 AND startDate IS NULL, container-less members only
+ *             (project children appear ONLY via the activeProjectItems
+ *             toggle, and only for anytime-active projects — mirrors the
+ *             UI's "Show items from active projects"). Grouped in sidebar
+ *             order like anytime.
  * - logbook:  status IN (2,3), by stopDate DESC
  * - trash:    trashed=1
  *
@@ -40,7 +48,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { addDaysIso, encodePackedDate, localToday } from "../model/dates.ts";
-import type { Project, Todo } from "../model/entities.ts";
+import type { Project, Ref, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
@@ -157,20 +165,153 @@ export function inboxView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {
   return materialize(db, rows);
 }
 
-export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): ListItem[] {
+/**
+ * One sidebar-ordered block of a grouped view (anytime/someday): the area
+ * (null = the top-level, area-less block, which the UI renders first) and its
+ * members in UI order — direct to-dos first, then each project block (the
+ * project row immediately followed by its member to-dos).
+ */
+export interface SidebarSection {
+  area: Ref | null;
+  items: ListItem[];
+}
+
+/** An item's own anytime membership: unscheduled-active, or dated <= today. */
+const ANYTIME_SELF = (col: string) =>
+  `((${col}.start = 1 AND (${col}.startDate IS NULL OR ${col}.startDate <= ?))
+    OR (${col}.start = 2 AND ${col}.startDate IS NOT NULL AND ${col}.startDate <= ?))`;
+
+/**
+ * The item's effective project: its own link, or its heading's project for
+ * headed children (heading rows carry the project link).
+ */
+const EFF_PROJECT = `COALESCE(t.project, (SELECT h.project FROM TMTask h WHERE h.uuid = t.heading))`;
+
+/**
+ * Container cascade (live-verified against the UI, 2026-07-09): a to-do
+ * inside a project that is NOT itself anytime-visible (someday or
+ * future-scheduled, logged, or trashed) is absent from Anytime regardless of
+ * the to-do's own start state — the project row alone represents it.
+ * Projects and container-less to-dos pass through. Two binds (packedToday ×2).
+ */
+const PROJECT_ANYTIME_ACTIVE = `(${EFF_PROJECT} IS NULL OR EXISTS (
+     SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
+     AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")}))`;
+
+export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): SidebarSection[] {
   const packedToday = encodePackedDate(localToday(now));
   const tf = tagFilter(db, filter);
   // Mirrors UI membership: every active item, including Today members
-  // (starred in the UI) and pending-promotion rows (start=2, past-dated).
+  // (starred in the UI) and pending-promotion rows (start=2, past-dated) —
+  // MINUS children of non-active containers (the project cascade).
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND (
-       (t.start = 1 AND (t.startDate IS NULL OR t.startDate <= ?))
-       OR (t.start = 2 AND t.startDate IS NOT NULL AND t.startDate <= ?)
-     )${tf.sql} ORDER BY t."index" ASC`,
-    [packedToday, packedToday, ...tf.binds],
+    `${OPEN} AND ${ANYTIME_SELF("t")}
+     AND ${PROJECT_ANYTIME_ACTIVE}${tf.sql} ORDER BY t."index" ASC`,
+    [packedToday, packedToday, packedToday, packedToday, ...tf.binds],
   );
-  return materialize(db, rows);
+  return groupBySidebar(db, materialize(db, rows));
+}
+
+/**
+ * Arranges view members into the UI's flat sidebar-mirroring order: the
+ * area-less block first (direct to-dos, then each top-level project followed
+ * by its members), then each area by its sidebar index (direct to-dos, then
+ * its projects). Project and area order here mirrors the sidebar exactly —
+ * both read the same "index" columns.
+ */
+function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
+  if (items.length === 0) return [];
+  const inList = (n: number) => Array.from({ length: n }, () => "?").join(", ");
+
+  // Headed children: resolve heading -> project.
+  const headingUuids = [
+    ...new Set(
+      items.flatMap((i) => (i.type === "to-do" && i.heading !== null ? [i.heading.uuid] : [])),
+    ),
+  ];
+  const headingProject = new Map<string, string | null>();
+  if (headingUuids.length > 0) {
+    for (const row of db
+      .prepare(`SELECT uuid, project FROM TMTask WHERE uuid IN (${inList(headingUuids.length)})`)
+      .all(...headingUuids) as Array<{ uuid: string; project: string | null }>) {
+      headingProject.set(row.uuid, row.project);
+    }
+  }
+  const effProject = (i: ListItem): string | null =>
+    i.type !== "to-do"
+      ? null
+      : (i.project?.uuid ??
+        (i.heading !== null ? (headingProject.get(i.heading.uuid) ?? null) : null));
+
+  // Sidebar rank + title for areas; index + area for every referenced project
+  // (a tag-filtered list can contain a child whose project row didn't match).
+  const areaRows = db
+    .prepare(`SELECT uuid, title, "index" FROM TMArea ORDER BY "index" ASC, uuid ASC`)
+    .all() as Array<{ uuid: string; title: string | null }>;
+  const areaRank = new Map(areaRows.map((a, rank) => [a.uuid, rank]));
+  const areaTitle = new Map(areaRows.map((a) => [a.uuid, a.title ?? ""]));
+  const projectUuids = [
+    ...new Set([
+      ...items.flatMap((i) => (i.type === "project" ? [i.uuid] : [])),
+      ...items.flatMap((i) => {
+        const p = effProject(i);
+        return p === null ? [] : [p];
+      }),
+    ]),
+  ];
+  const projectMeta = new Map<string, { index: number; area: string | null }>();
+  if (projectUuids.length > 0) {
+    for (const row of db
+      .prepare(
+        `SELECT uuid, "index", area FROM TMTask WHERE uuid IN (${inList(projectUuids.length)})`,
+      )
+      .all(...projectUuids) as Array<{ uuid: string; index: number | null; area: string | null }>) {
+      projectMeta.set(row.uuid, { index: row.index ?? 0, area: row.area });
+    }
+  }
+
+  const sortKey = (i: ListItem) => {
+    const project = i.type === "project" ? i.uuid : effProject(i);
+    const meta = project === null ? undefined : projectMeta.get(project);
+    const area = i.area?.uuid ?? meta?.area ?? null;
+    return {
+      areaRank: area === null ? -1 : (areaRank.get(area) ?? areaRows.length),
+      area: area ?? "",
+      inProject: project === null ? 0 : 1,
+      projectIndex: meta?.index ?? 0,
+      project: project ?? "",
+      headerFirst: i.type === "project" ? 0 : 1,
+      index: i.index,
+      uuid: i.uuid,
+    };
+  };
+  const keyed = items.map((item) => ({ item, k: sortKey(item) }));
+  keyed.sort(
+    (a, b) =>
+      a.k.areaRank - b.k.areaRank ||
+      a.k.area.localeCompare(b.k.area) ||
+      a.k.inProject - b.k.inProject ||
+      a.k.projectIndex - b.k.projectIndex ||
+      a.k.project.localeCompare(b.k.project) ||
+      a.k.headerFirst - b.k.headerFirst ||
+      a.k.index - b.k.index ||
+      a.k.uuid.localeCompare(b.k.uuid),
+  );
+
+  const sections: SidebarSection[] = [];
+  for (const { item, k } of keyed) {
+    const areaUuid = k.area === "" ? null : k.area;
+    const last = sections.at(-1);
+    if (last === undefined || (last.area?.uuid ?? null) !== areaUuid) {
+      sections.push({
+        area: areaUuid === null ? null : { uuid: areaUuid, title: areaTitle.get(areaUuid) ?? "" },
+        items: [],
+      });
+    }
+    sections.at(-1)?.items.push(item);
+  }
+  return sections;
 }
 
 /** The UI's star marker in Anytime: the item is also a Today member. */
@@ -256,14 +397,38 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   );
 }
 
-export function somedayView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {
+export interface SomedayFilter extends ViewFilter {
+  /**
+   * Also list someday to-dos that live inside ACTIVE projects — the UI's
+   * "Show items from active projects" toggle (default false, the UI's
+   * default). Children of someday projects are never listed either way: the
+   * project row stands for them.
+   */
+  activeProjectItems?: boolean;
+}
+
+export function somedayView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: SomedayFilter,
+): SidebarSection[] {
   const tf = tagFilter(db, filter);
+  const packedToday = encodePackedDate(localToday(now));
+  // Default membership excludes ALL project children (the UI shows only
+  // container-less someday to-dos, area members, and someday project rows);
+  // the toggle adds someday children of anytime-ACTIVE projects only.
+  const withActiveChildren = filter?.activeProjectItems === true;
+  const childArm = withActiveChildren
+    ? `EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
+         AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")})`
+    : "0";
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 2 AND t.startDate IS NULL${tf.sql} ORDER BY t."index" ASC`,
-    tf.binds,
+    `${OPEN} AND t.start = 2 AND t.startDate IS NULL
+     AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql} ORDER BY t."index" ASC`,
+    [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds],
   );
-  return materialize(db, rows);
+  return groupBySidebar(db, materialize(db, rows));
 }
 
 export function logbookView(
