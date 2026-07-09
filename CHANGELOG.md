@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.4.0 — 2026-07-09
+
 ### Anytime/Someday view semantics + CLI list polish
 
 - **Anytime container cascade (fix)**: children of projects that are not themselves anytime-visible (someday, future-scheduled, logged, or trashed) no longer appear in `anytime` — the project row represents them, matching the app. Heading-contained children resolve their project through the heading link.
