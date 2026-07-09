@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 
 import { loadConfig } from "./config.ts";
+import { decodeRecurrenceRule } from "./model/recurrence.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
@@ -33,6 +34,44 @@ import { sdefDeclaresPrivateReorder } from "./write/experimental.ts";
 import { ExitCode, PKG_VERSION, type EnvelopeMeta } from "./contracts.ts";
 
 const THINGS_APP = "/Applications/Things3.app";
+
+/** Decode every repeating template's rule blob; count the failures. */
+function scanRecurrenceRules(db: {
+  prepare(sql: string): { all(): unknown[] };
+}): DiagnoseReport["recurrence"] {
+  let rows: Array<{ uuid: string; rule: unknown }>;
+  try {
+    rows = db
+      .prepare(
+        "SELECT uuid, rt1_recurrenceRule AS rule FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL",
+      )
+      .all() as Array<{ uuid: string; rule: unknown }>;
+  } catch {
+    return { templates: 0, undecodable: 0, detail: "repeat-rule column unavailable" };
+  }
+  let undecodable = 0;
+  let firstError = "";
+  for (const row of rows) {
+    try {
+      decodeRecurrenceRule(row.rule);
+    } catch (err) {
+      undecodable += 1;
+      if (firstError === "") firstError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return {
+    templates: rows.length,
+    undecodable,
+    detail:
+      undecodable === 0
+        ? rows.length === 0
+          ? "no repeating templates"
+          : "every repeating template's rule decodes"
+        : `${undecodable} rule(s) failed to decode (first: ${firstError}) — a Things update ` +
+          "may have changed the repeat-rule format; occurrence projections for those " +
+          "templates are unavailable",
+  };
+}
 
 export interface DiagnoseReport {
   db: {
@@ -79,6 +118,17 @@ export interface DiagnoseReport {
     urlScheme: UrlSchemeState;
     /** Which proxy shortcuts are installed (the Shortcuts surface's prerequisites). */
     shortcuts: ShortcutsState;
+  };
+  /**
+   * Repeat-rule format canary: every repeating template's rule blob is
+   * decoded; a non-zero undecodable count is the early-warning sign that a
+   * Things update changed the repeat-rule format (the most schema-coupled
+   * read path).
+   */
+  recurrence: {
+    templates: number;
+    undecodable: number;
+    detail: string;
   };
 }
 
@@ -220,6 +270,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
         urlScheme: readUrlSchemeEnabled(options.availability),
         shortcuts: readShortcutProxies(options.availability),
       },
+      recurrence: scanRecurrenceRules(conn.db),
     };
     return {
       report,

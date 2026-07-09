@@ -88,6 +88,18 @@ export function decodeRecurrenceRule(blob: unknown): RepeatRule {
 
   const ed = typeof dict["ed"] === "number" ? dict["ed"] : null;
   const rc = typeof dict["rc"] === "number" ? dict["rc"] : 0;
+  // STRICT version gate: every rule in the validated corpus carries rrv=4.
+  // A different version means a Things update changed the rule format — the
+  // old semantics must not be silently applied to a new encoding. Consumers
+  // already treat a decode throw as "rule unavailable"; `things doctor`
+  // counts undecodable templates so the drift surfaces loudly.
+  const rrv = typeof dict["rrv"] === "number" ? dict["rrv"] : 0;
+  if (rrv !== KNOWN_RULE_VERSION) {
+    throw new RangeError(
+      `unsupported recurrence rule version rrv=${rrv} (validated: ${KNOWN_RULE_VERSION}) — ` +
+        "a Things update may have changed the repeat-rule format",
+    );
+  }
   return {
     type: tp === 0 ? "fixed" : "after-completion",
     unit,
@@ -96,9 +108,12 @@ export function decodeRecurrenceRule(blob: unknown): RepeatRule {
     offsets,
     endDate: ed === null || ed >= DISTANT_FUTURE_EPOCH ? null : epochToIso(ed),
     remainingCount: rc === 0 ? null : rc,
-    version: typeof dict["rrv"] === "number" ? dict["rrv"] : 0,
+    version: rrv,
   };
 }
+
+/** The rule schema version the 91-rule corpus + instance validation covered. */
+export const KNOWN_RULE_VERSION = 4;
 
 function num(dict: Record<string, PlistValue>, key: string): number {
   const v = dict[key];
