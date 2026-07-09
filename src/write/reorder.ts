@@ -26,6 +26,7 @@
 import type { AuditRecord } from "../audit/schema.ts";
 import { localToday, encodePackedDate } from "../model/dates.ts";
 import type { ReorderParams, ReorderStrategy } from "./operations.ts";
+import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { computeReorderPre, resolveArea, resolveProject } from "./pre-state.ts";
 import { sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
@@ -63,6 +64,7 @@ export async function runReorder(
   params: ReorderParams,
   options: WriteOptions = {},
 ): Promise<ReorderResult> {
+  params = { ...params, uuids: params.uuids.map((u) => resolveTaskUuidPrefix(deps.db, u)) };
   const strategy = resolveStrategy(deps, params);
   if (strategy.kind === "blocked") return strategy.result;
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Short uuids
+
+- **Every uuid parameter accepts a unique PREFIX (minimum 6 characters)** — CLI, MCP, and library alike (`things todo complete Vwn2yoRP` instead of the full 22-character id). Resolution is an indexed range scan; an exact full uuid always wins (a 21-char uuid can prefix a 22-char one), unknown prefixes report not-found, and ambiguous prefixes fail with every candidate listed. `things undo` and audit records always carry full uuids.
+- **List output shows shortened uuid prefixes** — the shortest length unique within the list, never below 8 characters so a copied prefix stays unique database-wide, not just list-wide. `--json` envelopes and detail-view headers carry full uuids unchanged.
+
 ### Heading operations + transactional undo
 
 - **`things heading rename / archive / unarchive`** (ops `heading.rename`/`heading.archive`/`heading.unarchive`; MCP `rename_heading`/`archive_heading`/`unarchive_heading`) — AppleScript by-id addressing (lab P10/P10b/P11), no Shortcuts setup. Archive is the preferred way to retire a heading (row deletion exists only interactively behind a per-run consent dialog); it is reversible. With open children, `--children` is required: `complete` and `cancel` ride the app's own cascades (one atomic call each; already-resolved children are never touched); `reparent` moves children to the project root first, keeping them open. `unarchive --restore-children` reopens the children the cascade resolved (matching timestamps; a someday child comes back as someday — lab-verified).

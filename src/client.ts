@@ -13,6 +13,7 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
+import { resolveTaskUuidPrefix } from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
@@ -402,13 +403,21 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       logbook: (o) => logbookView(conn.db, o),
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),
-      projectView: (uuid) => projectView(conn.db, uuid, now()),
+      projectView: (uuid) => projectView(conn.db, resolveTaskUuidPrefix(conn.db, uuid), now()),
       areaView: (ref) => areaView(conn.db, ref, now()),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),
       changes: (o) => changesView(conn.db, o),
-      byUuid: (uuid) => byUuid(conn.db, uuid),
+      byUuid: (uuid) => {
+        // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
+        try {
+          return byUuid(conn.db, resolveTaskUuidPrefix(conn.db, uuid));
+        } catch (err) {
+          if (err instanceof RangeError && !err.message.includes("ambiguous")) return null;
+          throw err;
+        }
+      },
       snapshot: () => snapshotView(conn.db),
     },
     write: {

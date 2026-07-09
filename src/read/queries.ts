@@ -57,6 +57,33 @@ export function tagWithDescendants(db: DatabaseSync, uuid: string): string[] {
 }
 
 /** Resolve a tag reference (uuid or unique case-insensitive title) — loud on miss. */
+/**
+ * Resolve a full TMTask uuid from a uuid OR a unique prefix (>= 6 chars).
+ * Exact matches win outright (a 21-char uuid can prefix a 22-char one);
+ * otherwise an indexed range scan finds prefix matches — zero throws
+ * not-found, several throw with the candidates listed. Uuid params across
+ * the CLI/MCP/library accept prefixes through this.
+ */
+export function resolveTaskUuidPrefix(db: DatabaseSync, ref: string): string {
+  const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
+    | { uuid: string }
+    | undefined;
+  if (exact !== undefined) return exact.uuid;
+  if (ref.length < 6) {
+    throw new RangeError(`no record with uuid "${ref}" (prefixes need at least 6 characters)`);
+  }
+  const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
+  const rows = db
+    .prepare("SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ? LIMIT 6")
+    .all(ref, upper) as { uuid: string; title: string | null }[];
+  if (rows.length === 0) throw new RangeError(`no record with uuid or prefix "${ref}"`);
+  if (rows.length > 1) {
+    const list = rows.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
+    throw new RangeError(`uuid prefix "${ref}" is ambiguous — matches: ${list}`);
+  }
+  return rows[0]?.uuid ?? ref;
+}
+
 export function resolveTagUuid(db: DatabaseSync, ref: string): string {
   const byId = db.prepare("SELECT uuid FROM TMTag WHERE uuid = ?").get(ref) as
     | { uuid: string }

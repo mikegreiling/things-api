@@ -119,7 +119,9 @@ function buildInstructions(getClient: () => ThingsClient): string {
     "This server reads and modifies the user's Things 3 data: to-dos, projects, areas, and tags.",
     "",
     "Conventions:",
-    "- Items are identified by uuid (returned by every read tool). Where a parameter says " +
+    "- Items are identified by uuid (returned by every read tool); uuid parameters accept " +
+      "unique prefixes of at least 6 characters (ambiguity returns an error listing the " +
+      "candidates). Where a parameter says " +
       `"${REF_FORMAT}", projects, areas, and tags may also be referenced by exact name.`,
     "- References must name existing items; unknown or ambiguous references return an error " +
       "rather than being guessed at. Create missing tags/areas/projects first (add_tag, " +
