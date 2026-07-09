@@ -47,6 +47,9 @@ The command returns success and produces literally zero database delta (not even
 ### 2g. `update?completion-date=` / `creation-date=` are silently ignored — while the json importer honors the same attributes
 `things:///update?id=<uuid>&auth-token=<t>&completion-date=2025-01-15` (and `creation-date=`) on a completed to-do changes nothing — no error, no modal, zero delta; `completed=true` in the same command class works. Meanwhile `things:///json` **add** honors `creation-date`/`completion-date` attributes exactly (row created with the given epoch values). The parameter names parse somewhere (no unknown-parameter error either way), the write path just drops them on update. *(scf2 P4c/P4d, 2026-07-09)*
 
+### 2h. The json date parser rejects fractional-seconds ISO 8601 — failing the WHOLE command
+A `things:///json` payload whose `creation-date`/`completion-date` carries milliseconds (`2025-03-01T18:00:00.000Z` — the default output of every ISO serializer, incl. JavaScript's `toISOString()`) fails the entire command: error modal (the json class steals focus, §4b), zero rows written. The identical payload with second-precision timestamps (`…T18:00:00Z`) imports perfectly. Accepting the RFC 3339 fractional-seconds form — or at least failing with a message naming the offending attribute — would save every JS/Swift-Date integrator a debugging session. *(live e2e catch, 2026-07-09; second-precision shape validated scf2 P4d)*
+
 ---
 
 ### 2d. Reminder times with bare hours 1–11 are silently reinterpreted (am/pm heuristic)

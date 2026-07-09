@@ -150,6 +150,10 @@ export function mapHeading(row: TaskRow, refs: RefResolver): Heading {
     uuid: row.uuid,
     type: "heading",
     title: row.title ?? "",
+    // Archived headings carry status "completed" (a canceled heading is
+    // stored as completed too — oddity 6a). Needed by consumers AND by the
+    // archive/unarchive result checks.
+    status: mapStatus(row),
     project: refs(row.project),
   };
 }

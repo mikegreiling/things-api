@@ -2,14 +2,13 @@
  * Build a throwaway SQLite database from the sanitized schema fixture.
  * WAL mode for realism (the real Things DB is WAL).
  */
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const SCHEMA_SQL = readFileSync(new URL("./schema-v26.sql", import.meta.url), "utf8");
-
-let counter = 0;
 
 export interface FixtureDb {
   db: DatabaseSync;
@@ -18,7 +17,11 @@ export interface FixtureDb {
 }
 
 export function buildFixtureDb(): FixtureDb {
-  const path = join(tmpdir(), `things-api-fixture-${process.pid}-${counter++}.sqlite`);
+  // Path must be unique across TEST FILES, not just within one: a pid+counter
+  // scheme resets per file (module isolation) while the worker pid persists,
+  // so a later file reopened an earlier file's leftover db — "table already
+  // exists" flakes. randomUUID is collision-free by construction.
+  const path = join(tmpdir(), `things-api-fixture-${randomUUID()}.sqlite`);
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA_SQL);

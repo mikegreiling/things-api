@@ -6,6 +6,7 @@
 - **[docs/things-app-oddities.md](docs/things-app-oddities.md)** — the future Cultured Code bug report. Record every newly discovered app bug/quirk THE MOMENT it is found, with probe evidence.
 - **[docs/gaps.md](docs/gaps.md)** — roadmap: one entry per phase, updated when a phase lands.
 - **[docs/roadmap.md](docs/roadmap.md)** — durable parked-work plan (survives compaction): decided-but-unbuilt items, distribution/onboarding, doctrine decisions. Update when a parked item lands or a new one is deferred.
+- **[docs/reference/](docs/reference/README.md)** — the evidence compendium: probe-id index ([README](docs/reference/README.md)), [novel-paths.md](docs/reference/novel-paths.md) (add each newly discovered working path), [suite-audit.md](docs/reference/suite-audit.md) (update when ops or suites change).
 - **CHANGELOG.md** — every user-visible change goes under `## Unreleased`.
 
 ## Safety rails (non-negotiable)

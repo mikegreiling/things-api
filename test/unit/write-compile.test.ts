@@ -244,9 +244,13 @@ describe("scf2/P8 op compilation goldens", () => {
     }>;
     expect(parsed[0]?.type).toBe("to-do");
     expect(parsed[0]?.attributes["completed"]).toBe(true);
-    // Local noon on the requested dates, expressed as a UTC instant.
-    expect(parsed[0]?.attributes["completion-date"]).toBe(new Date(2025, 0, 15, 12).toISOString());
-    expect(parsed[0]?.attributes["creation-date"]).toBe(new Date(2024, 5, 1, 12).toISOString());
+    // Local noon on the requested dates, expressed as a UTC instant — WITHOUT
+    // fractional seconds: the app's json date parser rejects `.000Z` and
+    // fails the whole command with an error modal (live e2e, 2026-07-09).
+    const noMillis = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+    expect(parsed[0]?.attributes["completion-date"]).toBe(noMillis(new Date(2025, 0, 15, 12)));
+    expect(parsed[0]?.attributes["creation-date"]).toBe(noMillis(new Date(2024, 5, 1, 12)));
+    expect(String(parsed[0]?.attributes["completion-date"])).not.toMatch(/\.\d{3}Z$/);
     expect(inv.redactedPayload).not.toContain(TOKEN);
   });
 
