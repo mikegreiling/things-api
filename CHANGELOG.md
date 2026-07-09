@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Safety: project operations now reject wrong-type targets.** `project.update`, `project.complete`, `project.set-tags`, and `project.delete` previously accepted any task uuid — passing a to-do or heading uuid resolved cleanly and compiled a project-shaped command around the wrong row (undefined app behavior; a heading in a schedule-class specifier is known to crash Things). Every `project.*` op now verifies the target is a project and points a mis-typed uuid at the right command family, matching the existing guards on `todo.*` and `heading.*`. Cross-table uuids (an area passed to a task/project op) were already caught as not-found.
+
 ### Short uuids
 
 - **Every uuid parameter accepts a unique PREFIX (minimum 6 characters)** — CLI, MCP, and library alike (`things todo complete Vwn2yoRP` instead of the full 22-character id). Resolution is an indexed range scan; an exact full uuid always wins (a 21-char uuid can prefix a 22-char one), unknown prefixes report not-found, and ambiguous prefixes fail with every candidate listed. `things undo` and audit records always carry full uuids.

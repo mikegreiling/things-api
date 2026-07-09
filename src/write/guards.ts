@@ -156,25 +156,33 @@ const GUARDS: Record<HazardId, GuardFn> = {
               : " — use the project commands"),
         );
       }
-      // Type/state preconditions for the Tier-2 ops: the probed commands
-      // address `project id` / trashed `to do id` specifically (E14/E15/E17).
-      if ((op === "project.move" || op === "project.duplicate") && pre.target.type !== "project") {
-        problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a project`);
+      // Every project.* op (except project.add) must target a PROJECT. A
+      // wrong-type uuid resolves cleanly (it is a real TMTask row) and would
+      // otherwise compile a `project id` / update-project specifier around a
+      // to-do or heading — undefined app behavior, and a heading in a
+      // schedule-class specifier CRASHES Things (P11e). Guarded, not probed.
+      if (op.startsWith("project.") && op !== "project.add" && pre.target.type !== "project") {
+        problems.push(
+          `target ${String(params["uuid"])} is a ${pre.target.type}, not a project` +
+            (pre.target.type === "to-do"
+              ? " — use the `things todo` commands"
+              : pre.target.type === "heading"
+                ? " — use the `things heading` commands"
+                : ""),
+        );
       }
+      // State preconditions once the target IS a project (E14/E15/E17, P01–P07).
       if (
-        (op === "project.cancel" || op === "project.reopen" || op === "project.restore") &&
-        pre.target.type !== "project"
+        op === "project.cancel" &&
+        pre.target.type === "project" &&
+        pre.target.status !== "open"
       ) {
-        problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a project`);
-      } else if (op === "project.cancel" && pre.target.type === "project") {
-        // Only open->canceled is probed (P01); re-canceling resolved
-        // projects is unvalidated.
-        if (pre.target.status !== "open") {
-          problems.push(
-            `target project is already ${pre.target.status} — cancel needs an open project`,
-          );
-        }
-      } else if (op === "project.reopen" && pre.target.type === "project") {
+        // Only open->canceled is probed (P01); re-canceling resolved projects is unvalidated.
+        problems.push(
+          `target project is already ${pre.target.status} — cancel needs an open project`,
+        );
+      }
+      if (op === "project.reopen" && pre.target.type === "project") {
         if (pre.target.status === "open") {
           problems.push("target project is already open — nothing to reopen");
         }
@@ -183,7 +191,8 @@ const GUARDS: Record<HazardId, GuardFn> = {
             "target project is in the Trash — restore it first (things project restore)",
           );
         }
-      } else if (op === "project.restore" && pre.target.type === "project" && !pre.target.trashed) {
+      }
+      if (op === "project.restore" && pre.target.type === "project" && !pre.target.trashed) {
         problems.push(
           `target ${String(params["uuid"])} is not in the Trash — restore only applies to ` +
             "trashed projects",
