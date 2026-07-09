@@ -42,7 +42,6 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
     uuid: row.uuid,
     title: row.title ?? "",
     visible: row.visible !== 0,
-    index: row.index ?? 0,
     tags: areaTags(db, uuid),
   };
 

@@ -35,7 +35,6 @@ export function tagsView(db: DatabaseSync): Tag[] {
       title: row.title ?? "",
       shortcut: row.shortcut,
       parent: parentRow ? { uuid: parentRow.uuid, title: parentRow.title ?? "" } : null,
-      index: row.index ?? 0,
     };
   });
 }
@@ -55,7 +54,6 @@ export function areasView(db: DatabaseSync): Area[] {
     uuid: row.uuid,
     title: row.title ?? "",
     visible: row.visible !== 0,
-    index: row.index ?? 0,
     tags: areaTags(db, row.uuid),
   }));
 }

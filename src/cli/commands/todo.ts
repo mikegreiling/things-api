@@ -10,10 +10,7 @@ import { withClient } from "./reads.ts";
 function renderDetail(item: AnyTask | null): string[] {
   if (!item) return ["(not found)"];
   if (item.type === "heading") {
-    return [
-      `${item.uuid}  [heading] ${item.title}`,
-      `  project: ${item.project?.title ?? "—"}  index: ${item.index}`,
-    ];
+    return [`${item.uuid}  [heading] ${item.title}`, `  project: ${item.project?.title ?? "—"}`];
   }
   const lines = [
     `${item.uuid}  [${item.type}] ${item.title}`,

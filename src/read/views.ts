@@ -271,7 +271,9 @@ function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
     }
   }
 
-  const sortKey = (i: ListItem) => {
+  // items arrive in SQL "index" order, so array position IS the per-container
+  // rank (the internal index is no longer exposed on the entity).
+  const sortKey = (i: ListItem, pos: number) => {
     const project = i.type === "project" ? i.uuid : effProject(i);
     const meta = project === null ? undefined : projectMeta.get(project);
     const area = i.area?.uuid ?? meta?.area ?? null;
@@ -282,11 +284,11 @@ function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
       projectIndex: meta?.index ?? 0,
       project: project ?? "",
       headerFirst: i.type === "project" ? 0 : 1,
-      index: i.index,
+      pos,
       uuid: i.uuid,
     };
   };
-  const keyed = items.map((item) => ({ item, k: sortKey(item) }));
+  const keyed = items.map((item, pos) => ({ item, k: sortKey(item, pos) }));
   keyed.sort(
     (a, b) =>
       a.k.areaRank - b.k.areaRank ||
@@ -295,7 +297,7 @@ function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
       a.k.projectIndex - b.k.projectIndex ||
       a.k.project.localeCompare(b.k.project) ||
       a.k.headerFirst - b.k.headerFirst ||
-      a.k.index - b.k.index ||
+      a.k.pos - b.k.pos ||
       a.k.uuid.localeCompare(b.k.uuid),
   );
 
@@ -389,12 +391,15 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     }));
   });
 
-  return [...items, ...occurrences].toSorted(
-    (a, b) =>
-      (a.startDate ?? "").localeCompare(b.startDate ?? "") ||
-      a.index - b.index ||
-      a.uuid.localeCompare(b.uuid),
-  );
+  return [...items, ...occurrences]
+    .map((item, pos) => ({ item, pos }))
+    .toSorted(
+      (a, b) =>
+        (a.item.startDate ?? "").localeCompare(b.item.startDate ?? "") ||
+        a.pos - b.pos ||
+        a.item.uuid.localeCompare(b.item.uuid),
+    )
+    .map((x) => x.item);
 }
 
 export interface SomedayFilter extends ViewFilter {

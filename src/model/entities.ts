@@ -54,9 +54,6 @@ interface TaskCommon {
   /** Opt-in: tags inherited from ancestor area/project (native UI filtering includes these). */
   inheritedTags?: Ref[];
   repeating: RepeatingInfo;
-  /** Sparse sortable rank keys — expose raw, never renumber. */
-  index: number;
-  todayIndex: number;
   created: Date;
   modified: Date;
   stopped: Date | null;
@@ -84,14 +81,12 @@ export interface Heading {
   title: string;
   /** The owning project. */
   project: Ref | null;
-  index: number;
 }
 
 export interface Area {
   uuid: string;
   title: string;
   visible: boolean;
-  index: number;
   tags: Ref[];
 }
 
@@ -100,19 +95,19 @@ export interface Tag {
   title: string;
   shortcut: string | null;
   parent: Ref | null;
-  index: number;
 }
 
+/**
+ * A checklist item as the API surfaces it: title + status only. The DB uuid
+ * is deliberately omitted — it is regenerated on every checklist rewrite and
+ * is never a valid mutation target (address items by title or 1-based
+ * position; see docs/design/reference-resolution.md). `status` is open |
+ * completed | canceled (canceled exists in real data); items have no
+ * trashed/logged state — they live and move with their parent to-do.
+ */
 export interface ChecklistItem {
-  uuid: string;
   title: string;
   status: TaskStatus;
-  index: number;
-  /** Owning to-do uuid. */
-  task: string;
-  created: Date;
-  modified: Date;
-  stopped: Date | null;
 }
 
 export type AnyTask = Todo | Project | Heading;

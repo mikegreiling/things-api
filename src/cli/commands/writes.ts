@@ -478,18 +478,26 @@ export function registerWriteCommands(program: Command): void {
           "--acknowledge-checklist-reset when items exist. GRANULAR (one per call): " +
           "--add/--remove/--check/--uncheck/--rename+--to/--move-item+--to-position change " +
           "a single item with every other item's checked state PRESERVED (no reset flag " +
-          "needed). Items are matched by exact title — ambiguous titles are rejected; item " +
-          "uuids are not stable across any edit.",
+          "needed). Target an item by title or by --index (1-based); duplicate titles are " +
+          "resolved best-effort (check → first unchecked, etc.). Checklist item uuids are " +
+          "internal and never exposed.",
       )
       .option("--item <text>", "wholesale: checklist item in order (repeatable)", collect, [])
       .option("--acknowledge-checklist-reset", "accept wholesale replacement of existing items")
       .option("--add <title>", "granular: append an item")
       .option("--at <n>", "with --add: 1-based insert position")
-      .option("--remove <title>", "granular: delete an item")
-      .option("--check <title>", "granular: mark an item completed")
-      .option("--uncheck <title>", "granular: mark an item open")
-      .option("--rename <title>", "granular: rename an item (requires --to)")
-      .option("--move-item <title>", "granular: reposition an item (requires --to-position)")
+      .option("--remove [title]", "granular: delete an item (by title or --index)")
+      .option("--check [title]", "granular: mark an item completed (by title or --index)")
+      .option("--uncheck [title]", "granular: mark an item open (by title or --index)")
+      .option(
+        "--rename [title]",
+        "granular: rename an item (target by title or --index; requires --to)",
+      )
+      .option("--move-item [title]", "granular: reposition an item (requires --to-position)")
+      .option(
+        "--index <n>",
+        "granular: target the item at this 1-based position instead of a title",
+      )
       .option("--to <title>", "new title for --rename")
       .option("--to-position <n>", "1-based position for --move-item"),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -518,6 +526,18 @@ export function registerWriteCommands(program: Command): void {
         process.exitCode = ExitCode.Usage;
         return;
       }
+      // Target: --index (1-based) OR the action flag's title value. When a
+      // targeting flag is present without a value commander yields `true`.
+      const flagVal = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+      const target: { index?: number; item?: string } =
+        opts["index"] !== undefined
+          ? { index: Number(opts["index"]) }
+          : { item: flagVal(opts[action]) ?? "" };
+      if (action !== "add" && opts["index"] === undefined && target.item === "") {
+        process.stderr.write(`error: --${action} needs a title, or use --index <n>\n`);
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
       const edit =
         action === "add"
           ? {
@@ -526,22 +546,14 @@ export function registerWriteCommands(program: Command): void {
               ...(opts["at"] !== undefined && { at: Number(opts["at"]) }),
             }
           : action === "remove"
-            ? { action: "remove" as const, item: opts["remove"] as string }
+            ? { action: "remove" as const, ...target }
             : action === "check"
-              ? { action: "check" as const, item: opts["check"] as string }
+              ? { action: "check" as const, ...target }
               : action === "uncheck"
-                ? { action: "uncheck" as const, item: opts["uncheck"] as string }
+                ? { action: "uncheck" as const, ...target }
                 : action === "rename"
-                  ? {
-                      action: "rename" as const,
-                      item: opts["rename"] as string,
-                      title: opts["to"] as string,
-                    }
-                  : {
-                      action: "move" as const,
-                      item: opts["moveItem"] as string,
-                      to: Number(opts["toPosition"]),
-                    };
+                  ? { action: "rename" as const, ...target, title: opts["to"] as string }
+                  : { action: "move" as const, ...target, to: Number(opts["toPosition"]) };
       await runWrite(opts, (c) => c.write.editChecklist(uuid, edit, writeOptionsFrom(opts)));
       return;
     }

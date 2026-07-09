@@ -160,6 +160,14 @@ function buildInstructions(getClient: () => ThingsClient): string {
   return lines.join("\n");
 }
 
+/** Build a checklist edit target from MCP args (index wins over title). */
+function checklistTarget(args: { item?: string | undefined; index?: number | undefined }): {
+  item?: string;
+  index?: number;
+} {
+  return args.index !== undefined ? { index: args.index } : { item: args.item ?? "" };
+}
+
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
   // One lazily-opened client for the server's lifetime; SQLite read
   // snapshots are per-statement, so fresh reads see external commits.
@@ -654,8 +662,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Edit a to-do's checklist. The single-item actions add / remove / check / uncheck " +
-        "/ rename / move change one item — matched by exact title — and leave every other " +
-        "item and its checked state untouched. The replace action swaps in a whole new " +
+        "/ rename / move change one item — targeted by title or 1-based index — and leave " +
+        "every other item and its checked state untouched (duplicate titles resolve " +
+        "best-effort). The replace action swaps in a whole new " +
         "list (items), discarding the existing items and their checked states — pass " +
         "acknowledge_checklist_reset to confirm when items already exist; entries may be " +
         "strings or {title, completed} objects to create items pre-checked. Positions are " +
@@ -667,7 +676,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         item: z
           .string()
           .optional()
-          .describe("remove/check/uncheck/rename/move: the existing item's exact title"),
+          .describe("remove/check/uncheck/rename/move: the existing item's title"),
+        index: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            "remove/check/uncheck/rename/move: target by 1-based position instead of title",
+          ),
         at: z
           .number()
           .int()
@@ -723,20 +740,22 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           case "remove":
           case "check":
           case "uncheck":
-            if (args.item === undefined) return usage(`action "${args.action}" requires item`);
-            edit = { action: args.action, item: args.item };
+            if (args.item === undefined && args.index === undefined) {
+              return usage(`action "${args.action}" requires item or index`);
+            }
+            edit = { action: args.action, ...checklistTarget(args) };
             break;
           case "rename":
-            if (args.item === undefined || args.title === undefined) {
-              return usage('action "rename" requires item and title');
+            if (args.title === undefined || (args.item === undefined && args.index === undefined)) {
+              return usage('action "rename" requires title and (item or index)');
             }
-            edit = { action: "rename", item: args.item, title: args.title };
+            edit = { action: "rename", ...checklistTarget(args), title: args.title };
             break;
           case "move":
-            if (args.item === undefined || args.to === undefined) {
-              return usage('action "move" requires item and to');
+            if (args.to === undefined || (args.item === undefined && args.index === undefined)) {
+              return usage('action "move" requires to and (item or index)');
             }
-            edit = { action: "move", item: args.item, to: args.to };
+            edit = { action: "move", ...checklistTarget(args), to: args.to };
             break;
         }
         return mutationResult(await c.write.editChecklist(args.uuid, edit, writeOptions(args)));
