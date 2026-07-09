@@ -33,6 +33,7 @@ Subject: the private AppleScript command `_private_experimental_ reorder to dos 
 
 - **O13**: moving areas among areas (sidebar order) is IMPOSSIBLE — AppleScript `move area … to before area` errors ('location specifier'); no other surface known.
 - **O14**: **projects WITHIN an area reorder natively** — the private command accepts project uuids in an area specifier (`project` inherits `to do`, O12 analog); area/type membership untouched. Extends write.reorder's area scope to projects.
+- **scf P1 (2026-07-09)**: **HEADINGS within a project reorder natively too** — the same command accepts heading (`type=2`) uuids in a project specifier; children keep their heading FK and follow. See [s-campaign-results.md](s-campaign-results.md) follow-ups.
 
 ## Not probed (future work)
 

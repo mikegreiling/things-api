@@ -1,36 +1,49 @@
 # Probe backlog & in-flight validation plan
 
-Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitting. Tracks (A) the autonomous S-campaign follow-up probes, (B) the PR #42 ops validation, and (C) parked work. Update the "STATUS" lines as each lands.
+Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitting; updated 2026-07-09 post-compaction after banking the first scf run. Tracks (A) the S-campaign follow-up probes, (B) the PR #42 ops validation, (C) parked work, and (D) release. Update the "STATUS" lines as each lands.
 
-## ⟹ RESUME HERE (post-compaction execution order)
+## ⟹ RESUME HERE (execution order)
 
-Mike compacts the context, THEN this runs. Nothing is running now (no VMs). Do, in order:
+1. ~~Bank §A round-1 results~~ — **DONE 2026-07-09** (PR #45): verdicts from `lab/artifacts/things-run-scf-20260709-041543/` folded into [s-campaign-results.md](s-campaign-results.md) (follow-ups table), capability-matrix, oddities (2e update + new 5k), gaps, o-suite-results.
+2. **Validate PR #42** (§B): `npm run lab:regress` as a NO-REGRESSION check → merge on double-green. STATUS: pending.
+3. **scf2 re-probe** (§A round 2, below): P4 redo + P3a formats + P2b to-do re-parent + P6 sidebar spellings. Run AFTER regress (one VM at a time). STATUS: pending.
+4. **npm publish** (§D). STATUS: pending.
+5. Parked §C work.
 
-1. **Bank §A results.** The probe run in `lab/scripts/research-scampaign-followups.sh` ALREADY RAN — raw evidence is on disk at `lab/artifacts/things-run-scf-20260709-041543/report.txt` (+ `final.sqlite`). NOT yet analyzed or banked. Read it, extract the P1–P4 verdicts (heading reorder / set-detail Parent / Reminder on scheduled + dated-clear / Completion+Creation backdating), and fold them into `docs/lab/s-campaign-results.md`, `docs/capability-matrix.md`, and `docs/things-app-oddities.md` (per the CLAUDE.md living-doc contract). Commit on a branch → PR → merge.
-2. **Validate PR #42** (§B). Decided approach: run `npm run lab:regress` as a NO-REGRESSION check (it exercises the reorder pipeline/guards/pre-state I changed + the guest e2e). Hand-authoring new recurring suite probes was deferred — unattended, a malformed ordering-assertion would block the merge on 40-min iterations, and the four ops are already validated by the A1–A6 real-app probes + 382 unit/engine tests. If regress is double-green → merge PR #42 (`mg/phase21b-ops`, currently OPEN). If it fails, diagnose (that's the check working).
-3. Optionally then author careful recurring suite probes (§B step 1) with an iteration budget, and pick up §C.
+## A. S-campaign follow-up probes
 
-Everything below is the detailed spec. `git log` on `main`: #40/#41/#43 merged; #42 open (ops, awaiting this regress).
+### Round 1 — `lab/scripts/research-scampaign-followups.sh` — RAN + BANKED (run `things-run-scf-20260709-041543`)
 
-## A. S-campaign autonomous follow-up probes — `lab/scripts/research-scampaign-followups.sh`
+- **P1 — heading reorder via the private command.** STATUS: **WORKS** 🎉 — heading uuids accepted in a project specifier; children follow. Banked.
+- **P2 — `set-detail` Parent = heading move.** STATUS: **SILENT NO-OP** — heading move dead on all surfaces. Banked. (To-do re-parent variant NOT attempted → P2b, round 2.)
+- **P3a — `set-detail` Reminder Time "14:30" on a scheduled to-do.** STATUS: **NO-OP** (text→Date coercion suspect) → format experiments, round 2.
+- **P3b — clear a DATED reminder via empty value.** STATUS: **WORKS** 🎉 — oddity-2e gap closed (Shortcuts-only, headless). Banked.
+- **P4 — Completion/Creation Date backdating.** STATUS: **INVALID RUN** (two script bugs: completion via `things:///update` WITHOUT the auth token → fixture never completed; stale `--output-path` file aliased P4 output to P3b's). → redo, round 2.
+- **P5 (NEEDS A HUMAN CLICK)** — delete a NON-empty heading: do children re-parent, orphan, or cascade? Delete-class consent re-prompts every run (oddity 5j). STATUS: parked.
 
-Run in ONE disposable clone (golden `things-lab-golden-v1`, stopped/frozen 2026-07-09; clones inherit the Shortcuts output-class Always-Allow grants, so `set-detail`/`find-items`/`create-heading` run headless — deadline-wrap every `shortcuts run` so a consent-didn't-transfer surprise can't wedge). All four are autonomous (no human click). Evidence → `docs/lab/s-campaign-results.md` + capability-matrix/oddities.
+### Round 2 — `lab/scripts/research-scf2.sh` (to author) — STATUS: pending
 
-- **P1 — heading reorder via the private command (Mike's sharp question).** The `_private_experimental_ reorder to dos in project id <P>` command is misleadingly named — it accepts PROJECT uuids in an area scope (O14, class inheritance). Untested: does it accept HEADING uuids (type=2) as project children? Use seed `LAB-PROJ-HEADINGS` (Dwr1MiANqMFvAWddgGgzVX) with headings Alpha (5saDdJcodvWARN9Ct2nQsT) + Beta (M7QEqPbk6v9jZZ6CBiyaP3). Reorder `with ids "<Beta>,<Alpha>"`; compare the headings' `"index"` before/after. Outcome ∈ {reorders them (heading ordering UNLOCKS — correct the "unautomatable" claim), errors (heading ∉ `to do` class), no-op}. STATUS: pending.
-- **P2 — `set-detail` Parent = move a heading to another project.** create-heading (headless) makes a heading in project A; `set-detail {id:<heading>, detail:"Parent", value:<project B uuid>}`; check `TMTask.project` of the heading. Also try it on a to-do (re-parent between projects). STATUS: pending.
-- **P3 — `set-detail` Reminder Time on a SCHEDULED item + clear a DATED reminder.** (a) to-do `when=today`, set-detail Reminder Time "14:30" → expect `reminderTime=970981376`. (b) to-do with a DATED reminder (`when=2026-07-10@09:00` via URL), then set-detail Reminder Time to ""/clear → does it CLEAR? (the sticky-dated-reminder gap, oddity 2e — the one thing URL can't do). STATUS: pending.
-- **P4 — Completion Date / Creation Date backdating.** Complete a to-do, `set-detail {detail:"Completion Date", value:<past ISO>}` → check `stopDate`. `set-detail {detail:"Creation Date", value:<past ISO>}` → check `creationDate`. No other surface writes these (GTD migration use case). STATUS: pending.
-- **P5 (NEEDS A HUMAN CLICK — not in this script)** — delete a NON-empty heading: do the children re-parent to the project root (expected), orphan, or cascade-delete? Delete-class consent re-prompts every run (oddity 5j), so this waits for a human. STATUS: parked.
+One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f /tmp/scf-out.txt` before each run; completion must go through AppleScript (`set status of to do id X to completed`) or URL WITH the auth token (read it from the guest defaults/plist as phase21b did).
+
+- **P4 redo — backdating.** Complete a fixture properly (verify `status=3`/stopDate in DB before proceeding), then: (a) Shortcuts `set-detail` Completion Date with several value shapes (ISO `2025-01-15`, locale `1/15/2025`, `January 15, 2025`); (b) AppleScript `set completion date of to do id X to date "..."`; (c) URL `things:///update?...&completion-date=...` (+auth token). Same trio for Creation Date. Check `stopDate`/`creationDate` deltas after each.
+- **P3a redo — Reminder Time set formats.** On a `when=today` fixture: `set-detail` Reminder Time with `"2:30 PM"`, `"14:30"` re-check, full datetime strings. Expect `reminderTime = hour<<26 | minute<<20`.
+- **P2b — `set-detail` Parent on a TO-DO** (re-parent between projects) — the heading variant no-op'd; does it work for to-dos?
+- **P6 — sidebar order, remaining spellings** (Mike's insight: Anytime view order mirrors sidebar order — consistent with both reading the same `index`; the two probed spellings are dead: O13 `move area to before area` errors, P17 private reorder in `list "Anytime"` with top-level project uuids no-ops). Untried spellings to sweep: (a) AppleScript `move project id X to before project id Y` (location specifier on projects, never probed — O13 only tried areas); (b) `set index of project/area` (property write); (c) private reorder in `list "Anytime"` with AREA uuids; (d) private reorder in `list "Someday"`; (e) grep the full sdef dump for any other `_private_` commands we haven't inventoried. Evidence target: `TMTask."index"` (top-level projects) / `TMArea."index"` (areas).
 
 ## B. PR #42 validation (project tags/reminders, tag-shortcut clear, inbox reorder)
 
-1. Recurring regression probes added to the suites (encode the A1–A6 deltas): e-suite (project tags URL+AS, project reminder, tag shortcut CLEAR) + o-suite (inbox reorder). STATUS: pending.
-2. `npm run lab:regress` (7 suites + guest e2e, ~40 min) — proves no regression AND the new probes pass. STATUS: pending.
-3. On double-green → merge PR #42. STATUS: pending.
+1. `npm run lab:regress` (7 suites + guest e2e, ~40 min) — no-regression check (exercises the reorder pipeline/guards/pre-state PR #42 touches). STATUS: pending.
+2. On double-green → merge PR #42 (`mg/phase21b-ops`, OPEN). STATUS: pending.
+3. Recurring suite probes encoding the A1–A6 deltas (e-suite: project tags URL+AS, project reminder, tag shortcut clear; o-suite: inbox reorder) — deliberately deferred; author later with an iteration budget. STATUS: deferred.
 
-## C. Parked (bigger, not auto-runnable now) — task #7
+## C. Parked (bigger, not auto-runnable now)
 
-- Lab runner/DSL **Shortcuts vector** support (write JSON input to a guest file + `shortcuts run --input-path`; interactive delete-class handling) so `s-suite.json` becomes a real recurring suite.
-- **Distribution/onboarding**: produce signed / iCloud-shareable proxies from a network Mac with an Apple ID; a `things setup shortcuts` import + first-run-consent flow. (Golden is airgapped + Apple-ID-less, so it can only make unsigned copies.)
-- **Headings doctrine decision** (gaps §0): flatten-only vs dual-mode, now that Shortcuts delivers the lifecycle.
+- Lab runner/DSL **Shortcuts vector** support (guest input files + `shortcuts run --input-path`; interactive delete-class handling) so `s-suite.json` becomes a real recurring suite.
+- **Distribution/onboarding**: signed / iCloud-shareable proxies from a network Mac with an Apple ID; a `things setup shortcuts` import + first-run-consent flow.
+- **Headings doctrine decision** (gaps §0): flatten-only vs dual-mode — Mike's call. New input since: heading REORDER is native/AppleScript (scf P1), heading MOVE is dead everywhere (scf P2).
 - **Availability layer** (Phase 21b remainder): advisory `availability(env)` per vector; doctor reads `uriSchemeEnabled`; correct the `feature-disabled` classifier to key on `uriSchemeEnabled`, not a null token.
+- **Heading reorder op** (`heading.reorder` or fold into project reorder): now that scf P1 proved the surface, wire it into the write pipeline (operations/commands/pre-state/vectors + matrix). Candidate next code phase alongside PR #42's pattern.
+
+## D. Release — publish `things-api` to npm (Mike, 2026-07-09)
+
+Unscoped name `things-api` confirmed available; LICENSE (MIT) landed; repo prepped in PR #38. Steps: merge PR #42 first → decide version → move CHANGELOG `## Unreleased` under the version heading → `npm run check` + `npm pack --dry-run` sanity → git tag `vX.Y.Z` → `npm publish` (Mike's npm auth/OTP likely needed). STATUS: pending.

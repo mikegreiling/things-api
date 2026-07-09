@@ -12,7 +12,7 @@ The flatten-by-default plan: project reads return one FLAT to-do list in UI orde
 
 ### 1. Headings in existing projects — SOLVED via Shortcuts (L5 sitting, 2026-07-09)
 - **Create / rename / delete a heading in an existing project all WORK via Shortcuts** (S02/S03/S04, [s-campaign-results.md](lab/s-campaign-results.md)) — `things-proxy-create-heading` / `-edit-title` / `-delete-items`. The sole capability Shortcuts uniquely provides, now proven.
-- Still dead elsewhere: `heading=` never creates (T09/U09), json update op on headings errors (U10), AppleScript has no heading class (A31); native reorder RIPS headed children out (O06) so heading-*scoped ordering* stays unautomatable; heading *move* is an unprobed `set-detail` Parent candidate; non-empty-heading delete (child re-parenting) unprobed.
+- Still dead elsewhere: `heading=` never creates (T09/U09), json update op on headings errors (U10), AppleScript has no heading class (A31); native reorder RIPS headed children out (O06) so heading-*scoped ordering* stays unautomatable; heading *move* is DEAD on every surface (`set-detail` Parent is a silent no-op — scf P2, 2026-07-09); non-empty-heading delete (child re-parenting) unprobed. NEW (scf P1): **the headings THEMSELVES reorder natively** — the private reorder command accepts heading uuids as project children ([s-campaign-results.md](lab/s-campaign-results.md) follow-ups).
 - **Remaining path:** wire a Shortcuts WriteVector (`heading.add/rename/delete`) behind the availability interface (Phase 21b layer), decide flatten-vs-dual-mode (§0). Consent caveat: create/edit are headless (Always-Allow), delete is tier-3 user-present (no Always-Allow — s-campaign-results.md).
 
 ### 2. Repeating items — creation and rule-editing are UI-only, permanently (until CC ships an API)
@@ -59,7 +59,7 @@ The flatten-by-default plan: project reads return one FLAT to-do list in UI orde
 ## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
 
 - Shipped: Today (native, bucket-0 members incl. scheduled projects — O01/O12), project + area scopes (native, un-headed children only — O06), Evening via verified bounce (O07/O08). Native is experimental-gated (config `allow-experimental` + sdef canary); see [docs/lab/o-suite-results.md](lab/o-suite-results.md).
-- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar area-among-areas ordering (DEAD — O13, see Tier-2 verdicts); checklist-item order (likely unautomatable — no granular checklist surface anywhere). Projects WITHIN an area now reorder natively (O14, Phase 14b).
+- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar area-among-areas ordering (DEAD — O13, see Tier-2 verdicts); checklist-item order (likely unautomatable — no granular checklist surface anywhere). Projects WITHIN an area now reorder natively (O14, Phase 14b), and headings within a project reorder natively too (scf P1, 2026-07-09).
 
 ## Read-layer gaps
 

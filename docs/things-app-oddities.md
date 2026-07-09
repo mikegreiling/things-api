@@ -76,6 +76,8 @@ The command returns success and produces literally zero database delta (not even
 
 On `when=today` / `when=evening`, re-sending a bare `when=` (no `@time`) **clears** an existing reminder (R07). On a dated schedule it does NOT: `when=2026-07-09` on an item already dated 07-09 with a reminder leaves the reminder intact (R20), and re-dating to `when=2026-07-10` carries the reminder along to the new date (R21). Consequence: **there is no URL-scheme way to remove a reminder from a date-scheduled item** — a caller must bounce it through `when=today` (which clears) and re-date, or use the UI. Whichever behavior is intended, the keyword/date asymmetry is surprising; callers relying on the today/evening clear behavior silently fail on dates. Evidence: R07/R20/R21, 2026-07-05.
 
+**Update 2026-07-09 (scf P3b):** the Shortcuts `Edit Items → Reminder Time` action with an EMPTY value DOES clear a dated reminder (`reminderTime` → NULL, `startDate` untouched). The URL-scheme asymmetry stands, but a workaround now exists outside it — Shortcuts is the only surface that clears a dated reminder in place.
+
 ## 3. UI vs. URL behavioral divergence: project completion
 
 Completing a project **in the UI** with unresolved children prompts ("mark as completed" etc.). Completing the same project via `things:///update-project?...&completed=true` **silently auto-completes every open child** — no prompt, no signal, canceled children left canceled. Same user intent, materially different outcome depending on the surface. For automation this is a destructive default: one URL can mark dozens of children done. *(T08/U08 — cascade behavior verified row-level)*
@@ -133,6 +135,10 @@ There is no scripted way to permanently delete ONE item via AppleScript or URL. 
 
 ### 5j. Shortcuts Privacy consent is asymmetric: "output" actions can be Always-Allowed, "delete" actions cannot
 Running a Things Shortcuts action prompts a per-shortcut Shortcuts-Privacy dialog scoped to a data class (distinct from AppleEvents Automation consent). **Output-class** dialogs ("Allow X to **output** N items" — create/edit/set/find) offer **Don't Allow / Allow Once / Always Allow**. **Delete-class** dialogs ("Allow X to **delete** N items") offer only **Don't Delete / Delete** — there is **no Always-Allow**, so a delete re-prompts on every single run and can never be made headless. A user can grant a create/edit shortcut once and automate it, but can never non-interactively delete through Shortcuts. *(L5 sitting, 2026-07-09)*
+
+### 5k. Shortcuts `Edit Items` reports success even when the edit silently fails
+
+`shortcuts run` exits 0 and the shortcut completes "successfully" even when the `Edit Items` action changed nothing: setting `Parent` on a heading echoes the item back with zero DB delta (scf P2), and setting `Reminder Time` from a plain `"14:30"` text value silently fails to coerce and writes nothing (scf P3a). When the action fails internally it may also produce NO output at all while still exiting 0 (scf P4) — an automation caller gets no error channel whatsoever; the only truth is re-reading the data. *(scf run, 2026-07-09)*
 
 ---
 

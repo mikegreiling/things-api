@@ -42,7 +42,7 @@ gas() { lab_ssh "$IP" "osascript -e $(printf '%q' "$1") 2>&1" || true; }
 gurl() { lab_ssh "$IP" "open -g $(printf '%q' "$1")"; sleep 2; }
 proxy() { # proxy <name> <json>  (deadline-wrapped; headless if consent inherited)
   note "-- shortcuts run $1  $2"
-  lab_ssh "$IP" "printf '%s' $(printf '%q' "$2") > /tmp/scf-in.json; perl -e 'alarm 60; exec @ARGV' shortcuts run $(printf '%q' "$1") --input-path /tmp/scf-in.json --output-path /tmp/scf-out.txt 2>&1; echo \"[exit \$?]\"; cat /tmp/scf-out.txt 2>/dev/null; echo" 2>&1 | tee -a "$REPORT" || true
+  lab_ssh "$IP" "printf '%s' $(printf '%q' "$2") > /tmp/scf-in.json; rm -f /tmp/scf-out.txt; perl -e 'alarm 60; exec @ARGV' shortcuts run $(printf '%q' "$1") --input-path /tmp/scf-in.json --output-path /tmp/scf-out.txt 2>&1; echo \"[exit \$?]\"; cat /tmp/scf-out.txt 2>/dev/null; echo" 2>&1 | tee -a "$REPORT" || true
   sleep 1
 }
 uuid_of() { local t="$1" typ="${2:-}" w="title='$1' AND trashed=0" u i; [ -n "$typ" ] && w="$w AND type=$typ"; for i in $(seq 1 12); do u=$(gq "SELECT uuid FROM TMTask WHERE $w ORDER BY creationDate DESC LIMIT 1"); [ -n "$u" ] && { echo "$u"; return 0; }; sleep 1; done; return 1; }

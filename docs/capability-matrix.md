@@ -15,8 +15,8 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Create | ✅ | ✅ | 🧪 | tags must pre-exist (app silently drops unknowns); reminder via `when=<list>@<time>` |
 | Update title/notes | ✅ (+append/prepend) | 🟡 partial | 🧪 | notes modes newline-joined (E04/E05) |
 | Schedule (today/evening/someday/date) | ✅ | 🟡 | 🧪 | 🚫 on repeating templates (crash — hard-blocked) |
-| Set reminder | ✅ today/evening/date | ⛔ no property | 🧪 | deterministic time emitter routes around the bare-hour parser trap (oddity 2d) |
-| Clear reminder | 🟡 today/evening only | ⛔ | 🧪 | dated reminders are STICKY (R20/R21, oddity 2e) — workaround: bounce via `when=today` first |
+| Set reminder | ✅ today/evening/date | ⛔ no property | 🧪 (`set-detail` `"14:30"` string no-ops, scf P3a — format experiments queued) | deterministic time emitter routes around the bare-hour parser trap (oddity 2d) |
+| Clear reminder | 🟡 today/evening only | ⛔ | ✅ **incl. DATED** (scf P3b, `set-detail` Reminder Time = `""`) | dated reminders are STICKY on URL (R20/R21, oddity 2e) — Shortcuts is the ONLY surface that clears them, and it's headless (output-class consent) |
 | Set/clear deadline | ✅ | 🟡 | 🧪 | |
 | Complete / cancel / reopen | ✅ | ✅ | 🧪 | |
 | Move to project/area (+existing heading) | ✅ | 🟡 no heading | 🧪 | unknown destinations guarded (app is a silent no-op) |
@@ -30,6 +30,7 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |
 | Permanently delete ONE item | 🚫 | 🚫 (all spellings fail, B0/A5) | ✅ interactive (S-delperm, Delete Immediately) | Shortcuts hard-deletes one row (no tombstone) — but the delete consent has NO "Always Allow", so it's tier-3 user-present, never headless. `trash.empty` is the only autonomous hard-delete (all-or-nothing) |
 | Convert to project | 🚫 (E16) | 🚫 | 🚫 (no Convert action exists) | dead on every surface (catalog sweep, L5) |
+| Backdate Completion/Creation Date | 🧪 (json at-creation attrs?) | 🧪 (`completion date` property?) | 🧪 (`set-detail`; first probe INVALID, scf P4 — re-probe queued) | GTD-migration wish — no surface proven or disproven yet |
 
 ## Projects
 
@@ -61,7 +62,8 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
 | Rename a heading | 🚫 | 🚫 | ✅ (S03, `Edit Items → Set Title`) | |
 | Delete a heading | 🚫 | 🚫 | ✅ (S04, removes the row) | non-empty-heading child re-parenting unprobed |
-| Move a heading | 🚫 | 🚫 | 🧪 (`set-detail` Parent?) | unprobed candidate |
+| Move a heading | 🚫 | 🚫 | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on every surface |
+| Reorder headings within a project | 🚫 | ✅ native (scf P1 — the private reorder command accepts heading uuids) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
 
 ## Areas
 
@@ -92,6 +94,7 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Today | ✅ native (experimental gate) or bounce ≤10 | |
 | This Evening | ✅ bounce only | native silently de-evenings (O03) |
 | Project children (un-headed) | ✅ native (experimental) | headed children rejected (O06) |
+| Project headings (the headings themselves) | ✅ native (experimental) | heading uuids accepted (scf P1); heading-*scoped* child order still unautomatable (O06) |
 | Area members (to-dos OR projects) | ✅ native (experimental) | never mixed in one request (O14) |
 | Inbox | ✅ native (experimental) | full reversed wire list re-ranked exactly (A6); joins today/project/area as a validated scope |
 | Checklist items | ✅ | granular move via stateful rewrite |
