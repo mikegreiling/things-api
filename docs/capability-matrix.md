@@ -28,7 +28,7 @@ The **Shortcuts** column is almost entirely 🧪: the S-campaign is blocked on t
 | Duplicate | ✅ `duplicate=true` | 🚫 refuses (−1717) | 🧪 | |
 | Delete (→ Trash) | 🚫 (tier-3 UI only) | ✅ | 🧪 | |
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |
-| Permanently delete ONE item | 🧪 | 🧪 (`delete` on an already-trashed row?) | 🧪 | wish list — today only `trash.empty` (all-or-nothing) |
+| Permanently delete ONE item | 🧪 | 🚫 (all spellings fail, B0/A5) | 🧪 | `delete to do id` on a trashed row → −1728; `list "Trash"` addressings → silent no-op. Only `trash.empty` (all-or-nothing) hard-deletes |
 | Convert to project | 🚫 (E16) | 🚫 | 🧪 | S-campaign candidate |
 
 ## Projects
@@ -38,8 +38,8 @@ The **Shortcuts** column is almost entirely 🧪: the S-campaign is blocked on t
 | Create (+area, +initial to-dos) | ✅ | ✅ | 🧪 | |
 | Create WITH headings (json payload) | 🧪 | ⛔ | 🧪 | queued small win, independent of Shortcuts (gaps roadmap item 5) |
 | Update title/notes/when/deadline | ✅ (+append/prepend, E18) | 🟡 | 🧪 | 🚫 schedule edits on repeating projects |
-| Set/clear reminder on a project | 🧪 (`when=@time` on update-project?) | ⛔ | 🧪 | wish list — unprobed |
-| Tags on a project | 🧪 (`update-project?tags=` / `set tag names of project`) | 🧪 | 🧪 | wish list — likely closeable, unprobed |
+| Set reminder on a project | ✅ (`update-project?when=<list>@time`, A3) | ⛔ no property | 🧪 | reminderTime uses the to-do codec (`14<<26\|30<<20`); clear-on-project follows the to-do rules (dated = sticky) |
+| Tags on a project | ✅ (`update-project?tags=`, A1) | ✅ (`set tag names of project id`, A2) | 🧪 | both vectors write `TMTaskTag`; tags must pre-exist (to-do rule presumed) |
 | Complete (children policy) | ✅ cascades, policy mandatory | 🟡 cascade unvalidated | 🧪 | |
 | Cancel (children policy) | ✅ (P01) | 🚫 | 🧪 | completed children untouched |
 | Reopen (± restore cascade-resolved children) | ✅ (P02/P05; <2s window P03) | 🚫 | 🧪 | children resolved earlier never touched (P04) |
@@ -80,7 +80,7 @@ Doctrine: treat headings as nonexistent in the API surface (flatten) until the S
 | Nest under an existing tag | 🚫 | ✅ (E03) | 🧪 | |
 | Un-nest to root | 🚫 | ✅ property-delete form (P29) | 🧪 | the ONE spelling that works |
 | Set keyboard shortcut | 🚫 | ✅ (E10) | 🧪 | |
-| Clear keyboard shortcut | 🚫 | 🧪 `delete keyboard shortcut of tag` (P29 analog) | 🧪 | queued cheap probe |
+| Clear keyboard shortcut | 🚫 | ✅ `delete keyboard shortcut of tag` (A4) | 🧪 | the P29 property-delete form generalizes to `shortcut` |
 | Delete | 🚫 | ✅ PERMANENT, subtree cascades (P16 — ack flag) | 🧪 | |
 
 ## Ordering
@@ -91,7 +91,7 @@ Doctrine: treat headings as nonexistent in the API surface (flatten) until the S
 | This Evening | ✅ bounce only | native silently de-evenings (O03) |
 | Project children (un-headed) | ✅ native (experimental) | headed children rejected (O06) |
 | Area members (to-dos OR projects) | ✅ native (experimental) | never mixed in one request (O14) |
-| Inbox | 🧪 | wish list — private command scope unprobed |
+| Inbox | ✅ native (experimental) | full reversed wire list re-ranked exactly (A6); joins today/project/area as a validated scope |
 | Checklist items | ✅ | granular move via stateful rewrite |
 | Sidebar: areas | 🚫 (O13) | |
 | Sidebar: top-level projects | 🚫 (P17) | reads provisional too (P19) |
@@ -113,5 +113,5 @@ Doctrine: treat headings as nonexistent in the API surface (flatten) until the S
 | Capability | Status | Notes |
 |---|---|---|
 | Empty Trash (everything) | ✅ AppleScript, PERMANENT | requires the permanent acknowledgement |
-| Permanently delete one item | 🧪 | see To-dos |
-| Enable-Things-URLs introspection | 🧪 | Phase 21b probes: token↔setting lifecycle, disabled-write signature |
+| Permanently delete one item | 🚫 | AppleScript spellings all fail (B0/A5); only all-or-nothing `trash.empty` |
+| Enable-Things-URLs introspection | ✅ read (`uriSchemeEnabled` in the group-container plist) | **RESOLVED (Phase 21b):** state = `uriSchemeEnabled` int-bool in `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist` (read via `plutil -p`, not `defaults`). Token PERSISTS while disabled and does NOT rotate across off/on. Disabled write → tier-3 enable-modal (write held, no DB row). See [phase21b-research.md](lab/phase21b-research.md). |
