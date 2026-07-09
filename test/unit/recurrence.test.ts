@@ -93,6 +93,25 @@ describe("decodeRecurrenceRule", () => {
     expect(() => decodeRecurrenceRule(ruleXml("<key>fu</key><integer>99</integer>"))).toThrow();
     expect(() => decodeRecurrenceRule(new Uint8Array([0x62, 0x70]))).toThrow();
   });
+
+  it("fails loudly on a rule-format version bump (rrv != 4) — the Things-update canary", () => {
+    const V5 = ruleXml(`
+      <key>fa</key><integer>1</integer>
+      <key>fu</key><integer>16</integer>
+      <key>rc</key><integer>0</integer>
+      <key>rrv</key><integer>5</integer>
+      <key>tp</key><integer>0</integer>
+      <key>ts</key><integer>0</integer>`);
+    expect(() => decodeRecurrenceRule(V5)).toThrow(/rrv=5/);
+    // Missing rrv (version 0) is equally unvalidated — refuse, don't guess.
+    const NO_VERSION = ruleXml(`
+      <key>fa</key><integer>1</integer>
+      <key>fu</key><integer>16</integer>
+      <key>rc</key><integer>0</integer>
+      <key>tp</key><integer>0</integer>
+      <key>ts</key><integer>0</integer>`);
+    expect(() => decodeRecurrenceRule(NO_VERSION)).toThrow(/rrv=0/);
+  });
 });
 
 describe("upcoming occurrence synthesis", () => {

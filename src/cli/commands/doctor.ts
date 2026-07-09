@@ -75,6 +75,9 @@ export function registerDoctor(program: Command): void {
             report.availability.shortcuts.present.length +
             report.availability.shortcuts.missing.length
           } proxies installed — ${report.availability.shortcuts.detail}`,
+          `repeats:     ${report.recurrence.templates} template(s), ${
+            report.recurrence.undecodable
+          } undecodable${report.recurrence.undecodable > 0 ? ` — ${report.recurrence.detail}` : ""}`,
         ];
         process.stdout.write(`${lines.join("\n")}\n`);
       } else if (error) {

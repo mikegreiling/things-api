@@ -79,6 +79,10 @@ Only remaining heading work: wire `heading.create` behind the Shortcuts vector (
 
 **HX sweep addendum (2026-07-09)**: every non-Shortcuts create/relocate escape hatch is now probed-dead — TJSON top-level heading and project-update items append are silently ignored; AS `move`/`duplicate` on a resolved heading are refused (301/−1717); TJSON update `list-id` no-ops. TJSON DOES create headings inside a NEW project (HX0) — wiring that into `project.add` is a live small win. Full table: [lab/heading-research.md](lab/heading-research.md).
 
+## §G. Hardening for the anticipated Things-update (Mike, 2026-07-09) — LANDED except the audit
+
+CC correspondence suggests repeat-handling changes and a likely major release alongside macOS 27. Shipped 2026-07-09: **[lab/things-update-runbook.md](lab/things-update-runbook.md)** (the full recertification sequence + version-pinning guidance + standing-defenses table), strict repeat-rule version decoding (`rrv` gate), and the doctor `repeats:` undecodable-template canary. Remaining: the **op×vector suite-completeness audit** (every shipped op must appear in a recurring suite) — folded into §F below. Apple-Intelligence surface research: separate memo (docs/design/apple-intelligence-research.md, pending).
+
 ## §F. Comprehensive reference compendium (Mike's "reference book")
 Goal: by project end, EVERYTHING probed is documented in one navigable place. Consolidate the per-campaign lab docs (a/o/p/r/e/u/x/s-suite results, phase21b, scf/scf2, P7–P14, heading-research) into a `docs/reference/` compendium: the full op×vector×verdict matrix with evidence ids, the crash/erratic catalog (oddities §7), and the "novel working paths" list. Leave no stone: any op we hand-waved as "probably dead" without a probe gets one. Track open probe candidates here as they arise.
 
