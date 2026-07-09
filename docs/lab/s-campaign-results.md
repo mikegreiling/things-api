@@ -37,6 +37,8 @@ Shortcuts Privacy is **per-shortcut and per-data-class**, and is a DIFFERENT sys
 - **Output-class** actions (create/edit/set/find — "Allow X to **output** N items") offer **Always Allow** → durable, headless after one grant. Clones inherit the grant.
 - **Delete-class** actions ("Allow X to **delete** N items") offer only **Don't Delete / Delete** — **no "Always" option**. They **re-prompt on every run** and can never be headless.
 
+**Container delete cascades (P12, interactive, 2026-07-09):** a Shortcuts delete on a HEADING always cascades — Trash removes the heading row outright and reparents its children to the project root before trashing them; permanent removes heading + children with no tombstone. A Shortcuts delete on a PROJECT is SHALLOW — the project goes to Trash, children keep their links untrashed (matches AppleScript). Shortcuts has NO area-delete surface at all (Find Items never returns area rows).
+
 Consequence: a Shortcuts create/edit/set/find vector can run autonomously; a Shortcuts **delete/permanent-delete is inherently interactive (tier 3, user-present)**. The single-item permanent delete is a real new capability but only as a user-confirmed action — not an autonomous op. The S-suite's delete probes therefore need a human (or SIP-off consent-DB seeding) and can't ride the autonomous `lab:regress`.
 
 ## Catalog facts banked (from the action sweep)

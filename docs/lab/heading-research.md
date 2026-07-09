@@ -42,5 +42,5 @@ Shipped ops: `heading.rename`, `heading.archive` (children: complete | cancel | 
 
 - ~~`set status … to canceled`~~ — probed (P11c, cancel-cascade quirk above).
 - ~~Crash verification~~ — CONFIRMED by process death (P11e); a captured `.ips` would still strengthen the Cultured Code report.
-- P5 (delete-class): non-empty heading delete via Shortcuts — child fate (human present).
+- ~~P5: non-empty heading delete via Shortcuts~~ — **DONE (P12, interactive, 2026-07-09).** Trash variant: the HEADING ROW VANISHES (headings never sit in Trash independently), and its children are REPARENTED to the project root (heading link cleared, project set) AND trashed with it — a cascade, not an orphan. Permanent variant (Delete Immediately): the heading AND both children are hard-deleted, zero rows remain, no tombstone. So a Shortcuts heading-delete always cascades to children (unlike a project-delete, which is shallow — see below).
 - Whether the UI renders an archived heading's still-open children anywhere odd (needs eyes on a VM screen).
