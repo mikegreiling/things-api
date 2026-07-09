@@ -221,10 +221,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Read a Things list as the app presents it: today (split into Today and This " +
         "Evening), inbox, anytime, upcoming, someday, logbook, or trash. For upcoming, " +
-        "horizon > 1 also includes future occurrences of repeating items (up to 10 each).",
+        "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
+        "anytime/someday return sidebar-ordered sections (area + items; null area = the " +
+        "top-level block); children of someday/future-scheduled projects are excluded " +
+        "from anytime — the project row represents them.",
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
+        active_project_items: z
+          .boolean()
+          .optional()
+          .describe("someday only: also list someday to-dos inside active projects"),
         horizon: z
           .number()
           .int()
@@ -258,7 +265,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               }),
             );
           case "someday":
-            return jsonResult(c.read.someday(filter));
+            return jsonResult(
+              c.read.someday({
+                ...filter,
+                ...(args.active_project_items === true && { activeProjectItems: true }),
+              }),
+            );
           case "logbook":
             return jsonResult(
               c.read.logbook({ ...filter, ...(args.limit !== undefined && { limit: args.limit }) }),

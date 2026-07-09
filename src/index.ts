@@ -35,7 +35,13 @@ export type { McpServerOptions } from "./mcp/server.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
 export type { BatchItemResult, BatchOp, BatchOptions } from "./write/batch.ts";
 export type { ReorderResult } from "./write/reorder.ts";
-export type { SearchOptions, UpcomingFilter, ViewFilter, ChangedItem } from "./read/views.ts";
+export type {
+  SearchOptions,
+  SomedayFilter,
+  UpcomingFilter,
+  ViewFilter,
+  ChangedItem,
+} from "./read/views.ts";
 
 export type {
   Acknowledgements,
@@ -92,7 +98,7 @@ export type {
   TodaySection,
 } from "./model/entities.ts";
 export type { IsoDate } from "./model/dates.ts";
-export type { ListItem, TodayView } from "./read/views.ts";
+export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
 export type { ProjectView } from "./read/project-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
 export { ThingsDbNotFoundError } from "./db/locate.ts";

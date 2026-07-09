@@ -7,7 +7,8 @@ import type { Command } from "commander";
 import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
-import { isTodayMember, type ListItem } from "../../read/views.ts";
+import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
+import { bold, cyan, dim, magenta, red, yellow } from "../style.ts";
 
 import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
@@ -65,36 +66,71 @@ export function withClient(
   }
 }
 
-export function formatItem(item: ListItem): string {
-  const marks = [
-    item.type === "project" ? "P" : "-",
-    item.repeating.isTemplate ? "↻" : null,
-    item.deadline ? `!${item.deadline}` : null,
-    item.startDate ? `@${item.startDate}` : null,
-    item.tags.length > 0 ? `#${item.tags.map((t) => t.title).join(",#")}` : null,
-    item.status !== "open" ? `[${item.status}]` : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+/**
+ * One item line: `<uuid>  <marker> [meta …] <title> (container)`. The uuid
+ * column pads to `uuidWidth` (uuids vary 21–22 chars) so the marker column
+ * aligns; exactly one space separates every following token. Meta tokens are
+ * colorized on a TTY only (see ../style.ts) — piped output stays plain.
+ */
+export function formatItem(item: ListItem, uuidWidth = 0): string {
+  const marker = (item.type === "project" ? "P" : "-") + (item.repeating.isTemplate ? "↻" : "");
+  const meta = [
+    item.deadline ? red(`!${item.deadline}`) : null,
+    item.startDate ? yellow(`@${item.startDate}`) : null,
+    item.tags.length > 0 ? cyan(`#${item.tags.map((t) => t.title).join(",#")}`) : null,
+    item.status !== "open" ? magenta(`[${item.status}]`) : null,
+  ].filter((s): s is string => s !== null);
   const context =
     item.type === "to-do" && item.project
       ? ` (${item.project.title})`
       : item.area
         ? ` (${item.area.title})`
         : "";
-  return `${item.uuid}  ${marks.padEnd(2)} ${item.title}${context}`;
+  return [
+    `${dim(item.uuid.padEnd(uuidWidth))} `,
+    marker,
+    ...meta,
+    context === "" ? item.title : `${item.title}${dim(context)}`,
+  ].join(" ");
+}
+
+function uuidWidth(items: ListItem[]): number {
+  return items.reduce((w, i) => Math.max(w, i.uuid.length), 0);
 }
 
 function renderList(items: ListItem[]): string[] {
-  return items.length === 0 ? ["(empty)"] : items.map(formatItem);
+  const w = uuidWidth(items);
+  return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
+}
+
+/**
+ * Sidebar-grouped views (anytime/someday): the area-less block renders
+ * headerless first, then one `── <area> ──` header per area, mirroring the
+ * app's layout. `star` prefixes each line with the Today-membership star.
+ */
+function renderSections(sections: SidebarSection[], star = false): string[] {
+  const all = sections.flatMap((s) => s.items);
+  if (all.length === 0) return ["(empty)"];
+  const w = uuidWidth(all);
+  const lines: string[] = [];
+  for (const section of sections) {
+    if (section.area !== null) lines.push(bold(`── ${section.area.title} ──`));
+    for (const item of section.items) {
+      const prefix = star ? `${isTodayMember(item) ? yellow("★") : " "} ` : "";
+      lines.push(`${prefix}${formatItem(item, w)}`);
+    }
+  }
+  return lines;
 }
 
 export function registerReadCommands(program: Command): void {
   const listCommands: Array<{
     name: string;
     description: string;
-    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => unknown;
+    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean, extra?: boolean) => unknown;
     render?: (data: never) => string[];
+    /** One extra boolean option: [flags, description, opts-key]. */
+    extraOption?: [string, string, string];
   }> = [
     {
       name: "today",
@@ -126,28 +162,39 @@ export function registerReadCommands(program: Command): void {
     {
       name: "anytime",
       description:
-        "All active items, mirroring the UI: Today members are starred (★), unscheduled items are not",
+        "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
+        "area: direct to-dos, then each project with its members). Today members are " +
+        "starred (★). Children of someday/future-scheduled projects are excluded — the " +
+        "project row represents them",
       fetch: (c, tag, exactTag) =>
         c.read.anytime(
           tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
         ),
-      render: (items: ListItem[]) =>
-        items.length === 0
-          ? ["(empty)"]
-          : items.map((i) => `${isTodayMember(i) ? "★" : " "} ${formatItem(i)}`),
+      render: (sections: SidebarSection[]) => renderSections(sections, true),
     },
     {
       name: "someday",
-      description: "Someday items (incubated, undated)",
-      fetch: (c, tag, exactTag) =>
-        c.read.someday(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
+      description:
+        "Someday items (incubated, undated) in sidebar order. Project children are " +
+        "represented by their project row; --active-project-items also lists someday " +
+        "to-dos inside active projects (the UI's 'Show items from active projects' toggle)",
+      fetch: (c, tag, exactTag, activeProjectItems) =>
+        c.read.someday({
+          ...(tag !== undefined && { tag }),
+          ...(exactTag === true && { exactTag }),
+          ...(activeProjectItems === true && { activeProjectItems }),
+        }),
+      render: (sections: SidebarSection[]) => renderSections(sections),
+      extraOption: [
+        "--active-project-items",
+        "also list someday to-dos inside active projects",
+        "activeProjectItems",
+      ],
     },
   ];
 
   for (const cmd of listCommands) {
-    program
+    const command = program
       .command(cmd.name)
       .description(cmd.description)
       .option(
@@ -156,15 +203,19 @@ export function registerReadCommands(program: Command): void {
       )
       .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
       .option("--json", "emit versioned JSON envelope on stdout")
-      .option("--db <path>", "explicit database path")
-      .action((opts: GlobalReadOpts & { tag?: string; exactTag?: boolean }) => {
+      .option("--db <path>", "explicit database path");
+    if (cmd.extraOption) command.option(cmd.extraOption[0], cmd.extraOption[1]);
+    command.action(
+      (opts: GlobalReadOpts & { tag?: string; exactTag?: boolean } & Record<string, unknown>) => {
+        const extra = cmd.extraOption ? opts[cmd.extraOption[2]] === true : undefined;
         withClient(
           opts,
           cmd.name,
-          (c) => cmd.fetch(c, opts.tag, opts.exactTag),
+          (c) => cmd.fetch(c, opts.tag, opts.exactTag, extra),
           (cmd.render ?? renderList) as (d: never) => string[],
         );
-      });
+      },
+    );
   }
 
   program

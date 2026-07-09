@@ -5,6 +5,7 @@ import { inheritedTagsFor } from "../../src/read/tags.ts";
 import { fetchTaskByUuid } from "../../src/read/queries.ts";
 import {
   anytimeView,
+  type SidebarSection,
   changesView,
   inboxView,
   isTodayMember,
@@ -26,6 +27,9 @@ import {
 } from "../fixtures/seed.ts";
 
 const NOW = new Date(2026, 6, 2, 12, 0); // local 2026-07-02
+
+/** Flattens grouped anytime/someday sections back to items for membership checks. */
+const flat = (sections: SidebarSection[]) => sections.flatMap((s) => s.items);
 
 let fx: FixtureDb;
 afterEach(() => fx?.close());
@@ -178,16 +182,19 @@ describe("list views", () => {
 
     expect(inboxView(fx.db).map((i) => i.title)).toEqual(["in-inbox"]);
     // Anytime mirrors the UI: unscheduled AND Today members (starred in UI)
-    expect(anytimeView(fx.db, NOW).map((i) => i.title)).toEqual(["unscheduled", "scheduled-today"]);
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).toEqual([
+      "unscheduled",
+      "scheduled-today",
+    ]);
     expect(upcomingView(fx.db, NOW).map((i) => i.title)).toEqual(["future"]);
-    expect(somedayView(fx.db).map((i) => i.title)).toEqual(["incubating"]);
+    expect(flat(somedayView(fx.db)).map((i) => i.title)).toEqual(["incubating"]);
   });
 
   it("isTodayMember marks the UI star in Anytime", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "unscheduled", start: "active", index: 1 });
     seedTodo(fx.db, { title: "starred", start: "active", startDate: "2026-07-01", index: 2 });
-    const items = anytimeView(fx.db, NOW);
+    const items = flat(anytimeView(fx.db, NOW));
     expect(items.map((i) => [i.title, isTodayMember(i, NOW)])).toEqual([
       ["unscheduled", false],
       ["starred", true],
@@ -200,6 +207,83 @@ describe("list views", () => {
     seedTodo(fx.db, { title: "newer", status: "canceled", stopDate: 200 });
     seedTodo(fx.db, { title: "trashed-done", status: "completed", stopDate: 300, trashed: true });
     expect(logbookView(fx.db).map((i) => i.title)).toEqual(["newer", "older"]);
+  });
+});
+
+describe("anytime container cascade + sidebar grouping", () => {
+  it("excludes children of someday/future-scheduled projects (the project row represents them)", () => {
+    fx = buildFixtureDb();
+    const somedayProj = seedProject(fx.db, { title: "sd-proj", start: "someday" });
+    seedTodo(fx.db, { title: "hidden-sd-child", project: somedayProj });
+    const futureProj = seedProject(fx.db, {
+      title: "future-proj",
+      start: "someday",
+      startDate: "2026-07-10",
+    });
+    seedTodo(fx.db, { title: "hidden-future-child", project: futureProj });
+    const activeProj = seedProject(fx.db, { title: "active-proj" });
+    seedTodo(fx.db, { title: "visible-child", project: activeProj });
+
+    const titles = flat(anytimeView(fx.db, NOW)).map((i) => i.title);
+    expect(titles).toContain("active-proj");
+    expect(titles).toContain("visible-child");
+    expect(titles).not.toContain("sd-proj");
+    expect(titles).not.toContain("hidden-sd-child");
+    expect(titles).not.toContain("hidden-future-child");
+  });
+
+  it("cascades through headings (a headed child reaches its project via the heading row)", () => {
+    fx = buildFixtureDb();
+    const somedayProj = seedProject(fx.db, { title: "sd-proj", start: "someday" });
+    const h1 = seedHeading(fx.db, { title: "H1", project: somedayProj });
+    seedTodo(fx.db, { title: "headed-hidden", heading: h1 }); // project = NULL by invariant
+    const activeProj = seedProject(fx.db, { title: "active-proj" });
+    const h2 = seedHeading(fx.db, { title: "H2", project: activeProj });
+    seedTodo(fx.db, { title: "headed-visible", heading: h2 });
+
+    const titles = flat(anytimeView(fx.db, NOW)).map((i) => i.title);
+    expect(titles).toContain("headed-visible");
+    expect(titles).not.toContain("headed-hidden");
+  });
+
+  it("groups in sidebar order: top-level block first, then areas by index; direct to-dos before project blocks", () => {
+    fx = buildFixtureDb();
+    const areaB = seedArea(fx.db, "B-Area", 2);
+    const areaA = seedArea(fx.db, "A-Area", 1);
+    seedTodo(fx.db, { title: "loose", index: 50 });
+    const topProj = seedProject(fx.db, { title: "top-proj", index: 9 });
+    seedTodo(fx.db, { title: "top-proj-child", project: topProj, index: 1 });
+    seedTodo(fx.db, { title: "areaB-direct", area: areaB, index: 1 });
+    seedTodo(fx.db, { title: "areaA-direct", area: areaA, index: 7 });
+    const projA = seedProject(fx.db, { title: "proj-in-A", area: areaA, index: 3 });
+    const hA = seedHeading(fx.db, { title: "HA", project: projA });
+    seedTodo(fx.db, { title: "projA-headed-child", heading: hA, index: 1 });
+
+    const sections = anytimeView(fx.db, NOW);
+    expect(sections.map((s) => s.area?.title ?? null)).toEqual([null, "A-Area", "B-Area"]);
+    expect(sections[0]?.items.map((i) => i.title)).toEqual(["loose", "top-proj", "top-proj-child"]);
+    expect(sections[1]?.items.map((i) => i.title)).toEqual([
+      "areaA-direct",
+      "proj-in-A",
+      "projA-headed-child",
+    ]);
+    expect(sections[2]?.items.map((i) => i.title)).toEqual(["areaB-direct"]);
+  });
+
+  it("someday hides project children by default; activeProjectItems adds active-project ones only", () => {
+    fx = buildFixtureDb();
+    const activeProj = seedProject(fx.db, { title: "active-proj" });
+    seedTodo(fx.db, { title: "sd-in-active", project: activeProj, start: "someday" });
+    const somedayProj = seedProject(fx.db, { title: "sd-proj", start: "someday" });
+    seedTodo(fx.db, { title: "sd-in-sd", project: somedayProj, start: "someday" });
+    seedTodo(fx.db, { title: "sd-loose", start: "someday" });
+
+    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-loose", "sd-proj"]);
+    const withActive = flat(somedayView(fx.db, NOW, { activeProjectItems: true })).map(
+      (i) => i.title,
+    );
+    expect(withActive).toContain("sd-in-active");
+    expect(withActive).not.toContain("sd-in-sd");
   });
 });
 
@@ -302,10 +386,10 @@ describe("tag-filtered list views (Phase 10)", () => {
   it("filters anytime/someday/logbook the same way", () => {
     seedTagChain();
     seedTodo(fx.db, { title: "done-tagged", status: "completed", stopDate: 1_780_000_100 });
-    expect(anytimeView(fx.db, NOW, { tag: "focus" }).map((i) => i.title)).not.toContain(
+    expect(flat(anytimeView(fx.db, NOW, { tag: "focus" })).map((i) => i.title)).not.toContain(
       "unrelated",
     );
-    expect(somedayView(fx.db, { tag: "focus" })).toEqual([]);
+    expect(somedayView(fx.db, NOW, { tag: "focus" })).toEqual([]);
     expect(logbookView(fx.db, { tag: "focus" }).map((i) => i.title)).not.toContain("done-tagged");
   });
 });
