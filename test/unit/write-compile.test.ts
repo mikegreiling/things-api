@@ -82,6 +82,26 @@ describe("URL compilation goldens", () => {
     expect(inv.payload).toBe("things:///update-project?id=P1&append-notes=tail%20note");
   });
 
+  it("project.set-tags compiles update-project?tags= (A1)", () => {
+    const inv = COMMANDS["project.set-tags"].compile(
+      { uuid: "P1", tags: ["prio", "high"] },
+      "url-scheme",
+      emptyPreState(),
+      { token: null },
+    );
+    expect(inv.payload).toBe("things:///update-project?id=P1&tags=prio%2Chigh");
+  });
+
+  it("project.update compiles a reminder into when=<list>@<time> (A3)", () => {
+    const inv = COMMANDS["project.update"].compile(
+      { uuid: "P1", when: "today", reminder: "14:30" },
+      "url-scheme",
+      emptyPreState(),
+      { token: null },
+    );
+    expect(inv.payload).toBe("things:///update-project?id=P1&when=today%4014%3A30");
+  });
+
   it("no token → no auth-token parameter at all", () => {
     const inv = COMMANDS["todo.add"].compile({ title: "T" }, "url-scheme", emptyPreState(), {
       token: null,
@@ -143,6 +163,46 @@ describe("AppleScript compilation goldens", () => {
       token: null,
     });
     expect(inv.payload).toBe('tell application "Things3" to move to do id "U-9" to list "Inbox"');
+  });
+
+  it("project.set-tags compiles the tag-names setter with an id specifier (A2)", () => {
+    const inv = COMMANDS["project.set-tags"].compile(
+      { uuid: "P-1", tags: ["prio", "high"] },
+      "applescript",
+      emptyPreState(),
+      { token: null },
+    );
+    expect(inv.payload).toBe(
+      'tell application "Things3" to set tag names of project id "P-1" to "prio, high"',
+    );
+  });
+
+  it("tag.update --clear-shortcut compiles the property-delete form by name (A4)", () => {
+    const pre = emptyPreState();
+    pre.entityTarget = { resolved: { uuid: "TAG-1", title: "prio" }, matches: 1 };
+    const inv = COMMANDS["tag.update"].compile(
+      { target: "prio", clearShortcut: true },
+      "applescript",
+      pre,
+      {
+        token: null,
+      },
+    );
+    expect(inv.payload).toBe(
+      'tell application "Things3" to delete keyboard shortcut of tag "prio"',
+    );
+  });
+
+  it('reorder scope=inbox targets list "Inbox" (A6)', () => {
+    const inv = COMMANDS["reorder"].compile(
+      { scope: "inbox", uuids: ["A", "B", "C"] },
+      "applescript",
+      emptyPreState(),
+      { token: null },
+    );
+    expect(inv.payload).toBe(
+      'tell application "Things3" to _private_experimental_ reorder to dos in list "Inbox" with ids "A,B,C"',
+    );
   });
 
   it("trash.empty compiles to the bare command", () => {

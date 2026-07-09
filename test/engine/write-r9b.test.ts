@@ -14,7 +14,7 @@ import { decodeReminderTime, encodeReminderTime, reminderUrlToken } from "../../
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedTag, seedTodo, tagArea } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTag, seedTodo, tagArea, tagTask } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -43,14 +43,14 @@ const CONFIG: ThingsApiConfig = {
 };
 
 const URL_MATRIX: VectorMatrix = Object.fromEntries(
-  ["todo.add", "todo.update", "todo.duplicate"].map((op) => [
+  ["todo.add", "todo.update", "todo.duplicate", "project.update", "project.set-tags"].map((op) => [
     op,
     { support: "yes", disruption: 0, validation: "validated" },
   ]),
 ) as VectorMatrix;
 
 const AS_MATRIX: VectorMatrix = Object.fromEntries(
-  ["todo.move", "area.update", "tag.update"].map((op) => [
+  ["todo.move", "area.update", "tag.update", "project.set-tags"].map((op) => [
     op,
     { support: "yes", disruption: 0, validation: "validated" },
   ]),
@@ -447,5 +447,64 @@ describe("dated reminders (Phase 12b, R17–R21)", () => {
     });
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") expect(result.hazard).toBe("H-REMINDER-SCOPE");
+  });
+});
+
+describe("project tags + reminders (Phase 21b)", () => {
+  it("project.update sets a reminder via when=<list>@time and verifies it (A3)", async () => {
+    const uuid = seedProject(fixture.db, { title: "Proj" });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
+      touch(uuid, `startDate = ${132805248}, start = 1, startBucket = 0, reminderTime = 970981376`);
+    });
+    const result = await runMutation(deps([vector]), "project.update", {
+      uuid,
+      when: "today",
+      reminder: "14:30",
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(encodeURIComponent("today@14:30"));
+    if (result.kind === "ok") expect(result.observed?.["reminder"]).toBe("14:30");
+  });
+
+  it("H-REMINDER-SCOPE blocks a project reminder without a schedulable when", async () => {
+    const uuid = seedProject(fixture.db, { title: "Proj" });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, null);
+    const result = await runMutation(deps([vector]), "project.update", {
+      uuid,
+      when: "someday",
+      reminder: "10:05",
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.hazard).toBe("H-REMINDER-SCOPE");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("project.set-tags replaces the tag set via update-project?tags= (A1)", async () => {
+    const uuid = seedProject(fixture.db, { title: "Proj" });
+    const prio = seedTag(fixture.db, "prio");
+    const high = seedTag(fixture.db, "high");
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
+      tagTask(fixture.db, uuid, prio);
+      tagTask(fixture.db, uuid, high);
+    });
+    const result = await runMutation(deps([vector]), "project.set-tags", {
+      uuid,
+      tags: ["prio", "high"],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain("things:///update-project?id=");
+    expect(calls[0]).toContain(encodeURIComponent("prio,high"));
+  });
+
+  it("project.set-tags rejects unknown tags before writing (H-UNKNOWN-TAG)", async () => {
+    const uuid = seedProject(fixture.db, { title: "Proj" });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, null);
+    const result = await runMutation(deps([vector]), "project.set-tags", {
+      uuid,
+      tags: ["ghost"],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.hazard).toBe("H-UNKNOWN-TAG");
+    expect(calls).toHaveLength(0);
   });
 });

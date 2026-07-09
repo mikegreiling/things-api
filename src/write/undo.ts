@@ -127,6 +127,7 @@ function scheduleSteps(
   uuid: string,
   record: AuditRecord,
   todayIso: string,
+  op: "todo.update" | "project.update" = "todo.update",
 ): { steps: UndoStep[]; notes: string[] } {
   const notes: string[] = [];
   const start = preField(record, "start");
@@ -134,6 +135,8 @@ function scheduleSteps(
   const section = preField(record, "todaySection");
   const reminder = preField(record, "reminder");
 
+  // start === "inbox" is a to-do-only pre-state (projects never live in the
+  // Inbox), so the move step below stays a todo.move.
   if (start === "inbox") {
     if (reminder !== undefined && reminder !== null) {
       notes.push("the pre-state carried a reminder in the Inbox — not reproducible, skipped");
@@ -184,7 +187,7 @@ function scheduleSteps(
       params["reminder"] = reminder;
     }
   }
-  return { steps: [{ op: "todo.update", params }], notes };
+  return { steps: [{ op, params }], notes };
 }
 
 /** Build the inverse plan for one audit record. Pure — unit-testable. */
@@ -412,13 +415,14 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
       if (title !== undefined) params["title"] = title;
       if (notesPre !== undefined) params["notes"] = notesPre;
       if (deadline !== undefined) params["deadline"] = deadline;
-      if (record.requested["when"] !== undefined) {
-        const startDate = preField(record, "startDate");
-        const start = preField(record, "start");
-        if (typeof startDate === "string") params["when"] = startDate;
-        else if (start === "someday") params["when"] = "someday";
-        else if (start === "active" && startDate === null) params["when"] = "anytime";
-        else notes.push("pre-op project scheduling was not captured fully — when not restored");
+      // when/reminder restore reuses the schedule reconstructor (emitting a
+      // project.update); projects never live in the Inbox so that branch is
+      // unreachable here.
+      if ((record.requested["when"] ?? record.requested["reminder"]) !== undefined) {
+        const schedule = scheduleSteps(uuid, record, todayIso, "project.update");
+        notes.push(...schedule.notes);
+        const scheduleStep = schedule.steps[0];
+        if (scheduleStep !== undefined) Object.assign(params, scheduleStep.params);
       }
       if (Object.keys(params).length === 1) {
         return irreversible("no pre-values were captured for the changed fields");
@@ -427,6 +431,18 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
         target,
         kind: "invertible",
         steps: [{ op: "project.update", params }],
+        notes,
+      };
+    }
+
+    case "project.set-tags": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const tags = preField(record, "tags");
+      if (!Array.isArray(tags)) return irreversible("the pre-op tag set was not captured");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.set-tags", params: { uuid, tags } }],
         notes,
       };
     }
@@ -613,9 +629,12 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
         // The op nested a previously-root tag: un-nest it back (P29).
         patch["unnest"] = true;
       }
+      // A captured pre-shortcut (string) re-binds whether the op changed or
+      // cleared it; a null pre-shortcut with the op having SET one inverts to
+      // a clear (A4 gave us the clear path).
       if (typeof shortcut === "string") patch["shortcut"] = shortcut;
       else if (shortcut === null && record.requested["shortcut"] !== undefined) {
-        notes.push("clearing a keyboard shortcut is unprobed — the new shortcut stays");
+        patch["clearShortcut"] = true;
       }
       if (Object.keys(patch).length === 1) {
         return irreversible("none of the changed tag fields can be restored (see notes)");

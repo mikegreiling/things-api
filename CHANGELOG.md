@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### New write capabilities (Phase 21b)
+
+Grounded in the Phase 21b lab probe campaign ([docs/lab/phase21b-research.md](docs/lab/phase21b-research.md)).
+
+- **Project tags** — `things project tags <uuid> --set/--add` and MCP `set_tags` now accept a project (dispatches on the item type). Full-replacement semantics mirror to-do tags; tags must name existing tags.
+- **Project reminders** — `things project update --reminder HH:mm` / `--clear-reminder` and MCP `update_project`'s `reminder`/`clear_reminder`. Projects carry the same reminder codec and scope rules as to-dos (requires `--when today|evening|YYYY-MM-DD`; an existing reminder is auto-preserved on re-schedule; dated reminders are sticky).
+- **Clear a tag's keyboard shortcut** — `things tag update --clear-shortcut` and MCP `update_tag`'s `clear_shortcut` (the property-delete form; `undo` now restores a cleared shortcut symmetrically).
+- **Inbox reordering** — `things reorder --scope inbox` and MCP `reorder` scope `inbox` order unscheduled Inbox to-dos (native/experimental, same gate as today/project/area).
+
 ### Environment awareness & failure attribution (Phase 21a)
 
 - **Failure attribution**: mutation failures carry an advisory `likelyCause` + hint when the signals point somewhere — AppleEvent `-1743` → `permission-denied`; a transport hang/deadline kill → `permission-pending` (the shape of an unanswered macOS consent dialog); a URL silent no-op without an authorization token → `feature-disabled` (Enable Things URLs); a Things version change since the last verified write → `app-updated`; drift blocks → `schema-drift`; residual silent no-ops → `app-behavior-change`. Surfaced in CLI stderr, `--json` envelopes (`error.likelyCause`, hint as `remediation`), and MCP tool errors.
