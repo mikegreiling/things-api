@@ -44,6 +44,9 @@ On `add`, a `heading=` value that doesn't match an existing heading in the targe
 ### 2f. AppleScript `move project … to list "Anytime"` on a non-trashed project → complete silent no-op
 The command returns success and produces literally zero database delta (not even a modification-date bump). The same command on a *trashed* project un-trashes it — so the identical statement is either a restore or a no-op depending on state the caller may not know, with no signal distinguishing the two. *(P06/P09, 2026-07-06)*
 
+### 2g. `update?completion-date=` / `creation-date=` are silently ignored — while the json importer honors the same attributes
+`things:///update?id=<uuid>&auth-token=<t>&completion-date=2025-01-15` (and `creation-date=`) on a completed to-do changes nothing — no error, no modal, zero delta; `completed=true` in the same command class works. Meanwhile `things:///json` **add** honors `creation-date`/`completion-date` attributes exactly (row created with the given epoch values). The parameter names parse somewhere (no unknown-parameter error either way), the write path just drops them on update. *(scf2 P4c/P4d, 2026-07-09)*
+
 ---
 
 ### 2d. Reminder times with bare hours 1–11 are silently reinterpreted (am/pm heuristic)
@@ -138,7 +141,11 @@ Running a Things Shortcuts action prompts a per-shortcut Shortcuts-Privacy dialo
 
 ### 5k. Shortcuts `Edit Items` reports success even when the edit silently fails
 
-`shortcuts run` exits 0 and the shortcut completes "successfully" even when the `Edit Items` action changed nothing: setting `Parent` on a heading echoes the item back with zero DB delta (scf P2), and setting `Reminder Time` from a plain `"14:30"` text value silently fails to coerce and writes nothing (scf P3a). When the action fails internally it may also produce NO output at all while still exiting 0 (scf P4) — an automation caller gets no error channel whatsoever; the only truth is re-reading the data. *(scf run, 2026-07-09)*
+`shortcuts run` exits 0 and the shortcut completes "successfully" even when the `Edit Items` action changed nothing: setting `Parent` on a heading echoes the item back with zero DB delta (scf P2), and setting `Reminder Time` from a plain `"14:30"` text value silently fails to coerce and writes nothing (scf P3a). When the action fails internally it may also produce NO output at all while still exiting 0 (scf P4) — an automation caller gets no error channel whatsoever; the only truth is re-reading the data. Round 2 widened the blast radius: EVERY date/time-valued detail write fails this way (Completion Date and Creation Date in five formats, Reminder Time in three — scf2 P4a/P3a). *(scf runs, 2026-07-09)*
+
+### 5l. Shortcuts `Edit Items → Parent` with a text value DETACHES the item instead of erroring
+
+Setting the `Parent` detail to a project uuid passed as TEXT does not move the to-do and does not error — it silently CLEARS the to-do's project link (`project` → NULL), leaving the item container-less. The text→entity coercion fails and the action writes the empty result. On a heading row the same call is a pure no-op (project unchanged) — two different silent-failure behaviors for one action depending on row type. A destructive wrong-action with exit 0 is the worst of the silent-failure family: the caller asked for a move and got a detach. *(scf P2 / scf2 P2b, 2026-07-09)*
 
 ---
 

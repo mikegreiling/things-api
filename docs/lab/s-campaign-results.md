@@ -61,6 +61,22 @@ Autonomous clone run ([`lab/scripts/research-scampaign-followups.sh`](../../lab/
 
 Harness lessons: `proxy()` must `rm -f` the `--output-path` file before each run (stale-output aliasing); `shortcuts run` exits 0 even when `Edit Items` silently fails inside (oddity 5k) — DB delta is the only truth.
 
+
+## Follow-up probes, round 2 (scf2 run `things-run-scf2-20260709-045454`, 2026-07-09)
+
+[`lab/scripts/research-scf2.sh`](../../lab/scripts/research-scf2.sh); raw report + `final.sqlite` under `lab/artifacts/things-run-scf2-20260709-045454/`. Fixture completion verified in-DB before every backdating probe (round 1's confound eliminated).
+
+| # | Question | Verdict | Evidence |
+|---|---|---|---|
+| P4a | Backdate Completion/Creation Date via `set-detail` | **DEAD** | Five value shapes (`1/15/2025`, `January 15, 2025`, `2025-01-15`, `6/1/2024`, `June 1, 2024`) all exit-0 silent no-ops on a VERIFIED-completed fixture. |
+| P4b | Backdate via AppleScript property writes | **WORKS** 🎉 | `set completion date of to do id X to ((current date) - (200 * days))` → `stopDate` 2026-07-05 → **2025-12-17**; `set creation date` → `creationDate` → **2025-05-31**. **Backdating existing items is unlocked, AppleScript-only.** |
+| P4c | Backdate via URL `update?completion-date=` / `creation-date=` (auth token attached) | **SILENT NO-OP** | `completed=true` WITH the token works (round-1 diagnosis confirmed); the date params change nothing (oddity 2g). |
+| P4d | **At-creation backdating via `things:///json` attributes** | **WORKS** 🎉 | `{"completed":true,"creation-date":"2024-06-01T08:00:00Z","completion-date":"2025-01-15T09:00:00Z"}` → row created `status=3`, `stopDate=2025-01-15 09:00`, `creationDate=2024-06-01 08:00` — exact values honored. The logbook-import / GTD-migration path. |
+| P3a | Set Reminder Time via `set-detail`, format sweep | **DEAD** | `2:30 PM`, `14:30`, `7/5/2026 2:30 PM` — all exit-0 no-ops on a scheduled fixture. `Edit Items → Reminder Time` can only CLEAR (P3b); it cannot set. |
+| P2b | `set-detail` Parent on a TO-DO (text uuid value) | **DESTRUCTIVE FOOTGUN** 🚨 | The to-do was not moved to the target project — it was **DETACHED from its project entirely** (`project` → NULL), exit 0. Text→entity coercion fails and CLEARS the parent (oddity 5l). An entity-typed variant (a proxy whose Parent field takes a second `Find Items` output) is unprobed — needs a golden sitting to build. |
+| P6a–g | Sidebar order, exhaustive spelling sweep | **ALL DEAD — sidebar ordering is conclusively UI-only** | `move project id X to before project id Y` → −1700; `move project/area … to beginning of …` → −1700; `set index of project/area` → −10006 (read-only); private reorder with top-level-project uuids (P17 re-check) or AREA uuids in `list "Anytime"` → zero-delta no-ops. Host sdef dump confirms exactly ONE private command exists (`_private_experimental_ reorder to dos in`) — no hidden sidebar verb. |
+| P6h | Private reorder in `list "Someday"` | **WORKS** 🎉 | `LAB-SOMEDAY-1` `"index"` 0 → −901, landing ABOVE the first-listed id — consistent with the Inbox scope's REVERSED wire-list convention (A6). **Someday is a new native reorder scope**; lock the exact convention with a 3-item probe before wiring the op. |
+
 ## Doctrine impact (for Mike)
 
 gaps.md §0 held the headings doctrine as "flatten unless Shortcuts delivers; **dual-mode** candidate (first-class with a Shortcuts vector, flattened otherwise)." **Shortcuts delivered** — create/rename/delete all work — so the dual-mode path is unblocked. The implementation decision (flatten vs dual-mode, and whether to ship the interactive permanent-delete) is Mike's; recorded here, not yet acted on.

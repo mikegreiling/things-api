@@ -59,7 +59,7 @@ The flatten-by-default plan: project reads return one FLAT to-do list in UI orde
 ## Ordering (LANDED — Phase 8, `things reorder` / `write.reorder`)
 
 - Shipped: Today (native, bucket-0 members incl. scheduled projects — O01/O12), project + area scopes (native, un-headed children only — O06), Evening via verified bounce (O07/O08). Native is experimental-gated (config `allow-experimental` + sdef canary); see [docs/lab/o-suite-results.md](lab/o-suite-results.md).
-- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar area-among-areas ordering (DEAD — O13, see Tier-2 verdicts); checklist-item order (likely unautomatable — no granular checklist surface anywhere). Projects WITHIN an area now reorder natively (O14, Phase 14b), and headings within a project reorder natively too (scf P1, 2026-07-09).
+- Remaining gaps: heading-scoped ordering (unautomatable, O06); sidebar ordering — **EXHAUSTIVELY CLOSED as UI-only 2026-07-09** (scf2 P6a–g: every move-to-location spelling errors −1700, `set index` is read-only −10006, the sole private command no-ops on project AND area uuids in Anytime scope, and the sdef contains no other private verb); checklist-item order (likely unautomatable — no granular checklist surface anywhere). Projects WITHIN an area reorder natively (O14), headings within a project reorder natively (scf P1), and **Someday is a newly proven native scope** (scf2 P6h — reversed-wire convention to lock before wiring the op).
 
 ## Read-layer gaps
 
