@@ -18,18 +18,21 @@ function renderAreaView(view: AreaView): string[] {
     ...view.logged.slice(0, 10),
   ];
   const w = uuidDisplayWidth(everyItem);
-  const fmt = (i: (typeof everyItem)[number]) => formatItem(i, w);
+  // Rows inside this view never repeat the area's own name.
+  const fmt = (i: (typeof everyItem)[number]) => formatItem(i, w, { suppressArea: view.area.uuid });
+  const fmtProject = (i: (typeof everyItem)[number]) =>
+    formatItem(i, w, { projectTitle: true, suppressArea: view.area.uuid });
   const tags = view.area.tags.length
     ? ` ${dim(`#${view.area.tags.map((t) => t.title).join(" #")}`)}`
     : "";
-  const lines: string[] = [`${view.area.uuid}  ${view.area.title}${tags}`];
-  lines.push(bold("── Active ──"), ...(view.active.length ? view.active.map(fmt) : ["(none)"]));
-  lines.push(
-    bold("── Projects ──"),
-    ...(view.projects.length ? view.projects.map(fmt) : ["(none)"]),
-  );
+  const lines: string[] = [`${view.area.uuid}  ${bold(view.area.title)}${tags}`];
+  const section = (header: string, rows: string[]) => {
+    lines.push("", bold(header), ...rows);
+  };
+  section("── Active ──", view.active.length ? view.active.map(fmt) : ["(none)"]);
+  section("── Projects ──", view.projects.length ? view.projects.map(fmtProject) : ["(none)"]);
   if (view.later.scheduled.length || view.later.repeating.length || view.later.someday.length) {
-    lines.push(bold("── Later ──"));
+    lines.push("", bold("── Later ──"));
     for (const day of view.later.scheduled) {
       lines.push(`  ${day.date}:`, ...day.items.map(fmt));
     }
@@ -41,8 +44,8 @@ function renderAreaView(view: AreaView): string[] {
     }
   }
   if (view.logged.length)
-    lines.push(bold(`── Logged (${view.logged.length}) ──`), ...view.logged.slice(0, 10).map(fmt));
-  if (view.trashed.length) lines.push(bold(`── Trashed (${view.trashed.length}) ──`));
+    section(`── Logged (${view.logged.length}) ──`, view.logged.slice(0, 10).map(fmt));
+  if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
   return lines;
 }
 

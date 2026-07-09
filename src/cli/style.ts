@@ -20,6 +20,7 @@ const wrap = (open: number, close: number) => (s: string) =>
 
 export const bold = wrap(1, 22);
 export const dim = wrap(2, 22);
+export const underline = wrap(4, 24);
 export const red = wrap(31, 39);
 export const blue = wrap(34, 39);
 export const yellow = wrap(33, 39);

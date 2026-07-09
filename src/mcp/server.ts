@@ -388,7 +388,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One project's full contents: metadata plus its to-dos grouped under their headings.",
-      inputSchema: { uuid: z.string().describe("Project uuid") },
+      inputSchema: { uuid: z.string().describe("Project uuid or unique name") },
       annotations: READ_ONLY,
     },
     async (args) => guard(() => jsonResult(getClient().read.projectView(args.uuid))),

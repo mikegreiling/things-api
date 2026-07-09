@@ -8,7 +8,7 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
-import { blue, bold, dim, magenta, red, yellow } from "../style.ts";
+import { blue, bold, dim, magenta, red, underline, yellow } from "../style.ts";
 
 import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
@@ -66,39 +66,60 @@ export function withClient(
   }
 }
 
+export interface FormatOpts {
+  /**
+   * Render a grouped project TITLE row: bold+underlined title, no type
+   * marker — the styling carries the type (the GUI's project-header look).
+   */
+  projectTitle?: boolean;
+  /** Container uuids already implied by surrounding output — their context suffix is dropped. */
+  suppressProject?: string | null;
+  suppressArea?: string | null;
+}
+
 /**
- * One item line: `<uuid-prefix>  <marker> [meta …] <title> (container)`.
+ * One item line: `<uuid-prefix>  <marker> [meta …] <title> #tags (container)`.
  * Human output shows a SHORTENED uuid prefix (every command accepts unique
  * prefixes >= 6 chars); `uuidWidth` is the display length from
  * uuidDisplayWidth — never below 8 so a copied prefix stays unique across
- * the whole database, not just the rendered list. Exactly one space
+ * the whole database, not just the rendered list. Tags follow the title
+ * (`#`-prefixed, space-separated), mirroring the GUI. Exactly one space
  * separates every following token; meta tokens colorize on a TTY only
  * (../style.ts) — piped output stays plain. `--json` always carries full
  * uuids.
  */
-export function formatItem(item: ListItem, uuidWidth = 0): string {
-  const marker = (item.type === "project" ? "P" : "-") + (item.repeating.isTemplate ? "↻" : "");
+export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {}): string {
+  const asTitle = opts.projectTitle === true && item.type === "project";
+  const marker = asTitle
+    ? null
+    : (item.type === "project" ? "P" : "-") + (item.repeating.isTemplate ? "↻" : "");
   const meta = [
     item.deadline ? red(`!${item.deadline}`) : null,
     item.startDate ? yellow(`@${item.startDate}`) : null,
-    item.tags.length > 0 ? blue(`#${item.tags.map((t) => t.title).join(",#")}`) : null,
     item.status !== "open" ? magenta(`[${item.status}]`) : null,
   ].filter((s): s is string => s !== null);
+  const tags =
+    item.tags.length > 0 ? ` ${blue(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
   const context =
     item.type === "to-do" && item.project
-      ? ` (${item.project.title})`
+      ? item.project.uuid === opts.suppressProject
+        ? ""
+        : ` (${item.project.title})`
       : item.area
-        ? ` (${item.area.title})`
+        ? item.area.uuid === opts.suppressArea
+          ? ""
+          : ` (${item.area.title})`
         : "";
   const shownUuid =
     uuidWidth > 0 && item.uuid.length > uuidWidth
       ? item.uuid.slice(0, uuidWidth)
       : item.uuid.padEnd(uuidWidth);
+  const title = asTitle ? bold(underline(item.title)) : item.title;
   return [
     `${dim(shownUuid)} `,
-    marker,
+    ...(marker === null ? [] : [marker]),
     ...meta,
-    context === "" ? item.title : `${item.title}${dim(context)}`,
+    `${title}${context === "" ? "" : dim(context)}${tags}`,
   ].join(" ");
 }
 
@@ -130,20 +151,48 @@ function renderList(items: ListItem[]): string[] {
 }
 
 /**
- * Sidebar-grouped views (anytime/someday): the area-less block renders
- * headerless first, then one `── <area> ──` header per area, mirroring the
- * app's layout. `star` prefixes each line with the Today-membership star.
+ * Sidebar-grouped views (anytime/someday), rendered the way the GUI reads:
+ * the area-less block headerless first, then one `── <area> ──` header per
+ * area; inside a section, loose to-dos first, then each project GROUP — a
+ * blank line, the project's bold+underlined title row, then its members.
+ * Container names implied by the grouping are not repeated on member rows
+ * (an area header covers its rows; a project title row covers the to-dos
+ * beneath it — a clustered child whose project row is absent, e.g. under a
+ * tag filter, keeps its `(project)` suffix). `star` prefixes each item line
+ * with the Today-membership star.
  */
-function renderSections(sections: SidebarSection[], star = false): string[] {
+export function renderSections(sections: SidebarSection[], star = false): string[] {
   const all = sections.flatMap((s) => s.items);
   if (all.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(all);
   const lines: string[] = [];
+  const blank = () => {
+    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
+  };
   for (const section of sections) {
-    if (section.area !== null) lines.push(bold(`── ${section.area.title} ──`));
+    if (section.area !== null) {
+      blank();
+      lines.push(bold(`── ${section.area.title} ──`));
+    }
+    // The uuid of the project whose title row is directly above (its member
+    // rows drop their redundant `(project)` suffix).
+    let openProject: string | null = null;
     for (const item of section.items) {
       const prefix = star ? `${isTodayMember(item) ? yellow("★") : " "} ` : "";
-      lines.push(`${prefix}${formatItem(item, w)}`);
+      if (item.type === "project") {
+        openProject = item.uuid;
+        blank();
+        lines.push(
+          `${prefix}${formatItem(item, w, { projectTitle: true, suppressArea: section.area?.uuid ?? null })}`,
+        );
+      } else {
+        lines.push(
+          `${prefix}${formatItem(item, w, {
+            suppressProject: openProject,
+            suppressArea: section.area?.uuid ?? null,
+          })}`,
+        );
+      }
     }
   }
   return lines;
