@@ -67,10 +67,14 @@ export function withClient(
 }
 
 /**
- * One item line: `<uuid>  <marker> [meta …] <title> (container)`. The uuid
- * column pads to `uuidWidth` (uuids vary 21–22 chars) so the marker column
- * aligns; exactly one space separates every following token. Meta tokens are
- * colorized on a TTY only (see ../style.ts) — piped output stays plain.
+ * One item line: `<uuid-prefix>  <marker> [meta …] <title> (container)`.
+ * Human output shows a SHORTENED uuid prefix (every command accepts unique
+ * prefixes >= 6 chars); `uuidWidth` is the display length from
+ * uuidDisplayWidth — never below 8 so a copied prefix stays unique across
+ * the whole database, not just the rendered list. Exactly one space
+ * separates every following token; meta tokens colorize on a TTY only
+ * (../style.ts) — piped output stays plain. `--json` always carries full
+ * uuids.
  */
 export function formatItem(item: ListItem, uuidWidth = 0): string {
   const marker = (item.type === "project" ? "P" : "-") + (item.repeating.isTemplate ? "↻" : "");
@@ -86,20 +90,42 @@ export function formatItem(item: ListItem, uuidWidth = 0): string {
       : item.area
         ? ` (${item.area.title})`
         : "";
+  const shownUuid =
+    uuidWidth > 0 && item.uuid.length > uuidWidth
+      ? item.uuid.slice(0, uuidWidth)
+      : item.uuid.padEnd(uuidWidth);
   return [
-    `${dim(item.uuid.padEnd(uuidWidth))} `,
+    `${dim(shownUuid)} `,
     marker,
     ...meta,
     context === "" ? item.title : `${item.title}${dim(context)}`,
   ].join(" ");
 }
 
-function uuidWidth(items: ListItem[]): number {
-  return items.reduce((w, i) => Math.max(w, i.uuid.length), 0);
+/** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
+const UUID_DISPLAY_MIN = 8;
+
+/**
+ * Display width for a list's uuid column: the shortest prefix that is
+ * unique WITHIN the list, floored at UUID_DISPLAY_MIN (list-local
+ * uniqueness at 2–3 chars would still collide database-wide).
+ */
+export function uuidDisplayWidth(items: Array<{ uuid: string }>): number {
+  if (items.length === 0) return UUID_DISPLAY_MIN;
+  const sorted = items.map((i) => i.uuid).toSorted();
+  let needed = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    const a = sorted[i - 1] ?? "";
+    const b = sorted[i] ?? "";
+    let common = 0;
+    while (common < a.length && common < b.length && a[common] === b[common]) common++;
+    needed = Math.max(needed, common + 1);
+  }
+  return Math.max(UUID_DISPLAY_MIN, needed);
 }
 
 function renderList(items: ListItem[]): string[] {
-  const w = uuidWidth(items);
+  const w = uuidDisplayWidth(items);
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
 }
 
@@ -111,7 +137,7 @@ function renderList(items: ListItem[]): string[] {
 function renderSections(sections: SidebarSection[], star = false): string[] {
   const all = sections.flatMap((s) => s.items);
   if (all.length === 0) return ["(empty)"];
-  const w = uuidWidth(all);
+  const w = uuidDisplayWidth(all);
   const lines: string[] = [];
   for (const section of sections) {
     if (section.area !== null) lines.push(bold(`── ${section.area.title} ──`));

@@ -6,7 +6,7 @@ import type { Command } from "commander";
 
 import type { AreaView } from "../../read/area-view.ts";
 import { bold, dim } from "../style.ts";
-import { formatItem, withClient } from "./reads.ts";
+import { formatItem, uuidDisplayWidth, withClient } from "./reads.ts";
 
 function renderAreaView(view: AreaView): string[] {
   const everyItem = [
@@ -17,7 +17,7 @@ function renderAreaView(view: AreaView): string[] {
     ...view.later.someday,
     ...view.logged.slice(0, 10),
   ];
-  const w = everyItem.reduce((max, i) => Math.max(max, i.uuid.length), 0);
+  const w = uuidDisplayWidth(everyItem);
   const fmt = (i: (typeof everyItem)[number]) => formatItem(i, w);
   const tags = view.area.tags.length
     ? ` ${dim(`#${view.area.tags.map((t) => t.title).join(" #")}`)}`

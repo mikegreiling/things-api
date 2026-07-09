@@ -21,6 +21,9 @@ import { ExitCode, PKG_VERSION } from "../contracts.ts";
 const AGENT_NOTES = `
 AGENT NOTES:
   - Every command supports --json: versioned envelope on stdout, logs on stderr.
+  - Uuid parameters accept unique PREFIXES (>= 6 chars); list output shows
+    8+-char prefixes, --json always carries full uuids. Ambiguous prefixes
+    fail with the candidates listed.
   - Exit codes are stable: 0 ok, 2 usage, 3 verify-failed, 4 blocked,
     5 drift-blocked, 6 unsupported, 7 environment.
   - No command ever prompts interactively; operations with cascading or

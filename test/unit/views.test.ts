@@ -622,3 +622,28 @@ describe("areaView", () => {
     expect(() => areaView(fx.db, "Dup", NOW)).toThrow(/ambiguous/);
   });
 });
+
+describe("resolveTaskUuidPrefix", () => {
+  it("resolves unique prefixes, prefers exact matches, errors on short/ambiguous/unknown", async () => {
+    const { resolveTaskUuidPrefix } = await import("../../src/read/queries.ts");
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { uuid: "ABCDEF1234567890AAAAAA", title: "one" });
+    seedTodo(fx.db, { uuid: "ABCXYZ1234567890BBBBBB", title: "two" });
+    // a full uuid that is also a strict prefix of a longer one
+    seedTodo(fx.db, { uuid: "SHORTUUID111111111111", title: "short" });
+    seedTodo(fx.db, { uuid: "SHORTUUID1111111111112", title: "longer" });
+
+    expect(resolveTaskUuidPrefix(fx.db, "ABCDEF")).toBe("ABCDEF1234567890AAAAAA");
+    expect(resolveTaskUuidPrefix(fx.db, "ABCXYZ123")).toBe("ABCXYZ1234567890BBBBBB");
+    // exact match wins over prefix ambiguity
+    expect(resolveTaskUuidPrefix(fx.db, "SHORTUUID111111111111")).toBe("SHORTUUID111111111111");
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABC")).toThrow(/at least 6/);
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDEF1234567890ZZZZ99")).toThrow(/no record/);
+    fx.db.exec("DELETE FROM TMTask WHERE uuid = 'SHORTUUID111111111111'");
+    seedTodo(fx.db, { uuid: "ABCDEG9999999999CCCCCC", title: "three" });
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDE9")).toThrow(/no record/);
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABC" + "DE".repeat(2))).toThrow(
+      /ambiguous|no record/,
+    );
+  });
+});

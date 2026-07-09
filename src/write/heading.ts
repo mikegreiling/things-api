@@ -11,6 +11,7 @@
  * Unarchive optionally restores cascade-resolved children via the P03-style
  * <2s stopDate window (someday state survives the round-trip — P11a).
  */
+import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type { HeadingArchiveParams, HeadingUnarchiveParams } from "./operations.ts";
 import { CASCADE_WINDOW_SECONDS } from "./reopen.ts";
@@ -48,6 +49,7 @@ export async function runHeadingArchive(
   params: HeadingArchiveParams,
   options: WriteOptions = {},
 ): Promise<HeadingArchiveResult> {
+  params = { ...params, uuid: resolveTaskUuidPrefix(deps.db, params.uuid) };
   const reparented: HeadingArchiveResult["reparented"] = [];
   if (params.children !== "reparent") {
     // Single-mutation path: the app's cascade is the policy.
@@ -94,6 +96,7 @@ export async function runHeadingUnarchive(
   params: HeadingUnarchiveParams,
   options: WriteOptions = {},
 ): Promise<HeadingUnarchiveResult> {
+  params = { ...params, uuid: resolveTaskUuidPrefix(deps.db, params.uuid) };
   const { restoreChildren, ...rest } = params as HeadingUnarchiveParams & Record<string, unknown>;
   void rest;
   // Candidates BEFORE the unarchive clears the heading's stopDate.
