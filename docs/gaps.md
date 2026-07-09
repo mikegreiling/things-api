@@ -6,9 +6,9 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 
 ## Headline gaps
 
-### 0. Headings doctrine (DECIDED 2026-07-06; dual-mode now UNBLOCKED 2026-07-09)
+### 0. Headings doctrine — DECIDED 2026-07-09: FIRST-CLASS, no flatten mode
 
-The flatten-by-default plan: project reads return one FLAT to-do list in UI order with heading rows spliced out (walk project rows by `index`; replace each heading row with its children in their own container-scoped order); project reorder accepts ALL children and silently strips heading associations (O06's "rips headed children out" becomes the intended flattening, not a hazard); the `--heading` placement params get removed. Only `byUuid` keeps reporting the raw heading link. **The candidate second mode — headings first-class when a Shortcuts vector is configured — is now a LIVE path: the L5 sitting proved create/rename/delete all work via Shortcuts (§1).** Which mode ships (flatten-only vs dual-mode) is Mike's call; still implementation-deferred.
+**Final decision (see [docs/roadmap.md](roadmap.md) §E): headings are always first-class; there is NO flatten or dual mode.** The flatten plan was motivated by "headings barely work without Shortcuts" and "their index makes flat reads incoherent" — both premises are now false. AppleScript unblocked heading rename/archive/delete/reorder + placement (P10/P11, docs/lab/heading-research.md), leaving ONLY `heading.create`-in-an-existing-project Shortcuts-gated; and v0.6.0 HID `index`/`todayIndex`, removing the incoherence entirely. Reads stay heading-aware (free, SQLite); writes are capability-gated — `heading.create` reports `unsupported` + a `things setup shortcuts` remediation when Shortcuts is unconfigured (the `allow-experimental` pattern). No silent clobbering (O06 stays a guard). The prior flatten-by-default text is retired.
 
 ### 1. Headings in existing projects — SOLVED via Shortcuts (L5 sitting, 2026-07-09)
 - **Create / rename / delete a heading in an existing project all WORK via Shortcuts** (S02/S03/S04, [s-campaign-results.md](lab/s-campaign-results.md)) — `things-proxy-create-heading` / `-edit-title` / `-delete-items`. The sole capability Shortcuts uniquely provides, now proven.

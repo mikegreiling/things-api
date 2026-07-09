@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { normalizeNameKey, resolveAreaUuid, resolveNamedRef } from "../../src/read/queries.ts";
+import {
+  normalizeNameKey,
+  resolveAreaUuid,
+  resolveNamedRef,
+  stripThingsUri,
+} from "../../src/read/queries.ts";
 import { applyChecklistEdit } from "../../src/client.ts";
 import type { ChecklistItemSpec } from "../../src/write/operations.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -22,7 +27,27 @@ describe("normalizeNameKey", () => {
   });
 });
 
+describe("stripThingsUri", () => {
+  it("extracts the id from a Share > Copy Link uri; passes plain refs through", () => {
+    expect(stripThingsUri("things:///show?id=ArVfyjWdyQHKVRLxNKaQYA")).toBe(
+      "ArVfyjWdyQHKVRLxNKaQYA",
+    );
+    expect(stripThingsUri("  things:///show?id=ABC123&reveal=1 ")).toBe("ABC123");
+    expect(stripThingsUri("things:///show?query=Errands")).toBe("Errands");
+    expect(stripThingsUri("ArVfyjWdyQHKVRLxNKaQYA")).toBe("ArVfyjWdyQHKVRLxNKaQYA");
+    expect(stripThingsUri("Family")).toBe("Family");
+  });
+});
+
 describe("tiered name resolution (areas/tags)", () => {
+  it("a Share link resolves like the bare uuid it wraps", () => {
+    const uuid = "Zx9qWaBc2dEf4gHi6jKl8m";
+    fx.db
+      .prepare('INSERT INTO TMArea (uuid, title, visible, "index") VALUES (?, ?, 1, 0)')
+      .run(uuid, "Linked");
+    expect(resolveArea(`things:///show?id=${uuid}`).resolved?.uuid).toBe(uuid);
+  });
+
   it("Mike's case: `family` matches `Family` and NOT `Family - Jennifer`", () => {
     seedArea(fx.db, "Family");
     seedArea(fx.db, "Family - Jennifer");

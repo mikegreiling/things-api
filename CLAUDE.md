@@ -5,6 +5,7 @@
 - **[docs/capability-matrix.md](docs/capability-matrix.md)** — the CRUD × vector wish-list/checklist. Update it in the SAME change as: any operation-catalog edit (`src/write/operations.ts`), any vector-matrix edit, any new probe verdict, or any gap opened/closed.
 - **[docs/things-app-oddities.md](docs/things-app-oddities.md)** — the future Cultured Code bug report. Record every newly discovered app bug/quirk THE MOMENT it is found, with probe evidence.
 - **[docs/gaps.md](docs/gaps.md)** — roadmap: one entry per phase, updated when a phase lands.
+- **[docs/roadmap.md](docs/roadmap.md)** — durable parked-work plan (survives compaction): decided-but-unbuilt items, distribution/onboarding, doctrine decisions. Update when a parked item lands or a new one is deferred.
 - **CHANGELOG.md** — every user-visible change goes under `## Unreleased`.
 
 ## Safety rails (non-negotiable)

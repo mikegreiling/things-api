@@ -64,7 +64,28 @@ export function tagWithDescendants(db: DatabaseSync, uuid: string): string[] {
  * not-found, several throw with the candidates listed. Uuid params across
  * the CLI/MCP/library accept prefixes through this.
  */
-export function resolveTaskUuidPrefix(db: DatabaseSync, ref: string): string {
+/**
+ * Accept a Things share link wherever a uuid/ref is expected: the app's
+ * right-click → Share → Copy Link yields `things:///show?id=<uuid>`. Strip
+ * the URI to its `id` (or `query`) parameter so it pastes directly; non-URI
+ * input passes through untouched (after trimming).
+ */
+export function stripThingsUri(ref: string): string {
+  const s = ref.trim();
+  if (!/^things:/i.test(s)) return s;
+  const m = /[?&](?:id|query)=([^&]+)/i.exec(s);
+  if (m?.[1] !== undefined) {
+    try {
+      return decodeURIComponent(m[1]);
+    } catch {
+      return m[1];
+    }
+  }
+  return s;
+}
+
+export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string): string {
+  const ref = stripThingsUri(refRaw);
   const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
     | { uuid: string }
     | undefined;
@@ -117,8 +138,9 @@ export function resolveNamedRef(
   table: string,
   extraWhere: string,
   extraBinds: (string | number)[],
-  ref: string,
+  refRaw: string,
 ): NamedResolution {
+  const ref = stripThingsUri(refRaw);
   type Row = { uuid: string; title: string };
   const sel = (cond: string, extra: (string | number)[] = []): Row[] =>
     db

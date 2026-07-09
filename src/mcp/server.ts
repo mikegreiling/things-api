@@ -121,7 +121,8 @@ function buildInstructions(getClient: () => ThingsClient): string {
     "Conventions:",
     "- Items are identified by uuid (returned by every read tool); uuid parameters accept " +
       "unique prefixes of at least 6 characters (ambiguity returns an error listing the " +
-      "candidates). Where a parameter says " +
+      "candidates); a Things share link (things:///show?id=<uuid>) is also accepted and " +
+      "stripped to its id. Where a parameter says " +
       `"${REF_FORMAT}", projects, areas, and tags may also be referenced by exact name.`,
     "- References must name existing items; unknown or ambiguous references return an error " +
       "rather than being guessed at. Create missing tags/areas/projects first (add_tag, " +
