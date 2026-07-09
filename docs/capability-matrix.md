@@ -38,7 +38,7 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Capability | URL scheme | AppleScript | Shortcuts | Notes |
 |---|---|---|---|---|
 | Create (+area, +initial to-dos) | ✅ | ✅ | 🧪 | |
-| Create WITH headings (json payload) | 🧪 | ⛔ | 🧪 | queued small win, independent of Shortcuts (gaps roadmap item 5) |
+| Create WITH headings (json payload) | ✅ (HX0 — `{"type":"heading"}` items in a NEW project's `items` produce real type=2 rows) | ⛔ | 🧪 | validated 2026-07-09; wiring into `project.add` still open |
 | Update title/notes/when/deadline | ✅ (+append/prepend, E18) | 🟡 (schedule via `schedule ... project id`, P14-A3) | 🧪 | 🚫 schedule edits on repeating projects — URL when= CRASHES the app (oddity §1/§7) |
 | Set reminder on a project | ✅ (`update-project?when=<list>@time`, A3) | ⛔ no property | 🧪 | reminderTime uses the to-do codec (`14<<26\|30<<20`); clear-on-project follows the to-do rules (dated = sticky) |
 | Tags on a project | ✅ (`update-project?tags=`, A1) | ✅ (`set tag names of project id`, A2) | 🧪 | both vectors write `TMTaskTag`; tags must pre-exist (to-do rule presumed) |
@@ -54,17 +54,17 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 
 ## Headings
 
-Doctrine: headings were treated as nonexistent (flatten) until the S-campaign settled their fate — [gaps.md §0](gaps.md). **The L5 sitting proved the full heading lifecycle works via Shortcuts (S02–S04)**, so the dual-mode shape (first-class when a Shortcuts vector is configured, flattened otherwise) is now a live path — implementation is Mike's call.
+Doctrine — **DECIDED 2026-07-09 (roadmap §E / gaps §0): headings are always first-class; there is NO flatten/dual mode.** Only `heading.create` in an existing project is capability-gated (Shortcuts vector); everything else works via AppleScript/URL. The HX sweep ([heading-research.md](lab/heading-research.md)) closed every non-Shortcuts create/relocate escape hatch.
 
 | Capability | URL scheme | AppleScript | Shortcuts | Notes |
 |---|---|---|---|---|
 | Place a to-do under an EXISTING heading | ✅ (add + move) | 🚫 | ✅ (Create To-Do `Heading` field) | |
-| Create heading at project creation | 🧪 json payload | ⛔ | ✅ (Create To-Do/Project) | |
-| Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
+| Create heading at project creation | ✅ json payload (HX0) | ⛔ | ✅ (Create To-Do/Project) | |
+| Create heading in an EXISTING project | 🚫 (T09/U09; json top-level heading + project-update `items` append both silently ignored, HX1/HX1b) | 🚫 (`make` A31; move/duplicate refusals HX2/HX3) | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — exhaustively confirmed by the HX sweep (2026-07-09); the sole other conceivable path is UI scripting (unprobed candidate vector) |
 | Rename a heading | 🚫 silent no-op (P10c) | ✅ **shipped** (`heading.rename`, `things heading rename`) | ✅ (S03) | by-id addressing; works on archived headings; no Shortcuts setup |
 | Delete a heading | 🚫 | 🚫 `delete to do id` → −1728 (P10b-b3) | ✅ interactive (S04/P12), CASCADES | Trash: heading row VANISHES, children reparented to project root + trashed (P12); permanent: heading + children hard-deleted, no tombstone (P12). Unlike a project delete (shallow). HEADLESS equivalent: empty it (P9f) + ARCHIVE it — reversible, no consent |
 | **Archive / un-archive a heading** | 🚫 `completed=` no-op (P10b) | ✅ **shipped** (`heading.archive`/`heading.unarchive`, `things heading archive`) | 🚫 Status detail exit-0 no-op (P10a) | children policy required when open children exist: complete/cancel = the app's cascades (P10b-b1/P11c; pre-resolved children untouched, P11d), reparent = compound with transactional undo. `--restore-children` reopens cascade-resolved children (<2s window; someday survives, P11a) |
-| Move a heading | 🚫 (U10) | 🚫 `set project of` silent no-op (P10b-b4) | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on FOUR surfaces |
+| Move a heading | 🚫 (U10); json update `list-id` silent no-op (HX4) | 🚫 `set project of` silent no-op (P10b-b4); `move → project id` error 301, `→ list id` −1728, `duplicate` −1717 (HX2/2b/3) | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | **conclusively dead — model-layer refusal on a resolved subject (HX sweep)** |
 | Reorder headings within a project | 🚫 | ✅ **shipped** (`reorder --scope headings`, scf P1) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
 
 ## Areas

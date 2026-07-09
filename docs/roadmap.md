@@ -4,7 +4,7 @@ Durable plan (survives context compaction). Written 2026-07-09. Everything shipp
 
 ## ⟹ RESUME HERE (post-compaction order)
 
-1. **Publish v0.6.0 to npm.** Prepared (package.json/lock + `PKG_VERSION` at 0.6.0, CHANGELOG 0.6.0 section dated 2026-07-09) but NOT tagged/published — needs Mike's `npm login` + OTP. Steps: confirm `npm run check` green → `npm pack --dry-run` (watch for the npm-11 bin warning, see memory `npm11-bin-path-quirk`) → `git tag v0.6.0` → `npm publish --access public --otp=<code>`.
+1. ~~Publish v0.6.0 to npm~~ — **DONE 2026-07-09**: tagged `v0.6.0`, published to `latest`, bin path intact, `npx things-api@0.6.0 --version` smoke green. (Publish gotcha for next time: `prepublishOnly` outlives a TOTP window — pre-run check+build, then `npm publish --ignore-scripts --otp=<code>`.)
 2. **§A Shortcuts onboarding** — the biggest gap; Mike wants the setup/share plan (below) actioned.
 3. **§B availability layer** (greenlit, straightforward).
 4. **§C e2e reorder coverage** + **§D project-schedule vector** (small).
@@ -35,12 +35,16 @@ How Apple's `https://www.icloud.com/shortcuts/<id>` sharing works:
 - **Removing from your system**: deleting your local shortcut does NOT immediately kill the link (the snapshot lives on iCloud), but if you **stop sharing** (Shortcut → Share sheet → Copy iCloud Link is per-share; there's a "Stop Sharing" in the shortcut's details) the link dies for everyone. So: don't revoke the shared links once published.
 - **Signing**: shared shortcuts are signed by the sharer's Apple ID; on import the recipient sees "Untrusted Shortcut" unless they've allowed untrusted shortcuts, OR the shortcut came through the signed iCloud share (which is trusted). Sharing via iCloud is the trusted path.
 
-### Recommended distribution plan
-1. On a networked Mac signed into Mike's Apple ID, build the six proxies from the build cards (or export from the golden — but the golden is airgapped/Apple-ID-less, so it can only make unsigned copies; rebuild is cleaner).
-2. For each, Share → Copy iCloud Link. Collect six `https://www.icloud.com/shortcuts/...` links.
-3. Put them in the README under a "Shortcuts setup (optional)" section + a one-time consent note (grant "Always Allow" on first run of each output-class proxy).
-4. Build `things setup shortcuts`: prints the six links + install/consent instructions, and verifies presence via `shortcuts list`.
-5. Emit the same link + instructions from otherwise-blocked actions (heading create, dated-reminder clear) as the remediation string.
+### Distribution plan — SUPERSEDED 2026-07-09: signed `.shortcut` files in the repo (no iCloud links, no manual rebuild)
+
+The SX probe series (research-sx*.sh) proved a fully-programmatic pipeline: the six proxies' action blobs were EXTRACTED from the golden's `~/Library/Shortcuts/Shortcuts.sqlite` (`ZSHORTCUTACTIONS.ZDATA`, verbatim `WFWorkflowActions` bplists), wrapped as old-format `.shortcut` plists (host python), and signed on Mike's Mac with `shortcuts sign --mode anyone` → **six signed, importable files in `lab/shortcuts/`** (~23 KB each). SX4 confirmed a clone presents the real "Add Shortcut" import sheet for the signed file (signature ACCEPTED; screenshot `lab/artifacts/things-run-sx4-20260709-165726/sx4-import-sheet.png`). Advantages over iCloud links: versioned in git, no Apple-hosted mutable/immutable-snapshot semantics, no manual rebuild sitting, updates are re-extract + re-sign + commit.
+
+Remaining to land §A:
+1. **Import validation on real hardware** — double-click one signed file on a host Mac, confirm Add Shortcut → it runs. (VM click automation is blocked: TCC.db is SIP-read-only even with FDA, so no AX consent; a VNC-synthetic-click arm is the lab fix — see UI-vector note below.)
+2. **Shipping location**: include the signed files in the npm package (`files` + a `shortcuts/` dir, ~140 KB total) so `things setup shortcuts` can `open` them locally — no network fetch, no browser.
+3. **`things setup shortcuts`**: opens each missing proxy's file (Shortcuts pops the Add sheet per file), prints the one-time consent instructions (Always-Allow on first output-class run), verifies via `shortcuts list`.
+4. Remediation strings from blocked actions (heading create, dated-reminder clear) point at `things setup shortcuts`.
+5. Sign-time gotchas (banked): the signer sandbox can't write to `/Volumes/*` — sign to `/tmp` and move; harmless `debugDescription` ObjC noise on stderr even on success.
 
 ### Bulk edits (Mike's question)
 All proxies are single-item by design (Find Items → one → act), which is CORRECT for us: per-item verification is the whole point of the pipeline. A bulk case ("tag 500 items matching 'drive'") is served by `things batch` iterating single mutations, each guarded+verified — we do NOT want a bulk Shortcuts action (loses verification, and triggers the scary "allow large edits" consent). Conclusion: the "allow Shortcuts to edit large amounts of data" setting is MOOT for our design; doctor need not flag it. (uriSchemeEnabled still gets surfaced — §B.)
@@ -60,6 +64,12 @@ The guest e2e smoke (lab/scripts/e2e-write-smoke.sh) has NO reorder steps. Add s
 ## §D. AppleScript project-schedule vector (small — "what did you mean")
 P14-A3 found `schedule to do id <PROJECT>` SUCCEEDS via AppleScript (projects inherit the `to do` class), setting the project's startDate with no error/crash. Today `project.update` schedules a project only via the URL vector (`update-project?when=`). This means AppleScript is an ALTERNATIVE, un-wired vector for project scheduling. Action: add an `applescript` matrix entry + compile branch for project schedule (evidence P14-A3), OR just document it and leave URL as the sole vector (it already works). Low priority; decide during §F.
 
+## §E½. UI-scripting ("ui") write vector — NEW candidate (Mike, 2026-07-09)
+
+For Mike's dedicated-Mac ("mini in a closet") hosted scenario: System Events AX automation can drive everything stamped "conclusively UI-only" — repeating to-do/project creation and rule edits (dead on ALL four programmatic surfaces), sidebar/area ordering (P6), to-do↔project convert, and a heading-create fallback. Requirements: Accessibility TCC grant (one-time), auto-login unlocked GUI session, Things frontmost during ops → tier 3+, opt-in, dedicated-machine-only vector. Fragile across app updates — but the VM lab is the regression harness that certifies AX paths per Things version.
+
+Lab findings so far (SX4): stock VMs can't self-grant Accessibility (TCC.db is SIP-protected read-only even with FDA — "attempt to write a readonly database"), so in-VM AX is blocked. **The lab arm is VNC synthetic input**: `tart run --vnc-experimental` exposes a standard RFB server; synthetic mouse/keyboard events arrive as hardware-level input, bypassing TCC entirely. That same arm would automate consent-prompt clicks (even the per-run delete-class prompts) in probes. Feasibility probe queued: drive `File → New Repeating To-Do` end-to-end via VNC clicks in a clone, verify an `rt1_recurrenceRule` row lands. Alternative: a SIP-disabled derived VM image (boot recovery via `tart run --recovery`, `csrutil disable`) makes TCC.db writable → real AX scripting in-VM.
+
 ## §E. Headings doctrine — DECIDED 2026-07-09: no flatten mode
 
 **Decision: headings are ALWAYS first-class. There is NO flatten/dual-mode.** Rationale (supersedes gaps.md §0's flatten-by-default plan):
@@ -70,6 +80,8 @@ P14-A3 found `schedule to do id <PROJECT>` SUCCEEDS via AppleScript (projects in
 - **Maintenance burden avoided**: a flatten/dual-mode would mean two read shapes, index-reconciliation, mode config, and a whole class of "which mode am I in" bugs — for the sake of one create op. Not worth it.
 
 Only remaining heading work: wire `heading.create` behind the Shortcuts vector (§A). Update gaps.md §0 to record this decision when §A lands.
+
+**HX sweep addendum (2026-07-09)**: every non-Shortcuts create/relocate escape hatch is now probed-dead — TJSON top-level heading and project-update items append are silently ignored; AS `move`/`duplicate` on a resolved heading are refused (301/−1717); TJSON update `list-id` no-ops. TJSON DOES create headings inside a NEW project (HX0) — wiring that into `project.add` is a live small win. Full table: [lab/heading-research.md](lab/heading-research.md).
 
 ## §F. Comprehensive reference compendium (Mike's "reference book")
 Goal: by project end, EVERYTHING probed is documented in one navigable place. Consolidate the per-campaign lab docs (a/o/p/r/e/u/x/s-suite results, phase21b, scf/scf2, P7–P14, heading-research) into a `docs/reference/` compendium: the full op×vector×verdict matrix with evidence ids, the crash/erratic catalog (oddities §7), and the "novel working paths" list. Leave no stone: any op we hand-waved as "probably dead" without a probe gets one. Track open probe candidates here as they arise.

@@ -81,4 +81,4 @@ Harness lessons: `proxy()` must `rm -f` the `--output-path` file before each run
 
 ## Doctrine impact (for Mike)
 
-gaps.md §0 held the headings doctrine as "flatten unless Shortcuts delivers; **dual-mode** candidate (first-class with a Shortcuts vector, flattened otherwise)." **Shortcuts delivered** — create/rename/delete all work — so the dual-mode path is unblocked. The implementation decision (flatten vs dual-mode, and whether to ship the interactive permanent-delete) is Mike's; recorded here, not yet acted on.
+gaps.md §0 held the headings doctrine as "flatten unless Shortcuts delivers; **dual-mode** candidate (first-class with a Shortcuts vector, flattened otherwise)." **Shortcuts delivered** — create/rename/delete all work — so the dual-mode path was unblocked. RESOLVED 2026-07-09: **first-class always, no flatten/dual mode** (roadmap §E, gaps §0); only `heading.create` is capability-gated behind the Shortcuts vector, exhaustively confirmed by the HX sweep ([heading-research.md](heading-research.md)).
