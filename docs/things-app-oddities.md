@@ -125,6 +125,12 @@ Deleting a tag that has child tags cascade-deletes the children too — permanen
 ### 5g. Removing a link (container/parent): four different behaviors for one intent
 Clearing a relationship behaves differently on every automation spelling: **AppleScript rejects** `set area/project/parent tag … to missing value` (E19/P08/P10/P11) and `set … to ""` (P27/P28) with errors; **the `json` command silently ignores** `"area-id": null` / `"list-id": null` (zero delta, no signal — P25/P26); **the URL scheme quietly supports container clears** via an EMPTY parameter (`update?list-id=` / `update-project?area-id=` — P21/P22/P24, undocumented, matches the empty-`tags=` replacement pattern); and **AppleScript's property-DELETE form works for tag parents** (`delete parent tag of tag X` un-nests cleanly, P29 — while the set-form of the very same property errors). One intent family: two error spellings, one silent no-op, two undocumented successes on two different surfaces. *(2026-07-06/07)*
 
+### 5h. "Enable Things URLs" OFF ≠ token cleared; a disabled URL write pops an enable-modal, not an error
+The `uriSchemeAuthenticationToken` in `TMSettings` **stays populated** when "Enable Things URLs" is unchecked, and it **does not rotate** across an off→on cycle (the old token keeps working the instant the feature is re-enabled). The real enabled/disabled flag lives elsewhere — `uriSchemeEnabled` (int-bool) in the app's group-container preferences plist — so token presence is not a proxy for feature availability. A URL-scheme write while disabled is **not** a silent no-op and **not** an error return: it raises a modal ("Things has been opened via the URL Scheme. Do you want to enable this feature?" — Cancel/Enable) and **holds the write pending the choice** (Cancel discards it; no DB row appears either way). Two queued writes stack two modals. *(Phase 21b, 2026-07-09)*
+
+### 5i. Single-item permanent delete has no automation surface
+There is no scripted way to permanently delete ONE item. On an already-trashed to-do, `delete to do id X` errors `-1728` (the delete verb can't re-address a trashed row by bare `to do id`), while `delete (first to do of list "Trash" whose id is X)` and `delete to do id X of list "Trash"` are silent no-ops. Only `empty trash` (all-or-nothing, permanent) hard-deletes. So "trash one item, then hard-delete just that item" is unautomatable — a gap between the UI (which offers per-item Delete in Trash) and every scripting surface. *(Phase 21b B0/A5, 2026-07-09)*
+
 ---
 
 ## Suggested report to Cultured Code
