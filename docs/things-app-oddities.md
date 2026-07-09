@@ -22,7 +22,7 @@ Everything surprising, inconsistent, or hazardous we found while systematically 
 
 **Data integrity:** no corruption observed — after relaunch the to-do and its repeat rule are byte-identical (verified by row-level DB diff before/after the crash, every run).
 
-**Also affected:** non-scheduling updates on the same repeating item work fine (`title`, checklist items), so the crash is specific to schedule-class fields via URL.
+**Also affected:** non-scheduling updates on the same repeating item work fine (`title`, checklist items), so the crash is specific to schedule-class fields via URL. **The same crash fires on a repeating PROJECT** via `update-project?...&when=<x>` (P14-A4, 2026-07-09 — process death + fresh `.ips`), so the whole repeating-template family is affected across both `update` and `update-project`.
 
 **Evidence:** first isolated 2026-03-12 on the MAS build (validation notes T12, reproducible across repeat configs); re-reproduced deterministically 2026-07-03 in clean-room VMs on the trial build — probe `U12` (crash detector: process death + `.ips` capture + row-unchanged assertion, green in every acceptance run), guard contrast probe `A21`. The reminder-flavored form `when=today@18:00` crashes identically (probe `R09`, 2026-07-04) — the whole `when=` family is affected. Repo refs: `docs/research/validation-notes-step3.md` (T12), `docs/lab/u-suite-results.md`, `docs/lab/a-suite-results.md`, `lab/suites/u-suite.json` (U12), `lab/suites/a-suite.json` (A21), `lab/suites/r-suite.json` (R09).
 
@@ -154,6 +154,21 @@ Setting the `Parent` detail to a project uuid passed as TEXT does not move the t
 ### 6a. Heading "canceled" status is stored as completed — with a different child cascade
 
 `set status of to do id "<heading>" to canceled` sets the heading row's status to **completed** (3, not 2 — headings appear to have no canceled state), yet cascades **canceled** (2) to its open children; `… to completed` cascades completed. Two different child outcomes distinguished only by an input value the heading itself does not record. Pre-resolved children keep their status and stopDate under both cascades (P11c/P11d).
+
+## 7. Consolidated crash & fault catalog (for the report)
+
+Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM). **The crash-prone family is SCHEDULE-CLASS operations on rows that cannot accept a schedule** — every crash is one of these; every OTHER type-mismatch is a graceful scriptable error or a silent no-op. Cultured Code could add the missing precondition guards (the AppleScript `schedule` path already refuses a repeating to-do cleanly with error 302 — that guard is just missing for the other cases).
+
+| # | Operation | Result | Evidence |
+|---|---|---|---|
+| C1 | URL `update?...&when=` on a repeating TO-DO | **CRASH** (SIGTRAP) | §1 (U12/R09), re-standing |
+| C2 | URL `update-project?...&when=` on a repeating PROJECT | **CRASH**, fresh `.ips` | P14-A4 (NEW 2026-07-09) |
+| C3 | AppleScript `schedule to do id <heading>` | **CRASH** (process death, −609) | §6 (P11e), re-confirmed P14-A1 |
+| F1 | AppleScript `move project … to area id <bad-uuid>` | non-fatal FAULT — errors −1728 but writes a DiagnosticReport without dying | P14-C4 |
+
+**Graceful (no guard needed):** AS `schedule` on a repeating to-do → error 302; every wrong-TYPE specifier (set status / delete / move / project op against a to-do/heading/area uuid of the wrong kind) → clean −1728 / −10006 / −1700, or a silent no-op on the URL side; malformed dates/statuses → silent no-op or −1700; unknown uuids → −1728. Full matrix in `lab/artifacts/things-run-p14-20260709-151631/`.
+
+**Novel working path found in the same sweep** (not a bug — a capability): AppleScript `schedule to do id <PROJECT>` SUCCEEDS (projects inherit the `to do` class), setting the project's startDate with no error — an AppleScript vector for project scheduling that complements the URL `update-project?when=` path (P14-A3).
 
 ---
 
