@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.5.0 — 2026-07-09
+
 ### Backdating, logged import, and three new reorder scopes
 
 - **`things todo backdate <uuid> --completed-on/--created-on`** (op `todo.backdate`, MCP `backdate_todo`): rewrites a to-do's completion and/or creation timestamp to local noon on the given date — AppleScript property writes, the only surface that can (lab scf2 P4b). Completion backdating requires an already-completed/canceled to-do; undo restores the previous dates at day precision.
