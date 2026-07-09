@@ -91,6 +91,13 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
       "`set area of project id` — area re-assignment; status/schedule untouched; DETACH is " +
       'URL-only (missing value/"" rejected — P08/P27)',
   },
+  "project.set-tags": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["A2"],
+    notes: "`set tag names of project id` — full replacement, same semantics as the URL vector",
+  },
   "project.restore": {
     support: "yes",
     disruption: 0,
@@ -129,10 +136,11 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["E02", "E03", "E10", "P29"],
+    evidence: ["E02", "E03", "E10", "P29", "A4"],
     notes:
-      "rename (assignments survive), re-parent existing, keyboard shortcut, un-nest to root " +
-      "via the property-delete form (P29 — `set … to missing value` errors, E19)",
+      "rename (assignments survive), re-parent existing, keyboard shortcut set AND clear " +
+      "(`delete keyboard shortcut of tag`, A4), un-nest to root via the property-delete form " +
+      "(P29 — `set … to missing value` errors, E19)",
   },
   "tag.delete": {
     support: "yes",
@@ -152,12 +160,13 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "partial",
     disruption: 0,
     validation: "validated",
-    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12", "O14"],
+    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12", "O14", "A6"],
     experimental: true,
     notes:
       "`_private_experimental_ reorder to dos in` — today (bucket-0 members), project/area " +
-      "(un-headed children only, O06); area also reorders PROJECTS (O14, same-type requests " +
-      "only); evening is bounce-only (O03 de-evenings bucket-1 members)",
+      "(un-headed children only, O06), inbox (unscheduled to-dos, A6); area also reorders " +
+      "PROJECTS (O14, same-type requests only); evening is bounce-only (O03 de-evenings " +
+      "bucket-1 members)",
   },
 };
 

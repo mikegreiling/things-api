@@ -250,6 +250,8 @@ interface MemberRow {
  *  - area:    direct open area to-dos (O05/O10) AND projects (O14), by
  *             "index" — but only SAME-TYPE requests; mixed wire lists are
  *             unprobed and the guard rejects them.
+ *  - inbox:   unscheduled to-dos with no container (start=0), by "index"
+ *             (A6 — the full reversed wire list re-ranked exactly).
  */
 export function computeReorderPre(
   db: DatabaseSync,
@@ -339,6 +341,12 @@ export function computeReorderPre(
         [containerUuid ?? ""],
         `"index"`,
       );
+      break;
+    }
+    case "inbox": {
+      // Inbox = unscheduled to-dos with no container (start=0, A6). Ranks on
+      // "index"; the private command re-ranks the full wire list exactly.
+      members = select("type = 0 AND start = 0", [], `"index"`);
       break;
     }
   }

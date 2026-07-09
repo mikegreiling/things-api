@@ -102,10 +102,10 @@ function resolveStrategy(
     return { kind: "ok", strategy: "native" };
   }
   if (params.strategy === "bounce") {
-    if (params.scope === "project" || params.scope === "area") {
+    if (params.scope === "project" || params.scope === "area" || params.scope === "inbox") {
       return blocked(
         "bounce can only reorder the Today/Evening sections — its primitive is a when= " +
-          "round-trip, which moves todayIndex, not project/area order (O07/O08)",
+          "round-trip, which moves todayIndex, not project/area/inbox order (O07/O08)",
         "use the native strategy (requires `things config set allow-experimental true`)",
       );
     }
@@ -120,6 +120,7 @@ function resolveStrategy(
       return { kind: "ok", strategy: nativeAvailable ? "native" : "bounce" };
     case "project":
     case "area":
+    case "inbox":
       // Native-only scopes: let the pipeline explain precisely why native is
       // unavailable (planner: experimental gate; canary: sdef change).
       return { kind: "ok", strategy: "native" };

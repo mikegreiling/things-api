@@ -614,8 +614,10 @@ export function registerWriteCommands(program: Command): void {
     project
       .command("update <uuid>")
       .description(
-        "Update a project's title/notes/when/deadline. --append-notes/--prepend-notes " +
-          "join with a newline (exclusive with --notes).",
+        "Update a project's title/notes/when/deadline/reminder. --append-notes/" +
+          "--prepend-notes join with a newline (exclusive with --notes). --reminder needs " +
+          "--when today|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing " +
+          "reminder is auto-preserved.",
       ),
   )
     .option("--title <text>", "new title")
@@ -623,6 +625,8 @@ export function registerWriteCommands(program: Command): void {
     .option("--append-notes <text>", "append to existing notes (newline-joined)")
     .option("--prepend-notes <text>", "prepend to existing notes (newline-joined)")
     .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+    .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
+    .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
     .option("--deadline <date>", "YYYY-MM-DD")
     .option("--clear-deadline", "remove the deadline")
     .action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -631,6 +635,11 @@ export function registerWriteCommands(program: Command): void {
       );
       if (notesModes.length > 1) {
         process.stderr.write("error: --notes, --append-notes, --prepend-notes are exclusive\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
+      if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
+        process.stderr.write("error: pass at most one of --reminder / --clear-reminder\n");
         process.exitCode = ExitCode.Usage;
         return;
       }
@@ -647,6 +656,8 @@ export function registerWriteCommands(program: Command): void {
               prependNotes: opts["prependNotes"] as string,
             }),
             ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+            ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
+            ...(opts["clearReminder"] === true && { reminder: null }),
             ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
             ...(opts["clearDeadline"] === true && { deadline: null }),
           },
@@ -654,6 +665,31 @@ export function registerWriteCommands(program: Command): void {
         ),
       );
     });
+
+  addWriteFlags(
+    project
+      .command("tags <uuid>")
+      .description(
+        "Set or extend a project's tags. --set REPLACES the full tag set (an empty value " +
+          "clears all tags); --add merges with the current tags. Tags must name existing " +
+          "tags — unknown tags are rejected.",
+      )
+      .option("--set <list>", "comma-separated tag names: full replacement")
+      .option("--add <list>", "comma-separated tag names: merge with existing"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const set = splitCsv(opts["set"] as string | undefined);
+    const add = splitCsv(opts["add"] as string | undefined);
+    if ((set === undefined) === (add === undefined)) {
+      process.stderr.write("error: pass exactly one of --set or --add\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    await runWrite(opts, (c) =>
+      set !== undefined
+        ? c.write.setProjectTags(uuid, set, writeOptionsFrom(opts))
+        : c.write.addProjectTags(uuid, add ?? [], writeOptionsFrom(opts)),
+    );
+  });
 
   addWriteFlags(
     project
@@ -894,26 +930,35 @@ export function registerWriteCommands(program: Command): void {
       .command("update <target>")
       .description(
         "Rename a tag (existing assignments follow the rename), nest it under an existing " +
-          "tag, UN-NEST it to the root (--unnest; exclusive with --parent), and/or set its " +
-          "keyboard shortcut. Clearing a shortcut is not supported.",
+          "tag, UN-NEST it to the root (--unnest; exclusive with --parent), and set or clear " +
+          "its keyboard shortcut (--shortcut / --clear-shortcut, exclusive).",
       )
       .option("--title <text>", "new name")
       .option("--parent <name>", "existing tag to nest under")
       .option("--unnest", "move the tag to the root of the hierarchy")
-      .option("--shortcut <char>", "keyboard shortcut character"),
+      .option("--shortcut <char>", "keyboard shortcut character")
+      .option("--clear-shortcut", "remove the keyboard shortcut"),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     if (
       opts["title"] === undefined &&
       opts["parent"] === undefined &&
       opts["unnest"] === undefined &&
-      opts["shortcut"] === undefined
+      opts["shortcut"] === undefined &&
+      opts["clearShortcut"] === undefined
     ) {
-      process.stderr.write("error: pass --title, --parent, --unnest, and/or --shortcut\n");
+      process.stderr.write(
+        "error: pass --title, --parent, --unnest, --shortcut, and/or --clear-shortcut\n",
+      );
       process.exitCode = ExitCode.Usage;
       return;
     }
     if (opts["parent"] !== undefined && opts["unnest"] === true) {
       process.stderr.write("error: --parent and --unnest are exclusive\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    if (opts["shortcut"] !== undefined && opts["clearShortcut"] === true) {
+      process.stderr.write("error: --shortcut and --clear-shortcut are exclusive\n");
       process.exitCode = ExitCode.Usage;
       return;
     }
@@ -925,6 +970,7 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["parent"] !== undefined && { parent: opts["parent"] as string }),
           ...(opts["unnest"] === true && { unnest: true }),
           ...(opts["shortcut"] !== undefined && { shortcut: opts["shortcut"] as string }),
+          ...(opts["clearShortcut"] === true && { clearShortcut: true }),
         },
         writeOptionsFrom(opts),
       ),
@@ -1139,16 +1185,16 @@ export function registerWriteCommands(program: Command): void {
     program
       .command("reorder <uuids...>")
       .description(
-        "Reorder items within Today, This Evening, a project, or an area — uuids are placed " +
-          "at the TOP in the given order; unlisted members keep their relative order below. " +
-          "Strategies: native (EXPERIMENTAL — requires `things config set allow-experimental " +
-          "true` and may stop working after a Things update; today/project/area) and bounce " +
-          `(today/evening, max ${BOUNCE_MAX_ITEMS} items; an interrupted run reports which ` +
-          "items were placed). Evening is bounce-only. Project children under headings " +
-          "cannot be reordered. Area scope reorders to-dos OR projects — never mixed in " +
-          "one request.",
+        "Reorder items within Today, This Evening, the Inbox, a project, or an area — uuids " +
+          "are placed at the TOP in the given order; unlisted members keep their relative " +
+          "order below. Strategies: native (EXPERIMENTAL — requires `things config set " +
+          "allow-experimental true` and may stop working after a Things update; today/inbox/" +
+          `project/area) and bounce (today/evening, max ${BOUNCE_MAX_ITEMS} items; an ` +
+          "interrupted run reports which items were placed). Evening is bounce-only. Project " +
+          "children under headings cannot be reordered. Area scope reorders to-dos OR " +
+          "projects — never mixed in one request.",
       )
-      .requiredOption("--scope <scope>", "today | evening | project | area")
+      .requiredOption("--scope <scope>", "today | evening | inbox | project | area")
       .option("--project <ref>", "project (uuid or unique name) — scope=project")
       .option("--area <ref>", "area (uuid or unique name) — scope=area")
       .option("--strategy <name>", "force native | bounce (default: per-scope)"),

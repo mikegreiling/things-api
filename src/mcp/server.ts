@@ -604,9 +604,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "set_tags",
     {
       description:
-        "Replace or extend a to-do's tags. mode 'replace' (default) sets exactly the given " +
-        "list — an empty list removes all tags; mode 'add' merges with the current tags. " +
-        "Tags must name existing tags (create them first with add_tag).",
+        "Replace or extend a to-do's or project's tags. mode 'replace' (default) sets exactly " +
+        "the given list — an empty list removes all tags; mode 'add' merges with the current " +
+        "tags. Tags must name existing tags (create them first with add_tag).",
       inputSchema: {
         uuid: z.string(),
         tags: z.array(z.string()).describe("Existing tag names"),
@@ -618,10 +618,19 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     async (args) =>
       guard(async () => {
         const c = getClient();
+        const isProject = itemType(args.uuid) === "project";
+        const opts = writeOptions(args);
+        if (args.mode === "add") {
+          return mutationResult(
+            isProject
+              ? await c.write.addProjectTags(args.uuid, args.tags, opts)
+              : await c.write.addTags(args.uuid, args.tags, opts),
+          );
+        }
         return mutationResult(
-          args.mode === "add"
-            ? await c.write.addTags(args.uuid, args.tags, writeOptions(args))
-            : await c.write.setTags(args.uuid, args.tags, writeOptions(args)),
+          isProject
+            ? await c.write.setProjectTags(args.uuid, args.tags, opts)
+            : await c.write.setTags(args.uuid, args.tags, opts),
         );
       }),
   );
@@ -825,8 +834,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "update_project",
     {
       description:
-        "Update a project's title, notes, schedule, or deadline. " +
-        "append_notes/prepend_notes add a line to the existing notes (exclusive with notes).",
+        "Update a project's title, notes, schedule, reminder, or deadline. " +
+        "append_notes/prepend_notes add a line to the existing notes (exclusive with notes). " +
+        "Changing the schedule keeps an existing reminder unless the call sets a new one. " +
+        "clear_reminder works while the project is scheduled for today or this evening; a " +
+        "reminder on a future date can only be changed, not cleared.",
       inputSchema: {
         uuid: z.string(),
         title: z.string().optional(),
@@ -834,6 +846,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         append_notes: z.string().optional(),
         prepend_notes: z.string().optional(),
         when: whenSchema,
+        reminder: z.string().optional().describe(REMINDER_FORMAT),
+        clear_reminder: z.boolean().optional(),
         deadline: z.string().optional().describe(DATE_FORMAT),
         clear_deadline: z.boolean().optional(),
         ...dryRunShape,
@@ -848,6 +862,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (notesModes.length > 1) {
           return usage("notes, append_notes, prepend_notes are exclusive");
         }
+        if (args.reminder !== undefined && args.clear_reminder === true) {
+          return usage("pass at most one of reminder / clear_reminder");
+        }
         if (args.deadline !== undefined && args.clear_deadline === true) {
           return usage("pass at most one of deadline / clear_deadline");
         }
@@ -860,6 +877,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
               ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
               ...(args.when !== undefined && { when: args.when as never }),
+              ...(args.reminder !== undefined && { reminder: args.reminder }),
+              ...(args.clear_reminder === true && { reminder: null }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.clear_deadline === true && { deadline: null }),
             },
@@ -1076,14 +1095,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Rename a tag (existing assignments follow the rename), nest it under another " +
-        "existing tag, un-nest it to the top level, and/or set its keyboard shortcut. " +
-        "parent and unnest are exclusive.",
+        "existing tag, un-nest it to the top level, and set or clear its keyboard shortcut. " +
+        "parent and unnest are exclusive; shortcut and clear_shortcut are exclusive.",
       inputSchema: {
         target: z.string().describe(`Tag to update (${REF_FORMAT})`),
         title: z.string().optional().describe("New name"),
         parent: z.string().optional().describe("Existing tag to nest under"),
         unnest: z.boolean().optional().describe("Move the tag to the top level"),
         shortcut: z.string().optional().describe("Keyboard shortcut character"),
+        clear_shortcut: z.boolean().optional().describe("Remove the keyboard shortcut"),
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1094,12 +1114,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           args.title === undefined &&
           args.parent === undefined &&
           args.unnest === undefined &&
-          args.shortcut === undefined
+          args.shortcut === undefined &&
+          args.clear_shortcut === undefined
         ) {
-          return usage("pass title, parent, unnest, and/or shortcut");
+          return usage("pass title, parent, unnest, shortcut, and/or clear_shortcut");
         }
         if (args.parent !== undefined && args.unnest === true) {
           return usage("parent and unnest are exclusive");
+        }
+        if (args.shortcut !== undefined && args.clear_shortcut === true) {
+          return usage("shortcut and clear_shortcut are exclusive");
         }
         return mutationResult(
           await getClient().write.updateTag(
@@ -1109,6 +1133,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.parent !== undefined && { parent: args.parent }),
               ...(args.unnest === true && { unnest: true }),
               ...(args.shortcut !== undefined && { shortcut: args.shortcut }),
+              ...(args.clear_shortcut === true && { clearShortcut: true }),
             },
             writeOptions(args),
           ),
@@ -1228,14 +1253,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder items within Today, This Evening, a project, or an area — the given " +
-        "uuids move to the TOP in the given order; unlisted items keep their relative " +
-        "order below. Today/project/area ordering must first be enabled once via `things " +
-        `config set allow-experimental true\`. This Evening handles at most ${BOUNCE_MAX_ITEMS} ` +
-        "items per call. An area's to-dos and projects are ordered separately — one kind " +
-        "per call.",
+        "Reorder items within Today, This Evening, the Inbox, a project, or an area — the " +
+        "given uuids move to the TOP in the given order; unlisted items keep their relative " +
+        "order below. Today/inbox/project/area ordering must first be enabled once via " +
+        "`things config set allow-experimental true`. This Evening handles at most " +
+        `${BOUNCE_MAX_ITEMS} items per call. An area's to-dos and projects are ordered ` +
+        "separately — one kind per call.",
       inputSchema: {
-        scope: z.enum(["today", "evening", "project", "area"]),
+        scope: z.enum(["today", "evening", "inbox", "project", "area"]),
         container: z
           .string()
           .optional()

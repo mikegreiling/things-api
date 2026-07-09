@@ -181,6 +181,18 @@ describe("native reorder (private command through the pipeline)", () => {
     expect(calls[0]).toContain(`with ids "${two},${one}"`);
   });
 
+  it('inbox scope: list "Inbox" specifier, ranks on index (A6)', async () => {
+    const one = seedTodo(fixture.db, { title: "one", start: "inbox", index: 1 });
+    const two = seedTodo(fixture.db, { title: "two", start: "inbox", index: 2 });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), { scope: "inbox", uuids: [two, one] });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`list "Inbox"`);
+    expect(calls[0]).toContain(`with ids "${two},${one}"`);
+    const [r2, r1] = ranks([two, one], `"index"`);
+    expect(r2).toBeLessThan(r1 as number);
+  });
+
   it("area scope: PROJECT members reorder natively (O14)", async () => {
     const area = seedArea(fixture.db, "Work");
     const p1 = seedProject(fixture.db, { title: "P1", area, index: 1 });
@@ -523,5 +535,20 @@ describe("computeReorderPre wire lists", () => {
     const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [t] }, null, NOW);
     expect(pre.mixedTypes).toBe(false);
     expect(pre.wireList).toEqual([t, p]);
+  });
+
+  it("inbox scope: unscheduled to-dos ranked on index, key=index (A6)", () => {
+    const a = seedTodo(fixture.db, { title: "A", start: "inbox", index: 30 });
+    const b = seedTodo(fixture.db, { title: "B", start: "inbox", index: 10 });
+    const c = seedTodo(fixture.db, { title: "C", start: "inbox", index: 20 });
+    // A scheduled to-do and a project must NOT be inbox members.
+    seedToday("SCHED", 5);
+    seedProject(fixture.db, { title: "P", start: "inbox" });
+    const pre = computeReorderPre(fixture.db, { scope: "inbox", uuids: [c, a] }, null, NOW);
+    expect(pre.key).toBe("index");
+    // Current index order is b(10), c(20), a(30) → wire = c, a, b.
+    expect(pre.wireList).toEqual([c, a, b]);
+    expect(pre.rejected).toEqual([]);
+    expect(pre.members.map((m) => m.uuid)).toEqual([b, c, a]);
   });
 });
