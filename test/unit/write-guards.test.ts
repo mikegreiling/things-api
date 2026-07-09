@@ -7,7 +7,7 @@ import type {
   OperationParamsMap,
 } from "../../src/write/operations.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedHeading, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedHeading, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
 
 let fixture: FixtureDb;
 
@@ -200,5 +200,40 @@ describe("H-HEADING-CHILDREN", () => {
     expect(check("heading.rename", { uuid: todo, title: "x" })?.hazard).toBe(
       "H-UNKNOWN-DESTINATION",
     );
+  });
+
+  it("EVERY project op rejects a to-do or heading uuid (wrong-specifier crash guard)", () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const todo = seedTodo(fixture.db, { title: "t", project: proj });
+    // The four ops that previously had NO type check.
+    for (const op of ["project.update", "project.complete", "project.delete"] as const) {
+      const params =
+        op === "project.complete"
+          ? { uuid: todo, children: "require-resolved" as const }
+          : { uuid: todo };
+      const block = check(op, params as never);
+      expect(block?.hazard).toBe("H-UNKNOWN-DESTINATION");
+      expect(block?.detail).toContain("not a project");
+      expect(block?.detail).toContain("things todo");
+    }
+    expect(check("project.set-tags", { uuid: todo, tags: [] })?.detail).toContain("not a project");
+    // A heading points at the heading commands.
+    expect(check("project.update", { uuid: heading, title: "x" })?.detail).toContain(
+      "things heading",
+    );
+    // The already-covered ops still reject too.
+    expect(check("project.move", { uuid: todo, area: { uuid: "A" } })?.hazard).toBe(
+      "H-UNKNOWN-DESTINATION",
+    );
+    // ...and a real project passes the type gate (may still hit other problems).
+    expect(check("project.update", { uuid: proj, title: "renamed" })).toBeNull();
+  });
+
+  it("a cross-table uuid (area) in a task/project op is caught as not-found", () => {
+    const area = seedArea(fixture.db, "Home");
+    // Areas live in TMArea, not TMTask, so loadTarget returns null.
+    expect(check("todo.update", { uuid: area, title: "x" })?.hazard).toBe("H-UNKNOWN-DESTINATION");
+    expect(check("project.delete", { uuid: area })?.hazard).toBe("H-UNKNOWN-DESTINATION");
   });
 });
