@@ -8,6 +8,8 @@ _(nothing yet)_
 
 ### Reference resolution & hidden internals (mildly breaking)
 
+- **Things share links are accepted wherever a uuid or name is expected.** Right-click → Share → Copy Link in the app yields `things:///show?id=<uuid>`; paste it directly into any `--uuid`/`--area`/`--project`/`--tag` argument and it is stripped to the id automatically — no intermediate step.
+
 - **Names resolve in tiers** (areas, tags, projects): exact uuid → exact title → case-insensitive title → normalized title (whitespace/dash-insensitive, NFC) → uuid prefix. The first tier with exactly one match wins definitively; several is an ambiguity error. `--area family` finds `Family` without tripping over `Family - Jennifer`; `on-hold` finds `On Hold`. **Leading emoji/symbols are significant** — a name beginning with an emoji must be typed with it (so an archived `🗄️errand` tag is never matched by a bare `errand`). See [docs/design/reference-resolution.md](docs/design/reference-resolution.md).
 - **Area/tag references now accept a unique uuid prefix** too (≥6 chars), like task uuids.
 - **Internal sort keys are no longer surfaced.** `index` and `todayIndex` are dropped from task/heading/area/tag responses; checklist items are now `{ title, status }` only (their uuid, index, owning-task, and timestamps were unstable implementation details — a checklist item's uuid is regenerated on every rewrite and was never addressable). Ordering is conveyed by array order; `--json` still carries full task uuids. **This changes read-response shapes.**
