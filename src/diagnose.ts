@@ -16,6 +16,13 @@ import {
   type AutomationProbeStatus,
 } from "./write/automation-probe.ts";
 import {
+  readShortcutProxies,
+  readUrlSchemeEnabled,
+  type AvailabilityDeps,
+  type ShortcutsState,
+  type UrlSchemeState,
+} from "./write/availability.ts";
+import {
   createEnvironmentTracker,
   diffEnvironment,
   type EnvironmentChange,
@@ -67,6 +74,12 @@ export interface DiagnoseReport {
     status: AutomationProbeStatus | "not-probed";
     detail: string;
   };
+  availability: {
+    /** On-disk 'Enable Things URLs' state (group-container plist; Phase 21b). */
+    urlScheme: UrlSchemeState;
+    /** Which proxy shortcuts are installed (the Shortcuts surface's prerequisites). */
+    shortcuts: ShortcutsState;
+  };
 }
 
 export interface DiagnoseOptions {
@@ -80,6 +93,7 @@ export interface DiagnoseOptions {
   /** Test seams. */
   probeDeps?: AutomationProbeDeps;
   environment?: EnvironmentTracker;
+  availability?: AvailabilityDeps;
 }
 
 export interface DiagnoseResult {
@@ -202,6 +216,10 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
                 "opt-in: pass --probe-automation to actively test Automation consent (may " +
                 "show a one-time macOS prompt; skipped when Things is not running)",
             },
+      availability: {
+        urlScheme: readUrlSchemeEnabled(options.availability),
+        shortcuts: readShortcutProxies(options.availability),
+      },
     };
     return {
       report,

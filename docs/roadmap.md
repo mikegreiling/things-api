@@ -5,8 +5,8 @@ Durable plan (survives context compaction). Written 2026-07-09. Everything shipp
 ## ⟹ RESUME HERE (post-compaction order)
 
 1. ~~Publish v0.6.0 to npm~~ — **DONE 2026-07-09**: tagged `v0.6.0`, published to `latest`, bin path intact, `npx things-api@0.6.0 --version` smoke green. (Publish gotcha for next time: `prepublishOnly` outlives a TOTP window — pre-run check+build, then `npm publish --ignore-scripts --otp=<code>`.)
-2. **§A Shortcuts onboarding** — the biggest gap; Mike wants the setup/share plan (below) actioned.
-3. **§B availability layer** (greenlit, straightforward).
+2. ~~§A Shortcuts onboarding~~ — **LANDED 2026-07-09** (signed-file distribution + `things setup shortcuts` + doctor availability); still open: real-hardware import validation (Mike) + wiring the Shortcuts write vector (§A list below).
+3. ~~§B availability layer~~ — **LANDED 2026-07-09** (see §B).
 4. **§C e2e reorder coverage** + **§D project-schedule vector** (small).
 5. **§F comprehensive reference compendium** (Mike's "reference book" goal).
 
@@ -39,24 +39,20 @@ How Apple's `https://www.icloud.com/shortcuts/<id>` sharing works:
 
 The SX probe series (research-sx*.sh) proved a fully-programmatic pipeline: the six proxies' action blobs were EXTRACTED from the golden's `~/Library/Shortcuts/Shortcuts.sqlite` (`ZSHORTCUTACTIONS.ZDATA`, verbatim `WFWorkflowActions` bplists), wrapped as old-format `.shortcut` plists (host python), and signed on Mike's Mac with `shortcuts sign --mode anyone` → **six signed, importable files in `lab/shortcuts/`** (~23 KB each). SX4 confirmed a clone presents the real "Add Shortcut" import sheet for the signed file (signature ACCEPTED; screenshot `lab/artifacts/things-run-sx4-20260709-165726/sx4-import-sheet.png`). Advantages over iCloud links: versioned in git, no Apple-hosted mutable/immutable-snapshot semantics, no manual rebuild sitting, updates are re-extract + re-sign + commit.
 
-Remaining to land §A:
-1. **Import validation on real hardware** — double-click one signed file on a host Mac, confirm Add Shortcut → it runs. (VM click automation is blocked: TCC.db is SIP-read-only even with FDA, so no AX consent; a VNC-synthetic-click arm is the lab fix — see UI-vector note below.)
-2. **Shipping location**: include the signed files in the npm package (`files` + a `shortcuts/` dir, ~140 KB total) so `things setup shortcuts` can `open` them locally — no network fetch, no browser.
-3. **`things setup shortcuts`**: opens each missing proxy's file (Shortcuts pops the Add sheet per file), prints the one-time consent instructions (Always-Allow on first output-class run), verifies via `shortcuts list`.
-4. Remediation strings from blocked actions (heading create, dated-reminder clear) point at `things setup shortcuts`.
-5. Sign-time gotchas (banked): the signer sandbox can't write to `/Volumes/*` — sign to `/tmp` and move; harmless `debugDescription` ObjC noise on stderr even on success.
+Landed 2026-07-09 (§A/§B PR): signed files ship in the npm package (top-level `shortcuts/`, in `files`); **`things setup shortcuts`** opens each missing proxy's install sheet + prints consent instructions (`--check` passive); **`things doctor`** reports `url scheme:` (on-disk `uriSchemeEnabled`) and `shortcuts:` (proxy presence); the `feature-disabled` classifier keys on the on-disk state (Phase 21b correction). Sign-time gotchas (banked): the signer sandbox can't write to `/Volumes/*` — sign to `/tmp` and move; harmless `debugDescription` ObjC noise on stderr even on success.
+
+Still open for §A:
+1. **Import validation on real hardware** — Mike double-clicks one signed file, confirms Add Shortcut → it runs. (VM click automation is blocked: TCC.db is SIP-read-only even with FDA, so no AX consent; a VNC-synthetic-click arm is the lab fix — §E½.)
+2. **Wire the Shortcuts write vector** into the pipeline (`heading.create`, dated-reminder clear): `VectorId "shortcuts"`, matrix entries from S-campaign evidence, `shortcuts run` executor, remediation strings pointing at `things setup shortcuts`.
 
 ### Bulk edits (Mike's question)
 All proxies are single-item by design (Find Items → one → act), which is CORRECT for us: per-item verification is the whole point of the pipeline. A bulk case ("tag 500 items matching 'drive'") is served by `things batch` iterating single mutations, each guarded+verified — we do NOT want a bulk Shortcuts action (loses verification, and triggers the scary "allow large edits" consent). Conclusion: the "allow Shortcuts to edit large amounts of data" setting is MOOT for our design; doctor need not flag it. (uriSchemeEnabled still gets surfaced — §B.)
 
 ---
 
-## §B. Availability / environment layer (greenlit)
+## §B. Availability / environment layer — LANDED 2026-07-09
 
-- Advisory `availability(env)` per write vector: does this surface work in the current environment? (URL scheme needs `uriSchemeEnabled`; Shortcuts needs the proxies present + consented.)
-- `things doctor` reads `uriSchemeEnabled` (int-bool in the group-container plist, via `plutil -p` — see docs/lab/phase21b-research.md) and reports Enable-Things-URLs state.
-- Correct the `feature-disabled` failure classifier to key on `uriSchemeEnabled` rather than a null token (the token persists even when disabled — Phase 21b).
-- Do NOT flag the "allow large edits" Shortcuts setting (moot, §A bulk note).
+Shipped in the §A/§B PR: `src/write/availability.ts` (`readUrlSchemeEnabled` — plist bytes read by the node process, parsed via `plutil` on stdin, so no new TCC file-access shape; `readShortcutProxies` vs the six expected names); doctor `availability` report section + CLI lines; `feature-disabled` classifier keys on the on-disk state (silent-noop OR timeout on url-scheme with `uriSchemeEnabled=0`), never the token. The "allow large edits" setting is deliberately NOT flagged (moot, §A bulk note).
 
 ## §C. e2e reorder coverage (small)
 The guest e2e smoke (lab/scripts/e2e-write-smoke.sh) has NO reorder steps. Add smoke steps for the shipped scopes: inbox, someday (to-dos + area-less projects), headings, projects (bounce). One VM run; wire into `lab:regress`.

@@ -251,6 +251,14 @@ describe("write-command help states the contract", () => {
     expect(help).toContain('args ["mcp"]');
     expect(help).toContain("live area/tag/project inventory");
   });
+
+  it("setup shortcuts: names the unlocked operations, the click, and --check", () => {
+    const help = helpFor("setup", "shortcuts");
+    expect(help).toContain("creating a heading in an existing project");
+    expect(help).toContain("Add Shortcut");
+    expect(help).toContain("Always Allow");
+    expect(help).toContain("--check");
+  });
 });
 
 describe("surface copy contract (docs/design/surface-copy.md)", () => {

@@ -6,7 +6,7 @@ Every **read** is complete and vector-independent (direct SQLite): views, detail
 
 Legend: ✅ shipped & lab-validated · 🟡 works with caveats · 🧪 plausible but unprobed (**wish list**) · 🚫 validated dead end (revisit per Things release) · ⛔ the app has no such concept · ➖ not applicable. Probe ids cite [docs/lab/](lab/harness.md) evidence; the authoritative op×vector data is `things capabilities`.
 
-The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the first S-campaign verdicts are in ([s-campaign-results.md](lab/s-campaign-results.md)) — the heading lifecycle and single-item permanent delete are proven. Remaining 🧪 Shortcuts cells await clone-based S-suite runs.
+The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the first S-campaign verdicts are in ([s-campaign-results.md](lab/s-campaign-results.md)) — the heading lifecycle and single-item permanent delete are proven. Remaining 🧪 Shortcuts cells await clone-based S-suite runs. **Distribution solved (2026-07-09)**: the six proxies ship as signed `.shortcut` files in the npm package; `things setup shortcuts` installs them and `things doctor` reports presence + the on-disk "Enable Things URLs" state. The Shortcuts WRITE VECTOR is not yet wired into the pipeline (roadmap §A).
 
 ## To-dos
 

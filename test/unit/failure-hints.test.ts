@@ -78,33 +78,53 @@ describe("classifyTransportFailure", () => {
 });
 
 describe("classifyVerifyFailure", () => {
-  it("silent no-op on url-scheme without an auth token → feature-disabled", () => {
+  it("silent no-op on url-scheme with the setting OFF on disk → feature-disabled", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      authTokenPresent: false,
+      urlSchemeEnabled: false,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("feature-disabled");
     expect(hint?.hint).toContain("Enable Things URLs");
   });
 
+  it("timeout on url-scheme with the setting OFF → feature-disabled (the write is held behind the enable dialog)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "timeout",
+      vector: "url-scheme",
+      urlSchemeEnabled: false,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("feature-disabled");
+  });
+
+  it("an unknown on-disk state never claims feature-disabled (Phase 21b: the token is no proxy)", () => {
+    const hint = classifyVerifyFailure({
+      reason: "silent-noop",
+      vector: "url-scheme",
+      urlSchemeEnabled: null,
+      environmentChanges: [],
+    });
+    expect(hint?.likelyCause).toBe("app-behavior-change");
+  });
+
   it("a Things version change since the last verified write → app-updated", () => {
     const hint = classifyVerifyFailure({
       reason: "timeout",
       vector: "url-scheme",
-      authTokenPresent: true,
+      urlSchemeEnabled: true,
       environmentChanges: THINGS_UPDATED,
     });
     expect(hint?.likelyCause).toBe("app-updated");
     expect(hint?.hint).toContain("3.22.12");
   });
 
-  it("plain silent no-op with a token and stable environment → app-behavior-change", () => {
+  it("plain silent no-op with the scheme enabled and stable environment → app-behavior-change", () => {
     const hint = classifyVerifyFailure({
       reason: "silent-noop",
       vector: "url-scheme",
-      authTokenPresent: true,
+      urlSchemeEnabled: true,
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("app-behavior-change");
@@ -115,7 +135,7 @@ describe("classifyVerifyFailure", () => {
       classifyVerifyFailure({
         reason: "mismatch",
         vector: "applescript",
-        authTokenPresent: true,
+        urlSchemeEnabled: true,
         environmentChanges: [],
       }),
     ).toBeNull();

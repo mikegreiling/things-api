@@ -13,6 +13,7 @@ import { registerMcp } from "./commands/mcp.ts";
 import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
+import { registerSetup } from "./commands/setup.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
@@ -50,6 +51,7 @@ export function buildProgram(): Command {
   registerAreaCommands(program);
   registerTodoCommands(program);
   registerWriteCommands(program);
+  registerSetup(program);
   registerSnapshot(program);
   registerMcp(program);
   return program;
