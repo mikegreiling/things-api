@@ -7,8 +7,10 @@ Durable plan (survives context compaction). Written 2026-07-09. Everything shipp
 1. ~~Publish v0.6.0 to npm~~ — **DONE 2026-07-09**: tagged `v0.6.0`, published to `latest`, bin path intact, `npx things-api@0.6.0 --version` smoke green. (Publish gotcha for next time: `prepublishOnly` outlives a TOTP window — pre-run check+build, then `npm publish --ignore-scripts --otp=<code>`.)
 2. ~~§A Shortcuts onboarding~~ — **LANDED 2026-07-09** (signed-file distribution + `things setup shortcuts` + doctor availability); still open: real-hardware import validation (Mike) + wiring the Shortcuts write vector (§A list below).
 3. ~~§B availability layer~~ — **LANDED 2026-07-09** (see §B).
-4. **§C e2e reorder coverage** + **§D project-schedule vector** (small).
-5. **§F comprehensive reference compendium** (Mike's "reference book" goal).
+4. ~~§C e2e reorder coverage~~ + ~~§D project-schedule vector~~ — **DONE 2026-07-09** (e2e GREEN 106 steps; §D document-only).
+5. ~~§F comprehensive reference compendium~~ — **LANDED 2026-07-09** (docs/reference/).
+
+Post-queue (2026-07-09, Mike): TUI restyle **SHIPPED**; hardening (§G) **SHIPPED**; Apple-Intelligence memo **DONE**. Open threads: Mike's real-hardware import click (§A.1), Shortcuts write-vector wiring (§A.2), UI-vector/VNC feasibility probe (§E½), macOS 27 public-beta regression VM (~late July), iOS 27 GA runbook execution (~Sept).
 
 Headings doctrine (§E) is DECIDED below — no flatten mode. Tag/area emoji-archival first-class support is SHELVED indefinitely (Mike, item 4).
 
@@ -85,8 +87,8 @@ CC correspondence suggests repeat-handling changes and a likely major release al
 
 **Apple-Intelligence research — DONE 2026-07-09**: [design/apple-intelligence-research.md](design/apple-intelligence-research.md). Headlines: App Intents is the only hook (SiriKit deprecated at WWDC26); generic LLM agents CANNOT invoke App Intents directly (two orthogonal caller classes; MCP shipped only inside Xcode 27); **`shortcuts run` remains the sanctioned generic-agent bridge — our proxy/MCP architecture is already the right shape**. Queued probes: macOS 27 public-beta regression VM (July), App Intents Testing Framework as a headless invoke channel (needs Xcode 27), full runbook execution at iOS 27 GA (~Sept 14) when Things likely ships its App Intents 2.0 release (task management is a system-defined schema domain).
 
-## §F. Comprehensive reference compendium (Mike's "reference book")
-Goal: by project end, EVERYTHING probed is documented in one navigable place. Consolidate the per-campaign lab docs (a/o/p/r/e/u/x/s-suite results, phase21b, scf/scf2, P7–P14, heading-research) into a `docs/reference/` compendium: the full op×vector×verdict matrix with evidence ids, the crash/erratic catalog (oddities §7), and the "novel working paths" list. Leave no stone: any op we hand-waved as "probably dead" without a probe gets one. Track open probe candidates here as they arise.
+## §F. Comprehensive reference compendium — LANDED 2026-07-09
+`docs/reference/` now exists: **[README](reference/README.md)** (the probe-id/campaign index over all evidence; the living rollups — capability-matrix + oddities — stay primary), **[novel-paths.md](reference/novel-paths.md)** (20 lab-discovered undocumented capabilities), **[suite-audit.md](reference/suite-audit.md)** (op catalog × recurring coverage — the §G leftover; the 7 uncovered op kinds got e2e steps in the same change). Remaining §F-adjacent: probe the "probably dead" unprobed cells as they surface (tracked in probe-backlog: hidden lists as reorder specifiers, area'd someday projects, entity-typed set-detail Parent, P5 non-empty heading delete).
 
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)

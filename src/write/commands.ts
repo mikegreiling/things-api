@@ -1340,9 +1340,15 @@ const todoAddLogged: CommandSpec<"todo.add-logged"> = {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
     // Local noon -> UTC instant, so the stored timestamp decodes back to the
     // requested local DATE in every timezone (P4d: json attrs honored exactly).
+    // WITHOUT milliseconds: the app's json date parser rejects fractional
+    // seconds — a `.000Z` timestamp fails the whole command (error modal, no
+    // write; caught live by the e2e 2026-07-09 — P4d's validated shape was
+    // second-precision).
     const utcNoon = (iso: string): string => {
       const [y, m, d] = iso.split("-").map(Number);
-      return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1, 12, 0, 0).toISOString();
+      return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1, 12, 0, 0)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "Z");
     };
     const payload = JSON.stringify([
       {

@@ -79,6 +79,8 @@ export interface Heading {
   uuid: string;
   type: "heading";
   title: string;
+  /** "completed" = archived (a canceled heading is stored as completed). */
+  status: TaskStatus;
   /** The owning project. */
   project: Ref | null;
 }

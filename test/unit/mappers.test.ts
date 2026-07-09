@@ -91,13 +91,16 @@ describe("mapProject / mapHeading", () => {
     expect(project.openUntrashedLeafActionsCount).toBe(2);
   });
 
-  it("maps headings minimally", () => {
+  it("maps headings minimally (plus archived-state status)", () => {
     const heading = mapHeading(row({ type: 2, title: "Phase 1", project: null }), refs);
     expect(heading).toEqual({
       uuid: "t-1",
       type: "heading",
       title: "Phase 1",
+      status: "open",
       project: null,
     });
+    const archived = mapHeading(row({ type: 2, title: "Done", project: null, status: 3 }), refs);
+    expect(archived.status).toBe("completed");
   });
 });

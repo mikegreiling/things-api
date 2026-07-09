@@ -176,6 +176,21 @@ run_step 0 "seed top-level project TP2" project add "E2E-TP2"
 TP2=$(json_get "d['data']['uuid']")
 run_step 0 "bounce reorder of top-level sidebar PROJECTS (someday round-trip)" reorder --scope projects "$TP2" "$TP1"
 
+echo "== suite-audit gap closure: cancel / backdate / add-logged / project tags / heading ops =="
+run_step 0 "seed to-do for cancel" todo add "E2E-CANCELME"
+CXL=$(json_get "d['data']['uuid']")
+run_step 0 "todo cancel" todo cancel "$CXL"
+run_step 0 "reopen the canceled to-do" todo reopen "$CXL"
+run_step 0 "complete it for backdating" todo complete "$CXL"
+run_step 0 "todo backdate (completion + creation, applescript)" todo backdate "$CXL" --completed-on 2025-01-15 --created-on 2024-06-01
+run_step 0 "todo add-logged (json at-creation import)" todo add-logged "E2E-LOGGED" --completed-on 2025-03-01 --created-on 2025-02-01
+run_step 0 "project tags (full replacement)" project tags "$RPROJ" --set lab-tag-1
+run_step 0 "heading rename (applescript by-id)" heading rename "$H1" "E2E-H1-RENAMED"
+run_step 0 "seed a child under the heading" todo add "E2E-HCHILD" --project "$HPROJ" --heading "E2E-H1-RENAMED"
+run_step 4 "heading archive requires a children policy (open child)" heading archive "$H1"
+run_step 0 "heading archive with complete cascade" heading archive "$H1" --children complete
+run_step 0 "heading unarchive with child restore (<2s window)" heading unarchive "$H1" --restore-children
+
 echo "== phase 9b: reminders, notes modes, duplicate, entity updates =="
 run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-REM" --when today --reminder 10:05
 REM=$(json_get "d['data']['uuid']")
