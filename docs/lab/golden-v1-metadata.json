@@ -18,7 +18,16 @@
   },
   "schemaFingerprint": "sha256:5526059b10ffffe1b67f796d031857d030403bd5b747374646a2803a55c0e5c3",
   "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
-  "humanLayersDone": ["L2", "L3-appleevents", "L3-fulldisk", "L4-launchagent", "L6-seed-dataset"],
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the L5 consent absorption run — not in the seed manifest; probe assertions tolerate it (runbook §5.3)",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j)",
   "tcc": {
     "appleEvents_sshd": "granted (image default; both Things3 + System Events work prompt-free)",
     "fullDiskAccess_sshd": "granted (image default; kTCCServiceSystemPolicyAllFiles)",
@@ -36,23 +45,19 @@
     "trashed": 1,
     "repeatingTemplates": 2
   },
-  "deferred": [
-    "L5: Shortcuts first-run + Allow Running Scripts + proxy imports (second sitting, before S-probe campaign)"
-  ],
+  "deferred": [],
   "l5Progress": {
-    "sittingPaused": "2026-07-03",
-    "done": [
-      "Shortcuts first-run dismissed",
-      "Allow Running Scripts enabled",
-      "four draft proxies exist (create-heading, edit-title, delete-items, find-items)"
+    "sittingCompleted": "2026-07-09",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
     ],
-    "finding": "Things-action entity fields (Items/Project) are app-entity pickers; raw string variables refused — restructure with Find Items -> bind output (golden-runbook §5.2)",
-    "note": "entity pickers launched Things during the sitting (guest 2026-07-03) — one app-maintenance pass ran on golden task data; post-sitting lab:regress validated green",
-    "remaining": [
-      "restructure 3 mutation proxies with Find-chains",
-      "check ID filter on Find Items",
-      "§5.3 consent runs + signed exports",
-      "§5.4 freeze checklist"
-    ]
+    "addressing": "Find Items offers an ID filter (no Name filter — name field is Title); all mutation proxies address by uuid via ID + Find->act chains",
+    "verdicts": "heading create/rename/delete WORK (S02-S04); single-item permanent delete WORKS, no tombstone (S-delperm); find returns title text; set-detail Reminder Time inconclusive on unscheduled item — see docs/lab/s-campaign-results.md",
+    "note": "consent absorption run mutated the golden (sacrificial L5-CONSENT-* entities, cleaned up); one trashed project residue (see consentResidue)"
   }
 }

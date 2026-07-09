@@ -6,7 +6,7 @@ Every **read** is complete and vector-independent (direct SQLite): views, detail
 
 Legend: ✅ shipped & lab-validated · 🟡 works with caveats · 🧪 plausible but unprobed (**wish list**) · 🚫 validated dead end (revisit per Things release) · ⛔ the app has no such concept · ➖ not applicable. Probe ids cite [docs/lab/](lab/harness.md) evidence; the authoritative op×vector data is `things capabilities`.
 
-The **Shortcuts** column is almost entirely 🧪: the S-campaign is blocked on the golden image's L5 sitting ([golden-runbook.md §5](lab/golden-runbook.md)).
+The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the first S-campaign verdicts are in ([s-campaign-results.md](lab/s-campaign-results.md)) — the heading lifecycle and single-item permanent delete are proven. Remaining 🧪 Shortcuts cells await clone-based S-suite runs.
 
 ## To-dos
 
@@ -28,8 +28,8 @@ The **Shortcuts** column is almost entirely 🧪: the S-campaign is blocked on t
 | Duplicate | ✅ `duplicate=true` | 🚫 refuses (−1717) | 🧪 | |
 | Delete (→ Trash) | 🚫 (tier-3 UI only) | ✅ | 🧪 | |
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |
-| Permanently delete ONE item | 🧪 | 🚫 (all spellings fail, B0/A5) | 🧪 | `delete to do id` on a trashed row → −1728; `list "Trash"` addressings → silent no-op. Only `trash.empty` (all-or-nothing) hard-deletes |
-| Convert to project | 🚫 (E16) | 🚫 | 🧪 | S-campaign candidate |
+| Permanently delete ONE item | 🚫 | 🚫 (all spellings fail, B0/A5) | ✅ interactive (S-delperm, Delete Immediately) | Shortcuts hard-deletes one row (no tombstone) — but the delete consent has NO "Always Allow", so it's tier-3 user-present, never headless. `trash.empty` is the only autonomous hard-delete (all-or-nothing) |
+| Convert to project | 🚫 (E16) | 🚫 | 🚫 (no Convert action exists) | dead on every surface (catalog sweep, L5) |
 
 ## Projects
 
@@ -52,14 +52,16 @@ The **Shortcuts** column is almost entirely 🧪: the S-campaign is blocked on t
 
 ## Headings
 
-Doctrine: treat headings as nonexistent in the API surface (flatten) until the S-campaign settles their fate — documented in [gaps.md §0](gaps.md); dual-mode (first-class with Shortcuts, flattened otherwise) is the candidate shape.
+Doctrine: headings were treated as nonexistent (flatten) until the S-campaign settled their fate — [gaps.md §0](gaps.md). **The L5 sitting proved the full heading lifecycle works via Shortcuts (S02–S04)**, so the dual-mode shape (first-class when a Shortcuts vector is configured, flattened otherwise) is now a live path — implementation is Mike's call.
 
 | Capability | URL scheme | AppleScript | Shortcuts | Notes |
 |---|---|---|---|---|
-| Place a to-do under an EXISTING heading | ✅ (add + move) | 🚫 | 🧪 | |
-| Create heading at project creation | 🧪 json payload | ⛔ | 🧪 | queued |
-| Create heading in an EXISTING project | 🚫 | 🚫 | 🧪 | **the S-campaign's primary target** |
-| Rename / move / delete a heading | 🚫 | 🚫 | 🧪 | |
+| Place a to-do under an EXISTING heading | ✅ (add + move) | 🚫 | ✅ (Create To-Do `Heading` field) | |
+| Create heading at project creation | 🧪 json payload | ⛔ | ✅ (Create To-Do/Project) | |
+| Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
+| Rename a heading | 🚫 | 🚫 | ✅ (S03, `Edit Items → Set Title`) | |
+| Delete a heading | 🚫 | 🚫 | ✅ (S04, removes the row) | non-empty-heading child re-parenting unprobed |
+| Move a heading | 🚫 | 🚫 | 🧪 (`set-detail` Parent?) | unprobed candidate |
 
 ## Areas
 
