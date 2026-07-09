@@ -10,6 +10,7 @@ import { Command } from "commander";
 
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerMcp } from "./commands/mcp.ts";
+import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
@@ -41,6 +42,7 @@ export function buildProgram(): Command {
   registerDoctor(program);
   registerReadCommands(program);
   registerProjectCommands(program);
+  registerAreaCommands(program);
   registerTodoCommands(program);
   registerWriteCommands(program);
   registerSnapshot(program);

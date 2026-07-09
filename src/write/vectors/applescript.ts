@@ -121,7 +121,7 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["E01"],
+    evidence: ["E01", "P10e"],
     notes: "rename via `set name`; tag replacement via `set tag names`",
   },
   "area.delete": {

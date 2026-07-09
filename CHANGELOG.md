@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`things area show <ref>`** (MCP: `get_area`): composite area view mirroring the native UI — the area's direct to-dos (active first), its projects in sidebar order, later (scheduled/repeating/someday), and logged items. Targets by uuid or unique name.
+- **`--area` filters accept area names** (uuid or unique title, ambiguity errors) everywhere — `things projects --area Hobbies` now works; `--tag` already resolved titles.
+- **Safety: every todo operation now rejects non-to-do targets.** Passing a HEADING uuid to a todo op previously reached the app unchecked; URL writes silently no-op on heading rows, and an AppleScript `schedule` on one is a suspected app crash (lab P10b). Projects are pointed at the project commands.
+- **CLI colors**: tags render blue (matching the app's tag color), not cyan.
+- **Area tag clearing is now a validated surface** (lab P10e): `things area update <ref> --tags ""` removes every tag.
 - **`things reorder --scope someday` now also orders area-less SOMEDAY PROJECTS** (one kind per call — to-dos and projects never mix). Someday projects are sidebar rows, so this orders the sidebar's someday segment natively. The two row types stack in opposite directions inside the app's Someday handler (lab P8b vs P9e), so the compiler emits the matching validated two-call protocol per type.
 - README refreshed: v0.5.0 status, the Shortcuts surface's lab-proven capabilities and roadmap position, and the full reorder scope list.
 

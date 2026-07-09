@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { areaView } from "../../src/read/area-view.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import { inheritedTagsFor } from "../../src/read/tags.ts";
 import { fetchTaskByUuid } from "../../src/read/queries.ts";
@@ -589,5 +590,35 @@ describe("changesView (Phase 13)", () => {
     expect(changes.find((c) => c.title === "trashed-after")?.trashed).toBe(true);
     expect(changes.find((c) => c.title === "template-edited")?.repeating.isTemplate).toBe(true);
     expect(changesView(fx.db, { since: new Date(SINCE * 1000), limit: 2 })).toHaveLength(2);
+  });
+});
+
+describe("areaView", () => {
+  it("segments active/projects/later/logged; resolves by title; sidebar project order", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Home");
+    seedTodo(fx.db, { title: "active-1", area, index: 2 });
+    seedTodo(fx.db, { title: "sched", area, startDate: "2026-07-09", start: "someday" });
+    seedTodo(fx.db, { title: "incub", area, start: "someday" });
+    seedTodo(fx.db, { title: "done", area, status: "completed", stopDate: 100 });
+    seedProject(fx.db, { title: "proj-b", area, index: 9 });
+    seedProject(fx.db, { title: "proj-a", area, index: 3 });
+    seedProject(fx.db, { title: "elsewhere" });
+
+    const view = areaView(fx.db, "Home", NOW);
+    expect(view.area.title).toBe("Home");
+    expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
+    expect(view.projects.map((i) => i.title)).toEqual(["proj-a", "proj-b"]);
+    expect(view.later.scheduled[0]?.items.map((i) => i.title)).toEqual(["sched"]);
+    expect(view.later.someday.map((i) => i.title)).toEqual(["incub"]);
+    expect(view.logged.map((i) => i.title)).toEqual(["done"]);
+  });
+
+  it("throws on unknown and ambiguous area references", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Dup");
+    seedArea(fx.db, "Dup");
+    expect(() => areaView(fx.db, "Nope", NOW)).toThrow(/not found/);
+    expect(() => areaView(fx.db, "Dup", NOW)).toThrow(/ambiguous/);
   });
 });

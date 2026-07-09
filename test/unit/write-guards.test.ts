@@ -150,6 +150,18 @@ describe("H-UNKNOWN-TAG / H-UNKNOWN-DESTINATION / H-AMBIGUOUS-HEADING", () => {
     );
   });
 
+  it("rejects non-to-do targets for every todo op (heading uuids can crash the app)", () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const block = check("todo.update", { uuid: heading, when: "today" });
+    expect(block?.hazard).toBe("H-UNKNOWN-DESTINATION");
+    expect(block?.detail).toContain("heading");
+    expect(check("todo.complete", { uuid: proj })?.detail).toContain("project commands");
+    expect(check("todo.backdate", { uuid: heading, creationDate: "2024-01-01" })?.hazard).toBe(
+      "H-UNKNOWN-DESTINATION",
+    );
+  });
+
   it("blocks duplicate heading names in the destination project", () => {
     const proj = seedProject(fixture.db, { title: "P" });
     seedHeading(fixture.db, { title: "Same", project: proj });

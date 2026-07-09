@@ -140,6 +140,18 @@ const GUARDS: Record<HazardId, GuardFn> = {
       pre.target === null;
     if (needsTarget) problems.push(`no record with uuid ${String(params["uuid"])}`);
     if (pre.target !== null) {
+      // todo.* ops must target actual to-dos. A HEADING uuid is the critical
+      // case: URL writes silently no-op on type=2 rows (P10b/c), and an
+      // AppleScript `schedule` on one is a SUSPECTED APP CRASH (P10b-b5,
+      // connection died -609). Projects have their own commands.
+      if (op.startsWith("todo.") && op !== "todo.add" && pre.target.type !== "to-do") {
+        problems.push(
+          `target ${String(params["uuid"])} is a ${pre.target.type}, not a to-do` +
+            (pre.target.type === "heading"
+              ? " — heading rows only support rename/archive (see docs/lab/heading-research.md); scheduling one can crash Things"
+              : " — use the project commands"),
+        );
+      }
       // Type/state preconditions for the Tier-2 ops: the probed commands
       // address `project id` / trashed `to do id` specifically (E14/E15/E17).
       if ((op === "project.move" || op === "project.duplicate") && pre.target.type !== "project") {

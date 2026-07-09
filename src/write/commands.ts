@@ -1258,7 +1258,7 @@ function asDateBlock(varName: string, iso: string): string[] {
 
 const todoBackdate: CommandSpec<"todo.backdate"> = {
   op: "todo.backdate",
-  hazards: ["H-BACKDATE-OPEN"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-BACKDATE-OPEN"],
   preRead(db, params) {
     if (params.completionDate === undefined && params.creationDate === undefined) {
       throw new RangeError("nothing to backdate: give completionDate and/or creationDate");
