@@ -12,6 +12,7 @@ import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { readUrlSchemeEnabled } from "./availability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
   describeEnvironmentChanges,
@@ -116,6 +117,8 @@ export interface WriteDeps {
   sdefProbe?: () => boolean;
   /** Consent-churn tripwire: tuple recorded per verified mutation (client wires the default). */
   environment?: EnvironmentTracker;
+  /** Seam: on-disk 'Enable Things URLs' state for failure attribution (availability.ts). */
+  urlSchemeEnabled?: () => boolean | null;
   now?: () => Date;
   poller?: PollerDeps;
   pkgVersion?: string;
@@ -513,7 +516,7 @@ export async function runMutation<K extends OperationKind>(
       classifyVerifyFailure({
         reason: outcome.kind,
         vector: vector.id,
-        authTokenPresent: token !== null,
+        urlSchemeEnabled: (deps.urlSchemeEnabled ?? (() => readUrlSchemeEnabled().enabled))(),
         environmentChanges: envChanges,
       }),
     );

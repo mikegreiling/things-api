@@ -89,4 +89,20 @@ describe("doctor environment & automation sections", () => {
     });
     expect(probed.report?.automation.status).toBe("app-not-running");
   });
+
+  it("reports the on-disk URL-scheme state and proxy-shortcut presence", () => {
+    fixture = buildFixtureDb();
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+      availability: {
+        plistPath: fixture.path, // any readable file; extract seam decides
+        extract: () => "0",
+        listShortcuts: () => "things-proxy-find-items\n",
+      },
+    });
+    expect(report?.availability.urlScheme.enabled).toBe(false);
+    expect(report?.availability.urlScheme.detail).toContain("Enable Things URLs");
+    expect(report?.availability.shortcuts.present).toEqual(["things-proxy-find-items"]);
+    expect(report?.availability.shortcuts.missing).toHaveLength(5);
+  });
 });

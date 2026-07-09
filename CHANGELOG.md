@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **`things setup shortcuts`** — installs the bundled Apple Shortcuts that enable the operations available on no other surface (creating a heading in an existing project, clearing a reminder from a date-scheduled item, permanently deleting a single item). The six signed `.shortcut` files ship with the package; the command opens an install sheet for each missing one (click "Add Shortcut", then "Always Allow" on each one's first run). `--check` reports without opening anything.
+- **`things doctor` reports write-surface availability**: an `url scheme:` line with the on-disk "Enable Things URLs" state (read from the app's preferences, not inferred), and a `shortcuts:` line counting installed proxy shortcuts. The JSON report gains an `availability` section.
+- **More accurate failure attribution when "Enable Things URLs" is off.** A URL write that never lands is now attributed to the disabled setting by reading its actual on-disk state; previously the attribution keyed on a missing authorization token, which stays populated while the feature is off and so could misattribute the failure.
 
 ## 0.6.0 — 2026-07-09
 

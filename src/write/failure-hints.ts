@@ -70,16 +70,26 @@ export function classifyTransportFailure(input: {
 export function classifyVerifyFailure(input: {
   reason: "timeout" | "mismatch" | "silent-noop";
   vector: VectorId;
-  authTokenPresent: boolean;
+  /**
+   * The on-disk 'Enable Things URLs' state (availability.ts); null when not
+   * determinable. NOT inferred from the auth token — the token persists in
+   * TMSettings while the feature is off (Phase 21b), so a populated token
+   * never implies the scheme is enabled.
+   */
+  urlSchemeEnabled: boolean | null;
   environmentChanges: EnvironmentChange[];
 }): FailureHint | null {
-  if (input.reason === "silent-noop" && input.vector === "url-scheme" && !input.authTokenPresent) {
+  if (
+    input.vector === "url-scheme" &&
+    (input.reason === "silent-noop" || input.reason === "timeout") &&
+    input.urlSchemeEnabled === false
+  ) {
     return {
       likelyCause: "feature-disabled",
       hint:
-        "no URL authorization token exists in the database, which usually means 'Enable " +
-        "Things URLs' is off (Things > Settings > General) — the app ignores update commands " +
-        "without it.",
+        "'Enable Things URLs' is off (Things > Settings > General) — the app holds URL " +
+        "commands behind an enable dialog instead of executing them, so the write never " +
+        "lands. Turn the setting on and retry.",
     };
   }
   const thingsChange = input.environmentChanges.find((c) => c.field === "thingsVersion");

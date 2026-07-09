@@ -64,6 +64,17 @@ export function registerDoctor(program: Command): void {
           `automation:  ${report.automation.status}${
             report.automation.status === "granted" ? "" : ` — ${report.automation.detail}`
           }`,
+          `url scheme:  ${
+            report.availability.urlScheme.enabled === true
+              ? "enabled"
+              : report.availability.urlScheme.enabled === false
+                ? "DISABLED"
+                : "unknown"
+          } — ${report.availability.urlScheme.detail}`,
+          `shortcuts:   ${report.availability.shortcuts.present.length}/${
+            report.availability.shortcuts.present.length +
+            report.availability.shortcuts.missing.length
+          } proxies installed — ${report.availability.shortcuts.detail}`,
         ];
         process.stdout.write(`${lines.join("\n")}\n`);
       } else if (error) {

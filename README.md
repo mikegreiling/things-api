@@ -16,6 +16,16 @@ things capabilities --op todo.delete   # what's possible, per vector, with evide
 
 Things 3 installed and launched once, Node ≥ 24, and a handful of one-time macOS consents / Things settings depending on what you use (file-access consent for reads; "Enable Things URLs" + Automation consents for writes). **See [docs/setup.md](docs/setup.md)** — including the dedicated-automation-Mac checklist. `things doctor` validates your setup and prints remediation for anything missing.
 
+### Shortcuts setup (optional)
+
+A few operations exist on no other app surface: creating a heading in an **existing** project, clearing a reminder from a date-scheduled item, and permanently deleting a single item. These run through six bundled Apple Shortcuts (signed `.shortcut` files shipped with the package). Install them with:
+
+```sh
+things setup shortcuts   # opens an install sheet per missing shortcut — click "Add Shortcut"
+```
+
+On each shortcut's first run macOS asks for permission — choose **Always Allow** so later runs are unattended (the two delete shortcuts re-ask on every run by design; Apple offers no always-allow for deletion). `things setup shortcuts --check` and `things doctor` report installation state.
+
 ### Development install
 
 To get a global `things` command that runs the live TypeScript source (no build step — Node ≥ 24 strips types natively):

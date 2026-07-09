@@ -23,10 +23,13 @@ const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
 let lockSeq = 0;
+/** On-disk 'Enable Things URLs' state injected into the pipeline (never the host's). */
+let urlSchemeState: boolean | null;
 
 beforeEach(() => {
   fixture = buildFixtureDb();
   auditRecords = [];
+  urlSchemeState = true;
 });
 afterEach(() => {
   fixture.close();
@@ -116,6 +119,7 @@ function deps(vectors: WriteVector[], environment?: EnvironmentTracker): WriteDe
     isAppRunning: () => true,
     ensureRunning: async () => true,
     now: () => NOW,
+    urlSchemeEnabled: () => urlSchemeState,
     ...(environment !== undefined && { environment }),
   };
 }
@@ -163,7 +167,8 @@ describe("transport failure attribution", () => {
 });
 
 describe("verification failure attribution", () => {
-  it("url-scheme silent no-op without an auth token → feature-disabled", async () => {
+  it("url-scheme silent no-op with 'Enable Things URLs' off on disk → feature-disabled", async () => {
+    urlSchemeState = false;
     const todo = seedTodo(fixture.db, { title: "noop" });
     const vector = effectVector("url-scheme", URL_MATRIX, null);
     const result = await runMutation(
