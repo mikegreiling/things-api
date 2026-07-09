@@ -13,7 +13,7 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
-import { resolveTaskUuidPrefix } from "./read/queries.ts";
+import { resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
@@ -118,7 +118,8 @@ export interface ThingsClient {
     logbook(options?: { limit?: number; tag?: string; exactTag?: boolean }): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
-    projectView(uuid: string): ProjectView;
+    /** Composite project view. Targets by uuid, unique name, or uuid prefix. */
+    projectView(ref: string): ProjectView;
     /** Composite area view: direct to-dos, projects in sidebar order, later, logged. */
     areaView(ref: string): AreaView;
     areas(): Area[];
@@ -435,7 +436,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       logbook: (o) => logbookView(conn.db, o),
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),
-      projectView: (uuid) => projectView(conn.db, resolveTaskUuidPrefix(conn.db, uuid), now()),
+      projectView: (ref) => projectView(conn.db, resolveProjectUuid(conn.db, ref), now()),
       areaView: (ref) => areaView(conn.db, ref, now()),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
