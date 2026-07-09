@@ -133,6 +133,49 @@ run_step 0 "seed area to-do for mixed check" todo add "E2E-AT1" --area LAB-AREA-
 AT1=$(json_get "d['data']['uuid']")
 run_step 4 "mixed to-do+project area reorder is rejected (guard)" reorder --scope area --area LAB-AREA-A "$AT1" "$AP1"
 
+echo "== reorder scopes: inbox / someday / headings / projects (§C) =="
+run_step 0 "seed inbox I1" todo add "E2E-I1"
+I1=$(json_get "d['data']['uuid']")
+run_step 0 "seed inbox I2" todo add "E2E-I2"
+I2=$(json_get "d['data']['uuid']")
+run_step 0 "native inbox reorder (A6 reversed wire convention)" reorder --scope inbox "$I2" "$I1"
+run_step 0 "seed someday S1" todo add "E2E-S1" --when someday
+S1=$(json_get "d['data']['uuid']")
+run_step 0 "seed someday S2" todo add "E2E-S2" --when someday
+S2=$(json_get "d['data']['uuid']")
+run_step 0 "native someday reorder of loose to-dos (P6h/P8)" reorder --scope someday "$S2" "$S1"
+run_step 0 "seed someday project SP1 (area-less)" project add "E2E-SP1" --when someday
+SP1=$(json_get "d['data']['uuid']")
+run_step 0 "seed someday project SP2 (area-less)" project add "E2E-SP2" --when someday
+SP2=$(json_get "d['data']['uuid']")
+run_step 0 "native someday reorder of PROJECTS (P9e descending stack)" reorder --scope someday "$SP2" "$SP1"
+run_step 4 "mixed someday to-do+project reorder is rejected (guard)" reorder --scope someday "$S1" "$SP1"
+# Headings seed via the json URL (HX0: heading items inside a NEW project's
+# payload create real type=2 rows — the only headless create path).
+open -g 'things:///json?data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-HPROJ%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-H1%22%7D%7D%2C%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-H2%22%7D%7D%5D%7D%7D%5D'
+sleep 3
+read -r HPROJ H1 H2 <<< "$(python3 -c "
+import glob, os, sqlite3
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+c = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+proj = c.execute(\"SELECT uuid FROM TMTask WHERE title='E2E-HPROJ' AND type=1\").fetchone()[0]
+h1 = c.execute(\"SELECT uuid FROM TMTask WHERE title='E2E-H1' AND type=2\").fetchone()[0]
+h2 = c.execute(\"SELECT uuid FROM TMTask WHERE title='E2E-H2' AND type=2\").fetchone()[0]
+print(proj, h1, h2)
+")"
+if [ -n "$HPROJ" ] && [ -n "$H1" ] && [ -n "$H2" ]; then
+  echo "ok   heading fixtures seeded via json url ($H1, $H2)"
+else
+  echo "FAIL heading fixtures did not appear (json url seed)"
+  FAILURES=$((FAILURES + 1))
+fi
+run_step 0 "native reorder of a project's HEADINGS (scf P1)" reorder --scope headings --project "$HPROJ" "$H2" "$H1"
+run_step 0 "seed top-level project TP1" project add "E2E-TP1"
+TP1=$(json_get "d['data']['uuid']")
+run_step 0 "seed top-level project TP2" project add "E2E-TP2"
+TP2=$(json_get "d['data']['uuid']")
+run_step 0 "bounce reorder of top-level sidebar PROJECTS (someday round-trip)" reorder --scope projects "$TP2" "$TP1"
+
 echo "== phase 9b: reminders, notes modes, duplicate, entity updates =="
 run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-REM" --when today --reminder 10:05
 REM=$(json_get "d['data']['uuid']")
