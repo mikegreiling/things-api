@@ -18,6 +18,7 @@ export const HAZARD_IDS = [
   "H-REORDER-SCOPE",
   "H-REMINDER-SCOPE",
   "H-TAG-SUBTREE-DELETE",
+  "H-BACKDATE-OPEN",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -237,6 +238,18 @@ const GUARDS: Record<HazardId, GuardFn> = {
       remediation: "pass when today|evening|YYYY-MM-DD together with the reminder",
     };
   },
+  "H-BACKDATE-OPEN": ({ op, params, pre }) => {
+    if (op !== "todo.backdate" || params["completionDate"] === undefined) return null;
+    const status = pre.target?.type === "to-do" ? pre.target.status : null;
+    if (status === "completed" || status === "canceled") return null;
+    return {
+      hazard: "H-BACKDATE-OPEN",
+      detail:
+        "completionDate can only be rewritten on a completed or canceled to-do — this one " +
+        `is ${status ?? "not a to-do / not found"}`,
+      remediation: "complete it first (todo.complete), then backdate",
+    };
+  },
   "H-REORDER-SCOPE": ({ op, params, pre }) => {
     if (op !== "reorder" || pre.reorder === null) return null;
     const problems: string[] = [];
@@ -256,10 +269,12 @@ const GUARDS: Record<HazardId, GuardFn> = {
     if (
       (params["scope"] === "today" ||
         params["scope"] === "evening" ||
-        params["scope"] === "inbox") &&
+        params["scope"] === "inbox" ||
+        params["scope"] === "someday" ||
+        params["scope"] === "projects") &&
       params["container"] !== undefined
     ) {
-      problems.push("container is only valid for project/area scopes");
+      problems.push("container is only valid for project/area/headings scopes");
     }
     const uuids = params["uuids"];
     if (!Array.isArray(uuids) || uuids.length === 0) {

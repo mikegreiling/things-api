@@ -7,13 +7,16 @@
  *           O03/O12), project/area (un-headed children, O04/O05/O09–O11).
  *           Gated by config.allowExperimental AND the sdef canary.
  *
- * bounce  — verified `when=` round-trips (O07/O08): re-scheduling an item
- *           away and back FRONT-INSERTS it in its section, so bouncing the
- *           requested uuids in reverse order places them top-first. Each leg
- *           is a full verified todo.update mutation; between items the live
- *           state is re-checked so a user editing Things concurrently causes
- *           a clean abort with partial-progress detail, never a fight.
- *           Scopes: today (fallback), evening (the ONLY way — O03).
+ * bounce  — verified `when=` round-trips (O07/O08, P8e): re-scheduling an
+ *           item away and back FRONT-INSERTS it in its section, so bouncing
+ *           the requested uuids in reverse order places them top-first. Each
+ *           leg is a full verified todo.update/project.update mutation;
+ *           between items the live state is re-checked so a user editing
+ *           Things concurrently causes a clean abort with partial-progress
+ *           detail, never a fight. Scopes: today (fallback), evening (the
+ *           ONLY way — O03), projects (top-level sidebar order via
+ *           when=someday -> when=anytime — P8e, the ONLY way: every native
+ *           sidebar spelling is dead, scf2 P6).
  *
  * The requested uuid list may be a subset of the scope: for native, the wire
  * list is extended with every remaining member in current order (placement
@@ -99,13 +102,26 @@ function resolveStrategy(
         "omit --strategy (evening defaults to bounce)",
       );
     }
+    if (params.scope === "projects") {
+      return blocked(
+        "top-level sidebar order has NO native surface (every AppleScript spelling errors " +
+          "and the private command no-ops — scf2 P6); only the when= bounce works (P8e)",
+        "omit --strategy (projects defaults to bounce)",
+      );
+    }
     return { kind: "ok", strategy: "native" };
   }
   if (params.strategy === "bounce") {
-    if (params.scope === "project" || params.scope === "area" || params.scope === "inbox") {
+    if (
+      params.scope === "project" ||
+      params.scope === "area" ||
+      params.scope === "inbox" ||
+      params.scope === "headings" ||
+      params.scope === "someday"
+    ) {
       return blocked(
-        "bounce can only reorder the Today/Evening sections — its primitive is a when= " +
-          "round-trip, which moves todayIndex, not project/area/inbox order (O07/O08)",
+        "bounce can only reorder the Today/Evening sections and top-level projects — its " +
+          "primitive is a when= round-trip, which does not move this scope's order",
         "use the native strategy (requires `things config set allow-experimental true`)",
       );
     }
@@ -115,12 +131,15 @@ function resolveStrategy(
   // Default per scope.
   switch (params.scope) {
     case "evening":
+    case "projects":
       return { kind: "ok", strategy: "bounce" };
     case "today":
       return { kind: "ok", strategy: nativeAvailable ? "native" : "bounce" };
     case "project":
     case "area":
     case "inbox":
+    case "headings":
+    case "someday":
       // Native-only scopes: let the pipeline explain precisely why native is
       // unavailable (planner: experimental gate; canary: sdef change).
       return { kind: "ok", strategy: "native" };
@@ -136,21 +155,25 @@ async function runBounce(
 ): Promise<ReorderResult> {
   const startedAt = deps.now?.() ?? new Date();
   const now = deps.now ?? (() => new Date());
-  const scope = params.scope as "today" | "evening";
+  const scope = params.scope as "today" | "evening" | "projects";
+  const rankKey: "index" | "todayIndex" = scope === "projects" ? "index" : "todayIndex";
+  const legOp = scope === "projects" ? ("project.update" as const) : ("todo.update" as const);
 
   // Scope/membership guard — same data the native path's guard uses.
   const pre = computeReorderPre(deps.db, params, resolveContainerUuid(deps, params), now());
   const problems: string[] = [];
   if (params.container !== undefined)
-    problems.push("container is only valid for project/area scopes");
+    problems.push("container is only valid for project/area/headings scopes");
   if (params.uuids.length === 0) problems.push("no uuids given");
   if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
-  for (const uuid of pre.projectMembers) {
-    problems.push(
-      `${uuid} is a project — bounce re-schedules via todo.update, which is only validated ` +
-        "for to-dos; use the native strategy for Today lists containing projects",
-    );
+  if (scope !== "projects") {
+    for (const uuid of pre.projectMembers) {
+      problems.push(
+        `${uuid} is a project — bounce re-schedules via todo.update, which is only validated ` +
+          "for to-dos; use the native strategy for Today lists containing projects",
+      );
+    }
   }
   if (params.uuids.length > BOUNCE_MAX_ITEMS) {
     problems.push(
@@ -173,7 +196,8 @@ async function runBounce(
     return result;
   }
 
-  const away = scope === "today" ? "evening" : "today";
+  const away = scope === "today" ? "evening" : scope === "projects" ? "someday" : "today";
+  const back = scope === "projects" ? "anytime" : scope;
   if (options.dryRun === true) {
     return {
       kind: "dry-run",
@@ -184,9 +208,9 @@ async function runBounce(
         tier: 0,
         invocation:
           `bounce ×${params.uuids.length} (reverse order): ` +
-          `things:///update?id=<uuid>&when=${away} → verified → when=${scope} → verified; ` +
+          `when=${away} → verified → when=${back} → verified; ` +
           "state re-checked between items",
-        expectedDelta: { mode: "ordering", key: "todayIndex", sequence: params.uuids },
+        expectedDelta: { mode: "ordering", key: rankKey, sequence: params.uuids },
         hazardsChecked: ["H-REORDER-SCOPE"],
       },
     };
@@ -215,7 +239,7 @@ async function runBounce(
       };
     }
 
-    const leg1 = await runMutation(deps, "todo.update", { uuid, when: away }, legOptions(options));
+    const leg1 = await runMutation(deps, legOp, { uuid, when: away }, legOptions(options));
     if (leg1.kind !== "ok") {
       auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
       return {
@@ -227,15 +251,15 @@ async function runBounce(
         cause: leg1,
       };
     }
-    const leg2 = await runMutation(deps, "todo.update", { uuid, when: scope }, legOptions(options));
+    const leg2 = await runMutation(deps, legOp, { uuid, when: back }, legOptions(options));
     if (leg2.kind !== "ok") {
       auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
       return {
         kind: "bounce-aborted",
         op: "reorder",
         detail:
-          `bounce leg 2 (when=${scope}) failed for ${uuid} — THE ITEM IS STRANDED IN ` +
-          `${away.toUpperCase()}; re-schedule it (things todo update --when ${scope}) or fix in the app`,
+          `bounce leg 2 (when=${back}) failed for ${uuid} — THE ITEM IS STRANDED IN ` +
+          `${away.toUpperCase()}; re-schedule it (when=${back}) or fix in the app`,
         placed: [...placed],
         remaining: params.uuids.slice(0, i + 1),
         cause: leg2,
@@ -248,7 +272,7 @@ async function runBounce(
     const prefixCheck = await pollUntilVerified(
       () =>
         evaluateDelta(
-          { mode: "ordering", key: "todayIndex", sequence: [...placed] },
+          { mode: "ordering", key: rankKey, sequence: [...placed] },
           createDbReader(deps.db),
           { modDates: {}, fields: {} },
         ),
@@ -272,7 +296,7 @@ async function runBounce(
 
   const reader = createDbReader(deps.db);
   const observed: Record<string, unknown> = {};
-  for (const uuid of params.uuids) observed[uuid] = reader.rankOf(uuid, "todayIndex");
+  for (const uuid of params.uuids) observed[uuid] = reader.rankOf(uuid, rankKey);
   auditSummary(deps, params, startedAt, "ok", observed);
   return {
     kind: "ok",
@@ -293,7 +317,7 @@ function legOptions(options: WriteOptions): WriteOptions {
 }
 
 function resolveContainerUuid(deps: WriteDeps, params: ReorderParams): string | null {
-  if (params.scope === "project") {
+  if (params.scope === "project" || params.scope === "headings") {
     return resolveProject(deps.db, params.container ?? {}).resolved?.uuid ?? null;
   }
   if (params.scope === "area") {
@@ -306,12 +330,14 @@ function resolveContainerUuid(deps: WriteDeps, params: ReorderParams): string | 
 function checkStillMember(
   deps: WriteDeps,
   uuid: string,
-  scope: "today" | "evening",
+  scope: "today" | "evening" | "projects",
   now: Date,
 ): string | null {
   const packedToday = encodePackedDate(localToday(now));
   const row = deps.db
-    .prepare("SELECT status, trashed, startBucket, startDate, start FROM TMTask WHERE uuid = ?")
+    .prepare(
+      "SELECT status, trashed, startBucket, startDate, start, type, area FROM TMTask WHERE uuid = ?",
+    )
     .get(uuid) as
     | {
         status: number;
@@ -319,11 +345,21 @@ function checkStillMember(
         startBucket: number;
         startDate: number | null;
         start: number;
+        type: number;
+        area: string | null;
       }
     | undefined;
   if (row === undefined) return "the item no longer exists";
   if (row.trashed !== 0) return "the item was trashed";
   if (row.status !== 0) return "the item is no longer open";
+  if (scope === "projects") {
+    if (row.type !== 1) return "the item is not a project";
+    if (row.area !== null) return "the project moved into an area";
+    if (row.start !== 1 || row.startDate !== null) {
+      return "the project is no longer a plain Anytime project";
+    }
+    return null;
+  }
   const inToday =
     row.startDate !== null && row.startDate <= packedToday && (row.start === 1 || row.start === 2);
   if (!inToday) return "the item left the Today list";

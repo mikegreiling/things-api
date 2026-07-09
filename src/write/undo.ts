@@ -212,6 +212,7 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
     // Creations: the inverse is deleting what appeared. To-dos/projects go
     // to the Trash (restorable); areas/tags delete PERMANENTLY (ack needed).
     case "todo.add":
+    case "todo.add-logged":
     case "todo.duplicate": {
       if (uuid === null) return irreversible("the created uuid was never discovered");
       return {
@@ -573,6 +574,23 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
         };
       }
       return irreversible("the pre-op area was not captured");
+    }
+
+    case "todo.backdate": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const patch: Record<string, unknown> = { uuid };
+      const stoppedPre = preField(record, "stoppedDate");
+      const createdPre = preField(record, "createdDate");
+      if (typeof stoppedPre === "string") patch["completionDate"] = stoppedPre;
+      if (typeof createdPre === "string") patch["creationDate"] = createdPre;
+      if (patch["completionDate"] === undefined && patch["creationDate"] === undefined) {
+        return irreversible("the pre-op timestamps were not captured");
+      }
+      notes.push(
+        "timestamps restore at DAY precision (noon local) — the original sub-day time is " +
+          "not recoverable",
+      );
+      return { target, kind: "invertible", steps: [{ op: "todo.backdate", params: patch }], notes };
     }
 
     case "todo.set-tags": {

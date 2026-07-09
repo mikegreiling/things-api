@@ -35,6 +35,16 @@ Subject: the private AppleScript command `_private_experimental_ reorder to dos 
 - **O14**: **projects WITHIN an area reorder natively** — the private command accepts project uuids in an area specifier (`project` inherits `to do`, O12 analog); area/type membership untouched. Extends write.reorder's area scope to projects.
 - **scf P1 (2026-07-09)**: **HEADINGS within a project reorder natively too** — the same command accepts heading (`type=2`) uuids in a project specifier; children keep their heading FK and follow. See [s-campaign-results.md](s-campaign-results.md) follow-ups.
 
+## Aggregate list scopes & the sidebar (P7/P8, 2026-07-09)
+
+Runs `things-run-p7-20260709-101502` / `things-run-p8-20260709-102315` (`lab/scripts/research-p7.sh` / `-p8.sh`), prompted by Mike's Anytime↔sidebar mirror observation.
+
+- **The list scopes do NOT share the container scopes' forward semantics.** Container specifiers (`project id`, `area id`, `list "Today"`) re-rank the sent ids in order (O01/O04). `list "Inbox"` ALSO ranks the sent list in order (P8a — re-confirming A6; the shipped inbox compile is correct). But `list "Someday"` STACKS each sent id above the call's ORIGINAL top item — the original top itself never moves (anchor model, 5/5 fits: P6h, P7e ×2, P8b, P8c-partial). The validated **two-call protocol** (push desired-bottom to top, then send the reversed wire list) realizes an exact order (P8b) and ships as the someday scope's compile.
+- **Someday accepts loose someday to-dos** (P6h/P7e/P8b — shipped) and **someday PROJECTS moved too** (P7a) but inconsistently across probes (P8c ≠ anchor model) — projects are rejected candidates until locked.
+- **Anytime moves loose to-dos** (P7b — P17's dead verdict was projects-only) but its convention is NOT locked (P7b vs P8d disagree under every candidate model) — unshipped, needs a dedicated probe series.
+- **Sidebar order: native writes exhaustively dead** (scf2 P6a–g), **but the BOUNCE works** (Mike's idea): clearing a project's area front-inserts it among top-level projects (P7c), attaching front-inserts within the area (P7c2), and a `when=someday → when=anytime` round-trip front-inserts without residue (P7d; P8e: 3-project sequence in reverse desired order → EXACT target order, `start=1`/`startDate NULL` preserved). Ships as reorder scope **"projects"** (bounce-only, plain anytime undated area-less projects). Areas among areas remain UI-only.
+- **Heading rows reorder natively in a project specifier** (scf P1) — ships as scope **"headings"**; children follow their heading.
+
 ## Not probed (future work)
 
-Sidebar ordering (areas among areas; projects within an area), checklist-item order (no granular surface anywhere), reorder behavior on the Anytime/Someday `index` scale outside containers.
+Areas among areas (every spelling dead); the Anytime list-scope convention (P7b/P8d inconsistent); someday PROJECTS in the Someday scope (P7a/P8c inconsistent); checklist-item order (no granular surface anywhere).

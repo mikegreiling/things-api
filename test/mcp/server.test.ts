@@ -92,6 +92,8 @@ afterEach(async () => {
 });
 
 const EXPECTED_TOOLS = [
+  "add_logged_todo",
+  "backdate_todo",
   // reads
   "read_view",
   "search",

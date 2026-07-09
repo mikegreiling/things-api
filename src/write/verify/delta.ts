@@ -19,6 +19,12 @@ export interface CreateProbe {
   type: Extract<TaskType, "to-do" | "project">;
   /** Only rows created at/after this epoch-seconds instant qualify. */
   sinceEpoch: number;
+  /**
+   * Alternative discovery for rows whose creationDate is intentionally
+   * BACKDATED (todo.add-logged): ignore sinceEpoch and instead exclude these
+   * pre-existing same-title uuids.
+   */
+  excludeUuids?: string[];
 }
 
 export type DeltaSpec =
@@ -117,14 +123,19 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
       return row.n;
     },
     findCreated(probe) {
-      const rows = db
-        .prepare(
-          "SELECT uuid FROM TMTask WHERE title = ? AND type = ? AND creationDate >= ? " +
-            "ORDER BY creationDate DESC LIMIT 5",
-        )
-        .all(probe.title, probe.type === "project" ? 1 : 0, probe.sinceEpoch) as {
-        uuid: string;
-      }[];
+      const excluded = new Set(probe.excludeUuids ?? []);
+      const rows = (
+        db
+          .prepare(
+            "SELECT uuid FROM TMTask WHERE title = ? AND type = ? AND creationDate >= ? " +
+              "ORDER BY creationDate DESC LIMIT 25",
+          )
+          .all(
+            probe.title,
+            probe.type === "project" ? 1 : 0,
+            probe.excludeUuids === undefined ? probe.sinceEpoch : 0,
+          ) as { uuid: string }[]
+      ).filter((r) => !excluded.has(r.uuid));
       const tasks: AnyTask[] = [];
       for (const r of rows) {
         const task = byUuid(db, r.uuid);
@@ -168,6 +179,14 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
  * in order; otherwise a dotted walk (`area.uuid`, `project.title`, …).
  */
 export function getField(entity: AnyTask, path: string): unknown {
+  // Day-precision views of the stored timestamps (backdating asserts these;
+  // Date objects never compare === so the raw fields are not assertable).
+  if (path === "stoppedDate" && "stopped" in entity) {
+    return entity.stopped === null ? null : localIsoDate(entity.stopped);
+  }
+  if (path === "createdDate" && "created" in entity) {
+    return localIsoDate(entity.created);
+  }
   if (path === "tags" && "tags" in entity) {
     return entity.tags.map((t) => t.title).toSorted();
   }
@@ -183,6 +202,11 @@ export function getField(entity: AnyTask, path: string): unknown {
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function localIsoDate(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 function valuesEqual(a: unknown, b: unknown): boolean {

@@ -30,8 +30,8 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |
 | Permanently delete ONE item | 🚫 | 🚫 (all spellings fail, B0/A5) | ✅ interactive (S-delperm, Delete Immediately) | Shortcuts hard-deletes one row (no tombstone) — but the delete consent has NO "Always Allow", so it's tier-3 user-present, never headless. `trash.empty` is the only autonomous hard-delete (all-or-nothing) |
 | Convert to project | 🚫 (E16) | 🚫 | 🚫 (no Convert action exists) | dead on every surface (catalog sweep, L5) |
-| Backdate Completion/Creation Date (existing item) | 🚫 (`update?completion-date=`/`creation-date=` silent no-ops, scf2 P4c — oddity 2g) | ✅ (`set completion date` / `set creation date` property writes, scf2 P4b) | 🚫 (`set-detail` dead in every format, scf2 P4a) | AppleScript is the ONLY surface |
-| Backdated import (completed at creation) | ✅ `things:///json` `creation-date`/`completion-date` attrs, exact values honored (scf2 P4d) | 🧪 (make-then-set two-step, untested) | 🚫 | the logbook-import / GTD-migration path |
+| Backdate Completion/Creation Date (existing item) | 🚫 (`update?completion-date=`/`creation-date=` silent no-ops, scf2 P4c — oddity 2g) | ✅ **shipped** (`todo.backdate` / `things todo backdate`, scf2 P4b) | 🚫 (`set-detail` dead in every format, scf2 P4a) | AppleScript is the ONLY surface; completion requires an already-resolved to-do (H-BACKDATE-OPEN) |
+| Backdated import (completed at creation) | ✅ **shipped** (`todo.add-logged` / `things todo add-logged`, scf2 P4d) | 🧪 (make-then-set two-step, untested) | 🚫 | the logbook-import / GTD-migration path |
 
 ## Projects
 
@@ -64,7 +64,7 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Rename a heading | 🚫 | 🚫 | ✅ (S03, `Edit Items → Set Title`) | |
 | Delete a heading | 🚫 | 🚫 | ✅ (S04, removes the row) | non-empty-heading child re-parenting unprobed |
 | Move a heading | 🚫 | 🚫 | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on every surface |
-| Reorder headings within a project | 🚫 | ✅ native (scf P1 — the private reorder command accepts heading uuids) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
+| Reorder headings within a project | 🚫 | ✅ **shipped** (`reorder --scope headings`, scf P1) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
 
 ## Areas
 
@@ -98,11 +98,11 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Project headings (the headings themselves) | ✅ native (experimental) | heading uuids accepted (scf P1); heading-*scoped* child order still unautomatable (O06) |
 | Area members (to-dos OR projects) | ✅ native (experimental) | never mixed in one request (O14) |
 | Inbox | ✅ native (experimental) | full reversed wire list re-ranked exactly (A6); joins today/project/area as a validated scope |
-| Someday | 🧪 native surface PROVEN (scf2 P6h) — op wire-up pending | same private command; appears to follow the Inbox reversed-wire convention — lock with a 3-item probe before shipping |
+| Someday (loose to-dos) | ✅ **shipped** (`reorder --scope someday`) | the list handler STACKS ids above the call's original top (anchor model, P6h/P7e/P8b) — the compile emits the validated two-call protocol (P8b: exact). Someday PROJECTS moved inconsistently (P7a vs P8c) — rejected until locked |
 | Checklist items | ✅ | granular move via stateful rewrite |
-| Sidebar: areas | 🚫 (O13 + scf2 P6e/f/g) | exhaustively closed 2026-07-09: move-to-location errors (−1700), `set index` read-only (−10006), private reorder no-ops on area uuids; sdef has no other command |
-| Sidebar: top-level projects | 🚫 (P17 + scf2 P6a–d) | same sweep; reads provisional too (P19). Anytime view order mirrors the sidebar (same "index" columns) but nothing writes them |
-| Anytime/Someday aggregate views | ⛔ | no independent order — derived from container order |
+| Sidebar: areas | 🚫 (O13 + scf2 P6e/f/g) | exhaustively closed 2026-07-09: move-to-location errors (−1700), `set index` read-only (−10006), private reorder no-ops on area uuids; sdef has no other command. The LAST unautomatable ordering |
+| Sidebar: top-level projects | ✅ **shipped — BOUNCE** (`reorder --scope projects`, P7c/P7d/P8e) | native writes stay dead (P17 + scf2 P6a–d), but a when=someday→anytime round-trip FRONT-INSERTS (P8e: 3-project sequence exact, state preserved). Plain anytime undated area-less projects only; ≤10/call. Within-area projects: native area scope (O14) |
+| Anytime aggregate view (loose to-dos) | 🧪 | the list scope MOVES loose to-dos (P7b — P17 was projects-only) but its convention is unlocked (P7b vs P8d disagree); grouped blocks derive from container order |
 
 ## Repeating items
 

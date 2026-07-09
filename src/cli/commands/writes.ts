@@ -581,6 +581,56 @@ export function registerWriteCommands(program: Command): void {
     await runWrite(opts, (c) => c.write.restoreTodo(uuid, writeOptionsFrom(opts)));
   });
 
+  addWriteFlags(
+    todo
+      .command("backdate <uuid>")
+      .description(
+        "Rewrite a to-do's completion and/or creation timestamp to noon (local) on the " +
+          "given date. --completed-on requires the to-do to already be completed or " +
+          "canceled. The Logbook re-sorts to the new date.",
+      )
+      .option("--completed-on <date>", "YYYY-MM-DD — new completion date")
+      .option("--created-on <date>", "YYYY-MM-DD — new creation date"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    await runWrite(opts, (c) =>
+      c.write.backdateTodo(
+        uuid,
+        {
+          ...(opts["completedOn"] !== undefined && {
+            completionDate: opts["completedOn"] as string,
+          }),
+          ...(opts["createdOn"] !== undefined && { creationDate: opts["createdOn"] as string }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addWriteFlags(
+    todo
+      .command("add-logged <title>")
+      .description(
+        "Create a to-do directly in the Logbook: completed, with the given past " +
+          "completion date (and optionally a past creation date). For importing history " +
+          "from another system.",
+      )
+      .requiredOption("--completed-on <date>", "YYYY-MM-DD — completion date (required)")
+      .option("--created-on <date>", "YYYY-MM-DD — creation date (must be <= completed-on)")
+      .option("--notes <text>", "notes body"),
+  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    await runWrite(opts, (c) =>
+      c.write.addLoggedTodo(
+        {
+          title,
+          completionDate: opts["completedOn"] as string,
+          ...(opts["createdOn"] !== undefined && { creationDate: opts["createdOn"] as string }),
+          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
   const project = group(program, "project", "Project-scoped operations");
 
   addWriteFlags(
@@ -1185,17 +1235,24 @@ export function registerWriteCommands(program: Command): void {
     program
       .command("reorder <uuids...>")
       .description(
-        "Reorder items within Today, This Evening, the Inbox, a project, or an area — uuids " +
-          "are placed at the TOP in the given order; unlisted members keep their relative " +
-          "order below. Strategies: native (EXPERIMENTAL — requires `things config set " +
-          "allow-experimental true` and may stop working after a Things update; today/inbox/" +
-          `project/area) and bounce (today/evening, max ${BOUNCE_MAX_ITEMS} items; an ` +
-          "interrupted run reports which items were placed). Evening is bounce-only. Project " +
-          "children under headings cannot be reordered. Area scope reorders to-dos OR " +
+        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos), a " +
+          "project's to-dos, a project's HEADINGS, an area, or the top-level sidebar " +
+          "projects — uuids are placed at the TOP in the given order; unlisted members " +
+          "keep their relative order below. Strategies: native (EXPERIMENTAL — requires " +
+          "`things config set allow-experimental true` and may stop working after a " +
+          "Things update; today/inbox/someday/project/headings/area) and bounce " +
+          `(today/evening/projects, max ${BOUNCE_MAX_ITEMS} items; an interrupted run ` +
+          "reports which items were placed). Evening and projects (top-level sidebar " +
+          "order — each project takes a brief someday/anytime round-trip) are " +
+          "bounce-only. Project children under headings cannot be reordered; reordering " +
+          "a heading carries its children with it. Area scope reorders to-dos OR " +
           "projects — never mixed in one request.",
       )
-      .requiredOption("--scope <scope>", "today | evening | inbox | project | area")
-      .option("--project <ref>", "project (uuid or unique name) — scope=project")
+      .requiredOption(
+        "--scope <scope>",
+        "today | evening | inbox | someday | project | headings | area | projects",
+      )
+      .option("--project <ref>", "project (uuid or unique name) — scope=project|headings")
       .option("--area <ref>", "area (uuid or unique name) — scope=area")
       .option("--strategy <name>", "force native | bounce (default: per-scope)"),
   ).action(async (uuids: string[], opts: WriteFlagOpts & Record<string, unknown>) => {

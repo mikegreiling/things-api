@@ -78,6 +78,8 @@ export interface PreState {
   trashedCount: number;
   /** Pre-existing uuids for entity-created probes. */
   existingEntityUuids: string[];
+  /** Pre-existing same-title/type rows (todo.add-logged create-probe exclusion). */
+  sameTitleUuids: string[];
   /** Scope membership + wire list for the reorder operation. */
   reorder: ReorderPre | null;
 }
@@ -99,6 +101,7 @@ export function emptyPreState(): PreState {
     checklistCount: 0,
     trashedCount: 0,
     existingEntityUuids: [],
+    sameTitleUuids: [],
     reorder: null,
   };
 }
@@ -251,7 +254,17 @@ interface MemberRow {
  *             "index" — but only SAME-TYPE requests; mixed wire lists are
  *             unprobed and the guard rejects them.
  *  - inbox:   unscheduled to-dos with no container (start=0), by "index"
- *             (A6 — the full reversed wire list re-ranked exactly).
+ *             (A6/P8a — the command ranks the sent list in order).
+ *  - headings: the HEADING rows (type=2) of a project, by "index" (scf P1 —
+ *             the private command accepts heading uuids; children follow).
+ *  - someday: loose someday to-dos (start=2, no startDate, no container), by
+ *             "index". The Someday list handler is anchor-stacked (P6h/P7e/
+ *             P8b) — the compiler emits the validated two-call protocol.
+ *             Someday PROJECTS moved inconsistently across probes (P7a vs
+ *             P8c) and are rejected candidates until locked.
+ *  - projects: TOP-LEVEL sidebar projects (type=1, no area, start=1,
+ *             undated), by "index". Bounce-only: a when=someday ->
+ *             when=anytime round-trip front-inserts (P8e).
  */
 export function computeReorderPre(
   db: DatabaseSync,
@@ -347,6 +360,56 @@ export function computeReorderPre(
       // Inbox = unscheduled to-dos with no container (start=0, A6). Ranks on
       // "index"; the private command re-ranks the full wire list exactly.
       members = select("type = 0 AND start = 0", [], `"index"`);
+      break;
+    }
+    case "headings": {
+      members = select("type = 2 AND project = ?", [containerUuid ?? ""], `"index"`);
+      break;
+    }
+    case "someday": {
+      members = select(
+        "type = 0 AND start = 2 AND startDate IS NULL AND project IS NULL AND area IS NULL " +
+          "AND heading IS NULL",
+        [],
+        `"index"`,
+      );
+      const projects = db
+        .prepare(
+          `SELECT uuid FROM TMTask WHERE trashed = 0 AND status = 0 AND type = 1
+           AND start = 2 AND startDate IS NULL`,
+        )
+        .all() as { uuid: string }[];
+      for (const r of projects) {
+        rejectedCandidates.set(
+          r.uuid,
+          "is a someday PROJECT — the Someday handler moved projects inconsistently across " +
+            "probes (P7a/P8c); only loose someday to-dos reorder in this scope",
+        );
+      }
+      break;
+    }
+    case "projects": {
+      members = select(
+        "type = 1 AND area IS NULL AND start = 1 AND startDate IS NULL",
+        [],
+        `"index"`,
+      );
+      const others = db
+        .prepare(
+          `SELECT uuid, area, start, startDate FROM TMTask
+           WHERE trashed = 0 AND status = 0 AND type = 1
+           AND NOT (area IS NULL AND start = 1 AND startDate IS NULL)`,
+        )
+        .all() as { uuid: string; area: string | null; start: number; startDate: number | null }[];
+      for (const r of others) {
+        rejectedCandidates.set(
+          r.uuid,
+          r.area !== null
+            ? "lives in an area — use scope 'area' (projects within an area reorder natively, O14)"
+            : "is not a plain Anytime project — the bounce round-trip (when=someday -> " +
+                "when=anytime) only preserves state for undated start=anytime projects (P8e)",
+        );
+      }
       break;
     }
   }

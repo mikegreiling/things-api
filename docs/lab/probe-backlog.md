@@ -7,8 +7,9 @@ Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitt
 1. ~~Bank §A round-1 results~~ — **DONE 2026-07-09** (PR #45): verdicts from `lab/artifacts/things-run-scf-20260709-041543/` folded into [s-campaign-results.md](s-campaign-results.md) (follow-ups table), capability-matrix, oddities (2e update + new 5k), gaps, o-suite-results.
 2. **Validate PR #42** (§B): `npm run lab:regress` as a NO-REGRESSION check → merge on double-green. STATUS: pending.
 3. ~~scf2 re-probe~~ — **RAN + BANKED 2026-07-09** (run `things-run-scf2-20260709-045454`; verdicts in [s-campaign-results.md](s-campaign-results.md) round 2): backdating = AppleScript-only for existing items + json at-creation import; reminder set via set-detail DEAD; set-detail Parent = DETACH footgun (oddity 5l); sidebar ordering exhaustively closed; Someday = new native reorder scope (P6h).
-4. **npm publish** (§D). STATUS: pending.
-5. Parked §C work.
+4. ~~P7/P8 lateral probes + operationalization~~ — **DONE 2026-07-09**: P7 (someday projects move; anytime moves loose to-dos; area detach/attach + when= round-trips FRONT-INSERT — Mike's bounce insight) and P8 (two-call someday protocol EXACT; inbox forward re-confirmed; 3-project when= bounce EXACT). Shipped: `todo.backdate`, `todo.add-logged`, reorder scopes `headings`/`someday`/`projects`. Evidence: [o-suite-results.md](o-suite-results.md) §P7/P8.
+5. **npm publish** (§D). STATUS: pending (blocked on Mike's `npm login`; v0.4.0 tagged — the new ops warrant either re-tagging or a fast-follow 0.5.0).
+6. Parked §C work.
 
 ## A. S-campaign follow-up probes
 
@@ -42,8 +43,8 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 - **Distribution/onboarding**: signed / iCloud-shareable proxies from a network Mac with an Apple ID; a `things setup shortcuts` import + first-run-consent flow.
 - **Headings doctrine decision** (gaps §0): flatten-only vs dual-mode — Mike's call. New input since: heading REORDER is native/AppleScript (scf P1), heading MOVE is dead everywhere (scf P2).
 - **Availability layer** (Phase 21b remainder): advisory `availability(env)` per vector; doctor reads `uriSchemeEnabled`; correct the `feature-disabled` classifier to key on `uriSchemeEnabled`, not a null token.
-- **Newly-opened ops to implement** (probe-proven, unwired): heading reorder within a project (scf P1); `todo.backdate` — completion/creation date via AppleScript property writes (scf2 P4b); backdated logbook IMPORT via `things:///json` at-creation attrs (scf2 P4d); `reorder` someday scope (scf2 P6h — FIRST lock the reversed-wire convention with a 3-item probe).
-- **Round-3 probe candidates**: 3-item someday-reorder convention lock (autonomous); set-detail Parent with an ENTITY-typed value — a `things-proxy-move-item` whose Parent field takes a second Find Items output (needs a golden sitting to build, human present); P5 non-empty heading delete (human click, delete-class consent).
+- **Round-3 probe candidates**: ANYTIME list-scope convention (P7b vs P8d disagree under every candidate model — needs a systematic series); someday PROJECTS in the Someday scope (P7a vs P8c inconsistent — would extend the sidebar story to someday-project rows); set-detail Parent with an ENTITY-typed value — a `things-proxy-move-item` whose Parent field takes a second Find Items output (needs a golden sitting, human present); P5 non-empty heading delete (human click, delete-class consent).
+- **e2e reorder coverage**: the guest e2e smoke has NO reorder steps — add scope smoke steps (inbox/someday/headings/projects) in the next lab-touching change so the shipped protocols get periodic live validation.
 
 ## D. Release — publish `things-api` to npm (Mike, 2026-07-09)
 
