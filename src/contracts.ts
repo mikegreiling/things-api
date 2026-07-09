@@ -15,7 +15,7 @@ export const API_VERSION = 1;
  * Package version, surfaced by `things --version` and the MCP serverInfo.
  * Kept in lockstep with package.json by a contract test.
  */
-export const PKG_VERSION = "0.5.0";
+export const PKG_VERSION = "0.6.0";
 
 /**
  * Stable exit-code contract for the `things` CLI (mirrored by MCP error

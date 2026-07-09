@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.6.0 — 2026-07-09
+
+### Reference resolution & hidden internals (mildly breaking)
+
+- **Names resolve in tiers** (areas, tags, projects): exact uuid → exact title → case-insensitive title → normalized title (whitespace/dash-insensitive, NFC) → uuid prefix. The first tier with exactly one match wins definitively; several is an ambiguity error. `--area family` finds `Family` without tripping over `Family - Jennifer`; `on-hold` finds `On Hold`. **Leading emoji/symbols are significant** — a name beginning with an emoji must be typed with it (so an archived `🗄️errand` tag is never matched by a bare `errand`). See [docs/design/reference-resolution.md](docs/design/reference-resolution.md).
+- **Area/tag references now accept a unique uuid prefix** too (≥6 chars), like task uuids.
+- **Internal sort keys are no longer surfaced.** `index` and `todayIndex` are dropped from task/heading/area/tag responses; checklist items are now `{ title, status }` only (their uuid, index, owning-task, and timestamps were unstable implementation details — a checklist item's uuid is regenerated on every rewrite and was never addressable). Ordering is conveyed by array order; `--json` still carries full task uuids. **This changes read-response shapes.**
+- **Checklist edits target by title OR 1-based index** (`--index` / MCP `index`). Duplicate titles resolve best-effort — `check` picks the first unchecked match, `uncheck` the first checked, others the first match — with `--index` as the exact override. Checklist items have `open`/`completed`/`canceled` states (canceled is read-only; the write path produces open/completed) and no trashed/logged state — they travel with their parent to-do.
+
 - **Safety: project operations now reject wrong-type targets.** `project.update`, `project.complete`, `project.set-tags`, and `project.delete` previously accepted any task uuid — passing a to-do or heading uuid resolved cleanly and compiled a project-shaped command around the wrong row (undefined app behavior; a heading in a schedule-class specifier is known to crash Things). Every `project.*` op now verifies the target is a project and points a mis-typed uuid at the right command family, matching the existing guards on `todo.*` and `heading.*`. Cross-table uuids (an area passed to a task/project op) were already caught as not-found.
 
 ### Short uuids

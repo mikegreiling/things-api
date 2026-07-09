@@ -84,54 +84,107 @@ export function resolveTaskUuidPrefix(db: DatabaseSync, ref: string): string {
   return rows[0]?.uuid ?? ref;
 }
 
+/**
+ * Fold a name to its match key: NFC + case-fold + strip all whitespace and
+ * dashes/hyphens (ASCII hyphen, the U+2010–2015 dash block, U+2212 minus).
+ * Nothing else is removed, so emoji/symbols stay significant — see
+ * docs/design/reference-resolution.md.
+ */
+export function normalizeNameKey(s: string): string {
+  return s
+    .normalize("NFC")
+    .toLowerCase()
+    .replace(/[\s‐-―−-]+/gu, "");
+}
+
+const BASE62 = /^[0-9A-Za-z]+$/;
+
+export interface NamedResolution {
+  resolved: { uuid: string; title: string } | null;
+  /** 0 = not found, 1 = ok, >1 = ambiguous at the deciding tier. */
+  matches: number;
+}
+
+/**
+ * Tiered reference resolution (docs/design/reference-resolution.md): exact
+ * uuid → exact title → case-insensitive title → normalized title → uuid
+ * prefix. The FIRST tier with exactly one match wins; a tier with several is
+ * ambiguous; no tier is not-found. Shared by the read-side `resolve*Uuid`
+ * throwers and the write-side `resolve*` (ContainerResolution) helpers.
+ */
+export function resolveNamedRef(
+  db: DatabaseSync,
+  table: string,
+  extraWhere: string,
+  extraBinds: (string | number)[],
+  ref: string,
+): NamedResolution {
+  type Row = { uuid: string; title: string };
+  const sel = (cond: string, extra: (string | number)[] = []): Row[] =>
+    db
+      .prepare(`SELECT uuid, title FROM ${table} WHERE ${extraWhere} AND ${cond}`)
+      .all(...extraBinds, ...extra) as unknown as Row[];
+
+  const byId = sel("uuid = ?", [ref]);
+  if (byId.length === 1) return { resolved: byId[0] ?? null, matches: 1 };
+
+  for (const cond of ["title = ?", "title = ? COLLATE NOCASE"]) {
+    const rows = sel(cond, [ref]);
+    if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
+    if (rows.length > 1) return { resolved: null, matches: rows.length };
+  }
+
+  const key = normalizeNameKey(ref);
+  if (key !== "") {
+    const hits = sel("title IS NOT NULL").filter((r) => normalizeNameKey(r.title) === key);
+    if (hits.length === 1) return { resolved: hits[0] ?? null, matches: 1 };
+    if (hits.length > 1) return { resolved: null, matches: hits.length };
+  }
+
+  if (ref.length >= 6 && BASE62.test(ref)) {
+    const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
+    const rows = sel("uuid >= ? AND uuid < ?", [ref, upper]);
+    if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
+    if (rows.length > 1) return { resolved: null, matches: rows.length };
+  }
+
+  return { resolved: null, matches: 0 };
+}
+
+function resolveUuidOrThrow(
+  db: DatabaseSync,
+  table: string,
+  extraWhere: string,
+  ref: string,
+  kind: string,
+  listCmd: string,
+): string {
+  const r = resolveNamedRef(db, table, extraWhere, [], ref);
+  if (r.resolved !== null) return r.resolved.uuid;
+  throw new RangeError(
+    r.matches === 0
+      ? `${kind} not found: ${ref} (list ${kind}s with \`${listCmd}\`)`
+      : `${kind} reference is ambiguous: ${ref} (${r.matches} matches — use the exact name or uuid)`,
+  );
+}
+
 export function resolveTagUuid(db: DatabaseSync, ref: string): string {
-  const byId = db.prepare("SELECT uuid FROM TMTag WHERE uuid = ?").get(ref) as
-    | { uuid: string }
-    | undefined;
-  if (byId !== undefined) return byId.uuid;
-  const rows = db.prepare("SELECT uuid FROM TMTag WHERE title = ? COLLATE NOCASE").all(ref) as {
-    uuid: string;
-  }[];
-  if (rows.length === 1 && rows[0] !== undefined) return rows[0].uuid;
-  throw new RangeError(
-    rows.length === 0
-      ? `tag not found: ${ref} (list tags with \`things tags\`)`
-      : `tag reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
-  );
+  return resolveUuidOrThrow(db, "TMTag", "1=1", ref, "tag", "things tags");
 }
 
-/** Resolve a project reference (uuid or unique case-insensitive title) — loud on miss. */
 export function resolveProjectUuid(db: DatabaseSync, ref: string): string {
-  const byId = db
-    .prepare("SELECT uuid FROM TMTask WHERE uuid = ? AND type = 1 AND trashed = 0")
-    .get(ref) as { uuid: string } | undefined;
-  if (byId !== undefined) return byId.uuid;
-  const rows = db
-    .prepare("SELECT uuid FROM TMTask WHERE title = ? COLLATE NOCASE AND type = 1 AND trashed = 0")
-    .all(ref) as { uuid: string }[];
-  if (rows.length === 1 && rows[0] !== undefined) return rows[0].uuid;
-  throw new RangeError(
-    rows.length === 0
-      ? `project not found: ${ref} (list projects with \`things projects\`)`
-      : `project reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
+  return resolveUuidOrThrow(
+    db,
+    "TMTask",
+    "type = 1 AND trashed = 0",
+    ref,
+    "project",
+    "things projects",
   );
 }
 
-/** Resolve an area reference (uuid or unique case-insensitive title) — loud on miss. */
 export function resolveAreaUuid(db: DatabaseSync, ref: string): string {
-  const byId = db.prepare("SELECT uuid FROM TMArea WHERE uuid = ?").get(ref) as
-    | { uuid: string }
-    | undefined;
-  if (byId !== undefined) return byId.uuid;
-  const rows = db.prepare("SELECT uuid FROM TMArea WHERE title = ? COLLATE NOCASE").all(ref) as {
-    uuid: string;
-  }[];
-  if (rows.length === 1 && rows[0] !== undefined) return rows[0].uuid;
-  throw new RangeError(
-    rows.length === 0
-      ? `area not found: ${ref} (list areas with \`things areas\`)`
-      : `area reference is ambiguous: ${ref} (${rows.length} matches — use the uuid)`,
-  );
+  return resolveUuidOrThrow(db, "TMArea", "1=1", ref, "area", "things areas");
 }
 
 export function fetchTaskRows(db: DatabaseSync, where: string, params: unknown[] = []): TaskRow[] {

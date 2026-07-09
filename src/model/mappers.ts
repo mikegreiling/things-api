@@ -119,8 +119,6 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
     area: refs(row.area),
     tags,
     repeating: mapRepeating(row),
-    index: row.index ?? 0,
-    todayIndex: row.todayIndex ?? 0,
     created: decodeEpochReal(row.creationDate) ?? new Date(0),
     modified: decodeEpochReal(row.userModificationDate) ?? new Date(0),
     stopped: decodeEpochReal(row.stopDate),
@@ -153,19 +151,12 @@ export function mapHeading(row: TaskRow, refs: RefResolver): Heading {
     type: "heading",
     title: row.title ?? "",
     project: refs(row.project),
-    index: row.index ?? 0,
   };
 }
 
 export function mapChecklistItem(row: ChecklistRow): ChecklistItem {
   return {
-    uuid: row.uuid,
     title: row.title ?? "",
     status: mapStatus(row),
-    index: row.index ?? 0,
-    task: row.task,
-    created: decodeEpochReal(row.creationDate) ?? new Date(0),
-    modified: decodeEpochReal(row.userModificationDate) ?? new Date(0),
-    stopped: decodeEpochReal(row.stopDate),
   };
 }

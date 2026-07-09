@@ -55,7 +55,6 @@ describe("mapTodo", () => {
     expect(todo.startDate).toBe("2026-06-25");
     expect(todo.todaySection).toBe("evening");
     expect(todo.area).toEqual(AREA);
-    expect(todo.todayIndex).toBe(6000626); // sparse rank exposed raw
     expect(todo.repeating).toEqual({ isTemplate: false, isInstance: false, templateUuid: null });
   });
 
@@ -99,7 +98,6 @@ describe("mapProject / mapHeading", () => {
       type: "heading",
       title: "Phase 1",
       project: null,
-      index: -1731,
     });
   });
 });

@@ -8,6 +8,7 @@ import { encodePackedDate, localToday } from "../model/dates.ts";
 import type { AnyTask, Project, TaskStatus, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
+import { resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, ReorderParams } from "./operations.ts";
 
 export interface ResolvedContainer {
@@ -106,45 +107,12 @@ export function emptyPreState(): PreState {
   };
 }
 
-function resolveByTitleOrUuid(
-  db: DatabaseSync,
-  table: "TMArea" | "TMTag",
-  ref: string,
-): ContainerResolution {
-  const byId = db.prepare(`SELECT uuid, title FROM ${table} WHERE uuid = ?`).get(ref) as
-    | ResolvedContainer
-    | undefined;
-  if (byId !== undefined) return { resolved: byId, matches: 1 };
-  const rows = db
-    .prepare(`SELECT uuid, title FROM ${table} WHERE title = ? COLLATE NOCASE`)
-    .all(ref) as unknown as ResolvedContainer[];
-  const first = rows[0];
-  return {
-    resolved: rows.length === 1 && first !== undefined ? first : null,
-    matches: rows.length,
-  };
-}
-
 export function resolveArea(db: DatabaseSync, ref: ContainerRef): ContainerResolution {
-  return resolveByTitleOrUuid(db, "TMArea", ref.uuid ?? ref.title ?? "");
+  return resolveNamedRef(db, "TMArea", "1=1", [], ref.uuid ?? ref.title ?? "");
 }
 
 export function resolveProject(db: DatabaseSync, ref: ContainerRef): ContainerResolution {
-  const key = ref.uuid ?? ref.title ?? "";
-  const byId = db
-    .prepare("SELECT uuid, title FROM TMTask WHERE uuid = ? AND type = 1 AND trashed = 0")
-    .get(key) as ResolvedContainer | undefined;
-  if (byId !== undefined) return { resolved: byId, matches: 1 };
-  const rows = db
-    .prepare(
-      "SELECT uuid, title FROM TMTask WHERE title = ? COLLATE NOCASE AND type = 1 AND trashed = 0",
-    )
-    .all(key) as unknown as ResolvedContainer[];
-  const first = rows[0];
-  return {
-    resolved: rows.length === 1 && first !== undefined ? first : null,
-    matches: rows.length,
-  };
+  return resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 0", [], ref.uuid ?? ref.title ?? "");
 }
 
 export function resolveHeading(
@@ -179,7 +147,7 @@ export function missingTagTitles(db: DatabaseSync, titles: string[]): string[] {
 }
 
 export function resolveTag(db: DatabaseSync, ref: string): ContainerResolution {
-  return resolveByTitleOrUuid(db, "TMTag", ref);
+  return resolveNamedRef(db, "TMTag", "1=1", [], ref);
 }
 
 export function loadTarget(db: DatabaseSync, uuid: string): AnyTask | null {

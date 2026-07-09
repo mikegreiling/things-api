@@ -286,23 +286,55 @@ export interface ThingsClient {
 }
 
 /** One granular checklist edit; every other item's checked state is preserved. */
+/**
+ * Target for an existing checklist item: by `item` (title) or `index`
+ * (1-based). Provide exactly one. Title matching is best-effort on duplicates
+ * (docs/design/reference-resolution.md); index is exact.
+ */
+export interface ChecklistTarget {
+  item?: string;
+  /** 1-based position; overrides `item` when both are given. */
+  index?: number;
+}
+
 export type ChecklistEdit =
   | { action: "add"; title: string; /** 1-based insert position (default: append). */ at?: number }
-  | { action: "remove"; item: string }
-  | { action: "check"; item: string }
-  | { action: "uncheck"; item: string }
-  | { action: "rename"; item: string; title: string }
-  | { action: "move"; item: string; /** 1-based target position. */ to: number };
+  | ({ action: "remove" } & ChecklistTarget)
+  | ({ action: "check" } & ChecklistTarget)
+  | ({ action: "uncheck" } & ChecklistTarget)
+  | ({ action: "rename"; title: string } & ChecklistTarget)
+  | ({ action: "move"; /** 1-based target position. */ to: number } & ChecklistTarget);
 
-/** Resolve an item by exact title — loud on missing/ambiguous (never guess). */
-function checklistIndex(items: ChecklistItemSpec[], ref: string): number {
+/**
+ * Resolve a checklist target to an array index. `index` (1-based) is exact.
+ * A title resolves best-effort: unique → that item; duplicates → the first on
+ * which the action is meaningful (check → first unchecked, uncheck → first
+ * checked, others → first match). Loud only when nothing matches / index is
+ * out of range.
+ */
+function checklistTarget(
+  items: ChecklistItemSpec[],
+  edit: ChecklistEdit & ChecklistTarget,
+): number {
+  if (edit.index !== undefined) {
+    const i = edit.index - 1;
+    if (i < 0 || i >= items.length) {
+      throw new RangeError(`checklist index ${edit.index} is out of range (1..${items.length})`);
+    }
+    return i;
+  }
+  const ref = edit.item;
+  if (ref === undefined) throw new RangeError("give a checklist item title or 1-based index");
   const matches = items.map((c, i) => ({ c, i })).filter(({ c }) => c.title === ref);
+  if (matches.length === 0) throw new RangeError(`no checklist item titled "${ref}"`);
   if (matches.length === 1) return (matches[0] as { i: number }).i;
-  throw new RangeError(
-    matches.length === 0
-      ? `no checklist item titled "${ref}"`
-      : `checklist item title "${ref}" is ambiguous (${matches.length} matches) — rename first`,
-  );
+  const meaningful =
+    edit.action === "check"
+      ? matches.find(({ c }) => !c.completed)
+      : edit.action === "uncheck"
+        ? matches.find(({ c }) => c.completed)
+        : undefined;
+  return (meaningful ?? matches[0] ?? { i: 0 }).i;
 }
 
 export function applyChecklistEdit(
@@ -318,21 +350,21 @@ export function applyChecklistEdit(
       return next;
     }
     case "remove":
-      next.splice(checklistIndex(next, edit.item), 1);
+      next.splice(checklistTarget(next, edit), 1);
       return next;
     case "check":
     case "uncheck": {
-      const target = next[checklistIndex(next, edit.item)] as ChecklistItemSpec;
+      const target = next[checklistTarget(next, edit)] as ChecklistItemSpec;
       target.completed = edit.action === "check";
       return next;
     }
     case "rename": {
-      const target = next[checklistIndex(next, edit.item)] as ChecklistItemSpec;
+      const target = next[checklistTarget(next, edit)] as ChecklistItemSpec;
       target.title = edit.title;
       return next;
     }
     case "move": {
-      const from = checklistIndex(next, edit.item);
+      const from = checklistTarget(next, edit);
       const [moved] = next.splice(from, 1);
       next.splice(Math.max(0, Math.min(next.length, edit.to - 1)), 0, moved as ChecklistItemSpec);
       return next;
