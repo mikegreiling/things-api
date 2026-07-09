@@ -138,7 +138,7 @@ describe("write-command help states the contract", () => {
     expect(tagHelp).toContain("--parent");
     expect(tagHelp).toContain("--unnest");
     expect(tagHelp).toContain("--shortcut");
-    expect(tagHelp).toContain("Clearing a shortcut is not supported");
+    expect(tagHelp).toContain("--clear-shortcut");
   });
 
   it("batch: no transactions, confirmation options, exit codes", () => {

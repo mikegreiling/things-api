@@ -206,7 +206,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
     };
   },
   "H-REMINDER-SCOPE": ({ op, params }) => {
-    if (op !== "todo.add" && op !== "todo.update") return null;
+    if (op !== "todo.add" && op !== "todo.update" && op !== "project.update") return null;
     if (!("reminder" in params) || params["reminder"] === undefined) return null;
     const when = params["when"];
     const isDate = typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when);
@@ -254,7 +254,9 @@ const GUARDS: Record<HazardId, GuardFn> = {
       };
     }
     if (
-      (params["scope"] === "today" || params["scope"] === "evening") &&
+      (params["scope"] === "today" ||
+        params["scope"] === "evening" ||
+        params["scope"] === "inbox") &&
       params["container"] !== undefined
     ) {
       problems.push("container is only valid for project/area scopes");

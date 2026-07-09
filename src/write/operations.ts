@@ -34,6 +34,7 @@ export const OPERATION_KINDS = [
   "project.cancel",
   "project.reopen",
   "project.restore",
+  "project.set-tags",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -144,7 +145,19 @@ export interface ProjectUpdateParams {
   /** Prepend to the existing notes (newline-joined). Exclusive with notes/appendNotes. */
   prependNotes?: string;
   when?: WhenValue;
+  /**
+   * `HH:mm` sets a reminder (requires when: today|evening|YYYY-MM-DD in the
+   * same call); null clears it (today/evening only — a dated reminder can
+   * only be changed, not cleared). Same semantics as to-do reminders.
+   */
+  reminder?: ReminderTime | null;
   deadline?: IsoDate | null;
+}
+
+export interface ProjectSetTagsParams {
+  uuid: string;
+  /** Full replacement set (an empty list clears all tags). */
+  tags: string[];
 }
 
 export interface ProjectMoveParams {
@@ -205,16 +218,18 @@ export interface TagUpdateParams {
   parent?: string;
   /** Un-nest the tag to the root of the hierarchy. Exclusive with parent. */
   unnest?: boolean;
-  /** Single character (clearing to none is not supported). */
+  /** Single character to bind. Exclusive with clearShortcut. */
   shortcut?: string;
+  /** Remove the tag's keyboard shortcut. Exclusive with shortcut. */
+  clearShortcut?: boolean;
 }
 
-export type ReorderScope = "today" | "evening" | "project" | "area";
+export type ReorderScope = "today" | "evening" | "project" | "area" | "inbox";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {
   scope: ReorderScope;
-  /** Required for project/area scopes; must be omitted for today/evening. */
+  /** Required for project/area scopes; must be omitted for today/evening/inbox. */
   container?: ContainerRef;
   /**
    * Desired order, top-first. May be a SUBSET of the scope's members: the
@@ -261,6 +276,7 @@ export interface OperationParamsMap {
   "project.cancel": ProjectCancelParams;
   "project.reopen": UuidParams;
   "project.restore": UuidParams;
+  "project.set-tags": ProjectSetTagsParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

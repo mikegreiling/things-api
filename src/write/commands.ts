@@ -600,7 +600,7 @@ const projectAdd: CommandSpec<"project.add"> = {
 
 const projectUpdate: CommandSpec<"project.update"> = {
   op: "project.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
   preRead(db, params) {
     assertNotesModesExclusive(params);
     const pre = emptyPreState();
@@ -613,11 +613,20 @@ const projectUpdate: CommandSpec<"project.update"> = {
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
     const joined = expectedNotes(pre, params);
     if (joined !== undefined) assert.push({ field: "notes", equals: joined });
-    if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
+    if (params.when !== undefined) {
+      assert.push(...whenAssertions(params.when, ctx.todayIso));
+      // Projects carry the same reminderTime codec as to-dos (A3); a bare
+      // when= clears an existing reminder unless auto-preserved.
+      const reminder = effectiveReminder(pre, params);
+      assert.push({
+        field: "reminder",
+        equals: reminder === null ? null : normalizeReminder(reminder),
+      });
+    }
     if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
     return { mode: "update", uuid: params.uuid, assert };
   },
-  compile(params, vector, _pre, ctx) {
+  compile(params, vector, pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
     return thingsUrl(
       "update-project",
@@ -627,11 +636,45 @@ const projectUpdate: CommandSpec<"project.update"> = {
         notes: params.notes,
         "append-notes": params.appendNotes,
         "prepend-notes": params.prependNotes,
-        when: params.when,
+        when:
+          params.when === undefined
+            ? undefined
+            : whenWithReminder(params.when, effectiveReminder(pre, params)),
         deadline: params.deadline === null ? "" : params.deadline,
       },
       ctx.token,
     );
+  },
+};
+
+const projectSetTags: CommandSpec<"project.set-tags"> = {
+  op: "project.set-tags",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    pre.missingTags = missingTagTitles(db, params.tags);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "tags", equals: sortedTags(params.tags) }],
+    };
+  },
+  compile(params, vector, _pre, ctx) {
+    // Both vectors validated on projects (A1 URL, A2 AppleScript). Full
+    // replacement semantics mirror todo.set-tags; unknown tags are guarded
+    // pre-write (the app silently drops them).
+    if (vector === "url-scheme") {
+      return thingsUrl(
+        "update-project",
+        { id: params.uuid, tags: params.tags.join(",") },
+        ctx.token,
+      );
+    }
+    return osa(`set tag names of project id ${q(params.uuid)} to ${q(params.tags.join(", "))}`);
   },
 };
 
@@ -1061,12 +1104,18 @@ const tagUpdate: CommandSpec<"tag.update"> = {
       params.title === undefined &&
       params.parent === undefined &&
       params.unnest === undefined &&
-      params.shortcut === undefined
+      params.shortcut === undefined &&
+      params.clearShortcut === undefined
     ) {
-      throw new RangeError("tag.update needs title, parent, unnest, and/or shortcut");
+      throw new RangeError(
+        "tag.update needs title, parent, unnest, shortcut, and/or clearShortcut",
+      );
     }
     if (params.parent !== undefined && params.unnest === true) {
       throw new RangeError("parent and unnest are exclusive");
+    }
+    if (params.shortcut !== undefined && params.clearShortcut === true) {
+      throw new RangeError("shortcut and clearShortcut are exclusive");
     }
     const pre = emptyPreState();
     pre.entityTarget = resolveTag(db, params.target);
@@ -1084,6 +1133,7 @@ const tagUpdate: CommandSpec<"tag.update"> = {
     }
     if (params.unnest === true) assert.push({ field: "parent", equals: null });
     if (params.shortcut !== undefined) assert.push({ field: "shortcut", equals: params.shortcut });
+    if (params.clearShortcut === true) assert.push({ field: "shortcut", equals: null });
     return {
       mode: "entity-updated",
       entity: "tag",
@@ -1109,6 +1159,12 @@ const tagUpdate: CommandSpec<"tag.update"> = {
     }
     if (params.shortcut !== undefined) {
       lines.push(`set keyboard shortcut of tag id ${id} to ${q(params.shortcut)}`);
+    }
+    if (params.clearShortcut === true) {
+      // The property-DELETE form clears the shortcut (A4 — the P29 un-nest
+      // spelling generalizes to `shortcut`; `set … to ""`/missing value has
+      // no validated clear path). By NAME, exactly as probed.
+      lines.push(`delete keyboard shortcut of tag ${q(pre.entityTarget?.resolved?.title ?? "")}`);
     }
     if (lines.length === 1) return osa(lines[0] as string);
     const payload = `tell application "Things3"\n${lines.map((l) => `  ${l}`).join("\n")}\nend tell`;
@@ -1141,7 +1197,7 @@ const reorder: CommandSpec<"reorder"> = {
       mode: "ordering",
       key:
         pre.reorder?.key ??
-        (params.scope === "project" || params.scope === "area" ? "index" : "todayIndex"),
+        (params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index"),
       sequence: params.uuids,
     };
   },
@@ -1152,7 +1208,9 @@ const reorder: CommandSpec<"reorder"> = {
         ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
         : params.scope === "area"
           ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
-          : `list "Today"`;
+          : params.scope === "inbox"
+            ? `list "Inbox"`
+            : `list "Today"`;
     const ids = (pre.reorder?.wireList ?? params.uuids).join(",");
     return osa(`${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(ids)}`);
   },
@@ -1204,4 +1262,5 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.cancel": projectCancel,
   "project.reopen": projectReopen,
   "project.restore": projectRestore,
+  "project.set-tags": projectSetTags,
 };

@@ -85,8 +85,17 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["U08", "E18"],
-    notes: "append-/prepend-notes newline-joined, same semantics as to-dos (E18)",
+    evidence: ["U08", "E18", "A3"],
+    notes:
+      "append-/prepend-notes newline-joined, same semantics as to-dos (E18); " +
+      "reminder via when=<list>@time — projects carry the to-do reminderTime codec (A3)",
+  },
+  "project.set-tags": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["A1"],
+    notes: "update-project?tags= — full replacement; unknown tags silently dropped (guarded)",
   },
   "project.move": {
     support: "yes",

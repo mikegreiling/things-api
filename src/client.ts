@@ -192,6 +192,10 @@ export interface ThingsClient {
     /** Duplicate a project INCLUDING its children; the copy's uuid is on the result. */
     duplicateProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /** Replace a project's full tag set (an empty list clears all tags). */
+    setProjectTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
+    /** Merge: current project tags + new ones, then replace. */
+    addProjectTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     addArea(params: AreaAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateArea(
       target: string,
@@ -406,6 +410,14 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreProject: (uuid, o) => run("project.restore", { uuid }, o),
       duplicateProject: (uuid, o) => run("project.duplicate", { uuid }, o),
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
+      setProjectTags: (uuid, tags, o) => run("project.set-tags", { uuid, tags }, o),
+      addProjectTags(uuid, tags, o) {
+        const current = byUuid(conn.db, uuid);
+        const existing =
+          current !== null && current.type !== "heading" ? current.tags.map((t) => t.title) : [];
+        const merged = [...new Set([...existing, ...tags])];
+        return run("project.set-tags", { uuid, tags: merged }, o);
+      },
       addArea: (params, o) => run("area.add", params, o),
       updateArea: (target, patch, o) => run("area.update", { target, ...patch }, o),
       deleteArea: (target, o) => run("area.delete", { target }, o),
