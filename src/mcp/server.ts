@@ -848,6 +848,81 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "rename_heading",
+    {
+      description: "Rename a heading in place (works on archived headings too).",
+      inputSchema: { uuid: z.string(), title: z.string(), ...dryRunShape },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.renameHeading(args.uuid, args.title, writeOptions(args)),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "archive_heading",
+    {
+      description:
+        "Archive a heading — it leaves the active project view (reversible with " +
+        "unarchive_heading). The preferred way to retire a heading: row deletion only " +
+        "exists in the app's UI / Shortcuts behind a per-run consent dialog. With open " +
+        "children the children policy is required: complete or cancel resolve them with " +
+        "the heading in one cascade; reparent moves them to the project root first, " +
+        "keeping them open (a compound sequence that undo reverses as one unit).",
+      inputSchema: {
+        uuid: z.string(),
+        children: z
+          .enum(["complete", "cancel", "reparent"])
+          .optional()
+          .describe("Required when the heading has open children"),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const r = await getClient().write.archiveHeading(
+          args.uuid,
+          args.children !== undefined ? { children: args.children } : {},
+          writeOptions(args),
+        );
+        return r.heading.kind === "ok" || r.heading.kind === "dry-run"
+          ? jsonResult(r)
+          : mutationResult(r.heading);
+      }),
+  );
+
+  server.registerTool(
+    "unarchive_heading",
+    {
+      description:
+        "Un-archive a heading. restore_children also reopens the children the archive " +
+        "cascade resolved with it (matching resolution timestamps; someday state " +
+        "survives). Children resolved at other times are never touched.",
+      inputSchema: {
+        uuid: z.string(),
+        restore_children: z.boolean().optional(),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const r = await getClient().write.unarchiveHeading(
+          args.uuid,
+          args.restore_children === true ? { restoreChildren: true } : {},
+          writeOptions(args),
+        );
+        return r.heading.kind === "ok" || r.heading.kind === "dry-run"
+          ? jsonResult(r)
+          : mutationResult(r.heading);
+      }),
+  );
+
+  server.registerTool(
     "duplicate_item",
     {
       description:

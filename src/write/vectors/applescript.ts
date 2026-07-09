@@ -165,6 +165,29 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
       "`set completion date` / `set creation date` property writes — the ONLY surface " +
       "that rewrites these timestamps on an existing item",
   },
+  "heading.rename": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P10d", "P10b:b6"],
+    notes: "`set name of to do id` — heading rows are id-addressable (enumeration hides them)",
+  },
+  "heading.archive": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P10d", "P10b:b1", "P11c", "P11d"],
+    notes:
+      "`set status of to do id` completed/canceled — the UI's Archive; open children " +
+      "cascade per the status (completed vs CANCELED), pre-resolved children untouched",
+  },
+  "heading.unarchive": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["P10b:b2"],
+    notes: "`set status … to open` — reopens the heading only; children stay resolved",
+  },
   reorder: {
     support: "partial",
     disruption: 0,

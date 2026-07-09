@@ -631,6 +631,71 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
+  const heading = group(program, "heading", "Heading-scoped operations");
+
+  addWriteFlags(
+    heading
+      .command("rename <uuid> <title>")
+      .description("Rename a heading in place (works on archived headings too)."),
+  ).action(async (uuid: string, title: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.renameHeading(uuid, title, writeOptionsFrom(opts)));
+  });
+
+  addWriteFlags(
+    heading
+      .command("archive <uuid>")
+      .description(
+        "Archive a heading — it leaves the active project view (reversible with " +
+          "`things heading unarchive`). This is the preferred way to retire a heading: " +
+          "row DELETION exists only in the app's UI and Shortcuts with a per-run consent " +
+          "dialog, never headlessly. With open children, --children is required: " +
+          "complete/cancel resolve them with the heading (one atomic cascade); reparent " +
+          "moves them to the project root first, keeping them open — a compound sequence " +
+          "that `things undo` reverses as one unit.",
+      )
+      .option(
+        "--children <policy>",
+        "complete | cancel | reparent (required when children are open)",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
+    await runWrite(opts, async (c) => {
+      const outcome = await c.write.archiveHeading(
+        uuid,
+        children ? { children } : {},
+        writeOptionsFrom(opts),
+      );
+      for (const leg of outcome.reparented) {
+        process.stderr.write(`reparented: ${leg.title} (${leg.result.kind})\n`);
+      }
+      return outcome.heading;
+    });
+  });
+
+  addWriteFlags(
+    heading
+      .command("unarchive <uuid>")
+      .description(
+        "Un-archive a heading. --restore-children also reopens the children the archive " +
+          "cascade resolved with it (identified by matching resolution timestamps; a " +
+          "someday child comes back as someday). Children resolved at other times are " +
+          "never touched.",
+      )
+      .option("--restore-children", "reopen cascade-resolved children too"),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    await runWrite(opts, async (c) => {
+      const outcome = await c.write.unarchiveHeading(
+        uuid,
+        opts["restoreChildren"] === true ? { restoreChildren: true } : {},
+        writeOptionsFrom(opts),
+      );
+      for (const child of outcome.children) {
+        process.stderr.write(`restored: ${child.title} (${child.result.kind})\n`);
+      }
+      return outcome.heading;
+    });
+  });
+
   const project = group(program, "project", "Project-scoped operations");
 
   addWriteFlags(

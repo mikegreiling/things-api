@@ -325,3 +325,27 @@ describe("scf2/P8 op compilation goldens", () => {
     expect(inv.payload).toContain('with ids "H2,H1"');
   });
 });
+
+describe("heading op goldens (P10/P11)", () => {
+  it("heading.rename / archive (per-policy status) / unarchive compile to by-id AppleScript", () => {
+    const pre = emptyPreState();
+    expect(
+      COMMANDS["heading.rename"].compile({ uuid: "H1", title: "New" }, "applescript", pre, {
+        token: TOKEN,
+      }).payload,
+    ).toContain('set name of to do id "H1" to "New"');
+    expect(
+      COMMANDS["heading.archive"].compile({ uuid: "H1" }, "applescript", pre, { token: TOKEN })
+        .payload,
+    ).toContain('set status of to do id "H1" to completed');
+    expect(
+      COMMANDS["heading.archive"].compile({ uuid: "H1", children: "cancel" }, "applescript", pre, {
+        token: TOKEN,
+      }).payload,
+    ).toContain('set status of to do id "H1" to canceled');
+    expect(
+      COMMANDS["heading.unarchive"].compile({ uuid: "H1" }, "applescript", pre, { token: TOKEN })
+        .payload,
+    ).toContain('set status of to do id "H1" to open');
+  });
+});

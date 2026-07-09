@@ -159,8 +159,13 @@ async function runBounce(
   const rankKey: "index" | "todayIndex" = scope === "projects" ? "index" : "todayIndex";
   const legOp = scope === "projects" ? ("project.update" as const) : ("todo.update" as const);
 
+  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
   // Scope/membership guard — same data the native path's guard uses.
   const pre = computeReorderPre(deps.db, params, resolveContainerUuid(deps, params), now());
+  // Pre-ranks make the SUMMARY record the undoable unit (a single inverse
+  // reorder restores the old relative order); legs are excluded from undo.
+  const preRanks: Record<string, unknown> = {};
+  for (const m of pre.members) preRanks[m.uuid] = m.rank;
   const problems: string[] = [];
   if (params.container !== undefined)
     problems.push("container is only valid for project/area/headings scopes");
@@ -192,7 +197,10 @@ async function runBounce(
         "read the scope first (things today) and pass only its eligible members, " +
         `at most ${BOUNCE_MAX_ITEMS} for the bounce strategy`,
     };
-    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null);
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
+      pre: preRanks,
+      txnId,
+    });
     return result;
   }
 
@@ -228,7 +236,14 @@ async function runBounce(
       const detail =
         `aborted before bouncing ${uuid}: ${memberProblem} (Things was likely edited ` +
         "concurrently); already-placed items keep their new positions";
-      auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        { pre: preRanks, txnId },
+      );
       return {
         kind: "bounce-aborted",
         op: "reorder",
@@ -239,9 +254,16 @@ async function runBounce(
       };
     }
 
-    const leg1 = await runMutation(deps, legOp, { uuid, when: away }, legOptions(options));
+    const leg1 = await runMutation(deps, legOp, { uuid, when: away }, legOptions(options, txnId));
     if (leg1.kind !== "ok") {
-      auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        { pre: preRanks, txnId },
+      );
       return {
         kind: "bounce-aborted",
         op: "reorder",
@@ -251,9 +273,16 @@ async function runBounce(
         cause: leg1,
       };
     }
-    const leg2 = await runMutation(deps, legOp, { uuid, when: back }, legOptions(options));
+    const leg2 = await runMutation(deps, legOp, { uuid, when: back }, legOptions(options, txnId));
     if (leg2.kind !== "ok") {
-      auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        { pre: preRanks, txnId },
+      );
       return {
         kind: "bounce-aborted",
         op: "reorder",
@@ -280,7 +309,14 @@ async function runBounce(
       deps.poller ?? {},
     );
     if (prefixCheck.kind !== "ok") {
-      auditSummary(deps, params, startedAt, "verify-failed:mismatch", { placed: [...placed] });
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        { pre: preRanks, txnId },
+      );
       return {
         kind: "bounce-aborted",
         op: "reorder",
@@ -297,7 +333,7 @@ async function runBounce(
   const reader = createDbReader(deps.db);
   const observed: Record<string, unknown> = {};
   for (const uuid of params.uuids) observed[uuid] = reader.rankOf(uuid, rankKey);
-  auditSummary(deps, params, startedAt, "ok", observed);
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId });
   return {
     kind: "ok",
     op: "reorder",
@@ -308,8 +344,9 @@ async function runBounce(
   };
 }
 
-function legOptions(options: WriteOptions): WriteOptions {
+function legOptions(options: WriteOptions, txnId?: string): WriteOptions {
   const legs: WriteOptions = {};
+  if (txnId !== undefined) legs.txn = { id: txnId, role: "leg" };
   if (options.maxDisruption !== undefined) legs.maxDisruption = options.maxDisruption;
   if (options.verifyTimeoutMs !== undefined) legs.verifyTimeoutMs = options.verifyTimeoutMs;
   if (options.actor !== undefined) legs.actor = options.actor;
@@ -376,6 +413,7 @@ function auditSummary(
   startedAt: Date,
   result: AuditRecord["result"],
   observed: Record<string, unknown> | null,
+  extras?: { pre?: Record<string, unknown>; txnId?: string },
 ): void {
   const fp = deps.fingerprint();
   const record: AuditRecord = {
@@ -389,7 +427,8 @@ function auditSummary(
     disruption: 0,
     invocation: `bounce(${params.scope}) ×${params.uuids.length}`,
     requested: params as unknown as Record<string, unknown>,
-    pre: null,
+    pre: extras?.pre ?? null,
+    ...(extras?.txnId !== undefined && { txn: { id: extras.txnId, role: "summary" as const } }),
     observed,
     result,
     verify: null,

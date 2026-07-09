@@ -101,8 +101,11 @@ export function readAuditRecords(dir: string): AuditRecord[] {
  * successful mutations qualify; inverse mutations (actor `undo:…`) never do.
  */
 export function selectUndoTargets(records: AuditRecord[], last: number): AuditRecord[] {
+  // Compound operations undo as ONE unit: legs are excluded here; their
+  // summary record replays every inverse (or, for reorders, issues a single
+  // inverse reorder from the recorded pre-ranks).
   return records
-    .filter((r) => r.result === "ok" && !r.actor.startsWith("undo:"))
+    .filter((r) => r.result === "ok" && !r.actor.startsWith("undo:") && r.txn?.role !== "leg")
     .slice(-Math.max(1, last))
     .toReversed();
 }
@@ -191,7 +194,7 @@ function scheduleSteps(
 }
 
 /** Build the inverse plan for one audit record. Pure — unit-testable. */
-export function planUndo(record: AuditRecord, now: Date): UndoPlan {
+export function planUndo(record: AuditRecord, now: Date, allRecords: AuditRecord[] = []): UndoPlan {
   const target = { ts: record.ts, op: record.op, uuid: record.uuid, actor: record.actor };
   const todayIso = localToday(now);
   const notes: string[] = [];
@@ -684,6 +687,82 @@ export function planUndo(record: AuditRecord, now: Date): UndoPlan {
       return { target, kind: "invertible", steps: [{ op: "reorder", params }], notes };
     }
 
+    case "heading.rename": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const title = preField(record, "title");
+      if (typeof title !== "string") return irreversible("the pre-op title was not captured");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "heading.rename", params: { uuid, title } }],
+        notes,
+      };
+    }
+
+    case "heading.archive": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const steps: UndoStep[] = [{ op: "heading.unarchive", params: { uuid } }];
+      // Reopen exactly the children the cascade resolved (nested pre map —
+      // the project.complete pattern). Reparented children live in leg
+      // records; replay their inverses too when this summary heads a txn.
+      const pre = record.pre ?? {};
+      for (const [childUuid, fields] of Object.entries(pre)) {
+        if (childUuid === uuid) continue;
+        if (
+          typeof fields === "object" &&
+          fields !== null &&
+          (fields as Record<string, unknown>)["status"] === "open"
+        ) {
+          steps.push({ op: "todo.reopen", params: { uuid: childUuid } });
+        }
+      }
+      if (record.txn?.role === "summary") {
+        const legs = allRecords.filter(
+          (r) => r.txn?.id === record.txn?.id && r.txn?.role === "leg" && r.result === "ok",
+        );
+        const headingTitle = preField(record, "title");
+        for (const leg of legs.toReversed()) {
+          const project = (leg.requested["project"] as { uuid?: unknown } | undefined)?.uuid;
+          if (leg.op === "todo.move" && leg.uuid !== null && typeof project === "string") {
+            // Reparent leg: move the child back UNDER the heading (the step-1
+            // unarchive precedes this; heading placement targets by NAME).
+            steps.push({
+              op: "todo.move",
+              params: {
+                uuid: leg.uuid,
+                project: { uuid: project },
+                ...(typeof headingTitle === "string" &&
+                  headingTitle !== "" && { heading: headingTitle }),
+              },
+            });
+            continue;
+          }
+          const legPlan = planUndo(leg, now, allRecords);
+          if (legPlan.kind === "invertible") steps.push(...legPlan.steps);
+          else notes.push(`leg ${leg.op} (${leg.uuid ?? "?"}) is not invertible: skipped`);
+        }
+        if (legs.length > 0) notes.push(`replays ${legs.length} compound leg(s) in reverse`);
+      }
+      if (steps.length > 1) {
+        notes.push("cascade-resolved children reopen too (someday state survives — P11a)");
+      }
+      return { target, kind: "invertible", steps, notes };
+    }
+
+    case "heading.unarchive": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      notes.push(
+        "re-archives the heading with children: complete — children reopened by the " +
+          "unarchive re-resolve via the cascade",
+      );
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "heading.archive", params: { uuid, children: "complete" } }],
+        notes,
+      };
+    }
+
     default:
       return irreversible(`no inverse is defined for operation "${record.op}"`);
   }
@@ -703,7 +782,7 @@ export async function runUndo(
   const items: UndoItemResult[] = [];
 
   for (const record of targets) {
-    const plan = planUndo(record, now);
+    const plan = planUndo(record, now, records);
     let item: UndoItemResult;
 
     if (plan.kind === "irreversible") {
