@@ -35,6 +35,8 @@ export const OPERATION_KINDS = [
   "project.reopen",
   "project.restore",
   "project.set-tags",
+  "todo.backdate",
+  "todo.add-logged",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -87,6 +89,26 @@ export interface TodoUpdateParams {
 
 export interface UuidParams {
   uuid: string;
+}
+
+export interface TodoBackdateParams {
+  uuid: string;
+  /**
+   * Rewrite the completion timestamp to noon (local) on this date. The
+   * to-do must already be completed or canceled.
+   */
+  completionDate?: IsoDate;
+  /** Rewrite the creation timestamp to noon (local) on this date. */
+  creationDate?: IsoDate;
+}
+
+export interface TodoAddLoggedParams {
+  title: string;
+  notes?: string;
+  /** The completion timestamp the created row carries (logged in the past). */
+  completionDate: IsoDate;
+  /** Optional backdated creation timestamp (must be <= completionDate). */
+  creationDate?: IsoDate;
 }
 
 export interface TodoMoveParams {
@@ -224,12 +246,24 @@ export interface TagUpdateParams {
   clearShortcut?: boolean;
 }
 
-export type ReorderScope = "today" | "evening" | "project" | "area" | "inbox";
+export type ReorderScope =
+  | "today"
+  | "evening"
+  | "project"
+  | "area"
+  | "inbox"
+  | "headings"
+  | "someday"
+  | "projects";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {
   scope: ReorderScope;
-  /** Required for project/area scopes; must be omitted for today/evening/inbox. */
+  /**
+   * Required for project/area/headings scopes (headings: the project whose
+   * heading rows are being reordered); must be omitted for
+   * today/evening/inbox/someday/projects.
+   */
   container?: ContainerRef;
   /**
    * Desired order, top-first. May be a SUBSET of the scope's members: the
@@ -238,9 +272,12 @@ export interface ReorderParams {
    */
   uuids: string[];
   /**
-   * Omit for the default per scope: native for today/project/area (requires
-   * allowExperimental), bounce for evening. Today accepts an explicit
-   * "bounce" fallback; project/area are native-only; evening is bounce-only.
+   * Omit for the default per scope: native for today/project/area/inbox/
+   * headings/someday (requires allowExperimental), bounce for evening and
+   * projects. Today accepts an explicit "bounce" fallback; evening is
+   * bounce-only; "projects" (top-level sidebar order) is bounce-only — each
+   * project takes a when=someday -> when=anytime round-trip, which
+   * front-inserts it (P8e).
    */
   strategy?: ReorderStrategy;
 }
@@ -277,6 +314,8 @@ export interface OperationParamsMap {
   "project.reopen": UuidParams;
   "project.restore": UuidParams;
   "project.set-tags": ProjectSetTagsParams;
+  "todo.backdate": TodoBackdateParams;
+  "todo.add-logged": TodoAddLoggedParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

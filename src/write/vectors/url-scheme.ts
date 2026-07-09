@@ -90,6 +90,15 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
       "append-/prepend-notes newline-joined, same semantics as to-dos (E18); " +
       "reminder via when=<list>@time — projects carry the to-do reminderTime codec (A3)",
   },
+  "todo.add-logged": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["scf2:P4d"],
+    notes:
+      "things:///json add with completed + completion-date/creation-date attributes — " +
+      "creates a row directly in the Logbook with backdated timestamps",
+  },
   "project.set-tags": {
     support: "yes",
     disruption: 0,

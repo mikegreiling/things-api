@@ -90,6 +90,12 @@ function osa(script: string): CompiledInvocation {
   return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
 }
 
+/** Multi-statement `tell` block (one osascript invocation, several events). */
+function osaBlock(statements: string[]): CompiledInvocation {
+  const payload = `tell application "Things3"\n  ${statements.join("\n  ")}\nend tell`;
+  return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
+}
+
 function q(value: string): string {
   return `"${escapeAppleScript(value)}"`;
 }
@@ -1178,7 +1184,7 @@ const reorder: CommandSpec<"reorder"> = {
   preRead(db, params, now) {
     const pre = emptyPreState();
     let containerUuid: string | null = null;
-    if (params.scope === "project") {
+    if (params.scope === "project" || params.scope === "headings") {
       pre.destProject = resolveProject(db, params.container ?? {});
       containerUuid = pre.destProject.resolved?.uuid ?? null;
     }
@@ -1204,15 +1210,148 @@ const reorder: CommandSpec<"reorder"> = {
   compile(params, vector, pre) {
     if (vector !== "applescript") unsupportedVector(this.op, vector);
     const specifier =
-      params.scope === "project"
+      params.scope === "project" || params.scope === "headings"
         ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
         : params.scope === "area"
           ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
           : params.scope === "inbox"
             ? `list "Inbox"`
-            : `list "Today"`;
-    const ids = (pre.reorder?.wireList ?? params.uuids).join(",");
-    return osa(`${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(ids)}`);
+            : params.scope === "someday"
+              ? `list "Someday"`
+              : `list "Today"`;
+    const wire = pre.reorder?.wireList ?? params.uuids;
+    if (params.scope === "someday") {
+      // The Someday handler STACKS each sent id above the list's current top
+      // (the current top itself never moves) — P6h/P7e/P8b. The validated
+      // two-call protocol realizes an exact order: (1) push the desired
+      // BOTTOM item to the top, making it the anchor; (2) send the reversed
+      // wire list — the anchor (first id) stays put and the rest stack above
+      // it in desired order (P8b: exact).
+      const bottom = wire.at(-1) ?? "";
+      const reversed = wire.toReversed().join(",");
+      return osaBlock([
+        `${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(bottom)}`,
+        `${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(reversed)}`,
+      ]);
+    }
+    return osa(`${PRIVATE_REORDER_COMMAND} ${specifier} with ids ${q(wire.join(","))}`);
+  },
+};
+
+/** Locale-proof AppleScript date literal: local noon on an ISO date. */
+function asDateBlock(varName: string, iso: string): string[] {
+  const [y, m, d] = iso.split("-").map(Number);
+  return [
+    `set ${varName} to current date`,
+    `set time of ${varName} to 12 * hours`,
+    `set day of ${varName} to 1`,
+    `set year of ${varName} to ${y}`,
+    `set month of ${varName} to ${m}`,
+    `set day of ${varName} to ${d}`,
+  ];
+}
+
+const todoBackdate: CommandSpec<"todo.backdate"> = {
+  op: "todo.backdate",
+  hazards: ["H-BACKDATE-OPEN"],
+  preRead(db, params) {
+    if (params.completionDate === undefined && params.creationDate === undefined) {
+      throw new RangeError("nothing to backdate: give completionDate and/or creationDate");
+    }
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    const assert: FieldAssertion[] = [];
+    if (params.completionDate !== undefined) {
+      assert.push({ field: "stoppedDate", equals: params.completionDate });
+    }
+    if (params.creationDate !== undefined) {
+      assert.push({ field: "createdDate", equals: params.creationDate });
+    }
+    return { mode: "update", uuid: params.uuid, assert };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const statements: string[] = [];
+    if (params.completionDate !== undefined) {
+      statements.push(
+        ...asDateBlock("compDate", params.completionDate),
+        `set completion date of to do id ${q(params.uuid)} to compDate`,
+      );
+    }
+    if (params.creationDate !== undefined) {
+      statements.push(
+        ...asDateBlock("createDate", params.creationDate),
+        `set creation date of to do id ${q(params.uuid)} to createDate`,
+      );
+    }
+    return osaBlock(statements);
+  },
+};
+
+const todoAddLogged: CommandSpec<"todo.add-logged"> = {
+  op: "todo.add-logged",
+  hazards: [],
+  preRead(db, params) {
+    if (
+      params.creationDate !== undefined &&
+      params.creationDate.localeCompare(params.completionDate) > 0
+    ) {
+      throw new RangeError("creationDate must not be after completionDate");
+    }
+    const pre = emptyPreState();
+    pre.sameTitleUuids = (
+      db.prepare("SELECT uuid FROM TMTask WHERE title = ? AND type = 0").all(params.title) as {
+        uuid: string;
+      }[]
+    ).map((r) => r.uuid);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    const assert: FieldAssertion[] = [
+      { field: "status", equals: "completed" },
+      { field: "stoppedDate", equals: params.completionDate },
+    ];
+    if (params.creationDate !== undefined) {
+      assert.push({ field: "createdDate", equals: params.creationDate });
+    }
+    if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
+    return {
+      mode: "create",
+      probe: {
+        title: params.title,
+        type: "to-do",
+        sinceEpoch: 0,
+        excludeUuids: pre.sameTitleUuids,
+      },
+      assert,
+    };
+  },
+  compile(params, vector, _pre, ctx) {
+    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    // Local noon -> UTC instant, so the stored timestamp decodes back to the
+    // requested local DATE in every timezone (P4d: json attrs honored exactly).
+    const utcNoon = (iso: string): string => {
+      const [y, m, d] = iso.split("-").map(Number);
+      return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1, 12, 0, 0).toISOString();
+    };
+    const payload = JSON.stringify([
+      {
+        type: "to-do",
+        attributes: {
+          title: params.title,
+          ...(params.notes !== undefined && { notes: params.notes }),
+          completed: true,
+          "completion-date": utcNoon(params.completionDate),
+          ...(params.creationDate !== undefined && {
+            "creation-date": utcNoon(params.creationDate),
+          }),
+        },
+      },
+    ]);
+    return thingsUrl("json", { data: payload }, ctx.token);
   },
 };
 
@@ -1263,4 +1402,6 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.reopen": projectReopen,
   "project.restore": projectRestore,
   "project.set-tags": projectSetTags,
+  "todo.backdate": todoBackdate,
+  "todo.add-logged": todoAddLogged,
 };

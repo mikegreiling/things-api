@@ -226,3 +226,102 @@ describe("AppleScript compilation goldens", () => {
     ).toThrow(/cannot be compiled/);
   });
 });
+
+describe("scf2/P8 op compilation goldens", () => {
+  it("todo.add-logged: json payload with completed + UTC-noon backdated attrs", () => {
+    const inv = COMMANDS["todo.add-logged"].compile(
+      { title: "Migrated ✓", completionDate: "2025-01-15", creationDate: "2024-06-01" },
+      "url-scheme",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(inv.kind).toBe("open-url");
+    expect(inv.payload).toContain("things:///json?");
+    const data = decodeURIComponent(inv.payload.split("data=")[1]?.split("&")[0] ?? "");
+    const parsed = JSON.parse(data) as Array<{
+      type: string;
+      attributes: Record<string, unknown>;
+    }>;
+    expect(parsed[0]?.type).toBe("to-do");
+    expect(parsed[0]?.attributes["completed"]).toBe(true);
+    // Local noon on the requested dates, expressed as a UTC instant.
+    expect(parsed[0]?.attributes["completion-date"]).toBe(new Date(2025, 0, 15, 12).toISOString());
+    expect(parsed[0]?.attributes["creation-date"]).toBe(new Date(2024, 5, 1, 12).toISOString());
+    expect(inv.redactedPayload).not.toContain(TOKEN);
+  });
+
+  it("todo.add-logged: creationDate after completionDate is refused at preRead", () => {
+    expect(() =>
+      COMMANDS["todo.add-logged"].preRead(
+        null as never,
+        { title: "X", completionDate: "2025-01-15", creationDate: "2025-02-01" },
+        new Date(),
+      ),
+    ).toThrow(/creationDate must not be after/);
+  });
+
+  it("todo.backdate: locale-proof AppleScript date construction, both fields", () => {
+    const inv = COMMANDS["todo.backdate"].compile(
+      { uuid: "ABC", completionDate: "2025-01-15", creationDate: "2024-06-01" },
+      "applescript",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(inv.kind).toBe("osascript");
+    expect(inv.payload).toContain('tell application "Things3"');
+    expect(inv.payload).toContain("set year of compDate to 2025");
+    expect(inv.payload).toContain("set month of compDate to 1");
+    expect(inv.payload).toContain("set day of compDate to 15");
+    expect(inv.payload).toContain('set completion date of to do id "ABC" to compDate');
+    expect(inv.payload).toContain("set year of createDate to 2024");
+    expect(inv.payload).toContain('set creation date of to do id "ABC" to createDate');
+    // no locale-dependent date string parsing anywhere
+    expect(inv.payload).not.toContain('date "');
+  });
+
+  it("reorder someday: the validated two-call anchor protocol (P8b)", () => {
+    const pre = emptyPreState();
+    pre.reorder = {
+      key: "index",
+      members: [],
+      rejected: [],
+      duplicates: [],
+      projectMembers: [],
+      mixedTypes: false,
+      wireList: ["A", "B", "C"],
+    };
+    const inv = COMMANDS["reorder"].compile(
+      { scope: "someday", uuids: ["A", "B", "C"] },
+      "applescript",
+      pre,
+      { token: TOKEN },
+    );
+    // Call 1 pushes the desired BOTTOM to the top (the anchor); call 2 sends
+    // the reversed wire list — anchor first (stays), rest stack above.
+    expect(inv.payload).toContain('with ids "C"');
+    expect(inv.payload).toContain('with ids "C,B,A"');
+    expect(inv.payload.indexOf('with ids "C"')).toBeLessThan(inv.payload.indexOf('"C,B,A"'));
+  });
+
+  it("reorder headings: project specifier carries the heading wire list forward (scf P1)", () => {
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
+    pre.reorder = {
+      key: "index",
+      members: [],
+      rejected: [],
+      duplicates: [],
+      projectMembers: [],
+      mixedTypes: false,
+      wireList: ["H2", "H1"],
+    };
+    const inv = COMMANDS["reorder"].compile(
+      { scope: "headings", container: { uuid: "PROJ-9" }, uuids: ["H2", "H1"] },
+      "applescript",
+      pre,
+      { token: TOKEN },
+    );
+    expect(inv.payload).toContain('project id "PROJ-9"');
+    expect(inv.payload).toContain('with ids "H2,H1"');
+  });
+});

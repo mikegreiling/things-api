@@ -552,3 +552,207 @@ describe("computeReorderPre wire lists", () => {
     expect(pre.members.map((m) => m.uuid)).toEqual([b, c, a]);
   });
 });
+
+// ---------------------------------------------------------------- new scopes
+
+/**
+ * Someday-list sim: the app STACKS each sent id above the call's ORIGINAL
+ * top; an id that IS the original top never moves (P6h/P7e/P8b anchor model).
+ */
+function somedayVector() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const scopeRows = (): { uuid: string; rank: number }[] =>
+        fixture.db
+          .prepare(
+            `SELECT uuid, "index" AS rank FROM TMTask WHERE trashed = 0 AND status = 0
+             AND type = 0 AND start = 2 AND startDate IS NULL ORDER BY "index" ASC`,
+          )
+          .all() as { uuid: string; rank: number }[];
+      for (const m of invocation.payload.matchAll(/with ids "([^"]+)"/g)) {
+        const ids = (m[1] ?? "").split(",");
+        const origTop = scopeRows()[0]?.uuid;
+        for (const uuid of ids) {
+          if (uuid === origTop) continue;
+          const min = scopeRows()[0]?.rank ?? 0;
+          fixture.db
+            .prepare(`UPDATE TMTask SET "index" = ?, userModificationDate = ? WHERE uuid = ?`)
+            .run(min - 1, modClock++, uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+/** update-project when= sim: someday parks, anytime FRONT-inserts (P8e). */
+function projectBounceVector() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "url-scheme",
+    matrix: { "project.update": { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const url = new URL(invocation.payload);
+      const id = url.searchParams.get("id") ?? "";
+      const when = url.searchParams.get("when") ?? "";
+      if (when === "someday") {
+        fixture.db
+          .prepare(
+            `UPDATE TMTask SET start = 2, startDate = NULL, userModificationDate = ? WHERE uuid = ?`,
+          )
+          .run(modClock++, id);
+      } else {
+        const min = fixture.db
+          .prepare(
+            `SELECT MIN("index") AS m FROM TMTask WHERE trashed = 0 AND status = 0
+             AND type = 1 AND area IS NULL`,
+          )
+          .get() as { m: number | null };
+        fixture.db
+          .prepare(
+            `UPDATE TMTask SET start = 1, startDate = NULL, "index" = ?,
+             userModificationDate = ? WHERE uuid = ?`,
+          )
+          .run((min.m ?? 0) - 1, modClock++, id);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+describe("headings scope (scf P1)", () => {
+  it("reorders a project's heading rows with a project specifier; children rejected", () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const h1 = seedHeading(fixture.db, { title: "Alpha", project, index: 1 });
+    const h2 = seedHeading(fixture.db, { title: "Beta", project, index: 2 });
+    seedTodo(fixture.db, { title: "child", heading: h1, index: 3 });
+
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "headings", container: { uuid: project }, uuids: [h2, h1] },
+      project,
+      NOW,
+    );
+    expect(pre.members.map((m) => m.uuid)).toEqual([h1, h2]);
+    expect(pre.key).toBe("index");
+
+    const { vector, calls } = nativeVector(`"index"`);
+    return runReorder(deps([vector]), {
+      scope: "headings",
+      container: { uuid: project },
+      uuids: [h2, h1],
+    }).then((result) => {
+      expect(result.kind).toBe("ok");
+      expect(calls[0]).toContain(`project id "${project}"`);
+      expect(calls[0]).toContain(`with ids "${h2},${h1}"`);
+    });
+  });
+
+  it("rejects a to-do uuid in headings scope", async () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    seedHeading(fixture.db, { title: "Alpha", project, index: 1 });
+    const child = seedTodo(fixture.db, { title: "plain", project, index: 2 });
+    const { vector } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), {
+      scope: "headings",
+      container: { uuid: project },
+      uuids: [child],
+    });
+    expect(result.kind).toBe("blocked");
+  });
+});
+
+describe("someday scope (P8b two-call anchor protocol)", () => {
+  it("realizes the exact requested order against anchor-stack semantics", async () => {
+    const a = seedTodo(fixture.db, { title: "A", start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "B", start: "someday", index: 20 });
+    const c = seedTodo(fixture.db, { title: "C", start: "someday", index: 30 });
+    const d = seedTodo(fixture.db, { title: "D", start: "someday", index: 40 });
+    const { vector, calls } = somedayVector();
+    const result = await runReorder(deps([vector]), { scope: "someday", uuids: [c, a, d, b] });
+    expect(result.kind).toBe("ok");
+    // one osascript invocation carrying the two-call protocol
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('list "Someday"');
+    const ranks = [c, a, d, b].map(
+      (u) =>
+        (
+          fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
+            r: number;
+          }
+        ).r,
+    );
+    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+  });
+
+  it("rejects someday PROJECTS (inconsistent across probes) and containered to-dos", async () => {
+    seedTodo(fixture.db, { title: "loose", start: "someday", index: 1 });
+    const proj = seedProject(fixture.db, { title: "SP", start: "someday", index: 2 });
+    const { vector } = somedayVector();
+    const result = await runReorder(deps([vector]), { scope: "someday", uuids: [proj] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("someday PROJECT");
+  });
+});
+
+describe("projects scope (P8e sidebar bounce)", () => {
+  it("bounces top-level projects into the requested order via when= round-trips", async () => {
+    const p1 = seedProject(fixture.db, { title: "P1", index: 10 });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
+    const { vector, calls } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [p2, p3, p1] });
+    expect(result.kind).toBe("ok");
+    // two legs per project, reverse order: p1, p3, p2
+    expect(calls.filter((c) => c.includes("when=someday"))).toHaveLength(3);
+    expect(calls.filter((c) => c.includes("when=anytime"))).toHaveLength(3);
+    expect(calls[0]).toContain(p1);
+    const ranks = [p2, p3, p1].map(
+      (u) =>
+        (
+          fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
+            r: number;
+          }
+        ).r,
+    );
+    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+    // state preserved: plain anytime, undated
+    for (const u of [p1, p2, p3]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as { start: number; startDate: number | null };
+      expect(row.start).toBe(1);
+      expect(row.startDate).toBeNull();
+    }
+  });
+
+  it("rejects area'd and someday projects with pointed reasons", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const inArea = seedProject(fixture.db, { title: "IA", area, index: 1 });
+    const { vector } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [inArea] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("scope 'area'");
+  });
+
+  it("native strategy is refused for projects scope", async () => {
+    const p1 = seedProject(fixture.db, { title: "P1", index: 10 });
+    const { vector } = projectBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "projects",
+      uuids: [p1],
+      strategy: "native",
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("NO native surface");
+  });
+});

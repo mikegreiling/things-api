@@ -50,7 +50,9 @@ import type {
   ReorderParams,
   TagAddParams,
   TagUpdateParams,
+  TodoAddLoggedParams,
   TodoAddParams,
+  TodoBackdateParams,
   TodoMoveParams,
   TodoUpdateParams,
 } from "./write/operations.ts";
@@ -150,6 +152,21 @@ export interface ThingsClient {
     duplicateTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /** Restore a TRASHED to-do: it returns to the Inbox, de-scheduled. */
     restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Rewrite a to-do's completion and/or creation timestamp to noon (local)
+     * on the given date. Completion requires the to-do to be completed or
+     * canceled already.
+     */
+    backdateTodo(
+      uuid: string,
+      dates: Omit<TodoBackdateParams, "uuid">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Create a to-do directly in the Logbook, completed, with backdated
+     * completion (and optionally creation) timestamps.
+     */
+    addLoggedTodo(params: TodoAddLoggedParams, options?: WriteOptions): Promise<MutationResult>;
     /** Detach a to-do from its project/area/heading, keeping the schedule. */
     detachTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -383,6 +400,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       deleteTodo: (uuid, o) => run("todo.delete", { uuid }, o),
       duplicateTodo: (uuid, o) => run("todo.duplicate", { uuid }, o),
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
+      backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
+      addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
       detachTodo: (uuid, o) => run("todo.move", { uuid, detach: true }, o),
       editChecklist(uuid, edit, o) {
         const current = byUuid(conn.db, uuid);

@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-_(nothing yet)_
+### Backdating, logged import, and three new reorder scopes
+
+- **`things todo backdate <uuid> --completed-on/--created-on`** (op `todo.backdate`, MCP `backdate_todo`): rewrites a to-do's completion and/or creation timestamp to local noon on the given date — AppleScript property writes, the only surface that can (lab scf2 P4b). Completion backdating requires an already-completed/canceled to-do; undo restores the previous dates at day precision.
+- **`things todo add-logged <title> --completed-on [--created-on] [--notes]`** (op `todo.add-logged`, MCP `add_logged_todo`): creates a to-do directly in the Logbook with backdated timestamps via `things:///json` (lab scf2 P4d) — for importing history from another system. Undo deletes the created row.
+- **`things reorder --scope headings`**: reorders a project's heading rows (children move with their heading) — the private reorder command accepts heading uuids (lab scf P1).
+- **`things reorder --scope someday`**: reorders loose someday to-dos. The app's Someday handler stacks sent ids above the list's original top (lab P6h/P7e), so the compiler emits a validated two-call protocol that realizes the exact requested order (lab P8b). Someday projects are rejected until their behavior is characterized.
+- **`things reorder --scope projects`**: orders the TOP-LEVEL sidebar projects — a capability with no native surface at all — by bouncing each project through a verified `when=someday → when=anytime` round-trip, which front-inserts it (lab P7c/P7d/P8e; exact order, schedule state preserved). Plain Anytime undated area-less projects only, max 10 per call; projects inside areas already reorder natively via `--scope area`.
 
 ## 0.4.0 — 2026-07-09
 

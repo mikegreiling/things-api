@@ -774,6 +774,68 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "backdate_todo",
+    {
+      description:
+        "Rewrite a to-do's completion and/or creation timestamp to noon (local) on the " +
+        "given date. completion_date requires the to-do to already be completed or " +
+        "canceled; the Logbook re-sorts to the new date.",
+      inputSchema: {
+        uuid: z.string(),
+        completion_date: z.string().optional().describe(DATE_FORMAT),
+        creation_date: z.string().optional().describe(DATE_FORMAT),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.backdateTodo(
+            args.uuid,
+            {
+              ...(args.completion_date !== undefined && { completionDate: args.completion_date }),
+              ...(args.creation_date !== undefined && { creationDate: args.creation_date }),
+            },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "add_logged_todo",
+    {
+      description:
+        "Create a to-do directly in the Logbook: completed, with the given past " +
+        "completion date (and optionally a past creation date). For importing history " +
+        "from another system.",
+      inputSchema: {
+        title: z.string(),
+        completion_date: z.string().describe(DATE_FORMAT),
+        creation_date: z.string().optional().describe(`${DATE_FORMAT}; <= completion_date`),
+        notes: z.string().optional(),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.addLoggedTodo(
+            {
+              title: args.title,
+              completionDate: args.completion_date,
+              ...(args.creation_date !== undefined && { creationDate: args.creation_date }),
+              ...(args.notes !== undefined && { notes: args.notes }),
+            },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
     "duplicate_item",
     {
       description:
@@ -1253,14 +1315,26 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder items within Today, This Evening, the Inbox, a project, or an area — the " +
-        "given uuids move to the TOP in the given order; unlisted items keep their relative " +
-        "order below. Today/inbox/project/area ordering must first be enabled once via " +
-        "`things config set allow-experimental true`. This Evening handles at most " +
-        `${BOUNCE_MAX_ITEMS} items per call. An area's to-dos and projects are ordered ` +
-        "separately — one kind per call.",
+        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos), a " +
+        "project's to-dos, a project's headings (scope=headings — children move with " +
+        "their heading), an area, or the top-level sidebar projects (scope=projects — " +
+        "each project takes a brief someday/anytime round-trip) — the given uuids move " +
+        "to the TOP in the given order; unlisted items keep their relative order below. " +
+        "Today/inbox/someday/project/headings/area ordering must first be enabled once " +
+        "via `things config set allow-experimental true`. This Evening and " +
+        `scope=projects handle at most ${BOUNCE_MAX_ITEMS} items per call. An area's ` +
+        "to-dos and projects are ordered separately — one kind per call.",
       inputSchema: {
-        scope: z.enum(["today", "evening", "inbox", "project", "area"]),
+        scope: z.enum([
+          "today",
+          "evening",
+          "inbox",
+          "someday",
+          "project",
+          "headings",
+          "area",
+          "projects",
+        ]),
         container: z
           .string()
           .optional()

@@ -156,17 +156,42 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["A27"],
     notes: "PERMANENT — hard-deletes every trashed row",
   },
+  "todo.backdate": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["scf2:P4b"],
+    notes:
+      "`set completion date` / `set creation date` property writes — the ONLY surface " +
+      "that rewrites these timestamps on an existing item",
+  },
   reorder: {
     support: "partial",
     disruption: 0,
     validation: "validated",
-    evidence: ["O01", "O03", "O04", "O05", "O06", "O09", "O10", "O11", "O12", "O14", "A6"],
+    evidence: [
+      "O01",
+      "O03",
+      "O04",
+      "O05",
+      "O06",
+      "O09",
+      "O10",
+      "O11",
+      "O12",
+      "O14",
+      "A6",
+      "scf:P1",
+      "P8a",
+      "P8b",
+    ],
     experimental: true,
     notes:
       "`_private_experimental_ reorder to dos in` — today (bucket-0 members), project/area " +
-      "(un-headed children only, O06), inbox (unscheduled to-dos, A6); area also reorders " +
-      "PROJECTS (O14, same-type requests only); evening is bounce-only (O03 de-evenings " +
-      "bucket-1 members)",
+      "(un-headed children only, O06), inbox (unscheduled to-dos, A6/P8a), headings (a " +
+      "project's heading rows, scf P1 — children follow), someday (loose someday to-dos, " +
+      "two-call anchor protocol, P8b); area also reorders PROJECTS (O14, same-type " +
+      "requests only); evening and top-level projects are bounce-only (O03, P8e)",
   },
 };
 
