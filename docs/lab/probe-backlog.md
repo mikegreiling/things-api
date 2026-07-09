@@ -8,7 +8,7 @@ Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitt
 2. **Validate PR #42** (§B): `npm run lab:regress` as a NO-REGRESSION check → merge on double-green. STATUS: pending.
 3. ~~scf2 re-probe~~ — **RAN + BANKED 2026-07-09** (run `things-run-scf2-20260709-045454`; verdicts in [s-campaign-results.md](s-campaign-results.md) round 2): backdating = AppleScript-only for existing items + json at-creation import; reminder set via set-detail DEAD; set-detail Parent = DETACH footgun (oddity 5l); sidebar ordering exhaustively closed; Someday = new native reorder scope (P6h).
 4. ~~P7/P8 lateral probes + operationalization~~ — **DONE 2026-07-09**: P7 (someday projects move; anytime moves loose to-dos; area detach/attach + when= round-trips FRONT-INSERT — Mike's bounce insight) and P8 (two-call someday protocol EXACT; inbox forward re-confirmed; 3-project when= bounce EXACT). Shipped: `todo.backdate`, `todo.add-logged`, reorder scopes `headings`/`someday`/`projects`. Evidence: [o-suite-results.md](o-suite-results.md) §P7/P8.
-5. **npm publish** (§D). STATUS: pending (blocked on Mike's `npm login`; v0.4.0 tagged — the new ops warrant either re-tagging or a fast-follow 0.5.0).
+5. ~~npm publish~~ — **DONE 2026-07-09**: v0.6.0 tagged + published (`latest`), npx smoke green.
 6. Parked §C work.
 
 ## A. S-campaign follow-up probes
@@ -40,8 +40,8 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 ## C. Parked (bigger, not auto-runnable now)
 
 - Lab runner/DSL **Shortcuts vector** support (guest input files + `shortcuts run --input-path`; interactive delete-class handling) so `s-suite.json` becomes a real recurring suite.
-- **Distribution/onboarding**: signed / iCloud-shareable proxies from a network Mac with an Apple ID; a `things setup shortcuts` import + first-run-consent flow.
-- **Headings doctrine decision** (gaps §0): flatten-only vs dual-mode — Mike's call. New input since: heading REORDER is native/AppleScript (scf P1), heading MOVE is dead everywhere (scf P2).
+- **Distribution/onboarding** — IN PROGRESS 2026-07-09, new plan: the six proxies were EXTRACTED from the golden's `Shortcuts.sqlite` (`ZSHORTCUTACTIONS.ZDATA` action blobs, SX2/SX3), reconstructed as old-format plists, and host-signed with `shortcuts sign --mode anyone` → repo-distributable signed `.shortcut` files in `lab/shortcuts/` (no iCloud links, no manual rebuild). Import+run validation: SX4. Still open: shipping location + `things setup shortcuts` flow. Gotcha: the signer can't write to `/Volumes/*` — sign to /tmp, then move.
+- ~~Headings doctrine decision~~ — **DECIDED 2026-07-09** (roadmap §E / gaps §0): first-class always, NO flatten/dual mode. The HX sweep closed every non-Shortcuts heading-create/move escape hatch (heading-research.md).
 - **Availability layer** (Phase 21b remainder): advisory `availability(env)` per vector; doctor reads `uriSchemeEnabled`; correct the `feature-disabled` classifier to key on `uriSchemeEnabled`, not a null token.
 - ~~someday PROJECTS characterization~~ — **LOCKED + SHIPPED 2026-07-09** (P9e: descending anchor-stack; inverted two-call protocol exact ×2 + predicted-failure control; someday scope now takes area-less someday projects).
 - ~~heading archive surfaces (P10/P10b)~~ — **DONE 2026-07-09**, consolidated in [heading-research.md](heading-research.md): AS by-id rename + archive/un-archive WORK (no Shortcuts); URL/Shortcuts status writes no-op; AS delete −1728; move dead on 4 surfaces; SUSPECTED schedule-on-heading crash (oddities §6) → todo ops hard-block non-to-do targets. Area tag clear via empty set WORKS (P10e).

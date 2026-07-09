@@ -14,7 +14,7 @@ A31's "AppleScript has no heading class" holds only for ENUMERATION — `to do i
 | Rename | 🚫 silent no-op (P10c) | ✅ **`set name of to do id`** (P10d + P10b-b6 ×2, works on archived headings too) | ✅ S03 | **AppleScript preferred — no setup** |
 | **Archive** (= UI "Archive") | 🚫 `completed=` silent no-op (P10b) | ✅ **`set status … to completed`** — status 3 + stopDate (P10d, P10b-b1) | 🚫 `Status` detail exit-0 no-ops (P10a, oddity 5k) | **AppleScript-only.** ⚠️ CASCADES on a non-empty heading: children are completed with it (P10b-b1); un-archive reopens the heading ONLY — children stay completed (b2). Needs a children policy/ack like project.complete |
 | Un-archive | ➖ | ✅ `set status … to open` (b2) | 🚫 | heading-only restore |
-| Move to another project | 🚫 (U10) | 🚫 `set project of` silent no-op (P10b-b4) | 🚫 `set-detail` Parent no-op (scf P2) | dead on FOUR surfaces |
+| Move to another project | 🚫 (U10) | 🚫 `set project of` silent no-op (P10b-b4); 🚫 `move … to project id` → **error 301 "Cannot move to-do"** (HX2 — the subject RESOLVES; the move itself is refused); 🚫 `move … to list id` → −1728 (HX2b); 🚫 `duplicate … to project id` → −1717 "can not be copied" (HX3) | 🚫 `set-detail` Parent no-op (scf P2) | **conclusively dead — model-layer refusal, not an addressing gap (HX sweep, 2026-07-09)** |
 | Delete (row removal) | 🚫 | 🚫 `delete to do id` → −1728 on empty AND non-empty (P10b-b3 — the delete verb resolves via the `to dos` container, which excludes type=2) | ✅ interactive only (S04; delete-class consent re-prompts every run) | headless row deletion impossible |
 | Reorder within project | 🚫 | ✅ private reorder command, heading uuids in a project specifier (scf P1) — shipped as `reorder --scope headings` | ➖ | children follow their heading |
 | Empty (deport children) | ✅ `update?list-id=<project>` clears the child's heading link, tier 0 (P9f) | ➖ | ➖ | the soft-delete precursor |
@@ -37,6 +37,22 @@ An archived-empty heading is invisible in normal use, reversible (`set status �
 - **THE SCHEDULE CRASH IS CONFIRMED** (P11e): Things' process (PID-watched) DIED on `schedule to do id <heading>`; row unchanged. [Oddities §6](../things-app-oddities.md) upgraded from suspected. things-api blocks all non-to-do targets in todo ops.
 
 Shipped ops: `heading.rename`, `heading.archive` (children: complete | cancel | reparent — reparent is a compound with transactional undo), `heading.unarchive` (`--restore-children` via the <2s window). CLI `things heading …`, MCP `rename_heading`/`archive_heading`/`unarchive_heading`.
+
+## The HX sweep (2026-07-09) — heading-create escape hatches, all dead
+
+Mike's ephemeral-project gambit: TJSON-create a throwaway project WITH the heading (works without Shortcuts — HX0 confirmed `{"type":"heading"}` items inside a NEW project's `items` produce real type=2 rows), relocate the heading into the target project, trash the throwaway. [`lab/scripts/research-hx.sh`](../../lab/scripts/research-hx.sh); artifacts `lab/artifacts/things-run-hx-20260709-164847/`.
+
+| # | Shape | Verdict |
+|---|---|---|
+| HX0 | TJSON new-project with heading item (the premise) | ✅ WORKS |
+| HX1 | TJSON TOP-LEVEL heading item with `list-id` → existing project | 💀 silently ignored (no row) |
+| HX1b | TJSON project UPDATE with `items:[heading]` (append semantics?) | 💀 silently ignored |
+| HX2 | AS `move to do id <H> to project id <TGT>` | 💀 error 301 "Cannot move to-do" |
+| HX2b | AS `move to do id <H> to list id <TGT>` | 💀 −1728 (projects aren't `list id`-addressable) |
+| HX3 | AS `duplicate to do id <H> to project id <TGT>` | 💀 −1717 "Selected to dos can not be copied" |
+| HX4/4b | TJSON update on heading uuid, `list-id` attr (`to-do` and `heading` type spellings) | 💀 silent no-ops |
+
+Reading: 301/−1717 fire on a fully-RESOLVED subject — the refusal is in the model layer, deliberate, and graceful (no crash; contrast the schedule-class crashes, oddities §6). **Heading relocation and non-Shortcuts heading-create are closed.** The only conceivable remaining path is UI scripting (System Events driving the app's real "New Heading" command) — a candidate "ui" vector for dedicated automation machines, unprobed. A project "identity-swap" (rebuild the project via TJSON with the heading, migrate to-dos, trash the original) technically composes but changes the project uuid and loses logbook history + repeating templates — considered and REJECTED as a footgun.
 
 ## Unprobed / follow-ups
 
