@@ -90,7 +90,7 @@ export function formatItem(item: ListItem, uuidWidth = 0): string {
     `${dim(item.uuid.padEnd(uuidWidth))} `,
     marker,
     ...meta,
-    `${item.title}${dim(context)}`,
+    context === "" ? item.title : `${item.title}${dim(context)}`,
   ].join(" ");
 }
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Anytime/Someday view semantics + CLI list polish
+
+- **Anytime container cascade (fix)**: children of projects that are not themselves anytime-visible (someday, future-scheduled, logged, or trashed) no longer appear in `anytime` — the project row represents them, matching the app. Heading-contained children resolve their project through the heading link.
+- **Sidebar-grouped anytime/someday**: both views now return sidebar-ordered sections (area + items; the area-less block first, direct to-dos before each project block) — the same order the app shows in Anytime and the sidebar. The CLI renders one `── <area> ──` header per area; `--json` envelopes and the MCP `read_view` tool carry the new sectioned shape.
+- **`things someday --active-project-items`** (MCP: `read_view {active_project_items}`): also lists someday to-dos inside active projects — the app's "Show items from active projects" toggle. By default someday shows only container-less members and someday project rows, as the app does.
+- **CLI list rendering**: the uuid column pads to the longest uuid in the list (Things uuids vary 21–22 chars), token spacing after the `-`/`P` marker is uniform (previously the gap depended on whether dates/tags were present), and metadata is colorized when stdout is a TTY (deadline red, date yellow, tags cyan, uuid/context dim, area headers bold; `NO_COLOR`/`FORCE_COLOR` honored). Piped output contains no escape codes.
+
+
 ### New write capabilities (Phase 21b)
 
 Grounded in the Phase 21b lab probe campaign ([docs/lab/phase21b-research.md](docs/lab/phase21b-research.md)).
