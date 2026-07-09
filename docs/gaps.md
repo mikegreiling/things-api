@@ -6,15 +6,14 @@ Living register of Things-app capabilities that are missing, thin, or janky in t
 
 ## Headline gaps
 
-### 0. Headings doctrine (DECIDED 2026-07-06, implementation deferred)
+### 0. Headings doctrine (DECIDED 2026-07-06; dual-mode now UNBLOCKED 2026-07-09)
 
-Unless the Shortcuts campaign (Phase 11) yields real heading capabilities, the API surface will treat headings as **nonexistent**: project reads return one FLAT to-do list in UI order with heading rows spliced out (walk project rows by `index`; replace each heading row with its children in their own container-scoped order); project reorder accepts ALL children and silently strips heading associations (O06's "rips headed children out" becomes the intended flattening, not a hazard); the `--heading` placement params get removed. Only `byUuid` keeps reporting the raw heading link. **Candidate shape if Shortcuts delivers:** two modes — headings first-class when a Shortcuts vector is configured, silently flattened otherwise. Held until the L5 sitting + S-campaign settle what Shortcuts can actually do.
+The flatten-by-default plan: project reads return one FLAT to-do list in UI order with heading rows spliced out (walk project rows by `index`; replace each heading row with its children in their own container-scoped order); project reorder accepts ALL children and silently strips heading associations (O06's "rips headed children out" becomes the intended flattening, not a hazard); the `--heading` placement params get removed. Only `byUuid` keeps reporting the raw heading link. **The candidate second mode — headings first-class when a Shortcuts vector is configured — is now a LIVE path: the L5 sitting proved create/rename/delete all work via Shortcuts (§1).** Which mode ships (flatten-only vs dual-mode) is Mike's call; still implementation-deferred.
 
-### 1. Headings in existing projects — the big one; Shortcuts is the only path
-- Create works ONLY inside a brand-new project via the `things:///json` add-project payload — and `project.add` doesn't expose even that yet (small win available).
-- In an existing project: no create/rename/archive/delete on any validated surface (`heading=` never creates, T09/U09; json update op on headings errors, U10; AppleScript has no heading class, A31).
-- Native reorder RIPS headed children out of their headings (O06) — heading-scoped ordering is unautomatable.
-- **Path:** finish the L5 golden sitting (Find→act chain proxies, golden-runbook §5) → S-campaign → Shortcuts vector for `heading.add/rename/delete` (+ probe archive). This is the sole capability Shortcuts uniquely provides.
+### 1. Headings in existing projects — SOLVED via Shortcuts (L5 sitting, 2026-07-09)
+- **Create / rename / delete a heading in an existing project all WORK via Shortcuts** (S02/S03/S04, [s-campaign-results.md](lab/s-campaign-results.md)) — `things-proxy-create-heading` / `-edit-title` / `-delete-items`. The sole capability Shortcuts uniquely provides, now proven.
+- Still dead elsewhere: `heading=` never creates (T09/U09), json update op on headings errors (U10), AppleScript has no heading class (A31); native reorder RIPS headed children out (O06) so heading-*scoped ordering* stays unautomatable; heading *move* is an unprobed `set-detail` Parent candidate; non-empty-heading delete (child re-parenting) unprobed.
+- **Remaining path:** wire a Shortcuts WriteVector (`heading.add/rename/delete`) behind the availability interface (Phase 21b layer), decide flatten-vs-dual-mode (§0). Consent caveat: create/edit are headless (Always-Allow), delete is tier-3 user-present (no Always-Allow — s-campaign-results.md).
 
 ### 2. Repeating items — creation and rule-editing are UI-only, permanently (until CC ships an API)
 - No surface creates a repeating item or edits a repeat rule: URL crashes on schedule-writes (the bug report), AppleScript refuses (error 302), Shortcuts actions expose no repeat parameters, and the rule plist must never be written directly.
