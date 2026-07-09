@@ -15,11 +15,11 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Create | ✅ | ✅ | 🧪 | tags must pre-exist (app silently drops unknowns); reminder via `when=<list>@<time>` |
 | Update title/notes | ✅ (+append/prepend) | 🟡 partial | 🧪 | notes modes newline-joined (E04/E05) |
 | Schedule (today/evening/someday/date) | ✅ | 🟡 | 🧪 | 🚫 on repeating templates (crash — hard-blocked) |
-| Set reminder | ✅ today/evening/date | ⛔ no property | 🧪 (`set-detail` `"14:30"` string no-ops, scf P3a — format experiments queued) | deterministic time emitter routes around the bare-hour parser trap (oddity 2d) |
+| Set reminder | ✅ today/evening/date | ⛔ no property | 🚫 (scf2 P3a — every format no-ops; `Edit Items → Reminder Time` can only CLEAR) | deterministic time emitter routes around the bare-hour parser trap (oddity 2d) |
 | Clear reminder | 🟡 today/evening only | ⛔ | ✅ **incl. DATED** (scf P3b, `set-detail` Reminder Time = `""`) | dated reminders are STICKY on URL (R20/R21, oddity 2e) — Shortcuts is the ONLY surface that clears them, and it's headless (output-class consent) |
 | Set/clear deadline | ✅ | 🟡 | 🧪 | |
 | Complete / cancel / reopen | ✅ | ✅ | 🧪 | |
-| Move to project/area (+existing heading) | ✅ | 🟡 no heading | 🧪 | unknown destinations guarded (app is a silent no-op) |
+| Move to project/area (+existing heading) | ✅ | 🟡 no heading | 🚫 text value (scf2 P2b — `set-detail` Parent with a uuid string DETACHES the item instead of moving it, oddity 5l); entity-typed variant 🧪 | unknown destinations guarded (app is a silent no-op) |
 | Move to Inbox | 🚫 | ✅ | 🧪 | de-schedules (E06) |
 | Detach from ALL containers (keep schedule) | ✅ empty `list-id=` (P21/P22) | 🚫 (all nil spellings fail) | 🧪 | |
 | Tags: replace/clear | ✅ (empty set clears, P14) | ✅ `set tag names` | 🧪 | add/merge is a client-side read-merge-replace |
@@ -30,7 +30,8 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |
 | Permanently delete ONE item | 🚫 | 🚫 (all spellings fail, B0/A5) | ✅ interactive (S-delperm, Delete Immediately) | Shortcuts hard-deletes one row (no tombstone) — but the delete consent has NO "Always Allow", so it's tier-3 user-present, never headless. `trash.empty` is the only autonomous hard-delete (all-or-nothing) |
 | Convert to project | 🚫 (E16) | 🚫 | 🚫 (no Convert action exists) | dead on every surface (catalog sweep, L5) |
-| Backdate Completion/Creation Date | 🧪 (json at-creation attrs?) | 🧪 (`completion date` property?) | 🧪 (`set-detail`; first probe INVALID, scf P4 — re-probe queued) | GTD-migration wish — no surface proven or disproven yet |
+| Backdate Completion/Creation Date (existing item) | 🚫 (`update?completion-date=`/`creation-date=` silent no-ops, scf2 P4c — oddity 2g) | ✅ (`set completion date` / `set creation date` property writes, scf2 P4b) | 🚫 (`set-detail` dead in every format, scf2 P4a) | AppleScript is the ONLY surface |
+| Backdated import (completed at creation) | ✅ `things:///json` `creation-date`/`completion-date` attrs, exact values honored (scf2 P4d) | 🧪 (make-then-set two-step, untested) | 🚫 | the logbook-import / GTD-migration path |
 
 ## Projects
 
@@ -97,9 +98,10 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Project headings (the headings themselves) | ✅ native (experimental) | heading uuids accepted (scf P1); heading-*scoped* child order still unautomatable (O06) |
 | Area members (to-dos OR projects) | ✅ native (experimental) | never mixed in one request (O14) |
 | Inbox | ✅ native (experimental) | full reversed wire list re-ranked exactly (A6); joins today/project/area as a validated scope |
+| Someday | 🧪 native surface PROVEN (scf2 P6h) — op wire-up pending | same private command; appears to follow the Inbox reversed-wire convention — lock with a 3-item probe before shipping |
 | Checklist items | ✅ | granular move via stateful rewrite |
-| Sidebar: areas | 🚫 (O13) | |
-| Sidebar: top-level projects | 🚫 (P17) | reads provisional too (P19) |
+| Sidebar: areas | 🚫 (O13 + scf2 P6e/f/g) | exhaustively closed 2026-07-09: move-to-location errors (−1700), `set index` read-only (−10006), private reorder no-ops on area uuids; sdef has no other command |
+| Sidebar: top-level projects | 🚫 (P17 + scf2 P6a–d) | same sweep; reads provisional too (P19). Anytime view order mirrors the sidebar (same "index" columns) but nothing writes them |
 | Anytime/Someday aggregate views | ⛔ | no independent order — derived from container order |
 
 ## Repeating items

@@ -6,7 +6,7 @@ Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitt
 
 1. ~~Bank §A round-1 results~~ — **DONE 2026-07-09** (PR #45): verdicts from `lab/artifacts/things-run-scf-20260709-041543/` folded into [s-campaign-results.md](s-campaign-results.md) (follow-ups table), capability-matrix, oddities (2e update + new 5k), gaps, o-suite-results.
 2. **Validate PR #42** (§B): `npm run lab:regress` as a NO-REGRESSION check → merge on double-green. STATUS: pending.
-3. **scf2 re-probe** (§A round 2, below): P4 redo + P3a formats + P2b to-do re-parent + P6 sidebar spellings. Run AFTER regress (one VM at a time). STATUS: pending.
+3. ~~scf2 re-probe~~ — **RAN + BANKED 2026-07-09** (run `things-run-scf2-20260709-045454`; verdicts in [s-campaign-results.md](s-campaign-results.md) round 2): backdating = AppleScript-only for existing items + json at-creation import; reminder set via set-detail DEAD; set-detail Parent = DETACH footgun (oddity 5l); sidebar ordering exhaustively closed; Someday = new native reorder scope (P6h).
 4. **npm publish** (§D). STATUS: pending.
 5. Parked §C work.
 
@@ -21,7 +21,7 @@ Durable plan (survives context compaction). Written 2026-07-09 after the L5 sitt
 - **P4 — Completion/Creation Date backdating.** STATUS: **INVALID RUN** (two script bugs: completion via `things:///update` WITHOUT the auth token → fixture never completed; stale `--output-path` file aliased P4 output to P3b's). → redo, round 2.
 - **P5 (NEEDS A HUMAN CLICK)** — delete a NON-empty heading: do children re-parent, orphan, or cascade? Delete-class consent re-prompts every run (oddity 5j). STATUS: parked.
 
-### Round 2 — `lab/scripts/research-scf2.sh` (to author) — STATUS: pending
+### Round 2 — `lab/scripts/research-scf2.sh` — RAN + BANKED (run `things-run-scf2-20260709-045454`)
 
 One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f /tmp/scf-out.txt` before each run; completion must go through AppleScript (`set status of to do id X to completed`) or URL WITH the auth token (read it from the guest defaults/plist as phase21b did).
 
@@ -42,7 +42,8 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 - **Distribution/onboarding**: signed / iCloud-shareable proxies from a network Mac with an Apple ID; a `things setup shortcuts` import + first-run-consent flow.
 - **Headings doctrine decision** (gaps §0): flatten-only vs dual-mode — Mike's call. New input since: heading REORDER is native/AppleScript (scf P1), heading MOVE is dead everywhere (scf P2).
 - **Availability layer** (Phase 21b remainder): advisory `availability(env)` per vector; doctor reads `uriSchemeEnabled`; correct the `feature-disabled` classifier to key on `uriSchemeEnabled`, not a null token.
-- **Heading reorder op** (`heading.reorder` or fold into project reorder): now that scf P1 proved the surface, wire it into the write pipeline (operations/commands/pre-state/vectors + matrix). Candidate next code phase alongside PR #42's pattern.
+- **Newly-opened ops to implement** (probe-proven, unwired): heading reorder within a project (scf P1); `todo.backdate` — completion/creation date via AppleScript property writes (scf2 P4b); backdated logbook IMPORT via `things:///json` at-creation attrs (scf2 P4d); `reorder` someday scope (scf2 P6h — FIRST lock the reversed-wire convention with a 3-item probe).
+- **Round-3 probe candidates**: 3-item someday-reorder convention lock (autonomous); set-detail Parent with an ENTITY-typed value — a `things-proxy-move-item` whose Parent field takes a second Find Items output (needs a golden sitting to build, human present); P5 non-empty heading delete (human click, delete-class consent).
 
 ## D. Release — publish `things-api` to npm (Mike, 2026-07-09)
 
