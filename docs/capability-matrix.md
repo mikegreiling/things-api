@@ -48,7 +48,7 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Move to area | ✅ (P23) | ✅ (E14) | 🧪 | |
 | Detach from area | ✅ empty `area-id=` (P24) — the ONLY surface | 🚫 (P08/P27) | 🧪 | |
 | Duplicate (incl. children) | ✅ (E17) | 🚫 | 🧪 | |
-| Delete (→ Trash) | 🚫 | ✅ shallow (children keep links) | 🧪 | |
+| Delete (→ Trash) | 🚫 | ✅ shallow (children keep links) | ✅ interactive, SHALLOW (P12 — project → Trash, children keep their links, untrashed; matches AppleScript) | delete-class consent, tier-3 |
 | Restore IN PLACE | 🚫 | ✅ (P06) | 🧪 | schedule/area/children intact |
 | Convert to to-do | 🚫 | 🚫 | 🧪 | |
 
@@ -62,7 +62,7 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Create heading at project creation | 🧪 json payload | ⛔ | ✅ (Create To-Do/Project) | |
 | Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
 | Rename a heading | 🚫 silent no-op (P10c) | ✅ **shipped** (`heading.rename`, `things heading rename`) | ✅ (S03) | by-id addressing; works on archived headings; no Shortcuts setup |
-| Delete a heading | 🚫 | 🚫 `delete to do id` → −1728 (P10b-b3) | ✅ (S04, removes the row) — interactive only (delete-class consent) | non-empty-heading child re-parenting unprobed. HEADLESS equivalent: empty it (P9f `update?list-id=`) + ARCHIVE it (below) — reversible, no consent |
+| Delete a heading | 🚫 | 🚫 `delete to do id` → −1728 (P10b-b3) | ✅ interactive (S04/P12), CASCADES | Trash: heading row VANISHES, children reparented to project root + trashed (P12); permanent: heading + children hard-deleted, no tombstone (P12). Unlike a project delete (shallow). HEADLESS equivalent: empty it (P9f) + ARCHIVE it — reversible, no consent |
 | **Archive / un-archive a heading** | 🚫 `completed=` no-op (P10b) | ✅ **shipped** (`heading.archive`/`heading.unarchive`, `things heading archive`) | 🚫 Status detail exit-0 no-op (P10a) | children policy required when open children exist: complete/cancel = the app's cascades (P10b-b1/P11c; pre-resolved children untouched, P11d), reparent = compound with transactional undo. `--restore-children` reopens cascade-resolved children (<2s window; someday survives, P11a) |
 | Move a heading | 🚫 (U10) | 🚫 `set project of` silent no-op (P10b-b4) | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on FOUR surfaces |
 | Reorder headings within a project | 🚫 | ✅ **shipped** (`reorder --scope headings`, scf P1) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
@@ -121,5 +121,5 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Capability | Status | Notes |
 |---|---|---|
 | Empty Trash (everything) | ✅ AppleScript, PERMANENT | requires the permanent acknowledgement |
-| Permanently delete one item | 🚫 | AppleScript spellings all fail (B0/A5); only all-or-nothing `trash.empty` |
+| Permanently delete one item | 🚫 | AppleScript spellings all fail (B0/A5); only all-or-nothing `trash.empty`. Shortcuts hard-deletes ONE to-do/project/heading interactively (P12) but has NO area support (Find Items surfaces only to-dos/projects) |
 | Enable-Things-URLs introspection | ✅ read (`uriSchemeEnabled` in the group-container plist) | **RESOLVED (Phase 21b):** state = `uriSchemeEnabled` int-bool in `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/Library/Preferences/JLMPQHK86H.com.culturedcode.ThingsMac.plist` (read via `plutil -p`, not `defaults`). Token PERSISTS while disabled and does NOT rotate across off/on. Disabled write → tier-3 enable-modal (write held, no DB row). See [phase21b-research.md](lab/phase21b-research.md). |
