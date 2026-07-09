@@ -50,6 +50,8 @@ export interface WriteOptions extends Acknowledgements {
   dryRun?: boolean;
   /** Audit attribution. */
   actor?: string;
+  /** Compound-operation grouping (set by orchestrators, not callers). */
+  txn?: { id: string; role: "leg" | "summary" };
 }
 
 export interface MutationPlan {
@@ -225,6 +227,7 @@ export async function runMutation<K extends OperationKind>(
       disruption: null,
       invocation: null,
       requested: params as Record<string, unknown>,
+      ...(options.txn !== undefined && { txn: options.txn }),
       pre: null,
       observed: null,
       verify: null,

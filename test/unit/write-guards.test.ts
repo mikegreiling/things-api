@@ -180,3 +180,25 @@ describe("H-PERMANENT-DELETE", () => {
     expect(check("trash.empty", {})?.hazard).toBe("H-PERMANENT-DELETE");
   });
 });
+
+describe("H-HEADING-CHILDREN", () => {
+  it("requires a children policy when open children exist; passes when drained or resolved", () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    seedTodo(fixture.db, { title: "child", heading });
+    expect(check("heading.archive", { uuid: heading })?.hazard).toBe("H-HEADING-CHILDREN");
+    expect(check("heading.archive", { uuid: heading, children: "complete" })).toBeNull();
+    expect(check("heading.archive", { uuid: heading, children: "cancel" })).toBeNull();
+    // reparent at the atomic layer with children still open = orchestrator bypass
+    expect(check("heading.archive", { uuid: heading, children: "reparent" })?.detail).toContain(
+      "orchestrator",
+    );
+  });
+
+  it("heading ops reject non-heading targets", () => {
+    const todo = seedTodo(fixture.db, { title: "t" });
+    expect(check("heading.rename", { uuid: todo, title: "x" })?.hazard).toBe(
+      "H-UNKNOWN-DESTINATION",
+    );
+  });
+});

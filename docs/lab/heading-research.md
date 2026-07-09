@@ -29,9 +29,18 @@ True row deletion cannot be headless (AS −1728; Shortcuts delete-class consent
 
 An archived-empty heading is invisible in normal use, reversible (`set status … to open`), and requires zero consent prompts. This supersedes the blank-the-title hack (P9f probed `edit-title` to `""` — works, but archive is semantically honest and reversible).
 
+## P11 additions (2026-07-09) — design inputs, now SHIPPED as ops
+
+- **Someday survives resolution round-trips** (P11a): `start=2` persists through complete AND cancel (URL + AS); reopen restores full someday state. No recovery gap in project-reopen restore either.
+- **Heading "cancel" is a distinct cascade** (P11c): `set status … to canceled` stores the HEADING as completed (the app has no canceled heading state) but marks open children CANCELED. Both cascades leave pre-resolved children untouched (P11d — status AND original stopDate preserved), so the <2s window heuristic is safe.
+- **Heading trash via `move … to list "Trash"`: dead** (clean error 301, P11b) — row deletion stays interactive-only (Shortcuts delete-class).
+- **THE SCHEDULE CRASH IS CONFIRMED** (P11e): Things' process (PID-watched) DIED on `schedule to do id <heading>`; row unchanged. [Oddities §6](../things-app-oddities.md) upgraded from suspected. things-api blocks all non-to-do targets in todo ops.
+
+Shipped ops: `heading.rename`, `heading.archive` (children: complete | cancel | reparent — reparent is a compound with transactional undo), `heading.unarchive` (`--restore-children` via the <2s window). CLI `things heading …`, MCP `rename_heading`/`archive_heading`/`unarchive_heading`.
+
 ## Unprobed / follow-ups
 
-- `set status … to canceled` on a heading (presumed symmetric with completed; minor).
-- Crash VERIFICATION for `schedule` on a heading (needs the U12-style crash detector: process death + `.ips` capture + row-unchanged assertion) before it goes in the Cultured Code report as more than a suspicion.
+- ~~`set status … to canceled`~~ — probed (P11c, cancel-cascade quirk above).
+- ~~Crash verification~~ — CONFIRMED by process death (P11e); a captured `.ips` would still strengthen the Cultured Code report.
 - P5 (delete-class): non-empty heading delete via Shortcuts — child fate (human present).
 - Whether the UI renders an archived heading's still-open children anywhere odd (needs eyes on a VM screen).

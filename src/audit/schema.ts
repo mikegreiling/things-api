@@ -18,6 +18,12 @@ export interface AuditRecord {
   disruption: number | null;
   /** Compiled invocation with the auth token structurally redacted. */
   invocation: string | null;
+  /**
+   * Compound-operation grouping: legs share the orchestrator's txn id and
+   * are excluded from direct undo targeting; the summary record is the
+   * single undoable unit for the whole sequence.
+   */
+  txn?: { id: string; role: "leg" | "summary" };
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */

@@ -412,3 +412,89 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
     ]);
   });
 });
+
+describe("transactional undo (compound operations)", () => {
+  it("legs are excluded from targeting; the summary is the single unit", () => {
+    const records = [
+      record({ op: "todo.move", uuid: "C1", txn: { id: "t1", role: "leg" } }),
+      record({ op: "todo.move", uuid: "C2", txn: { id: "t1", role: "leg" } }),
+      record({
+        op: "heading.archive",
+        uuid: "H1",
+        txn: { id: "t1", role: "summary" },
+        pre: { status: "open" },
+      }),
+    ];
+    const targets = selectUndoTargets(records, 3);
+    expect(targets.map((r) => r.op)).toEqual(["heading.archive"]);
+  });
+
+  it("heading.archive summary replays reparent-leg inverses in reverse order", () => {
+    const legs = [
+      record({
+        op: "todo.move",
+        uuid: "C1",
+        txn: { id: "t1", role: "leg" },
+        requested: { uuid: "C1", project: { uuid: "PROJ" } },
+        pre: { "heading.uuid": "H1", "project.uuid": null, "area.uuid": null },
+      }),
+      record({
+        op: "todo.move",
+        uuid: "C2",
+        txn: { id: "t1", role: "leg" },
+        requested: { uuid: "C2", project: { uuid: "PROJ" } },
+        pre: { "heading.uuid": "H1", "project.uuid": null, "area.uuid": null },
+      }),
+    ];
+    const summary = record({
+      op: "heading.archive",
+      uuid: "H1",
+      txn: { id: "t1", role: "summary" },
+      pre: { status: "open", title: "Phase 1" },
+    });
+    const plan = planUndo(summary, NOW, [...legs, summary]);
+    expect(plan.kind).toBe("invertible");
+    if (plan.kind === "invertible") {
+      expect(plan.steps[0]).toEqual({ op: "heading.unarchive", params: { uuid: "H1" } });
+      // legs replay in reverse (C2 before C1), moving back UNDER the heading
+      expect(plan.steps.slice(1)).toEqual([
+        { op: "todo.move", params: { uuid: "C2", project: { uuid: "PROJ" }, heading: "Phase 1" } },
+        { op: "todo.move", params: { uuid: "C1", project: { uuid: "PROJ" }, heading: "Phase 1" } },
+      ]);
+    }
+  });
+
+  it("heading.archive cascade capture reopens the children that were open", () => {
+    const summary = record({
+      op: "heading.archive",
+      uuid: "H1",
+      pre: {
+        "C-open": { status: "open" },
+        "C-done": { status: "completed" },
+      },
+    });
+    const plan = planUndo(summary, NOW);
+    expect(plan.kind).toBe("invertible");
+    if (plan.kind === "invertible") {
+      expect(plan.steps).toContainEqual({ op: "todo.reopen", params: { uuid: "C-open" } });
+      expect(plan.steps.map((st) => (st.params as { uuid: string }).uuid)).not.toContain("C-done");
+    }
+  });
+
+  it("bounce reorder summaries carry pre-ranks and invert to a single reorder", () => {
+    const summary = record({
+      op: "reorder",
+      uuid: null,
+      txn: { id: "t2", role: "summary" },
+      requested: { scope: "projects", uuids: ["B", "A"] },
+      pre: { A: -10, B: -5 },
+    });
+    const plan = planUndo(summary, NOW);
+    expect(plan.kind).toBe("invertible");
+    if (plan.kind === "invertible") {
+      const first = plan.steps[0];
+      expect(first?.op).toBe("reorder");
+      expect((first?.params as { uuids: string[] } | undefined)?.uuids).toEqual(["A", "B"]);
+    }
+  });
+});

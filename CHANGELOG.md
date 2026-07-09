@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Heading operations + transactional undo
+
+- **`things heading rename / archive / unarchive`** (ops `heading.rename`/`heading.archive`/`heading.unarchive`; MCP `rename_heading`/`archive_heading`/`unarchive_heading`) — AppleScript by-id addressing (lab P10/P10b/P11), no Shortcuts setup. Archive is the preferred way to retire a heading (row deletion exists only interactively behind a per-run consent dialog); it is reversible. With open children, `--children` is required: `complete` and `cancel` ride the app's own cascades (one atomic call each; already-resolved children are never touched); `reparent` moves children to the project root first, keeping them open. `unarchive --restore-children` reopens the children the cascade resolved (matching timestamps; a someday child comes back as someday — lab-verified).
+- **Compound operations now undo as one unit.** Bounce reorders and reparent-archives group their steps under a transaction: the individual legs no longer appear as separate undo targets, and undoing the operation reverses the whole sequence (a bounce reorder inverts to a single reorder back to the recorded pre-order; a reparent-archive un-archives the heading and moves every child back under it).
+- **Crash guard confirmed necessary**: the lab verified that AppleScript `schedule` on a heading row crashes Things (process death). All todo operations reject non-to-do targets.
 - **`things area show <ref>`** (MCP: `get_area`): composite area view mirroring the native UI — the area's direct to-dos (active first), its projects in sidebar order, later (scheduled/repeating/someday), and logged items. Targets by uuid or unique name.
 - **`--area` filters accept area names** (uuid or unique title, ambiguity errors) everywhere — `things projects --area Hobbies` now works; `--tag` already resolved titles.
 - **Safety: every todo operation now rejects non-to-do targets.** Passing a HEADING uuid to a todo op previously reached the app unchecked; URL writes silently no-op on heading rows, and an AppleScript `schedule` on one is a suspected app crash (lab P10b). Projects are pointed at the project commands.

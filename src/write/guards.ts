@@ -19,6 +19,7 @@ export const HAZARD_IDS = [
   "H-REMINDER-SCOPE",
   "H-TAG-SUBTREE-DELETE",
   "H-BACKDATE-OPEN",
+  "H-HEADING-CHILDREN",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -144,6 +145,9 @@ const GUARDS: Record<HazardId, GuardFn> = {
       // case: URL writes silently no-op on type=2 rows (P10b/c), and an
       // AppleScript `schedule` on one is a SUSPECTED APP CRASH (P10b-b5,
       // connection died -609). Projects have their own commands.
+      if (op.startsWith("heading.") && pre.target.type !== "heading") {
+        problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a heading`);
+      }
       if (op.startsWith("todo.") && op !== "todo.add" && pre.target.type !== "to-do") {
         problems.push(
           `target ${String(params["uuid"])} is a ${pre.target.type}, not a to-do` +
@@ -248,6 +252,33 @@ const GUARDS: Record<HazardId, GuardFn> = {
         "reminders require a scheduled when: today|evening|YYYY-MM-DD (R-suite; " +
         "anytime/someday carry no date for the reminder to attach to)",
       remediation: "pass when today|evening|YYYY-MM-DD together with the reminder",
+    };
+  },
+  "H-HEADING-CHILDREN": ({ op, params, pre }) => {
+    if (op !== "heading.archive" || pre.openChildren.length === 0) return null;
+    const policy = params["children"];
+    if (policy === "complete" || policy === "cancel") return null;
+    if (policy === "reparent") {
+      // The orchestrator drains children first; open ones remaining here
+      // means it was bypassed (direct pipeline call).
+      return {
+        hazard: "H-HEADING-CHILDREN",
+        detail:
+          `the heading still has ${pre.openChildren.length} open child(ren) — the reparent ` +
+          "policy is served by the heading-archive orchestrator, which moves them to the " +
+          "project root first",
+        remediation: "use write.archiveHeading / `things heading archive` (not a raw run)",
+      };
+    }
+    return {
+      hazard: "H-HEADING-CHILDREN",
+      detail:
+        `archiving this heading affects ${pre.openChildren.length} open child(ren) — the ` +
+        "app cascades their resolution with the heading's",
+      remediation:
+        "pass children: complete (cascade completes them), cancel (the app's " +
+        "cancel-cascade marks them canceled), or reparent (move them to the project root " +
+        "first, keeping them open)",
     };
   },
   "H-BACKDATE-OPEN": ({ op, params, pre }) => {

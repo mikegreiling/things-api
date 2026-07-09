@@ -37,6 +37,9 @@ export const OPERATION_KINDS = [
   "project.set-tags",
   "todo.backdate",
   "todo.add-logged",
+  "heading.rename",
+  "heading.archive",
+  "heading.unarchive",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -89,6 +92,36 @@ export interface TodoUpdateParams {
 
 export interface UuidParams {
   uuid: string;
+}
+
+export interface HeadingRenameParams {
+  uuid: string;
+  title: string;
+}
+
+export interface HeadingArchiveParams {
+  uuid: string;
+  /**
+   * What happens to the heading's OPEN children (required when any exist):
+   * - "complete": the archive cascade completes them (app behavior);
+   * - "cancel":   the app's cancel-cascade marks them canceled (the heading
+   *               itself still stores as completed — the app has no canceled
+   *               heading state);
+   * - "reparent": children move to the project root first (each a verified
+   *               mutation), then the empty heading is archived.
+   * Children already completed/canceled are never touched.
+   */
+  children?: "complete" | "cancel" | "reparent";
+}
+
+export interface HeadingUnarchiveParams {
+  uuid: string;
+  /**
+   * Also reopen children the archive cascade resolved (identified by the
+   * <2s stopDate window; someday state survives the round-trip). Children
+   * resolved at other times are never touched.
+   */
+  restoreChildren?: boolean;
 }
 
 export interface TodoBackdateParams {
@@ -316,6 +349,9 @@ export interface OperationParamsMap {
   "project.set-tags": ProjectSetTagsParams;
   "todo.backdate": TodoBackdateParams;
   "todo.add-logged": TodoAddLoggedParams;
+  "heading.rename": HeadingRenameParams;
+  "heading.archive": HeadingArchiveParams;
+  "heading.unarchive": HeadingUnarchiveParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

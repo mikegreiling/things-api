@@ -61,9 +61,9 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Place a to-do under an EXISTING heading | ✅ (add + move) | 🚫 | ✅ (Create To-Do `Heading` field) | |
 | Create heading at project creation | 🧪 json payload | ⛔ | ✅ (Create To-Do/Project) | |
 | Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
-| Rename a heading | 🚫 silent no-op (P10c) | ✅ **`set name of to do id`** (P10d/P10b — by-id addressing; works on archived headings) | ✅ (S03) | AppleScript preferred: no Shortcuts setup |
+| Rename a heading | 🚫 silent no-op (P10c) | ✅ **shipped** (`heading.rename`, `things heading rename`) | ✅ (S03) | by-id addressing; works on archived headings; no Shortcuts setup |
 | Delete a heading | 🚫 | 🚫 `delete to do id` → −1728 (P10b-b3) | ✅ (S04, removes the row) — interactive only (delete-class consent) | non-empty-heading child re-parenting unprobed. HEADLESS equivalent: empty it (P9f `update?list-id=`) + ARCHIVE it (below) — reversible, no consent |
-| **Archive / un-archive a heading** | 🚫 `completed=` no-op (P10b) | ✅ **`set status of to do id` completed/open** (P10d, P10b-b1/b2) | 🚫 Status detail exit-0 no-op (P10a) | ⚠️ archive on a NON-empty heading COMPLETES its children (b1); un-archive reopens the heading only (b2) — needs a children policy like project.complete |
+| **Archive / un-archive a heading** | 🚫 `completed=` no-op (P10b) | ✅ **shipped** (`heading.archive`/`heading.unarchive`, `things heading archive`) | 🚫 Status detail exit-0 no-op (P10a) | children policy required when open children exist: complete/cancel = the app's cascades (P10b-b1/P11c; pre-resolved children untouched, P11d), reparent = compound with transactional undo. `--restore-children` reopens cascade-resolved children (<2s window; someday survives, P11a) |
 | Move a heading | 🚫 (U10) | 🚫 `set project of` silent no-op (P10b-b4) | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on FOUR surfaces |
 | Reorder headings within a project | 🚫 | ✅ **shipped** (`reorder --scope headings`, scf P1) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
 

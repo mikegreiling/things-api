@@ -13,6 +13,8 @@ import {
   type IsoDate,
   type ReminderTime,
 } from "../model/dates.ts";
+import type { Todo } from "../model/entities.ts";
+import { byUuid } from "../read/detail.ts";
 import type { HazardId } from "./guards.ts";
 import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "./operations.ts";
 import {
@@ -1360,6 +1362,116 @@ const todoAddLogged: CommandSpec<"todo.add-logged"> = {
   },
 };
 
+/** Children of a heading (open ones drive the archive policies). */
+function headingChildren(db: DatabaseSync, headingUuid: string): Todo[] {
+  const rows = db
+    .prepare("SELECT uuid FROM TMTask WHERE type = 0 AND trashed = 0 AND heading = ?")
+    .all(headingUuid) as { uuid: string }[];
+  const todos: Todo[] = [];
+  for (const r of rows) {
+    const t = byUuid(db, r.uuid);
+    if (t !== null && t.type === "to-do") todos.push(t);
+  }
+  return todos;
+}
+
+const headingRename: CommandSpec<"heading.rename"> = {
+  op: "heading.rename",
+  hazards: ["H-UNKNOWN-DESTINATION"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "title", equals: params.title }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    // Heading rows are invisible to AppleScript enumeration but fully
+    // addressable by id (P10d — the oddity-5e pattern).
+    return osa(`set name of to do id ${q(params.uuid)} to ${q(params.title)}`);
+  },
+};
+
+const headingArchive: CommandSpec<"heading.archive"> = {
+  op: "heading.archive",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-CHILDREN"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    if (pre.target?.type === "heading") {
+      const children = headingChildren(db, params.uuid);
+      pre.openChildren = children.filter((c) => c.status === "open");
+      pre.canceledChildren = children.filter((c) => c.status === "canceled");
+      pre.completedChildren = children.filter((c) => c.status === "completed");
+    }
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    // The app has no canceled heading state: BOTH cascades store the heading
+    // as completed; children land per the policy (P10b-b1 complete, P11c
+    // cancel). Pre-resolved children keep their status + stopDate (P11d).
+    const childStatus = params.children === "cancel" ? "canceled" : "completed";
+    const cascade = [
+      ...pre.openChildren.map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "status", equals: childStatus }],
+      })),
+      ...pre.canceledChildren.map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "status", equals: "canceled" }],
+      })),
+      ...pre.completedChildren.map((c) => ({
+        uuid: c.uuid,
+        assert: [{ field: "status", equals: "completed" }],
+      })),
+    ];
+    return {
+      mode: "state",
+      uuid: params.uuid,
+      // Asserting the (unchanged) title captures it in the audit pre-state —
+      // the compound undo needs it to restore reparented children's heading
+      // placement (todo.move's heading param takes a NAME).
+      assert: [
+        { field: "status", equals: "completed" },
+        { field: "title", equals: pre.target?.type === "heading" ? pre.target.title : "" },
+      ],
+      cascade,
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const status = params.children === "cancel" ? "canceled" : "completed";
+    return osa(`set status of to do id ${q(params.uuid)} to ${status}`);
+  },
+};
+
+const headingUnarchive: CommandSpec<"heading.unarchive"> = {
+  op: "heading.unarchive",
+  hazards: ["H-UNKNOWN-DESTINATION"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    return {
+      mode: "state",
+      uuid: params.uuid,
+      assert: [{ field: "status", equals: "open" }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    return osa(`set status of to do id ${q(params.uuid)} to open`);
+  },
+};
+
 const trashEmpty: CommandSpec<"trash.empty"> = {
   op: "trash.empty",
   hazards: ["H-PERMANENT-DELETE"],
@@ -1409,4 +1521,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.set-tags": projectSetTags,
   "todo.backdate": todoBackdate,
   "todo.add-logged": todoAddLogged,
+  "heading.rename": headingRename,
+  "heading.archive": headingArchive,
+  "heading.unarchive": headingUnarchive,
 };

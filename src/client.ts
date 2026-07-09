@@ -51,6 +51,8 @@ import type {
   ReorderParams,
   TagAddParams,
   TagUpdateParams,
+  HeadingArchiveParams,
+  HeadingUnarchiveParams,
   TodoAddLoggedParams,
   TodoAddParams,
   TodoBackdateParams,
@@ -66,6 +68,12 @@ import {
 } from "./write/pipeline.ts";
 import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
 import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
+import {
+  runHeadingArchive,
+  runHeadingUnarchive,
+  type HeadingArchiveResult,
+  type HeadingUnarchiveResult,
+} from "./write/heading.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
@@ -170,6 +178,25 @@ export interface ThingsClient {
      * completion (and optionally creation) timestamps.
      */
     addLoggedTodo(params: TodoAddLoggedParams, options?: WriteOptions): Promise<MutationResult>;
+    /** Rename a heading in place (works on archived headings too). */
+    renameHeading(uuid: string, title: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Archive a heading (the UI's Archive — it leaves the active project
+     * view, reversibly). With open children the policy is mandatory:
+     * complete/cancel ride the app's cascade; reparent moves them to the
+     * project root first (compound — undo reverses the whole sequence).
+     */
+    archiveHeading(
+      uuid: string,
+      policy?: Pick<HeadingArchiveParams, "children">,
+      options?: WriteOptions,
+    ): Promise<HeadingArchiveResult>;
+    /** Un-archive; restoreChildren reopens cascade-resolved children (someday survives). */
+    unarchiveHeading(
+      uuid: string,
+      policy?: Pick<HeadingUnarchiveParams, "restoreChildren">,
+      options?: WriteOptions,
+    ): Promise<HeadingUnarchiveResult>;
     /** Detach a to-do from its project/area/heading, keeping the schedule. */
     detachTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -406,6 +433,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
+      renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
+      archiveHeading: (uuid, policy, o) =>
+        runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
+      unarchiveHeading: (uuid, policy, o) =>
+        runHeadingUnarchive(writeDeps, { uuid, ...policy }, o ?? {}),
       detachTodo: (uuid, o) => run("todo.move", { uuid, detach: true }, o),
       editChecklist(uuid, edit, o) {
         const current = byUuid(conn.db, uuid);

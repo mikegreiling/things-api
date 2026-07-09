@@ -147,9 +147,13 @@ Running a Things Shortcuts action prompts a per-shortcut Shortcuts-Privacy dialo
 
 Setting the `Parent` detail to a project uuid passed as TEXT does not move the to-do and does not error — it silently CLEARS the to-do's project link (`project` → NULL), leaving the item container-less. The text→entity coercion fails and the action writes the empty result. On a heading row the same call is a pure no-op (project unchanged) — two different silent-failure behaviors for one action depending on row type. A destructive wrong-action with exit 0 is the worst of the silent-failure family: the caller asked for a move and got a detach. *(scf P2 / scf2 P2b, 2026-07-09)*
 
-## 6. SUSPECTED CRASH: AppleScript `schedule` on a heading row kills the AppleEvent connection
+## 6. CRASH: AppleScript `schedule` on a heading row kills the app
 
-`tell application "Things3" to schedule to do id "<heading-uuid>" for (current date) + 1 * days` returned `Connection is invalid. (-609)` — the classic signature of the target process dying mid-event (P10b-b5, 2026-07-09; heading rows are addressable via `to do id`, see §5e's by-id pattern). The app recovered on the next event, the heading row was unchanged, and no crash detector ran in that probe, so this is a SUSPICION pending a U12-style verification (process-death watch + `.ips` capture). If confirmed, it is the second unguarded-precondition crash in the schedule-class family (§1 is the URL `when=` on repeating items). things-api hard-blocks every todo-op against non-to-do targets regardless.
+**CONFIRMED 2026-07-09 (P11e, PID watch):** `tell application "Things3" to schedule to do id "<heading-uuid>" for (current date) + 1 * days` returns `Connection is invalid. (-609)` and the Things process DIES (PID present before, gone after; heading row unchanged — no corruption observed). Heading rows are addressable via `to do id` (§5e's by-id pattern: `get properties`, `set name`, `set status` all work — see docs/lab/heading-research.md), so this is reachable by any script that touches to-dos by id without checking the row type. It is the second unguarded-precondition crash in the schedule-class family (§1 is the URL `when=` on repeating items) — the AppleScript guard that correctly rejects e.g. repeating to-dos (302) is missing for type=2 rows. A `.ips` capture is still wanted for the report (the probe VM's DiagnosticReports had not flushed one before teardown). things-api hard-blocks every todo-op against non-to-do targets.
+
+### 6a. Heading "canceled" status is stored as completed — with a different child cascade
+
+`set status of to do id "<heading>" to canceled` sets the heading row's status to **completed** (3, not 2 — headings appear to have no canceled state), yet cascades **canceled** (2) to its open children; `… to completed` cascades completed. Two different child outcomes distinguished only by an input value the heading itself does not record. Pre-resolved children keep their status and stopDate under both cascades (P11c/P11d).
 
 ---
 
