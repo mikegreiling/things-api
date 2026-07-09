@@ -1235,7 +1235,8 @@ export function registerWriteCommands(program: Command): void {
     program
       .command("reorder <uuids...>")
       .description(
-        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos), a " +
+        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
+          "area-less someday projects — one kind per call), a " +
           "project's to-dos, a project's HEADINGS, an area, or the top-level sidebar " +
           "projects — uuids are placed at the TOP in the given order; unlisted members " +
           "keep their relative order below. Strategies: native (EXPERIMENTAL — requires " +

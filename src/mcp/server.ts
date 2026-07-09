@@ -1315,7 +1315,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos), a " +
+        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
+        "area-less someday projects — one kind per call), a " +
         "project's to-dos, a project's headings (scope=headings — children move with " +
         "their heading), an area, or the top-level sidebar projects (scope=projects — " +
         "each project takes a brief someday/anytime round-trip) — the given uuids move " +

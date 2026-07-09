@@ -257,11 +257,11 @@ interface MemberRow {
  *             (A6/P8a — the command ranks the sent list in order).
  *  - headings: the HEADING rows (type=2) of a project, by "index" (scf P1 —
  *             the private command accepts heading uuids; children follow).
- *  - someday: loose someday to-dos (start=2, no startDate, no container), by
- *             "index". The Someday list handler is anchor-stacked (P6h/P7e/
- *             P8b) — the compiler emits the validated two-call protocol.
- *             Someday PROJECTS moved inconsistently across probes (P7a vs
- *             P8c) and are rejected candidates until locked.
+ *  - someday: loose someday to-dos AND area-less someday projects, by
+ *             "index"; same-type requests only. The Someday list handler is
+ *             anchor-stacked with OPPOSITE stack directions by row type:
+ *             to-dos ascend (P6h/P7e/P8b), projects DESCEND (P9e) — the
+ *             compiler emits the matching validated two-call protocol.
  *  - projects: TOP-LEVEL sidebar projects (type=1, no area, start=1,
  *             undated), by "index". Bounce-only: a when=someday ->
  *             when=anytime round-trip front-inserts (P8e).
@@ -367,23 +367,25 @@ export function computeReorderPre(
       break;
     }
     case "someday": {
+      // Loose someday to-dos AND area-less someday projects (P9e locked the
+      // project protocol) — same-type requests only, like the area scope.
       members = select(
-        "type = 0 AND start = 2 AND startDate IS NULL AND project IS NULL AND area IS NULL " +
-          "AND heading IS NULL",
+        "((type = 0 AND project IS NULL AND area IS NULL AND heading IS NULL) " +
+          "OR (type = 1 AND area IS NULL)) AND start = 2 AND startDate IS NULL",
         [],
         `"index"`,
       );
-      const projects = db
+      const areaProjects = db
         .prepare(
           `SELECT uuid FROM TMTask WHERE trashed = 0 AND status = 0 AND type = 1
-           AND start = 2 AND startDate IS NULL`,
+           AND start = 2 AND startDate IS NULL AND area IS NOT NULL`,
         )
         .all() as { uuid: string }[];
-      for (const r of projects) {
+      for (const r of areaProjects) {
         rejectedCandidates.set(
           r.uuid,
-          "is a someday PROJECT — the Someday handler moved projects inconsistently across " +
-            "probes (P7a/P8c); only loose someday to-dos reorder in this scope",
+          "is a someday project INSIDE an area — only area-less someday projects were " +
+            "probed (P8c/P9e); order it within its area via scope 'area'",
         );
       }
       break;
@@ -439,14 +441,16 @@ export function computeReorderPre(
   const requestedTypes = new Set(
     params.uuids.map((u) => memberSet.get(u)?.type).filter((t) => t !== undefined),
   );
-  const mixedTypes = params.scope === "area" && requestedTypes.size > 1;
+  const mixedTypes =
+    (params.scope === "area" || params.scope === "someday") && requestedTypes.size > 1;
 
   // Area scope pins ONLY the requested type's cohort: to-dos and projects
   // rank on "index" independently in the sidebar, and a mixed wire list is
   // unprobed (O05/O10 vs O14) — same-type extension keeps the send inside
   // validated territory. Other scopes extend with every member (today's
   // mixed to-do+project wire list IS validated, O12).
-  const uniformType = params.scope === "area" && requestedTypes.size === 1;
+  const uniformType =
+    (params.scope === "area" || params.scope === "someday") && requestedTypes.size === 1;
   const requestedType = [...requestedTypes][0];
   const requested = new Set(params.uuids);
   const wireList = [

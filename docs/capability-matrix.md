@@ -62,7 +62,7 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Create heading at project creation | 🧪 json payload | ⛔ | ✅ (Create To-Do/Project) | |
 | Create heading in an EXISTING project | 🚫 | 🚫 | ✅ (S02, `Create Heading`) | **only Shortcuts delivers this** — the marquee gap, now closed |
 | Rename a heading | 🚫 | 🚫 | ✅ (S03, `Edit Items → Set Title`) | |
-| Delete a heading | 🚫 | 🚫 | ✅ (S04, removes the row) | non-empty-heading child re-parenting unprobed |
+| Delete a heading | 🚫 | 🚫 | ✅ (S04, removes the row) — interactive only (delete-class consent) | non-empty-heading child re-parenting unprobed. HEADLESS soft-delete exists (P9f): move children out via `update?list-id=<project>` (clears the heading link, tier 0) + rename the heading to "" (Shortcuts edit-title, headless) |
 | Move a heading | 🚫 | 🚫 | 🚫 (scf P2 — `set-detail` Parent is an exit-0 silent no-op) | dead on every surface |
 | Reorder headings within a project | 🚫 | ✅ **shipped** (`reorder --scope headings`, scf P1) | ➖ | children follow their heading (FK intact); the command is misleadingly named "reorder to dos" |
 
@@ -98,9 +98,9 @@ Doctrine: headings were treated as nonexistent (flatten) until the S-campaign se
 | Project headings (the headings themselves) | ✅ native (experimental) | heading uuids accepted (scf P1); heading-*scoped* child order still unautomatable (O06) |
 | Area members (to-dos OR projects) | ✅ native (experimental) | never mixed in one request (O14) |
 | Inbox | ✅ native (experimental) | full reversed wire list re-ranked exactly (A6); joins today/project/area as a validated scope |
-| Someday (loose to-dos) | ✅ **shipped** (`reorder --scope someday`) | the list handler STACKS ids above the call's original top (anchor model, P6h/P7e/P8b) — the compile emits the validated two-call protocol (P8b: exact). Someday PROJECTS moved inconsistently (P7a vs P8c) — rejected until locked |
+| Someday (loose to-dos OR area-less someday projects) | ✅ **shipped** (`reorder --scope someday`, one kind per call) | anchor-stack handler with OPPOSITE stack directions by row type: to-dos ascend (P6h/P7e/P8b), projects descend (P9e incl. predicted-failure control) — the compile emits the matching two-call protocol. Someday projects are sidebar rows, so this orders the sidebar's someday segment natively |
 | Checklist items | ✅ | granular move via stateful rewrite |
-| Sidebar: areas | 🚫 (O13 + scf2 P6e/f/g) | exhaustively closed 2026-07-09: move-to-location errors (−1700), `set index` read-only (−10006), private reorder no-ops on area uuids; sdef has no other command. The LAST unautomatable ordering |
+| Sidebar: areas | 🚫 (O13 + scf2 P6e/f/g + P9b/c) | exhaustively closed 2026-07-09, twice: move-to-location errors (−1700), `set index` read-only (−10006), private reorder no-ops on area uuids in EVERY specifier the sdef admits (named lists, application, area); creation appends at index 0 (the app writes TMArea."index" only on UI drag); no list contains areas. The LAST unautomatable ordering |
 | Sidebar: top-level projects | ✅ **shipped — BOUNCE** (`reorder --scope projects`, P7c/P7d/P8e) | native writes stay dead (P17 + scf2 P6a–d), but a when=someday→anytime round-trip FRONT-INSERTS (P8e: 3-project sequence exact, state preserved). Plain anytime undated area-less projects only; ≤10/call. Within-area projects: native area scope (O14) |
 | Anytime aggregate view (loose to-dos) | 🧪 | the list scope MOVES loose to-dos (P7b — P17 was projects-only) but its convention is unlocked (P7b vs P8d disagree); grouped blocks derive from container order |
 

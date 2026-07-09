@@ -694,13 +694,13 @@ describe("someday scope (P8b two-call anchor protocol)", () => {
     expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
   });
 
-  it("rejects someday PROJECTS (inconsistent across probes) and containered to-dos", async () => {
+  it("rejects containered someday to-dos (only loose ones are members)", async () => {
     seedTodo(fixture.db, { title: "loose", start: "someday", index: 1 });
-    const proj = seedProject(fixture.db, { title: "SP", start: "someday", index: 2 });
+    const proj = seedProject(fixture.db, { title: "SP", index: 2 });
+    const inProj = seedTodo(fixture.db, { title: "in-proj", start: "someday", project: proj });
     const { vector } = somedayVector();
-    const result = await runReorder(deps([vector]), { scope: "someday", uuids: [proj] });
+    const result = await runReorder(deps([vector]), { scope: "someday", uuids: [inProj] });
     expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.detail).toContain("someday PROJECT");
   });
 });
 
@@ -754,5 +754,93 @@ describe("projects scope (P8e sidebar bounce)", () => {
     });
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") expect(result.detail).toContain("NO native surface");
+  });
+});
+
+/**
+ * Someday-list sim for PROJECTS: anchor rule as somedayVector, but the stack
+ * DESCENDS — each moved id lands directly BELOW the previously moved one,
+ * all above the call's original top (P9e).
+ */
+function somedayProjectVector() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const scopeRows = (): { uuid: string; rank: number }[] =>
+        fixture.db
+          .prepare(
+            `SELECT uuid, "index" AS rank FROM TMTask WHERE trashed = 0 AND status = 0
+             AND type = 1 AND area IS NULL AND start = 2 AND startDate IS NULL
+             ORDER BY "index" ASC`,
+          )
+          .all() as { uuid: string; rank: number }[];
+      for (const m of invocation.payload.matchAll(/with ids "([^"]+)"/g)) {
+        const ids = (m[1] ?? "").split(",");
+        const rows = scopeRows();
+        const origTop = rows[0];
+        if (origTop === undefined) continue;
+        // Moved ids stack between (below) the previous moved id and the
+        // original top; the first moved id goes above the original top.
+        let ceiling = origTop.rank - 1000;
+        for (const uuid of ids) {
+          if (uuid === origTop.uuid) continue;
+          ceiling = ceiling + 100; // descending: each subsequent LOWER (closer to old top)
+          fixture.db
+            .prepare(`UPDATE TMTask SET "index" = ?, userModificationDate = ? WHERE uuid = ?`)
+            .run(ceiling, modClock++, uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
+  it("realizes the exact requested order against descending-stack semantics", async () => {
+    const p1 = seedProject(fixture.db, { title: "SP1", start: "someday", index: 10 });
+    const p2 = seedProject(fixture.db, { title: "SP2", start: "someday", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "SP3", start: "someday", index: 30 });
+    const p4 = seedProject(fixture.db, { title: "SP4", start: "someday", index: 40 });
+    const { vector, calls } = somedayProjectVector();
+    const result = await runReorder(deps([vector]), { scope: "someday", uuids: [p3, p1, p4, p2] });
+    expect(result.kind).toBe("ok");
+    expect(calls).toHaveLength(1);
+    // call 1 pushes the desired-bottom (p2); call 2 = anchor + FORWARD rest
+    expect(calls[0]).toContain(`with ids "${p2}"`);
+    expect(calls[0]).toContain(`with ids "${p2},${p3},${p1},${p4}"`);
+    const ranks = [p3, p1, p4, p2].map(
+      (u) =>
+        (
+          fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
+            r: number;
+          }
+        ).r,
+    );
+    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+  });
+
+  it("rejects mixed to-do + project someday requests and area'd someday projects", async () => {
+    const todo = seedTodo(fixture.db, { title: "sd-todo", start: "someday", index: 1 });
+    const proj = seedProject(fixture.db, { title: "sd-proj", start: "someday", index: 2 });
+    const area = seedArea(fixture.db, "Work");
+    const areaProj = seedProject(fixture.db, {
+      title: "sd-area-proj",
+      start: "someday",
+      area,
+      index: 3,
+    });
+    const { vector } = somedayProjectVector();
+    const mixed = await runReorder(deps([vector]), { scope: "someday", uuids: [todo, proj] });
+    expect(mixed.kind).toBe("blocked");
+    if (mixed.kind === "blocked") expect(mixed.detail).toContain("same-type");
+    const inArea = await runReorder(deps([vector]), { scope: "someday", uuids: [areaProj] });
+    expect(inArea.kind).toBe("blocked");
+    if (inArea.kind === "blocked") expect(inArea.detail).toContain("INSIDE an area");
   });
 });
