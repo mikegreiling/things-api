@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **Fixed: the bundled `things-proxy-find-items` shortcut now actually searches.** The previous file echoed its input back instead of querying Things (its Find Items action shipped without a predicate). The repaired shortcut filters on Title (case-insensitive exact match, first match returned; no match returns empty output) and was validated in the VM lab before shipping. If you installed the old copy, delete it in Shortcuts and run `things setup shortcuts` again — the replacement asks for its own one-time permission on first run. No pipeline operation is affected; the proxy is diagnostic-only.
 
 ## 0.7.0 — 2026-07-09
 
