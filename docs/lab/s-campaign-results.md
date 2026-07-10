@@ -101,3 +101,29 @@ The signed extracted `.shortcut` files were import-and-run tested on Mike's prod
 
 ### Safety note (banked)
 Iterating hand-authored/experimental shortcuts on the PRODUCTION host crashed Things (read-only op, so no data loss and no write-rail breach — but a crash nonetheless). Rule reaffirmed: **all shortcut experimentation happens in disposable golden clones; only validated assets touch prod.** `find-items` reads are the only prod-safe shortcut runs; the five mutating proxies must never be `shortcuts run` against prod outside the verified pipeline.
+
+## VM repair campaign results (SX5 + SX6, 2026-07-10) — all four queued items CLOSED
+
+[`lab/scripts/research-sx5.sh`](../../lab/scripts/research-sx5.sh) (repair + crash discrimination; artifacts `lab/artifacts/things-run-sx5-20260710-140641/` — report, four `.ips`, variant blobs) and [`lab/scripts/research-sx6.sh`](../../lab/scripts/research-sx6.sh) (import validation; artifacts `lab/artifacts/things-run-sx6-20260710-141331/` — screenshots). Final asset builder: [`lab/scripts/build-find-items-shortcut.py`](../../lab/scripts/build-find-items-shortcut.py).
+
+**Zero-cost evidence first (no VM, no app interaction):** `Things3.app/Contents/Frameworks/ThingsCommon.framework/Versions/A/Resources/Metadata.appintents/extract.actionsdata` (host file read, Things 3.22.11 — same version as golden) is the authoritative App Intents vocabulary. `entities.TAIItemEntity.properties` lists identifier **`title`** (display key "Title"); there is **no `name` property** — the prod crash used a nonexistent identifier. `queries.TAIItemQuery` gives per-property comparators: `title` → [0,6,7,8] (equals/contains/begins/ends), `id` → [0,1]. (Note: the top-level `Things3.app/Contents/Resources/Metadata.appintents/` is an empty stub — the real metadata lives in the ThingsCommon framework.)
+
+**Method — DB surgery preserves consent (new fact).** Killing `siriactionsd` and UPDATE-ing the golden-resident proxy's `ZSHORTCUTACTIONS.ZDATA` blob in place lets the candidate run HEADLESS under the golden's inherited Always-Allow — consent is keyed to shortcut identity, not action content. Readback after every injection was byte-identical; no re-signing/validation layer rejected the surgery; the runtime picked up each new blob immediately (no stale cache observed across 7 injections).
+
+| # | Probe | Verdict | Evidence |
+|---|---|---|---|
+| SX5-0 | baseline unmodified proxy | echoes input verbatim (S01 correction re-confirmed in-VM) | input `sx5 baseline echo probe` → output same |
+| SX5-1 | **repair `v-title-is`** (filter row `Property="title"`, `Operator=4`, `Unit=4`, dict-key `search` token, Limit 1, stray `WFContentItemInputParameter` dropped) — MIS-CASED query | **REAL MATCH, case-insensitive** 🎉 — the case-fold discriminator: query `lab-inbox-1` returned the STORED casing `LAB-INBOX-1` | exit 0, Things alive |
+| SX5-2 | same, exact-cased query | `LAB-INBOX-1` | exit 0 |
+| SX5-3 | same, no-match query | clean empty (exit 0, no output file, no error) | |
+| SX5-4/5 | `v-title-contains` (`Operator=99`), substring `lab-inbox` / no-match | contains also works, also case-insensitive (returned `LAB-INBOX-2`); no-match clean empty | Operator 4 "is" is the shipped choice |
+| SX5-C1a/b | `v-name-is` — the EXACT prod-crasher (Property `"name"`) — two runs | **CRASH both runs** — Things PID dead, fresh `.ips` each (EXC_BREAKPOINT/SIGTRAP, Swift trap in the app's Base/FoundationAdditions frameworks) | run 1: "Things app quit unexpectedly"; run 2: "Couldn't communicate with a helper application" — same underlying crash |
+| SX5-C2 | `v-garbage-prop` (Property `"zzzNotAProperty"`) | **CRASH** | third `.ips` |
+| SX5-C3 | `v-bad-operator` (VALID `title` property, Operator 987654) | **CRASH** | fourth `.ips` — unknown Operator is independently fatal |
+| SX5-F | restore `v-title-is` post-crashes, sanity | `lab-inbox-1` → `LAB-INBOX-1` again | crash left no wedge |
+
+**Verdicts against the queue:**
+1. **Filter repaired** — `Property: "title"` (not `name`), Operator 4 ("is", case-insensitive), Unit 4, the edit-title token shape. Case-fold proof above. No-match behavior: clean empty output.
+2. **Crash discriminated — REAL BUG, banked as oddities §7 C4**: any unrecognized predicate `Property` OR `Operator` reproducibly crashes Things (4/4, `.ips` collected). My prod serialization was *invalid* (wrong property), but the app crashing on it (instead of erroring) is the defect.
+3. **Programmatic shortcut authoring banked** — novel-paths #18. The working filter was composed in Python and never touched a GUI; with the ThingsCommon metadata as the vocabulary source, new proxies need no golden GUI sitting (changes roadmap §A.2).
+4. **Validated asset shipped** — `shortcuts/things-proxy-find-items.shortcut` rebuilt (SX5-validated actions + the committed file's exact envelope, recovered from its AEA payload via `aea decrypt -sign-pub <leaf-cert pubkey>` + `aa extract`; only `WFWorkflowActions` differs), signed `--mode anyone`, and **import-validated end-to-end in a fresh clone (SX6)**: `open` → genuine Add-Shortcut sheet (signature accepted) → "Add Shortcut" clicked via **VNC synthetic input** (`tart run --vnc-experimental` + vncdotool — no TCC, first working demonstration of the §E½ VNC arm) → row landed in `Shortcuts.sqlite` (`shortcuts list` shows it). The run-after-import consent modal was not exercised (fresh identity needs one Always-Allow click) — Mike's real-hardware import will grant it on first run, exactly like the other five proxies.
