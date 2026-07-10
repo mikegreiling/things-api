@@ -8,7 +8,18 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
-import { blue, bold, dim, magenta, red, underline, yellow } from "../style.ts";
+import { localToday } from "../../model/dates.ts";
+import { bold, dim, green, red, strike, underline } from "../style.ts";
+import {
+  countChip,
+  dateChip,
+  eveningMoon,
+  loggedDate,
+  NOTES_MARK,
+  projectCircle,
+  todayStar,
+  todoBox,
+} from "../glyphs.ts";
 
 import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 
@@ -68,43 +79,52 @@ export function withClient(
 
 export interface FormatOpts {
   /**
-   * Render a grouped project TITLE row: bold+underlined title, no type
-   * marker — the styling carries the type (the GUI's project-header look).
+   * Render a grouped project TITLE row: bold+underlined title (the GUI's
+   * project-header look) — the circle glyph and count chip still apply.
    */
   projectTitle?: boolean;
   /** Container uuids already implied by surrounding output — their context suffix is dropped. */
   suppressProject?: string | null;
   suppressArea?: string | null;
+  /** Reference instant for date-relative tokens (tests pin this; defaults to now). */
+  now?: Date;
 }
 
 /**
- * One item line: `<uuid-prefix>  <marker> [meta …] <title> #tags (container)`.
- * Human output shows a SHORTENED uuid prefix (every command accepts unique
- * prefixes >= 6 chars); `uuidWidth` is the display length from
- * uuidDisplayWidth — never below 8 so a copied prefix stays unique across
- * the whole database, not just the rendered list. Tags follow the title
- * (`#`-prefixed, space-separated), mirroring the GUI. Exactly one space
- * separates every following token; meta tokens colorize on a TTY only
- * (../style.ts) — piped output stays plain. `--json` always carries full
- * uuids.
+ * One item line:
+ * `<uuid-prefix>  <box> [↻] [logged-date] [‹chip›] [!deadline] <title> [‹n›] [≡] (container) #tags`.
+ * The box is the glyph-language state carrier (../glyphs.ts): `[ ]`-family
+ * for to-dos, `( )`-family for projects — state survives with color
+ * stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
+ * mark keeps the state when strike/ANSI is unavailable). Human output shows
+ * a SHORTENED uuid prefix (every command accepts unique prefixes >= 6
+ * chars); `uuidWidth` is the display length from uuidDisplayWidth — never
+ * below 8 so a copied prefix stays unique across the whole database, not
+ * just the rendered list. Tags follow the title (`#`-prefixed, green — GUI
+ * color), after the count chip (projects), notes marker, and container.
+ * Heading-nested to-dos label their parent PROJECT (via headingProject),
+ * never the heading — GUI behavior. Colors engage on a TTY only
+ * (../style.ts); `--json` always carries full uuids.
  */
 export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {}): string {
+  const todayIso = localToday(opts.now);
   const asTitle = opts.projectTitle === true && item.type === "project";
-  const marker = asTitle
-    ? null
-    : (item.type === "project" ? "P" : "-") + (item.repeating.isTemplate ? "↻" : "");
-  const meta = [
-    item.deadline ? red(`!${item.deadline}`) : null,
-    item.startDate ? yellow(`@${item.startDate}`) : null,
-    item.status !== "open" ? magenta(`[${item.status}]`) : null,
-  ].filter((s): s is string => s !== null);
+  const box = item.type === "project" ? projectCircle(item) : todoBox(item);
+  const meta: string[] = [];
+  if (item.repeating.isTemplate) meta.push("↻");
+  if (item.status !== "open" && item.stopped !== null)
+    meta.push(loggedDate(item.stopped, todayIso));
+  if (item.status === "open" && item.startDate !== null && item.startDate > todayIso)
+    meta.push(dateChip(item.startDate, todayIso));
+  if (item.deadline !== null) meta.push(red(`!${item.deadline}`));
   const tags =
-    item.tags.length > 0 ? ` ${blue(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
+    item.tags.length > 0 ? ` ${green(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
+  const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
   const context =
-    item.type === "to-do" && item.project
-      ? item.project.uuid === opts.suppressProject
+    container !== null
+      ? container.uuid === opts.suppressProject
         ? ""
-        : ` (${item.project.title})`
+        : ` (${container.title})`
       : item.area
         ? item.area.uuid === opts.suppressArea
           ? ""
@@ -114,13 +134,31 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     uuidWidth > 0 && item.uuid.length > uuidWidth
       ? item.uuid.slice(0, uuidWidth)
       : item.uuid.padEnd(uuidWidth);
-  const title = asTitle ? bold(underline(item.title)) : item.title;
+  let title = item.title;
+  if (asTitle) title = bold(underline(title));
+  else if (item.status === "canceled") title = dim(strike(title));
+  else if (item.status === "completed") title = dim(title);
+  const tail = [
+    ...(item.type === "project" ? [countChip(item)] : []),
+    ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
+  ];
   return [
     `${dim(shownUuid)} `,
-    ...(marker === null ? [] : [marker]),
+    box,
     ...meta,
-    `${title}${context === "" ? "" : dim(context)}${tags}`,
+    `${title}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}${context === "" ? "" : dim(context)}${tags}`,
   ].join(" ");
+}
+
+/**
+ * Row prefix in today-aware views: yellow ★ for Today members, cyan ⏾ for
+ * effective This-Evening members (raw evening assignment counts only while
+ * startDate is exactly today — the UI's daily expiry), null otherwise.
+ */
+export function todayMark(item: ListItem, now?: Date): string | null {
+  if (!isTodayMember(item, now)) return null;
+  const evening = item.todaySection === "evening" && item.startDate === localToday(now);
+  return evening ? eveningMoon() : todayStar();
 }
 
 /** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
@@ -159,7 +197,7 @@ function renderList(items: ListItem[]): string[] {
  * (an area header covers its rows; a project title row covers the to-dos
  * beneath it — a clustered child whose project row is absent, e.g. under a
  * tag filter, keeps its `(project)` suffix). `star` prefixes each item line
- * with the Today-membership star.
+ * with the Today-membership mark (★, or ⏾ for This-Evening members).
  */
 export function renderSections(sections: SidebarSection[], star = false): string[] {
   const all = sections.flatMap((s) => s.items);
@@ -178,7 +216,7 @@ export function renderSections(sections: SidebarSection[], star = false): string
     // rows drop their redundant `(project)` suffix).
     let openProject: string | null = null;
     for (const item of section.items) {
-      const prefix = star ? `${isTodayMember(item) ? yellow("★") : " "} ` : "";
+      const prefix = star ? `${todayMark(item) ?? " "} ` : "";
       if (item.type === "project") {
         openProject = item.uuid;
         blank();
@@ -219,12 +257,21 @@ export function registerReadCommands(program: Command): void {
         today: ListItem[];
         evening: ListItem[];
         badge: { dueOrOverdue: number; other: number };
-      }) => [
-        `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
-        ...renderList(data.today),
-        "── This Evening ──",
-        ...renderList(data.evening),
-      ],
+      }) => {
+        // GUI parity: every Today row carries the star, every This-Evening
+        // row the crescent (both computed over one shared uuid column).
+        const w = uuidDisplayWidth([...data.today, ...data.evening]);
+        return [
+          `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
+          ...(data.today.length === 0
+            ? ["(empty)"]
+            : data.today.map((i) => `${todayStar()} ${formatItem(i, w)}`)),
+          "── This Evening ──",
+          ...(data.evening.length === 0
+            ? ["(empty)"]
+            : data.evening.map((i) => `${eveningMoon()} ${formatItem(i, w)}`)),
+        ];
+      },
     },
     {
       name: "inbox",

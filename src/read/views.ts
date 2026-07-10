@@ -55,6 +55,7 @@ import { decodeRecurrenceRule } from "../model/recurrence.ts";
 import {
   fetchTagsForTasks,
   fetchTaskRows,
+  makeHeadingProjectResolver,
   makeRefResolver,
   NOT_TEMPLATE,
   resolveAreaUuid,
@@ -98,15 +99,20 @@ const OPEN = `${LIVE} AND t.status = 0`;
 
 function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
   const refs = makeRefResolver(db);
+  const headingProject = makeHeadingProjectResolver(db);
   const tags = fetchTagsForTasks(
     db,
     rows.map((r) => r.uuid),
   );
-  return rows.map((row) =>
-    row.type === 1
-      ? mapProject(row, refs, tags.get(row.uuid) ?? [])
-      : mapTodo(row, refs, tags.get(row.uuid) ?? []),
-  );
+  return rows.map((row) => {
+    if (row.type === 1) return mapProject(row, refs, tags.get(row.uuid) ?? []);
+    const todo = mapTodo(row, refs, tags.get(row.uuid) ?? []);
+    if (todo.heading !== null) {
+      const p = headingProject(todo.heading.uuid);
+      if (p !== null) todo.headingProject = p;
+    }
+    return todo;
+  });
 }
 
 export interface TodayView {

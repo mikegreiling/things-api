@@ -64,6 +64,12 @@ export interface Todo extends TaskCommon {
   project: Ref | null;
   /** When set, project is reached via the heading (DB invariant: project column is NULL). */
   heading: Ref | null;
+  /**
+   * Owning project resolved THROUGH the heading (`project` itself stays
+   * null — DB truth). Computed opt-in: list views populate it so consumers
+   * get the GUI's container label without a second lookup.
+   */
+  headingProject?: Ref;
   checklist?: ChecklistItem[];
   checklistItemsCount: number;
   openChecklistItemsCount: number;
