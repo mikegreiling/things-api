@@ -249,6 +249,26 @@ export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<st
   return map;
 }
 
+/**
+ * Lazy heading-uuid -> owning-project Ref resolver, cached per instance.
+ * Heading-nested to-dos carry project = NULL in the DB (the heading holds
+ * the link); list views use this to surface the GUI's container label.
+ */
+export function makeHeadingProjectResolver(db: DatabaseSync): (headingUuid: string) => Ref | null {
+  const cache = new Map<string, Ref | null>();
+  const stmt = db.prepare(
+    "SELECT p.uuid AS uuid, p.title AS title FROM TMTask h JOIN TMTask p ON p.uuid = h.project WHERE h.uuid = ?",
+  );
+  return (headingUuid) => {
+    const cached = cache.get(headingUuid);
+    if (cached !== undefined) return cached;
+    const hit = stmt.get(headingUuid) as { uuid: string; title: string | null } | undefined;
+    const ref = hit ? { uuid: hit.uuid, title: hit.title ?? "" } : null;
+    cache.set(headingUuid, ref);
+    return ref;
+  };
+}
+
 /** Lazy uuid -> Ref resolver over TMTask + TMArea titles, cached per instance. */
 export function makeRefResolver(db: DatabaseSync): (uuid: string | null) => Ref | null {
   const cache = new Map<string, Ref | null>();

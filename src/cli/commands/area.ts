@@ -8,15 +8,20 @@ import type { AreaView } from "../../read/area-view.ts";
 import { bold, dim } from "../style.ts";
 import { formatItem, uuidDisplayWidth, withClient } from "./reads.ts";
 
-function renderAreaView(view: AreaView): string[] {
-  const everyItem = [
-    ...view.active,
-    ...view.projects,
-    ...view.later.scheduled.flatMap((d) => d.items),
-    ...view.later.repeating,
-    ...view.later.someday,
-    ...view.logged.slice(0, 10),
-  ];
+/**
+ * GUI parity: later rows (scheduled / repeating / someday) render inline at
+ * the bottom of the Active block — dimmed boxes and date chips carry the
+ * state. `--hide-later` mirrors the GUI's toggle in its hidden position.
+ */
+function renderAreaView(view: AreaView, hideLater: boolean): string[] {
+  const later = hideLater
+    ? []
+    : [
+        ...view.later.scheduled.flatMap((d) => d.items),
+        ...view.later.repeating,
+        ...view.later.someday,
+      ];
+  const everyItem = [...view.active, ...later, ...view.projects, ...view.logged.slice(0, 10)];
   const w = uuidDisplayWidth(everyItem);
   // Rows inside this view never repeat the area's own name.
   const fmt = (i: (typeof everyItem)[number]) => formatItem(i, w, { suppressArea: view.area.uuid });
@@ -29,20 +34,9 @@ function renderAreaView(view: AreaView): string[] {
   const section = (header: string, rows: string[]) => {
     lines.push("", bold(header), ...rows);
   };
-  section("── Active ──", view.active.length ? view.active.map(fmt) : ["(none)"]);
+  const activeRows = [...view.active, ...later];
+  section("── Active ──", activeRows.length ? activeRows.map(fmt) : ["(none)"]);
   section("── Projects ──", view.projects.length ? view.projects.map(fmtProject) : ["(none)"]);
-  if (view.later.scheduled.length || view.later.repeating.length || view.later.someday.length) {
-    lines.push("", bold("── Later ──"));
-    for (const day of view.later.scheduled) {
-      lines.push(`  ${day.date}:`, ...day.items.map(fmt));
-    }
-    if (view.later.repeating.length) {
-      lines.push("  repeating templates:", ...view.later.repeating.map(fmt));
-    }
-    if (view.later.someday.length) {
-      lines.push("  someday:", ...view.later.someday.map(fmt));
-    }
-  }
   if (view.logged.length)
     section(`── Logged (${view.logged.length}) ──`, view.logged.slice(0, 10).map(fmt));
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
@@ -55,17 +49,14 @@ export function registerAreaCommands(program: Command): void {
     .command("show <ref>")
     .description(
       "Composite area view mirroring the native UI: the area's direct to-dos (active " +
-        "first), its projects in sidebar order, later (scheduled/repeating/someday), " +
-        "logged. Target by uuid or unique name.",
+        "first, scheduled/repeating/someday inline after), its projects in sidebar " +
+        "order, logged. Target by uuid or unique name.",
     )
+    .option("--hide-later", "omit scheduled, repeating, and someday rows")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: { json?: boolean; db?: string }) => {
-      withClient(
-        opts,
-        "area-view",
-        (c) => c.read.areaView(ref),
-        renderAreaView as (d: never) => string[],
-      );
+    .action((ref: string, opts: { hideLater?: boolean; json?: boolean; db?: string }) => {
+      withClient(opts, "area-view", (c) => c.read.areaView(ref), ((d: AreaView) =>
+        renderAreaView(d, opts.hideLater === true)) as (d: never) => string[]);
     });
 }

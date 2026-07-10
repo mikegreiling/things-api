@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **List rows speak the app's visual language.** To-dos carry a state checkbox — `[ ]` open, `[✓]` completed, `[×]` canceled (title struck through on a TTY), `[~]` someday — and projects a round counterpart: `( )` untouched, quarter pie `(◔ ◑ ◕)` while in progress, `(◉)` all children done, `(✓)`/`(×)` completed/canceled, `(~)` someday. Future-scheduled rows show the app's date pill as a dim `‹Jul 31›` chip (year appended when not the current year) instead of `@2026-07-31`; logged rows show their completion date (`[✓] Jun 15 Old win`); rows with notes carry a `≡` marker; project rows show the remaining-count chip `‹12›`. The `[completed]`/`[canceled]` text markers and the `P`/`-` type markers are retired — shape carries the state, so piped/`NO_COLOR` output stays unambiguous; color, dim, and strikethrough are TTY-only enhancements.
+- **Tags render green** (the app's tag color), correcting the earlier blue.
+- **`things today` marks every row** — yellow `★` in Today, cyan `⏾` in This Evening — and grouped views (`anytime`) use the crescent for effective This-Evening members instead of the star.
+- **`project show` and `area show` render later items inline.** Scheduled, repeating, and someday rows now appear under their heading (or at the end of the active block) with their state carried by the `[~]` box and date chips, instead of being pulled out into a separate "Later" section that disassociated them from their headings. `--hide-later` omits them, mirroring the app's toggle. JSON shapes are unchanged.
+- **Flat views label heading-nested to-dos with their parent project** (the app's behavior). Read model: to-dos gain an optional computed `headingProject` ref in list views (`project` itself stays null for heading-nested rows — DB truth); additive, non-breaking.
 
 ## 0.7.0 — 2026-07-09
 

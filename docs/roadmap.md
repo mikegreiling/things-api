@@ -90,5 +90,9 @@ CC correspondence suggests repeat-handling changes and a likely major release al
 ## §F. Comprehensive reference compendium — LANDED 2026-07-09
 `docs/reference/` now exists: **[README](reference/README.md)** (the probe-id/campaign index over all evidence; the living rollups — capability-matrix + oddities — stay primary), **[novel-paths.md](reference/novel-paths.md)** (20 lab-discovered undocumented capabilities), **[suite-audit.md](reference/suite-audit.md)** (op catalog × recurring coverage — the §G leftover; the 7 uncovered op kinds got e2e steps in the same change). Remaining §F-adjacent: probe the "probably dead" unprobed cells as they surface (tracked in probe-backlog: hidden lists as reorder specifiers, area'd someday projects, entity-typed set-detail Parent, P5 non-empty heading delete).
 
+## §H. TUI polish backlog
+
+**Cross-terminal glyph audit (flagged by Mike, 2026-07-10).** The CLI's glyph language (`src/cli/glyphs.ts` — checkbox marks ✓ × ~, pie quarters ◔ ◑ ◕ ◉, chips ‹›, ★/⏾/≡) was chosen on one macOS font stack; audit how it renders across terminal emulators and fonts before treating it as settled. Matrix: Terminal.app, iTerm2, Ghostty, kitty, VS Code terminal, Warp × SF Mono, Menlo, JetBrains Mono, a Nerd Font — plus a CJK-wide (`ambiguous=double`) config and a `NO_COLOR`/piped pass. Watch for: tofu on `⏾` (U+23FE, Unicode 9) and the pie quarters, double-width drift of ambiguous-width glyphs breaking column alignment, and dim-on-light-theme legibility. Every glyph is a constant in `glyphs.ts`, so retuning is a one-file change.
+
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)
