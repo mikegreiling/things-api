@@ -167,6 +167,7 @@ Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM
 | C1 | URL `update?...&when=` on a repeating TO-DO | **CRASH** (SIGTRAP) | §1 (U12/R09), re-standing |
 | C2 | URL `update-project?...&when=` on a repeating PROJECT | **CRASH**, fresh `.ips` | P14-A4 (NEW 2026-07-09) |
 | C3 | AppleScript `schedule to do id <heading>` | **CRASH** (process death, −609) | §6 (P11e), re-confirmed P14-A1 |
+| C4? | Shortcuts **Find Items** with a hand-authored/malformed predicate | **CRASH** ("the 'Things' app quit unexpectedly") — **LAB-PENDING** | real-hardware 2026-07-10; NOT yet a firm bug — may be an invalid serialization rather than an app defect. **Must be discriminated in a VM** (build a known-good Find-Items-by-title shortcut, diff its predicate blob; then probe deliberately-invalid predicates for reproduction + `.ips`). See s-campaign-results.md "Real-hardware validation + corrections (2026-07-10)". |
 | F1 | AppleScript `move project … to area id <bad-uuid>` | non-fatal FAULT — errors −1728 but writes a DiagnosticReport without dying | P14-C4 |
 
 **Graceful (no guard needed):** AS `schedule` on a repeating to-do → error 302; every wrong-TYPE specifier (set status / delete / move / project op against a to-do/heading/area uuid of the wrong kind) → clean −1728 / −10006 / −1700, or a silent no-op on the URL side; malformed dates/statuses → silent no-op or −1700; unknown uuids → −1728. Full matrix in `lab/artifacts/things-run-p14-20260709-151631/`.

@@ -19,7 +19,7 @@ Six shortcuts, all using the **Find → act** pattern (entity fields take a `Fin
 
 | # | Capability | Verdict | Evidence |
 |---|---|---|---|
-| S01 | `find-items` read | **WORKS** | Returns the item **title** as text (not the uuid) — consumers must map title→uuid themselves, or the proxy needs a "Get Details (ID)" tail to emit uuids. |
+| S01 | `find-items` read | **CONFOUNDED — see 2026-07-10 correction below** | ~~Returns the item title as text~~ — every lab run searched an EXACT fixture title, so a real match and a plain input-echo were indistinguishable. Real-hardware retest proved the proxy ECHOES its input, it does not search. |
 | S02 | **Create a heading in an EXISTING project** | **WORKS** 🎉 | `Create Heading` made a `type=2` row with `project=<proj uuid>`. **Closes gaps.md §1** — the one capability dead on both URL (T09/U09) and AppleScript (A31). |
 | S03 | Rename a heading | **WORKS** | `Edit Items → Set Title` renamed the `type=2` row in place. |
 | S04 | Delete a heading | **WORKS** | The heading row is removed from `TMTask` (headings don't sit in Trash independently). Child-reparenting behavior on a NON-empty heading is unprobed (this heading was empty) — an S-suite follow-up. |
@@ -82,3 +82,22 @@ Harness lessons: `proxy()` must `rm -f` the `--output-path` file before each run
 ## Doctrine impact (for Mike)
 
 gaps.md §0 held the headings doctrine as "flatten unless Shortcuts delivers; **dual-mode** candidate (first-class with a Shortcuts vector, flattened otherwise)." **Shortcuts delivered** — create/rename/delete all work — so the dual-mode path was unblocked. RESOLVED 2026-07-09: **first-class always, no flatten/dual mode** (roadmap §E, gaps §0); only `heading.create` is capability-gated behind the Shortcuts vector, exhaustively confirmed by the HX sweep ([heading-research.md](heading-research.md)).
+
+## Real-hardware validation + corrections (2026-07-10, Mike's Mac)
+
+The signed extracted `.shortcut` files were import-and-run tested on Mike's production machine (reads only; no data harm, no write-rail violation — but see the safety note).
+
+- **Distribution pipeline VALIDATED end-to-end.** `open shortcuts/things-proxy-find-items.shortcut` → the genuine "Add Shortcut" import sheet (signature accepted, "anyone" mode trusted) → the shortcut installs and runs. **iCloud-free signed-file distribution works on real hardware** — closes the last §A.1 open item. Consent classes observed live: an **input** class ("Allow X to *share 1 dictionary with* Things", Always-Allow available) distinct from the **output** class documented earlier, plus a broader **"Allow X to *access* Things"** on the hand-authored variant.
+
+- **S01 CORRECTION — `find-items` ECHOES its input, it does not search.** Query `{"search":"anything"}` → output `anything`; query `{"search":"CLEAN AIR CONDITIONER"}` (a real to-do's title deliberately mis-cased) → output `CLEAN AIR CONDITIONER` verbatim (NOT case-folded to the stored casing). A true match would return the item's stored title; the verbatim caps prove it's echoing the input value. Root cause in the extracted blob (`lab/artifacts/things-run-sx3-20260709-165344/sx3-out/things-proxy-find-items.ZDATA.blob`): action 1 (Find Items / `TAIItemEntity`) has an **empty** `WFActionParameterFilterTemplates` (no predicate) plus a stray `WFContentItemInputParameter` aggrandizing the dict `search` value; the proxy was mis-built during the L5 sitting. The other five proxies address by `id` and are unaffected. **Product impact: NONE** — the write pipeline addresses items by uuid from SQLite reads; `find-items` is a diagnostic-only proxy on no write path.
+
+- **⚠️ CRASH (lab-PENDING, not yet a firm oddity): a malformed Find Items predicate crashed Things.** A hand-authored repair (graft a `Property="name"` / `Operator=4` / `Unit=4` filter row cribbed from `edit-title`'s `id` filter, drop the input-parameter, add Limit 1) IMPORTED fine but on run: `Error: The action "Find Items" could not run because the "Things" app quit unexpectedly.` Unknown whether this is (a) a genuine Things bug (malformed predicate → crash = a NEW crash family distinct from schedule-class, oddities §7) or (b) simply an invalid serialization on my part (wrong Property key — maybe `title` not `name` — or wrong Operator/Unit). **Must be discriminated in a VM clone, NOT on prod.** The crash-inducing asset was reverted from `shortcuts/` immediately (`git checkout`); the committed file is the non-crashing echo-bug version.
+
+### Queued VM work (the `find-items` repair campaign)
+1. In a golden clone, iterate the Find Items filter serialization until it returns REAL matches: candidate `Property` values `title` / `name`; confirm `Operator` (4 = "is"?) and the `Unit`/string-token shape against a KNOWN-GOOD hand-built Find-Items-by-name shortcut (build one in the golden GUI, extract its blob, diff — the authoritative reference). Prove with a case-fold test (mis-cased query returns stored casing = real match).
+2. Determine if the malformed-predicate crash reproduces with obviously-invalid predicates → if yes, bank as oddities §7 crash family C4 with an `.ips`.
+3. **Novel-path candidate — programmatic shortcut authoring:** the extracted-blob→edit→sign→import path already proves import+sign of a *hand-edited* workflow; if a hand-authored FILTER runs correctly in the VM, we can COMPOSE new proxies in Python with no golden GUI sitting — materially changes the §A.2 write-vector-wiring plan (no human-in-VM needed to mint proxies). Bank in novel-paths.md if it works.
+4. Only a VM-validated re-signed `shortcuts/things-proxy-find-items.shortcut` returns to the repo + Mike's machine.
+
+### Safety note (banked)
+Iterating hand-authored/experimental shortcuts on the PRODUCTION host crashed Things (read-only op, so no data loss and no write-rail breach — but a crash nonetheless). Rule reaffirmed: **all shortcut experimentation happens in disposable golden clones; only validated assets touch prod.** `find-items` reads are the only prod-safe shortcut runs; the five mutating proxies must never be `shortcuts run` against prod outside the verified pipeline.
