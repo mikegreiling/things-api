@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.7.0 — 2026-07-09
+
 - **Fixed: `todo.add-logged` never landed.** The backdated import compiled its dates with fractional seconds, which the app's date parser rejects — the command errored (a dialog appeared) and no to-do was created. Dates are now second-precision; verified live end-to-end.
 - **Headings now expose `status`** (`"completed"` = archived; a canceled heading is stored as completed). Also fixes `heading.archive`/`heading.unarchive` reporting a failure after a successful archive — the result check could not observe the heading's status without it.
 - **Repeat-rule format canary.** `things doctor` gains a `repeats:` line decoding every repeating template's rule; a non-zero undecodable count is the early warning that a Things update changed the repeat-rule format. Rule decoding is now strict about the rule schema version — an unrecognized version reports the rule as unavailable instead of silently misreading a new format with old semantics.
