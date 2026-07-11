@@ -144,13 +144,16 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   // template rows drop it via the sentinel guard: their deadline column
   // carries app-internal 4001-01-01 sentinels (upcoming's synthesized
   // occurrences carry REAL rule-derived deadlines and must keep the flag).
-  const ruleOffset = item.repeating.rule?.startOffsetDays;
+  const rule = item.repeating.rule;
   const deadline =
     item.status === "open" && item.deadline !== null && item.deadline < "4000"
       ? ` ${deadlineToken(item.deadline, todayIso)}`
       : // The GUI's bare flag on no-date repeating templates: the rule WILL
-        // assign each occurrence a deadline, date unknown until spawned.
-        item.repeating.isTemplate && ruleOffset !== undefined && ruleOffset < 0
+        // assign each occurrence a deadline (fixed rules always do; after-
+        // completion only with a start offset), date unknown until spawned.
+        item.repeating.isTemplate &&
+          rule !== undefined &&
+          (rule.type === "fixed" || rule.startOffsetDays < 0)
         ? ` ${bold(dim("⚑"))}`
         : "";
   const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;

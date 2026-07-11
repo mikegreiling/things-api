@@ -54,11 +54,16 @@ export function renderDetail(item: AnyTask | null): string[] {
       // when the rule assigns deadlines, say so instead of the sentinel.
       const next = item.repeating.nextOccurrence;
       meta("when", next == null ? null : `↻ ${shortDate(next, todayIso)}`);
-      const offset = item.repeating.rule?.startOffsetDays;
+      const rule = item.repeating.rule;
+      const deadlines = rule !== undefined && (rule.type === "fixed" || rule.startOffsetDays < 0);
       meta(
         "deadline",
-        offset !== undefined && offset < 0
-          ? `${bold(dim("⚑"))} ${dim(`set per occurrence (${-offset} days after its start)`)}`
+        deadlines
+          ? `${bold(dim("⚑"))} ${dim(
+              rule.startOffsetDays < 0
+                ? `set per occurrence (${-rule.startOffsetDays} days after its start)`
+                : "set per occurrence (due the day it appears)",
+            )}`
           : null,
       );
     } else {

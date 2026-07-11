@@ -216,6 +216,9 @@ export function projectOccurrences(
   const anchorEvent = addDays(nextInstanceStartDate, -rule.startOffsetDays);
   return generateEventDates(rule, anchorEvent, window).map((event) => ({
     startDate: addDays(event, rule.startOffsetDays),
-    deadline: rule.startOffsetDays < 0 ? event : null,
+    // Fixed rules always deadline at the event date, even ts=0 (projections
+    // are fixed-only; corpus-validated 2026-07-11 — birthday-style repeats
+    // spawn with deadline = start).
+    deadline: event,
   }));
 }

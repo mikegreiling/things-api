@@ -384,8 +384,12 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
       }
     }
     if (rule === null || horizon === 1 || rule.type !== "fixed") {
+      // Corpus-validated 2026-07-11 (1,900+ live instances): FIXED rules
+      // always deadline their occurrences at the event date — start − ts,
+      // INCLUDING ts=0 (deadline = the start date itself; birthday-style
+      // repeats). After-completion rules deadline only when ts < 0.
       const deadline =
-        rule !== null && rule.startOffsetDays < 0
+        rule !== null && (rule.type === "fixed" || rule.startOffsetDays < 0)
           ? addDaysIso(startDate, -rule.startOffsetDays)
           : null;
       return [{ ...template, startDate, deadline }];

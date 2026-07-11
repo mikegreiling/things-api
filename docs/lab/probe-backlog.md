@@ -39,6 +39,7 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 
 ## C. Parked (bigger, not auto-runnable now)
 
+- **Deadline-less FIXED repeat encoding** (2026-07-11): every fixed rule in the live corpus deadlines its occurrences at the event date (deadline = start − ts, ts=0 included — all fixed-ts=0 templates are birthday-style and spawn deadline = start). Unknown: can the GUI even create a fixed repeat with NO deadline, and if so does it encode differently (the ts=0 plists for "deadline on the day" vs a hypothetical "no deadline" would otherwise collide)? Probe: create both shapes in a clone's GUI, diff `rt1_recurrenceRule`, observe spawned instances. Until then upcoming/projections assume fixed ⇒ deadlined (src/read/views.ts, src/model/occurrences.ts).
 - **`TMSettings.logInterval` enum verification** (2026-07-10): the log-move boundary model (src/read/log-boundary.ts) has `1 = daily` VERIFIED live (Mike's DB: fresh completions absent from the GUI Logbook until the daily sweep); `0 = immediately`, `2 = weekly`, `3 = monthly`, and the manual-mode value are ASSUMED by analogy. Probe: flip the preference in a clone's GUI, diff TMSettings after each setting, and complete+observe an item across each boundary. Also confirm whether a mid-interval "log now" click updates `manualLogDate` (the boundary max()s it in).
 
 - Lab runner/DSL **Shortcuts vector** support (guest input files + `shortcuts run --input-path`; interactive delete-class handling) so `s-suite.json` becomes a real recurring suite.

@@ -156,11 +156,13 @@ describe("projectOccurrences", () => {
     ]);
   });
 
-  it("ts=0 rules project without deadlines", () => {
+  it("ts=0 rules project with deadline = start (fixed rules always deadline the event date)", () => {
+    // Corpus-validated 2026-07-11: every fixed-ts=0 template (birthday
+    // style) spawns instances with deadline = startDate.
     const occ = projectOccurrences(rule({ unit: "daily" }), "2026-07-10", { count: 2 });
     expect(occ).toEqual([
-      { startDate: "2026-07-10", deadline: null },
-      { startDate: "2026-07-11", deadline: null },
+      { startDate: "2026-07-10", deadline: "2026-07-10" },
+      { startDate: "2026-07-11", deadline: "2026-07-11" },
     ]);
   });
 });
