@@ -252,6 +252,18 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("live area/tag/project inventory");
   });
 
+  it("heading add: existing-project requirement + setup pointer", () => {
+    const help = helpFor("heading", "add");
+    expect(help).toContain("existing project");
+    expect(help).toContain("things setup shortcuts");
+  });
+
+  it("todo clear-reminder: date-scheduled reminder + setup pointer", () => {
+    const help = helpFor("todo", "clear-reminder");
+    expect(help).toContain("date-scheduled");
+    expect(help).toContain("things setup shortcuts");
+  });
+
   it("setup shortcuts: names the unlocked operations, the click, and --check", () => {
     const help = helpFor("setup", "shortcuts");
     expect(help).toContain("creating a heading in an existing project");

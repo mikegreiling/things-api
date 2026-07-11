@@ -174,6 +174,12 @@ export interface ThingsClient {
     /** Restore a TRASHED to-do: it returns to the Inbox, de-scheduled. */
     restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
+     * Clear a to-do's time-of-day reminder, keeping its scheduled date — the
+     * only way to remove a reminder from a date-scheduled to-do. Delivered
+     * through the Things proxy shortcuts (run `things setup shortcuts` first).
+     */
+    clearReminder(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
      * Rewrite a to-do's completion and/or creation timestamp to noon (local)
      * on the given date. Completion requires the to-do to be completed or
      * canceled already.
@@ -188,6 +194,16 @@ export interface ThingsClient {
      * completion (and optionally creation) timestamps.
      */
     addLoggedTodo(params: TodoAddLoggedParams, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Create a heading inside an EXISTING project; the new heading's uuid is
+     * on the result. Delivered through the Things proxy shortcuts (run
+     * `things setup shortcuts` once first).
+     */
+    createHeading(
+      project: ContainerRef,
+      title: string,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     /** Rename a heading in place (works on archived headings too). */
     renameHeading(uuid: string, title: string, options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -484,7 +500,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
+      createHeading: (project, title, o) => run("heading.create", { project, title }, o),
       renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
+      clearReminder: (uuid, o) => run("todo.clear-dated-reminder", { uuid }, o),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
       unarchiveHeading: (uuid, policy, o) =>

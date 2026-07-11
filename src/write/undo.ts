@@ -116,6 +116,12 @@ const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
+  "heading.create":
+    "a created heading can only be removed by deleting it, which has no headless surface " +
+    "(heading delete is interactive-only) — archive it in the app instead",
+  "todo.clear-dated-reminder":
+    "a cleared reminder cannot be re-set automatically — setting a dated reminder is dead " +
+    "on every surface (scf2 P3a); re-add it in the app",
 };
 
 function preField(record: AuditRecord, field: string): unknown {

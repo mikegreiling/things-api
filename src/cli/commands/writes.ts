@@ -39,7 +39,10 @@ function addWriteFlags(cmd: Command): Command {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .option("--dry-run", "preview the planned change and its expected effect; nothing executes")
-    .option("--vector <id>", "force how the change is delivered: url-scheme | applescript")
+    .option(
+      "--vector <id>",
+      "force how the change is delivered: url-scheme | applescript | shortcuts",
+    )
     .option("--allow-disruptive", "permit changes that briefly steal window focus")
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
     .option("--verify-timeout <ms>", "how long to wait for the change to take effect")
@@ -595,6 +598,18 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     todo
+      .command("clear-reminder <uuid>")
+      .description(
+        "Clear a to-do's time-of-day reminder while keeping its scheduled date — the one " +
+          "way to remove a reminder from a date-scheduled to-do. This uses the Things proxy " +
+          "shortcuts — run `things setup shortcuts` once first.",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.clearReminder(uuid, writeOptionsFrom(opts)));
+  });
+
+  addWriteFlags(
+    todo
       .command("backdate <uuid>")
       .description(
         "Rewrite a to-do's completion and/or creation timestamp to noon (local) on the " +
@@ -644,6 +659,20 @@ export function registerWriteCommands(program: Command): void {
   });
 
   const heading = group(program, "heading", "Heading-scoped operations");
+
+  addWriteFlags(
+    heading
+      .command("add <project> <title>")
+      .description(
+        "Create a heading inside an existing project; its uuid is printed on success. The " +
+          "project must name an existing project (uuid or unique name). This uses the Things " +
+          "proxy shortcuts — run `things setup shortcuts` once first.",
+      ),
+  ).action(async (project: string, title: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) =>
+      c.write.createHeading({ uuid: project, title: project }, title, writeOptionsFrom(opts)),
+    );
+  });
 
   addWriteFlags(
     heading

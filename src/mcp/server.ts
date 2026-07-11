@@ -870,6 +870,48 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "create_heading",
+    {
+      description:
+        "Create a heading inside an existing project; its uuid is returned. The project " +
+        "must name an existing project. Uses the Things proxy shortcuts — set them up once " +
+        "with `things setup shortcuts`.",
+      inputSchema: {
+        project: z.string().describe(`Existing project (${REF_FORMAT})`),
+        title: z.string(),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.createHeading(
+            containerRef(args.project),
+            args.title,
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "clear_reminder",
+    {
+      description:
+        "Clear a to-do's time-of-day reminder, keeping its scheduled date — the only way to " +
+        "remove a reminder from a date-scheduled to-do. Uses the Things proxy shortcuts — " +
+        "set them up once with `things setup shortcuts`.",
+      inputSchema: { uuid: z.string(), ...dryRunShape },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(await getClient().write.clearReminder(args.uuid, writeOptions(args))),
+      ),
+  );
+
+  server.registerTool(
     "rename_heading",
     {
       description: "Rename a heading in place (works on archived headings too).",
