@@ -16,6 +16,7 @@ import {
   type ChecklistRow,
 } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskRows, makeRefResolver } from "./queries.ts";
+import { logBoundary, markLogged } from "./log-boundary.ts";
 import { areasView, tagsView } from "./tags.ts";
 
 export interface Snapshot {
@@ -49,6 +50,10 @@ export function snapshotView(db: DatabaseSync): Snapshot {
     const rowTags = tagMap.get(row.uuid) ?? [];
     return row.type === 1 ? mapProject(row, refs, rowTags) : mapTodo(row, refs, rowTags);
   });
+  markLogged(
+    tasks.filter((t): t is Exclude<AnyTask, { type: "heading" }> => t.type !== "heading"),
+    logBoundary(db),
+  );
   const checklistRows = db
     .prepare(
       `SELECT ${selectList("TMChecklistItem")} FROM TMChecklistItem ORDER BY ${q("uuid")} ASC`,

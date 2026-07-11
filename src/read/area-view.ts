@@ -10,6 +10,7 @@ import { encodePackedDate, localToday, decodePackedDate } from "../model/dates.t
 import type { Area, IsoDateGroup, Project, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskRows, makeRefResolver, resolveAreaUuid } from "./queries.ts";
+import { logBoundary, markLogged } from "./log-boundary.ts";
 import { areaTags } from "./tags.ts";
 
 export interface AreaView {
@@ -52,13 +53,20 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
       rows.map((r) => r.uuid),
     );
 
+  const boundary = logBoundary(db, now);
+  // Open projects PLUS closed ones the log-move sweep has not passed — the
+  // GUI keeps those checked in place (completion ≠ logged).
   const projectRows = fetchTaskRows(
     db,
-    `t.type = 1 AND t.area = ? AND t.trashed = 0 AND t.status = 0 ORDER BY t."index" ASC`,
-    [uuid],
+    `t.type = 1 AND t.area = ? AND t.trashed = 0
+     AND (t.status = 0 OR t.stopDate > ?) ORDER BY t."index" ASC`,
+    [uuid, boundary.getTime() / 1000],
   );
   const projectTags = tagsOf(projectRows);
-  const projects = projectRows.map((r) => mapProject(r, refs, projectTags.get(r.uuid) ?? []));
+  const projects = markLogged(
+    projectRows.map((r) => mapProject(r, refs, projectTags.get(r.uuid) ?? [])),
+    boundary,
+  );
 
   const todoRows = fetchTaskRows(db, `t.type = 0 AND t.area = ? ORDER BY t."index" ASC`, [uuid]);
   const todoTags = tagsOf(todoRows);
@@ -66,10 +74,14 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
     row: r,
     todo: mapTodo(r, refs, todoTags.get(r.uuid) ?? []),
   }));
+  markLogged(
+    todos.map((t) => t.todo),
+    boundary,
+  );
 
   const packedToday = encodePackedDate(localToday(now));
   const active: Todo[] = [];
-  const scheduledRows: Array<{ date: string; todo: Todo }> = [];
+  const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
   const logged: Todo[] = [];
@@ -85,7 +97,10 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
       continue;
     }
     if (row.status !== 0) {
-      logged.push(todo);
+      // Completion ≠ logged: closed-but-unswept items stay checked in the
+      // active block, like the GUI.
+      if (todo.logged) logged.push(todo);
+      else active.push(todo);
       continue;
     }
     if (row.start === 2 && row.startDate === null) {
@@ -93,7 +108,11 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
       continue;
     }
     if (row.startDate !== null && row.startDate > packedToday) {
-      scheduledRows.push({ date: decodePackedDate(row.startDate) ?? "", todo });
+      scheduledRows.push({
+        date: decodePackedDate(row.startDate) ?? "",
+        ti: row.todayIndex ?? 0,
+        todo,
+      });
       continue;
     }
     active.push(todo);
@@ -101,7 +120,10 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
 
   logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
   const scheduled: IsoDateGroup<Todo>[] = [];
-  for (const { date, todo } of scheduledRows.sort((a, b) => a.date.localeCompare(b.date))) {
+  // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
+  for (const { date, todo } of scheduledRows.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
+  )) {
     const last = scheduled[scheduled.length - 1];
     if (last && last.date === date) last.items.push(todo);
     else scheduled.push({ date, items: [todo] });

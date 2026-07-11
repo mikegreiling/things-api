@@ -26,6 +26,8 @@ export const strike = wrap(9, 29);
 export const red = wrap(31, 39);
 export const green = wrap(32, 39);
 export const blue = wrap(34, 39);
+/** Bright-blue (SGR 94) — the palette's "light blue"; still theme-remapped. */
+export const brightBlue = wrap(94, 39);
 export const yellow = wrap(33, 39);
 export const magenta = wrap(35, 39);
 export const cyan = wrap(36, 39);

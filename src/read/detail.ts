@@ -17,8 +17,10 @@ import {
   fetchChecklistRows,
   fetchTagsForTasks,
   fetchTaskByUuid,
+  makeHeadingProjectResolver,
   makeRefResolver,
 } from "./queries.ts";
+import { logBoundary, markLogged } from "./log-boundary.ts";
 import { inheritedTagsFor } from "./tags.ts";
 
 export function byUuid(db: DatabaseSync, uuid: string): AnyTask | null {
@@ -32,8 +34,17 @@ function materializeOne(db: DatabaseSync, row: TaskRow): AnyTask {
   if (row.type === 2) return mapHeading(row, refs);
   const tags = fetchTagsForTasks(db, [row.uuid]).get(row.uuid) ?? [];
   const entity = row.type === 1 ? mapProject(row, refs, tags) : mapTodo(row, refs, tags);
+  markLogged([entity], logBoundary(db));
   entity.inheritedTags = inheritedTagsFor(db, row);
-  if (entity.type === "to-do") entity.checklist = checklistFor(db, row.uuid);
+  if (entity.type === "to-do") {
+    entity.checklist = checklistFor(db, row.uuid);
+    // Container parity with list views: resolve the owning project through
+    // the heading (project itself stays null — DB truth).
+    if (entity.heading !== null) {
+      const p = makeHeadingProjectResolver(db)(entity.heading.uuid);
+      if (p !== null) entity.headingProject = p;
+    }
+  }
   if (entity.repeating.isTemplate && row.rt1_recurrenceRule !== null) {
     try {
       entity.repeating.rule = decodeRecurrenceRule(row.rt1_recurrenceRule);

@@ -52,6 +52,27 @@ const UNITS: Record<number, RepeatRule["unit"]> = {
 /** Unix seconds this far out (year ≥ 3000) mean "repeats forever". */
 const DISTANT_FUTURE_EPOCH = 32503680000;
 
+/**
+ * The GUI's status word for a repeating template with no set next
+ * occurrence: `paused` (instance creation paused), `ended` (the rule's end
+ * date has passed or its repeat count is exhausted), else `waiting` (an
+ * after-completion rule between instances). Live-verified 2026-07-11:
+ * Ended = fixed rule with endDate 2025-02-24; Waiting = after-completion
+ * rule — otherwise column-identical rows.
+ */
+export function templateStatus(
+  repeating: { paused?: boolean; rule?: RepeatRule },
+  todayIso: string,
+): "waiting" | "paused" | "ended" {
+  if (repeating.paused === true) return "paused";
+  const rule = repeating.rule;
+  if (rule !== undefined) {
+    if (rule.endDate !== null && rule.endDate < todayIso) return "ended";
+    if (rule.remainingCount === 0) return "ended";
+  }
+  return "waiting";
+}
+
 export function decodeRecurrenceRule(blob: unknown): RepeatRule {
   const xml =
     typeof blob === "string"

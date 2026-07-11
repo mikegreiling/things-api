@@ -17,6 +17,7 @@ import { resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
+import { classifyShowTarget, type ShowTarget } from "./read/show-target.ts";
 import { areasView, tagsView } from "./read/tags.ts";
 import {
   anytimeView,
@@ -31,6 +32,7 @@ import {
   upcomingView,
   type ChangedItem,
   type ListItem,
+  type LogbookFilter,
   type SearchOptions,
   type SidebarSection,
   type SomedayFilter,
@@ -115,7 +117,7 @@ export interface ThingsClient {
     anytime(filter?: ViewFilter): SidebarSection[];
     upcoming(filter?: UpcomingFilter): ListItem[];
     someday(filter?: SomedayFilter): SidebarSection[];
-    logbook(options?: { limit?: number; tag?: string; exactTag?: boolean }): ListItem[];
+    logbook(options?: LogbookFilter): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
     projects(options?: { areaUuid?: string }): Project[];
     /** Composite project view. Targets by uuid, unique name, or uuid prefix. */
@@ -128,6 +130,12 @@ export interface ThingsClient {
     /** Rows created/modified since a moment — incl. trashed/logged/templates. */
     changes(options: { since: Date; limit?: number }): ChangedItem[];
     byUuid(uuid: string): AnyTask | null;
+    /**
+     * Classify a loose reference (uuid, >=6-char prefix, share link, or
+     * area name) into the resource class that has a show view. Headings
+     * resolve to their containing project (viaHeading: true).
+     */
+    showTarget(ref: string): ShowTarget;
     snapshot(): Snapshot;
   };
   write: {
@@ -442,6 +450,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),
       changes: (o) => changesView(conn.db, o),
+      showTarget: (ref) => classifyShowTarget(conn.db, ref),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
         try {

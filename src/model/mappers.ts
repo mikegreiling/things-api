@@ -110,6 +110,10 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
     title: row.title ?? "",
     notes: row.notes ?? "",
     status: mapStatus(row),
+    // Refined by markLogged (read layer): closed AND past the log-move
+    // boundary. Defaulting to closed-implies-logged keeps paths that skip
+    // the boundary (writes' result checks) on the old semantics.
+    logged: mapStatus(row) !== "open",
     trashed: row.trashed === 1,
     start: mapStart(row),
     startDate: decodePackedDate(row.startDate),

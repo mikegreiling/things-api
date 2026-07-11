@@ -13,6 +13,8 @@ import { encodePackedDate, localToday, decodePackedDate } from "../model/dates.t
 import type { Heading, IsoDateGroup, Project, Todo } from "../model/entities.ts";
 import { mapHeading, mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskByUuid, fetchTaskRows, makeRefResolver } from "./queries.ts";
+import { logBoundary, markLogged } from "./log-boundary.ts";
+import { inheritedTagsFor } from "./tags.ts";
 
 export interface ProjectView {
   project: Project;
@@ -50,6 +52,8 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
     );
   const projectTags = tagsOf([projectRow]);
   const project = mapProject(projectRow, refs, projectTags.get(projectRow.uuid) ?? []);
+  // The card view surfaces area-inherited tags (the UI's tag filter honors them).
+  project.inheritedTags = inheritedTagsFor(db, projectRow);
 
   const headingRows = fetchTaskRows(
     db,
@@ -67,15 +71,17 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
     [uuid, uuid],
   );
   const childTags = tagsOf(childRows);
+  const boundary = logBoundary(db, now);
   const todos = childRows.map((r) => ({
     row: r,
     todo: mapTodo(r, refs, childTags.get(r.uuid) ?? []),
   }));
+  markLogged([project, ...todos.map((t) => t.todo)], boundary);
 
   const packedToday = encodePackedDate(localToday(now));
   const active: Todo[] = [];
   const byHeading = new Map<string, Todo[]>();
-  const scheduledRows: Array<{ date: string; todo: Todo }> = [];
+  const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
   const logged: Todo[] = [];
@@ -91,7 +97,20 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
       continue;
     }
     if (row.status !== 0) {
-      logged.push(todo);
+      // Completion ≠ logged: closed items the log-move sweep has not
+      // passed stay checked IN PLACE (their heading / the active block),
+      // exactly like the GUI — only logged ones join the Logbook bucket.
+      if (todo.logged) {
+        logged.push(todo);
+        continue;
+      }
+      if (row.heading) {
+        const list = byHeading.get(row.heading) ?? [];
+        list.push(todo);
+        byHeading.set(row.heading, list);
+      } else {
+        active.push(todo);
+      }
       continue;
     }
     if (row.start === 2 && row.startDate === null) {
@@ -99,7 +118,11 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
       continue;
     }
     if (row.startDate !== null && row.startDate > packedToday) {
-      scheduledRows.push({ date: decodePackedDate(row.startDate) ?? "", todo });
+      scheduledRows.push({
+        date: decodePackedDate(row.startDate) ?? "",
+        ti: row.todayIndex ?? 0,
+        todo,
+      });
       continue;
     }
     if (row.heading) {
@@ -113,7 +136,10 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
 
   logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
   const scheduled: IsoDateGroup<Todo>[] = [];
-  for (const { date, todo } of scheduledRows.sort((a, b) => a.date.localeCompare(b.date))) {
+  // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
+  for (const { date, todo } of scheduledRows.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
+  )) {
     const last = scheduled[scheduled.length - 1];
     if (last && last.date === date) last.items.push(todo);
     else scheduled.push({ date, items: [todo] });

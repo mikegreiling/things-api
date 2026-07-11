@@ -39,6 +39,8 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 
 ## C. Parked (bigger, not auto-runnable now)
 
+- **`TMSettings.logInterval` enum verification** (2026-07-10): the log-move boundary model (src/read/log-boundary.ts) has `1 = daily` VERIFIED live (Mike's DB: fresh completions absent from the GUI Logbook until the daily sweep); `0 = immediately`, `2 = weekly`, `3 = monthly`, and the manual-mode value are ASSUMED by analogy. Probe: flip the preference in a clone's GUI, diff TMSettings after each setting, and complete+observe an item across each boundary. Also confirm whether a mid-interval "log now" click updates `manualLogDate` (the boundary max()s it in).
+
 - Lab runner/DSL **Shortcuts vector** support (guest input files + `shortcuts run --input-path`; interactive delete-class handling) so `s-suite.json` becomes a real recurring suite.
 - **Distribution/onboarding** — IN PROGRESS 2026-07-09, new plan: the six proxies were EXTRACTED from the golden's `Shortcuts.sqlite` (`ZSHORTCUTACTIONS.ZDATA` action blobs, SX2/SX3), reconstructed as old-format plists, and host-signed with `shortcuts sign --mode anyone` → repo-distributable signed `.shortcut` files in `lab/shortcuts/` (no iCloud links, no manual rebuild). Import+run validation: SX4. Still open: shipping location + `things setup shortcuts` flow. Gotcha: the signer can't write to `/Volumes/*` — sign to /tmp, then move.
 - ~~Headings doctrine decision~~ — **DECIDED 2026-07-09** (roadmap §E / gaps §0): first-class always, NO flatten/dual mode. The HX sweep closed every non-Shortcuts heading-create/move escape hatch (heading-research.md).

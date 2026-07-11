@@ -134,7 +134,7 @@ describe("upcoming occurrence synthesis", () => {
     fx.close();
   });
 
-  it("excludes paused, after-completion (no next date), past-dated, and honors repeats:false", () => {
+  it("appends paused/between-instances templates as no-date resting rows; repeats:false drops them", () => {
     const fx = buildFixtureDb();
     seedTodo(fx.db, {
       title: "paused",
@@ -153,7 +153,19 @@ describe("upcoming occurrence synthesis", () => {
       recurrenceRuleXml: MONTHLY_LAST_FRIDAY,
       nextInstanceStartDate: "2026-07-17",
     });
-    expect(upcomingView(fx.db, NOW).map((i) => i.title)).toEqual(["active"]);
+    // GUI parity: only "active" gets a dated occurrence; the paused,
+    // between-instances (after-completion), and stale-next templates trail
+    // as the Repeating To-Dos section — startDate null, rule attached.
+    const items = upcomingView(fx.db, NOW);
+    expect(items.map((i) => i.title)).toEqual([
+      "active",
+      "paused",
+      "after-completion",
+      "already-spawned",
+    ]);
+    const resting = items.slice(1);
+    expect(resting.every((i) => i.startDate === null && i.repeating.isTemplate)).toBe(true);
+    expect(resting.every((i) => i.repeating.rule !== undefined)).toBe(true);
     expect(upcomingView(fx.db, NOW, { repeats: false })).toEqual([]);
     fx.close();
   });

@@ -3,20 +3,26 @@
  * shown — agents and humans both need stable references) or a --json envelope.
  */
 import type { Command } from "commander";
+import { execFileSync } from "node:child_process";
 
 import { openThings, type ThingsClient } from "../../client.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
-import { bold, dim, green, red, strike, underline } from "../style.ts";
+import { templateStatus } from "../../model/recurrence.ts";
+import { bold, dim, strike, underline } from "../style.ts";
 import {
+  areaMark,
+  CHECKLIST_MARK,
   countChip,
   dateChip,
+  deadlineToken,
   eveningMoon,
   loggedDate,
   NOTES_MARK,
   projectCircle,
+  REMINDER_MARK,
   todayStar,
   todoBox,
 } from "../glyphs.ts";
@@ -88,11 +94,17 @@ export interface FormatOpts {
   suppressArea?: string | null;
   /** Reference instant for date-relative tokens (tests pin this; defaults to now). */
   now?: Date;
+  /** Pre-styled Today/Evening mark (★/⏾), rendered right after the box — GUI position. */
+  mark?: string | null;
+  /** Dim status word after the box (the GUI's waiting/paused/ended chips on repeating templates). */
+  statusWord?: string;
+  /** Suppress the ‹date› chip (rows under a day header already carry the date). */
+  hideDateChip?: boolean;
 }
 
 /**
  * One item line:
- * `<uuid-prefix>  <box> [↻] [logged-date] [‹chip›] [!deadline] <title> [‹n›] [≡] (container) #tags`.
+ * `<uuid-prefix>  <box> [★|⏾] [↻] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
  * The box is the glyph-language state carrier (../glyphs.ts): `[ ]`-family
  * for to-dos, `( )`-family for projects — state survives with color
  * stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
@@ -111,14 +123,36 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const asTitle = opts.projectTitle === true && item.type === "project";
   const box = item.type === "project" ? projectCircle(item) : todoBox(item);
   const meta: string[] = [];
+  if (opts.mark != null) meta.push(opts.mark);
   if (item.repeating.isTemplate) meta.push("↻");
+  if (opts.statusWord !== undefined) meta.push(dim(opts.statusWord));
   if (item.status !== "open" && item.stopped !== null)
     meta.push(loggedDate(item.stopped, todayIso));
-  if (item.status === "open" && item.startDate !== null && item.startDate > todayIso)
+  if (opts.hideDateChip === true) {
+    // rows under a day header — the header carries the date
+  } else if (item.status === "open" && item.startDate !== null && item.startDate > todayIso)
     meta.push(dateChip(item.startDate, todayIso));
-  if (item.deadline !== null) meta.push(red(`!${item.deadline}`));
+  // Repeating templates chip their app-materialized next occurrence.
+  else if (item.repeating.isTemplate && item.repeating.nextOccurrence != null)
+    meta.push(dateChip(item.repeating.nextOccurrence, todayIso));
+  // List rows mute their tags (the GUI's gray pills); tags go green only on
+  // the opened resource (todo show / the project|area header row).
   const tags =
-    item.tags.length > 0 ? ` ${green(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
+    item.tags.length > 0 ? ` ${dim(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
+  // Closed rows drop the deadline flag — a months-old red "n days ago" on a
+  // logged item is noise (the GUI doesn't flag logbook rows either). Raw
+  // template rows drop it via the sentinel guard: their deadline column
+  // carries app-internal 4001-01-01 sentinels (upcoming's synthesized
+  // occurrences carry REAL rule-derived deadlines and must keep the flag).
+  const ruleOffset = item.repeating.rule?.startOffsetDays;
+  const deadline =
+    item.status === "open" && item.deadline !== null && item.deadline < "4000"
+      ? ` ${deadlineToken(item.deadline, todayIso)}`
+      : // The GUI's bare flag on no-date repeating templates: the rule WILL
+        // assign each occurrence a deadline, date unknown until spawned.
+        item.repeating.isTemplate && ruleOffset !== undefined && ruleOffset < 0
+        ? ` ${bold(dim("⚑"))}`
+        : "";
   const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
   const context =
     container !== null
@@ -138,15 +172,18 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   if (asTitle) title = bold(underline(title));
   else if (item.status === "canceled") title = dim(strike(title));
   else if (item.status === "completed") title = dim(title);
+  // GUI indicator order after the title: bell, document, checklist.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
+    ...(item.reminder !== null ? [dim(REMINDER_MARK)] : []),
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
+    ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
   ];
   return [
     `${dim(shownUuid)} `,
     box,
     ...meta,
-    `${title}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}${context === "" ? "" : dim(context)}${tags}`,
+    `${title}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}${tags}${context === "" ? "" : dim(context)}${deadline}`,
   ].join(" ");
 }
 
@@ -159,6 +196,17 @@ export function todayMark(item: ListItem, now?: Date): string | null {
   if (!isTodayMember(item, now)) return null;
   const evening = item.todaySection === "evening" && item.startDate === localToday(now);
   return evening ? eveningMoon() : todayStar();
+}
+
+/**
+ * Foreground the Things app on a resource via its share URI. A GUI action
+ * on this Mac — NOT headless; the shared implementation behind every
+ * `open` command. Returns the URI it launched.
+ */
+export function openInThings(uuid: string): string {
+  const uri = `things:///show?id=${uuid}`;
+  execFileSync("/usr/bin/open", [uri]);
+  return uri;
 }
 
 /** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
@@ -188,6 +236,150 @@ function renderList(items: ListItem[]): string[] {
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
 }
 
+const FULL_MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+] as const;
+
+/**
+ * `--until` accepting whole periods: `2024` means through Dec 31 2024,
+ * `2024-03` through Mar 31, `2024-03-05` through end of that day; anything
+ * else parses as an instant.
+ */
+export function parsePeriodEnd(s: string): Date {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
+  if (m === null) return new Date(s);
+  const year = Number(m[1]);
+  // Day 0 of month n+1 = the last day of month n.
+  if (m[2] === undefined) return new Date(year, 11, 31, 23, 59, 59, 999);
+  const month = Number(m[2]) - 1;
+  if (m[3] === undefined) return new Date(year, month + 1, 0, 23, 59, 59, 999);
+  return new Date(year, month, Number(m[3]), 23, 59, 59, 999);
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+/**
+ * GUI-style Upcoming bucket for a date, granularity decaying with distance:
+ * individual days for the next week ("Wed Jul 15"), the remainder of the
+ * current month ("Jul 19–31"), months through the end of NEXT year
+ * ("August", "January 2027"), then bare years ("2028").
+ */
+function upcomingBucket(iso: string, todayIso: string): { label: string; isDay: boolean } {
+  const [y, m, d] = iso.split("-").map(Number);
+  const [y0, m0, d0] = todayIso.split("-").map(Number);
+  const diff = Math.round(
+    (Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1) - Date.UTC(y0 ?? 0, (m0 ?? 1) - 1, d0 ?? 1)) /
+      86_400_000,
+  );
+  if (diff <= 7) {
+    const weekday = WEEKDAYS[new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1)).getUTCDay()];
+    return { label: `${weekday} ${SHORT_MONTHS[(m ?? 1) - 1]} ${d}`, isDay: true };
+  }
+  if (y === y0 && m === m0) {
+    const lastDay = new Date(y ?? 0, m ?? 1, 0).getDate();
+    return { label: `${SHORT_MONTHS[(m ?? 1) - 1]} ${(d0 ?? 1) + 8}–${lastDay}`, isDay: false };
+  }
+  if ((y ?? 0) <= (y0 ?? 0) + 1) {
+    const month = FULL_MONTHS[(m ?? 1) - 1];
+    return { label: y === y0 ? `${month}` : `${month} ${y}`, isDay: false };
+  }
+  return { label: `${y}`, isDay: false };
+}
+
+/**
+ * Upcoming rows under GUI-style date headers (empty periods are simply
+ * absent), with the trailing Repeating To-Dos section: templates with no
+ * set next occurrence, carrying their waiting/paused/ended status word and
+ * the bare ⚑ when the rule will assign a deadline per occurrence.
+ */
+export function renderUpcoming(items: ListItem[], now?: Date): string[] {
+  if (items.length === 0) return ["(empty)"];
+  const todayIso = localToday(now);
+  const w = uuidDisplayWidth(items);
+  const fmtOpts = now === undefined ? {} : { now };
+  const dated = items.filter((i) => i.startDate !== null);
+  const resting = items.filter((i) => i.startDate === null && i.repeating.isTemplate);
+  const lines: string[] = [];
+  let openHeader: string | null = null;
+  for (const item of dated) {
+    const bucket = upcomingBucket(item.startDate ?? "", todayIso);
+    if (bucket.label !== openHeader) {
+      if (lines.length > 0) lines.push("");
+      lines.push(bold(`── ${bucket.label} ──`));
+      openHeader = bucket.label;
+    }
+    lines.push(formatItem(item, w, { ...fmtOpts, hideDateChip: bucket.isDay }));
+  }
+  if (resting.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(bold("── Repeating To-Dos ──"));
+    for (const item of resting) {
+      lines.push(
+        formatItem(item, w, { ...fmtOpts, statusWord: templateStatus(item.repeating, todayIso) }),
+      );
+    }
+  }
+  return lines;
+}
+
+/**
+ * Logbook rows under GUI-style date headings, month granularity throughout
+ * — `── July ──` within the current year, `── March 2025 ──` beyond (finer
+ * than the GUI's bare per-year buckets, deliberately). When the row count
+ * hits the limit, a trailing note says the range is NOT exhaustive.
+ */
+export function renderLogbook(items: ListItem[], limit: number, now?: Date): string[] {
+  if (items.length === 0) return ["(empty)"];
+  const w = uuidDisplayWidth(items);
+  const currentYear = localToday(now).slice(0, 4);
+  const lines: string[] = [];
+  let openHeading: string | null = null;
+  for (const item of items) {
+    const s = item.stopped;
+    const heading =
+      s === null
+        ? "no logged date"
+        : `${FULL_MONTHS[s.getMonth()]}${String(s.getFullYear()) === currentYear ? "" : ` ${s.getFullYear()}`}`;
+    if (heading !== openHeading) {
+      if (lines.length > 0) lines.push("");
+      lines.push(bold(`── ${heading} ──`));
+      openHeading = heading;
+    }
+    lines.push(formatItem(item, w, now === undefined ? {} : { now }));
+  }
+  if (items.length >= limit)
+    lines.push(
+      "",
+      dim(`(${items.length} shown — --limit reached; raise --limit or narrow --since/--until)`),
+    );
+  return lines;
+}
+
 /**
  * Sidebar-grouped views (anytime/someday), rendered the way the GUI reads:
  * the area-less block headerless first, then one `── <area> ──` header per
@@ -210,25 +402,30 @@ export function renderSections(sections: SidebarSection[], star = false): string
   for (const section of sections) {
     if (section.area !== null) {
       blank();
-      lines.push(bold(`── ${section.area.title} ──`));
+      lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
     }
     // The uuid of the project whose title row is directly above (its member
     // rows drop their redundant `(project)` suffix).
     let openProject: string | null = null;
     for (const item of section.items) {
-      const prefix = star ? `${todayMark(item) ?? " "} ` : "";
+      const mark = star ? todayMark(item) : null;
       if (item.type === "project") {
         openProject = item.uuid;
         blank();
         lines.push(
-          `${prefix}${formatItem(item, w, { projectTitle: true, suppressArea: section.area?.uuid ?? null })}`,
+          formatItem(item, w, {
+            projectTitle: true,
+            suppressArea: section.area?.uuid ?? null,
+            mark,
+          }),
         );
       } else {
         lines.push(
-          `${prefix}${formatItem(item, w, {
+          formatItem(item, w, {
             suppressProject: openProject,
             suppressArea: section.area?.uuid ?? null,
-          })}`,
+            mark,
+          }),
         );
       }
     }
@@ -259,17 +456,17 @@ export function registerReadCommands(program: Command): void {
         badge: { dueOrOverdue: number; other: number };
       }) => {
         // GUI parity: every Today row carries the star, every This-Evening
-        // row the crescent (both computed over one shared uuid column).
+        // row the crescent, right after the box (one shared uuid column).
         const w = uuidDisplayWidth([...data.today, ...data.evening]);
         return [
           `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
           ...(data.today.length === 0
             ? ["(empty)"]
-            : data.today.map((i) => `${todayStar()} ${formatItem(i, w)}`)),
+            : data.today.map((i) => formatItem(i, w, { mark: todayStar() }))),
           "── This Evening ──",
           ...(data.evening.length === 0
             ? ["(empty)"]
-            : data.evening.map((i) => `${eveningMoon()} ${formatItem(i, w)}`)),
+            : data.evening.map((i) => formatItem(i, w, { mark: eveningMoon() }))),
         ];
       },
     },
@@ -367,50 +564,87 @@ export function registerReadCommands(program: Command): void {
             ...(opts.exactTag === true && { exactTag: true }),
             ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
           }),
-        renderList as (d: never) => string[],
+        ((items: ListItem[]) => renderUpcoming(items)) as (d: never) => string[],
       );
     });
 
-  for (const cmd of [
-    {
-      name: "logbook",
-      description: "Completed and canceled items, most recent first",
-      fetch: (c: ThingsClient, limit: number, tag?: string, exactTag?: boolean) =>
-        c.read.logbook({
-          limit,
-          ...(tag !== undefined && { tag }),
-          ...(exactTag === true && { exactTag }),
-        }),
-      defaultLimit: 100,
-    },
-    {
-      name: "trash",
-      description: "Trashed items (trashed=1 flag, any status), most recently modified first",
-      fetch: (c: ThingsClient, limit: number, _tag?: string, _exactTag?: boolean) =>
-        c.read.trash({ limit }),
-      defaultLimit: 200,
-    },
-  ]) {
-    program
-      .command(cmd.name)
-      .description(cmd.description)
-      .option("--limit <n>", "maximum items to return", String(cmd.defaultLimit))
-      .option(
-        "--tag <ref>",
-        "filter by tag (uuid or unique name), direct OR inherited — logbook only",
-      )
-      .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
-      .option("--json", "emit versioned JSON envelope on stdout")
-      .option("--db <path>", "explicit database path")
-      .action((opts: GlobalReadOpts & { limit: string; tag?: string; exactTag?: boolean }) => {
+  program
+    .command("logbook")
+    .description(
+      "Completed and canceled items, most recent first, grouped under month headings " +
+        "(year appended beyond the current year). Scope with --area (direct items + its " +
+        "projects' children, heading-nested included) / --project (all children, " +
+        "heading-nested included) / --tag; bound the logged date with --since/--until.",
+    )
+    .option("--limit <n>", "maximum items to return", "100")
+    .option("--area <ref>", "restrict to an area: direct items plus its projects' children")
+    .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
+    .option("--since <when>", "only entries logged on/after this date")
+    .option(
+      "--until <when>",
+      "only entries logged on/before this date (2024 or 2024-03 cover the whole period)",
+    )
+    .option("--tag <ref>", "filter by tag (uuid or unique name), direct OR inherited")
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          limit: string;
+          area?: string;
+          project?: string;
+          since?: string;
+          until?: string;
+          tag?: string;
+          exactTag?: boolean;
+        },
+      ) => {
+        const since = opts.since !== undefined ? new Date(opts.since) : undefined;
+        const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
+        for (const [flag, value] of [
+          ["--since", since],
+          ["--until", until],
+        ] as const) {
+          if (value !== undefined && Number.isNaN(value.getTime())) {
+            process.stderr.write(`error: ${flag} is not a parseable date\n`);
+            process.exitCode = ExitCode.Usage;
+            return;
+          }
+        }
+        const limit = Number(opts.limit);
         withClient(
           opts,
-          cmd.name,
-          (c) => cmd.fetch(c, Number(opts.limit), opts.tag, opts.exactTag),
-          renderList as (d: never) => string[],
+          "logbook",
+          (c) =>
+            c.read.logbook({
+              limit,
+              ...(opts.area !== undefined && { area: opts.area }),
+              ...(opts.project !== undefined && { project: opts.project }),
+              ...(since !== undefined && { since }),
+              ...(until !== undefined && { until }),
+              ...(opts.tag !== undefined && { tag: opts.tag }),
+              ...(opts.exactTag === true && { exactTag: true }),
+            }),
+          ((items: ListItem[]) => renderLogbook(items, limit)) as (d: never) => string[],
         );
-      });
-  }
+      },
+    );
+
+  program
+    .command("trash")
+    .description("Trashed items (trashed=1 flag, any status), most recently modified first")
+    .option("--limit <n>", "maximum items to return", "200")
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((opts: GlobalReadOpts & { limit: string }) => {
+      withClient(
+        opts,
+        "trash",
+        (c) => c.read.trash({ limit: Number(opts.limit) }),
+        renderList as (d: never) => string[],
+      );
+    });
 
   program
     .command("projects")
@@ -435,11 +669,13 @@ export function registerReadCommands(program: Command): void {
     .action((opts: GlobalReadOpts) => {
       withClient(opts, "areas", (c) => c.read.areas(), ((
         data: Array<{ uuid: string; title: string; tags: Array<{ title: string }> }>,
-      ) =>
-        data.map(
+      ) => {
+        const w = uuidDisplayWidth(data);
+        return data.map(
           (a) =>
-            `${a.uuid}  ${a.title}${a.tags.length ? ` #${a.tags.map((t) => t.title).join(" #")}` : ""}`,
-        )) as (d: never) => string[]);
+            `${dim(a.uuid.length > w ? a.uuid.slice(0, w) : a.uuid.padEnd(w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
+        );
+      }) as (d: never) => string[]);
     });
 
   program

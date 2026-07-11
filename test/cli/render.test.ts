@@ -8,8 +8,22 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { anytimeView, searchView, somedayView } from "../../src/read/views.ts";
-import { formatItem, renderSections, todayMark } from "../../src/cli/commands/reads.ts";
+import {
+  anytimeView,
+  logbookView,
+  searchView,
+  somedayView,
+  upcomingView,
+} from "../../src/read/views.ts";
+import { projectView } from "../../src/read/project-view.ts";
+import {
+  formatItem,
+  parsePeriodEnd,
+  renderLogbook,
+  renderSections,
+  renderUpcoming,
+  todayMark,
+} from "../../src/cli/commands/reads.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
@@ -48,8 +62,8 @@ describe("renderSections (anytime/someday layout)", () => {
     const lines = renderSections(anytimeView(fixture.db, NOW));
     const text = lines.join("\n");
 
-    // Area header, blank line, then the first project block.
-    expect(lines[0]).toBe("── Hobbies ──");
+    // Area header (with the ⬡ area mark), blank line, then the first project block.
+    expect(lines[0]).toBe("── ⬡ Hobbies ──");
     expect(lines[1]).toBe("");
     expect(lines[2]).toContain("Firmware Updates");
     // Project title rows carry the circle glyph, never the redundant (Hobbies).
@@ -61,8 +75,8 @@ describe("renderSections (anytime/someday layout)", () => {
     // Blank line separates the two project groups.
     const fastenersAt = lines.findIndex((l) => l.includes("Astro City Fasteners"));
     expect(lines[fastenersAt - 1]).toBe("");
-    // Tags render AFTER the title and the count chip.
-    expect(lines[fastenersAt]).toMatch(/Astro City Fasteners ‹\d+› #interest$/);
+    // Tags render AFTER the title and the ratio chip.
+    expect(lines[fastenersAt]).toMatch(/Astro City Fasteners ‹\d+(?:\/\d+)?› #interest$/);
   });
 
   it("keeps the (project) suffix when the project's own row is absent", () => {
@@ -85,7 +99,7 @@ describe("renderSections (anytime/someday layout)", () => {
 
     const lines = renderSections(anytimeView(fixture.db, NOW));
     expect(lines[0]).toContain("Loose top-level");
-    expect(lines.findIndex((l) => l.includes("── Hobbies ──"))).toBeGreaterThan(0);
+    expect(lines.findIndex((l) => l.includes("⬡ Hobbies ──"))).toBeGreaterThan(0);
   });
 });
 
@@ -100,8 +114,8 @@ describe("project title rows", () => {
     expect(project).toBeDefined();
     if (!project || !project.area) return;
     const line = formatItem(project, 8, { projectTitle: true, suppressArea: project.area.uuid });
-    // uuid column, circle glyph, styled title, count chip — no (Hobbies).
-    expect(line).toMatch(/^proj-\d+ {2}\( \) Firmware Updates ‹\d+›$/);
+    // uuid column, circle glyph, styled title, ratio chip — no (Hobbies).
+    expect(line).toMatch(/^proj-\d+ {2}\( \) Firmware Updates ‹\d+(?:\/\d+)?›$/);
   });
 });
 
@@ -122,8 +136,10 @@ describe("formatItem", () => {
     expect(item).toBeDefined();
     if (!item) return;
     const line = formatItem(item, 8, { now: NOW });
-    // Future startDate renders as the schedule chip; the deadline keeps ISO.
-    expect(line).toMatch(/\[ \] ‹Jul 20› !2026-07-06 Buy milk \(Groceries\) #urgent$/);
+    // Future startDate renders as the schedule chip before the title; tags
+    // precede the container hint; the near deadline renders as the GUI's
+    // relative flag at the END.
+    expect(line).toMatch(/\[ \] ‹Jul 20› Buy milk #urgent \(Groceries\) ⚑ 1 day left$/);
   });
 
   it("suppresses the date chip when the startDate is today or past", () => {
@@ -199,6 +215,186 @@ describe("formatItem", () => {
     expect(formatItem(item, 8, { now: NOW, suppressProject: p })).not.toContain(
       "(Restore Cabinet)",
     );
+  });
+});
+
+describe("logbook", () => {
+  const stopAt = (iso: string) => new Date(iso).getTime() / 1000;
+
+  function seedLoggedWorld(fx: FixtureDb): { area: string; project: string } {
+    const area = seedArea(fx.db, "Home");
+    const project = seedProject(fx.db, { title: "Garage", area });
+    const heading = seedHeading(fx.db, { title: "Shelving", project });
+    seedTodo(fx.db, {
+      title: "Direct area win",
+      area,
+      status: "completed",
+      stopDate: stopAt("2026-07-01T12:00:00Z"),
+    });
+    seedTodo(fx.db, {
+      title: "Project child win",
+      project,
+      status: "completed",
+      stopDate: stopAt("2026-06-10T12:00:00Z"),
+    });
+    seedTodo(fx.db, {
+      title: "Heading child win",
+      heading,
+      status: "completed",
+      stopDate: stopAt("2025-03-05T12:00:00Z"),
+    });
+    seedTodo(fx.db, {
+      title: "Unrelated win",
+      status: "completed",
+      stopDate: stopAt("2026-07-02T12:00:00Z"),
+    });
+    return { area, project };
+  }
+
+  it("--area includes direct, project-child, and HEADING-child entries", () => {
+    fixture = buildFixtureDb();
+    const { area } = seedLoggedWorld(fixture);
+    const titles = logbookView(fixture.db, { area }).map((i) => i.title);
+    expect(titles).toEqual(["Direct area win", "Project child win", "Heading child win"]);
+  });
+
+  it("--project includes heading-nested children", () => {
+    fixture = buildFixtureDb();
+    const { project } = seedLoggedWorld(fixture);
+    const titles = logbookView(fixture.db, { project }).map((i) => i.title);
+    expect(titles).toEqual(["Project child win", "Heading child win"]);
+  });
+
+  it("--since/--until bound by logged instant", () => {
+    fixture = buildFixtureDb();
+    const { area } = seedLoggedWorld(fixture);
+    const titles = logbookView(fixture.db, {
+      area,
+      since: new Date("2026-01-01T00:00:00Z"),
+      until: parsePeriodEnd("2026-06"),
+    }).map((i) => i.title);
+    expect(titles).toEqual(["Project child win"]);
+  });
+
+  it("renders month headings (year appended beyond the current year) and no heading rows", () => {
+    fixture = buildFixtureDb();
+    const { area } = seedLoggedWorld(fixture);
+    const lines = renderLogbook(logbookView(fixture.db, { area }), 100, NOW);
+    expect(lines[0]).toBe("── July ──");
+    expect(lines).toContain("── June ──");
+    expect(lines).toContain("── March 2025 ──");
+    // Headings are invisible outside project views — the heading-nested row
+    // labels its parent PROJECT.
+    const nested = lines.find((l) => l.includes("Heading child win"));
+    expect(nested).toContain("(Garage)");
+    expect(lines.join("\n")).not.toContain("Shelving");
+  });
+
+  it("excludes closed items the log-move sweep has not passed (completion ≠ logged)", () => {
+    fixture = buildFixtureDb();
+    // logInterval 1 = daily: the boundary is local midnight today.
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 1, NULL)")
+      .run();
+    const now = Date.now() / 1000;
+    seedTodo(fixture.db, { title: "Swept win", status: "completed", stopDate: now - 2 * 86400 });
+    seedTodo(fixture.db, { title: "Fresh win", status: "completed", stopDate: now });
+    const titles = logbookView(fixture.db).map((i) => i.title);
+    expect(titles).toContain("Swept win");
+    expect(titles).not.toContain("Fresh win");
+    // The fresh completion sits checked in its ORIGINAL list instead: the
+    // project view keeps it inline, marked logged=false.
+    const [fresh] = searchView(fixture.db, "Fresh win", { logged: true });
+    expect(fresh?.logged).toBe(false);
+    const [swept] = searchView(fixture.db, "Swept win", { logged: true });
+    expect(swept?.logged).toBe(true);
+  });
+
+  it("keeps closed-but-unswept rows inline in the project view", () => {
+    fixture = buildFixtureDb();
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 1, NULL)")
+      .run();
+    const project = seedProject(fixture.db, { title: "Sprint" });
+    const heading = seedHeading(fixture.db, { title: "Phase 1", project });
+    seedTodo(fixture.db, {
+      title: "Fresh headed win",
+      heading,
+      status: "completed",
+      stopDate: Date.now() / 1000,
+    });
+    seedTodo(fixture.db, {
+      title: "Old headed win",
+      heading,
+      status: "completed",
+      stopDate: Date.now() / 1000 - 2 * 86400,
+    });
+    const view = projectView(fixture.db, project);
+    const phase = view.headings.find((g) => g.heading.title === "Phase 1");
+    expect(phase?.items.map((i) => i.title)).toEqual(["Fresh headed win"]);
+    expect(view.logged.map((i) => i.title)).toEqual(["Old headed win"]);
+  });
+
+  it("flags a limit-truncated range loudly", () => {
+    fixture = buildFixtureDb();
+    const { area } = seedLoggedWorld(fixture);
+    const lines = renderLogbook(logbookView(fixture.db, { area, limit: 3 }), 3, NOW);
+    expect(lines.at(-1)).toContain("--limit reached");
+  });
+
+  it("parsePeriodEnd expands whole periods (local time)", () => {
+    const yearEnd = parsePeriodEnd("2024");
+    expect([yearEnd.getFullYear(), yearEnd.getMonth(), yearEnd.getDate()]).toEqual([2024, 11, 31]);
+    expect(parsePeriodEnd("2024-02").getDate()).toBe(29); // leap year
+    expect(parsePeriodEnd("2024-03-05").getHours()).toBe(23);
+  });
+});
+
+describe("upcoming", () => {
+  it("orders within a day by todayIndex (the UI's drag order), not index", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Second",
+      start: "someday",
+      startDate: "2026-07-15",
+      index: 1,
+      todayIndex: 20,
+    });
+    seedTodo(fixture.db, {
+      title: "First",
+      start: "someday",
+      startDate: "2026-07-15",
+      index: 2,
+      todayIndex: 10,
+    });
+    const titles = upcomingView(fixture.db, NOW).map((i) => i.title);
+    expect(titles).toEqual(["First", "Second"]);
+  });
+
+  it("appends no-date repeating templates and renders GUI-style buckets", () => {
+    fixture = buildFixtureDb();
+    // NOW = Sun Jul 5: +2d lands in the day window, +20d in the
+    // rest-of-month bucket, next January in the month bucket.
+    seedTodo(fixture.db, { title: "Near", start: "someday", startDate: "2026-07-07" });
+    seedTodo(fixture.db, { title: "Later this month", start: "someday", startDate: "2026-07-25" });
+    seedTodo(fixture.db, { title: "Next year", start: "someday", startDate: "2027-01-09" });
+    seedTodo(fixture.db, { title: "Far out", start: "someday", startDate: "2028-03-01" });
+    seedTodo(fixture.db, { title: "Between instances", recurrenceRule: true });
+    const items = upcomingView(fixture.db, NOW);
+    const resting = items.find((i) => i.title === "Between instances");
+    expect(resting?.startDate).toBeNull();
+
+    const lines = renderUpcoming(items, NOW);
+    expect(lines).toContain("── Tue Jul 7 ──");
+    expect(lines).toContain("── Jul 13–31 ──");
+    expect(lines).toContain("── January 2027 ──");
+    expect(lines).toContain("── 2028 ──");
+    expect(lines).toContain("── Repeating To-Dos ──");
+    // Day-bucket rows drop the redundant date chip; coarser buckets keep it.
+    expect(lines.find((l) => l.includes("Near"))).not.toContain("‹");
+    expect(lines.find((l) => l.includes("Later this month"))).toContain("‹Jul 25›");
+    // No-date templates carry the ↻ and their status word.
+    expect(lines.find((l) => l.includes("Between instances"))).toContain("↻ waiting");
   });
 });
 
