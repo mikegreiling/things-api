@@ -35,6 +35,12 @@ interface TaskCommon {
   title: string;
   notes: string;
   status: TaskStatus;
+  /**
+   * In the GUI's Logbook. Completion and logged are SEPARATE states: a
+   * closed item stays checked in its original list until the app's
+   * log-move sweep passes it (TMSettings.logInterval / manualLogDate).
+   */
+  logged: boolean;
   trashed: boolean;
   start: StartState;
   /** The "When" date (packed int in DB), null when unscheduled. */

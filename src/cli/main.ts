@@ -14,6 +14,7 @@ import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
 import { registerSetup } from "./commands/setup.ts";
+import { registerShowCommands } from "./commands/show.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
@@ -47,6 +48,7 @@ export function buildProgram(): Command {
     .addHelpText("after", AGENT_NOTES);
   registerDoctor(program);
   registerReadCommands(program);
+  registerShowCommands(program);
   registerProjectCommands(program);
   registerAreaCommands(program);
   registerTodoCommands(program);

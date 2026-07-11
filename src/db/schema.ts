@@ -55,7 +55,13 @@ export const DEPENDED_TABLES = {
     "creationDate",
     "userModificationDate",
   ],
-  TMSettings: ["uuid", "uriSchemeAuthenticationToken", "groupTodayByParent"],
+  TMSettings: [
+    "uuid",
+    "uriSchemeAuthenticationToken",
+    "groupTodayByParent",
+    "logInterval",
+    "manualLogDate",
+  ],
   Meta: ["key", "value"],
 } as const;
 

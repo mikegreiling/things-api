@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Project, Todo } from "../../src/model/entities.ts";
-import { projectCircle, shortDate, todoBox } from "../../src/cli/glyphs.ts";
+import { deadlineToken, projectCircle, shortDate, todoBox } from "../../src/cli/glyphs.ts";
 
 const TODAY = "2026-07-05";
 
@@ -22,24 +22,19 @@ function project(overrides: Partial<Project>): Project {
 }
 
 function todo(overrides: Partial<Todo>): Todo {
-  return { type: "to-do", status: "open", start: "active", startDate: null, ...overrides } as Todo;
+  return {
+    type: "to-do",
+    status: "open",
+    start: "active",
+    startDate: null,
+    repeating: { isTemplate: false, isInstance: false },
+    ...overrides,
+  } as Todo;
 }
 
 describe("projectCircle", () => {
-  it("quantizes completion to quarters", () => {
-    const at = (total: number, open: number) =>
-      projectCircle(
-        project({ untrashedLeafActionsCount: total, openUntrashedLeafActionsCount: open }),
-      );
-    expect(at(0, 0)).toBe("( )"); // childless
-    expect(at(4, 4)).toBe("( )"); // nothing done
-    expect(at(4, 3)).toBe("(◔)"); // 1/4 done
-    expect(at(2, 1)).toBe("(◑)"); // 1/2 done
-    expect(at(4, 1)).toBe("(◕)"); // 3/4 done
-    expect(at(4, 0)).toBe("(◉)"); // all children done, project still open
-  });
-
-  it("carries the project's own terminal state over progress", () => {
+  it("uses the checkbox marks — progress lives in the ratio chip, not the circle", () => {
+    expect(projectCircle(project({}))).toBe("( )");
     expect(projectCircle(project({ status: "completed" }))).toBe("(✓)");
     expect(projectCircle(project({ status: "canceled" }))).toBe("(×)");
     expect(projectCircle(project({ start: "someday" }))).toBe("(~)");
@@ -50,6 +45,24 @@ describe("todoBox", () => {
   it("keeps the plain box for DATED someday rows (the chip carries the state)", () => {
     expect(todoBox(todo({ start: "someday" }))).toBe("[~]");
     expect(todoBox(todo({ start: "someday", startDate: "2026-08-01" }))).toBe("[ ]");
+  });
+});
+
+describe("deadlineToken", () => {
+  it("uses relative phrasing near the deadline, GUI cutoffs 14/59 days", () => {
+    expect(deadlineToken("2026-07-05", TODAY)).toBe("⚑ today");
+    expect(deadlineToken("2026-07-06", TODAY)).toBe("⚑ 1 day left");
+    expect(deadlineToken("2026-07-19", TODAY)).toBe("⚑ 14 days left");
+    expect(deadlineToken("2026-07-20", TODAY)).toBe("⚑ Jul 20"); // 15 out → date
+    expect(deadlineToken("2026-07-04", TODAY)).toBe("⚑ 1 day ago");
+    expect(deadlineToken("2026-05-07", TODAY)).toBe("⚑ 59 days ago");
+    expect(deadlineToken("2026-05-06", TODAY)).toBe("⚑ May 6"); // 60 past → date
+  });
+
+  it("shortens far dates: day within the year, month+year beyond it", () => {
+    expect(deadlineToken("2026-09-16", TODAY)).toBe("⚑ Sep 16");
+    expect(deadlineToken("2027-02-10", TODAY)).toBe("⚑ Feb 2027");
+    expect(deadlineToken("2025-03-01", TODAY)).toBe("⚑ Mar 2025");
   });
 });
 

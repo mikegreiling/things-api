@@ -8,8 +8,15 @@
  *   tp  0 fixed schedule · 1 after-completion
  *   fu  16 daily · 256 weekly · 8 monthly · 4 yearly
  *   fa  interval multiplier ("every fa units")
- *   ts  start offset in days relative to the event date (≤0 = start early;
- *       the event date becomes the spawned instance's DEADLINE when ts<0)
+ *   ts  start offset in days relative to the event date (≤0 = start early).
+ *       The event date becomes the spawned instance's DEADLINE for EVERY
+ *       fixed rule — including ts=0, where deadline = start (birthday-style
+ *       repeats; corpus re-validated 2026-07-11 over 1,900+ live
+ *       instances). After-completion rules deadline only when ts<0 (their
+ *       ts=0 instances spawn deadline-less — ecobee/letterboxd live
+ *       evidence). Whether a deadline-LESS fixed repeat can exist (and how
+ *       it would encode) is unproven — probe queued in
+ *       docs/lab/probe-backlog.md.
  *   of  occurrence offsets: dy (0-based day; -1 = last day of month),
  *       mo (0-based month), wd (weekday, 0=Sunday), wdo (nth weekday, -1=last)
  *   ed  end date (unix seconds; distant-future sentinel = no end)
@@ -51,6 +58,27 @@ const UNITS: Record<number, RepeatRule["unit"]> = {
 
 /** Unix seconds this far out (year ≥ 3000) mean "repeats forever". */
 const DISTANT_FUTURE_EPOCH = 32503680000;
+
+/**
+ * The GUI's status word for a repeating template with no set next
+ * occurrence: `paused` (instance creation paused), `ended` (the rule's end
+ * date has passed or its repeat count is exhausted), else `waiting` (an
+ * after-completion rule between instances). Live-verified 2026-07-11:
+ * Ended = fixed rule with endDate 2025-02-24; Waiting = after-completion
+ * rule — otherwise column-identical rows.
+ */
+export function templateStatus(
+  repeating: { paused?: boolean; rule?: RepeatRule },
+  todayIso: string,
+): "waiting" | "paused" | "ended" {
+  if (repeating.paused === true) return "paused";
+  const rule = repeating.rule;
+  if (rule !== undefined) {
+    if (rule.endDate !== null && rule.endDate < todayIso) return "ended";
+    if (rule.remainingCount === 0) return "ended";
+  }
+  return "waiting";
+}
 
 export function decodeRecurrenceRule(blob: unknown): RepeatRule {
   const xml =

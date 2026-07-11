@@ -113,7 +113,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 
 **TMChecklistItem:** `uuid, userModificationDate, creationDate, title, status (0/2/3), stopDate, index, task, leavesTombstone, experimental`. Status domain matches tasks. Checklist state does not bubble to the parent (T20).
 
-**TMSettings:** singleton — `logInterval`, `manualLogDate` (Logbook timing behavior), `groupTodayByParent` (Today view grouping toggle), `uriSchemeAuthenticationToken`.
+**TMSettings:** singleton — `logInterval`, `manualLogDate` (the LOG-MOVE BOUNDARY: completion ≠ logged — a closed item joins the Logbook only once the sweep passes `stopDate`; no per-row column records it. `logInterval` 1 = daily, verified live 2026-07-10; 0 = immediately, 2 = weekly, 3 = monthly assumed — probe-backlog §C. `manualLogDate` = last explicit "log now", max()ed into the boundary. Model: `src/read/log-boundary.ts`), `groupTodayByParent` (Today view grouping toggle), `uriSchemeAuthenticationToken`.
 
 ## Encodings
 

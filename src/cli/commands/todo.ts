@@ -5,31 +5,103 @@
 import type { Command } from "commander";
 
 import type { AnyTask } from "../../model/entities.ts";
-import { withClient } from "./reads.ts";
+import { localToday } from "../../model/dates.ts";
+import { templateStatus } from "../../model/recurrence.ts";
+import { blue, bold, dim, green, red } from "../style.ts";
+import {
+  deadlineDetail,
+  loggedDate,
+  projectCircle,
+  shortDate,
+  thingsLink,
+  todoBox,
+  whenValue,
+} from "../glyphs.ts";
+import { openInThings, withClient } from "./reads.ts";
 
-function renderDetail(item: AnyTask | null): string[] {
+/**
+ * The detail card, project-card grammar: type-labeled title row (the box
+ * carries open/completed/canceled; only `trashed` needs words), uri, then
+ * labeled meta lines with absent values HIDDEN, the full note as a block,
+ * and the checklist last. `status:`/`start:` lines are gone — the box, the
+ * `when:` collapse, and the `logged:` line carry those between them.
+ */
+export function renderDetail(item: AnyTask | null): string[] {
   if (!item) return ["(not found)"];
   if (item.type === "heading") {
-    return [`${item.uuid}  [heading] ${item.title}`, `  project: ${item.project?.title ?? "—"}`];
+    return [
+      `${bold("Heading:")} ${bold(item.title)}`,
+      `  ${dim("uri:")} ${thingsLink(item.uuid)}`,
+      `  ${dim("project:")} ${item.project?.title ?? "—"}`,
+    ];
   }
+  const todayIso = localToday();
+  const label = item.type === "to-do" ? "To-Do:" : "Project:";
+  const box = item.type === "to-do" ? todoBox(item) : projectCircle(item);
+  const trashed = item.trashed ? ` ${red("(trashed)")}` : "";
   const lines = [
-    `${item.uuid}  [${item.type}] ${item.title}`,
-    `  status: ${item.status}${item.trashed ? " (trashed)" : ""}  start: ${item.start}`,
-    `  when: ${item.startDate ?? "—"}${item.todaySection === "evening" ? " (this evening)" : ""}  deadline: ${item.deadline ?? "—"}`,
-    `  area: ${item.area?.title ?? "—"}${item.type === "to-do" ? `  project: ${item.project?.title ?? "—"}  heading: ${item.heading?.title ?? "—"}` : ""}`,
-    `  tags: ${item.tags.map((t) => t.title).join(", ") || "—"}  inherited: ${(item.inheritedTags ?? []).map((t) => t.title).join(", ") || "—"}`,
+    `${bold(label)} ${box} ${bold(item.title)}${trashed}`,
+    `  ${dim("uri:")} ${thingsLink(item.uuid)}`,
   ];
-  if (item.repeating.isTemplate) lines.push("  repeating: TEMPLATE (invisible in list views)");
-  if (item.repeating.isInstance)
-    lines.push(`  repeating: instance of ${item.repeating.templateUuid}`);
-  if (item.notes)
-    lines.push(`  notes: ${item.notes.length > 200 ? `${item.notes.slice(0, 200)}…` : item.notes}`);
-  if (item.type === "to-do" && item.checklist && item.checklist.length > 0) {
-    lines.push("  checklist:");
-    for (const c of item.checklist) {
-      lines.push(
-        `    [${c.status === "completed" ? "x" : c.status === "canceled" ? "~" : " "}] ${c.title}`,
+  const meta = (name: string, value: string | null | undefined) => {
+    if (value != null && value !== "") lines.push(`  ${dim(`${name}:`)} ${value}`);
+  };
+  if (item.status === "open") {
+    if (item.repeating.isTemplate) {
+      // Templates: the stored start/deadline columns are app sentinels
+      // (start=someday, deadline=4001-01-01) — the real dates belong to
+      // spawned occurrences. Show the materialized next occurrence and,
+      // when the rule assigns deadlines, say so instead of the sentinel.
+      const next = item.repeating.nextOccurrence;
+      meta("when", next == null ? null : `↻ ${shortDate(next, todayIso)}`);
+      const rule = item.repeating.rule;
+      const deadlines = rule !== undefined && (rule.type === "fixed" || rule.startOffsetDays < 0);
+      meta(
+        "deadline",
+        deadlines
+          ? `${bold(dim("⚑"))} ${dim(
+              rule.startOffsetDays < 0
+                ? `set per occurrence (${-rule.startOffsetDays} days after its start)`
+                : "set per occurrence (due the day it appears)",
+            )}`
+          : null,
       );
+    } else {
+      meta("when", whenValue(item, todayIso));
+      meta(
+        "deadline",
+        item.deadline !== null && item.deadline < "4000"
+          ? deadlineDetail(item.deadline, todayIso)
+          : null,
+      );
+    }
+  } else if (item.stopped !== null) {
+    meta("logged", `${loggedDate(item.stopped, todayIso)} ${dim(`(${item.status})`)}`);
+  }
+  meta("area", item.area?.title);
+  if (item.type === "to-do") {
+    meta("project", (item.project ?? item.headingProject)?.title);
+    meta("heading", item.heading?.title);
+  }
+  // The opened resource shows its tags green (GUI: list pills are gray).
+  const tagList = (tags: Array<{ title: string }>) =>
+    green(`#${tags.map((t) => t.title).join(" #")}`);
+  if (item.tags.length > 0) meta("tags", tagList(item.tags));
+  if (item.inheritedTags !== undefined && item.inheritedTags.length > 0)
+    meta("inherited", tagList(item.inheritedTags));
+  if (item.repeating.isTemplate) {
+    const st = templateStatus(item.repeating, todayIso);
+    const state = item.repeating.nextOccurrence != null && st === "waiting" ? "scheduled" : st;
+    meta("repeating", `TEMPLATE, ${state} (occurrences appear in upcoming)`);
+  }
+  if (item.repeating.isInstance) meta("repeating", `instance of ${item.repeating.templateUuid}`);
+  if (item.notes !== "") lines.push("", item.notes);
+  if (item.type === "to-do" && item.checklist && item.checklist.length > 0) {
+    lines.push("", dim("checklist:"));
+    for (const c of item.checklist) {
+      const cbox =
+        c.status === "completed" ? blue("[✓]") : c.status === "canceled" ? blue("[×]") : "[ ]";
+      lines.push(`  ${cbox} ${c.title}`);
     }
   }
   return lines;
@@ -50,6 +122,28 @@ export function registerTodoCommands(program: Command): void {
         "todo-detail",
         (c) => c.read.byUuid(uuid),
         renderDetail as (d: never) => string[],
+      );
+    });
+  todo
+    .command("open <ref>")
+    .description(
+      "Open the to-do in the Things app — foregrounds the GUI on this Mac (NOT headless). Errors when the reference is not a to-do.",
+    )
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((ref: string, opts: { json?: boolean; db?: string }) => {
+      withClient(
+        opts,
+        "open",
+        (c) => {
+          const t = c.read.showTarget(ref);
+          if (t.kind !== "to-do")
+            throw new RangeError(
+              `"${ref}" is a ${t.viaHeading === true ? "heading" : t.kind}, not a to-do (try \`things open\`)`,
+            );
+          return { uri: openInThings(t.uuid) };
+        },
+        ((d: { uri: string }) => [`opened ${d.uri}`]) as (d: never) => string[],
       );
     });
 }

@@ -92,6 +92,10 @@ CC correspondence suggests repeat-handling changes and a likely major release al
 
 ## §H. TUI polish backlog
 
+**Stateful display preferences (parked by Mike, 2026-07-10).** The composite views grew show/hide toggles (`--show-later`, `--show-logged`; defaults hidden, mirroring the GUI's toggle-off state). Revisit when there's bandwidth: user-configurable defaults for these flags (a config file, env vars, or even reading Things' own plists for the user's in-app show-later preference — with the caveat that plist-driven defaults could confuse agents whose output changes without any flag changing). Decide config surface + precedence then.
+
+Font-test observations already banked (Mike's terminal, 2026-07-10): `◑` renders visibly oversized next to `◔`/`◕` (dropped — pie is now under-half/over-half only); `U+1F5CE 🗎` is tofu (missing glyph); `⎘`/`❏`/`▤` render but are hard to discern at cell size; `⍾` doesn't read as a bell (replaced by `◷`).
+
 **Cross-terminal glyph audit (flagged by Mike, 2026-07-10).** The CLI's glyph language (`src/cli/glyphs.ts` — checkbox marks ✓ × ~, pie quarters ◔ ◑ ◕ ◉, chips ‹›, ★/⏾/≡) was chosen on one macOS font stack; audit how it renders across terminal emulators and fonts before treating it as settled. Matrix: Terminal.app, iTerm2, Ghostty, kitty, VS Code terminal, Warp × SF Mono, Menlo, JetBrains Mono, a Nerd Font — plus a CJK-wide (`ambiguous=double`) config and a `NO_COLOR`/piped pass. Watch for: tofu on `⏾` (U+23FE, Unicode 9) and the pie quarters, double-width drift of ambiguous-width glyphs breaking column alignment, and dim-on-light-theme legibility. Every glyph is a constant in `glyphs.ts`, so retuning is a one-file change.
 
 ## Shelved indefinitely (Mike, item 4)

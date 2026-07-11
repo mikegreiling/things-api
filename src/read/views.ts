@@ -48,6 +48,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { addDaysIso, encodePackedDate, localToday } from "../model/dates.ts";
+import { logBoundary, markLogged } from "./log-boundary.ts";
 import type { Project, Ref, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
@@ -104,7 +105,7 @@ function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
     db,
     rows.map((r) => r.uuid),
   );
-  return rows.map((row) => {
+  const items = rows.map((row) => {
     if (row.type === 1) return mapProject(row, refs, tags.get(row.uuid) ?? []);
     const todo = mapTodo(row, refs, tags.get(row.uuid) ?? []);
     if (todo.heading !== null) {
@@ -113,6 +114,7 @@ function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
     }
     return todo;
   });
+  return markLogged(items, logBoundary(db));
 }
 
 export interface TodayView {
@@ -382,8 +384,12 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
       }
     }
     if (rule === null || horizon === 1 || rule.type !== "fixed") {
+      // Corpus-validated 2026-07-11 (1,900+ live instances): FIXED rules
+      // always deadline their occurrences at the event date — start − ts,
+      // INCLUDING ts=0 (deadline = the start date itself; birthday-style
+      // repeats). After-completion rules deadline only when ts < 0.
       const deadline =
-        rule !== null && rule.startOffsetDays < 0
+        rule !== null && (rule.type === "fixed" || rule.startOffsetDays < 0)
           ? addDaysIso(startDate, -rule.startOffsetDays)
           : null;
       return [{ ...template, startDate, deadline }];
@@ -397,15 +403,48 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     }));
   });
 
-  return [...items, ...occurrences]
+  // Within a day the UI's drag order is todayIndex ASC (live-verified
+  // 2026-07-11 against the GUI: plain `index` disagrees, todayIndex matches
+  // exactly), so the sortable Upcoming order survives the CLI.
+  const todayIndexOf = new Map<string, number>(
+    [...rows, ...templateRows].map((r) => [r.uuid, r.todayIndex ?? 0]),
+  );
+  const dated = [...items, ...occurrences]
     .map((item, pos) => ({ item, pos }))
     .toSorted(
       (a, b) =>
         (a.item.startDate ?? "").localeCompare(b.item.startDate ?? "") ||
+        (todayIndexOf.get(a.item.uuid) ?? 0) - (todayIndexOf.get(b.item.uuid) ?? 0) ||
         a.pos - b.pos ||
         a.item.uuid.localeCompare(b.item.uuid),
     )
     .map((x) => x.item);
+
+  // The UI's trailing "Repeating To-Dos" section: templates with NO set
+  // next occurrence (after-completion rules between instances, rules past
+  // their end date) plus paused ones — startDate stays null, the decoded
+  // rule rides along so consumers can derive waiting/paused/ended.
+  const restingRows = fetchTaskRows(
+    db,
+    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0
+     AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
+     AND (t.rt1_nextInstanceStartDate IS NULL OR t.rt1_nextInstanceStartDate <= ?
+          OR t.rt1_instanceCreationPaused = 1)${tf.sql}
+     ORDER BY t.todayIndex ASC, t."index" ASC`,
+    [packedToday, ...tf.binds],
+  );
+  const resting = materialize(db, restingRows).map((item) => {
+    const raw = restingRows.find((r) => r.uuid === item.uuid)?.rt1_recurrenceRule;
+    if (raw !== null && raw !== undefined) {
+      try {
+        item.repeating.rule = decodeRecurrenceRule(raw);
+      } catch {
+        // undecodable rule (future Things build) — surface without it
+      }
+    }
+    return item;
+  });
+  return [...dated, ...resting];
 }
 
 export interface SomedayFilter extends ViewFilter {
@@ -442,16 +481,53 @@ export function somedayView(
   return groupBySidebar(db, materialize(db, rows));
 }
 
-export function logbookView(
-  db: DatabaseSync,
-  options?: { limit?: number; tag?: string },
-): ListItem[] {
+export interface LogbookFilter extends ViewFilter {
+  limit?: number;
+  /**
+   * Area scope: the area's direct items, its project rows, and every to-do
+   * of its projects — INCLUDING heading-nested ones (heading → project →
+   * area). Uuid or unique name.
+   */
+  area?: string;
+  /** Project scope: ALL children, heading-nested included. Uuid or unique name. */
+  project?: string;
+  /** Only entries logged at/after this instant. */
+  since?: Date;
+  /** Only entries logged at/before this instant. */
+  until?: Date;
+}
+
+export function logbookView(db: DatabaseSync, options?: LogbookFilter): ListItem[] {
   const limit = options?.limit ?? 100;
   const tf = tagFilter(db, options);
+  const where: string[] = [];
+  const binds: (string | number)[] = [];
+  if (options?.project !== undefined) {
+    where.push(`${EFF_PROJECT} = ?`);
+    binds.push(resolveProjectUuid(db, options.project));
+  }
+  if (options?.area !== undefined) {
+    const areaUuid = resolveAreaUuid(db, options.area);
+    where.push(
+      `(t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
+    );
+    binds.push(areaUuid, areaUuid);
+  }
+  if (options?.since !== undefined) {
+    where.push("t.stopDate >= ?");
+    binds.push(options.since.getTime() / 1000);
+  }
+  if (options?.until !== undefined) {
+    where.push("t.stopDate <= ?");
+    binds.push(options.until.getTime() / 1000);
+  }
+  const extra = where.length > 0 ? ` AND ${where.join(" AND ")}` : "";
+  // Completion ≠ logged: closed items past the log-move boundary still sit
+  // checked in their original lists, exactly like the GUI's Logbook.
   const rows = fetchTaskRows(
     db,
-    `${LIVE} AND t.status IN (2, 3)${tf.sql} ORDER BY t.stopDate DESC LIMIT ?`,
-    [...tf.binds, limit],
+    `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC LIMIT ?`,
+    [logBoundary(db).getTime() / 1000, ...binds, ...tf.binds, limit],
   );
   return materialize(db, rows);
 }
