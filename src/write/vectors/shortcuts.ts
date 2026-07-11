@@ -2,9 +2,11 @@
  * Apple Shortcuts vector — drives the six golden-resident `things-proxy-*`
  * shortcuts (docs/lab/s-campaign-results.md). It fills the last gaps left by
  * the URL scheme and AppleScript: creating a heading inside an existing
- * project, and clearing a DATED reminder (both impossible on every other
- * surface). Each run pipes a JSON dict to `shortcuts run <name>` via a
- * per-run temp file and reads the shortcut's output back from another.
+ * project (impossible on every other surface), and clearing a DATED reminder
+ * in place (the URL bounce and AppleScript de-schedule also clear it, but only
+ * by mutating the schedule — see docs/lab/rc-suite-results.md). Each run pipes
+ * a JSON dict to `shortcuts run <name>` via a per-run temp file and reads the
+ * shortcut's output back from another.
  *
  * Consent: the create/edit/set proxies are output-class ("Allow … to output
  * N items") and offer Always-Allow, so they run headless after one grant. A
@@ -39,9 +41,12 @@ export const SHORTCUTS_MATRIX: VectorMatrix = {
     validation: "validated",
     evidence: ["scf:P3b"],
     notes:
-      '`things-proxy-set-detail` Reminder Time = "" — the ONLY surface that clears a ' +
-      "DATED reminder (sticky on URL, R20/R21, oddity 2e); startDate untouched. Requires " +
-      "the Things proxy shortcuts (`things setup shortcuts`)",
+      '`things-proxy-set-detail` Reminder Time = "" — the only IN-PLACE / schedule-preserving ' +
+      "clear of a DATED reminder (startDate untouched, headless). Not the only clear: a pure-URL " +
+      "`when=today`->re-date bounce (RC01/RC02) and an AppleScript move-to-Inbox de-schedule (RC03) " +
+      "also drop it, but both mutate the schedule and the bounce crashes on repeating items. Same-date " +
+      "bare `when=` is sticky (R20/R21, oddity 2e). Requires the Things proxy shortcuts " +
+      "(`things setup shortcuts`)",
   },
 };
 
