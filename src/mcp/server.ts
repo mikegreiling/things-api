@@ -899,9 +899,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "clear_reminder",
     {
       description:
-        "Clear a to-do's time-of-day reminder, keeping its scheduled date — the only way to " +
-        "remove a reminder from a date-scheduled to-do. Uses the Things proxy shortcuts — " +
-        "set them up once with `things setup shortcuts`.",
+        "Clear a to-do's time-of-day reminder while keeping its scheduled date. Uses the " +
+        "Things proxy shortcuts when installed (in place, and the only path for a repeating " +
+        "to-do); otherwise a non-repeating dated to-do falls back to a URL re-schedule that " +
+        "briefly moves it to Today and back. Reversible with the undo tool.",
       inputSchema: { uuid: z.string(), ...dryRunShape },
       annotations: NON_DESTRUCTIVE,
     },

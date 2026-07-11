@@ -600,9 +600,12 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("clear-reminder <uuid>")
       .description(
-        "Clear a to-do's time-of-day reminder while keeping its scheduled date — the one " +
-          "way to remove a reminder from a date-scheduled to-do. This uses the Things proxy " +
-          "shortcuts — run `things setup shortcuts` once first.",
+        "Clear a to-do's time-of-day reminder while keeping its scheduled date. When the " +
+          "Things proxy shortcuts are installed (`things setup shortcuts`) this happens in " +
+          "place, and it is the only way for a repeating to-do; otherwise a non-repeating " +
+          "date-scheduled to-do falls back to a URL re-schedule that briefly moves it to Today " +
+          "and back. Reversible with `things undo`. Force a delivery path with --vector " +
+          "shortcuts|url-scheme.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.clearReminder(uuid, writeOptionsFrom(opts)));

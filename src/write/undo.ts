@@ -15,12 +15,20 @@
  *    de-scheduled; checklist per-item state is unrecoverable).
  *  - Inverse mutations are audited under an `undo:`-prefixed actor and are
  *    themselves EXCLUDED from later undo target selection (no undo-the-undo).
+ *  - PRECONDITION guard: before executing each inverse step, runUndo confirms
+ *    the fields the step would OVERWRITE still hold their recorded after-state
+ *    (`observed`). A field an out-of-band edit already moved is NOT clobbered —
+ *    the step is refused (blocked) and unwinding stops. This is in addition to
+ *    the pipeline's own verified read-after-write.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AuditRecord } from "../audit/schema.ts";
+import type { AnyTask } from "../model/entities.ts";
 import { localToday } from "../model/dates.ts";
+import { getField } from "./verify/delta.ts";
+import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
 import type { OperationKind, ReorderParams } from "./operations.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
@@ -119,9 +127,12 @@ const IRREVERSIBLE: Partial<Record<string, string>> = {
   "heading.create":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",
-  "todo.clear-dated-reminder":
-    "a cleared reminder cannot be re-set automatically — setting a dated reminder is dead " +
-    "on every surface (scf2 P3a); re-add it in the app",
+  // NB: todo.clear-dated-reminder is NOT here — it IS reversible. The URL
+  // scheme re-SETS a dated reminder (update?id=X&when=<date>@<time>, R17/R18),
+  // so its inverse re-attaches the captured reminder to the item's current
+  // schedule (see the todo.clear-dated-reminder case below). The old "dead on
+  // every surface (scf2 P3a)" reason was false — P3a is only the Shortcuts
+  // set-detail SET path; the URL SET path is alive.
 };
 
 function preField(record: AuditRecord, field: string): unknown {
@@ -199,8 +210,21 @@ function scheduleSteps(
   return { steps: [{ op, params }], notes };
 }
 
-/** Build the inverse plan for one audit record. Pure — unit-testable. */
-export function planUndo(record: AuditRecord, now: Date, allRecords: AuditRecord[] = []): UndoPlan {
+/**
+ * Build the inverse plan for one audit record. Pure — unit-testable.
+ *
+ * `current` is the target's CURRENT decoded state (runUndo loads it fresh).
+ * Most ops invert from the recorded `pre`/`observed` alone and ignore it; the
+ * exception is `todo.clear-dated-reminder`, whose inverse re-attaches the
+ * cleared reminder to wherever the item is scheduled RIGHT NOW (not the date
+ * it was cleared from), so it must read the live schedule.
+ */
+export function planUndo(
+  record: AuditRecord,
+  now: Date,
+  allRecords: AuditRecord[] = [],
+  current?: AnyTask | null,
+): UndoPlan {
   const target = { ts: record.ts, op: record.op, uuid: record.uuid, actor: record.actor };
   const todayIso = localToday(now);
   const notes: string[] = [];
@@ -769,9 +793,109 @@ export function planUndo(record: AuditRecord, now: Date, allRecords: AuditRecord
       };
     }
 
+    case "todo.clear-dated-reminder": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      // The reminder we must put back is the pre-op reminder time captured by
+      // the clear (atomic Shortcuts record OR the URL-bounce summary).
+      const preReminder = preField(record, "reminder");
+      if (typeof preReminder !== "string") {
+        return irreversible("the pre-op reminder time was not captured — cannot restore it");
+      }
+      if (current === undefined || current === null || current.type !== "to-do") {
+        return irreversible(
+          "the item no longer exists as a to-do — the reminder can't be restored",
+        );
+      }
+      if (isRepeatingTemplate(current)) {
+        return irreversible(
+          "the item is now a repeating template — a dated reminder can't be re-set on it",
+        );
+      }
+      // Re-attach to the item's CURRENT schedule, NOT the recorded date: a
+      // concrete date restores literally; today/evening restore via keyword
+      // (which keeps the reminder-set path open — R17/R18).
+      const startDate = current.startDate;
+      if (startDate === null) {
+        return irreversible(
+          "the item is no longer scheduled (someday/anytime/inbox) — a dated reminder has no " +
+            "date to attach to; re-schedule it, then re-add the reminder",
+        );
+      }
+      const when =
+        startDate === todayIso
+          ? current.todaySection === "evening"
+            ? "evening"
+            : "today"
+          : startDate;
+      notes.push(
+        "the reminder is restored on the item's CURRENT schedule (not moved back to the date it " +
+          "was cleared from) — an out-of-band re-schedule is preserved",
+      );
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "todo.update", params: { uuid, when, reminder: preReminder } }],
+        notes,
+      };
+    }
+
     default:
       return irreversible(`no inverse is defined for operation "${record.op}"`);
   }
+}
+
+// ------------------------------------------------------ precondition guard
+
+/** Content fields an inverse can silently CLOBBER; keyed to observed 1:1. */
+const CLOBBER_FIELDS = ["title", "notes", "deadline", "reminder", "tags"] as const;
+
+function fieldsEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b);
+  return a === b || (a === undefined && b === null) || (a === null && b === undefined);
+}
+
+function formatValue(value: unknown): string {
+  return value === null || value === undefined ? "none" : JSON.stringify(value);
+}
+
+/**
+ * Refuse an inverse step that would overwrite a field an out-of-band edit has
+ * already moved. For every CLOBBER_FIELD the step writes AND that the audit
+ * `observed` (after-state) recorded, the target's CURRENT value must still
+ * equal that after-value; a divergence means the world moved underneath us, so
+ * we block rather than clobber. Fields absent from `observed` are skipped (we
+ * cannot confirm them but must not break ops whose observed legitimately omits
+ * them). Returns a blocked result on divergence, else null.
+ */
+function checkStepPrecondition(
+  deps: WriteDeps,
+  step: UndoStep,
+  observed: Record<string, unknown> | null,
+): MutationResult | null {
+  if (observed === null) return null;
+  const uuid = step.params["uuid"];
+  if (typeof uuid !== "string") return null;
+  const current = loadTarget(deps.db, uuid);
+  if (current === null) return null; // vanished — the inverse's own verify handles it
+  for (const field of CLOBBER_FIELDS) {
+    if (!(field in step.params) || !(field in observed)) continue;
+    const cur = getField(current, field) ?? null;
+    const after = observed[field];
+    if (!fieldsEqual(cur, after)) {
+      return {
+        kind: "blocked",
+        op: step.op,
+        reason: "environment",
+        detail:
+          `${field} changed since the recorded mutation (expected ${formatValue(after)}, found ` +
+          `${formatValue(cur)}) — refusing to avoid clobbering an out-of-band edit`,
+        remediation:
+          "review the item's current state; redo the change by hand if it's still wanted, or " +
+          "re-run undo once the field is back to its post-change value",
+      };
+    }
+  }
+  return null;
 }
 
 // ----------------------------------------------------------------- executor
@@ -788,7 +912,10 @@ export async function runUndo(
   const items: UndoItemResult[] = [];
 
   for (const record of targets) {
-    const plan = planUndo(record, now, records);
+    // Fresh current state for the record's target (drives the clear-reminder
+    // targeted restore, and is otherwise ignored by planUndo).
+    const current = record.uuid === null ? null : loadTarget(deps.db, record.uuid);
+    const plan = planUndo(record, now, records, current);
     let item: UndoItemResult;
 
     if (plan.kind === "irreversible") {
@@ -799,6 +926,13 @@ export async function runUndo(
       const results: (MutationResult | ReorderResult)[] = [];
       let failed = false;
       for (const step of plan.steps) {
+        // Precondition guard: never clobber a field an out-of-band edit moved.
+        const precondition = checkStepPrecondition(deps, step, record.observed);
+        if (precondition !== null) {
+          results.push(precondition);
+          failed = true;
+          break;
+        }
         const needsPermanent = step.options?.dangerouslyPermanent === true;
         if (needsPermanent && options.dangerouslyPermanent !== true) {
           results.push({

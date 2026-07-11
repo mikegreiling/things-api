@@ -164,6 +164,11 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
   },
   "tag.delete": { support: "no", disruption: 0, validation: "validated" },
   "trash.empty": { support: "no", disruption: 0, validation: "validated" },
+  // NB: no `todo.clear-dated-reminder` entry — like the reorder bounce, the
+  // URL fallback is an ORCHESTRATED compound (two todo.update legs), not a
+  // native command, so it stays out of the vector matrix (adding it here would
+  // make planVector pick url-scheme and then fail to compile the op). The
+  // fallback is surfaced via the clear-reminder command + capability-matrix.md.
 };
 
 function openUrl(url: string): Promise<ExecuteResult> {

@@ -42,11 +42,13 @@ export const SHORTCUTS_MATRIX: VectorMatrix = {
     evidence: ["scf:P3b"],
     notes:
       '`things-proxy-set-detail` Reminder Time = "" — the only IN-PLACE / schedule-preserving ' +
-      "clear of a DATED reminder (startDate untouched, headless). Not the only clear: a pure-URL " +
-      "`when=today`->re-date bounce (RC01/RC02) and an AppleScript move-to-Inbox de-schedule (RC03) " +
-      "also drop it, but both mutate the schedule and the bounce crashes on repeating items. Same-date " +
-      "bare `when=` is sticky (R20/R21, oddity 2e). Requires the Things proxy shortcuts " +
-      "(`things setup shortcuts`)",
+      "clear of a DATED reminder (startDate untouched, headless), and the ONLY path for a " +
+      "repeating template. The `todo.clear-dated-reminder` orchestrator auto-prefers this when " +
+      "the proxy is installed and falls back to a pure-URL `when=today`->re-date BOUNCE " +
+      "(RC01/RC02) for NON-REPEATING items when it is not (the bounce when= CRASHES a repeating " +
+      "template, R09 — repeating stays Shortcuts-only). The clear is REVERSIBLE either way: undo " +
+      "re-attaches the reminder via the URL set path (R17/R18). Same-date bare `when=` is sticky " +
+      "(R20/R21, oddity 2e). Requires the Things proxy shortcuts (`things setup shortcuts`)",
   },
 };
 

@@ -77,6 +77,7 @@ import {
   type HeadingArchiveResult,
   type HeadingUnarchiveResult,
 } from "./write/heading.ts";
+import { runClearReminder } from "./write/clear-reminder.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
@@ -174,9 +175,11 @@ export interface ThingsClient {
     /** Restore a TRASHED to-do: it returns to the Inbox, de-scheduled. */
     restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
-     * Clear a to-do's time-of-day reminder, keeping its scheduled date — the
-     * only way to remove a reminder from a date-scheduled to-do. Delivered
-     * through the Things proxy shortcuts (run `things setup shortcuts` first).
+     * Clear a to-do's time-of-day reminder while keeping its scheduled date.
+     * Uses the Things proxy shortcuts when installed (in place, and the only
+     * path for repeating to-dos); without them, a non-repeating dated to-do
+     * falls back to a URL re-schedule that briefly moves it to Today and back.
+     * Reversible with `undo`. Force a path with `vector: "shortcuts" | "url-scheme"`.
      */
     clearReminder(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -502,7 +505,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
       createHeading: (project, title, o) => run("heading.create", { project, title }, o),
       renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
-      clearReminder: (uuid, o) => run("todo.clear-dated-reminder", { uuid }, o),
+      clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
       unarchiveHeading: (uuid, policy, o) =>
