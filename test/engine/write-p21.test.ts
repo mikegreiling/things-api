@@ -159,7 +159,7 @@ describe("transport failure attribution", () => {
     expect(result.kind).toBe("verify-failed");
     if (result.kind === "verify-failed") {
       expect(result.likelyCause).toBe("permission-pending");
-      expect(result.hint).toContain("consent dialog");
+      expect(result.hint).toContain("Automation dialog");
       expect(result.hint).toContain("Things changed (3.22.11 → 3.22.12)");
       expect(result.detail).toContain("timed out");
     }

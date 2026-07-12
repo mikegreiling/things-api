@@ -26,6 +26,17 @@ export interface FailureHint {
 const DENIED = /-1743|not authori[sz]ed to send apple events/i;
 const EVENT_TIMED_OUT = /-1712|event timed out/i;
 
+/**
+ * The app macOS attributes an Automation request to — the TERMINAL EMULATOR
+ * hosting the process tree, not the CLI binary (live-confirmed 2026-07-12:
+ * the consent dialog read "Ghostty.app wants access to control Things.app").
+ * TERM_PROGRAM names it when the shell exports one; generic otherwise.
+ */
+export function automationGrantee(): string {
+  const term = process.env["TERM_PROGRAM"];
+  return term !== undefined && term !== "" ? `your terminal app (${term})` : "your terminal app";
+}
+
 function environmentSuffix(changes: EnvironmentChange[]): string {
   if (changes.length === 0) return "";
   return (
@@ -65,8 +76,12 @@ export function classifyTransportFailure(input: {
     return {
       likelyCause: "permission-pending",
       hint:
-        "the command hung the way an unanswered macOS consent dialog does — check the " +
-        "machine's screen for a permission prompt and approve it." +
+        "the command hung the way an unanswered macOS Automation dialog does (AppleEvent " +
+        `-1712). The dialog is addressed to ${automationGrantee()} — not to \`things\` — and ` +
+        "it shows on the machine's PHYSICAL screen, so over SSH/remote sessions it is easy " +
+        "to miss (oddity 5m: while it waits, object-model AppleScript hangs but URL-scheme " +
+        "commands still work). Approve the prompt and retry; if it was dismissed, re-enable " +
+        "under System Settings > Privacy & Security > Automation." +
         environmentSuffix(input.environmentChanges),
     };
   }
