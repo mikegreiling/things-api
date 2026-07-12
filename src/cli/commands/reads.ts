@@ -23,6 +23,7 @@ import {
   NOTES_MARK,
   projectCircle,
   REMINDER_MARK,
+  shortDate,
   todayStar,
   todoBox,
 } from "../glyphs.ts";
@@ -287,11 +288,35 @@ const FULL_MONTHS = [
 ] as const;
 
 /**
- * `--until` accepting whole periods: `2024` means through Dec 31 2024,
- * `2024-03` through Mar 31, `2024-03-05` through end of that day; anything
- * else parses as an instant.
+ * Relative period: `3d`/`2w`/`1m`/`1y` (days/weeks/calendar months/years),
+ * counted from `now` — FORWARD for an until-bound, BACKWARD for a since-
+ * bound (each command's natural direction; the flag name carries it).
  */
-export function parsePeriodEnd(s: string): Date {
+const RELATIVE_PERIOD = /^(\d+)([dwmy])$/i;
+
+function relativePeriodDate(m: RegExpExecArray, now: Date, sign: 1 | -1): Date {
+  const n = sign * Number(m[1]);
+  const unit = (m[2] ?? "").toLowerCase();
+  const d = new Date(now);
+  if (unit === "d") d.setDate(d.getDate() + n);
+  else if (unit === "w") d.setDate(d.getDate() + 7 * n);
+  else if (unit === "m") d.setMonth(d.getMonth() + n);
+  else d.setFullYear(d.getFullYear() + n);
+  return d;
+}
+
+/**
+ * `--until` accepting whole periods: `2024` means through Dec 31 2024,
+ * `2024-03` through Mar 31, `2024-03-05` through end of that day; relative
+ * periods (`2w`, `1m`, `1y`) count FORWARD from now through the end of the
+ * landing day; anything else parses as an instant.
+ */
+export function parsePeriodEnd(s: string, now: Date = new Date()): Date {
+  const rel = RELATIVE_PERIOD.exec(s.trim());
+  if (rel !== null) {
+    const d = relativePeriodDate(rel, now, 1);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+  }
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
   if (m === null) return new Date(s);
   const year = Number(m[1]);
@@ -300,6 +325,27 @@ export function parsePeriodEnd(s: string): Date {
   const month = Number(m[2]) - 1;
   if (m[3] === undefined) return new Date(year, month + 1, 0, 23, 59, 59, 999);
   return new Date(year, month, Number(m[3]), 23, 59, 59, 999);
+}
+
+/**
+ * `--since` accepting the same vocabulary at the period's START: `2024` =
+ * Jan 1 2024 00:00, `2024-03` = Mar 1, `2024-03-05` = that midnight;
+ * relative periods (`2w`, `1m`) count BACKWARD from now to the landing
+ * day's midnight; anything else parses as an instant.
+ */
+export function parsePeriodStart(s: string, now: Date = new Date()): Date {
+  const rel = RELATIVE_PERIOD.exec(s.trim());
+  if (rel !== null) {
+    const d = relativePeriodDate(rel, now, -1);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
+  if (m === null) return new Date(s);
+  const year = Number(m[1]);
+  if (m[2] === undefined) return new Date(year, 0, 1);
+  const month = Number(m[2]) - 1;
+  if (m[3] === undefined) return new Date(year, month, 1);
+  return new Date(year, month, Number(m[3]));
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -576,11 +622,21 @@ export function registerReadCommands(program: Command): void {
     .command("upcoming")
     .description(
       "Future-scheduled items in date order, INCLUDING each repeating item's next " +
-        "occurrence (↻ marker; deadline derived from the repeat rule). --horizon <n> also " +
+        "occurrence (↻ marker; deadline derived from the repeat rule). Shows the next " +
+        "month by default — widen with --until (relative `2w`/`3m`/`1y` or absolute " +
+        "`2026-09`/`2026`) or --all for the full horizon. --horizon <n> also " +
         "PROJECTS the following n-1 occurrences per repeating item from its decoded rule " +
         "(fixed rules only, max 10) — projections are host math the app has not " +
         "materialized yet.",
     )
+    .option(
+      "--until <period>",
+      "only items scheduled through this bound: `2w`/`3m`/`1y` from today, or `2026-09`, " +
+        "`2026-09-15`, `2026` (whole periods)",
+      "1m",
+    )
+    .option("--all", "no date bound — every future-scheduled item (the app's full Upcoming)")
+    .option("--limit <n>", "maximum rows (applied after the date bound)")
     .option(
       "--tag <ref>",
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
@@ -589,19 +645,73 @@ export function registerReadCommands(program: Command): void {
     .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { tag?: string; exactTag?: boolean; horizon?: string }) => {
-      withClient(
-        opts,
-        "upcoming",
-        (c) =>
-          c.read.upcoming({
-            ...(opts.tag !== undefined && { tag: opts.tag }),
-            ...(opts.exactTag === true && { exactTag: true }),
-            ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
-          }),
-        ((items: ListItem[]) => renderUpcoming(items)) as (d: never) => string[],
-      );
-    });
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          until: string;
+          all?: boolean;
+          limit?: string;
+          tag?: string;
+          exactTag?: boolean;
+          horizon?: string;
+        },
+        command: Command,
+      ) => {
+        const untilGiven = command.getOptionValueSource("until") !== "default";
+        if (opts.all === true && untilGiven) {
+          process.stderr.write("error: --all and --until are mutually exclusive\n");
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const untilDate = opts.all === true ? undefined : parsePeriodEnd(opts.until);
+        if (untilDate !== undefined && Number.isNaN(untilDate.getTime())) {
+          process.stderr.write(`error: --until is not a parseable period: ${opts.until}\n`);
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const until = untilDate === undefined ? undefined : localToday(untilDate);
+        const limit = opts.limit === undefined ? undefined : Number(opts.limit);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+          process.stderr.write(`error: --limit must be a positive integer\n`);
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        let clipped = false;
+        withClient(
+          opts,
+          "upcoming",
+          (c) => {
+            const items = c.read.upcoming({
+              ...(until !== undefined && { until }),
+              ...(opts.tag !== undefined && { tag: opts.tag }),
+              ...(opts.exactTag === true && { exactTag: true }),
+              ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
+            });
+            if (limit !== undefined && items.length > limit) {
+              clipped = true;
+              return items.slice(0, limit);
+            }
+            return items;
+          },
+          ((items: ListItem[]) => {
+            const lines = renderUpcoming(items);
+            if (clipped && limit !== undefined) {
+              lines.push(
+                "",
+                dim(`(${limit} shown — --limit reached; raise --limit or widen --until)`),
+              );
+            }
+            if (until !== undefined) {
+              lines.push(
+                "",
+                dim(`(through ${shortDate(until, localToday())} — --all for the full horizon)`),
+              );
+            }
+            return lines;
+          }) as (d: never) => string[],
+        );
+      },
+    );
 
   program
     .command("logbook")
@@ -614,7 +724,11 @@ export function registerReadCommands(program: Command): void {
     .option("--limit <n>", "maximum items to return", "100")
     .option("--area <ref>", "restrict to an area: direct items plus its projects' children")
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
-    .option("--since <when>", "only entries logged on/after this date")
+    .option(
+      "--since <when>",
+      "only entries logged on/after this bound: `2w`/`3m`/`1y` back from today, or " +
+        "`2024`, `2024-03`, `2024-03-05` (whole periods)",
+    )
     .option(
       "--until <when>",
       "only entries logged on/before this date (2024 or 2024-03 cover the whole period)",
@@ -635,7 +749,7 @@ export function registerReadCommands(program: Command): void {
           exactTag?: boolean;
         },
       ) => {
-        const since = opts.since !== undefined ? new Date(opts.since) : undefined;
+        const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
         const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
         for (const [flag, value] of [
           ["--since", since],
