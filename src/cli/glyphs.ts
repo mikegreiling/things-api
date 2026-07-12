@@ -52,9 +52,12 @@ export function loggedDate(stopped: Date, todayIso: string): string {
 export function todoBox(item: Todo): string {
   if (item.status === "completed") return blue("[✓]");
   if (item.status === "canceled") return blue("[×]");
-  // Repeating templates read as scheduled (↻ + next-occurrence chip carry
-  // the state), never as someday, even though the DB stores start=someday.
-  if (item.repeating.isTemplate) return "[ ]";
+  // A repeating TEMPLATE is the rule itself, not a checkable instance — the
+  // GUI shows only the ↻ glyph where a checkbox would be. We keep the
+  // brackets (still a to-do) but seat ↻ INSIDE them so the row reads as
+  // "the recurring one" at a glance, distinct from its spawned instances
+  // (which are ordinary [ ] rows). Never someday, though the DB stores it so.
+  if (item.repeating.isTemplate) return dim("[↻]");
   if (item.start === "someday" && item.startDate === null) return dim("[~]");
   return "[ ]";
 }
@@ -68,8 +71,13 @@ export function todoBox(item: Todo): string {
 export function projectCircle(item: Project): string {
   if (item.status === "completed") return blue("(✓)");
   if (item.status === "canceled") return blue("(×)");
-  if (item.start === "someday" && item.startDate === null) return dim("(~)");
-  return "( )";
+  // Repeating project template: ↻ inside the circle (the to-do rule above).
+  if (item.repeating.isTemplate) return dim("(↻)");
+  // Open projects render blue — GUI parity (the sidebar/list accent) and a
+  // second, color-independent cue on top of the round bracket that this row
+  // is a project, not a to-do.
+  if (item.start === "someday" && item.startDate === null) return blue("(~)");
+  return blue("( )");
 }
 
 /** Progress chip on project rows: `‹remaining/total›` (the GUI shows only the remaining count). */

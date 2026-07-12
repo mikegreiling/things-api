@@ -393,8 +393,11 @@ describe("upcoming", () => {
     // Day-bucket rows drop the redundant date chip; coarser buckets keep it.
     expect(lines.find((l) => l.includes("Near"))).not.toContain("‹");
     expect(lines.find((l) => l.includes("Later this month"))).toContain("‹Jul 25›");
-    // No-date templates carry the ↻ and their status word.
-    expect(lines.find((l) => l.includes("Between instances"))).toContain("↻ waiting");
+    // No-date templates seat ↻ inside the box (not a separate mark) and keep
+    // their status word.
+    const restingLine = lines.find((l) => l.includes("Between instances"));
+    expect(restingLine).toContain("[↻]");
+    expect(restingLine).toContain("waiting");
   });
 });
 

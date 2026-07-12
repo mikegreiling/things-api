@@ -17,6 +17,7 @@ function project(overrides: Partial<Project>): Project {
     startDate: null,
     untrashedLeafActionsCount: 0,
     openUntrashedLeafActionsCount: 0,
+    repeating: { isTemplate: false, isInstance: false },
     ...overrides,
   } as Project;
 }
@@ -38,6 +39,22 @@ describe("projectCircle", () => {
     expect(projectCircle(project({ status: "completed" }))).toBe("(✓)");
     expect(projectCircle(project({ status: "canceled" }))).toBe("(×)");
     expect(projectCircle(project({ start: "someday" }))).toBe("(~)");
+  });
+
+  it("seats ↻ inside the circle for a repeating project template", () => {
+    expect(
+      projectCircle(
+        project({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
+      ),
+    ).toBe("(↻)");
+  });
+});
+
+describe("todoBox — repeating templates", () => {
+  it("seats ↻ inside the box (the rule row, not a checkable instance)", () => {
+    expect(
+      todoBox(todo({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } })),
+    ).toBe("[↻]");
   });
 });
 

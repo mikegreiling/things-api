@@ -11,7 +11,7 @@ import { ThingsDbOpenError } from "../../db/connection.ts";
 import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
 import { templateStatus } from "../../model/recurrence.ts";
-import { bold, dim, strike, underline } from "../style.ts";
+import { blue, bold, dim, strike, underline } from "../style.ts";
 import {
   areaMark,
   CHECKLIST_MARK,
@@ -104,7 +104,9 @@ export interface FormatOpts {
 
 /**
  * One item line:
- * `<uuid-prefix>  <box> [★|⏾] [↻] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
+ * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
+ * Repeating templates seat ↻ INSIDE the box (`[↻]`/`(↻)`) rather than as a
+ * separate mark; open project rows render their circle and title blue.
  * The box is the glyph-language state carrier (../glyphs.ts): `[ ]`-family
  * for to-dos, `( )`-family for projects — state survives with color
  * stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
@@ -124,7 +126,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const box = item.type === "project" ? projectCircle(item) : todoBox(item);
   const meta: string[] = [];
   if (opts.mark != null) meta.push(opts.mark);
-  if (item.repeating.isTemplate) meta.push("↻");
+  // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
   if (opts.statusWord !== undefined) meta.push(dim(opts.statusWord));
   if (item.status !== "open" && item.stopped !== null)
     meta.push(loggedDate(item.stopped, todayIso));
@@ -175,6 +177,9 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   if (asTitle) title = bold(underline(title));
   else if (item.status === "canceled") title = dim(strike(title));
   else if (item.status === "completed") title = dim(title);
+  // Open project rows render their title blue — GUI parity (list accent) and
+  // a color cue reinforcing the round bracket. To-dos stay default-colored.
+  else if (item.type === "project") title = blue(title);
   // GUI indicator order after the title: bell, document, checklist.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
