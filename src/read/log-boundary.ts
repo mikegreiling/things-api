@@ -8,10 +8,15 @@
  * GUI Logbook share every TMTask column shape with logged history; only
  * the stopDate-vs-boundary relation differs).
  *
- * logInterval semantics: 0 = immediately, 1 = daily (VERIFIED live),
- * 2 = weekly, 3 = monthly (both assumed by analogy — lab probe queued in
- * docs/lab/probe-backlog.md), anything else = manual-only. manualLogDate
- * is the user's last explicit "log now"; it can only move the boundary
+ * logInterval semantics (GUI enum VERIFIED live in a clone, 2026-07-12,
+ * s-campaign-results.md round 3): 0 = immediately, 1 = daily, 4 = manual
+ * ("When I choose"). Things 3.22.11's "Move completed items to Logbook"
+ * dropdown offers ONLY these three — there is NO weekly or monthly option,
+ * so the `case 2`/`case 3` branches below are UNREACHABLE with the current
+ * app (kept as defensive analogues in case a future build adds them; the
+ * real manual value 4 falls to `default`, which is correct). manualLogDate
+ * is the user's last explicit "log now" (an AppleScript `log completed now`
+ * advances it to the current time — VERIFIED); it can only move the boundary
  * FORWARD past the interval's own edge.
  */
 import type { DatabaseSync } from "node:sqlite";

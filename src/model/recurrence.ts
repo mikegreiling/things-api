@@ -9,14 +9,23 @@
  *   fu  16 daily · 256 weekly · 8 monthly · 4 yearly
  *   fa  interval multiplier ("every fa units")
  *   ts  start offset in days relative to the event date (≤0 = start early).
- *       The event date becomes the spawned instance's DEADLINE for EVERY
- *       fixed rule — including ts=0, where deadline = start (birthday-style
- *       repeats; corpus re-validated 2026-07-11 over 1,900+ live
- *       instances). After-completion rules deadline only when ts<0 (their
- *       ts=0 instances spawn deadline-less — ecobee/letterboxd live
- *       evidence). Whether a deadline-LESS fixed repeat can exist (and how
- *       it would encode) is unproven — probe queued in
- *       docs/lab/probe-backlog.md.
+ *       For a DEADLINED fixed rule the event date becomes the spawned
+ *       instance's deadline (deadline = start − ts; corpus re-validated
+ *       2026-07-11 over 1,900+ live instances, all of which were deadlined).
+ *       After-completion rules deadline only when ts<0 (their ts=0 instances
+ *       spawn deadline-less — ecobee/letterboxd live evidence).
+ *       ⚠️ CAVEAT (VM-probed 2026-07-12, DLREPEAT, oddities §8a): a
+ *       deadline-LESS fixed repeat DOES exist and is in fact the GUI DEFAULT
+ *       ("Add deadlines" is an opt-in checkbox). Its instances carry a
+ *       startDate but NO deadline, and its rt1_recurrenceRule is
+ *       BYTE-IDENTICAL to a deadlined ts=0 rule (tp=0, ts=0, of=[{dy:0}]) —
+ *       so deadline-ness is NOT derivable from this blob alone. The
+ *       fixed⇒deadlined assumption below therefore holds only for the
+ *       (all-deadlined) live corpus, not for the encoding; consumers that
+ *       project deadlines for fixed repeats can over-report on deadline-less
+ *       templates. The real discriminator (a non-zero start-offset deadlined
+ *       repeat's encoding, likely non-zero ts/t2_deadlineOffset) is a queued
+ *       follow-up (docs/up-next.md).
  *   of  occurrence offsets: dy (0-based day; -1 = last day of month),
  *       mo (0-based month), wd (weekday, 0=Sunday), wdo (nth weekday, -1=last)
  *   ed  end date (unix seconds; distant-future sentinel = no end)

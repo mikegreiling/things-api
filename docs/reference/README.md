@@ -22,7 +22,7 @@ Every claim in the living docs carries a probe id. Families, by prefix:
 | P01–P30 | gap-closure Phase 18/19 (cascades, container clears, checklists, tag un-nest) | [lab/p-suite-results.md](../lab/p-suite-results.md) |
 | P6–P14 (2026-07-09 series) | aggregate-list ordering, crash sweep, backdating — distinct from P01–P30 | [lab/o-suite-results.md](../lab/o-suite-results.md) §P7–P9/P13, [lab/s-campaign-results.md](../lab/s-campaign-results.md) (scf/scf2), oddities §7 (P14) |
 | R01–R21 | reminders (codec + time-parser classes + dated stickiness) | [lab/r-suite-results.md](../lab/r-suite-results.md) |
-| S01–S05, S-detail, S-delperm, scf/scf2 | Shortcuts campaign (proxies, consent model, backdating) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) |
+| S01–S05, S-detail, S-delperm, scf/scf2/scf3 | Shortcuts campaign (proxies, consent model, backdating; scf3 = round-3 reconfirm + Someday convention lock, logInterval enum, deadline-less repeat, repeating-reminder clear, oddity-6½ screenshots) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) |
 | P10–P12, HX0–HX4b | heading verb matrix + escape-hatch sweep | [lab/heading-research.md](../lab/heading-research.md) |
 | F-DL-* | Today membership/ordering UI-oracle | [lab/today-order-research.md](../lab/today-order-research.md) |
 | A1–A6, B0–B4 (21b series) | environment/TCC/uriSchemeEnabled + wish-list piggybacks | [lab/phase21b-research.md](../lab/phase21b-research.md) |
