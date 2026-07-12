@@ -4,6 +4,9 @@ Durable plan (survives context compaction). Written 2026-07-09. Everything shipp
 
 ## ⟹ RESUME HERE (post-compaction order)
 
+**2026-07-12: the live pick list moved to [docs/up-next.md](up-next.md)** — decisions Mike owes, VM campaigns (batchable), human-required sittings, calendar-pinned work (macOS 27 beta ~late July, iOS 27 GA ~Sept 14), small unblocked items. Everything below in this section is DONE history. v0.8.0 shipped 2026-07-12 (PRs #73–#85: Shortcuts write vector live-validated, reversible/guarded undo + checklist intents + reversibility matrix, trash-cascade fix + oddity 6½, projects sidebar mirror, upcoming window, hidden-item hints, --when validation, capabilities undo column).
+
+
 1. ~~Publish v0.6.0 to npm~~ — **DONE 2026-07-09**: tagged `v0.6.0`, published to `latest`, bin path intact, `npx things-api@0.6.0 --version` smoke green. (Publish gotcha for next time: `prepublishOnly` outlives a TOTP window — pre-run check+build, then `npm publish --ignore-scripts --otp=<code>`.)
 2. ~~§A Shortcuts onboarding~~ — **LANDED 2026-07-09** (signed-file distribution + `things setup shortcuts` + doctor availability); real-hardware import validation **DONE 2026-07-10**; ~~wiring the Shortcuts write vector~~ **DONE 2026-07-11** (§A.2).
 3. ~~§B availability layer~~ — **LANDED 2026-07-09** (see §B).

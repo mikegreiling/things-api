@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-07-12
 
 - **`things capabilities` now shows each operation's undo classification.** Every op entry carries an `undo:` line — `reversible`, `reversible-with-loss`, `conditional`, or `irreversible` — with the note explaining what `things undo` can and cannot restore (and the acknowledgement flag its inverse needs, where one applies). The same data rides the `--json` envelope and the MCP capabilities tool as an additive `undo` field, straight from the test-locked reversibility matrix.
 - **Fixed: `--when` no longer accepts the raw URL `@time` grammar silently.** `--when 2026-07-20@09:30` used to flow straight into the URL — the app would SET the date and reminder while verification asserted the literal string as the date, reporting a false mismatch on a write that succeeded. The write layer now validates `when` strictly (`today | evening | anytime | someday | YYYY-MM-DD`), and the CLI splits a well-formed `@HH:mm` suffix into when + reminder for the commands that take both (`todo add`, `todo update`, `project update`) — giving both alongside each other, or a malformed suffix, is a clean usage error.
