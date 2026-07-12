@@ -1,5 +1,7 @@
 # Reversibility matrix — test-suite plan
 
+> **Status: IMPLEMENTED (2026-07-12).** Landed as `src/write/reversibility.ts` (the total classification table) + `test/unit/reversibility-matrix.test.ts` (exhaustiveness guard, per-op round-trips, anti-clobber probes, conditional/irreversible branches, and the undo-catalog cross-check). Surfacing the matrix in `things capabilities` remains deferred (see docs/roadmap.md).
+
 Written 2026-07-11. Motivation: `todo.clear-dated-reminder` was mislabeled IRREVERSIBLE on a false premise ("setting a dated reminder is dead on every surface" — actually only the Shortcuts set-detail path is dead; URL `when=<date>@<time>` sets one fine, R18). The existing undo tests (`test/unit/undo-plan.test.ts`, ~40 scenario cases) never caught it because they're **scenario-based**, not a **systematic per-op matrix** — and the one test that touched clear-reminder asserted its (wrong) irreversibility, locking the bug in. This plan builds the reversibility analog of `docs/capability-matrix.md`: a single source-of-truth table over every `OperationKind`, driving round-trip tests and an exhaustiveness guard so no op can ship unclassified.
 
 ## Goal
