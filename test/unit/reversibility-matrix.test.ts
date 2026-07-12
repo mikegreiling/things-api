@@ -276,6 +276,13 @@ function writeAudit(records: AuditRecord[]): void {
 // =============================================================== table checks
 
 describe("reversibility matrix — table integrity", () => {
+  it("things capabilities carries each op's undo classification", async () => {
+    const { capabilitiesTable } = await import("../../src/write/capabilities.ts");
+    for (const entry of capabilitiesTable()) {
+      expect(entry.undo).toBe(REVERSIBILITY[entry.op]);
+    }
+  });
+
   it("EXHAUSTIVENESS: every operation kind has a table entry AND a registered case", () => {
     for (const op of OPERATION_KINDS) {
       expect(REVERSIBILITY[op], `no reversibility entry for ${op}`).toBeDefined();
