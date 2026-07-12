@@ -69,6 +69,36 @@ function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
+/**
+ * URL-style `--when DATE@TIME` sugar: splits into when + reminder for the
+ * ops that take both (an explicit --reminder alongside the suffix errors).
+ */
+function applyWhenSugar(opts: Record<string, unknown>): string | null {
+  const when = opts["when"];
+  if (typeof when !== "string" || !when.includes("@")) return null;
+  const at = when.indexOf("@");
+  const date = when.slice(0, at);
+  const time = when.slice(at + 1);
+  if (date === "" || time === "" || time.includes("@")) {
+    return `invalid --when "${when}" — expected today | evening | anytime | someday | YYYY-MM-DD (set a reminder with --reminder HH:mm)`;
+  }
+  if (opts["reminder"] !== undefined) {
+    return `--when "${when}" carries an @time suffix and --reminder was also given — use one`;
+  }
+  opts["when"] = date;
+  opts["reminder"] = time;
+  return null;
+}
+
+/** Apply the sugar or print the usage error; false = caller returns. */
+function whenSugarOk(opts: Record<string, unknown>): boolean {
+  const err = applyWhenSugar(opts);
+  if (err === null) return true;
+  process.stderr.write(`error: ${err}\n`);
+  process.exitCode = ExitCode.Usage;
+  return false;
+}
+
 function splitCsv(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   return value
@@ -293,6 +323,7 @@ export function registerWriteCommands(program: Command): void {
     const tags = splitCsv(opts["tags"] as string | undefined);
     const project = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
+    if (!whenSugarOk(opts)) return;
     await runWrite(opts, (c) =>
       c.write.addTodo(
         {
@@ -351,6 +382,7 @@ export function registerWriteCommands(program: Command): void {
       process.exitCode = ExitCode.Usage;
       return;
     }
+    if (!whenSugarOk(opts)) return;
     await runWrite(opts, (c) =>
       c.write.updateTodo(
         uuid,
@@ -802,6 +834,7 @@ export function registerWriteCommands(program: Command): void {
         process.exitCode = ExitCode.Usage;
         return;
       }
+      if (!whenSugarOk(opts)) return;
       await runWrite(opts, (c) =>
         c.write.updateProject(
           uuid,
@@ -1406,6 +1439,9 @@ export function registerWriteCommands(program: Command): void {
       }
       for (const entry of data) {
         process.stdout.write(`${entry.op}\n`);
+        process.stdout.write(
+          `  undo: ${entry.undo.class}${entry.undo.ack !== undefined ? ` (ack: ${entry.undo.ack})` : ""} — ${entry.undo.note}\n`,
+        );
         for (const v of entry.vectors) {
           const s = v as {
             support: string;

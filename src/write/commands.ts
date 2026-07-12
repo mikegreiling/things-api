@@ -125,6 +125,23 @@ function unsupportedVector(op: string, vector: VectorId): never {
 }
 
 function whenAssertions(when: WhenValue, todayIso: IsoDate): FieldAssertion[] {
+  // Strict shape check: an unvalidated string used to flow straight into the
+  // URL (e.g. "2026-07-20@09:30", the raw URL grammar) — the app would SET
+  // date+reminder while verification asserted the literal string as the date,
+  // reporting a false mismatch on a write that succeeded.
+  if (
+    when !== "today" &&
+    when !== "evening" &&
+    when !== "anytime" &&
+    when !== "someday" &&
+    !/^\d{4}-\d{2}-\d{2}$/.test(when)
+  ) {
+    throw new RangeError(
+      when.includes("@")
+        ? `invalid when "${when}" — a reminder time is a separate parameter (reminder: "HH:mm"; CLI --reminder), not an @ suffix`
+        : `invalid when "${when}" — expected today | evening | anytime | someday | YYYY-MM-DD`,
+    );
+  }
   switch (when) {
     case "today":
       return [

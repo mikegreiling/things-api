@@ -96,6 +96,20 @@ function deps(vector: WriteVector, overrides: Partial<WriteDeps> = {}): WriteDep
   };
 }
 
+describe("when-value validation", () => {
+  it("rejects the raw URL @time grammar with the reminder-parameter pointer", async () => {
+    const uuid = seedTodo(fixture.db, { title: "T" });
+    const { vector, calls } = fakeVector(() => {});
+    await expect(
+      runMutation(deps(vector), "todo.update", { uuid, when: "2026-07-20@09:30" as never }),
+    ).rejects.toThrow(/reminder time is a separate parameter/);
+    await expect(
+      runMutation(deps(vector), "todo.update", { uuid, when: "tomorrow" as never }),
+    ).rejects.toThrow(/expected today \| evening \| anytime \| someday \| YYYY-MM-DD/);
+    expect(calls).toHaveLength(0); // nothing was dispatched
+  });
+});
+
 describe("verified mutations", () => {
   it("ok update: assertion satisfied, audit record written", async () => {
     const uuid = seedTodo(fixture.db, { title: "Old" });
