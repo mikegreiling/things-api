@@ -236,6 +236,25 @@ describe("things projects — sidebar mirror", () => {
     // No hints when none are hidden.
     expect(renderProjectsSidebar(visible).join("\n")).not.toContain("later project");
   });
+
+  it("a project-less area still renders its sidebar header with (no projects)", () => {
+    fixture = buildFixtureDb();
+    seedArea(fixture.db, "Empty Zone", 1);
+    seedProject(fixture.db, { title: "Loose active", index: 1 });
+
+    const visible = projectsView(fixture.db, { now: NOW });
+    const lines = renderProjectsSidebar(visible, {
+      groups: [
+        { area: null, hidden: 0 },
+        { area: { uuid: "a1", title: "Empty Zone" }, hidden: 0 },
+      ],
+    });
+    const headerAt = lines.findIndex((l) => l.includes("⬡ Empty Zone ──"));
+    expect(headerAt).toBeGreaterThan(0);
+    expect(lines[headerAt + 1]).toBe("(no projects)");
+    // No later hints anywhere (nothing hidden), and no phantom loose header.
+    expect(lines.join("\n")).not.toContain("later project");
+  });
 });
 
 describe("project title rows", () => {
