@@ -799,16 +799,23 @@ export function registerReadCommands(program: Command): void {
     .command("projects")
     .description(
       "Active projects in sidebar order: loose projects first, then grouped under " +
-        "their area (optionally scoped to --area <ref>)",
+        "their area (optionally scoped to --area <ref>). Someday and future-scheduled " +
+        "projects are hidden — --show-later appends them after each group's active " +
+        "block (state carried by the (~) mark and ‹date› chip)",
     )
     .option("--area <ref>", "filter by area (uuid or unique name)")
+    .option("--show-later", "include someday/future-scheduled projects after each active block")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { area?: string }) => {
+    .action((opts: GlobalReadOpts & { area?: string; showLater?: boolean }) => {
       withClient(
         opts,
         "projects",
-        (c) => c.read.projects(opts.area ? { areaUuid: opts.area } : {}),
+        (c) =>
+          c.read.projects({
+            ...(opts.area !== undefined && { areaUuid: opts.area }),
+            ...(opts.showLater === true && { later: true }),
+          }),
         // Scoped to one area the list is flat (the scope names the group);
         // unscoped it mirrors the sidebar with ⬡ area headers.
         (opts.area ? renderList : renderProjectsSidebar) as (d: never) => string[],

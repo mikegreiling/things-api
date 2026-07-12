@@ -559,19 +559,39 @@ export function trashView(db: DatabaseSync, options?: { limit?: number }): ListI
   return materialize(db, rows);
 }
 
-export function projectsView(db: DatabaseSync, options?: { areaUuid?: string }): Project[] {
+export function projectsView(
+  db: DatabaseSync,
+  options?: { areaUuid?: string; later?: boolean; now?: Date },
+): Project[] {
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
+  const packedToday = encodePackedDate(localToday(options?.now));
+  // Sidebar default: LATER (someday + future-scheduled) projects are hidden —
+  // active means ANYTIME_SELF (a scheduled project whose date has arrived
+  // counts active, exactly the Anytime membership test). With later=true they
+  // append AFTER the active block of their group, never intermingled.
+  const laterSql = options?.later === true ? "" : ` AND ${ANYTIME_SELF("t")}`;
+  const laterBinds = options?.later === true ? [] : [packedToday, packedToday];
+  // "Active first" within each group needs the same test as an ORDER key
+  // (two more binds when later projects are included).
+  const activeFirst =
+    options?.later === true ? `(CASE WHEN ${ANYTIME_SELF("t")} THEN 0 ELSE 1 END) ASC, ` : "";
+  const activeFirstBinds = options?.later === true ? [packedToday, packedToday] : [];
   // Sidebar order, not raw global index (which interleaves areas): loose
   // (area-less) projects first in their own drag order — the GUI lists them
   // above the areas — then each area by ITS sidebar rank (TMArea."index"),
   // projects within an area by their drag order.
   const where = area
-    ? `${OPEN} AND t.type = 1 AND t.area = ? ORDER BY t."index" ASC`
-    : `${OPEN} AND t.type = 1 ORDER BY (t.area IS NOT NULL) ASC,
-       (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, t."index" ASC`;
-  const rows = fetchTaskRows(db, where, area ? [area] : []);
+    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}
+       ORDER BY ${activeFirst}t."index" ASC`
+    : `${OPEN} AND t.type = 1${laterSql} ORDER BY (t.area IS NOT NULL) ASC,
+       (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, ${activeFirst}t."index" ASC`;
+  const rows = fetchTaskRows(db, where, [
+    ...(area ? [area] : []),
+    ...laterBinds,
+    ...activeFirstBinds,
+  ]);
   return materialize(db, rows) as Project[];
 }
 
