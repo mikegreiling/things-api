@@ -138,6 +138,56 @@ describe("things projects — sidebar mirror", () => {
     expect(lines.join("\n")).not.toContain("(Zebra)");
     expect(lines.join("\n")).not.toContain("(Alpha)");
   });
+
+  it("hides LATER (someday + future-scheduled) projects by default; arrived-scheduled stays", () => {
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Zone", 1);
+    seedProject(fixture.db, { title: "Active", area, index: 1 });
+    seedProject(fixture.db, { title: "Someday", area, start: "someday", index: 2 });
+    seedProject(fixture.db, {
+      title: "Future",
+      area,
+      start: "someday",
+      startDate: "2026-10-19",
+      index: 3,
+    });
+    // A scheduled project whose date ARRIVED is active (the Anytime test).
+    seedProject(fixture.db, {
+      title: "Arrived",
+      area,
+      start: "someday",
+      startDate: "2026-07-01",
+      index: 4,
+    });
+
+    expect(projectsView(fixture.db, { now: NOW }).map((i) => i.title)).toEqual([
+      "Active",
+      "Arrived",
+    ]);
+  });
+
+  it("--show-later appends later projects AFTER each group's active block, never intermingled", () => {
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Zone", 1);
+    // Global indexes deliberately interleave: later(1), active(2), later(3), active(4).
+    seedProject(fixture.db, { title: "Someday early", area, start: "someday", index: 1 });
+    seedProject(fixture.db, { title: "Active A", area, index: 2 });
+    seedProject(fixture.db, {
+      title: "Future mid",
+      area,
+      start: "someday",
+      startDate: "2026-10-19",
+      index: 3,
+    });
+    seedProject(fixture.db, { title: "Active B", area, index: 4 });
+
+    expect(projectsView(fixture.db, { later: true, now: NOW }).map((i) => i.title)).toEqual([
+      "Active A",
+      "Active B",
+      "Someday early",
+      "Future mid",
+    ]);
+  });
 });
 
 describe("project title rows", () => {

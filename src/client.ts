@@ -121,7 +121,12 @@ export interface ThingsClient {
     someday(filter?: SomedayFilter): SidebarSection[];
     logbook(options?: LogbookFilter): ListItem[];
     trash(options?: { limit?: number }): ListItem[];
-    projects(options?: { areaUuid?: string }): Project[];
+    /**
+     * Projects in sidebar order. LATER (someday + future-scheduled) projects
+     * are excluded by default — `later: true` appends them after the active
+     * block of their group (loose block / area), never intermingled.
+     */
+    projects(options?: { areaUuid?: string; later?: boolean }): Project[];
     /** Composite project view. Targets by uuid, unique name, or uuid prefix. */
     projectView(ref: string): ProjectView;
     /** Composite area view: direct to-dos, projects in sidebar order, later, logged. */
