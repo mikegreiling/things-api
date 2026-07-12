@@ -20,6 +20,7 @@ import { projectView } from "../../src/read/project-view.ts";
 import {
   formatItem,
   parsePeriodEnd,
+  parsePeriodStart,
   renderLogbook,
   renderProjectsSidebar,
   renderSections,
@@ -384,9 +385,45 @@ describe("logbook", () => {
     expect(parsePeriodEnd("2024-02").getDate()).toBe(29); // leap year
     expect(parsePeriodEnd("2024-03-05").getHours()).toBe(23);
   });
+
+  it("parsePeriodEnd counts relative periods FORWARD to the landing day's end", () => {
+    const now = new Date(2026, 6, 5, 12, 0); // local 2026-07-05
+    const twoWeeks = parsePeriodEnd("2w", now);
+    expect([twoWeeks.getMonth(), twoWeeks.getDate(), twoWeeks.getHours()]).toEqual([6, 19, 23]);
+    expect(parsePeriodEnd("1m", now).getMonth()).toBe(7); // Aug 5
+    expect(parsePeriodEnd("3d", now).getDate()).toBe(8);
+    expect(parsePeriodEnd("1y", now).getFullYear()).toBe(2027);
+  });
+
+  it("parsePeriodStart counts relative periods BACKWARD to the landing day's start", () => {
+    const now = new Date(2026, 6, 5, 12, 0);
+    const twoWeeks = parsePeriodStart("2w", now);
+    expect([twoWeeks.getMonth(), twoWeeks.getDate(), twoWeeks.getHours()]).toEqual([5, 21, 0]);
+    const q1 = parsePeriodStart("2024-03", now);
+    expect([q1.getFullYear(), q1.getMonth(), q1.getDate()]).toEqual([2024, 2, 1]);
+    const year = parsePeriodStart("2024", now);
+    expect([year.getMonth(), year.getDate()]).toEqual([0, 1]);
+  });
 });
 
 describe("upcoming", () => {
+  it("until clamps dated rows and template occurrences; dateless resting templates survive", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, { title: "Inside", start: "someday", startDate: "2026-07-20" });
+    seedTodo(fixture.db, { title: "Outside", start: "someday", startDate: "2026-09-01" });
+    seedTodo(fixture.db, {
+      title: "Template far",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-10-01",
+    });
+    seedTodo(fixture.db, { title: "Resting", recurrenceRule: true });
+    const titles = upcomingView(fixture.db, NOW, { until: "2026-08-05" }).map((i) => i.title);
+    expect(titles).toContain("Inside");
+    expect(titles).not.toContain("Outside");
+    expect(titles).not.toContain("Template far");
+    expect(titles).toContain("Resting"); // dateless — a date bound cannot apply
+  });
+
   it("orders within a day by todayIndex (the UI's drag order), not index", () => {
     fixture = buildFixtureDb();
     seedTodo(fixture.db, {

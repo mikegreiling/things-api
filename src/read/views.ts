@@ -47,7 +47,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { addDaysIso, encodePackedDate, localToday } from "../model/dates.ts";
+import { addDaysIso, encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import type { Project, Ref, Todo } from "../model/entities.ts";
 import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
@@ -339,16 +339,26 @@ export interface UpcomingFilter extends ViewFilter {
    * 10) — projections are host math the app has not materialized yet.
    */
   horizon?: number;
+  /**
+   * Only rows scheduled on/before this date (inclusive). Dated rows and
+   * template occurrences beyond it are dropped; the dateless resting
+   * templates (the trailing Repeating To-Dos section) always survive —
+   * a date bound cannot apply to rows with no date.
+   */
+  until?: IsoDate;
 }
 
 export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
+  const until = filter?.until;
+  const untilSql = until === undefined ? "" : " AND t.startDate <= ?";
+  const untilBinds = until === undefined ? [] : [encodePackedDate(until)];
   const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${tf.sql}
+    `${OPEN} AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${tf.sql}
      ORDER BY t.startDate ASC, t."index" ASC`,
-    [packedToday, ...tf.binds],
+    [packedToday, ...untilBinds, ...tf.binds],
   );
   const items = materialize(db, rows);
   if (filter?.repeats === false) return items;
@@ -363,9 +373,9 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0
      AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
      AND t.rt1_instanceCreationPaused = 0
-     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${tf.sql}
+     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${until === undefined ? "" : " AND t.rt1_nextInstanceStartDate <= ?"}${tf.sql}
      ORDER BY t.rt1_nextInstanceStartDate ASC, t."index" ASC`,
-    [packedToday, ...tf.binds],
+    [packedToday, ...untilBinds, ...tf.binds],
   );
   const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
@@ -395,12 +405,18 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
       return [{ ...template, startDate, deadline }];
     }
     // horizon > 1: later occurrences PROJECTED from the decoded rule,
-    // anchored on the app's own materialized next instance.
-    return projectOccurrences(rule, startDate, { count: horizon }).map((o) => ({
-      ...template,
-      startDate: o.startDate,
-      deadline: o.deadline,
-    }));
+    // anchored on the app's own materialized next instance. The until bound
+    // clips projections the same way it clips stored rows.
+    return projectOccurrences(rule, startDate, {
+      count: horizon,
+      ...(until !== undefined && { until }),
+    })
+      .filter((o) => until === undefined || o.startDate <= until)
+      .map((o) => ({
+        ...template,
+        startDate: o.startDate,
+        deadline: o.deadline,
+      }));
   });
 
   // Within a day the UI's drag order is todayIndex ASC (live-verified
