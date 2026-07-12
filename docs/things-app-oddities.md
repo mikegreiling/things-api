@@ -164,6 +164,19 @@ While an unanswered Automation consent dialog is up (or after one was dismissed 
 
 `set status of to do id "<heading>" to canceled` sets the heading row's status to **completed** (3, not 2 — headings appear to have no canceled state), yet cascades **canceled** (2) to its open children; `… to completed` cascades completed. Two different child outcomes distinguished only by an input value the heading itself does not record. Pre-resolved children keep their status and stopDate under both cascades (P11c/P11d).
 
+## 6½. Double-trashed to-dos vanish from every GUI view — no place to see or recover them individually
+
+**Report-ready (GUI data-visibility bug).** Trashing a to-do AND its containing project as SEPARATE actions makes the to-do invisible everywhere in the app: the trashed project's view hides it (directly-trashed children are filtered from project views), and the Trash view ALSO hides it (Trash apparently hides items whose container is itself trashed, showing only the container). Directly and transitively trashed at once — the two hiding rules compose into a black hole.
+
+**Reproduce (GUI, live host 2026-07-12):**
+1. Create project P with child to-do T.
+2. Trash T (T appears in Trash individually, with P's name in muted text; Put Back returns it to P; P's view no longer shows T). ✓ expected
+3. Trash P separately. → T is gone from BOTH the Trash view and P's (trashed) view. There is genuinely no view in the app that lists T.
+
+Contrast the benign single-trash cases: trashing ONLY P keeps its untrashed children visible when viewing P from the Trash (they recover with it — trash cascade is derived, not written; A24B); trashing ONLY T shows it in the Trash individually. It is specifically the direct+transitive combination that loses the row. The data is intact (the row keeps `trashed=1` and its project link — restore/empty-trash still act on it); only every VIEW of it is gone.
+
+**things-api behavior (deliberately divergent):** `things trash` lists every directly-flagged row including double-trashed ones, and a trashed project's own view (`things show <uuid>`) shows a `── Trashed (n) ──` bucket with them — locked by regression tests. Every LIVE view (upcoming/today/anytime/someday/search) excludes the whole derived-trash chain, which the GUI gets right and our CLI initially got wrong (a child of a shallow-trashed project leaked into Upcoming — fixed same change). Evidence: GUI observation on the live host, 2026-07-12; VM screenshot capture for the report queued (probe-backlog §C).
+
 ## 7. Consolidated crash & fault catalog (for the report)
 
 Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM). Two crash-prone families are known: **SCHEDULE-CLASS operations on rows that cannot accept a schedule** (C1–C3) and **malformed Find Items predicates** (C4, 2026-07-10) — every OTHER type-mismatch is a graceful scriptable error or a silent no-op. Cultured Code could add the missing precondition guards (the AppleScript `schedule` path already refuses a repeating to-do cleanly with error 302 — that guard is just missing for the other cases).

@@ -14,6 +14,8 @@ import {
   projectsView,
   searchView,
   somedayView,
+  todayView,
+  trashView,
   upcomingView,
 } from "../../src/read/views.ts";
 import { projectView } from "../../src/read/project-view.ts";
@@ -453,6 +455,60 @@ describe("logbook", () => {
     expect([q1.getFullYear(), q1.getMonth(), q1.getDate()]).toEqual([2024, 2, 1]);
     const year = parsePeriodStart("2024", now);
     expect([year.getMonth(), year.getDate()]).toEqual([0, 1]);
+  });
+});
+
+describe("derived trash — children of trashed containers (A24B shallow delete)", () => {
+  it("upcoming/today/anytime/search hide an untrashed child of a TRASHED project", () => {
+    fixture = buildFixtureDb();
+    const p = seedProject(fixture.db, { title: "Binned", trashed: true });
+    seedTodo(fixture.db, {
+      title: "Derived-trash upcoming",
+      project: p,
+      start: "someday",
+      startDate: "2026-07-20",
+    });
+    seedTodo(fixture.db, { title: "Derived-trash today", project: p, startDate: "2026-07-05" });
+
+    expect(upcomingView(fixture.db, NOW).map((i) => i.title)).toEqual([]);
+    const today = todayView(fixture.db, NOW);
+    expect([...today.today, ...today.evening].map((i) => i.title)).toEqual([]);
+    expect(anytimeView(fixture.db, NOW).flatMap((s) => s.items.map((i) => i.title))).toEqual([]);
+    expect(searchView(fixture.db, "Derived-trash")).toEqual([]);
+    // --trashed widens search back to the whole chain.
+    expect(searchView(fixture.db, "Derived-trash", { trashed: true }).length).toBe(2);
+  });
+
+  it("a HEADED child of a trashed project is hidden too (cascade via the heading)", () => {
+    fixture = buildFixtureDb();
+    const p = seedProject(fixture.db, { title: "Binned", trashed: true });
+    const h = seedHeading(fixture.db, { title: "H", project: p });
+    seedTodo(fixture.db, {
+      title: "Headed leak",
+      heading: h,
+      start: "someday",
+      startDate: "2026-07-20",
+    });
+    expect(upcomingView(fixture.db, NOW).map((i) => i.title)).toEqual([]);
+  });
+
+  it("the trashed project's OWN view still shows its would-be-recovered children", () => {
+    fixture = buildFixtureDb();
+    const p = seedProject(fixture.db, { title: "Binned", trashed: true });
+    seedTodo(fixture.db, { title: "Recoverable", project: p });
+    const view = projectView(fixture.db, p, NOW);
+    expect(view.project.trashed).toBe(true);
+    expect(view.active.map((t) => t.title)).toEqual(["Recoverable"]);
+  });
+
+  it("a DOUBLE-trashed to-do stays visible in `things trash` AND the project's trashed bucket (the GUI loses it entirely — oddity)", () => {
+    fixture = buildFixtureDb();
+    const p = seedProject(fixture.db, { title: "Binned", trashed: true });
+    seedTodo(fixture.db, { title: "Double-trashed", project: p, trashed: true });
+    expect(trashView(fixture.db).map((i) => i.title)).toEqual(
+      expect.arrayContaining(["Double-trashed", "Binned"]),
+    );
+    expect(projectView(fixture.db, p, NOW).trashed.map((t) => t.title)).toEqual(["Double-trashed"]);
   });
 });
 

@@ -389,7 +389,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       logbook: (o) => logbookView(conn.db, o),
       trash: (o) => trashView(conn.db, o),
       projects: (o) => projectsView(conn.db, o),
-      projectView: (ref) => projectView(conn.db, resolveProjectUuid(conn.db, ref), now()),
+      projectView: (ref) =>
+        projectView(conn.db, resolveProjectUuid(conn.db, ref, { trashed: true }), now()),
       areaView: (ref) => areaView(conn.db, ref, now()),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
