@@ -110,11 +110,11 @@ Doctrine — **DECIDED 2026-07-09 (roadmap §E / gaps §0): headings are always 
 
 | Capability | URL scheme | AppleScript | Shortcuts | Notes |
 |---|---|---|---|---|
-| Create a repeating to-do/project | 🚫 (E13 disproven) | 🚫 (error 302) | 🚫 per docs (no repeat parameters in the actions) | re-verify empirically during the S-campaign; permanently UI-only until Cultured Code ships an API |
-| Edit / pause / resume a repeat rule | 🚫 | 🚫 | 🚫 per docs | `rt1_instanceCreationPaused` is DB-only today |
+| Create a repeating to-do/project | 🚫 (E13 disproven) | 🚫 (error 302) | 🚫 per docs (no repeat parameters in the actions) | **UI-only, and UI create is now VNC-FEASIBLE** (UI1 2026-07-12, §E½): `File → New Repeating To-Do` driven end-to-end by VNC synthetic input landed a real `rt1_recurrenceRule` row (tp=0 fixed, fu=16 daily, rrv=4) + a spawned instance. Candidate for a dedicated-Mac "ui" write vector; no headless API |
+| Edit / pause / resume a repeat rule | 🚫 | 🚫 | 🚫 per docs | `rt1_instanceCreationPaused` is DB-only today; UI edit is VNC-drivable (same §E½ machinery, UI1) |
 | Skip / advance the next occurrence | 🧪 | 🧪 | 🧪 | wish list — likely dead, unprobed |
 | Complete a materialized occurrence | ✅ | ✅ | 🧪 | occurrences are normal to-dos |
-| Read rules + project occurrences | ✅ | ➖ | ➖ | decoded read-only; `upcoming --horizon` |
+| Read rules + project occurrences | ✅ | ➖ | ➖ | decoded read-only; `upcoming --horizon`. Occurrence deadlines now gate on `RepeatingInfo.deadlined` (the template's `deadline` column, NULL vs 4001-01-01 sentinel), not on the rule — no more phantom deadlines on deadline-less fixed repeats (UI1, oddities §8a) |
 | Schedule/deadline edits on templates | 🚫 hard-blocked | 🚫 | 🧪 | the URL write crashes Things (oddity §1) |
 
 ## Trash & system

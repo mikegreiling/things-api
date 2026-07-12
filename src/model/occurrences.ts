@@ -207,18 +207,23 @@ export interface ProjectedOccurrence {
  * app-materialized next instance START date (rt1_nextInstanceStartDate);
  * the rule's ts offset splits each event into startDate/deadline exactly as
  * the app does when spawning (deadline = start − ts, validated live).
+ *
+ * `deadlined` says whether the template deadlines its instances (the repeat
+ * editor's "Add deadlines"; see RepeatingInfo.deadlined). Deadline-less
+ * templates spawn instances with NO deadline even for fixed ts=0 rules, so the
+ * caller MUST pass this — it is not derivable from the rule (oddities §8a).
  */
 export function projectOccurrences(
   rule: RepeatRule,
   nextInstanceStartDate: IsoDate,
   window: OccurrenceWindow,
+  deadlined: boolean,
 ): ProjectedOccurrence[] {
   const anchorEvent = addDays(nextInstanceStartDate, -rule.startOffsetDays);
   return generateEventDates(rule, anchorEvent, window).map((event) => ({
     startDate: addDays(event, rule.startOffsetDays),
-    // Fixed rules always deadline at the event date, even ts=0 (projections
-    // are fixed-only; corpus-validated 2026-07-11 — birthday-style repeats
-    // spawn with deadline = start).
-    deadline: event,
+    // Deadlined templates deadline at the event date (start − ts, incl. ts=0);
+    // deadline-less templates spawn instances with no deadline at all.
+    deadline: deadlined ? event : null,
   }));
 }

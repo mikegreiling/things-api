@@ -202,11 +202,23 @@ Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM
 
 Found while GUI-probing repeat rules and the log-move preference in a `--vnc-experimental` clone (`things-run-r3-20260712-171142`). Not bugs to report — model-relevant behavior worth documenting.
 
-### 8a. `rt1_recurrenceRule` does NOT encode whether a fixed repeat is deadlined
+### 8a. `rt1_recurrenceRule` does NOT encode whether a fixed repeat is deadlined — the template's own `deadline` COLUMN does (RESOLVED, UI1 2026-07-12)
 
 The repeat editor's **"Add deadlines"** is an opt-in checkbox, **OFF by default** — so the *default* fixed repeat is **deadline-less**: its schedule dates are START dates ("Next:"), and its spawned instances carry a `startDate` with **`deadline` = NULL**. Ticking "Add deadlines and start N days earlier" reframes those dates as DEADLINES ("Due:") with start = deadline − N.
 
-The surprise: at N=0 ("deadline on the day"), the deadlined and the deadline-less variants are **byte-identical** in `rt1_recurrenceRule` (`tp=0, fu=…, ts=0, of=[{dy:0}]`) **and** in `t2_deadlineOffset` (both 0) — a same-day deadline collapses to the deadline-less encoding. So the presence/absence of a deadline on a fixed repeat's instances is **not derivable from `rt1_recurrenceRule` alone**. This falsifies the "every fixed rule deadlines its occurrences (incl. ts=0)" law in `src/model/recurrence.ts` for the deadline-less case: that law held on Mike's live corpus because his fixed repeats were all deadlined, not because the rule encoding guarantees it. The actual discriminator (for a non-zero start-offset deadlined repeat, which likely carries a non-zero `ts`/`t2_deadlineOffset`) was not captured (VNC keyboard entry into the offset field failed) — a queued follow-up. **Product impact:** projections that assume fixed⇒deadline (`src/read/views.ts`, `src/model/occurrences.ts`) may show phantom deadlines for deadline-less fixed repeats. Evidence: `DLREPEAT`, s-campaign-results.md round 3.
+At N=0 ("deadline on the day"), the deadlined and the deadline-less variants are **byte-identical** in `rt1_recurrenceRule` (`tp=0, fu=…, ts=0, of=[{dy:0}]`) **and** in `t2_deadlineOffset` (both 0). So deadline-ness is **not derivable from `rt1_recurrenceRule` alone**, falsifying the "every fixed rule deadlines its occurrences (incl. ts=0)" law for the deadline-less case.
+
+**The discriminator (UI1, VNC-driven):** the **TEMPLATE row's own `deadline` COLUMN** — **NULL** when deadline-less, a **far-future sentinel `4001-01-01`** (packed int `262213760`) when deadlined. Probed by creating all variants via the GUI:
+
+| template | rule `ts` | template `deadline` col | `t2_deadlineOffset` | verdict |
+|---|---|---|---|---|
+| fixed daily, no deadline (default) | 0 | **NULL** | 0 | deadline-less |
+| fixed daily, "Add deadlines" 0 earlier | 0 | **262213760** (4001-01-01) | 0 | deadlined |
+| fixed daily, "Add deadlines" 3 earlier | **−3** | 262213760 | 0 | deadlined |
+| after-completion, no deadline | 0 | **NULL** | 0 | deadline-less |
+| after-completion, "Add deadlines" | 0 | **262213760** | 0 | deadlined |
+
+Findings: (1) the column NULL/sentinel split is the reliable, **universal** discriminator (holds for fixed AND after-completion); (2) a **non-zero** start offset additionally surfaces as **`ts = −N`** in the rule (3 days earlier → ts=−3), so a *non-zero* ts unambiguously means deadlined, but ts=0 stays ambiguous in the rule; (3) `t2_deadlineOffset` stays **0** in every case — it is NOT the discriminator; (4) instances confirm — deadline-less spawn `deadline=NULL`, deadlined spawn `deadline = start + |ts| days`. The old after-completion "deadline only when ts<0" heuristic is ALSO falsified (a deadlined ts=0 after-completion template exists). **Fix shipped:** `RepeatingInfo.deadlined` (mapper reads the template `deadline` column; the sentinel is never surfaced as a phantom deadline), and `src/read/views.ts` / `src/model/occurrences.ts` gate the deadline projection on it, not on the rule. Evidence: `UI1`, s-campaign-results.md; `lab/artifacts/things-run-ui1-explore-20260712-180724/` (screenshots `00`–`14`, `final.sqlite`, `discriminator-evidence.txt`).
 
 ### 8b. A repeating template's reminder is a rule property, invisible in `reminderTime`
 

@@ -26,6 +26,15 @@ export interface RepeatingInfo {
   nextOccurrence?: IsoDate | null;
   /** Templates: instance creation paused in the app UI. */
   paused?: boolean;
+  /**
+   * Templates: whether the repeat deadlines its spawned instances ("Add
+   * deadlines" was ticked in the repeat editor). The discriminator is the
+   * template row's own `deadline` column — a non-null far-future sentinel
+   * (4001-01-01) when deadlined, NULL when deadline-less. It is NOT derivable
+   * from the recurrence rule alone: a deadlined ts=0 rule is byte-identical to
+   * a deadline-less one. VM-probed 2026-07-12 (UI1, oddities §8a).
+   */
+  deadlined?: boolean;
   /** Templates, detail reads only: the decoded repeat rule (read-only; undecodable rules are omitted). */
   rule?: RepeatRule;
 }

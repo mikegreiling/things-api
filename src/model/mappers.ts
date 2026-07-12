@@ -100,6 +100,12 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
   if (isTemplate) {
     info.nextOccurrence = decodePackedDate(row.rt1_nextInstanceStartDate);
     info.paused = row.rt1_instanceCreationPaused === 1;
+    // A deadlined template carries a far-future sentinel (4001-01-01) in its
+    // own `deadline` column; a deadline-less one carries NULL. This — NOT the
+    // recurrence rule — is what says whether spawned instances get a deadline
+    // (a deadlined ts=0 rule is byte-identical to a deadline-less one). See
+    // oddities §8a (UI1, 2026-07-12).
+    info.deadlined = row.deadline !== null;
   }
   return info;
 }
@@ -118,7 +124,14 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
     start: mapStart(row),
     startDate: decodePackedDate(row.startDate),
     todaySection: mapTodaySection(row),
-    deadline: decodePackedDate(row.deadline),
+    // A template's own `deadline` column is not a real date: it is NULL
+    // (deadline-less) or a far-future sentinel (4001-01-01, deadlined) that
+    // flags whether spawned instances deadline. Surface it via
+    // repeating.deadlined, never as a phantom deadline on the template row.
+    deadline:
+      row.rt1_recurrenceRule !== null || row.repeater !== null
+        ? null
+        : decodePackedDate(row.deadline),
     reminder: decodeReminderTime(row.reminderTime),
     area: refs(row.area),
     tags,

@@ -399,8 +399,11 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   const occurrences = materialize(db, templateRows).flatMap((template) => {
     const startDate = template.repeating.nextOccurrence ?? null;
     if (startDate === null) return [];
-    // Only the rule-derived deadline is real: the template row's own deadline
-    // column carries app-internal sentinels (4001-01-01 observed live).
+    // Whether occurrences deadline is the TEMPLATE's property, not the rule's:
+    // a deadline-less template (repeating.deadlined false) spawns instances
+    // with NO deadline even for fixed ts=0 rules — its rt1_recurrenceRule is
+    // byte-identical to a deadlined ts=0 rule (oddities §8a, UI1 2026-07-12).
+    const deadlined = template.repeating.deadlined === true;
     let rule: ReturnType<typeof decodeRecurrenceRule> | null = null;
     const raw = rawByUuid.get(template.uuid);
     if (raw !== null && raw !== undefined) {
@@ -411,23 +414,24 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
       }
     }
     if (rule === null || horizon === 1 || rule.type !== "fixed") {
-      // Corpus-validated 2026-07-11 (1,900+ live instances): FIXED rules
-      // always deadline their occurrences at the event date — start − ts,
-      // INCLUDING ts=0 (deadline = the start date itself; birthday-style
-      // repeats). After-completion rules deadline only when ts < 0.
+      // Deadlined templates deadline the occurrence at the event date
+      // (start − ts, incl. ts=0); deadline-less ones carry no deadline.
       const deadline =
-        rule !== null && (rule.type === "fixed" || rule.startOffsetDays < 0)
-          ? addDaysIso(startDate, -rule.startOffsetDays)
-          : null;
+        rule !== null && deadlined ? addDaysIso(startDate, -rule.startOffsetDays) : null;
       return [{ ...template, startDate, deadline }];
     }
     // horizon > 1: later occurrences PROJECTED from the decoded rule,
     // anchored on the app's own materialized next instance. The until bound
     // clips projections the same way it clips stored rows.
-    return projectOccurrences(rule, startDate, {
-      count: horizon,
-      ...(until !== undefined && { until }),
-    })
+    return projectOccurrences(
+      rule,
+      startDate,
+      {
+        count: horizon,
+        ...(until !== undefined && { until }),
+      },
+      deadlined,
+    )
       .filter((o) => until === undefined || o.startDate <= until)
       .map((o) => ({
         ...template,
