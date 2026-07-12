@@ -114,8 +114,10 @@ Any AppleScript command — even a pure read like `count of to dos of list "Inbo
 ### 5b. Adding an open child silently reopens a resolved project
 Adding (or moving) an open to-do into a completed, canceled, or even already-logged project silently flips the project back to open. Re-resolving the children does not re-complete it. No surface signals this side effect. *(T19/U19)*
 
-### 5c. Checklist updates are replace-all and reset per-item state
-`checklist-items=` replaces the entire checklist; previously completed/canceled checklist items are recreated as open — even when re-sending an identical item list. There is no additive or patch form. *(T07/U07/U20)*
+### 5c. Checklist updates are replace-all (but the `json` form preserves per-item state)
+The classic `checklist-items=` form replaces the entire checklist and recreates every item OPEN — previously completed/canceled items lose their state even when re-sending an identical list. There is no additive or patch form, and item uuids regenerate on every rewrite (no stable per-item identity). *(T07/U07/U20)*
+
+The `things:///json` form is NOT subject to the reset: it honors a per-item `completed` attribute, recreating items pre-checked *(P18)*. This is what makes a "granular" checklist edit possible: read the current list, apply one change in memory, and re-send the whole list via `json` so every non-targeted item keeps its state (op `todo.edit-checklist-item`, `things todo checklist --check/…`). Canceled items are still not recreatable (the item model carries only a `completed` boolean) — they round-trip to open. The forward edit remains read-then-rewrite, so a concurrent out-of-band checklist edit landing in that window is overwritten (surface limit; there is no item-level write and no cross-app lock).
 
 ### 5d. `duplicate=true` on a repeating template: no-op on the data, but opens new windows
 

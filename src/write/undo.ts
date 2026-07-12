@@ -12,7 +12,13 @@
  *  - Ops with no validated inverse surface are reported IRREVERSIBLE with
  *    the reason (permanent deletes, empty-trash, project→no-area — unprobed).
  *  - Partial inversions carry notes (todo.delete undo restores to the Inbox
- *    de-scheduled; checklist per-item state is unrecoverable).
+ *    de-scheduled).
+ *  - Checklist undos are CURRENT-STATE-AWARE: a granular edit
+ *    (todo.edit-checklist-item) inverts only the targeted item against the
+ *    live list (a 3-way merge, so an out-of-band edit to a DIFFERENT item
+ *    survives), refusing when the targeted item itself moved. A wholesale
+ *    replace restores titles AND per-item state via the json form (P18) and
+ *    refuses on ANY out-of-band difference from its recorded post snapshot.
  *  - Inverse mutations are audited under an `undo:`-prefixed actor and are
  *    themselves EXCLUDED from later undo target selection (no undo-the-undo).
  *  - PRECONDITION guard: before executing each inverse step, runUndo confirms
@@ -40,6 +46,14 @@ export interface UndoStep {
   options?: {
     acknowledgeChecklistReset?: boolean;
     dangerouslyPermanent?: boolean;
+    /**
+     * A precondition the PLAN already found violated (checklist undos resolve
+     * against the CURRENT list at plan time). When present, runUndo refuses
+     * this step (blocked/environment) instead of executing — same shape as the
+     * runtime `checkStepPrecondition` guard, decided earlier because the check
+     * is item-level, not a CLOBBER_FIELD.
+     */
+    blocked?: { detail: string; remediation: string };
   };
 }
 
@@ -208,6 +222,178 @@ function scheduleSteps(
     }
   }
   return { steps: [{ op, params }], notes };
+}
+
+// ------------------------------------------------------- checklist inverses
+
+interface ChecklistSpec {
+  title: string;
+  completed: boolean;
+}
+
+/** The current checklist as ordered {title, completed}. */
+function currentChecklistSpecs(current: AnyTask): ChecklistSpec[] {
+  if (current.type !== "to-do") return [];
+  return (current.checklist ?? []).map((c) => ({
+    title: c.title,
+    completed: c.status === "completed",
+  }));
+}
+
+/** Raw ordered statuses (open|completed|canceled) — matches getField/observed. */
+function currentChecklistStatuses(current: AnyTask): string[] {
+  if (current.type !== "to-do") return [];
+  return (current.checklist ?? []).map((c) => c.status);
+}
+
+function arraysEqual(a: unknown, b: unknown): boolean {
+  return Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Locate a checklist item by title, using the recorded 1-based `position` to
+ * break duplicate-title ties. Returns the index, `-1` when absent, or `-2`
+ * when the title is ambiguous and `position` does not disambiguate.
+ */
+function locateChecklistItem(items: ChecklistSpec[], title: string, position?: number): number {
+  const matches = items.map((c, i) => ({ c, i })).filter(({ c }) => c.title === title);
+  if (matches.length === 0) return -1;
+  if (matches.length === 1) return (matches[0] as { i: number }).i;
+  if (position !== undefined) {
+    const exact = matches.find(({ i }) => i === position - 1);
+    if (exact !== undefined) return exact.i;
+  }
+  return -2;
+}
+
+type ChecklistInverse =
+  | { items: ChecklistSpec[] }
+  | { conflict: { detail: string; remediation: string } };
+
+const CHECKLIST_REMEDIATION =
+  "review the item's current checklist; redo the change by hand if it's still wanted, or " +
+  "re-run undo once the targeted item is back to its post-change state";
+
+function conflict(detail: string): ChecklistInverse {
+  return { conflict: { detail, remediation: CHECKLIST_REMEDIATION } };
+}
+
+/**
+ * The TARGETED inverse of a granular checklist edit, applied to the CURRENT
+ * list (a 3-way merge): only the item the edit touched is reverted; every
+ * other item keeps its current state. Refuses (conflict) when the targeted
+ * item itself moved out of band (toggled / renamed / removed) or a duplicate
+ * title makes it ambiguous.
+ */
+function planChecklistItemInverse(record: AuditRecord, current: AnyTask): ChecklistInverse {
+  const items = currentChecklistSpecs(current);
+  const req = record.requested;
+  const action = req["action"];
+  const pre = record.pre ?? {};
+  const observed = record.observed ?? {};
+  const postTitle =
+    typeof observed["title"] === "string" ? (observed["title"] as string) : undefined;
+  const postPos =
+    typeof observed["position"] === "number" ? (observed["position"] as number) : undefined;
+
+  switch (action) {
+    case "check":
+    case "uncheck": {
+      if (postTitle === undefined) return conflict("the audit record did not capture the target");
+      const i = locateChecklistItem(items, postTitle, postPos);
+      if (i === -1)
+        return conflict(`the ${action}ed item "${postTitle}" is no longer in the checklist`);
+      if (i === -2)
+        return conflict(`"${postTitle}" is now a duplicate title — the target is ambiguous`);
+      const wantCompleted = action === "check"; // post-state we expect to still hold
+      if ((items[i] as ChecklistSpec).completed !== wantCompleted) {
+        return conflict(`"${postTitle}" was changed out of band (no longer ${action}ed)`);
+      }
+      const next = items.map((c) => ({ ...c }));
+      (next[i] as ChecklistSpec).completed = !wantCompleted; // toggle back to the pre-state
+      return { items: next };
+    }
+    case "add": {
+      if (postTitle === undefined)
+        return conflict("the audit record did not capture the added item");
+      const i = locateChecklistItem(items, postTitle, postPos);
+      if (i === -1) return conflict(`the added item "${postTitle}" is no longer in the checklist`);
+      if (i === -2)
+        return conflict(`"${postTitle}" is now a duplicate title — the added item is ambiguous`);
+      const next = items.map((c) => ({ ...c }));
+      next.splice(i, 1);
+      return { items: next };
+    }
+    case "remove": {
+      const title = typeof pre["title"] === "string" ? (pre["title"] as string) : undefined;
+      if (title === undefined) return conflict("the removed item's title was not captured");
+      const at =
+        typeof pre["position"] === "number" ? (pre["position"] as number) : items.length + 1;
+      const next = items.map((c) => ({ ...c }));
+      next.splice(Math.max(0, Math.min(next.length, at - 1)), 0, {
+        title,
+        completed: pre["completed"] === true,
+      });
+      return { items: next };
+    }
+    case "rename": {
+      const oldTitle = typeof pre["title"] === "string" ? (pre["title"] as string) : undefined;
+      if (postTitle === undefined || oldTitle === undefined) {
+        return conflict("the rename's old/new titles were not captured");
+      }
+      const i = locateChecklistItem(items, postTitle, postPos);
+      if (i === -1) return conflict(`no checklist item bears the new title "${postTitle}" anymore`);
+      if (i === -2)
+        return conflict(`"${postTitle}" is now a duplicate title — the target is ambiguous`);
+      const next = items.map((c) => ({ ...c }));
+      (next[i] as ChecklistSpec).title = oldTitle;
+      return { items: next };
+    }
+    case "move": {
+      const title = typeof req["title"] === "string" ? (req["title"] as string) : postTitle;
+      const oldPos = typeof pre["position"] === "number" ? (pre["position"] as number) : undefined;
+      if (title === undefined || oldPos === undefined) {
+        return conflict("the move's title/old position were not captured");
+      }
+      const i = locateChecklistItem(items, title, postPos);
+      if (i === -1) return conflict(`the moved item "${title}" is no longer in the checklist`);
+      if (i === -2)
+        return conflict(`"${title}" is now a duplicate title — the moved item is ambiguous`);
+      const next = items.map((c) => ({ ...c }));
+      const [moved] = next.splice(i, 1);
+      next.splice(Math.max(0, Math.min(next.length, oldPos - 1)), 0, moved as ChecklistSpec);
+      return { items: next };
+    }
+    default:
+      return conflict(`unknown checklist action "${String(action)}"`);
+  }
+}
+
+/**
+ * Tier-1 precondition for a WHOLESALE checklist undo: the current list
+ * (titles + states, ordered) must still equal the recorded OBSERVED (post)
+ * snapshot. ANY out-of-band difference blocks (monolith semantics — unlike the
+ * granular path, which tolerates edits to other items). Returns the block
+ * payload, or null when it passes / cannot be checked (legacy record).
+ */
+function wholesaleChecklistConflict(
+  record: AuditRecord,
+  current: AnyTask,
+): { detail: string; remediation: string } | null {
+  const obsTitles = record.observed?.["checklistTitles"];
+  const obsStates = record.observed?.["checklistStates"];
+  if (!Array.isArray(obsTitles) || !Array.isArray(obsStates)) return null; // legacy: can't verify
+  const curTitles = currentChecklistSpecs(current).map((c) => c.title);
+  const curStates = currentChecklistStatuses(current);
+  if (arraysEqual(curTitles, obsTitles) && arraysEqual(curStates, obsStates)) return null;
+  return {
+    detail:
+      "the checklist changed since the recorded replacement — refusing to avoid clobbering an " +
+      "out-of-band edit (wholesale undo restores the whole list, so ANY difference blocks)",
+    remediation:
+      "review the current checklist; redo the change by hand if still wanted, or re-run undo " +
+      "once the checklist matches its post-replacement state",
+  };
 }
 
 /**
@@ -640,9 +826,33 @@ export function planUndo(
 
     case "todo.replace-checklist": {
       if (uuid === null) return irreversible("no target uuid recorded");
-      const items = preField(record, "checklistTitles");
-      if (!Array.isArray(items)) return irreversible("the pre-op checklist was not captured");
-      notes.push("checklist TITLES are restored; per-item completion state is unrecoverable (T07)");
+      const titles = preField(record, "checklistTitles");
+      if (!Array.isArray(titles)) return irreversible("the pre-op checklist was not captured");
+      const states = preField(record, "checklistStates");
+      // Restore titles AND per-item completion via the things:///json form
+      // (P18) — the "state is unrecoverable (T07)" caveat is retired: T07 only
+      // describes the classic `checklist-items=` form, which recreates items
+      // open; json honors per-item `completed`. Legacy records without a
+      // captured state array fall back to titles-only (all open).
+      let items: unknown;
+      if (Array.isArray(states) && states.length === titles.length) {
+        items = titles.map((t, i) => ({ title: t, completed: states[i] === "completed" }));
+        if (states.some((s) => s === "canceled")) {
+          notes.push(
+            "canceled checklist items are restored as OPEN (the item model has no canceled-create surface)",
+          );
+        }
+      } else {
+        items = titles;
+        notes.push("only checklist TITLES were captured for this record — states restore as open");
+      }
+      // Tier-1 precondition: wholesale undo replaces the WHOLE list, so any
+      // out-of-band change since the replacement blocks (decided at plan time
+      // against the freshly-loaded current state).
+      const block =
+        current === undefined || current === null
+          ? null
+          : wholesaleChecklistConflict(record, current);
       return {
         target,
         kind: "invertible",
@@ -650,7 +860,37 @@ export function planUndo(
           {
             op: "todo.replace-checklist",
             params: { uuid, items },
-            options: { acknowledgeChecklistReset: true },
+            options: { acknowledgeChecklistReset: true, ...(block !== null && { blocked: block }) },
+          },
+        ],
+        notes,
+      };
+    }
+
+    case "todo.edit-checklist-item": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      if (current === undefined || current === null || current.type !== "to-do") {
+        return irreversible(
+          "the item no longer exists as a to-do — its checklist can't be restored",
+        );
+      }
+      const resolved = planChecklistItemInverse(record, current);
+      notes.push(
+        "only the targeted item is inverted; every OTHER checklist item keeps its CURRENT state " +
+          "(an out-of-band edit to a different item survives the undo)",
+      );
+      const items = "items" in resolved ? resolved.items : currentChecklistSpecs(current); // unused: the step is blocked below
+      return {
+        target,
+        kind: "invertible",
+        steps: [
+          {
+            op: "todo.replace-checklist",
+            params: { uuid, items },
+            options: {
+              acknowledgeChecklistReset: true,
+              ...("conflict" in resolved && { blocked: resolved.conflict }),
+            },
           },
         ],
         notes,
@@ -926,6 +1166,20 @@ export async function runUndo(
       const results: (MutationResult | ReorderResult)[] = [];
       let failed = false;
       for (const step of plan.steps) {
+        // Plan-time precondition (checklist undos): the inverse was resolved
+        // against the current list and found a conflict — refuse, don't clobber.
+        const planBlock = step.options?.blocked;
+        if (planBlock !== undefined) {
+          results.push({
+            kind: "blocked",
+            op: step.op,
+            reason: "environment",
+            detail: planBlock.detail,
+            remediation: planBlock.remediation,
+          });
+          failed = true;
+          break;
+        }
         // Precondition guard: never clobber a field an out-of-band edit moved.
         const precondition = checkStepPrecondition(deps, step, record.observed);
         if (precondition !== null) {

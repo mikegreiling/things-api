@@ -67,6 +67,18 @@ export const URL_SCHEME_MATRIX: VectorMatrix = {
       "clears (P15); stateful items ride things:///json with per-item completed (P18, " +
       "item uuids not stable across a rewrite)",
   },
+  "todo.edit-checklist-item": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["U07", "P18"],
+    notes:
+      "ONE granular item edit (add/remove/check/uncheck/rename/move), preserving every other " +
+      "item's checked state. Orchestrated (runEditChecklist): read current → apply one edit → " +
+      "deliver as a todo.replace-checklist rewrite (json form when any item is completed, P18). " +
+      "Audited as intent, so undo applies a TARGETED inverse (3-way merge) against the current " +
+      "list. Not dispatched directly — use the checklist granular actions",
+  },
   "todo.delete": { support: "no", disruption: 3, validation: "validated", evidence: ["U14"] },
   "todo.duplicate": {
     support: "yes",

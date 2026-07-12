@@ -253,7 +253,8 @@ describe("things MCP server", () => {
       }),
     ) as { kind: string; op: string; plan: { invocation: string } };
     expect(outcome.kind).toBe("dry-run");
-    expect(outcome.op).toBe("todo.replace-checklist");
+    // The granular edit is audited as its own op; its delivery is the rewrite.
+    expect(outcome.op).toBe("todo.edit-checklist-item");
     expect(outcome.plan.invocation).toContain("things:///json");
 
     const missing = await client.callTool({
