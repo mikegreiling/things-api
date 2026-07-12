@@ -264,7 +264,8 @@ export interface LaterHints {
  */
 export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): string[] {
   const total = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
-  if (items.length === 0 && total === 0) return ["(empty)"];
+  if (items.length === 0 && total === 0 && (hints === undefined || hints.groups.length === 0))
+    return ["(empty)"];
   const w = uuidDisplayWidth(items);
   const byGroup = new Map<string | null, ListItem[]>();
   for (const item of items) {
@@ -282,7 +283,9 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
   const lines: string[] = [];
   for (const group of groups) {
     const rows = byGroup.get(group.area?.uuid ?? null) ?? [];
-    if (rows.length === 0 && group.hidden === 0) continue;
+    // The loose block only exists when it has content; areas mirror the
+    // sidebar and render even when empty.
+    if (group.area === null && rows.length === 0 && group.hidden === 0) continue;
     if (group.area !== null) {
       if (lines.length > 0) lines.push("");
       lines.push(`${bold("──")} ${areaMark()} ${bold(`${group.area.title} ──`)}`);
@@ -292,6 +295,7 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
     );
     if (group.hidden > 0)
       lines.push(dim(`…${group.hidden} later project${group.hidden === 1 ? "" : "s"}`));
+    else if (group.area !== null && rows.length === 0) lines.push(dim("(no projects)"));
   }
   if (total > 0)
     lines.push(
@@ -863,25 +867,32 @@ export function registerReadCommands(program: Command): void {
             ...scope,
             ...(opts.showLater === true && { later: true }),
           });
-          if (opts.showLater !== true) {
-            // One extra query buys the hidden-later counts; the FULL list
-            // carries the sidebar group order (incl. later-only areas).
-            const full = c.read.projects({ ...scope, later: true });
+          if (opts.area === undefined) {
+            // Sidebar scaffold: every VISIBLE area renders (project-less
+            // ones say so), in sidebar order; the loose block leads. One
+            // extra projects query buys the hidden-later counts.
+            const full = opts.showLater === true ? visible : c.read.projects({ later: true });
             const shown = new Set(visible.map((i) => i.uuid));
-            const groups: LaterHints["groups"] = [];
-            const at = new Map<string | null, number>();
+            const groups: LaterHints["groups"] = [
+              { area: null, hidden: 0 },
+              ...c.read
+                .areas()
+                .filter((a) => a.visible)
+                .map((a) => ({ area: { uuid: a.uuid, title: a.title }, hidden: 0 })),
+            ];
+            const at = new Map<string | null, number>(
+              groups.map((g, i) => [g.area?.uuid ?? null, i]),
+            );
             for (const item of full) {
-              const key = item.area?.uuid ?? null;
-              if (!at.has(key)) {
-                at.set(key, groups.length);
-                groups.push({ area: item.area ?? null, hidden: 0 });
-              }
-              if (!shown.has(item.uuid)) {
-                const g = groups[at.get(key) ?? 0];
-                if (g !== undefined) g.hidden += 1;
-              }
+              if (shown.has(item.uuid)) continue;
+              const g = groups[at.get(item.area?.uuid ?? null) ?? 0];
+              if (g !== undefined) g.hidden += 1;
             }
             hints = { groups };
+          } else if (opts.showLater !== true) {
+            // --area scoped: only the bottom hint needs a count.
+            const full = c.read.projects({ ...scope, later: true });
+            hints = { groups: [{ area: null, hidden: full.length - visible.length }] };
           }
           return visible;
         },
