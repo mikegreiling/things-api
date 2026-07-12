@@ -28,7 +28,18 @@ describe("probeAutomation", () => {
       run: throwing({ killed: true, signal: "SIGTERM" }),
     });
     expect(result.status).toBe("pending");
-    expect(result.detail).toContain("consent dialog");
+    expect(result.detail).toContain("Automation dialog");
+  });
+
+  it("classifies an in-band AppleEvent -1712 as pending too (oddity 5m: Things gives up before our deadline)", () => {
+    const result = probeAutomation({
+      isAppRunning: () => true,
+      run: throwing({
+        stderr: "execution error: Things3 got an error: AppleEvent timed out. (-1712)",
+      }),
+    });
+    expect(result.status).toBe("pending");
+    expect(result.detail).toContain("physical screen");
   });
 
   it("classifies -1743 as denied", () => {

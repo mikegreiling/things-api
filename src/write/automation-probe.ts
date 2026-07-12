@@ -8,6 +8,8 @@
  */
 import { execFileSync } from "node:child_process";
 
+import { automationGrantee } from "./failure-hints.ts";
+
 export type AutomationProbeStatus =
   | "granted"
   | "denied"
@@ -58,21 +60,28 @@ export function probeAutomation(deps: AutomationProbeDeps = {}): AutomationProbe
     const e = err as { signal?: string | null; killed?: boolean; stderr?: unknown };
     const stderr =
       typeof e.stderr === "string" ? e.stderr : err instanceof Error ? err.message : String(err);
-    if (e.killed === true || e.signal === "SIGTERM") {
+    // An unanswered dialog surfaces two ways: our own timeout kills osascript
+    // (killed/SIGTERM), or Things itself gives up first and osascript exits 1
+    // with "AppleEvent timed out. (-1712)" — live-confirmed 2026-07-12
+    // (oddity 5m). Both mean a prompt is (or was) waiting for a click.
+    if (e.killed === true || e.signal === "SIGTERM" || /-1712|event timed out/i.test(stderr)) {
       return {
         status: "pending",
         detail:
-          "the probe timed out — the shape of an unanswered macOS consent dialog. Check the " +
-          "machine's screen for an Automation prompt and approve it.",
+          "the probe timed out (AppleEvent -1712) — the shape of an unanswered macOS " +
+          `Automation dialog. The dialog is addressed to ${automationGrantee()} and shows ` +
+          "on the machine's physical screen (easy to miss over SSH/remote sessions). " +
+          "Approve it and re-run; if it was dismissed, re-enable under System Settings > " +
+          "Privacy & Security > Automation.",
       };
     }
     if (/-1743|not authori[sz]ed to send apple events/i.test(stderr)) {
       return {
         status: "denied",
         detail:
-          "macOS declined the Apple Event (-1743): Automation permission for this process " +
-          "(or the app hosting it) is missing or was denied. Grant it under System Settings " +
-          "> Privacy & Security > Automation, or see docs/setup.md for headless setups.",
+          `macOS declined the Apple Event (-1743): Automation permission for ${automationGrantee()} ` +
+          "is missing or was denied. Grant it under System Settings > Privacy & Security > " +
+          "Automation, or see docs/setup.md for headless setups.",
       };
     }
     return {

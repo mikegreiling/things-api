@@ -31,7 +31,7 @@ describe("classifyTransportFailure", () => {
       environmentChanges: [],
     });
     expect(hint?.likelyCause).toBe("permission-pending");
-    expect(hint?.hint).toContain("consent dialog");
+    expect(hint?.hint).toContain("Automation dialog");
   });
 
   it("maps AppleEvent -1712 (event timed out) to permission-pending", () => {
