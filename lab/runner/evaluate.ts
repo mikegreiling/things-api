@@ -28,6 +28,18 @@ export interface EvaluatedRun {
   ok: boolean;
 }
 
+/**
+ * Probes the automated run actually executes and judges. "interactive" probes
+ * (e.g. delete-class Shortcuts with no Always-Allow, oddities 5j) re-prompt
+ * every run and cannot ride lab:run/regress — they stay in the suite JSON as
+ * documentation for human sittings but are excluded from execution, evaluation,
+ * and the green gate. The guest runner drops them from its execution list too,
+ * so the two sides agree.
+ */
+export function activeProbes(probes: ProbeSpec[]): ProbeSpec[] {
+  return probes.filter((p) => p.group !== "interactive");
+}
+
 export function evaluateRun(
   probes: ProbeSpec[],
   artifacts: Map<string, ProbeArtifacts>,
