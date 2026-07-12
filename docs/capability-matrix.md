@@ -23,8 +23,8 @@ The **Shortcuts** column: the L5 golden sitting is DONE (2026-07-09) and the fir
 | Move to Inbox | 🚫 | ✅ | 🧪 | de-schedules (E06) |
 | Detach from ALL containers (keep schedule) | ✅ empty `list-id=` (P21/P22) | 🚫 (all nil spellings fail) | 🧪 | |
 | Tags: replace/clear | ✅ (empty set clears, P14) | ✅ `set tag names` | 🧪 | add/merge is a client-side read-merge-replace |
-| Checklist: wholesale replace | ✅ (destroys item state — ack required; empty clears, P15) | 🚫 no access (A30) | 🧪 | |
-| Checklist: granular + stateful edits | ✅ `things:///json` per-item `completed` (P18) | 🚫 | 🧪 | item uuids not stable across a rewrite; match by title |
+| Checklist: wholesale replace | ✅ (`todo.replace-checklist`, ack required; empty clears, P15) | 🚫 no access (A30) | 🧪 | undo restores titles AND per-item state via `things:///json` (P18) and refuses on ANY out-of-band diff from the post snapshot |
+| Checklist: granular item edit (add/remove/check/uncheck/rename/move) | ✅ `todo.edit-checklist-item` — read-current → apply-one → `things:///json` rewrite (P18) | 🚫 | 🧪 | audited as INTENT + the targeted item's pre/post; undo applies a TARGETED inverse (3-way merge) against the live list, so an out-of-band edit to a DIFFERENT item survives; refuses when the target itself moved / duplicate-title ambiguity. item uuids not stable across a rewrite; match by title (+ position tiebreak) |
 | Duplicate | ✅ `duplicate=true` | 🚫 refuses (−1717) | 🧪 | |
 | Delete (→ Trash) | 🚫 (tier-3 UI only) | ✅ | 🧪 | |
 | Restore from Trash | 🚫 | 🟡 → Inbox, de-scheduled (E15) | 🧪 | prior container/schedule not restored |

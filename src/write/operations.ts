@@ -14,6 +14,7 @@ export const OPERATION_KINDS = [
   "todo.move",
   "todo.set-tags",
   "todo.replace-checklist",
+  "todo.edit-checklist-item",
   "todo.delete",
   "project.add",
   "project.update",
@@ -190,6 +191,31 @@ export interface TodoReplaceChecklistParams {
   items: (string | ChecklistItemSpec)[];
 }
 
+/** One granular checklist action (audited as INTENT, not a full snapshot). */
+export type ChecklistItemAction = "add" | "remove" | "check" | "uncheck" | "rename" | "move";
+
+/**
+ * ONE granular checklist edit. Delivered as a full `todo.replace-checklist`
+ * rewrite (the only surface Things offers) but audited as the intent + the
+ * targeted item's pre-state, so undo can apply a TARGETED inverse against the
+ * current list instead of clobbering it. Orchestrated by `runEditChecklist`;
+ * never dispatched directly through the pipeline (no atomic surface exists).
+ */
+export interface TodoEditChecklistItemParams {
+  uuid: string;
+  action: ChecklistItemAction;
+  /** Targeted item title (add: the new item's title). */
+  title?: string;
+  /** 1-based target index; exact, overrides `title`. */
+  index?: number;
+  /** add: 1-based insert position (default: append). */
+  at?: number;
+  /** move: 1-based destination position. */
+  to?: number;
+  /** rename: the new title. */
+  newTitle?: string;
+}
+
 export interface ProjectAddParams {
   title: string;
   notes?: string;
@@ -334,6 +360,7 @@ export interface OperationParamsMap {
   "todo.move": TodoMoveParams;
   "todo.set-tags": TodoSetTagsParams;
   "todo.replace-checklist": TodoReplaceChecklistParams;
+  "todo.edit-checklist-item": TodoEditChecklistItemParams;
   "todo.delete": UuidParams;
   "project.add": ProjectAddParams;
   "project.update": ProjectUpdateParams;

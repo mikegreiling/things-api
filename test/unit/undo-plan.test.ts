@@ -288,13 +288,34 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
     expect(plan.steps[0]?.params["tags"]).toEqual(["a", "c"]);
   });
 
-  it("checklist replacement restores titles with the ack + state caveat", () => {
+  it("wholesale checklist replacement restores titles AND states via the json form (P18)", () => {
+    const plan = planUndo(
+      record({
+        op: "todo.replace-checklist",
+        pre: { checklistTitles: ["x", "y"], checklistStates: ["completed", "open"] },
+        observed: { checklistTitles: ["a"], checklistStates: ["open"] },
+      }),
+      NOW,
+      [],
+      currentTodo({ checklist: [{ title: "a", status: "open" }] } as Partial<AnyTask>),
+    );
+    expect(plan.steps[0]?.options?.acknowledgeChecklistReset).toBe(true);
+    // per-item completion IS recoverable now (json form) — no stale caveat.
+    expect(plan.notes.join(" ")).not.toContain("unrecoverable");
+    expect(plan.steps[0]?.params["items"]).toEqual([
+      { title: "x", completed: true },
+      { title: "y", completed: false },
+    ]);
+  });
+
+  it("legacy wholesale record (titles only) restores titles, states default open", () => {
     const plan = planUndo(
       record({ op: "todo.replace-checklist", pre: { checklistTitles: ["x", "y"] } }),
       NOW,
     );
     expect(plan.steps[0]?.options?.acknowledgeChecklistReset).toBe(true);
-    expect(plan.notes.join(" ")).toContain("unrecoverable");
+    expect(plan.steps[0]?.params["items"]).toEqual(["x", "y"]);
+    expect(plan.notes.join(" ")).toContain("states restore as open");
   });
 
   it("tag.update that nested a root tag inverts via unnest (P29)", () => {

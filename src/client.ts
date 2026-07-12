@@ -43,7 +43,6 @@ import {
 import type {
   AreaAddParams,
   AreaUpdateParams,
-  ChecklistItemSpec,
   ContainerRef,
   ProjectCancelParams,
   OperationKind,
@@ -78,6 +77,8 @@ import {
   type HeadingUnarchiveResult,
 } from "./write/heading.ts";
 import { runClearReminder } from "./write/clear-reminder.ts";
+import { runEditChecklist } from "./write/edit-checklist.ts";
+import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
@@ -313,92 +314,12 @@ export interface ThingsClient {
   close(): void;
 }
 
-/** One granular checklist edit; every other item's checked state is preserved. */
-/**
- * Target for an existing checklist item: by `item` (title) or `index`
- * (1-based). Provide exactly one. Title matching is best-effort on duplicates
- * (docs/design/reference-resolution.md); index is exact.
- */
-export interface ChecklistTarget {
-  item?: string;
-  /** 1-based position; overrides `item` when both are given. */
-  index?: number;
-}
-
-export type ChecklistEdit =
-  | { action: "add"; title: string; /** 1-based insert position (default: append). */ at?: number }
-  | ({ action: "remove" } & ChecklistTarget)
-  | ({ action: "check" } & ChecklistTarget)
-  | ({ action: "uncheck" } & ChecklistTarget)
-  | ({ action: "rename"; title: string } & ChecklistTarget)
-  | ({ action: "move"; /** 1-based target position. */ to: number } & ChecklistTarget);
-
-/**
- * Resolve a checklist target to an array index. `index` (1-based) is exact.
- * A title resolves best-effort: unique → that item; duplicates → the first on
- * which the action is meaningful (check → first unchecked, uncheck → first
- * checked, others → first match). Loud only when nothing matches / index is
- * out of range.
- */
-function checklistTarget(
-  items: ChecklistItemSpec[],
-  edit: ChecklistEdit & ChecklistTarget,
-): number {
-  if (edit.index !== undefined) {
-    const i = edit.index - 1;
-    if (i < 0 || i >= items.length) {
-      throw new RangeError(`checklist index ${edit.index} is out of range (1..${items.length})`);
-    }
-    return i;
-  }
-  const ref = edit.item;
-  if (ref === undefined) throw new RangeError("give a checklist item title or 1-based index");
-  const matches = items.map((c, i) => ({ c, i })).filter(({ c }) => c.title === ref);
-  if (matches.length === 0) throw new RangeError(`no checklist item titled "${ref}"`);
-  if (matches.length === 1) return (matches[0] as { i: number }).i;
-  const meaningful =
-    edit.action === "check"
-      ? matches.find(({ c }) => !c.completed)
-      : edit.action === "uncheck"
-        ? matches.find(({ c }) => c.completed)
-        : undefined;
-  return (meaningful ?? matches[0] ?? { i: 0 }).i;
-}
-
-export function applyChecklistEdit(
-  items: ChecklistItemSpec[],
-  edit: ChecklistEdit,
-): ChecklistItemSpec[] {
-  const next = items.map((c) => ({ ...c }));
-  switch (edit.action) {
-    case "add": {
-      const at =
-        edit.at === undefined ? next.length : Math.max(0, Math.min(next.length, edit.at - 1));
-      next.splice(at, 0, { title: edit.title, completed: false });
-      return next;
-    }
-    case "remove":
-      next.splice(checklistTarget(next, edit), 1);
-      return next;
-    case "check":
-    case "uncheck": {
-      const target = next[checklistTarget(next, edit)] as ChecklistItemSpec;
-      target.completed = edit.action === "check";
-      return next;
-    }
-    case "rename": {
-      const target = next[checklistTarget(next, edit)] as ChecklistItemSpec;
-      target.title = edit.title;
-      return next;
-    }
-    case "move": {
-      const from = checklistTarget(next, edit);
-      const [moved] = next.splice(from, 1);
-      next.splice(Math.max(0, Math.min(next.length, edit.to - 1)), 0, moved as ChecklistItemSpec);
-      return next;
-    }
-  }
-}
+// Granular checklist edit primitives live in ./write/checklist.ts (so the
+// write-layer orchestrator can reuse them without importing back through the
+// client). One granular edit changes a single item while every other item and
+// its checked state is preserved. Re-exported for existing consumers.
+export type { ChecklistEdit, ChecklistTarget, ChecklistItemAction } from "./write/checklist.ts";
+export { applyChecklistEdit } from "./write/checklist.ts";
 
 export function openThings(options: OpenOptions = {}): ThingsClient {
   const located = locateThingsDb(options.dbPath ? { dbPath: options.dbPath } : undefined);
@@ -511,22 +432,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       unarchiveHeading: (uuid, policy, o) =>
         runHeadingUnarchive(writeDeps, { uuid, ...policy }, o ?? {}),
       detachTodo: (uuid, o) => run("todo.move", { uuid, detach: true }, o),
-      editChecklist(uuid, edit, o) {
-        const current = byUuid(conn.db, uuid);
-        if (current === null || current.type !== "to-do") {
-          throw new RangeError(`no to-do with uuid ${uuid}`);
-        }
-        const items: ChecklistItemSpec[] = (current.checklist ?? []).map((c) => ({
-          title: c.title,
-          completed: c.status === "completed",
-        }));
-        const next = applyChecklistEdit(items, edit);
-        return run(
-          "todo.replace-checklist",
-          { uuid, items: next },
-          { ...o, acknowledgeChecklistReset: true },
-        );
-      },
+      editChecklist: (uuid, edit, o) => runEditChecklist(writeDeps, uuid, edit, o ?? {}),
       addProject: (params, o) => run("project.add", params, o),
       updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
       completeProject: (uuid, policy, o) =>

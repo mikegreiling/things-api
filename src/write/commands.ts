@@ -527,17 +527,16 @@ const todoReplaceChecklist: CommandSpec<"todo.replace-checklist"> = {
     return pre;
   },
   expectedDelta(_pre, params) {
-    const { specs, needsJson } = checklistSpecs(params.items);
+    const { specs } = checklistSpecs(params.items);
+    // Always assert titles AND states: the non-json form recreates every item
+    // OPEN (T07) and the json form honors per-item `completed` (P18), so the
+    // resulting states are known either way. Asserting them (a) strengthens
+    // verification and (b) records the ordered states into `pre`/`observed`,
+    // which the wholesale undo needs to restore states and to precondition on.
     const assert: FieldAssertion[] = [
       { field: "checklistTitles", equals: specs.map((s) => s.title) },
+      { field: "checklistStates", equals: specs.map((s) => (s.completed ? "completed" : "open")) },
     ];
-    if (needsJson) {
-      // P18: the json form applies per-item completed states — verify them.
-      assert.push({
-        field: "checklistStates",
-        equals: specs.map((s) => (s.completed ? "completed" : "open")),
-      });
-    }
     return { mode: "update", uuid: params.uuid, assert };
   },
   compile(params, vector, _pre, ctx) {
@@ -566,6 +565,27 @@ const todoReplaceChecklist: CommandSpec<"todo.replace-checklist"> = {
       },
     ]);
     return thingsUrl("json", { data: payload }, ctx.token);
+  },
+};
+
+const ORCHESTRATED_ONLY =
+  "todo.edit-checklist-item is delivered by the runEditChecklist orchestrator (a targeted " +
+  "todo.replace-checklist rewrite that preserves every other item's state); it has no atomic " +
+  "surface and is never dispatched directly through the pipeline";
+
+const todoEditChecklistItem: CommandSpec<"todo.edit-checklist-item"> = {
+  op: "todo.edit-checklist-item",
+  hazards: [],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta() {
+    throw new Error(ORCHESTRATED_ONLY);
+  },
+  compile() {
+    throw new Error(ORCHESTRATED_ONLY);
   },
 };
 
@@ -1588,6 +1608,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "todo.move": todoMove,
   "todo.set-tags": todoSetTags,
   "todo.replace-checklist": todoReplaceChecklist,
+  "todo.edit-checklist-item": todoEditChecklistItem,
   "todo.delete": todoDelete,
   "project.add": projectAdd,
   "project.update": projectUpdate,
