@@ -208,7 +208,7 @@ describe("cli list limits + truncation hint", () => {
   });
 });
 
-describe("cli grouped views — per-block preview (anytime/someday)", () => {
+describe("cli anytime — per-block preview (--area-limit / --project-limit)", () => {
   function seedCatalogue(): void {
     const area = seedArea(fx!.db, "Hobbies");
     const proj = seedProject(fx!.db, { title: "Firmware", area, index: 1 });
@@ -216,20 +216,29 @@ describe("cli grouped views — per-block preview (anytime/someday)", () => {
     for (let i = 0; i < 5; i++) seedTodo(fx!.db, { title: `loose ${i}`, index: 100 + i });
   }
 
-  it("previews 3 items per block by default with per-block grouped meta", () => {
+  it("defaults: 50 per area block, 3 per project block, with per-block grouped meta", () => {
     fx = buildFixtureDb();
     seedCatalogue();
     const { stdout, exitCode } = runCli(["anytime", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
     expect(env.meta.grouped.truncated).toBe(true);
-    expect(env.meta.grouped.limit).toBe(3);
-    // Both the loose block and the project block are capped and counted.
-    const blocks = env.meta.grouped.blocks as Array<{ kind: string; total: number; shown: number }>;
+    const blocks = env.meta.grouped.blocks as Array<{
+      kind: string;
+      total: number;
+      shown: number;
+      limit: number | null;
+    }>;
     expect(blocks).toEqual(
       expect.arrayContaining([
-        { kind: "loose", uuid: null, title: null, shown: 3, total: 5 },
-        expect.objectContaining({ kind: "project", title: "Firmware", shown: 3, total: 8 }),
+        { kind: "loose", uuid: null, title: null, shown: 5, total: 5, limit: 50 },
+        expect.objectContaining({
+          kind: "project",
+          title: "Firmware",
+          shown: 3,
+          total: 8,
+          limit: 3,
+        }),
       ]),
     );
     // The project ROW is always present even though its children were capped.
@@ -239,20 +248,32 @@ describe("cli grouped views — per-block preview (anytime/someday)", () => {
     expect(firmware.type).toBe("project");
   });
 
-  it("human output drills into truncated blocks and points at --limit/--all", () => {
+  it("human output drills into truncated blocks and escalates the caps that hit", () => {
     fx = buildFixtureDb();
     seedCatalogue();
     const { stdout } = runCli(["anytime", "--db", fx.path]);
     expect(stdout).toContain("… 5 more — `things project show 'Firmware'`");
-    expect(stdout).toContain("… 2 more"); // the loose block (5 total, 3 shown) — no drill-down
-    expect(stdout).toContain("`things anytime --limit 6`");
+    expect(stdout).toContain("`things anytime --project-limit 6`");
     expect(stdout).toContain("`things anytime --all`");
+    // Only the project cap hit — no area-limit escalation.
+    expect(stdout).not.toContain("--area-limit");
   });
 
-  it("--limit sets a bigger per-block cap; --all lifts it entirely", () => {
+  it("--area-limit truncates area-direct lists with an area drill-down", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Busy");
+    for (let i = 0; i < 6; i++) seedTodo(fx.db, { title: `direct ${i}`, area, index: i });
+    const { stdout } = runCli(["anytime", "--area-limit", "2", "--db", fx.path]);
+    expect(stdout).toContain("… 4 more — `things area show 'Busy'`");
+    expect(stdout).toContain("`things anytime --area-limit 4`");
+  });
+
+  it("--project-limit raises the per-project cap; --all lifts everything", () => {
     fx = buildFixtureDb();
     seedCatalogue();
-    const five = JSON.parse(runCli(["anytime", "--limit", "5", "--json", "--db", fx.path]).stdout);
+    const five = JSON.parse(
+      runCli(["anytime", "--project-limit", "5", "--json", "--db", fx.path]).stdout,
+    );
     const fwBlock = five.meta.grouped.blocks.find(
       (b: { title?: string }) => b.title === "Firmware",
     );
@@ -261,6 +282,142 @@ describe("cli grouped views — per-block preview (anytime/someday)", () => {
     const all = JSON.parse(runCli(["anytime", "--all", "--json", "--db", fx.path]).stdout);
     expect(all.meta.grouped.truncated).toBe(false);
     expect(runCli(["anytime", "--all", "--db", fx.path]).stdout).not.toContain("more per group");
+  });
+
+  it("--limit is a usage error on anytime/someday; caps validate; --all conflicts", () => {
+    fx = buildFixtureDb();
+    seedCatalogue();
+    for (const argv of [
+      ["anytime", "--limit", "10"],
+      ["someday", "--limit", "10"],
+      ["anytime", "--area-limit", "0"],
+      ["anytime", "--project-limit", "nope"],
+      ["anytime", "--area-limit", "5", "--all"],
+      ["someday", "--area-limit", "5", "--all"],
+    ]) {
+      expect(runCli([...argv, "--db", fx.path]).exitCode, argv.join(" ")).toBe(2);
+    }
+  });
+});
+
+describe("cli someday — GUI parity + --show-active-project-items", () => {
+  function seedSomedayWorld(): { active: string } {
+    const area = seedArea(fx!.db, "Hobbies");
+    // A someday PROJECT (renders as a plain row inside the group).
+    seedProject(fx!.db, { title: "Dormant Proj", area, start: "someday", index: 1 });
+    // Direct someday to-dos, seeded BEFORE the project by drag index to prove
+    // the projects-first reorder.
+    seedTodo(fx!.db, { title: "someday direct A", area, start: "someday", index: 0 });
+    seedTodo(fx!.db, { title: "someday direct B", area, start: "someday", index: 2 });
+    // An ACTIVE project holding someday children (the toggle's content).
+    const active = seedProject(fx!.db, { title: "Active Proj", area, index: 3 });
+    for (let i = 0; i < 4; i++) {
+      seedTodo(fx!.db, { title: `parked ${i}`, project: active, start: "someday", index: 10 + i });
+    }
+    return { active };
+  }
+
+  it("lists project rows FIRST within a group, as plain rows (no header blocks)", () => {
+    fx = buildFixtureDb();
+    seedSomedayWorld();
+    const { stdout, exitCode } = runCli(["someday", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const lines = stdout.split("\n");
+    const proj = lines.findIndex((l) => l.includes("Dormant Proj"));
+    const a = lines.findIndex((l) => l.includes("someday direct A"));
+    const b = lines.findIndex((l) => l.includes("someday direct B"));
+    expect(proj).toBeGreaterThan(-1);
+    expect(proj).toBeLessThan(a);
+    expect(a).toBeLessThan(b);
+    // Plain row: someday circle mark, count chip, and NO blank line around it.
+    expect(lines[proj]).toContain("(~)");
+    expect(lines[proj + 1]).not.toBe("");
+    // JSON data carries the same projects-first order.
+    const env = JSON.parse(runCli(["someday", "--json", "--db", fx.path]).stdout);
+    const titles = env.data.flatMap((s: { items: { title: string }[] }) =>
+      s.items.map((i) => i.title),
+    );
+    expect(titles.indexOf("Dormant Proj")).toBeLessThan(titles.indexOf("someday direct A"));
+  });
+
+  it("hides active-project items by default, with a muted counting hint", () => {
+    fx = buildFixtureDb();
+    seedSomedayWorld();
+    const { stdout } = runCli(["someday", "--db", fx.path]);
+    expect(stdout).not.toContain("parked 0");
+    expect(stdout).not.toContain("From active projects");
+    expect(stdout).toContain(
+      "(4 someday to-dos inside active projects — visible with `things someday --show-active-project-items`)",
+    );
+  });
+
+  it("--show-active-project-items appends a trailing flat section of project blocks", () => {
+    fx = buildFixtureDb();
+    seedSomedayWorld();
+    const { stdout, exitCode } = runCli([
+      "someday",
+      "--show-active-project-items",
+      "--db",
+      fx.path,
+    ]);
+    expect(exitCode).toBe(0);
+    const lines = stdout.split("\n");
+    const divider = lines.findIndex((l) => l.includes("── From active projects ──"));
+    const header = lines.findIndex((l) => l.includes("Active Proj"));
+    const child = lines.findIndex((l) => l.includes("parked 0"));
+    // Divider AFTER all sidebar groups, project header inside it, children beneath.
+    expect(divider).toBeGreaterThan(lines.findIndex((l) => l.includes("someday direct B")));
+    expect(header).toBeGreaterThan(divider);
+    expect(child).toBeGreaterThan(header);
+    // Bare flag shows EVERY child; children drop the redundant (project) suffix.
+    expect(stdout).toContain("parked 3");
+    expect(lines[child]).not.toContain("(Active Proj)");
+    // The trailing header is a container header, not an item row: no box glyph.
+    expect(lines[header]).not.toContain("( )");
+    // No hidden-items hint when the section is shown.
+    expect(stdout).not.toContain("visible with");
+  });
+
+  it("a numeric value caps each project block and escalates in the bottom line", () => {
+    fx = buildFixtureDb();
+    seedSomedayWorld();
+    const { stdout } = runCli(["someday", "--show-active-project-items", "2", "--db", fx.path]);
+    expect(stdout).toContain("parked 1");
+    expect(stdout).not.toContain("parked 2");
+    expect(stdout).toContain("… 2 more — `things project show 'Active Proj'`");
+    expect(stdout).toContain("--show-active-project-items 4");
+    // JSON meta carries the per-project block with its cap.
+    const env = JSON.parse(
+      runCli(["someday", "--show-active-project-items", "2", "--json", "--db", fx.path]).stdout,
+    );
+    expect(env.meta.grouped.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "project",
+          title: "Active Proj",
+          shown: 2,
+          total: 4,
+          limit: 2,
+        }),
+      ]),
+    );
+    // Numeric value conflicts with --all.
+    expect(
+      runCli(["someday", "--show-active-project-items", "2", "--all", "--db", fx.path]).exitCode,
+    ).toBe(2);
+  });
+});
+
+describe("cli --db validation", () => {
+  it("an empty --db is a loud usage error, not a fallthrough to the default database", () => {
+    for (const argv of [
+      ["inbox", "--db", ""],
+      ["someday", "--db", "  "],
+      ["search", "x", "--db", ""],
+    ]) {
+      const { exitCode } = runCli(argv);
+      expect(exitCode, argv.join(" ")).toBe(2);
+    }
   });
 });
 

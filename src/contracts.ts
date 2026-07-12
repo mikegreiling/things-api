@@ -60,9 +60,9 @@ export interface Pagination {
 
 /**
  * Per-block truncation for the grouped catalogues (anytime/someday). Every
- * area/project header is always present (sidebar completeness); only the
- * innermost item lists are capped. One entry per non-empty block: the
- * area-less loose to-dos, an area's direct to-dos, or a project's to-dos.
+ * area header and project row is always present (sidebar completeness); only
+ * the innermost item lists are capped. One entry per non-empty block: the
+ * area-less loose block, an area's direct items, or a project's to-dos.
  */
 export interface BlockCount {
   kind: "loose" | "area" | "project";
@@ -72,12 +72,12 @@ export interface BlockCount {
   title: string | null;
   shown: number;
   total: number;
+  /** The cap that applied to THIS block (null = uncapped). */
+  limit: number | null;
 }
 
 /** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Pagination}. */
 export interface GroupedPagination {
-  /** Per-block preview cap (null when the caller asked for every item). */
-  limit: number | null;
   /** True when any block hid items. */
   truncated: boolean;
   blocks: BlockCount[];

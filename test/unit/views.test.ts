@@ -279,7 +279,8 @@ describe("anytime container cascade + sidebar grouping", () => {
     seedTodo(fx.db, { title: "sd-in-sd", project: somedayProj, start: "someday" });
     seedTodo(fx.db, { title: "sd-loose", start: "someday" });
 
-    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-loose", "sd-proj"]);
+    // GUI order: project rows first within a group, then direct to-dos.
+    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-proj", "sd-loose"]);
     const withActive = flat(somedayView(fx.db, NOW, { activeProjectItems: true })).map(
       (i) => i.title,
     );

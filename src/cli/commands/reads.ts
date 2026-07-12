@@ -2,7 +2,7 @@
  * Read-only list commands. Each renders a compact human table (UUIDs always
  * shown — agents and humans both need stable references) or a --json envelope.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { execFileSync } from "node:child_process";
 
 import { openThings, type ThingsClient } from "../../client.ts";
@@ -37,20 +37,25 @@ import {
   type Pagination,
 } from "../../contracts.ts";
 import {
+  AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
-  GROUPED_PREVIEW_LIMIT,
+  PROJECT_PREVIEW_LIMIT,
   paginateList,
   paginateToday,
+  partitionSomedaySection,
   previewSections,
+  previewSomedaySections,
   splitSectionBlocks,
+  type GroupedLimits,
 } from "../../read/pagination.ts";
 import {
   ALL_DESC,
+  AREA_LIMIT_DESC,
   GROUPED_ALL_DESC,
-  GROUPED_LIMIT_DESC,
   LIMIT_DESC,
   PERIOD_SINCE,
   PERIOD_UNTIL,
+  PROJECT_LIMIT_DESC,
 } from "../../surface-copy.ts";
 
 interface GlobalReadOpts {
@@ -87,6 +92,13 @@ function runRead<T>(
   hintBase?: string,
 ): void {
   const started = Date.now();
+  // An empty --db would silently fall through to the default database path —
+  // reject it loudly instead of reading somewhere the caller did not name.
+  if (opts.db !== undefined && opts.db.trim() === "") {
+    process.stderr.write("error: --db requires a non-empty path\n");
+    process.exitCode = ExitCode.Usage;
+    return;
+  }
   let client: ThingsClient | null = null;
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
@@ -149,26 +161,36 @@ export function withClient(
 type LimitResolution = { ok: true; limit: number | null } | { ok: false };
 
 /**
- * Resolve the shared `--limit`/`--all` pair into a row cap (null = no cap),
- * writing a loud usage error and setting the exit code on bad input:
- * `--limit` must be a positive integer, and it may not combine with `--all`.
- * `defaultLimit` differs by view family (50 flat, {@link GROUPED_PREVIEW_LIMIT}
- * per-block for the grouped catalogues).
+ * Resolve the shared `--limit`/`--all` pair (flat views) into a row cap
+ * (null = no cap), writing a loud usage error and setting the exit code on
+ * bad input: `--limit` must be a positive integer, and it may not combine
+ * with `--all`.
  */
-function parseLimit(
-  opts: { limit?: string; all?: boolean },
-  defaultLimit = DEFAULT_LIST_LIMIT,
+function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
+  return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true);
+}
+
+/**
+ * Resolve one cap flag (`--limit`, `--area-limit`, `--project-limit`) against
+ * `--all`: positive integer required, `--all` conflicts with an explicit
+ * value and otherwise lifts the cap (null).
+ */
+function parseCap(
+  flag: string,
+  value: string | undefined,
+  defaultLimit: number,
+  all: boolean,
 ): LimitResolution {
-  if (opts.all === true && opts.limit !== undefined) {
-    process.stderr.write("error: --limit and --all are mutually exclusive\n");
+  if (all && value !== undefined) {
+    process.stderr.write(`error: ${flag} and --all are mutually exclusive\n`);
     process.exitCode = ExitCode.Usage;
     return { ok: false };
   }
-  if (opts.all === true) return { ok: true, limit: null };
-  if (opts.limit === undefined) return { ok: true, limit: defaultLimit };
-  const n = Number(opts.limit);
+  if (all) return { ok: true, limit: null };
+  if (value === undefined) return { ok: true, limit: defaultLimit };
+  const n = Number(value);
   if (!Number.isInteger(n) || n < 1) {
-    process.stderr.write("error: --limit must be a positive integer\n");
+    process.stderr.write(`error: ${flag} must be a positive integer\n`);
     process.exitCode = ExitCode.Usage;
     return { ok: false };
   }
@@ -669,33 +691,46 @@ function quoteTitle(title: string): string {
   return `'${title.replace(/'/g, "'\\''")}'`;
 }
 
+const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
+  limit === null ? items : items.slice(0, limit);
+
+/** Muted per-block truncation line: `… N more — \`drill-down\``. */
+function blockMoreLine(total: number, shown: number, drill: string | null): string {
+  return dim(`  … ${total - shown} more${drill === null ? "" : ` — \`${drill}\``}`);
+}
+
 /**
- * The grouped-catalogue preview (anytime/someday): the FULL block skeleton —
- * every area header and every project row — always renders; only the innermost
- * item lists are capped at `limit` (null = no cap). A truncated block trails a
- * muted `… N more — \`things (project|area) show '…'\`` drill-down (the loose
- * block has no container, so it shows only the count), and the whole view ends
- * with one line pointing at a bigger `--limit`/`--all`. `star` marks Today
- * members (anytime). Mirrors renderSections' layout exactly.
+ * Muted bottom line for a truncated grouped view: `── more per group — see
+ * more: \`<base> <bigger flags>\` · all: \`<base> --all\` ──`, where the
+ * bigger-flags command doubles exactly the caps that actually truncated.
  */
-function renderGroupedPreview(
+function groupedBottomLine(base: string, escalations: string[], allBase = base): string {
+  const seeMore = escalations.length > 0 ? `see more: \`${base} ${escalations.join(" ")}\` · ` : "";
+  return dim(`── more per group — ${seeMore}all: \`${allBase} --all\` ──`);
+}
+
+/**
+ * The anytime preview: the FULL block skeleton — every area header and every
+ * project row — always renders; `limits.area` caps the loose block and each
+ * area's direct to-dos, `limits.project` each project's to-dos. A truncated
+ * block trails a muted `… N more — \`things (project|area) show '…'\``
+ * drill-down (the loose block has no container, so it shows only the count),
+ * and the view ends with one line escalating the caps that hit. Today members
+ * are starred. Mirrors renderSections' layout exactly.
+ */
+function renderAnytimePreview(
   sections: SidebarSection[],
-  limit: number | null,
+  limits: GroupedLimits,
   base: string,
-  star: boolean,
 ): string[] {
   const all = sections.flatMap((s) => s.items);
   if (all.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(all);
-  const take = <T>(items: T[]): T[] => (limit === null ? items : items.slice(0, limit));
   const lines: string[] = [];
-  let truncated = false;
+  let areaHit = false;
+  let projectHit = false;
   const blank = () => {
     if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
-  };
-  const blockHint = (total: number, shown: number, drill: string | null) => {
-    truncated = true;
-    lines.push(dim(`  … ${total - shown} more${drill === null ? "" : ` — \`${drill}\``}`));
   };
   for (const section of sections) {
     if (section.area !== null) {
@@ -704,48 +739,144 @@ function renderGroupedPreview(
     }
     const { direct, projects } = splitSectionBlocks(section);
     const suppressArea = section.area?.uuid ?? null;
-    const shownDirect = take(direct);
+    const shownDirect = takeUpTo(direct, limits.area);
     for (const item of shownDirect) {
-      lines.push(formatItem(item, w, { suppressArea, mark: star ? todayMark(item) : null }));
+      lines.push(formatItem(item, w, { suppressArea, mark: todayMark(item) }));
     }
     if (direct.length > shownDirect.length) {
+      areaHit = true;
       const drill =
         section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-      blockHint(direct.length, shownDirect.length, drill);
+      lines.push(blockMoreLine(direct.length, shownDirect.length, drill));
     }
     for (const { project, items: children } of projects) {
       blank();
       lines.push(
-        formatItem(project, w, {
-          projectTitle: true,
-          suppressArea,
-          mark: star ? todayMark(project) : null,
-        }),
+        formatItem(project, w, { projectTitle: true, suppressArea, mark: todayMark(project) }),
       );
-      const shownChildren = take(children);
+      const shownChildren = takeUpTo(children, limits.project);
       for (const item of shownChildren) {
         lines.push(
           formatItem(item, w, {
             suppressProject: project.uuid,
             suppressArea,
-            mark: star ? todayMark(item) : null,
+            mark: todayMark(item),
           }),
         );
       }
       if (children.length > shownChildren.length) {
-        blockHint(
-          children.length,
-          shownChildren.length,
-          `things project show ${quoteTitle(project.title)}`,
+        projectHit = true;
+        lines.push(
+          blockMoreLine(
+            children.length,
+            shownChildren.length,
+            `things project show ${quoteTitle(project.title)}`,
+          ),
         );
       }
     }
   }
-  if (truncated && limit !== null) {
+  if (areaHit || projectHit) {
+    const escalations = [
+      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
+      ...(projectHit && limits.project !== null ? [`--project-limit ${limits.project * 2}`] : []),
+    ];
+    lines.push("", groupedBottomLine(base, escalations));
+  }
+  return lines;
+}
+
+/**
+ * The someday preview, mirroring the GUI (side-by-side, 2026-07-12): inside
+ * each group the project rows render as PLAIN items — `(~)` circle, count
+ * chip, no header styling, no surrounding blank lines — listed before the
+ * direct to-dos; `limits.area` caps each group's combined list. With
+ * `showActive` (the --show-active-project-items toggle) the someday to-dos
+ * living inside active projects append as a separate trailing
+ * `── From active projects ──` section — a flat run of project-header blocks
+ * (no area grouping), each capped at `limits.project` (null = every item).
+ * When the toggle is off and such items exist, a muted bottom hint counts
+ * them and names the flag.
+ */
+function renderSomedayPreview(
+  sections: SidebarSection[],
+  limits: GroupedLimits,
+  base: string,
+  showActive: boolean,
+  hiddenActiveItems: number,
+): string[] {
+  const all = sections.flatMap((s) => s.items);
+  const lines: string[] = [];
+  let areaHit = false;
+  let projectHit = false;
+  const blank = () => {
+    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
+  };
+  if (all.length === 0) {
+    lines.push("(empty)");
+  } else {
+    const w = uuidDisplayWidth(all);
+    const trailing: Array<{ project: { uuid: string; title: string }; items: ListItem[] }> = [];
+    for (const section of sections) {
+      const { own, children } = partitionSomedaySection(section);
+      trailing.push(...children);
+      if (section.area !== null) {
+        blank();
+        lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
+      }
+      const suppressArea = section.area?.uuid ?? null;
+      const shownOwn = takeUpTo(own, limits.area);
+      for (const item of shownOwn) lines.push(formatItem(item, w, { suppressArea }));
+      if (own.length > shownOwn.length) {
+        areaHit = true;
+        const drill =
+          section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
+        lines.push(blockMoreLine(own.length, shownOwn.length, drill));
+      }
+    }
+    if (trailing.length > 0) {
+      blank();
+      lines.push(bold("── From active projects ──"));
+      for (const group of trailing) {
+        blank();
+        const uuidCol =
+          group.project.uuid.length > w
+            ? group.project.uuid.slice(0, w)
+            : group.project.uuid.padEnd(w);
+        lines.push(`${dim(uuidCol)}  ${bold(underline(group.project.title))}`);
+        const shown = takeUpTo(group.items, limits.project);
+        for (const item of shown) {
+          lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
+        }
+        if (group.items.length > shown.length) {
+          projectHit = true;
+          lines.push(
+            blockMoreLine(
+              group.items.length,
+              shown.length,
+              `things project show ${quoteTitle(group.project.title)}`,
+            ),
+          );
+        }
+      }
+    }
+  }
+  if (areaHit || projectHit) {
+    const escalations = [
+      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
+      ...(projectHit && limits.project !== null
+        ? [`--show-active-project-items ${limits.project * 2}`]
+        : []),
+    ];
+    // The bare flag keeps the active-projects section visible under --all.
+    const allBase = showActive ? `${base} --show-active-project-items` : base;
+    lines.push("", groupedBottomLine(base, escalations, allBase));
+  }
+  if (!showActive && hiddenActiveItems > 0) {
+    blank();
     lines.push(
-      "",
       dim(
-        `── more per group — see more: \`${base} --limit ${limit * 2}\` · all: \`${base} --all\` ──`,
+        `(${hiddenActiveItems} someday to-do${hiddenActiveItems === 1 ? "" : "s"} inside active projects — visible with \`things someday --show-active-project-items\`)`,
       ),
     );
   }
@@ -756,16 +887,10 @@ export function registerReadCommands(program: Command): void {
   const listCommands: Array<{
     name: string;
     description: string;
-    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean, extra?: boolean) => unknown;
+    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => unknown;
     render?: (data: never) => string[];
-    /** Flat views: truncate to the row limit + compute pagination (default: flat list). */
+    /** Truncate to the row limit + compute pagination (default: flat list). */
     paginate?: (data: never, limit: number | null) => { data: unknown; pagination: Pagination };
-    /** Grouped catalogue (anytime/someday): per-block preview instead of a global cut. */
-    grouped?: boolean;
-    /** Grouped only: star Today members (anytime). */
-    star?: boolean;
-    /** One extra boolean option: [flags, description, opts-key]. */
-    extraOption?: [string, string, string];
   }> = [
     {
       name: "today",
@@ -807,49 +932,10 @@ export function registerReadCommands(program: Command): void {
           tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
         ),
     },
-    {
-      name: "anytime",
-      description:
-        "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
-        "area: direct to-dos, then each project with its members). Today members are " +
-        "starred (★). Children of someday/future-scheduled projects are excluded — the " +
-        "project row represents them. Every group is always shown; each block previews the " +
-        "first few items (--limit <n> per block, --all for every item)",
-      fetch: (c, tag, exactTag) =>
-        c.read.anytime(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
-      render: (sections: SidebarSection[]) => renderSections(sections, true),
-      grouped: true,
-      star: true,
-    },
-    {
-      name: "someday",
-      description:
-        "Someday items (incubated, undated) in sidebar order. Project children are " +
-        "represented by their project row; --active-project-items also lists someday " +
-        "to-dos inside active projects (the UI's 'Show items from active projects' toggle). " +
-        "Every group is always shown; each block previews the first few items (--limit <n> " +
-        "per block, --all for every item)",
-      fetch: (c, tag, exactTag, activeProjectItems) =>
-        c.read.someday({
-          ...(tag !== undefined && { tag }),
-          ...(exactTag === true && { exactTag }),
-          ...(activeProjectItems === true && { activeProjectItems }),
-        }),
-      render: (sections: SidebarSection[]) => renderSections(sections),
-      grouped: true,
-      star: false,
-      extraOption: [
-        "--active-project-items",
-        "also list someday to-dos inside active projects",
-        "activeProjectItems",
-      ],
-    },
   ];
 
   for (const cmd of listCommands) {
-    const command = program
+    program
       .command(cmd.name)
       .description(cmd.description)
       .option(
@@ -857,53 +943,214 @@ export function registerReadCommands(program: Command): void {
         "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
       )
       .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
-      .option("--limit <n>", cmd.grouped === true ? GROUPED_LIMIT_DESC : LIMIT_DESC)
-      .option("--all", cmd.grouped === true ? GROUPED_ALL_DESC : ALL_DESC)
+      .option("--limit <n>", LIMIT_DESC)
+      .option("--all", ALL_DESC)
       .option("--json", "emit versioned JSON envelope on stdout")
-      .option("--db <path>", "explicit database path");
-    if (cmd.extraOption) command.option(cmd.extraOption[0], cmd.extraOption[1]);
-    command.action(
+      .option("--db <path>", "explicit database path")
+      .action(
+        (
+          opts: GlobalReadOpts & {
+            tag?: string;
+            exactTag?: boolean;
+            limit?: string;
+            all?: boolean;
+          },
+        ) => {
+          const lim = parseLimit(opts);
+          if (!lim.ok) return;
+          const base = invocation(cmd.name, [
+            opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+            opts.exactTag === true && "--exact-tag",
+          ]);
+          const paginate = cmd.paginate ?? paginateList;
+          runRead(
+            opts,
+            cmd.name,
+            (c) => paginate(cmd.fetch(c, opts.tag, opts.exactTag) as never, lim.limit),
+            (cmd.render ?? renderList) as (d: unknown) => string[],
+            base,
+          );
+        },
+      );
+  }
+
+  program
+    .command("anytime")
+    .description(
+      "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
+        "area: direct to-dos, then each project with its members). Today members are " +
+        "starred (★). Children of someday/future-scheduled projects are excluded — the " +
+        "project row represents them. Every group and project row is always shown; " +
+        "--area-limit caps each area's direct list, --project-limit each project's list, " +
+        "--all shows everything",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--area-limit <n>", AREA_LIMIT_DESC)
+    .option("--project-limit <n>", PROJECT_LIMIT_DESC)
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
       (
         opts: GlobalReadOpts & {
           tag?: string;
           exactTag?: boolean;
-          limit?: string;
+          areaLimit?: string;
+          projectLimit?: string;
           all?: boolean;
-        } & Record<string, unknown>,
+          limit?: string;
+        },
       ) => {
-        const lim = parseLimit(opts, cmd.grouped === true ? GROUPED_PREVIEW_LIMIT : undefined);
-        if (!lim.ok) return;
-        const extra = cmd.extraOption ? opts[cmd.extraOption[2]] === true : undefined;
-        const base = invocation(cmd.name, [
-          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
-          opts.exactTag === true && "--exact-tag",
-          cmd.extraOption && extra === true ? cmd.extraOption[0] : undefined,
-        ]);
-        if (cmd.grouped === true) {
-          const star = cmd.star === true;
-          runRead(
-            opts,
-            cmd.name,
-            (c) => {
-              const full = cmd.fetch(c, opts.tag, opts.exactTag, extra) as SidebarSection[];
-              const { data, grouped } = previewSections(full, lim.limit);
-              return { data, grouped, lines: renderGroupedPreview(full, lim.limit, base, star) };
-            },
-            renderList as (d: unknown) => string[],
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on anytime — cap blocks with --area-limit / --project-limit, or pass --all\n",
           );
+          process.exitCode = ExitCode.Usage;
           return;
         }
-        const paginate = cmd.paginate ?? paginateList;
+        const area = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!area.ok) return;
+        const project = parseCap(
+          "--project-limit",
+          opts.projectLimit,
+          PROJECT_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!project.ok) return;
+        const limits: GroupedLimits = { area: area.limit, project: project.limit };
+        const base = invocation("anytime", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
         runRead(
           opts,
-          cmd.name,
-          (c) => paginate(cmd.fetch(c, opts.tag, opts.exactTag, extra) as never, lim.limit),
-          (cmd.render ?? renderList) as (d: unknown) => string[],
-          base,
+          "anytime",
+          (c) => {
+            const full = c.read.anytime(
+              opts.tag === undefined
+                ? undefined
+                : { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) },
+            );
+            const { data, grouped } = previewSections(full, limits);
+            return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
+          },
+          renderList as (d: unknown) => string[],
         );
       },
     );
-  }
+
+  program
+    .command("someday")
+    .description(
+      "Someday items (incubated, undated) in sidebar order — inside each group the " +
+        "someday projects list first, then the to-dos; project children are represented " +
+        "by their project row. --show-active-project-items [n] appends a trailing section " +
+        "of someday to-dos inside active projects, grouped under their project (the UI's " +
+        "'Show items from active projects' toggle; n caps each project's list). " +
+        "--area-limit caps each group, --all shows everything",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--area-limit <n>", AREA_LIMIT_DESC)
+    .option(
+      "--show-active-project-items [n]",
+      "append someday to-dos inside active projects, grouped under their project; " +
+        "n caps each project's list (bare flag: every item)",
+    )
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          areaLimit?: string;
+          showActiveProjectItems?: boolean | string;
+          all?: boolean;
+          limit?: string;
+        },
+      ) => {
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on someday — cap groups with --area-limit, or pass --all\n",
+          );
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const showActive = opts.showActiveProjectItems !== undefined;
+        let projectCap: number | null = null;
+        if (typeof opts.showActiveProjectItems === "string") {
+          const capped = parseCap(
+            "--show-active-project-items",
+            opts.showActiveProjectItems,
+            0,
+            opts.all === true,
+          );
+          if (!capped.ok) return;
+          projectCap = capped.limit;
+        }
+        const area = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!area.ok) return;
+        const limits: GroupedLimits = { area: area.limit, project: projectCap };
+        const filter = {
+          ...(opts.tag !== undefined && { tag: opts.tag }),
+          ...(opts.exactTag === true && { exactTag: true }),
+        };
+        const base = invocation("someday", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
+          opts,
+          "someday",
+          (c) => {
+            const full = c.read.someday({
+              ...filter,
+              ...(showActive && { activeProjectItems: true }),
+            });
+            // Hidden-items-never-silent: when the toggle is off, one extra
+            // query counts what it would reveal so the hint can say so.
+            const hiddenActiveItems = showActive
+              ? 0
+              : c.read
+                  .someday({ ...filter, activeProjectItems: true })
+                  .reduce(
+                    (n, s) =>
+                      n +
+                      partitionSomedaySection(s).children.reduce((m, g) => m + g.items.length, 0),
+                    0,
+                  );
+            const { data, grouped } = previewSomedaySections(full, limits);
+            return {
+              data,
+              grouped,
+              lines: renderSomedayPreview(full, limits, base, showActive, hiddenActiveItems),
+            };
+          },
+          renderList as (d: unknown) => string[],
+        );
+      },
+    );
 
   program
     .command("upcoming")

@@ -18,18 +18,21 @@ import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } f
 import { PKG_VERSION, type GroupedPagination, type Pagination } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
 import {
+  AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
-  GROUPED_PREVIEW_LIMIT,
+  PROJECT_PREVIEW_LIMIT,
   paginateList,
   paginateToday,
   previewSections,
+  previewSomedaySections,
+  type GroupedLimits,
 } from "../read/pagination.ts";
 import {
   ALL_DESC,
+  AREA_LIMIT_DESC,
   DATE_FORMAT,
-  GROUPED_ALL_DESC,
-  GROUPED_LIMIT_DESC,
   LIMIT_DESC,
+  PROJECT_LIMIT_DESC,
   REF_FORMAT,
   REMINDER_FORMAT,
   WHEN_VALUES,
@@ -79,7 +82,7 @@ function paginatedResult(data: unknown, pagination: Pagination): ToolResult {
  */
 function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
   const note = grouped.truncated
-    ? `previewing up to ${grouped.limit} items per group — pass limit for a bigger preview, or all: true for every item`
+    ? "some blocks are previews — raise area_limit/project_limit for more per block, or all: true for every item"
     : undefined;
   return {
     content: [
@@ -90,17 +93,25 @@ function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
 }
 
 /**
- * Resolve MCP limit/all into a row cap (null = every row); "conflict" when both
- * are given. `defaultLimit` is 50 for flat views, the per-block preview cap for
- * the grouped catalogues.
+ * Resolve one cap param against `all` into a row cap (null = every row);
+ * "conflict" when an explicit value combines with all: true.
  */
-function resolveLimit(
-  args: { limit?: number | undefined; all?: boolean | undefined },
-  defaultLimit = DEFAULT_LIST_LIMIT,
+function resolveCap(
+  value: number | undefined,
+  all: boolean | undefined,
+  defaultLimit: number,
 ): number | null | "conflict" {
-  if (args.all === true && args.limit !== undefined) return "conflict";
-  if (args.all === true) return null;
-  return args.limit ?? defaultLimit;
+  if (all === true && value !== undefined) return "conflict";
+  if (all === true) return null;
+  return value ?? defaultLimit;
+}
+
+/** Resolve MCP limit/all (flat read tools) into a row cap (null = every row). */
+function resolveLimit(args: {
+  limit?: number | undefined;
+  all?: boolean | undefined;
+}): number | null | "conflict" {
+  return resolveCap(args.limit, args.all, DEFAULT_LIST_LIMIT);
 }
 
 /** Shared limit/all input schema fragment for the flat read tools. */
@@ -305,17 +316,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sidebar-ordered sections (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
-        "from anytime — the project row represents them. Flat views (today/inbox/upcoming/" +
-        `logbook/trash) return at most ${DEFAULT_LIST_LIMIT} items by default; anytime/someday ` +
-        `always return every group but preview ${GROUPED_PREVIEW_LIMIT} items per block. Raise ` +
-        "with limit or lift entirely with all: true; the result's second block reports the counts.",
+        "from anytime — the project row represents them; someday lists each group's " +
+        "project rows before its to-dos. Flat views (today/inbox/upcoming/logbook/trash) " +
+        `return at most ${DEFAULT_LIST_LIMIT} items by default (raise with limit); ` +
+        "anytime/someday always return every group and cap per block instead — " +
+        `area_limit (default ${AREA_PREVIEW_LIMIT}) per area block, and on anytime ` +
+        `project_limit (default ${PROJECT_PREVIEW_LIMIT}) per project block. ` +
+        "all: true lifts every cap; the result's second block reports the counts.",
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
         active_project_items: z
-          .boolean()
+          .union([z.boolean(), z.number().int().min(1)])
           .optional()
-          .describe("someday only: also list someday to-dos inside active projects"),
+          .describe(
+            "someday only: include someday to-dos inside active projects, clustered per " +
+              "project after each group; a number caps each project's list (true: every item)",
+          ),
         horizon: z
           .number()
           .int()
@@ -328,16 +345,24 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .int()
           .min(1)
           .optional()
-          .describe(
-            `${LIMIT_DESC}; for anytime/someday it is a per-group preview cap (default ` +
-              `${GROUPED_PREVIEW_LIMIT}), applied to each area/project block independently, with ` +
-              "every group header always shown",
-          ),
+          .describe(`flat views only (not anytime/someday): ${LIMIT_DESC}`),
+        area_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`anytime/someday only: ${AREA_LIMIT_DESC}`),
+        project_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`anytime only: ${PROJECT_LIMIT_DESC}`),
         all: z
           .boolean()
           .optional()
           .describe(
-            "show everything (flat views: no row limit; anytime/someday: no per-group cap)",
+            "show everything (flat views: no row limit; anytime/someday: no per-block caps)",
           ),
       },
       annotations: READ_ONLY,
@@ -345,8 +370,31 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     async (args) =>
       guard(() => {
         const isGrouped = args.view === "anytime" || args.view === "someday";
-        const limit = resolveLimit(args, isGrouped ? GROUPED_PREVIEW_LIMIT : DEFAULT_LIST_LIMIT);
+        if (isGrouped && args.limit !== undefined) {
+          return usage(
+            `limit does not apply to ${args.view} — cap blocks with area_limit` +
+              `${args.view === "anytime" ? "/project_limit" : ""}, or pass all: true`,
+          );
+        }
+        if (!isGrouped && (args.area_limit !== undefined || args.project_limit !== undefined)) {
+          return usage(`area_limit/project_limit apply only to anytime/someday, not ${args.view}`);
+        }
+        if (args.view !== "someday" && args.active_project_items !== undefined) {
+          return usage("active_project_items applies only to someday");
+        }
+        if (args.view === "someday" && args.project_limit !== undefined) {
+          return usage(
+            "project_limit does not apply to someday — pass a number as active_project_items " +
+              "to cap that section's project lists",
+          );
+        }
+        const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
+        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+        const projectLimit = resolveCap(args.project_limit, args.all, PROJECT_PREVIEW_LIMIT);
+        if (areaLimit === "conflict" || projectLimit === "conflict") {
+          return usage("pass at most one of area_limit/project_limit / all");
+        }
         const c = getClient();
         const filter = {
           ...(args.tag !== undefined && { tag: args.tag }),
@@ -362,7 +410,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return paginatedResult(data, pagination);
           }
           case "anytime": {
-            const { data, grouped } = previewSections(c.read.anytime(filter), limit);
+            const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
+            const { data, grouped } = previewSections(c.read.anytime(filter), limits);
             return groupedResult(data, grouped);
           }
           case "upcoming": {
@@ -376,12 +425,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return paginatedResult(data, pagination);
           }
           case "someday": {
-            const { data, grouped } = previewSections(
+            const active = args.active_project_items;
+            if (typeof active === "number" && args.all === true) {
+              return usage("pass at most one of a numeric active_project_items / all");
+            }
+            const limits: GroupedLimits = {
+              area: areaLimit,
+              // true = every item per project; a number caps each list.
+              project: typeof active === "number" ? active : null,
+            };
+            const { data, grouped } = previewSomedaySections(
               c.read.someday({
                 ...filter,
-                ...(args.active_project_items === true && { activeProjectItems: true }),
+                ...((active === true || typeof active === "number") && {
+                  activeProjectItems: true,
+                }),
               }),
-              limit,
+              limits,
             );
             return groupedResult(data, grouped);
           }

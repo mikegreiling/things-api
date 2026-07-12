@@ -8,10 +8,22 @@
  * "all rows" (the caller passed --all / all: true).
  */
 import type { BlockCount, GroupedPagination, Pagination } from "../contracts.ts";
-import { DEFAULT_LIST_LIMIT, GROUPED_PREVIEW_LIMIT } from "../surface-copy.ts";
+import type { Ref } from "../model/entities.ts";
+import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
 
-export { DEFAULT_LIST_LIMIT, GROUPED_PREVIEW_LIMIT };
+export { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT };
+
+/**
+ * Per-block caps for the grouped catalogues: `area` bounds each area-direct
+ * block (and the leading loose block), `project` each project's to-do list.
+ * `null` = uncapped (the caller passed --all / all: true, or — for someday's
+ * active-projects section — asked for every item).
+ */
+export interface GroupedLimits {
+  area: number | null;
+  project: number | null;
+}
 
 const whole = (total: number, limit: number | null): Pagination => ({
   shown: total,
@@ -80,25 +92,27 @@ export function splitSectionBlocks(section: SidebarSection): SectionBlocks {
   return { direct, projects };
 }
 
+const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
+  limit === null ? items : items.slice(0, limit);
+
 /**
- * Grouped catalogues (anytime/someday): the block skeleton is ALWAYS complete
- * — every area header and every project row survives — and the `limit`
- * (null = no cap) is applied INDEPENDENTLY to each innermost item list (the
- * loose block, an area's direct to-dos, each project's to-dos). Returns the
+ * Anytime: the block skeleton is ALWAYS complete — every area header and
+ * every project row survives — and the caps apply INDEPENDENTLY to each
+ * innermost item list: `limits.area` to the loose block and each area's
+ * direct to-dos, `limits.project` to each project's to-dos. Returns the
  * per-block-truncated sections (project rows retained) plus the per-block
  * counts and a top-level `truncated` flag.
  */
 export function previewSections(
   sections: SidebarSection[],
-  limit: number | null,
+  limits: GroupedLimits,
 ): { data: SidebarSection[]; grouped: GroupedPagination } {
-  const take = <T>(items: T[]): T[] => (limit === null ? items : items.slice(0, limit));
   const outSections: SidebarSection[] = [];
   const blocks: BlockCount[] = [];
   let truncated = false;
   for (const section of sections) {
     const { direct, projects } = splitSectionBlocks(section);
-    const shownDirect = take(direct);
+    const shownDirect = takeUpTo(direct, limits.area);
     if (direct.length > 0) {
       if (direct.length > shownDirect.length) truncated = true;
       blocks.push({
@@ -107,11 +121,12 @@ export function previewSections(
         title: section.area?.title ?? null,
         shown: shownDirect.length,
         total: direct.length,
+        limit: limits.area,
       });
     }
     const items: ListItem[] = [...shownDirect];
     for (const { project, items: children } of projects) {
-      const shownChildren = take(children);
+      const shownChildren = takeUpTo(children, limits.project);
       if (children.length > 0) {
         if (children.length > shownChildren.length) truncated = true;
         blocks.push({
@@ -120,11 +135,92 @@ export function previewSections(
           title: project.title,
           shown: shownChildren.length,
           total: children.length,
+          limit: limits.project,
         });
       }
       items.push(project, ...shownChildren);
     }
     outSections.push({ area: section.area, items });
   }
-  return { data: outSections, grouped: { limit, truncated, blocks } };
+  return { data: outSections, grouped: { truncated, blocks } };
+}
+
+/**
+ * Someday sections split differently from anytime: PROJECT rows there are
+ * plain ITEMS (a someday project stands for itself — its children are never
+ * inline), so a section's "own" block is its project rows + container-less
+ * to-dos together, and the to-dos that DO carry a project reference (the
+ * activeProjectItems toggle) form separate per-project child groups.
+ */
+export interface SomedayPartition {
+  /** Project rows + direct to-dos, in section order. */
+  own: ListItem[];
+  /** Someday to-dos inside active projects, clustered per project. */
+  children: Array<{ project: Ref; items: ListItem[] }>;
+}
+
+export function partitionSomedaySection(section: SidebarSection): SomedayPartition {
+  const own: ListItem[] = [];
+  const byProject = new Map<string, { project: Ref; items: ListItem[] }>();
+  for (const item of section.items) {
+    const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
+    if (container === null) {
+      own.push(item);
+      continue;
+    }
+    let group = byProject.get(container.uuid);
+    if (group === undefined) {
+      group = { project: container, items: [] };
+      byProject.set(container.uuid, group);
+    }
+    group.items.push(item);
+  }
+  return { own, children: [...byProject.values()] };
+}
+
+/**
+ * Someday preview: every group survives; `limits.area` (null = no cap)
+ * applies independently to each section's own block (project rows + direct
+ * to-dos are items alike there), `limits.project` to each active project's
+ * child group (the show-active-project-items toggle). Sections keep their
+ * capped children after the own block, still clustered per project.
+ */
+export function previewSomedaySections(
+  sections: SidebarSection[],
+  limits: GroupedLimits,
+): { data: SidebarSection[]; grouped: GroupedPagination } {
+  const outSections: SidebarSection[] = [];
+  const blocks: BlockCount[] = [];
+  let truncated = false;
+  for (const section of sections) {
+    const { own, children } = partitionSomedaySection(section);
+    const shownOwn = takeUpTo(own, limits.area);
+    if (own.length > 0) {
+      if (own.length > shownOwn.length) truncated = true;
+      blocks.push({
+        kind: section.area === null ? "loose" : "area",
+        uuid: section.area?.uuid ?? null,
+        title: section.area?.title ?? null,
+        shown: shownOwn.length,
+        total: own.length,
+        limit: limits.area,
+      });
+    }
+    const items: ListItem[] = [...shownOwn];
+    for (const group of children) {
+      const shown = takeUpTo(group.items, limits.project);
+      if (group.items.length > shown.length) truncated = true;
+      blocks.push({
+        kind: "project",
+        uuid: group.project.uuid,
+        title: group.project.title,
+        shown: shown.length,
+        total: group.items.length,
+        limit: limits.project,
+      });
+      items.push(...shown);
+    }
+    outSections.push({ area: section.area, items });
+  }
+  return { data: outSections, grouped: { truncated, blocks } };
 }

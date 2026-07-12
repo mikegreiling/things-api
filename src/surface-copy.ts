@@ -35,15 +35,17 @@ export const LIMIT_DESC = `maximum items to show (default ${DEFAULT_LIST_LIMIT})
 /** Shared `--all`/`all` description (lift the row limit). */
 export const ALL_DESC = "show every matching item, no limit";
 
-/** Per-group preview cap for the grouped catalogues (anytime/someday). */
-export const GROUPED_PREVIEW_LIMIT = 3;
+/** Default per-project preview cap in the grouped catalogues (anytime). */
+export const PROJECT_PREVIEW_LIMIT = 3;
 
-/**
- * `--limit`/`limit` description for the GROUPED views: the flag caps each
- * block independently, and the block skeleton (every area + project header)
- * is always complete.
- */
-export const GROUPED_LIMIT_DESC = `items shown per group before truncating, applied to each area/project block independently (default ${GROUPED_PREVIEW_LIMIT}); every group header is always shown`;
+/** Default per-area-block cap in the grouped catalogues (anytime/someday). */
+export const AREA_PREVIEW_LIMIT = DEFAULT_LIST_LIMIT;
 
-/** `--all`/`all` description for the grouped views (lift the per-group cap). */
-export const GROUPED_ALL_DESC = "show every item in every group (no per-group cap)";
+/** `--area-limit`/`area_limit` description (grouped views). */
+export const AREA_LIMIT_DESC = `items shown per area block — including the leading area-less block — before truncating (default ${AREA_PREVIEW_LIMIT}); every block is always shown`;
+
+/** `--project-limit`/`project_limit` description (anytime). */
+export const PROJECT_LIMIT_DESC = `items shown per project block before truncating (default ${PROJECT_PREVIEW_LIMIT}); every project row is always shown`;
+
+/** `--all`/`all` description for the grouped views (lift every per-block cap). */
+export const GROUPED_ALL_DESC = "show every item in every group (no per-block caps)";

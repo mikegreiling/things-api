@@ -525,7 +525,22 @@ export function somedayView(
      AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql} ORDER BY t."index" ASC`,
     [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds],
   );
-  return groupBySidebar(db, materialize(db, rows));
+  const sections = groupBySidebar(db, materialize(db, rows));
+  // GUI order within a Someday group (live side-by-side, 2026-07-12):
+  // PROJECT rows first (their sidebar order preserved), then direct to-dos in
+  // drag order. Someday children of active projects (the activeProjectItems
+  // toggle) trail the group, still clustered by their project — surfaces
+  // present them as a separate "From active projects" section.
+  const isChild = (i: ListItem) =>
+    i.type === "to-do" && (i.project !== null || i.headingProject !== null);
+  return sections.map((s) => ({
+    area: s.area,
+    items: [
+      ...s.items.filter((i) => i.type === "project"),
+      ...s.items.filter((i) => i.type === "to-do" && !isChild(i)),
+      ...s.items.filter(isChild),
+    ],
+  }));
 }
 
 export interface LogbookFilter extends ViewFilter {

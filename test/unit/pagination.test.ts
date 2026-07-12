@@ -1,25 +1,46 @@
 /**
- * The shared list-view truncation: exact totals, mid-group cuts, and the
- * "no empty header survives" rule for grouped shapes. Pure functions — no DB.
+ * The shared list-view truncation: exact totals, mid-group cuts for the flat
+ * shapes, and the per-block preview (area/project caps, "no header ever
+ * dropped") for the grouped catalogues. Pure functions — no DB.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
-  GROUPED_PREVIEW_LIMIT,
+  PROJECT_PREVIEW_LIMIT,
   paginateList,
   paginateToday,
+  partitionSomedaySection,
   previewSections,
+  previewSomedaySections,
   splitSectionBlocks,
 } from "../../src/read/pagination.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
-/** Minimal ListItem stand-ins — pagination never inspects item fields beyond type/uuid. */
-const items = (n: number): ListItem[] =>
-  Array.from({ length: n }, (_, i) => ({ uuid: `u${i}`, type: "to-do" }) as unknown as ListItem);
+/** Minimal ListItem stand-ins — pagination only inspects type/uuid/refs. */
+const items = (n: number, prefix = "u"): ListItem[] =>
+  Array.from(
+    { length: n },
+    (_, i) =>
+      ({
+        uuid: `${prefix}${i}`,
+        type: "to-do",
+        project: null,
+        headingProject: null,
+      }) as unknown as ListItem,
+  );
 
 const project = (uuid: string, title: string): ListItem =>
-  ({ uuid, title, type: "project" }) as unknown as ListItem;
+  ({ uuid, title, type: "project", project: null, headingProject: null }) as unknown as ListItem;
+
+const childOf = (uuid: string, projectUuid: string, projectTitle: string): ListItem =>
+  ({
+    uuid,
+    type: "to-do",
+    project: { uuid: projectUuid, title: projectTitle },
+    headingProject: null,
+  }) as unknown as ListItem;
 
 describe("paginateList", () => {
   it("returns everything untruncated under the limit", () => {
@@ -40,15 +61,17 @@ describe("paginateList", () => {
     expect(pagination).toEqual({ shown: 1000, total: 1000, limit: null, truncated: false });
   });
 
-  it("the exposed default is 50", () => {
+  it("the exposed defaults are 50 flat / 50 per area / 3 per project", () => {
     expect(DEFAULT_LIST_LIMIT).toBe(50);
+    expect(AREA_PREVIEW_LIMIT).toBe(50);
+    expect(PROJECT_PREVIEW_LIMIT).toBe(3);
   });
 });
 
 describe("paginateToday", () => {
   const view = (todayN: number, eveningN: number): TodayView => ({
     today: items(todayN),
-    evening: items(eveningN),
+    evening: items(eveningN, "e"),
     badge: { dueOrOverdue: 1, other: 2 },
   });
 
@@ -77,7 +100,7 @@ describe("splitSectionBlocks", () => {
       items: [
         ...items(2), // direct (u0, u1)
         project("p1", "Proj 1"),
-        ...items(3), // p1 children
+        ...items(3, "c"), // p1 children
         project("p2", "Proj 2"),
       ],
     };
@@ -89,46 +112,96 @@ describe("splitSectionBlocks", () => {
   });
 });
 
-describe("previewSections (grouped per-block preview)", () => {
+describe("previewSections (anytime per-block preview)", () => {
   const grouped: SidebarSection = {
     area: { uuid: "a", title: "Hobbies" },
-    items: [...items(10), project("p1", "Firmware"), ...items(8)],
+    items: [...items(10), project("p1", "Firmware"), ...items(8, "c")],
   };
-  const loose: SidebarSection = { area: null, items: items(9) };
+  const loose: SidebarSection = { area: null, items: items(9, "l") };
 
-  it("the exposed grouped default is 3", () => {
-    expect(GROUPED_PREVIEW_LIMIT).toBe(3);
-  });
-
-  it("caps each block independently and keeps every project row", () => {
-    const { data, grouped: meta } = previewSections([loose, grouped], 3);
-    // Loose block: 3 of 9 direct.
-    expect(data[0]?.items).toHaveLength(3);
-    // Area section: 3 direct + the project row + 3 children = 7 rows.
-    expect(data[1]?.items).toHaveLength(7);
+  it("caps area blocks and project blocks with their own limits", () => {
+    const { data, grouped: meta } = previewSections([loose, grouped], { area: 4, project: 3 });
+    // Loose block: 4 of 9 direct.
+    expect(data[0]?.items).toHaveLength(4);
+    // Area section: 4 direct + the project row + 3 children = 8 rows.
+    expect(data[1]?.items).toHaveLength(8);
     expect(data[1]?.items.some((i) => i.type === "project")).toBe(true);
     expect(meta.truncated).toBe(true);
     expect(meta.blocks).toEqual([
-      { kind: "loose", uuid: null, title: null, shown: 3, total: 9 },
-      { kind: "area", uuid: "a", title: "Hobbies", shown: 3, total: 10 },
-      { kind: "project", uuid: "p1", title: "Firmware", shown: 3, total: 8 },
+      { kind: "loose", uuid: null, title: null, shown: 4, total: 9, limit: 4 },
+      { kind: "area", uuid: "a", title: "Hobbies", shown: 4, total: 10, limit: 4 },
+      { kind: "project", uuid: "p1", title: "Firmware", shown: 3, total: 8, limit: 3 },
     ]);
   });
 
-  it("--all (null) keeps every item and reports no truncation", () => {
-    const { data, grouped: meta } = previewSections([grouped], null);
+  it("null caps (--all) keep every item and report no truncation", () => {
+    const { data, grouped: meta } = previewSections([grouped], { area: null, project: null });
     expect(data[0]?.items).toHaveLength(19); // 10 direct + project row + 8 children
     expect(meta.truncated).toBe(false);
-    expect(meta.blocks.every((b) => b.shown === b.total)).toBe(true);
+    expect(meta.blocks.every((b) => b.shown === b.total && b.limit === null)).toBe(true);
   });
 
-  it("empty blocks are omitted from the counts", () => {
-    const { grouped: meta } = previewSections(
+  it("empty blocks are omitted from the counts; project rows always survive", () => {
+    const { data, grouped: meta } = previewSections(
       [{ area: null, items: [project("p", "Empty Proj")] }],
-      3,
+      { area: 3, project: 3 },
     );
-    // A project with no children contributes no block entry.
     expect(meta.blocks).toEqual([]);
     expect(meta.truncated).toBe(false);
+    expect(data[0]?.items).toHaveLength(1); // the project row itself
+  });
+});
+
+describe("partitionSomedaySection", () => {
+  it("separates own items (projects + direct to-dos) from per-project children", () => {
+    const section: SidebarSection = {
+      area: { uuid: "a", title: "Area" },
+      items: [
+        project("p1", "Proj 1"),
+        ...items(2),
+        childOf("k0", "p1", "Proj 1"),
+        childOf("k1", "p1", "Proj 1"),
+        childOf("k2", "p2", "Proj 2"),
+      ],
+    };
+    const { own, children } = partitionSomedaySection(section);
+    // Own = the project ROW + the 2 direct to-dos (project rows are items).
+    expect(own.map((i) => i.uuid)).toEqual(["p1", "u0", "u1"]);
+    expect(children).toHaveLength(2);
+    expect(children[0]?.project).toEqual({ uuid: "p1", title: "Proj 1" });
+    expect(children[0]?.items).toHaveLength(2);
+    expect(children[1]?.project.uuid).toBe("p2");
+  });
+});
+
+describe("previewSomedaySections", () => {
+  const section: SidebarSection = {
+    area: { uuid: "a", title: "Hobbies" },
+    items: [
+      project("p1", "Proj 1"),
+      project("p2", "Proj 2"),
+      ...items(6),
+      childOf("k0", "p1", "Proj 1"),
+      childOf("k1", "p1", "Proj 1"),
+      childOf("k2", "p1", "Proj 1"),
+    ],
+  };
+
+  it("area cap covers project rows + direct to-dos as one block; children cap per project", () => {
+    const { data, grouped: meta } = previewSomedaySections([section], { area: 4, project: 2 });
+    // 4 own (2 project rows + first 2 to-dos) + 2 children = 6.
+    expect(data[0]?.items.map((i) => i.uuid)).toEqual(["p1", "p2", "u0", "u1", "k0", "k1"]);
+    expect(meta.truncated).toBe(true);
+    expect(meta.blocks).toEqual([
+      { kind: "area", uuid: "a", title: "Hobbies", shown: 4, total: 8, limit: 4 },
+      { kind: "project", uuid: "p1", title: "Proj 1", shown: 2, total: 3, limit: 2 },
+    ]);
+  });
+
+  it("null project cap (bare show flag) keeps every child", () => {
+    const { data, grouped: meta } = previewSomedaySections([section], { area: 50, project: null });
+    expect(data[0]?.items).toHaveLength(11);
+    expect(meta.truncated).toBe(false);
+    expect(meta.blocks.find((b) => b.kind === "project")?.limit).toBeNull();
   });
 });
