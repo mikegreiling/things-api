@@ -96,6 +96,15 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
       }
     }
   }
+  // Default-hidden rows are never silent — a muted count names the toggle.
+  if (opts.showLater !== true) {
+    const hiddenLater = upcoming.length + somedayProjects.length + view.later.someday.length;
+    if (hiddenLater > 0)
+      lines.push(
+        "",
+        dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
+      );
+  }
   if (logged.length > 0) {
     // Truncation is loud: areas accumulate years of history — the full
     // archive belongs to `things logbook --area`.
@@ -104,6 +113,11 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
         ? `── Logged (${logged.length} of ${view.logged.length} — see things logbook --area) ──`
         : `── Logged (${view.logged.length}) ──`;
     lines.push("", bold(header), ...logged.map(fmt));
+  } else if (view.logged.length > 0) {
+    lines.push(
+      "",
+      dim(`…${view.logged.length} logged (--show-logged; full history: things logbook --area)`),
+    );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
   return lines;

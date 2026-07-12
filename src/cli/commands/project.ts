@@ -111,12 +111,26 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
       ...(members.length > 0 ? members.map(fmt) : ["(none)"]),
     );
   }
+  // Default-hidden rows are never silent — a muted count names the toggle.
+  if (opts.showLater !== true) {
+    const hiddenLater =
+      view.later.scheduled.reduce((n, d) => n + d.items.length, 0) +
+      view.later.repeating.length +
+      view.later.someday.length;
+    if (hiddenLater > 0)
+      lines.push(
+        "",
+        dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
+      );
+  }
   if (logged.length > 0) {
     const header =
       logged.length < view.logged.length
         ? `── Logged (${logged.length} of ${view.logged.length}) ──`
         : `── Logged (${view.logged.length}) ──`;
     lines.push("", bold(header), ...logged.map(fmt));
+  } else if (view.logged.length > 0) {
+    lines.push("", dim(`…${view.logged.length} logged (--show-logged)`));
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
   return lines;

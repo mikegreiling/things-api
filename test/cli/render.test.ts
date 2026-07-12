@@ -190,6 +190,52 @@ describe("things projects — sidebar mirror", () => {
       "Future mid",
     ]);
   });
+
+  it("hidden later projects are never silent: per-group muted counts + a bottom flag hint", () => {
+    fixture = buildFixtureDb();
+    const zone = seedArea(fixture.db, "Zone", 1);
+    const idle = seedArea(fixture.db, "Idle", 2);
+    seedProject(fixture.db, { title: "Loose active", index: 1 });
+    seedProject(fixture.db, { title: "Loose someday", start: "someday", index: 2 });
+    seedProject(fixture.db, { title: "Zone active", area: zone, index: 3 });
+    seedProject(fixture.db, { title: "Zone someday", area: zone, start: "someday", index: 4 });
+    // An area whose EVERY project is later still surfaces (header + count).
+    seedProject(fixture.db, { title: "Idle someday", area: idle, start: "someday", index: 5 });
+
+    const visible = projectsView(fixture.db, { now: NOW });
+    const full = projectsView(fixture.db, { later: true, now: NOW });
+    const shown = new Set(visible.map((i) => i.uuid));
+    const groups: Array<{ area: { uuid: string; title: string } | null; hidden: number }> = [];
+    const at = new Map<string | null, number>();
+    for (const item of full) {
+      const key = item.area?.uuid ?? null;
+      if (!at.has(key)) {
+        at.set(key, groups.length);
+        groups.push({ area: item.area ?? null, hidden: 0 });
+      }
+      if (!shown.has(item.uuid)) {
+        const g = groups[at.get(key) ?? 0];
+        if (g !== undefined) g.hidden += 1;
+      }
+    }
+    const lines = renderProjectsSidebar(visible, { groups });
+    // Loose block: active row then its muted count.
+    const looseHint = lines.indexOf("…1 later project");
+    expect(looseHint).toBeGreaterThan(lines.findIndex((l) => l.includes("Loose active")));
+    // Zone: count after its active row.
+    const zoneAt = lines.findIndex((l) => l.includes("⬡ Zone ──"));
+    expect(lines[zoneAt + 2]).toBe("…1 later project");
+    // Later-only area still gets a header + count, no rows.
+    const idleAt = lines.findIndex((l) => l.includes("⬡ Idle ──"));
+    expect(idleAt).toBeGreaterThan(zoneAt);
+    expect(lines[idleAt + 1]).toBe("…1 later project");
+    // Bottom line names the flag.
+    expect(lines.at(-1)).toContain(
+      "3 later projects — visible with `things projects --show-later`",
+    );
+    // No hints when none are hidden.
+    expect(renderProjectsSidebar(visible).join("\n")).not.toContain("later project");
+  });
 });
 
 describe("project title rows", () => {
