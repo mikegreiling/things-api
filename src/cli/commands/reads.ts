@@ -245,30 +245,61 @@ function renderList(items: ListItem[]): string[] {
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
 }
 
+/** Hidden-later counts per sidebar group (null area = the loose block). */
+export interface LaterHints {
+  /** Sidebar-ordered, INCLUDING groups whose every project is later. */
+  groups: Array<{ area: { uuid: string; title: string } | null; hidden: number }>;
+}
+
 /**
  * The sidebar mirror for `things projects`: loose projects first (the GUI
  * lists them above the areas), then a `── ⬡ Area ──` header per area with
  * its projects beneath (the redundant `(Area)` suffix suppressed). Items
  * arrive from projectsView already in sidebar order — this only inserts the
  * headers. Denser than renderSections on purpose: no title styling and no
- * blank line per project (every row here IS a project).
+ * blank line per project (every row here IS a project). With `hints`,
+ * default-hidden later projects are never silent: each group trails a muted
+ * `…n later projects` count (a later-only area still gets its header), and
+ * the output ends with the flag that reveals them.
  */
-export function renderProjectsSidebar(items: ListItem[]): string[] {
-  if (items.length === 0) return ["(empty)"];
+export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): string[] {
+  const total = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
+  if (items.length === 0 && total === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
-  const lines: string[] = [];
-  let openArea: string | null | undefined;
+  const byGroup = new Map<string | null, ListItem[]>();
   for (const item of items) {
-    const area = item.area ?? null;
-    if (openArea === undefined || (openArea ?? null) !== (area?.uuid ?? null)) {
-      openArea = area?.uuid ?? null;
-      if (area !== null) {
-        if (lines.length > 0) lines.push("");
-        lines.push(`${bold("──")} ${areaMark()} ${bold(`${area.title} ──`)}`);
-      }
-    }
-    lines.push(formatItem(item, w, { suppressArea: area?.uuid ?? null }));
+    const key = item.area?.uuid ?? null;
+    byGroup.set(key, [...(byGroup.get(key) ?? []), item]);
   }
+  // hints (when present) carry the full sidebar group order, including
+  // later-only groups the visible items can't reveal.
+  const groups =
+    hints?.groups ??
+    [...byGroup.keys()].map((key) => ({
+      area: key === null ? null : (items.find((i) => i.area?.uuid === key)?.area ?? null),
+      hidden: 0,
+    }));
+  const lines: string[] = [];
+  for (const group of groups) {
+    const rows = byGroup.get(group.area?.uuid ?? null) ?? [];
+    if (rows.length === 0 && group.hidden === 0) continue;
+    if (group.area !== null) {
+      if (lines.length > 0) lines.push("");
+      lines.push(`${bold("──")} ${areaMark()} ${bold(`${group.area.title} ──`)}`);
+    }
+    lines.push(
+      ...rows.map((item) => formatItem(item, w, { suppressArea: group.area?.uuid ?? null })),
+    );
+    if (group.hidden > 0)
+      lines.push(dim(`…${group.hidden} later project${group.hidden === 1 ? "" : "s"}`));
+  }
+  if (total > 0)
+    lines.push(
+      "",
+      dim(
+        `(${total} later project${total === 1 ? "" : "s"} — visible with \`things projects --show-later\`)`,
+      ),
+    );
   return lines;
 }
 
@@ -787,11 +818,25 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts & { limit: string }) => {
+      const limit = Number(opts.limit);
+      let clipped = false;
       withClient(
         opts,
         "trash",
-        (c) => c.read.trash({ limit: Number(opts.limit) }),
-        renderList as (d: never) => string[],
+        (c) => {
+          // Fetch one past the limit so truncation is loud, never silent.
+          const items = c.read.trash({ limit: limit + 1 });
+          if (items.length > limit) {
+            clipped = true;
+            return items.slice(0, limit);
+          }
+          return items;
+        },
+        ((items: ListItem[]) => {
+          const lines = renderList(items);
+          if (clipped) lines.push("", dim(`(${limit} shown — --limit reached; raise --limit)`));
+          return lines;
+        }) as (d: never) => string[],
       );
     });
 
@@ -808,17 +853,53 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts & { area?: string; showLater?: boolean }) => {
+      let hints: LaterHints | undefined;
       withClient(
         opts,
         "projects",
-        (c) =>
-          c.read.projects({
-            ...(opts.area !== undefined && { areaUuid: opts.area }),
+        (c) => {
+          const scope = opts.area !== undefined ? { areaUuid: opts.area } : {};
+          const visible = c.read.projects({
+            ...scope,
             ...(opts.showLater === true && { later: true }),
-          }),
+          });
+          if (opts.showLater !== true) {
+            // One extra query buys the hidden-later counts; the FULL list
+            // carries the sidebar group order (incl. later-only areas).
+            const full = c.read.projects({ ...scope, later: true });
+            const shown = new Set(visible.map((i) => i.uuid));
+            const groups: LaterHints["groups"] = [];
+            const at = new Map<string | null, number>();
+            for (const item of full) {
+              const key = item.area?.uuid ?? null;
+              if (!at.has(key)) {
+                at.set(key, groups.length);
+                groups.push({ area: item.area ?? null, hidden: 0 });
+              }
+              if (!shown.has(item.uuid)) {
+                const g = groups[at.get(key) ?? 0];
+                if (g !== undefined) g.hidden += 1;
+              }
+            }
+            hints = { groups };
+          }
+          return visible;
+        },
         // Scoped to one area the list is flat (the scope names the group);
         // unscoped it mirrors the sidebar with ⬡ area headers.
-        (opts.area ? renderList : renderProjectsSidebar) as (d: never) => string[],
+        ((items: ListItem[]) => {
+          if (opts.area === undefined) return renderProjectsSidebar(items, hints);
+          const lines = renderList(items);
+          const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
+          if (hidden > 0)
+            lines.push(
+              "",
+              dim(
+                `(${hidden} later project${hidden === 1 ? "" : "s"} — visible with \`--show-later\`)`,
+              ),
+            );
+          return lines;
+        }) as (d: never) => string[],
       );
     });
 
