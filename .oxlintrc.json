@@ -8,5 +8,5 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["dist", "coverage", "lab/artifacts"]
+  "ignorePatterns": ["dist", "coverage", "lab/artifacts", ".claude"]
 }
