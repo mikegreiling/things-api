@@ -20,6 +20,7 @@ export const HAZARD_IDS = [
   "H-TAG-SUBTREE-DELETE",
   "H-BACKDATE-OPEN",
   "H-HEADING-CHILDREN",
+  "H-NO-REMINDER",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -288,6 +289,19 @@ const GUARDS: Record<HazardId, GuardFn> = {
         "pass children: complete (cascade completes them), cancel (the app's " +
         "cancel-cascade marks them canceled), or reparent (move them to the project root " +
         "first, keeping them open)",
+    };
+  },
+  "H-NO-REMINDER": ({ op, pre }) => {
+    if (op !== "todo.clear-dated-reminder") return null;
+    const target = pre.target;
+    // Type/existence problems are H-UNKNOWN-DESTINATION's job; here we only
+    // guard the no-op: clearing a reminder that isn't set would verify
+    // trivially (already null) without anything having happened.
+    if (target === null || target.type !== "to-do" || target.reminder !== null) return null;
+    return {
+      hazard: "H-NO-REMINDER",
+      detail: "this to-do has no reminder to clear",
+      remediation: "target a to-do that has a time-of-day reminder set",
     };
   },
   "H-BACKDATE-OPEN": ({ op, params, pre }) => {

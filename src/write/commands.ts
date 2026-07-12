@@ -92,6 +92,24 @@ function osa(script: string): CompiledInvocation {
   return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
 }
 
+/**
+ * A `shortcuts run <name>` invocation. The input dict is piped to the proxy
+ * as JSON (no secrets — the auth token is never sent to a shortcut), so the
+ * redacted rendering equals the payload. Key names come verbatim from the
+ * proxy input contracts in docs/lab/s-campaign-results.md.
+ */
+function shortcutsRun(shortcut: string, input: Record<string, unknown>): CompiledInvocation {
+  const rendered = `shortcuts run ${shortcut} <- ${JSON.stringify(input)}`;
+  return {
+    vector: "shortcuts",
+    kind: "shortcuts-run",
+    payload: rendered,
+    redactedPayload: rendered,
+    shortcut,
+    input,
+  };
+}
+
 /** Multi-statement `tell` block (one osascript invocation, several events). */
 function osaBlock(statements: string[]): CompiledInvocation {
   const payload = `tell application "Things3"\n  ${statements.join("\n  ")}\nend tell`;
@@ -1478,6 +1496,72 @@ const headingUnarchive: CommandSpec<"heading.unarchive"> = {
   },
 };
 
+const headingCreate: CommandSpec<"heading.create"> = {
+  op: "heading.create",
+  hazards: ["H-UNKNOWN-DESTINATION"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.destProject = resolveProject(db, params.project);
+    return pre;
+  },
+  expectedDelta(pre, params, ctx) {
+    const project = pre.destProject?.resolved;
+    // A new type=2 row with this title under the project; disambiguate
+    // duplicate titles by newest creationDate (findCreated orders DESC).
+    return {
+      mode: "create",
+      probe: { title: params.title, type: "heading", sinceEpoch: ctx.nowEpoch - 2 },
+      assert:
+        project !== undefined && project !== null
+          ? [{ field: "project.uuid", equals: project.uuid }]
+          : [],
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "shortcuts") unsupportedVector(this.op, vector);
+    // `things-proxy-create-heading` input: {"title": <str>, "project": <uuid>}.
+    return shortcutsRun("things-proxy-create-heading", {
+      title: params.title,
+      project: pre.destProject?.resolved?.uuid ?? "",
+    });
+  },
+};
+
+const todoClearDatedReminder: CommandSpec<"todo.clear-dated-reminder"> = {
+  op: "todo.clear-dated-reminder",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-NO-REMINDER"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    // The reminder clears; the scheduled date is left untouched (P3b).
+    const target = pre.target;
+    const startDate =
+      target !== null && target.type === "to-do" ? (target.startDate ?? null) : null;
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [
+        { field: "reminder", equals: null },
+        { field: "startDate", equals: startDate },
+      ],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "shortcuts") unsupportedVector(this.op, vector);
+    // `things-proxy-set-detail` input: {"id": <uuid>, "detail": <Detail>, "value": <str>}.
+    // Reminder Time = "" is the clear path (scf P3b); the Detail selector name
+    // comes from the app's Edit Items action list.
+    return shortcutsRun("things-proxy-set-detail", {
+      id: params.uuid,
+      detail: "Reminder Time",
+      value: "",
+    });
+  },
+};
+
 const trashEmpty: CommandSpec<"trash.empty"> = {
   op: "trash.empty",
   hazards: ["H-PERMANENT-DELETE"],
@@ -1530,4 +1614,6 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "heading.rename": headingRename,
   "heading.archive": headingArchive,
   "heading.unarchive": headingUnarchive,
+  "heading.create": headingCreate,
+  "todo.clear-dated-reminder": todoClearDatedReminder,
 };

@@ -54,6 +54,42 @@ describe("H-REPEAT-SCHEDULE", () => {
   });
 });
 
+describe("H-UNKNOWN-DESTINATION (heading.create project resolution)", () => {
+  it("blocks when the destination project does not resolve", () => {
+    expect(check("heading.create", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
+      "H-UNKNOWN-DESTINATION",
+    );
+  });
+
+  it("passes when the project resolves", () => {
+    seedProject(fixture.db, { title: "Real" });
+    expect(check("heading.create", { project: { title: "Real" }, title: "H" })).toBeNull();
+  });
+});
+
+describe("H-NO-REMINDER (todo.clear-dated-reminder)", () => {
+  it("blocks a to-do with no reminder set", () => {
+    const uuid = seedTodo(fixture.db, { title: "no reminder", startDate: "2026-07-20" });
+    expect(check("todo.clear-dated-reminder", { uuid })?.hazard).toBe("H-NO-REMINDER");
+  });
+
+  it("passes a date-scheduled to-do that has a reminder", () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "dated + reminder",
+      startDate: "2026-07-20",
+      reminder: "09:30",
+    });
+    expect(check("todo.clear-dated-reminder", { uuid })).toBeNull();
+  });
+
+  it("blocks a non-to-do target via H-UNKNOWN-DESTINATION", () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    expect(check("todo.clear-dated-reminder", { uuid: proj })?.hazard).toBe(
+      "H-UNKNOWN-DESTINATION",
+    );
+  });
+});
+
 describe("H-PROJECT-COMPLETE-CHILDREN", () => {
   it("requires an explicit children policy when open children exist", () => {
     const proj = seedProject(fixture.db, { title: "P" });

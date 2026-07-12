@@ -96,8 +96,10 @@ const EXPECTED_TOOLS = [
   "backdate_todo",
   "archive_heading",
   "get_area",
+  "create_heading",
   "rename_heading",
   "unarchive_heading",
+  "clear_reminder",
   // reads
   "read_view",
   "search",
@@ -356,7 +358,11 @@ describe("things MCP server", () => {
       vectors: { vector: string }[];
     }[];
     expect(table).toHaveLength(OPERATION_KINDS.length);
-    expect(table[0]?.vectors.map((v) => v.vector)).toEqual(["url-scheme", "applescript"]);
+    expect(table[0]?.vectors.map((v) => v.vector)).toEqual([
+      "url-scheme",
+      "applescript",
+      "shortcuts",
+    ]);
   });
 
   it("get_project renders the heading-grouped project view", async () => {

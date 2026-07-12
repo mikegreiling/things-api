@@ -112,6 +112,32 @@ describe("dry-run plans", () => {
     const plan = env["data"] as Record<string, unknown>;
     expect(String(plan["invocation"])).toContain(`move to do id "${uuid}" to list "Inbox"`);
   });
+
+  it("heading add --dry-run plans the create-heading proxy on the shortcuts vector", async () => {
+    const proj = seedProject(fixture.db, { title: "Dest" });
+    await run(["heading", "add", "Dest", "Phase 2", "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["vector"]).toBe("shortcuts");
+    expect(String(plan["invocation"])).toContain("things-proxy-create-heading");
+    expect(String(plan["invocation"])).toContain(proj);
+  });
+
+  it("todo clear-reminder --dry-run plans the set-detail proxy (Reminder Time = '')", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "dated",
+      startDate: "2026-07-20",
+      reminder: "09:30",
+    });
+    await run(["todo", "clear-reminder", uuid, "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["vector"]).toBe("shortcuts");
+    expect(String(plan["invocation"])).toContain("things-proxy-set-detail");
+    expect(String(plan["invocation"])).toContain("Reminder Time");
+  });
 });
 
 describe("blocked paths (exit 4, nothing executed)", () => {
@@ -138,6 +164,21 @@ describe("blocked paths (exit 4, nothing executed)", () => {
     const error = env["error"] as Record<string, unknown>;
     expect(error["code"]).toBe("blocked:H-UNKNOWN-DESTINATION");
     expect(String(error["message"])).toContain("not in the Trash");
+    expect(process.exitCode).toBe(4);
+  });
+
+  it("heading add into an unknown project is rejected", async () => {
+    await run(["heading", "add", "ghost-project", "New Phase", "--json"]);
+    const env = envelope();
+    expect((env["error"] as Record<string, unknown>)["code"]).toBe("blocked:H-UNKNOWN-DESTINATION");
+    expect(process.exitCode).toBe(4);
+  });
+
+  it("todo clear-reminder on a to-do with no reminder is rejected", async () => {
+    const uuid = seedTodo(fixture.db, { title: "no reminder", startDate: "2026-07-20" });
+    await run(["todo", "clear-reminder", uuid, "--json"]);
+    const env = envelope();
+    expect((env["error"] as Record<string, unknown>)["code"]).toBe("blocked:H-NO-REMINDER");
     expect(process.exitCode).toBe(4);
   });
 

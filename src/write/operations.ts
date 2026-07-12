@@ -40,6 +40,8 @@ export const OPERATION_KINDS = [
   "heading.rename",
   "heading.archive",
   "heading.unarchive",
+  "heading.create",
+  "todo.clear-dated-reminder",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -92,6 +94,12 @@ export interface TodoUpdateParams {
 
 export interface UuidParams {
   uuid: string;
+}
+
+export interface HeadingCreateParams {
+  /** Existing project to create the heading in (uuid or unique, case-insensitive title). */
+  project: ContainerRef;
+  title: string;
 }
 
 export interface HeadingRenameParams {
@@ -352,6 +360,8 @@ export interface OperationParamsMap {
   "heading.rename": HeadingRenameParams;
   "heading.archive": HeadingArchiveParams;
   "heading.unarchive": HeadingUnarchiveParams;
+  "heading.create": HeadingCreateParams;
+  "todo.clear-dated-reminder": UuidParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

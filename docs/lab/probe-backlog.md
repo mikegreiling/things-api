@@ -37,6 +37,17 @@ One clone, autonomous. Harness fixes learned from round 1: `proxy()` must `rm -f
 2. On double-green → merge PR #42 (`mg/phase21b-ops`, OPEN). STATUS: pending.
 3. Recurring suite probes encoding the A1–A6 deltas (e-suite: project tags URL+AS, project reminder, tag shortcut clear; o-suite: inbox reorder) — deliberately deferred; author later with an iteration budget. STATUS: deferred.
 
+### RC — dated-reminder CLEAR campaign — RAN + BANKED 2026-07-11 (runs `rc-20260711-172432` + re-validate, PR #73)
+
+Suite [rc-suite.json](../../lab/suites/rc-suite.json) (RC01–RC03) + avenues C/D in a `--keep-vm` clone. Answered "is Shortcuts the ONLY dated-reminder clear?" → **no** (Shortcuts is the only *in-place / schedule-preserving* clear). Full writeup: [rc-suite-results.md](rc-suite-results.md).
+
+- **RC01/RC02 — URL bounce (avenue B).** STATUS: **WORKS** — `when=today` (keyword) clears the reminder + re-dates to today; re-date back restores the date without re-attaching. Pure-URL dated-reminder clear; non-atomic, crashes on repeating items. This is the H-REMINDER-SCOPE remediation, now end-to-end verified.
+- **RC03 — AppleScript move-to-Inbox (avenue A).** STATUS: **WORKS** — de-schedule drops `reminderTime` with `startDate` (both → NULL, start → 0). Most disruptive (loses the date).
+- **Avenue C — AppleScript reminder property.** STATUS: **DEAD** — no reminder/alarm term in the sdef; read-only `activation date` + read-only `_private_experimental_ json`, `set` on either → −10006.
+- **Avenue D — Shortcuts clear on a PROJECT.** STATUS: **WORKS, in-place, headless** — `set-detail` Reminder Time = `""` on a dated project: `reminderTime` → NULL, `startDate` untouched. Closes capability-matrix:43. Also banked: `add-project?when=<date>@time` attaches a reminder at project creation.
+- **Residual gap:** repeating-item dated-reminder clear — avenue B crashes, avenue A unprobed on templates; Shortcuts `set-detail` is the only demonstrated in-place clear there but was not re-probed on a repeating template. Also DEFERRED (Mike): whether `todo.clear-dated-reminder` should gain a URL-bounce fallback vector to drop the Shortcuts dependency for non-repeating items (no write logic changed in this campaign).
+- **Harness maintenance done in the same change:** the golden `schemaFingerprint` in [golden-v1-metadata.json](golden-v1-metadata.json) was stale (`5526…`) after commit c8eeb69 added `logInterval`/`manualLogDate` to the `TMSettings` depended-columns manifest (`src/db/schema.ts`); updated to `784bd2f6…`. Verified pure manifest drift, NOT golden-DB drift (old manifest still reproduces `5526…` against the clone; the two new columns exist in the golden). Any future `DEPENDED_TABLES` edit must re-record this fingerprint or `lab:run` aborts at bootstrap.
+
 ## C. Parked (bigger, not auto-runnable now)
 
 - **Deadline-less FIXED repeat encoding** (2026-07-11): every fixed rule in the live corpus deadlines its occurrences at the event date (deadline = start − ts, ts=0 included — all fixed-ts=0 templates are birthday-style and spawn deadline = start). Unknown: can the GUI even create a fixed repeat with NO deadline, and if so does it encode differently (the ts=0 plists for "deadline on the day" vs a hypothetical "no deadline" would otherwise collide)? Probe: create both shapes in a clone's GUI, diff `rt1_recurrenceRule`, observe spawned instances. Until then upcoming/projections assume fixed ⇒ deadlined (src/read/views.ts, src/model/occurrences.ts).

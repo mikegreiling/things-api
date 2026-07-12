@@ -1,0 +1,141 @@
+{
+  "suite": "rc",
+  "description": "Reminder-CLEAR campaign: does clearing a DATED reminder REQUIRE the Shortcuts vector, or are there untested non-Shortcuts paths? The 'Shortcuts is the ONLY surface' copy (capability-matrix, oddity 2e, novel-paths #15) rests on URL in-place stickiness (R20/R21, solid) + AppleScript having no reminder property (solid for direct writes) — but leaves three indirect avenues unprobed. RC01/RC02 test the URL bounce-via-today-then-re-date SEQUENCE (the guard's own recommended workaround, never verified end-to-end). RC03 measures reminderTime after an AppleScript move-to-Inbox de-schedule (E06 asserted start/startDate but never recorded reminderTime). Avenue C (AppleScript json-property write) and avenue D (Shortcuts clear-on-a-PROJECT) are handled outside this JSON harness — see docs/lab/rc-suite-results.md. Codec refs from r-suite: 15:00 dated reminder = reminderTime 1006632960; startDate 2026-07-09 = 132805760; 2026-07-10 = 132805888.",
+  "probes": [
+    {
+      "id": "RC01",
+      "title": "URL bounce leg 1: a DATED item with a DATED reminder, updated with a bare when=today keyword — does the keyword-clear (R07) win, or the dated-sticky carry (R20/R21)? CRUX of avenue B.",
+      "vector": "url",
+      "operation": "reminder.bounce-leg1-today",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=RC-BOUNCE&when=2026-07-09@15:00"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='RC-BOUNCE' AND start=2 AND startDate=132805760 AND reminderTime=1006632960"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:RC-BOUNCE}&auth-token={ctx:token}&when=today"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='RC-BOUNCE' AND start=1"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-BOUNCE" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-BOUNCE" },
+            "field": "reminderTime",
+            "value": null
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-BOUNCE" },
+            "field": "startDate",
+            "value": 132805248
+          }
+        ]
+      }
+    },
+    {
+      "id": "RC02",
+      "title": "URL bounce leg 2: re-date the just-cleared item back to its original date (when=2026-07-09) — does it stay cleared (bounce SUCCEEDS as a pure-URL dated clear), or does a reminder re-attach? Completes avenue B end-to-end.",
+      "vector": "url",
+      "operation": "reminder.bounce-leg2-redate",
+      "appState": "running-background",
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:RC-BOUNCE}&auth-token={ctx:token}&when=2026-07-09"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='RC-BOUNCE' AND startDate=132805760"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-BOUNCE" },
+            "field": "startDate",
+            "value": 132805760
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-BOUNCE" },
+            "field": "reminderTime",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "RC03",
+      "title": "AppleScript de-schedule side-effect on reminderTime: a DATED item with a DATED reminder, moved to Inbox via `move ... to list \"Inbox\"` (E06). E06 proved start=0/startDate NULL but NEVER recorded reminderTime — does the reminder DROP when the date it hangs on is removed? Avenue A.",
+      "vector": "applescript",
+      "operation": "reminder.deschedule-drop",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=RC-ASINBOX&when=2026-07-09@15:00"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='RC-ASINBOX' AND start=2 AND startDate=132805760 AND reminderTime=1006632960"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:RC-ASINBOX}\" to list \"Inbox\""
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='RC-ASINBOX' AND start=0"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-ASINBOX" },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-ASINBOX" },
+            "field": "startDate",
+            "value": null
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "RC-ASINBOX" },
+            "field": "reminderTime",
+            "value": null
+          }
+        ]
+      }
+    }
+  ]
+}

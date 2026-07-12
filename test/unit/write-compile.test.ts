@@ -353,3 +353,50 @@ describe("heading op goldens (P10/P11)", () => {
     ).toContain('set status of to do id "H1" to open');
   });
 });
+
+describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
+  it("heading.create pipes {title, project:<uuid>} to things-proxy-create-heading", () => {
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "My Project" }, matches: 1 };
+    const inv = COMMANDS["heading.create"].compile(
+      { project: { title: "My Project" }, title: "Phase Å" },
+      "shortcuts",
+      pre,
+      { token: TOKEN },
+    );
+    expect(inv.vector).toBe("shortcuts");
+    expect(inv.kind).toBe("shortcuts-run");
+    expect(inv.shortcut).toBe("things-proxy-create-heading");
+    expect(inv.input).toEqual({ title: "Phase Å", project: "PROJ-9" });
+    // No secrets ever ride a shortcut input — redacted equals payload.
+    expect(inv.redactedPayload).toBe(inv.payload);
+    expect(inv.payload).not.toContain(TOKEN);
+  });
+
+  it("todo.clear-dated-reminder pipes Reminder Time = '' to things-proxy-set-detail", () => {
+    const inv = COMMANDS["todo.clear-dated-reminder"].compile(
+      { uuid: "TODO-1" },
+      "shortcuts",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(inv.shortcut).toBe("things-proxy-set-detail");
+    expect(inv.input).toEqual({ id: "TODO-1", detail: "Reminder Time", value: "" });
+  });
+
+  it("both ops refuse a non-shortcuts vector (planner-bug guard)", () => {
+    expect(() =>
+      COMMANDS["heading.create"].compile(
+        { project: { uuid: "P" }, title: "x" },
+        "url-scheme",
+        emptyPreState(),
+        { token: TOKEN },
+      ),
+    ).toThrow(/cannot be compiled/);
+    expect(() =>
+      COMMANDS["todo.clear-dated-reminder"].compile({ uuid: "T" }, "applescript", emptyPreState(), {
+        token: TOKEN,
+      }),
+    ).toThrow(/cannot be compiled/);
+  });
+});

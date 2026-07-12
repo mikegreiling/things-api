@@ -12,7 +12,7 @@ import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
-import { readUrlSchemeEnabled } from "./availability.ts";
+import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
   describeEnvironmentChanges,
@@ -119,6 +119,8 @@ export interface WriteDeps {
   environment?: EnvironmentTracker;
   /** Seam: on-disk 'Enable Things URLs' state for failure attribution (availability.ts). */
   urlSchemeEnabled?: () => boolean | null;
+  /** Seam: installed Things proxy shortcuts, for the pre-dispatch availability gate (availability.ts). */
+  shortcutProxies?: () => ShortcutsState;
   now?: () => Date;
   poller?: PollerDeps;
   pkgVersion?: string;
@@ -402,6 +404,30 @@ export async function runMutation<K extends OperationKind>(
           hazardsChecked: spec.hazards,
         },
       };
+    }
+
+    // 5b. Shortcuts availability gate: the proxy the invocation names must be
+    // installed. A missing proxy is a setup problem, not a failed write — the
+    // app is never touched. (Skipped for dry-run above, which only compiles.)
+    if (vector.id === "shortcuts" && invocation.shortcut !== undefined) {
+      const proxies = (deps.shortcutProxies ?? (() => readShortcutProxies()))();
+      if (!proxies.present.includes(invocation.shortcut)) {
+        audit({
+          result: "blocked:environment",
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+        });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail:
+            `the Things proxy shortcut "${invocation.shortcut}" is not installed — this ` +
+            "operation is delivered through it",
+          remediation: "run `things setup shortcuts` to install the proxy shortcuts, then retry",
+        };
+      }
     }
 
     // 6. Ensure the app is running in the BACKGROUND before dispatch —

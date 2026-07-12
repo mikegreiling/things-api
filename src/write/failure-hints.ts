@@ -51,6 +51,16 @@ export function classifyTransportFailure(input: {
         environmentSuffix(input.environmentChanges),
     };
   }
+  if (input.vector === "shortcuts" && input.timedOut) {
+    return {
+      likelyCause: "permission-pending",
+      hint:
+        "the shortcut did not return in time — the first run of a Things proxy shortcut " +
+        "shows a one-time macOS consent prompt. Run the shortcut once interactively and " +
+        "choose Always Allow, then retry (headless after that)." +
+        environmentSuffix(input.environmentChanges),
+    };
+  }
   if (input.timedOut || EVENT_TIMED_OUT.test(input.stderr)) {
     return {
       likelyCause: "permission-pending",

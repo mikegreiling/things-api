@@ -6,15 +6,23 @@
 import type { DisruptionTier } from "../../config.ts";
 import type { OperationKind } from "../operations.ts";
 
-export type VectorId = "url-scheme" | "applescript";
+export type VectorId = "url-scheme" | "applescript" | "shortcuts";
 
 export interface CompiledInvocation {
   vector: VectorId;
-  kind: "open-url" | "osascript";
-  /** The exact payload executed (URL or AppleScript source). */
+  kind: "open-url" | "osascript" | "shortcuts-run";
+  /**
+   * The exact payload executed (URL or AppleScript source). For the
+   * shortcuts-run kind this is a human-readable rendering of the run — the
+   * executor reads `shortcut`/`input` instead.
+   */
   payload: string;
   /** Payload with secrets replaced — safe for dry-run output and errors. */
   redactedPayload: string;
+  /** shortcuts-run only: the proxy shortcut to invoke (`shortcuts run <name>`). */
+  shortcut?: string;
+  /** shortcuts-run only: the JSON-serializable input dict piped to the shortcut. */
+  input?: unknown;
 }
 
 export interface VectorSupport {

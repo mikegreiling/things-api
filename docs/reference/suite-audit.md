@@ -18,8 +18,12 @@ Seven op kinds had no recurring autonomous coverage: `todo.cancel`, `todo.backda
 
 Moral, now policy: **an op ships with a recurring live check, not just unit-level compile/verify tests** — unit seams can't see an app-side parser rejection or a mapper gap.
 
+## Shortcuts write vector — two new op kinds, recurring coverage PARKED (2026-07-11)
+
+The Shortcuts write vector landed (§A.2): `heading.create` and `todo.clear-dated-reminder` are shipped op kinds (**catalog now 36**), delivered through `things-proxy-create-heading` / `things-proxy-set-detail`. Neither is in the guest e2e: the e2e/`lab:regress` runner has no Shortcuts-vector arm yet (it can't `shortcuts run` a proxy and answer first-run consent), so these two are **the only shipped ops without a recurring live check** — PARKED in probe-backlog §C alongside the s-suite. They ARE covered at the seam level (`test/engine/write-shortcuts.test.ts`: success + verified delta, missing-proxy blocked, first-run-timeout→consent, silent-noop verify-fail; plus compile goldens and guard tests). When the runner grows a Shortcuts arm, wire an e2e step for both (a golden clone with the proxies installed + Always-Allow pre-granted).
+
 ## Suite-level notes
 
-- **s-suite** (Shortcuts) is defined but NOT auto-runnable (proxy runs need the lab runner's Shortcuts-vector support; delete-class probes need a human). Its output-class probes (S01–S03) could ride `lab:regress` once the runner ships guest input files — parked in probe-backlog §C.
+- **s-suite** (Shortcuts) is defined but NOT auto-runnable (proxy runs need the lab runner's Shortcuts-vector support; delete-class probes need a human). Its output-class probes (S01–S03) could ride `lab:regress` once the runner ships guest input files — parked in probe-backlog §C. The two wired Shortcuts ops (`heading.create`, `todo.clear-dated-reminder`) ride the same parked track for recurring live coverage.
 - **Probe-id vocabularies differ by layer**: suite JSON `operation` fields are probe-level primitives (`todo.create`, `order.today-partial`); the write API uses catalog kinds (`todo.add`, `reorder`). The [README](README.md) maps the families.
 - Read-side regression is carried by the unit corpus (fixture DBs; UI-oracle-derived expectations) — views have no VM suite, by design (SQLite reads don't drift with app behavior, only with schema, which the fingerprint gate owns).

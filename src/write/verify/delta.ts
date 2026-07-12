@@ -16,7 +16,7 @@ export interface FieldAssertion {
 
 export interface CreateProbe {
   title: string;
-  type: Extract<TaskType, "to-do" | "project">;
+  type: Extract<TaskType, "to-do" | "project" | "heading">;
   /** Only rows created at/after this epoch-seconds instant qualify. */
   sinceEpoch: number;
   /**
@@ -132,7 +132,7 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
           )
           .all(
             probe.title,
-            probe.type === "project" ? 1 : 0,
+            probe.type === "project" ? 1 : probe.type === "heading" ? 2 : 0,
             probe.excludeUuids === undefined ? probe.sinceEpoch : 0,
           ) as { uuid: string }[]
       ).filter((r) => !excluded.has(r.uuid));

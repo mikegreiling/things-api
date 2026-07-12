@@ -9,9 +9,23 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { AuditRecord } from "../../src/audit/schema.ts";
+import type { AnyTask } from "../../src/model/entities.ts";
 import { planUndo, readAuditRecords, selectUndoTargets } from "../../src/write/undo.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
+
+/** Minimal decoded to-do for the clear-reminder targeted-restore path. */
+function currentTodo(partial: Partial<AnyTask> = {}): AnyTask {
+  return {
+    type: "to-do",
+    uuid: "U-1",
+    startDate: null,
+    todaySection: null,
+    reminder: null,
+    repeating: { isTemplate: false, isInstance: false, templateUuid: null },
+    ...partial,
+  } as unknown as AnyTask;
+}
 
 function record(partial: Partial<AuditRecord>): AuditRecord {
   return {
@@ -410,6 +424,62 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
     expect(plan.steps).toEqual([
       { op: "todo.move", params: { uuid: "U-1", project: { uuid: "P-OLD" } } },
     ]);
+  });
+});
+
+describe("planUndo — clear-dated-reminder (targeted restore)", () => {
+  const clearRecord = (partial: Partial<AuditRecord> = {}): AuditRecord =>
+    record({
+      op: "todo.clear-dated-reminder",
+      uuid: "U-1",
+      pre: { reminder: "09:30", startDate: "2026-07-20" },
+      observed: { reminder: null, startDate: "2026-07-20" },
+      ...partial,
+    });
+
+  it("re-attaches the captured reminder to the CURRENT concrete date", () => {
+    const plan = planUndo(clearRecord(), NOW, [], currentTodo({ startDate: "2026-07-20" }));
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps).toEqual([
+      { op: "todo.update", params: { uuid: "U-1", when: "2026-07-20", reminder: "09:30" } },
+    ]);
+  });
+
+  it("re-attaches to the NEW date when the item moved out of band (no over-restore)", () => {
+    const plan = planUndo(clearRecord(), NOW, [], currentTodo({ startDate: "2026-08-01" }));
+    expect(plan.steps).toEqual([
+      { op: "todo.update", params: { uuid: "U-1", when: "2026-08-01", reminder: "09:30" } },
+    ]);
+  });
+
+  it("restores today/evening via the keyword when the current date is today", () => {
+    const plan = planUndo(
+      clearRecord(),
+      NOW,
+      [],
+      currentTodo({ startDate: "2026-07-05", todaySection: "evening" }),
+    );
+    expect(plan.steps[0]?.params["when"]).toBe("evening");
+  });
+
+  it("is irreversible-at-plan-time once the item is de-scheduled", () => {
+    const plan = planUndo(clearRecord(), NOW, [], currentTodo({ startDate: null }));
+    expect(plan.kind).toBe("irreversible");
+    expect(plan.reason).toContain("no longer scheduled");
+  });
+
+  it("is irreversible once the item is a repeating template", () => {
+    const plan = planUndo(
+      clearRecord(),
+      NOW,
+      [],
+      currentTodo({
+        startDate: "2026-07-20",
+        repeating: { isTemplate: true, isInstance: false, templateUuid: null },
+      }),
+    );
+    expect(plan.kind).toBe("irreversible");
+    expect(plan.reason).toContain("repeating");
   });
 });
 
