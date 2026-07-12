@@ -98,5 +98,9 @@ Font-test observations already banked (Mike's terminal, 2026-07-10): `◑` rende
 
 **Cross-terminal glyph audit (flagged by Mike, 2026-07-10).** The CLI's glyph language (`src/cli/glyphs.ts` — checkbox marks ✓ × ~, pie quarters ◔ ◑ ◕ ◉, chips ‹›, ★/⏾/≡) was chosen on one macOS font stack; audit how it renders across terminal emulators and fonts before treating it as settled. Matrix: Terminal.app, iTerm2, Ghostty, kitty, VS Code terminal, Warp × SF Mono, Menlo, JetBrains Mono, a Nerd Font — plus a CJK-wide (`ambiguous=double`) config and a `NO_COLOR`/piped pass. Watch for: tofu on `⏾` (U+23FE, Unicode 9) and the pie quarters, double-width drift of ambiguous-width glyphs breaking column alignment, and dim-on-light-theme legibility. Every glyph is a constant in `glyphs.ts`, so retuning is a one-file change.
 
+## §I. Surface the reversibility matrix — DEFERRED (2026-07-12)
+
+The per-op reversibility classification landed as data + tests (`src/write/reversibility.ts`, `test/unit/reversibility-matrix.test.ts`, per [design/reversibility-matrix-plan.md](design/reversibility-matrix-plan.md)) but is NOT yet surfaced to users. Parked: add a reversibility column to `things capabilities` (and/or a generated docs table) sourced from `REVERSIBILITY`. The table's `{class, note, ack?}` shape was chosen for exactly this — a consumer reads `class` for the badge and `note` for the honest caveat. Do it when the capabilities surface next gets attention; no behavior change, purely additive read output.
+
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)

@@ -134,7 +134,13 @@ export function selectUndoTargets(records: AuditRecord[], last: number): AuditRe
 
 // -------------------------------------------------------------- plan builder
 
-const IRREVERSIBLE: Partial<Record<string, string>> = {
+/**
+ * Operations with NO validated inverse surface — reported irreversible on
+ * sight, before any per-record analysis. The reversibility matrix cross-checks
+ * that these keys are EXACTLY the ops classed `irreversible` in
+ * `reversibility.ts`, so the two catalogs cannot drift.
+ */
+export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
