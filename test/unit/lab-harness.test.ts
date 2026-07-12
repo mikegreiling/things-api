@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateAssertions } from "../../lab/runner/assertions.ts";
 import { diffSnapshots } from "../../lab/runner/differ.ts";
-import { compareVerdicts, evaluateProbe } from "../../lab/runner/evaluate.ts";
+import { activeProbes, compareVerdicts, evaluateProbe } from "../../lab/runner/evaluate.ts";
 import { computeDisruption, parseEventLog, sliceEvents } from "../../lab/runner/tier.ts";
 import type {
   DbSnapshot,
@@ -425,5 +425,34 @@ describe("evaluateProbe + compareVerdicts", () => {
     const cmp = compareVerdicts(a, b);
     expect(cmp.identical).toBe(false);
     expect(cmp.diffs).toEqual(["U02: tier 3 vs 2"]);
+  });
+});
+
+describe("activeProbes", () => {
+  const base = {
+    title: "t",
+    vector: "shortcuts" as const,
+    operation: "op",
+    appState: "running-background" as const,
+    commands: [],
+    expect: { verdict: "supported" as const, tier: 0 as const, assertions: [] },
+  };
+
+  it("drops interactive probes, keeps normal + hazard", () => {
+    const probes: ProbeSpec[] = [
+      { ...base, id: "S01" },
+      { ...base, id: "S02", group: "normal" },
+      { ...base, id: "S-haz", group: "hazard" },
+      { ...base, id: "S04", group: "interactive" },
+    ];
+    expect(activeProbes(probes).map((p) => p.id)).toEqual(["S01", "S02", "S-haz"]);
+  });
+
+  it("is a no-op when nothing is interactive", () => {
+    const probes: ProbeSpec[] = [
+      { ...base, id: "A" },
+      { ...base, id: "B" },
+    ];
+    expect(activeProbes(probes)).toHaveLength(2);
   });
 });

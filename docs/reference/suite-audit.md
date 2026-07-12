@@ -18,9 +18,9 @@ Seven op kinds had no recurring autonomous coverage: `todo.cancel`, `todo.backda
 
 Moral, now policy: **an op ships with a recurring live check, not just unit-level compile/verify tests** — unit seams can't see an app-side parser rejection or a mapper gap.
 
-## Shortcuts write vector — two new op kinds, recurring coverage PARKED (2026-07-11)
+## Shortcuts write vector — two new op kinds, recurring coverage CLOSED (2026-07-12)
 
-The Shortcuts write vector landed (§A.2): `heading.create` and `todo.clear-dated-reminder` are shipped op kinds (**catalog now 36**), delivered through `things-proxy-create-heading` / `things-proxy-set-detail`. Neither is in the guest e2e: the e2e/`lab:regress` runner has no Shortcuts-vector arm yet (it can't `shortcuts run` a proxy and answer first-run consent), so these two are **the only shipped ops without a recurring live check** — PARKED in probe-backlog §C alongside the s-suite. They ARE covered at the seam level (`test/engine/write-shortcuts.test.ts`: success + verified delta, missing-proxy blocked, first-run-timeout→consent, silent-noop verify-fail; plus compile goldens and guard tests). When the runner grows a Shortcuts arm, wire an e2e step for both (a golden clone with the proxies installed + Always-Allow pre-granted).
+The Shortcuts write vector landed (§A.2): `heading.create` and `todo.clear-dated-reminder` are shipped op kinds (**catalog now 36**), delivered through `things-proxy-create-heading` / `things-proxy-set-detail`. **Recurring live coverage now exists**: the lab runner grew a Shortcuts arm (a `shortcut` DSL step — guest input file + `shortcuts run --input-path`/`--output-path`, output captured for `stdoutMatches`; docs/lab/harness.md) and **s-suite is now an autonomous recurring suite in `lab:regress`**. S02 locks `heading.create` (type=2 row with `project=<uuid>`) and S-detail locks `todo.clear-dated-reminder` (`reminderTime`→NULL, `startDate` untouched) — both run headless on the golden's inherited output-class Always-Allow. S01 (find echo) + S03 (heading.rename via edit-title) ride along; the delete-class probes S04/S-delperm are `group:interactive` (auto-skipped — no Always-Allow, human sitting only). Seam tests remain (`test/engine/write-shortcuts.test.ts`: success + verified delta, missing-proxy blocked, first-run-timeout→consent, silent-noop verify-fail). Every shipped op kind now has a recurring live check.
 
 ## Granular checklist edit — one new op kind, live delivery already covered (2026-07-12)
 
@@ -32,6 +32,6 @@ The Shortcuts write vector landed (§A.2): `heading.create` and `todo.clear-date
 
 ## Suite-level notes
 
-- **s-suite** (Shortcuts) is defined but NOT auto-runnable (proxy runs need the lab runner's Shortcuts-vector support; delete-class probes need a human). Its output-class probes (S01–S03) could ride `lab:regress` once the runner ships guest input files — parked in probe-backlog §C. The two wired Shortcuts ops (`heading.create`, `todo.clear-dated-reminder`) ride the same parked track for recurring live coverage.
+- **s-suite** (Shortcuts) is auto-runnable and part of `lab:regress` (2026-07-12): its output-class probes (S01–S03 + S-detail) run headless via the runner's `shortcut` DSL step on the golden's inherited Always-Allow; the delete-class probes (S04, S-delperm) are `group:interactive` and skipped by the runner (human sitting via `lab/scripts/l5-consent-absorb.sh`). Backs recurring live coverage of `heading.create` + `todo.clear-dated-reminder`.
 - **Probe-id vocabularies differ by layer**: suite JSON `operation` fields are probe-level primitives (`todo.create`, `order.today-partial`); the write API uses catalog kinds (`todo.add`, `reorder`). The [README](README.md) maps the families.
 - Read-side regression is carried by the unit corpus (fixture DBs; UI-oracle-derived expectations) — views have no VM suite, by design (SQLite reads don't drift with app behavior, only with schema, which the fingerprint gate owns).

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Lab harness gained an Apple Shortcuts arm (developer-facing).** The probe-suite DSL grew a `shortcut` step — the guest writes a JSON input file and runs `shortcuts run <proxy> --input-path/--output-path`, capturing the proxy's output for assertions — plus a `group:interactive` marker that the runner skips (for the delete-class proxies that re-prompt on every run and can't run unattended). `s-suite.json` is now an autonomous recurring suite in `lab:regress`, giving the two Shortcuts-only shipped operations (`heading.create`, `todo.clear-dated-reminder`) recurring live validation against the real app, alongside the already-present reorder-scope coverage in the guest e2e smoke. No product behavior changes.
+
 ## 0.8.0 — 2026-07-12
 
 - **`things capabilities` now shows each operation's undo classification.** Every op entry carries an `undo:` line — `reversible`, `reversible-with-loss`, `conditional`, or `irreversible` — with the note explaining what `things undo` can and cannot restore (and the acknowledgement flag its inverse needs, where one applies). The same data rides the `--json` envelope and the MCP capabilities tool as an additive `undo` field, straight from the test-locked reversibility matrix.

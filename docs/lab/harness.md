@@ -44,6 +44,13 @@ A probe is **green** iff: transport clean (unless `allowNonzeroExit`) ∧ all wa
 
 Disruption tiers: 0 = no observable effect · 1 = background launch · 2 = focus steal (Things became frontmost) · 3 = new window/modal beyond the window budget, or a title change. Window budget: a launch surfaces the main window plus (sometimes) an untitled companion (budget 2); a bare activation can surface that companion alone (budget 1); anything beyond is a modal/new window. Error modals show up as `window-new` events without a launch; the `json` command's error modal additionally steals focus. Note: AppleEvents to a *closed* Things auto-launch it **with focus steal** (tier 2, A40/A41) — pre-launch with `open -g` to keep AppleScript operations at tier 0.
 
+## Command steps & vectors (suite DSL)
+
+A probe's `setup`/`commands`/`cleanup` are lists of step objects the guest runs in order (`lab/guest/probe-runner.py`): `openUrl` (background `open -g` unless `foreground`), `exec` (raw argv), `osascript`, `shortcut`, `waitSql` (poll a SELECT until it returns a row), `waitCrash`, and `sleep`. String fields resolve `{ctx:…}`/`{seed:…}`/`{uuid:TITLE}` placeholders on the guest at execution time.
+
+- **`shortcut`** — the Apple Shortcuts vector: `{ "shortcut": "<name>", "input": { … }, "timeoutSeconds": 40 }`. The guest writes `input` (a JSON dict; string values resolve placeholders) to a temp file and runs `shortcuts run <name> --input-path <in> --output-path <out>`. The output file (falling back to process stdout) becomes the command's `stdout`, so `stdoutMatches` assertions see the proxy's result; the stale output file is removed before each run (a proxy exits 0 even when it silently no-ops — the DB delta is the only truth, scf lesson). Requires the six golden-resident `things-proxy-*` shortcuts + inherited consent (see [s-campaign-results.md](s-campaign-results.md)).
+- **`group: "interactive"`** — a probe the automated runner SKIPS (both the guest execution list and the host's `activeProbes` gate). It stays in the suite JSON as documentation for human sittings. Use it for the delete-class Shortcuts proxies, which have no Always-Allow and re-prompt every run (oddities 5j): S04/S-delperm ride a human sitting via `lab/scripts/l5-consent-absorb.sh`, never `lab:regress`.
+
 ## Suite conventions (u-suite)
 
 - Canonical URL transport is **`open -g`** (background-open). U01 alone uses plain `open` to re-validate T01's launch/foreground finding. Matrix-v1 tiers assumed plain `open`; the recorded tiers here are the `-g` variant, which is what the write API will use.

@@ -58,6 +58,18 @@ export type ProbeCommand =
   | { openUrl: string; foreground?: boolean; note?: string }
   | { exec: string[]; note?: string }
   | { osascript: string; note?: string }
+  /**
+   * Apple Shortcuts vector. The guest writes `input` (a JSON dict; string
+   * values resolve the same {ctx:…}/{seed:…}/{uuid:…} placeholders) to a temp
+   * file and runs `shortcuts run <shortcut> --input-path <in> --output-path
+   * <out>`. The output file (falling back to process stdout) becomes the
+   * command's stdout, so `stdoutMatches` assertions see the proxy's result.
+   * Only the output-class proxies (find/create-heading/edit-title/set-detail)
+   * run headless in clones — the delete-class proxies re-prompt every run, so
+   * any probe driving one MUST be tagged `group: "interactive"` (lab:run skips
+   * those; they need a human sitting).
+   */
+  | { shortcut: string; input?: Record<string, unknown>; timeoutSeconds?: number; note?: string }
   | { waitSql: string; timeoutSeconds?: number; note?: string }
   | { waitCrash: true; timeoutSeconds?: number; note?: string }
   | { sleep: number; note?: string };
@@ -104,8 +116,13 @@ export interface ProbeSpec {
   vector: Vector;
   operation: string;
   appState: AppState;
-  /** "hazard" probes are quarantined to the end of the run (crash risk). */
-  group?: "normal" | "hazard";
+  /**
+   * "hazard" probes are quarantined to the end of the run (crash risk).
+   * "interactive" probes need a human present (e.g. delete-class Shortcuts that
+   * re-prompt every run) — lab:run/regress skip them; they are documented in
+   * the suite for human sittings (see lab/scripts/l5-consent-absorb.sh).
+   */
+  group?: "normal" | "hazard" | "interactive";
   /** Executed before the before-snapshot; not part of the evidence window. */
   setup?: ProbeCommand[];
   commands: ProbeCommand[];

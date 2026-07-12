@@ -26,7 +26,10 @@ if margin < 2:
 print(f"[regress] trial window ok: pinned {meta['pinnedDate']}, expiry {expiry:%Y-%m-%d} ({margin} days margin)")
 EOF
 
-for suite in u a x o r e p; do
+# s-suite drives the Apple Shortcuts proxies; its output-class probes run
+# headless on the golden's inherited Always-Allow, and its delete-class probes
+# are group:interactive (auto-skipped by lab:run).
+for suite in u a x o r e p s; do
   echo "[regress] === suite: $suite ==="
   npm run lab:run -- --suite "lab/suites/$suite-suite.json"
 done

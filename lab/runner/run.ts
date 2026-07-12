@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { observeSchema } from "../../src/db/fingerprint.ts";
 import type { AssertionContext } from "./assertions.ts";
-import { evaluateRun } from "./evaluate.ts";
+import { activeProbes, evaluateRun } from "./evaluate.ts";
 import { log, run, scp, sleep, ssh, sshStreaming, SSH_USER, TART_HOME } from "./sh.ts";
 import { parseEventLog } from "./tier.ts";
 import {
@@ -94,7 +94,14 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
 
     await bootstrap(ip, metadata, artifactsDir);
 
-    log(`executing suite "${suite.suite}" (${suite.probes.length} probes)…`);
+    // "interactive" probes (delete-class Shortcuts, oddities 5j) never ride an
+    // automated run — the guest skips them and they are excluded from the gate.
+    const active = activeProbes(suite.probes);
+    const skipped = suite.probes.length - active.length;
+    log(
+      `executing suite "${suite.suite}" (${active.length} probes` +
+        `${skipped > 0 ? `; ${skipped} interactive skipped` : ""})…`,
+    );
     pushBundle(ip, options.suitePath, metadata, seed);
     const guestExit = await sshStreaming(
       ip,
@@ -107,8 +114,8 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
     collect(ip, artifactsDir);
 
     log("evaluating evidence…");
-    const verdicts = evaluate(suite, metadata, seed, artifactsDir, runId);
-    ok = suite.probes.every((p) => verdicts[p.id]?.ok === true);
+    const verdicts = evaluate({ ...suite, probes: active }, metadata, seed, artifactsDir, runId);
+    ok = active.every((p) => verdicts[p.id]?.ok === true);
     exitCode = ok ? 0 : 1;
 
     writeFileSync(

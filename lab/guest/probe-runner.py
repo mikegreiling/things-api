@@ -222,6 +222,36 @@ def execute_commands(commands: list, resolver: Resolver, record: dict) -> None:
             script = resolver.resolve(cmd["osascript"])
             result = run_argv(["osascript", "-e", script])
             record["commands"].append(result)
+        elif "shortcut" in cmd:
+            # Apple Shortcuts vector: JSON input -> temp file -> `shortcuts run
+            # <name> --input-path <in> --output-path <out>`. Placeholders in
+            # string input values resolve like command strings. The output file
+            # (falling back to process stdout) becomes the command's stdout so
+            # stdoutMatches assertions see the proxy's result. The output file
+            # is removed first — `shortcuts run` exits 0 even when Edit Items
+            # silently no-ops (oddity 5k), so a stale file would alias a prior
+            # run's output (scf harness lesson).
+            name = cmd["shortcut"]
+            resolved_input = {
+                k: (resolver.resolve(v) if isinstance(v, str) else v)
+                for k, v in cmd.get("input", {}).items()
+            }
+            in_path = os.path.expanduser("~/things-lab/run/shortcut-in.json")
+            out_path = os.path.expanduser("~/things-lab/run/shortcut-out.txt")
+            with open(in_path, "w") as f:
+                json.dump(resolved_input, f)
+            if os.path.exists(out_path):
+                os.remove(out_path)
+            result = run_argv(
+                ["shortcuts", "run", name, "--input-path", in_path, "--output-path", out_path],
+                timeout=float(cmd.get("timeoutSeconds", 40)),
+            )
+            try:
+                with open(out_path) as f:
+                    result["stdout"] = f.read()
+            except OSError:
+                pass  # no output file (empty result) — keep the process stdout
+            record["commands"].append(result)
         elif "waitSql" in cmd:
             # Placeholders may reference rows the preceding command is still
             # creating ({uuid:TITLE} right after an `open`); resolve on every
@@ -406,9 +436,16 @@ def main() -> int:
 
     resolver = Resolver(context)
     probes = suite["probes"]
+    # Interactive probes (delete-class Shortcuts with no Always-Allow, oddities
+    # 5j) re-prompt every run and cannot run unattended — skip them; the host
+    # excludes them from evaluation and the green gate too (evaluate.activeProbes).
+    for p in probes:
+        if p.get("group", "normal") == "interactive":
+            print(f"== {p['id']}: SKIPPED (interactive — needs a human sitting)", flush=True)
+    runnable = [p for p in probes if p.get("group", "normal") != "interactive"]
     # Hazard probes (crash risk) are quarantined to the end, preserving order.
-    ordered = [p for p in probes if p.get("group", "normal") != "hazard"] + [
-        p for p in probes if p.get("group", "normal") == "hazard"
+    ordered = [p for p in runnable if p.get("group", "normal") != "hazard"] + [
+        p for p in runnable if p.get("group", "normal") == "hazard"
     ]
 
     exec_path = os.path.join(args.out, "execution.ndjson")
