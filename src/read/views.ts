@@ -609,7 +609,50 @@ export function projectsView(
     ...laterBinds,
     ...activeFirstBinds,
   ]);
-  return materialize(db, rows) as Project[];
+  const items = materialize(db, rows) as Project[];
+  if (options?.later !== true) return items;
+  // Each group's later sub-block reads like Upcoming: SCHEDULED projects
+  // first — date ascending, todayIndex within a day (the UI's drag order,
+  // hidden on entities but present on the raw rows) — then someday in drag
+  // order. The SQL already made group runs contiguous with actives leading,
+  // so only the later runs are re-sorted (stable within someday).
+  const todayIso = localToday(options?.now);
+  const ti = new Map(rows.map((r) => [r.uuid, r.todayIndex ?? 0]));
+  const isLater = (p: Project) =>
+    p.startDate !== null ? p.startDate > todayIso : p.start === "someday";
+  const out: Project[] = [];
+  let run: Project[] = [];
+  let runArea: string | null | undefined;
+  const flush = () => {
+    out.push(
+      ...run
+        .map((item, pos) => ({ item, pos }))
+        .toSorted((a, b) => {
+          const ad = a.item.startDate;
+          const bd = b.item.startDate;
+          if (ad !== null && bd !== null)
+            return (
+              ad.localeCompare(bd) ||
+              (ti.get(a.item.uuid) ?? 0) - (ti.get(b.item.uuid) ?? 0) ||
+              a.pos - b.pos
+            );
+          if (ad !== null) return -1;
+          if (bd !== null) return 1;
+          return a.pos - b.pos; // someday keeps drag order
+        })
+        .map((x) => x.item),
+    );
+    run = [];
+  };
+  for (const item of items) {
+    const key = item.area?.uuid ?? null;
+    if (!isLater(item) || key !== runArea) flush();
+    runArea = key;
+    if (isLater(item)) run.push(item);
+    else out.push(item);
+  }
+  flush();
+  return out;
 }
 
 export interface SearchOptions extends ViewFilter {

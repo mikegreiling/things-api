@@ -186,8 +186,48 @@ describe("things projects — sidebar mirror", () => {
     expect(projectsView(fixture.db, { later: true, now: NOW }).map((i) => i.title)).toEqual([
       "Active A",
       "Active B",
-      "Someday early",
       "Future mid",
+      "Someday early",
+    ]);
+  });
+
+  it("later blocks read like Upcoming: scheduled by date (todayIndex within a day) BEFORE someday", () => {
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Zone", 1);
+    seedProject(fixture.db, { title: "Active", area, index: 1 });
+    // Drag order (index) deliberately contradicts the wanted output.
+    seedProject(fixture.db, { title: "Someday first-by-drag", area, start: "someday", index: 2 });
+    seedProject(fixture.db, {
+      title: "Oct 19",
+      area,
+      start: "someday",
+      startDate: "2026-10-19",
+      index: 3,
+    });
+    // Same day, todayIndex reversed vs index — upcoming's within-day order.
+    seedProject(fixture.db, {
+      title: "Aug 1 second",
+      area,
+      start: "someday",
+      startDate: "2026-08-01",
+      index: 4,
+      todayIndex: 20,
+    });
+    seedProject(fixture.db, {
+      title: "Aug 1 first",
+      area,
+      start: "someday",
+      startDate: "2026-08-01",
+      index: 5,
+      todayIndex: 10,
+    });
+
+    expect(projectsView(fixture.db, { later: true, now: NOW }).map((i) => i.title)).toEqual([
+      "Active",
+      "Aug 1 first",
+      "Aug 1 second",
+      "Oct 19",
+      "Someday first-by-drag",
     ]);
   });
 
