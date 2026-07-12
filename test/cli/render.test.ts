@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   anytimeView,
   logbookView,
+  projectsView,
   searchView,
   somedayView,
   upcomingView,
@@ -20,6 +21,7 @@ import {
   formatItem,
   parsePeriodEnd,
   renderLogbook,
+  renderProjectsSidebar,
   renderSections,
   renderUpcoming,
   todayMark,
@@ -100,6 +102,40 @@ describe("renderSections (anytime/someday layout)", () => {
     const lines = renderSections(anytimeView(fixture.db, NOW));
     expect(lines[0]).toContain("Loose top-level");
     expect(lines.findIndex((l) => l.includes("⬡ Hobbies ──"))).toBeGreaterThan(0);
+  });
+});
+
+describe("things projects — sidebar mirror", () => {
+  it("orders loose-first, then areas by sidebar rank (not title), suppressing (Area)", () => {
+    fixture = buildFixtureDb();
+    // Reverse-alphabetical area indexes prove rank order beats title order.
+    const zebra = seedArea(fixture.db, "Zebra", 1);
+    const alpha = seedArea(fixture.db, "Alpha", 2);
+    // Global TMTask indexes deliberately interleave the groups: the raw-index
+    // dump (the old behavior) would shuffle these across areas.
+    seedProject(fixture.db, { title: "In Alpha", area: alpha, index: 1 });
+    seedProject(fixture.db, { title: "Loose one", index: 2 });
+    seedProject(fixture.db, { title: "Zebra second", area: zebra, index: 5 });
+    seedProject(fixture.db, { title: "Zebra first", area: zebra, index: 3 });
+
+    const items = projectsView(fixture.db);
+    expect(items.map((i) => i.title)).toEqual([
+      "Loose one",
+      "Zebra first",
+      "Zebra second",
+      "In Alpha",
+    ]);
+
+    const lines = renderProjectsSidebar(items);
+    // Loose block first, headerless; then ⬡ headers in rank order.
+    expect(lines[0]).toContain("Loose one");
+    const zebraAt = lines.findIndex((l) => l.includes("⬡ Zebra ──"));
+    const alphaAt = lines.findIndex((l) => l.includes("⬡ Alpha ──"));
+    expect(zebraAt).toBeGreaterThan(0);
+    expect(alphaAt).toBeGreaterThan(zebraAt);
+    // Rows under a header drop the redundant (Area) suffix.
+    expect(lines.join("\n")).not.toContain("(Zebra)");
+    expect(lines.join("\n")).not.toContain("(Alpha)");
   });
 });
 

@@ -244,6 +244,33 @@ function renderList(items: ListItem[]): string[] {
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
 }
 
+/**
+ * The sidebar mirror for `things projects`: loose projects first (the GUI
+ * lists them above the areas), then a `── ⬡ Area ──` header per area with
+ * its projects beneath (the redundant `(Area)` suffix suppressed). Items
+ * arrive from projectsView already in sidebar order — this only inserts the
+ * headers. Denser than renderSections on purpose: no title styling and no
+ * blank line per project (every row here IS a project).
+ */
+export function renderProjectsSidebar(items: ListItem[]): string[] {
+  if (items.length === 0) return ["(empty)"];
+  const w = uuidDisplayWidth(items);
+  const lines: string[] = [];
+  let openArea: string | null | undefined;
+  for (const item of items) {
+    const area = item.area ?? null;
+    if (openArea === undefined || (openArea ?? null) !== (area?.uuid ?? null)) {
+      openArea = area?.uuid ?? null;
+      if (area !== null) {
+        if (lines.length > 0) lines.push("");
+        lines.push(`${bold("──")} ${areaMark()} ${bold(`${area.title} ──`)}`);
+      }
+    }
+    lines.push(formatItem(item, w, { suppressArea: area?.uuid ?? null }));
+  }
+  return lines;
+}
+
 const FULL_MONTHS = [
   "January",
   "February",
@@ -656,7 +683,10 @@ export function registerReadCommands(program: Command): void {
 
   program
     .command("projects")
-    .description("Active projects (optionally scoped to --area <uuid>)")
+    .description(
+      "Active projects in sidebar order: loose projects first, then grouped under " +
+        "their area (optionally scoped to --area <ref>)",
+    )
     .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -665,7 +695,9 @@ export function registerReadCommands(program: Command): void {
         opts,
         "projects",
         (c) => c.read.projects(opts.area ? { areaUuid: opts.area } : {}),
-        renderList as (d: never) => string[],
+        // Scoped to one area the list is flat (the scope names the group);
+        // unscoped it mirrors the sidebar with ⬡ area headers.
+        (opts.area ? renderList : renderProjectsSidebar) as (d: never) => string[],
       );
     });
 

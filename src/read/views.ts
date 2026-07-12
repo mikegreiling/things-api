@@ -547,9 +547,14 @@ export function projectsView(db: DatabaseSync, options?: { areaUuid?: string }):
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
+  // Sidebar order, not raw global index (which interleaves areas): loose
+  // (area-less) projects first in their own drag order — the GUI lists them
+  // above the areas — then each area by ITS sidebar rank (TMArea."index"),
+  // projects within an area by their drag order.
   const where = area
     ? `${OPEN} AND t.type = 1 AND t.area = ? ORDER BY t."index" ASC`
-    : `${OPEN} AND t.type = 1 ORDER BY t."index" ASC`;
+    : `${OPEN} AND t.type = 1 ORDER BY (t.area IS NOT NULL) ASC,
+       (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, t."index" ASC`;
   const rows = fetchTaskRows(db, where, area ? [area] : []);
   return materialize(db, rows) as Project[];
 }
