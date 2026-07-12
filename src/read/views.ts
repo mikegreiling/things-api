@@ -141,7 +141,7 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: ViewFilter): To
   //    stable tiebreak).
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND (
+    `${OPEN} AND ${CONTAINER_UNTRASHED} AND (
        (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
        OR (t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
            AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))
@@ -205,6 +205,22 @@ const EFF_PROJECT = `COALESCE(t.project, (SELECT h.project FROM TMTask h WHERE h
 const PROJECT_ANYTIME_ACTIVE = `(${EFF_PROJECT} IS NULL OR EXISTS (
      SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
      AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")}))`;
+
+/**
+ * DERIVED-trash exclusion: project deletion is SHALLOW (A24B — only the
+ * project row flips trashed=1; children keep trashed=0 and their links, so
+ * their Trash membership is derived through the container chain). Every live
+ * view must therefore check the chain, not just the row's own flag: the
+ * heading (if any) and the effective project (direct or via heading) must
+ * both be untrashed. Areas cannot be trashed (they delete permanently), so
+ * the chain is at most heading → project. Trash-adjacent surfaces stay
+ * exempt on purpose: `things trash` lists directly-flagged rows, and a
+ * trashed project's OWN view shows its would-be-recovered children.
+ */
+const CONTAINER_UNTRASHED = `(t.heading IS NULL OR EXISTS (
+     SELECT 1 FROM TMTask hh WHERE hh.uuid = t.heading AND hh.trashed = 0))
+ AND (${EFF_PROJECT} IS NULL OR EXISTS (
+     SELECT 1 FROM TMTask cc WHERE cc.uuid = ${EFF_PROJECT} AND cc.trashed = 0))`;
 
 export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): SidebarSection[] {
   const packedToday = encodePackedDate(localToday(now));
@@ -356,7 +372,8 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${tf.sql}
+    `${OPEN} AND ${CONTAINER_UNTRASHED}
+     AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${tf.sql}
      ORDER BY t.startDate ASC, t."index" ASC`,
     [packedToday, ...untilBinds, ...tf.binds],
   );
@@ -370,7 +387,7 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   // the instance-validated model: deadline = startDate − rule.startOffsetDays.
   const templateRows = fetchTaskRows(
     db,
-    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0
+    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
      AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
      AND t.rt1_instanceCreationPaused = 0
      AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${until === undefined ? "" : " AND t.rt1_nextInstanceStartDate <= ?"}${tf.sql}
@@ -442,7 +459,7 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   // rule rides along so consumers can derive waiting/paused/ended.
   const restingRows = fetchTaskRows(
     db,
-    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0
+    `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
      AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
      AND (t.rt1_nextInstanceStartDate IS NULL OR t.rt1_nextInstanceStartDate <= ?
           OR t.rt1_instanceCreationPaused = 1)${tf.sql}
@@ -655,11 +672,12 @@ export function searchView(db: DatabaseSync, query: string, options?: SearchOpti
   );
 
   // Scope: open + untrashed by default; --logged/--trashed widen; --all is
-  // the legacy include-everything behavior.
+  // the legacy include-everything behavior. Untrashed means the whole
+  // container chain (derived trash, A24B), not just the row's own flag.
   if (options?.all !== true) {
     const statuses = options?.logged === true ? "(0, 2, 3)" : "(0)";
     where.push(`t.status IN ${statuses}`);
-    if (options?.trashed !== true) where.push("t.trashed = 0");
+    if (options?.trashed !== true) where.push(`t.trashed = 0 AND ${CONTAINER_UNTRASHED}`);
   }
 
   if (options?.project !== undefined) {

@@ -194,11 +194,20 @@ export function resolveTagUuid(db: DatabaseSync, ref: string): string {
   return resolveUuidOrThrow(db, "TMTag", "1=1", ref, "tag", "things tags");
 }
 
-export function resolveProjectUuid(db: DatabaseSync, ref: string): string {
+/**
+ * Write destinations stay strict (a trashed project is not a valid target);
+ * READ surfaces pass `trashed: true` so a project in the Trash can still be
+ * viewed — its would-be-recovered children are only visible there.
+ */
+export function resolveProjectUuid(
+  db: DatabaseSync,
+  ref: string,
+  options?: { trashed?: boolean },
+): string {
   return resolveUuidOrThrow(
     db,
     "TMTask",
-    "type = 1 AND trashed = 0",
+    options?.trashed === true ? "type = 1" : "type = 1 AND trashed = 0",
     ref,
     "project",
     "things projects",
