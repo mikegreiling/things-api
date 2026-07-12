@@ -175,7 +175,10 @@ While an unanswered Automation consent dialog is up (or after one was dismissed 
 
 Contrast the benign single-trash cases: trashing ONLY P keeps its untrashed children visible when viewing P from the Trash (they recover with it — trash cascade is derived, not written; A24B); trashing ONLY T shows it in the Trash individually. It is specifically the direct+transitive combination that loses the row. The data is intact (the row keeps `trashed=1` and its project link — restore/empty-trash still act on it); only every VIEW of it is gone.
 
-**things-api behavior (deliberately divergent):** `things trash` lists every directly-flagged row including double-trashed ones, and a trashed project's own view (`things show <uuid>`) shows a `── Trashed (n) ──` bucket with them — locked by regression tests. Every LIVE view (upcoming/today/anytime/someday/search) excludes the whole derived-trash chain, which the GUI gets right and our CLI initially got wrong (a child of a shallow-trashed project leaked into Upcoming — fixed same change). Evidence: GUI observation on the live host, 2026-07-12; VM screenshot capture for the report queued (probe-backlog §C).
+**things-api behavior (deliberately divergent):** `things trash` lists every directly-flagged row including double-trashed ones, and a trashed project's own view (`things show <uuid>`) shows a `── Trashed (n) ──` bucket with them — locked by regression tests. Every LIVE view (upcoming/today/anytime/someday/search) excludes the whole derived-trash chain, which the GUI gets right and our CLI initially got wrong (a child of a shallow-trashed project leaked into Upcoming — fixed same change). Evidence: GUI observation on the live host, 2026-07-12; **VM screenshot capture DONE 2026-07-12** (VNC arm, clone `things-run-r3-20260712-171142`), report-ready sequence under `lab/artifacts/things-run-r3-20260712-171142/oddity-6half/` (gitignored, like the `.ips` crash reports):
+- `01-trash-child-only.png` — baseline: after trashing ONLY the child, the Trash view shows it individually with its parent project's name in muted text; the project is still live in the sidebar. ✓ expected
+- `02-trash-after-both-child-gone.png` — after separately trashing the project: the child has **vanished** from the Trash view; the project now appears there with a **"0" child-count badge**.
+- `03-project-selected-0-children.png` / `04-project-view-empty.png` — opening the trashed project's own view shows it **empty** ("Press ⌘N to create a new to-do"): the child is invisible there too, though the DB row persists (`trashed=1`, project link intact — confirmed in `final.sqlite`).
 
 ## 7. Consolidated crash & fault catalog (for the report)
 
@@ -194,6 +197,24 @@ Systematic incoherent-mutation sweep (P14, 2026-07-09, PID-watched on a clean VM
 **Novel working path found in the same sweep** (not a bug — a capability): AppleScript `schedule to do id <PROJECT>` SUCCEEDS (projects inherit the `to do` class), setting the project's startDate with no error — an AppleScript vector for project scheduling that complements the URL `update-project?when=` path (P14-A3).
 
 ---
+
+## 8. Repeat-rule & scheduling model surprises (round-3 VM probes, 2026-07-12)
+
+Found while GUI-probing repeat rules and the log-move preference in a `--vnc-experimental` clone (`things-run-r3-20260712-171142`). Not bugs to report — model-relevant behavior worth documenting.
+
+### 8a. `rt1_recurrenceRule` does NOT encode whether a fixed repeat is deadlined
+
+The repeat editor's **"Add deadlines"** is an opt-in checkbox, **OFF by default** — so the *default* fixed repeat is **deadline-less**: its schedule dates are START dates ("Next:"), and its spawned instances carry a `startDate` with **`deadline` = NULL**. Ticking "Add deadlines and start N days earlier" reframes those dates as DEADLINES ("Due:") with start = deadline − N.
+
+The surprise: at N=0 ("deadline on the day"), the deadlined and the deadline-less variants are **byte-identical** in `rt1_recurrenceRule` (`tp=0, fu=…, ts=0, of=[{dy:0}]`) **and** in `t2_deadlineOffset` (both 0) — a same-day deadline collapses to the deadline-less encoding. So the presence/absence of a deadline on a fixed repeat's instances is **not derivable from `rt1_recurrenceRule` alone**. This falsifies the "every fixed rule deadlines its occurrences (incl. ts=0)" law in `src/model/recurrence.ts` for the deadline-less case: that law held on Mike's live corpus because his fixed repeats were all deadlined, not because the rule encoding guarantees it. The actual discriminator (for a non-zero start-offset deadlined repeat, which likely carries a non-zero `ts`/`t2_deadlineOffset`) was not captured (VNC keyboard entry into the offset field failed) — a queued follow-up. **Product impact:** projections that assume fixed⇒deadline (`src/read/views.ts`, `src/model/occurrences.ts`) may show phantom deadlines for deadline-less fixed repeats. Evidence: `DLREPEAT`, s-campaign-results.md round 3.
+
+### 8b. A repeating template's reminder is a rule property, invisible in `reminderTime`
+
+Adding a reminder to a repeating template via the repeat editor ("Add reminders 12:00 PM") **persists in the editor** (re-opening shows it checked) yet writes **nothing to the `reminderTime` column** on the template OR its pre-spawned instances, and adds **no time key** to the decoded `rt1_recurrenceRule`. The reminder lives in the repeat spec (materialized on future instances, storage column unresolved). Consequence for automation: there is **no `reminderTime`-column reminder to clear on a template** — the Shortcuts `set-detail Reminder Time=""` clear is a safe no-op there, and clearing the template's reminder means editing the rule (UI-only). Evidence: `RCLEAR`, s-campaign-results.md round 3.
+
+### 8c. `logInterval` has only THREE values — no weekly/monthly
+
+The "Move completed items to Logbook" preference (`TMSettings.logInterval`) offers exactly **Immediately (0) · Daily (1) · Manually (4)** in Things 3.22.11 — there is **no Weekly or Monthly** option. The `2`(weekly)/`3`(monthly) values assumed by `src/read/log-boundary.ts` are unreachable; the real manual value is `4` (which falls to the model's `default`/manual branch, so behavior is unaffected — only the enum documentation was wrong). A mid-interval AppleScript `log completed now` advances `TMSettings.manualLogDate` to the current time (confirms the boundary max()-in). Evidence: `logInterval`/`LOGNOW`, s-campaign-results.md round 3.
 
 ## Suggested report to Cultured Code
 
