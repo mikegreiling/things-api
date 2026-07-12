@@ -43,6 +43,46 @@ export const ExitCode = {
 
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 
+/**
+ * List-view truncation metadata (ADDITIVE). Present on the meta of any read
+ * command that applies a row limit; absent on unbounded/structured views.
+ * `shown` items were returned of `total` that matched after all filters;
+ * `limit` is the effective cap (null when the caller asked for all rows);
+ * `truncated` is true exactly when `shown < total`. The dropped remainder is
+ * `total - shown`.
+ */
+export interface Pagination {
+  shown: number;
+  total: number;
+  limit: number | null;
+  truncated: boolean;
+}
+
+/**
+ * Per-block truncation for the grouped catalogues (anytime/someday). Every
+ * area/project header is always present (sidebar completeness); only the
+ * innermost item lists are capped. One entry per non-empty block: the
+ * area-less loose to-dos, an area's direct to-dos, or a project's to-dos.
+ */
+export interface BlockCount {
+  kind: "loose" | "area" | "project";
+  /** Container uuid (area or project); null for the loose block. */
+  uuid: string | null;
+  /** Container title; null for the loose block. */
+  title: string | null;
+  shown: number;
+  total: number;
+}
+
+/** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Pagination}. */
+export interface GroupedPagination {
+  /** Per-block preview cap (null when the caller asked for every item). */
+  limit: number | null;
+  /** True when any block hid items. */
+  truncated: boolean;
+  blocks: BlockCount[];
+}
+
 export interface EnvelopeMeta {
   /** Things database schema version (`Meta.databaseVersion`), null when no DB was opened. */
   dbVersion: number | null;
@@ -50,6 +90,10 @@ export interface EnvelopeMeta {
   fingerprint: "ok" | "drift" | "user-accepted" | "unknown";
   /** Wall-clock duration of the command in milliseconds. */
   elapsedMs: number;
+  /** List-view truncation metadata; present only on limited flat read views. */
+  pagination?: Pagination;
+  /** Per-block truncation metadata; present only on grouped views (anytime/someday). */
+  grouped?: GroupedPagination;
 }
 
 export interface OkEnvelope<T> {

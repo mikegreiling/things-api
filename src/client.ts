@@ -120,7 +120,7 @@ export interface ThingsClient {
     upcoming(filter?: UpcomingFilter): ListItem[];
     someday(filter?: SomedayFilter): SidebarSection[];
     logbook(options?: LogbookFilter): ListItem[];
-    trash(options?: { limit?: number }): ListItem[];
+    trash(options?: { limit?: number | null }): ListItem[];
     /**
      * Projects in sidebar order. LATER (someday + future-scheduled) projects
      * are excluded by default — `later: true` appends them after the active
@@ -135,7 +135,7 @@ export interface ThingsClient {
     tags(): Tag[];
     search(query: string, options?: SearchOptions): ListItem[];
     /** Rows created/modified since a moment — incl. trashed/logged/templates. */
-    changes(options: { since: Date; limit?: number }): ChangedItem[];
+    changes(options: { since: Date; limit?: number | null }): ChangedItem[];
     byUuid(uuid: string): AnyTask | null;
     /**
      * Classify a loose reference (uuid, >=6-char prefix, share link, or
