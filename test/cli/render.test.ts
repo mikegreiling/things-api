@@ -23,12 +23,24 @@ import {
   formatItem,
   parsePeriodEnd,
   parsePeriodStart,
+  renderLegend,
   renderLogbook,
   renderProjectsSidebar,
   renderSections,
   renderUpcoming,
   todayMark,
+  viewHeaderLines,
 } from "../../src/cli/commands/reads.ts";
+import {
+  areaMark,
+  CHECKLIST_MARK,
+  eveningMoon,
+  LEGEND,
+  LEGEND_GROUPS,
+  NOTES_MARK,
+  REMINDER_MARK,
+  todayStar,
+} from "../../src/cli/glyphs.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
@@ -703,5 +715,61 @@ describe("todayMark", () => {
     expect(todayMark(day, NOW)).toBe("★");
     expect(todayMark(night, NOW)).toBe("⏾");
     expect(todayMark(future, NOW)).toBeNull();
+  });
+});
+
+describe("renderLegend (things legend)", () => {
+  it("groups entries under the five section headers, in order", () => {
+    const lines = renderLegend();
+    const headers = lines.filter((l) => /^── .+ ──$/.test(l));
+    expect(headers).toEqual(LEGEND_GROUPS.map((g) => `── ${g} ──`));
+    // Every entry's group has at least one non-header row beneath it.
+    for (const group of LEGEND_GROUPS) {
+      expect(LEGEND.some((e) => e.group === group)).toBe(true);
+    }
+  });
+
+  it("every entry renders as `<glyph>  <meaning>` and stays within 80 columns", () => {
+    // Colors are OFF here (non-TTY), so a line is the plain glyph + meaning.
+    for (const line of renderLegend()) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it("documents every state box, project circle, and marker glyph", () => {
+    // The single-source coverage guard: the exported marks and the box/circle
+    // families must each appear in the rendered legend, so a new glyph in
+    // glyphs.ts that never reaches the legend fails here.
+    const text = renderLegend().join("\n");
+    const required = [
+      "[ ]",
+      "[✓]",
+      "[×]",
+      "[~]",
+      "[↻]",
+      "( )",
+      "(✓)",
+      "(×)",
+      "(~)",
+      "(↻)",
+      NOTES_MARK,
+      REMINDER_MARK,
+      CHECKLIST_MARK,
+      todayStar(),
+      eveningMoon(),
+      areaMark(),
+      "⚑",
+    ];
+    for (const glyph of required) {
+      expect(text, `legend missing ${glyph}`).toContain(glyph);
+    }
+  });
+});
+
+describe("viewHeaderLines (view title preamble)", () => {
+  it("builds a bold title + dim deep link followed by a blank line", () => {
+    // Non-TTY here, so bold/dim are identity — assert the plain shape.
+    expect(viewHeaderLines("anytime")).toEqual(["Anytime (things:///show?id=anytime)", ""]);
+    expect(viewHeaderLines("inbox")).toEqual(["Inbox (things:///show?id=inbox)", ""]);
   });
 });

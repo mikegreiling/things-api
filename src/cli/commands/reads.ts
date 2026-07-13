@@ -19,6 +19,8 @@ import {
   dateChip,
   deadlineToken,
   eveningMoon,
+  LEGEND,
+  LEGEND_GROUPS,
   loggedDate,
   NOTES_MARK,
   projectCircle,
@@ -78,11 +80,52 @@ interface PagedResult<T> {
 }
 
 /**
+ * A view's TTY-only title preamble: bold view name + its dim Things deep link,
+ * then a blank line — e.g. `Anytime (things:///show?id=anytime)`. The id is the
+ * app's documented show id (identical to the command name for these views).
+ * Suppressed off a TTY so `things inbox | grep …` stays clean, and never part
+ * of `--json`; the caller gates on both.
+ */
+export function viewHeaderLines(view: string): string[] {
+  const title = view.charAt(0).toUpperCase() + view.slice(1);
+  return [`${bold(title)} ${dim(`(things:///show?id=${view})`)}`, ""];
+}
+
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const stripAnsi = (s: string): string => s.replace(ANSI, "");
+const visibleWidth = (s: string): number => [...stripAnsi(s)].length;
+
+/** Left-column width for the legend's glyph samples (short marks align; long textual samples overflow). */
+const LEGEND_GUTTER = 10;
+
+/**
+ * The `things legend` layout: the visual language grouped into sections
+ * (`── To-dos ──`, …), each row the glyph as it actually renders (color on a
+ * TTY) followed by its meaning. Content comes straight from glyphs.ts's LEGEND
+ * table, so it can never drift from what the list renderers emit.
+ */
+export function renderLegend(): string[] {
+  const lines: string[] = [];
+  for (const group of LEGEND_GROUPS) {
+    const entries = LEGEND.filter((e) => e.group === group);
+    if (entries.length === 0) continue;
+    if (lines.length > 0) lines.push("");
+    lines.push(bold(`── ${group} ──`));
+    for (const e of entries) {
+      const pad = " ".repeat(Math.max(0, LEGEND_GUTTER - visibleWidth(e.glyph)));
+      lines.push(`${e.glyph}${pad}  ${e.meaning}`);
+    }
+  }
+  return lines;
+}
+
+/**
  * The shared read driver: open the client, stamp the envelope meta (including
  * fingerprint + optional pagination), and either emit the `--json` envelope or
  * render human lines. When `hintBase` is given and the result was truncated,
  * the muted "N more items" hint (reconstructing the user's own invocation) is
- * appended to the human output — never to `--json`.
+ * appended to the human output — never to `--json`. When `header` names a view,
+ * its title preamble leads the human output on a TTY only (viewHeaderLines).
  */
 function runRead<T>(
   opts: GlobalReadOpts,
@@ -90,6 +133,7 @@ function runRead<T>(
   fn: (client: ThingsClient) => PagedResult<T>,
   render: (data: T) => string[],
   hintBase?: string,
+  header?: string,
 ): void {
   const started = Date.now();
   // An empty --db would silently fall through to the default database path —
@@ -124,7 +168,13 @@ function runRead<T>(
         const hint = truncationHint(hintBase, pagination);
         if (hint !== null) lines.push("", hint);
       }
-      process.stdout.write(`${lines.join("\n")}\n`);
+      // The view title preamble is a TTY-only affordance (`things inbox | grep`
+      // must stay clean) and never rides --json — both gates already hold here.
+      const out =
+        header !== undefined && process.stdout.isTTY === true
+          ? [...viewHeaderLines(header), ...lines]
+          : lines;
+      process.stdout.write(`${out.join("\n")}\n`);
     }
     process.exitCode = ExitCode.Ok;
   } catch (err) {
@@ -900,6 +950,34 @@ function renderSomedayPreview(
 }
 
 export function registerReadCommands(program: Command): void {
+  program
+    .command("legend")
+    .description(
+      "The symbols and colors the list views use, grouped and explained: to-do boxes and " +
+        "project circles, markers and chips, colors and styles, section dividers and hints. " +
+        "Human-readable by default; --json emits {glyph, meaning, group} rows.",
+    )
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .action((opts: { json?: boolean }) => {
+      const started = Date.now();
+      if (opts.json) {
+        const entries = LEGEND.map((e) => ({
+          glyph: stripAnsi(e.glyph),
+          meaning: e.meaning,
+          group: e.group,
+        }));
+        const meta: EnvelopeMeta = {
+          dbVersion: null,
+          fingerprint: "unknown",
+          elapsedMs: Date.now() - started,
+        };
+        process.stdout.write(`${JSON.stringify(okEnvelope("legend", entries, meta))}\n`);
+      } else {
+        process.stdout.write(`${renderLegend().join("\n")}\n`);
+      }
+      process.exitCode = ExitCode.Ok;
+    });
+
   const listCommands: Array<{
     name: string;
     description: string;
@@ -985,6 +1063,7 @@ export function registerReadCommands(program: Command): void {
             (c) => paginate(cmd.fetch(c, opts.tag, opts.exactTag) as never, lim.limit),
             (cmd.render ?? renderList) as (d: unknown) => string[],
             base,
+            cmd.name,
           );
         },
       );
@@ -1061,6 +1140,8 @@ export function registerReadCommands(program: Command): void {
             return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
           },
           renderList as (d: unknown) => string[],
+          undefined,
+          "anytime",
         );
       },
     );
@@ -1164,6 +1245,8 @@ export function registerReadCommands(program: Command): void {
             };
           },
           renderList as (d: unknown) => string[],
+          undefined,
+          "someday",
         );
       },
     );
@@ -1263,6 +1346,7 @@ export function registerReadCommands(program: Command): void {
             return lines;
           }) as (d: unknown) => string[],
           base,
+          "upcoming",
         );
       },
     );
@@ -1338,6 +1422,7 @@ export function registerReadCommands(program: Command): void {
             ),
           ((items: ListItem[]) => renderLogbook(items)) as (d: unknown) => string[],
           base,
+          "logbook",
         );
       },
     );
@@ -1358,6 +1443,7 @@ export function registerReadCommands(program: Command): void {
         (c) => paginateList(c.read.trash({ limit: null }), lim.limit),
         renderList as (d: unknown) => string[],
         invocation("trash", []),
+        "trash",
       );
     });
 
@@ -1568,4 +1654,24 @@ export function registerReadCommands(program: Command): void {
         base,
       );
     });
+
+  // Every row-rendering view points at `things legend` for its glyph language.
+  const GLYPH_VIEWS = new Set([
+    "today",
+    "inbox",
+    "anytime",
+    "someday",
+    "upcoming",
+    "logbook",
+    "trash",
+    "projects",
+    "areas",
+    "changes",
+    "search",
+  ]);
+  for (const c of program.commands) {
+    if (GLYPH_VIEWS.has(c.name())) {
+      c.addHelpText("after", "\nsymbols & colors: run `things legend`");
+    }
+  }
 }

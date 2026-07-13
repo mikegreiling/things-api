@@ -33,6 +33,7 @@ AGENT NOTES:
   - No command ever prompts interactively; operations with cascading or
     permanent effects require explicit flags documented in their --help.
   - Discover the full operation catalog with: things capabilities --json
+  - Symbols & colors in list output: run \`things legend\` (add --json for the table).
   - Every write supports --dry-run: preview the planned change and its
     expected effect without executing anything.
   - Failures are loud: a change that does not take effect exits 3; refused
