@@ -375,18 +375,26 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
  * absent), with the trailing Repeating To-Dos section: templates with no
  * set next occurrence, carrying their waiting/paused/ended status word and
  * the bare ⚑ when the rule will assign a deadline per occurrence.
+ *
+ * Deadline-forecast rows (UPC1) keep startDate=null but carry a real future
+ * deadline; they group under their DEADLINE date via COALESCE(startDate,
+ * deadline) — no when-date pill (the header carries the date; formatItem's
+ * chip keys on startDate, so a null-startDate row shows only the ⚑ deadline
+ * flag, mirroring the GUI's bare-flag anatomy).
  */
 export function renderUpcoming(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
   const todayIso = localToday(now);
   const w = uuidDisplayWidth(items);
   const fmtOpts = now === undefined ? {} : { now };
-  const dated = items.filter((i) => i.startDate !== null);
+  const groupDate = (i: ListItem): string | null =>
+    i.startDate ?? (i.repeating.isTemplate ? null : i.deadline);
+  const dated = items.filter((i) => groupDate(i) !== null);
   const resting = items.filter((i) => i.startDate === null && i.repeating.isTemplate);
   const lines: string[] = [];
   let openHeader: string | null = null;
   for (const item of dated) {
-    const bucket = upcomingBucket(item.startDate ?? "", todayIso);
+    const bucket = upcomingBucket(groupDate(item) ?? "", todayIso);
     if (bucket.label !== openHeader) {
       if (lines.length > 0) lines.push("");
       lines.push(bold(`── ${bucket.label} ──`));

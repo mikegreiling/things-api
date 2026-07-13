@@ -230,6 +230,99 @@ describe("list views", () => {
   });
 });
 
+describe("upcomingView deadline-forecast cohort (UPC1)", () => {
+  it("forecasts future-deadline anytime/someday to-dos and someday projects under the DEADLINE date, excludes Inbox", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "anytime-dl", start: "active", deadline: "2026-07-20" });
+    seedTodo(fx.db, { title: "someday-dl", start: "someday", deadline: "2026-07-22" });
+    seedProject(fx.db, { title: "someday-proj-dl", start: "someday", deadline: "2026-07-25" });
+    seedTodo(fx.db, { title: "inbox-dl", start: "inbox", deadline: "2026-07-21" });
+    // A future startDate is the SCHEDULED cohort, not forecast — control.
+    seedTodo(fx.db, { title: "scheduled", start: "someday", startDate: "2026-07-15" });
+
+    const items = upcomingView(fx.db, NOW);
+    expect(items.map((i) => i.title)).toEqual([
+      "scheduled", // when-date 07-15
+      "anytime-dl", // deadline 07-20
+      "someday-dl", // deadline 07-22
+      "someday-proj-dl", // deadline 07-25
+    ]);
+    expect(items.map((i) => i.title)).not.toContain("inbox-dl");
+    // JSON honesty: forecast rows keep startDate null (no faked when-date).
+    const forecast = items.filter((i) => i.title !== "scheduled");
+    expect(forecast.every((i) => i.startDate === null)).toBe(true);
+    expect(forecast.every((i) => i.deadline !== null)).toBe(true);
+  });
+
+  it("drops a suppressed (dismissed-nag) deadline, keeps a re-armed one", () => {
+    fx = buildFixtureDb();
+    // supp == deadline: the reschedule-to-someday nag dismissal — ABSENT.
+    seedTodo(fx.db, {
+      title: "suppressed",
+      start: "someday",
+      deadline: "2026-07-20",
+      deadlineSuppressionDate: "2026-07-20",
+    });
+    // supp < deadline: a stale suppression from a prior, earlier deadline that
+    // was re-armed to a later date — PRESENT.
+    seedTodo(fx.db, {
+      title: "re-armed",
+      start: "someday",
+      deadline: "2026-07-22",
+      deadlineSuppressionDate: "2026-07-01",
+    });
+    const titles = upcomingView(fx.db, NOW).map((i) => i.title);
+    expect(titles).toEqual(["re-armed"]);
+  });
+
+  it("a when+deadline row appears ONCE under its when-date, never double-emitted", () => {
+    fx = buildFixtureDb();
+    // startDate (when) 07-20, deadline earlier at 07-10 — groups under the WHEN
+    // date and the deadline rides as a flag; NOT also emitted at its deadline.
+    seedTodo(fx.db, {
+      title: "when-and-deadline",
+      start: "someday",
+      startDate: "2026-07-20",
+      deadline: "2026-07-10",
+    });
+    const items = upcomingView(fx.db, NOW);
+    expect(items.map((i) => i.title)).toEqual(["when-and-deadline"]);
+    expect(items[0]?.startDate).toBe("2026-07-20");
+    expect(items[0]?.deadline).toBe("2026-07-10");
+  });
+
+  it("--until clips forecast rows by their DEADLINE (their appearance date)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "inside-dl", start: "someday", deadline: "2026-07-20" });
+    seedTodo(fx.db, { title: "outside-dl", start: "someday", deadline: "2026-09-01" });
+    const titles = upcomingView(fx.db, NOW, { until: "2026-08-05" }).map((i) => i.title);
+    expect(titles).toContain("inside-dl");
+    expect(titles).not.toContain("outside-dl");
+  });
+
+  it("--since skips forecast rows whose deadline is before the bound", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "early-dl", start: "someday", deadline: "2026-07-20" });
+    seedTodo(fx.db, { title: "late-dl", start: "someday", deadline: "2026-09-01" });
+    const titles = upcomingView(fx.db, NOW, { since: "2026-08-01" }).map((i) => i.title);
+    expect(titles).not.toContain("early-dl");
+    expect(titles).toContain("late-dl");
+  });
+
+  it("forecast rows survive repeats:false (they are not templates) and merge with scheduled rows", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "forecast", start: "active", deadline: "2026-07-20" });
+    seedTodo(fx.db, { title: "scheduled", start: "someday", startDate: "2026-07-15" });
+    seedTodo(fx.db, {
+      title: "template",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-07-18",
+    });
+    const titles = upcomingView(fx.db, NOW, { repeats: false }).map((i) => i.title);
+    expect(titles).toEqual(["scheduled", "forecast"]); // template synthesis suppressed
+  });
+});
+
 describe("anytime container cascade + sidebar grouping", () => {
   it("excludes children of someday/future-scheduled projects (the project row represents them)", () => {
     fx = buildFixtureDb();

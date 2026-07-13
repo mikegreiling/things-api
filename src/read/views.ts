@@ -29,7 +29,22 @@
  *             project that is not itself anytime-visible (someday/future/
  *             logged/trashed) are excluded — the project row represents
  *             them. Result is grouped in sidebar order (SidebarSection[]).
- * - upcoming: start=2 AND startDate > today, PLUS each fixed repeating
+ * - upcoming: TWO cohorts merged, grouped/sorted by COALESCE(startDate,
+ *             deadline) (UPC1, GUI-verified, docs/lab/upcoming-research.md):
+ *             (1) SCHEDULED — start=2 AND startDate > today, grouped under its
+ *             when-date (a deadline it also carries rides along as a flag);
+ *             (2) DEADLINE-FORECAST — startDate IS NULL AND start IN (1, 2)
+ *             AND deadline > today AND (deadlineSuppressionDate IS NULL OR
+ *             deadlineSuppressionDate < deadline), grouped under its DEADLINE
+ *             date (both to-dos and projects). INBOX (start=0) is EXCLUDED — a
+ *             future deadline does not forecast an Inbox item into Upcoming,
+ *             though a DUE one still pulls it into Today. The suppression guard
+ *             drops a dismissed-nag deadline (supp == deadline) and lets a
+ *             re-armed one (supp < deadline) reappear — the todayView clause
+ *             one step earlier (deadline > today). A when+deadline row appears
+ *             ONCE under its when-date, never double-emitted (the forecast
+ *             cohort requires startDate IS NULL). Forecast rows keep
+ *             startDate=null (no faked when-date). PLUS each fixed repeating
  *             template's next occurrence synthesized from
  *             rt1_nextInstanceStartDate (UI parity; opt out via
  *             repeats:false). Occurrence deadline = start − rule.ts
@@ -288,20 +303,67 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   const packedToday = encodePackedDate(localToday(now));
   const until = filter?.until;
   const since = filter?.since;
-  const untilSql = until === undefined ? "" : " AND t.startDate <= ?";
   const untilBinds = until === undefined ? [] : [encodePackedDate(until)];
-  const sinceSql = since === undefined ? "" : " AND t.startDate >= ?";
   const sinceBinds = since === undefined ? [] : [encodePackedDate(since)];
   const tf = tagFilter(db, filter);
+
+  // Cohort 1 — SCHEDULED: start=2 with a future startDate. The bounds clip the
+  // APPEARANCE date, which for these rows is the startDate (when-date).
+  const schedUntilSql = until === undefined ? "" : " AND t.startDate <= ?";
+  const schedSinceSql = since === undefined ? "" : " AND t.startDate >= ?";
   const rows = fetchTaskRows(
     db,
     `${OPEN} AND ${CONTAINER_UNTRASHED}
-     AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${sinceSql}${tf.sql}
+     AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${schedUntilSql}${schedSinceSql}${tf.sql}
      ORDER BY t.startDate ASC, t."index" ASC`,
     [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
   );
-  const items = materialize(db, rows);
-  if (filter?.repeats === false) return items;
+
+  // Cohort 2 — DEADLINE-FORECAST (UPC1, GUI-verified): anytime/someday to-dos
+  // and someday projects carrying a FUTURE deadline and no when-date. Inbox
+  // (start=0) is excluded; a dismissed-nag deadline (deadlineSuppressionDate ==
+  // deadline) is dropped while a re-armed one (supp < deadline) survives — the
+  // todayView suppression clause one step earlier (deadline > today, not <=).
+  // These rows keep startDate NULL (JSON honesty) and APPEAR under their
+  // deadline, so the bounds clip on deadline, exactly as cohort 1 clips on
+  // startDate.
+  const fcUntilSql = until === undefined ? "" : " AND t.deadline <= ?";
+  const fcSinceSql = since === undefined ? "" : " AND t.deadline >= ?";
+  const forecastRows = fetchTaskRows(
+    db,
+    `${OPEN} AND ${CONTAINER_UNTRASHED}
+     AND t.startDate IS NULL AND t.start IN (1, 2)
+     AND t.deadline IS NOT NULL AND t.deadline > ?
+     AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline)${fcUntilSql}${fcSinceSql}${tf.sql}
+     ORDER BY t.deadline ASC, t."index" ASC`,
+    [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
+  );
+
+  const scheduled = materialize(db, rows);
+  const forecast = materialize(db, forecastRows);
+
+  // The merged date-ordered stream keys on COALESCE(startDate, deadline) — a
+  // scheduled row groups under its when-date, a forecast row under its deadline
+  // — then the UI's within-day drag order (todayIndex ASC; live-verified
+  // 2026-07-11 against the GUI — plain `index` disagrees), then a stable
+  // seed-order/uuid tiebreak.
+  const groupKey = (i: ListItem): string => i.startDate ?? i.deadline ?? "";
+  const sortDated = (list: ListItem[], indexRows: TaskRow[]): ListItem[] => {
+    const todayIndexOf = new Map<string, number>(indexRows.map((r) => [r.uuid, r.todayIndex ?? 0]));
+    return list
+      .map((item, pos) => ({ item, pos }))
+      .toSorted(
+        (a, b) =>
+          groupKey(a.item).localeCompare(groupKey(b.item)) ||
+          (todayIndexOf.get(a.item.uuid) ?? 0) - (todayIndexOf.get(b.item.uuid) ?? 0) ||
+          a.pos - b.pos ||
+          a.item.uuid.localeCompare(b.item.uuid),
+      )
+      .map((x) => x.item);
+  };
+
+  if (filter?.repeats === false)
+    return sortDated([...scheduled, ...forecast], [...rows, ...forecastRows]);
 
   // UI parity: repeating templates surface at their app-materialized next
   // occurrence (rt1_nextInstanceStartDate). Fixed rules only — after-
@@ -367,22 +429,12 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     );
   });
 
-  // Within a day the UI's drag order is todayIndex ASC (live-verified
-  // 2026-07-11 against the GUI: plain `index` disagrees, todayIndex matches
-  // exactly), so the sortable Upcoming order survives the CLI.
-  const todayIndexOf = new Map<string, number>(
-    [...rows, ...templateRows].map((r) => [r.uuid, r.todayIndex ?? 0]),
+  // The scheduled + forecast + occurrence rows share one date-ordered stream
+  // (COALESCE(startDate, deadline), then the UI's within-day drag order).
+  const dated = sortDated(
+    [...scheduled, ...forecast, ...occurrences],
+    [...rows, ...forecastRows, ...templateRows],
   );
-  const dated = [...items, ...occurrences]
-    .map((item, pos) => ({ item, pos }))
-    .toSorted(
-      (a, b) =>
-        (a.item.startDate ?? "").localeCompare(b.item.startDate ?? "") ||
-        (todayIndexOf.get(a.item.uuid) ?? 0) - (todayIndexOf.get(b.item.uuid) ?? 0) ||
-        a.pos - b.pos ||
-        a.item.uuid.localeCompare(b.item.uuid),
-    )
-    .map((x) => x.item);
 
   // The UI's trailing "Repeating To-Dos" section: templates with NO set
   // next occurrence (after-completion rules between instances, rules past
