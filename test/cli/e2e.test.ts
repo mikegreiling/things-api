@@ -65,6 +65,58 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.data.evening.map((i: { title: string }) => i.title)).toEqual(["tonight"]);
   });
 
+  it("things today puts ★/⏾ in the section headers, not on the rows", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "morning", startDate: localToday(), todayIndex: 1 });
+    seedTodo(fx.db, { title: "tonight", startDate: localToday(), evening: true });
+    const { stdout, exitCode } = runCli(["today", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("★ Today (badge:");
+    expect(stdout).toContain("⏾ This Evening ──");
+    // The membership glyph is gone from the item rows themselves.
+    const rows = stdout.split("\n").filter((l) => l.includes("morning") || l.includes("tonight"));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row).not.toContain("★");
+      expect(row).not.toContain("⏾");
+    }
+  });
+
+  it("things today: a cap consuming evening keeps an honest evening hint + the global footer", () => {
+    fx = buildFixtureDb();
+    // 55 Today + 20 This Evening = 75; the default --limit 50 shows 50 Today
+    // rows and NO evening rows, hiding 25 total (5 Today + all 20 evening).
+    for (let i = 0; i < 55; i++) {
+      seedTodo(fx.db, { title: `day ${i}`, startDate: localToday(), todayIndex: i });
+    }
+    for (let i = 0; i < 20; i++) {
+      seedTodo(fx.db, {
+        title: `night ${i}`,
+        startDate: localToday(),
+        evening: true,
+        todayIndex: i,
+      });
+    }
+    const { stdout, exitCode } = runCli(["today", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    // This Evening header renders even though every evening row was cut — the
+    // section-specific hint replaces the old misleading "(empty)".
+    expect(stdout).toContain("⏾ This Evening ──");
+    expect(stdout).not.toContain("(empty)");
+    // Evening-specific number (20) + the exact --limit (75) that reveals them.
+    expect(stdout).toContain(
+      "… 20 evening items — `things today --limit 75` · all: `things today --all`",
+    );
+    // The global footer counts ALL hidden rows (25) — the two compose sensibly.
+    expect(stdout).toContain("25 more items");
+    expect(stdout).toContain("see more: `things today --limit 100`");
+    // JSON is unchanged (fields, not glyphs): the split still carries counts.
+    const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
+    expect(env.data.today).toHaveLength(50);
+    expect(env.data.evening).toHaveLength(0);
+    expect(env.meta.pagination).toEqual({ shown: 50, total: 75, limit: 50, truncated: true });
+  });
+
   it("things todo show includes checklist and repeating flags", () => {
     fx = buildFixtureDb();
     const uuid = seedTodo(fx.db, { title: "template", recurrenceRule: true });

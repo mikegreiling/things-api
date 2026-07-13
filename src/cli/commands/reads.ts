@@ -12,7 +12,7 @@ import type { ThingsClient } from "../../client.ts";
 import type { ListItem, TodayView } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
-import { areaMark, eveningMoon, LEGEND, shortDate, todayStar } from "../glyphs.ts";
+import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
   formatItem,
   renderAnytimePreview,
@@ -23,6 +23,7 @@ import {
   renderSearch,
   renderSections,
   renderSomedayPreview,
+  renderToday,
   renderUpcoming,
   stripAnsi,
   uuidCol,
@@ -154,29 +155,53 @@ export function registerReadCommands(program: Command): void {
       process.exitCode = ExitCode.Ok;
     });
 
-  registerListView(program, {
-    name: "today",
-    description:
+  program
+    .command("today")
+    .description(
       "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
-    fetch: (c, tag, exactTag) =>
-      c.read.today(tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) }),
-    render: (data: TodayView) => {
-      // GUI parity: every Today row carries the star, every This-Evening
-      // row the crescent, right after the box (one shared uuid column).
-      const w = uuidDisplayWidth([...data.today, ...data.evening]);
-      return [
-        `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
-        ...(data.today.length === 0
-          ? ["(empty)"]
-          : data.today.map((i) => formatItem(i, w, { mark: todayStar() }))),
-        "── This Evening ──",
-        ...(data.evening.length === 0
-          ? ["(empty)"]
-          : data.evening.map((i) => formatItem(i, w, { mark: eveningMoon() }))),
-      ];
-    },
-    paginate: paginateToday,
-  });
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & { tag?: string; exactTag?: boolean; limit?: string; all?: boolean },
+      ) => {
+        const lim = parseLimit(opts);
+        if (!lim.ok) return;
+        const base = invocation("today", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
+          opts,
+          "today",
+          (c) => {
+            const full = c.read.today(
+              opts.tag === undefined
+                ? undefined
+                : { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) },
+            );
+            const { data, pagination } = paginateToday(full, lim.limit);
+            // The renderer needs the PRE-cap view to keep This Evening honest
+            // under truncation, so the lines are precomputed here; the global
+            // footer (whole-view remainder) is still appended by the driver.
+            return { data, pagination, lines: renderToday(full, data, base) };
+          },
+          // Type-correct fallback for the TodayView payload; never reached
+          // because `lines` is always precomputed above.
+          (data: TodayView) => renderToday(data, data, base),
+          base,
+          "today",
+        );
+      },
+    );
 
   registerListView(program, {
     name: "inbox",

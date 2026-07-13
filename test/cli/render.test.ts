@@ -25,10 +25,12 @@ import {
   renderLogbook,
   renderProjectsSidebar,
   renderSections,
+  renderToday,
   renderUpcoming,
   todayMark,
   viewHeaderLines,
 } from "../../src/cli/render.ts";
+import { paginateToday } from "../../src/read/pagination.ts";
 import { parsePeriodEnd, parsePeriodStart } from "../../src/cli/period.ts";
 import {
   areaMark,
@@ -718,6 +720,96 @@ describe("todayMark", () => {
     expect(todayMark(day, NOW)).toBe("★");
     expect(todayMark(night, NOW)).toBe("⏾");
     expect(todayMark(future, NOW)).toBeNull();
+  });
+});
+
+describe("renderToday (things today split)", () => {
+  const base = "things today";
+  // Seed `todayN` Today members + `eveningN` This-Evening members, then build
+  // the real view pinned at NOW (evening membership needs startDate == today).
+  function build(fx: FixtureDb, todayN: number, eveningN: number) {
+    for (let i = 0; i < todayN; i++) {
+      seedTodo(fx.db, { title: `day ${i}`, startDate: "2026-07-05", todayIndex: i });
+    }
+    for (let i = 0; i < eveningN; i++) {
+      seedTodo(fx.db, {
+        title: `night ${i}`,
+        startDate: "2026-07-05",
+        evening: true,
+        todayIndex: i,
+      });
+    }
+    return todayView(fx.db, NOW);
+  }
+
+  it("puts ★/⏾ in the section headers and drops them from the rows", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 1, 1);
+    const lines = renderToday(full, full, base);
+    const todayHeader = lines.find((l) => l.includes("Today (badge:"));
+    const eveningHeader = lines.find((l) => l.includes("This Evening"));
+    // Membership glyph lives in the header now (yellow ★ / blue ⏾; color is
+    // OFF here so the helpers render the bare marks).
+    expect(todayHeader).toContain(todayStar());
+    expect(eveningHeader).toContain(eveningMoon());
+    // …and is gone from the item rows (the header implies it).
+    expect(lines.find((l) => l.includes("day 0"))).not.toContain("★");
+    expect(lines.find((l) => l.includes("night 0"))).not.toContain("⏾");
+  });
+
+  it("(a) a cap cutting INSIDE evening keeps the shown rows + an honest `more` hint", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 4); // total 7
+    const { data } = paginateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
+    const lines = renderToday(full, data, base);
+    expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(2);
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
+    expect(lines).toContain(
+      "… 2 more evening items — `things today --limit 7` · all: `things today --all`",
+    );
+  });
+
+  it("(b) a cap consuming evening entirely shows the header + hidden-count hint, never `(empty)`", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 5, 4); // total 9
+    const { data } = paginateToday(full, 3); // 3 today, 0 evening → all 4 evening hidden
+    expect(data.evening).toHaveLength(0);
+    const lines = renderToday(full, data, base);
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
+    expect(lines).not.toContain("(empty)");
+    expect(lines.some((l) => /night \d/.test(l))).toBe(false);
+    expect(lines).toContain(
+      "… 4 evening items — `things today --limit 9` · all: `things today --all`",
+    );
+  });
+
+  it("(c) a truly-empty evening renders NO This Evening header at all (GUI parity)", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 2, 0);
+    const lines = renderToday(full, full, base);
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
+    expect(lines).not.toContain("(empty)");
+    // Today still renders its rows under the ★ badge header.
+    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(true);
+    expect(lines.filter((l) => /day \d/.test(l))).toHaveLength(2);
+  });
+
+  it("(d) --all (no cap) shows every evening row and no hint", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 4);
+    const { data } = paginateToday(full, null);
+    const lines = renderToday(full, data, base);
+    expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(4);
+    expect(lines.some((l) => l.includes("evening items —"))).toBe(false);
+  });
+
+  it("an empty Today section keeps its honest `(empty)` under the badge header", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 0, 0);
+    const lines = renderToday(full, full, base);
+    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(true);
+    expect(lines).toContain("(empty)");
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
   });
 });
 
