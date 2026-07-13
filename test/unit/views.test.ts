@@ -88,6 +88,24 @@ describe("todayView", () => {
     expect(view.badge).toEqual({ dueOrOverdue: 2, other: 2 });
   });
 
+  it("eveningOnly keeps the view shape: today empty, evening populated, badge over evening", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "day", startDate: "2026-07-02" });
+    seedTodo(fx.db, { title: "night", startDate: "2026-07-02", evening: true });
+    seedTodo(fx.db, {
+      title: "night-due",
+      startDate: "2026-07-02",
+      deadline: "2026-07-02",
+      evening: true,
+    });
+
+    const view = todayView(fx.db, NOW, { eveningOnly: true });
+    expect(view.today).toEqual([]);
+    expect(view.evening.map((i) => i.title).toSorted()).toEqual(["night", "night-due"]);
+    // Badge counts only the evening members (mirrors the tag filter's badge).
+    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+  });
+
   it("a DUE deadline pulls items into Today, even from the Inbox (UI-oracle 2026-07-04)", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "deadline-only", deadline: "2026-06-30" }); // overdue, no startDate

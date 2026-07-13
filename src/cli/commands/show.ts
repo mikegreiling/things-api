@@ -205,14 +205,20 @@ export function registerShowCommands(program: Command): void {
       // valid `show` keywords but have no app screen to open — reject them with
       // the fix, rather than resolving an item that happens to share the name.
       if (SHOW_KEYWORDS.has(lower) && !OPEN_KEYWORDS.has(lower)) {
-        const specific = lower === "projects" ? "project" : lower === "areas" ? "area" : "item";
+        // `evening` is not a valid `things:///show?id=` id — the app has no
+        // This Evening screen to foreground — so point at the CLI section
+        // filter instead of a resource ref (as the plurals do).
+        const message =
+          lower === "evening"
+            ? "the app has no This Evening screen to open — use `things today --evening`"
+            : `the app has no ${lower} list to open — open a specific ${
+                lower === "projects" ? "project" : lower === "areas" ? "area" : "item"
+              }: \`things open <ref>\``;
         withClient(
           opts,
           "open",
           () => {
-            throw new RangeError(
-              `the app has no ${lower} list to open — open a specific ${specific}: \`things open <ref>\``,
-            );
+            throw new RangeError(message);
           },
           () => [],
         );

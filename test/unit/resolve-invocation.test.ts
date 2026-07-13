@@ -47,9 +47,33 @@ describe("precedence 2 — view keywords inside show", () => {
     for (const kw of SHOW_KEYWORDS) {
       const r = resolve(["show", kw]);
       expect(r.form, kw).toBe("show-keyword");
-      expect(r.argv, kw).toEqual([kw]);
-      expect(r.canonical, kw).toBe(`things ${kw}`);
+      if (kw === "evening") {
+        // The section sugar expands to a command PLUS its flag.
+        expect(r.argv).toEqual(["today", "--evening"]);
+        expect(r.canonical).toBe("things today --evening");
+      } else {
+        expect(r.argv, kw).toEqual([kw]);
+        expect(r.canonical, kw).toBe(`things ${kw}`);
+      }
     }
+  });
+
+  it("`evening` is a section sugar: `show evening` and bare `evening` → today --evening", () => {
+    for (const argv of [["show", "evening"], ["evening"]]) {
+      const r = resolve(argv);
+      expect(r.form, argv.join(" ")).toBe("show-keyword");
+      expect(r.argv, argv.join(" ")).toEqual(["today", "--evening"]);
+      expect(r.canonical, argv.join(" ")).toBe("things today --evening");
+      expect(r.ref, argv.join(" ")).toBe("evening");
+    }
+    // Case-insensitive, and trailing flags pass through after the expansion.
+    expect(resolve(["Evening", "--json"]).argv).toEqual(["today", "--evening", "--json"]);
+    expect(resolve(["show", "evening", "--limit", "5"]).argv).toEqual([
+      "today",
+      "--evening",
+      "--limit",
+      "5",
+    ]);
   });
 
   it("show keywords carry the view's own flags through", () => {

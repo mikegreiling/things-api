@@ -133,7 +133,16 @@ export interface TodayView {
   badge: { dueOrOverdue: number; other: number };
 }
 
-export function todayView(db: DatabaseSync, now?: Date, filter?: ViewFilter): TodayView {
+export interface TodayFilter extends ViewFilter {
+  /**
+   * Restrict to the This-Evening section: the Today section is filtered out
+   * (returned empty) and the badge counts only the evening members. A section
+   * visibility toggle, not a volume change — the row limit still applies.
+   */
+  eveningOnly?: boolean;
+}
+
+export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): TodayView {
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
   const tf = tagFilter(db, filter);
@@ -164,10 +173,23 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: ViewFilter): To
   // Evening membership expires daily: raw startBucket=1 counts only while
   // startDate is exactly today; stale evening items belong to Today proper.
   const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
-  const dueOrOverdue = items.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
+  const evening = items.filter(isEvening);
+  const dueIn = (list: ListItem[]) =>
+    list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
+  // The evening filter mirrors the tag filter's badge treatment: the badge
+  // reflects exactly the members the view now returns (here, evening only).
+  if (filter?.eveningOnly === true) {
+    const eveningDue = dueIn(evening);
+    return {
+      today: [],
+      evening,
+      badge: { dueOrOverdue: eveningDue, other: evening.length - eveningDue },
+    };
+  }
+  const dueOrOverdue = dueIn(items);
   return {
     today: items.filter((i) => !isEvening(i)),
-    evening: items.filter(isEvening),
+    evening,
     badge: { dueOrOverdue, other: items.length - dueOrOverdue },
   };
 }

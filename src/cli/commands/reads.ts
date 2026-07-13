@@ -165,38 +165,48 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--evening", "show only the This Evening section")
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
       (
-        opts: GlobalReadOpts & { tag?: string; exactTag?: boolean; limit?: string; all?: boolean },
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          evening?: boolean;
+          limit?: string;
+          all?: boolean;
+        },
       ) => {
         const lim = parseLimit(opts);
         if (!lim.ok) return;
+        const eveningOnly = opts.evening === true;
         const base = invocation("today", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          eveningOnly && "--evening",
         ]);
+        const filter = {
+          ...(opts.tag !== undefined && { tag: opts.tag }),
+          ...(opts.exactTag === true && { exactTag: true }),
+          ...(eveningOnly && { eveningOnly: true }),
+        };
         runRead(
           opts,
           "today",
           (c) => {
-            const full = c.read.today(
-              opts.tag === undefined
-                ? undefined
-                : { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) },
-            );
+            const full = c.read.today(filter);
             const { data, pagination } = paginateToday(full, lim.limit);
             // The renderer needs the PRE-cap view to keep This Evening honest
             // under truncation, so the lines are precomputed here; the global
             // footer (whole-view remainder) is still appended by the driver.
-            return { data, pagination, lines: renderToday(full, data, base) };
+            return { data, pagination, lines: renderToday(full, data, base, { eveningOnly }) };
           },
           // Type-correct fallback for the TodayView payload; never reached
           // because `lines` is always precomputed above.
-          (data: TodayView) => renderToday(data, data, base),
+          (data: TodayView) => renderToday(data, data, base, { eveningOnly }),
           base,
           "today",
         );

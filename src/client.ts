@@ -39,6 +39,7 @@ import {
   type SearchResultItem,
   type SidebarSection,
   type SomedayFilter,
+  type TodayFilter,
   type TodayView,
   type UpcomingFilter,
   type ViewFilter,
@@ -117,7 +118,7 @@ export interface ThingsClient {
   config: ThingsApiConfig;
   fingerprint(): FingerprintStatus;
   read: {
-    today(filter?: ViewFilter): TodayView;
+    today(filter?: TodayFilter): TodayView;
     inbox(filter?: ViewFilter): ListItem[];
     anytime(filter?: ViewFilter): SidebarSection[];
     upcoming(filter?: UpcomingFilter): ListItem[];
