@@ -12,6 +12,7 @@ import { isTodayMember, type ListItem, type SidebarSection } from "../../read/vi
 import { localToday } from "../../model/dates.ts";
 import { templateStatus } from "../../model/recurrence.ts";
 import { blue, bold, dim, strike, underline } from "../style.ts";
+import { getInvocation } from "../resolve-invocation.ts";
 import {
   areaMark,
   CHECKLIST_MARK,
@@ -148,12 +149,17 @@ export function runRead<T>(
     client = openThings(opts.db ? { dbPath: opts.db } : {});
     const fp = client.fingerprint();
     const { data, pagination, grouped, lines: precomputed } = fn(client);
+    // The canonical command a sugar invocation normalized to — known now that
+    // `fn` has resolved any reference. Present only for the routing sugars
+    // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
+    const resolvedCommand = getInvocation()?.canonical ?? null;
     const meta: EnvelopeMeta = {
       dbVersion: fp.observation.databaseVersion,
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
       elapsedMs: Date.now() - started,
       ...(pagination !== undefined && { pagination }),
       ...(grouped !== undefined && { grouped }),
+      ...(resolvedCommand !== null && { resolvedCommand }),
     };
     if (fp.kind !== "ok") {
       process.stderr.write(
@@ -170,10 +176,18 @@ export function runRead<T>(
       }
       // The view title preamble is a TTY-only affordance (`things inbox | grep`
       // must stay clean) and never rides --json — both gates already hold here.
-      const out =
+      const withHeader =
         header !== undefined && process.stdout.isTTY === true
           ? [...viewHeaderLines(header), ...lines]
           : lines;
+      // The normalized-form echo: one dim line naming the canonical command a
+      // sugar invocation resolved to, adjacent to the header. Same gates as the
+      // preamble (TTY-only, never in --json) — canonical invocations echo
+      // nothing because `resolvedCommand` is null for them.
+      const out =
+        resolvedCommand !== null && process.stdout.isTTY === true
+          ? [dim(`≡ ${resolvedCommand}`), ...withHeader]
+          : withHeader;
       process.stdout.write(`${out.join("\n")}\n`);
     }
     process.exitCode = ExitCode.Ok;
@@ -948,21 +962,6 @@ function renderSomedayPreview(
   }
   return lines;
 }
-
-/**
- * The view keywords of the app's show?id vocabulary: `things show <keyword>`
- * IS that view, and `things open <keyword>` launches things:///show?id=<kw>
- * directly. A keyword beats a same-named project or area on both.
- */
-export const VIEW_KEYWORDS = new Set([
-  "inbox",
-  "today",
-  "anytime",
-  "upcoming",
-  "someday",
-  "logbook",
-  "trash",
-]);
 
 export function registerReadCommands(program: Command): void {
   program

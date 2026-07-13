@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildProgram, expandShorthand } from "../../src/cli/main.ts";
+import { buildProgram } from "../../src/cli/main.ts";
+import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
@@ -23,8 +24,8 @@ function runCli(argv: string[]): { stdout: string; exitCode: number } {
   try {
     const program = buildProgram();
     program.exitOverride();
-    // Route through the same argv preprocessing the real CLI applies.
-    program.parse(expandShorthand(program, argv), { from: "user" });
+    // Route through the same resolver the real CLI applies.
+    program.parse(resolveInvocation(program, argv).argv, { from: "user" });
     return { stdout: chunks.join(""), exitCode: Number(process.exitCode ?? 0) };
   } finally {
     process.stdout.write = originalWrite;
@@ -521,6 +522,34 @@ describe("cli bare-noun shorthand + show keywords", () => {
     expect(env.data.type).toBe("area");
   });
 
+  it("leading global flags route too: `things --json <name>` = `things <name> --json`", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+
+    // --json leading the noun.
+    const jsonFirst = runCli(["--json", "Hobbies", "--db", fx.path]);
+    expect(jsonFirst.exitCode).toBe(0);
+    const env = JSON.parse(jsonFirst.stdout);
+    expect(env.kind).toBe("show");
+    expect(env.data.type).toBe("area");
+    // meta.resolvedCommand rides the same path.
+    expect(env.meta.resolvedCommand).toBe("things area show Hobbies");
+
+    // --db <value> leading: the value is never misread as the noun.
+    const dbFirst = runCli(["--db", fx.path, "Hobbies", "--json"]);
+    expect(dbFirst.exitCode).toBe(0);
+    expect(JSON.parse(dbFirst.stdout).data.type).toBe("area");
+
+    // Both flags leading, noun last.
+    const bothFirst = runCli(["--json", "--db", fx.path, "Hobbies"]);
+    expect(bothFirst.exitCode).toBe(0);
+    expect(JSON.parse(bothFirst.stdout).meta.resolvedCommand).toBe("things area show Hobbies");
+
+    // Canary: `things --json` alone (no noun) still errors as before — it is
+    // not silently routed anywhere.
+    expect(() => runCli(["--json"])).toThrow();
+  });
+
   it("registered command names are reserved and always win", () => {
     fx = buildFixtureDb();
     const legend = runCli(["legend", "--json"]);
@@ -555,6 +584,125 @@ describe("cli bare-noun shorthand + show keywords", () => {
     // Typed `things show <ref>` keeps the plain resolution error.
     const typed = runCli(["show", "frobnicate", "--json", "--db", fx.path]);
     expect(JSON.parse(typed.stdout).error.message).not.toContain("no command or item");
+  });
+
+  it("show accepts the plural collection keywords (projects|areas|tags)", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Home");
+    seedProject(fx.db, { title: "Website", index: 1 });
+    for (const kw of ["projects", "areas", "tags"]) {
+      const out = runCli(["show", kw, "--json", "--db", fx.path]);
+      expect(out.exitCode, kw).toBe(0);
+      expect(JSON.parse(out.stdout).kind, kw).toBe(kw);
+    }
+  });
+});
+
+describe("cli normalized-form echo + meta.resolvedCommand", () => {
+  it("meta.resolvedCommand names the canonical command for each routing sugar", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const spaced = seedProject(fx.db, { title: "Website redesign", index: 1 });
+    const todo = seedTodo(fx.db, { title: "solder", index: 1 });
+
+    // bare noun (name) → typed area show (plain word: shell-safe, unquoted)
+    expect(
+      JSON.parse(runCli(["Hobbies", "--json", "--db", fx.path]).stdout).meta.resolvedCommand,
+    ).toBe("things area show Hobbies");
+    // a multi-word name is quoted (same shellQuote rules as the footers)
+    expect(
+      JSON.parse(runCli(["Website redesign", "--json", "--db", fx.path]).stdout).meta
+        .resolvedCommand,
+    ).toBe('things project show "Website redesign"');
+    void spaced;
+    // keyword-in-show → the view command
+    expect(
+      JSON.parse(runCli(["show", "anytime", "--json", "--db", fx.path]).stdout).meta
+        .resolvedCommand,
+    ).toBe("things anytime");
+    // uuid routing (bare) → typed todo show, echoing the prefix given
+    expect(
+      JSON.parse(runCli([todo.slice(0, 8), "--json", "--db", fx.path]).stdout).meta.resolvedCommand,
+    ).toBe(`things todo show ${todo.slice(0, 8)}`);
+    // share link (loose show) → typed todo show, link stripped to its id
+    expect(
+      JSON.parse(runCli(["show", `things:///show?id=${todo}`, "--json", "--db", fx.path]).stdout)
+        .meta.resolvedCommand,
+    ).toBe(`things todo show ${todo}`);
+  });
+
+  it("canonical invocations carry no resolvedCommand (no noise)", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    // a plain view command
+    expect(
+      JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout).meta.resolvedCommand,
+    ).toBeUndefined();
+    // an already-typed command
+    expect(
+      JSON.parse(runCli(["area", "show", "Hobbies", "--json", "--db", fx.path]).stdout).meta
+        .resolvedCommand,
+    ).toBeUndefined();
+    // a loose show given a plain NAME is not a routing sugar
+    expect(
+      JSON.parse(runCli(["show", "Hobbies", "--json", "--db", fx.path]).stdout).meta
+        .resolvedCommand,
+    ).toBeUndefined();
+  });
+
+  it("the echo line renders on a TTY, but never piped and never in --json", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const path = fx.path;
+    // A TTY-forcing harness (the default runCli leaves isTTY falsy = piped).
+    const runTty = (argv: string[]): string => {
+      const chunks: string[] = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      const originalIsTty = process.stdout.isTTY;
+      process.stdout.isTTY = true;
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+        return true;
+      }) as typeof process.stdout.write;
+      const originalExitCode = process.exitCode;
+      try {
+        const program = buildProgram();
+        program.exitOverride();
+        program.parse(resolveInvocation(program, argv).argv, { from: "user" });
+        return chunks.join("");
+      } finally {
+        process.stdout.write = originalWrite;
+        process.stdout.isTTY = originalIsTty;
+        process.exitCode = originalExitCode;
+      }
+    };
+
+    // On a TTY the bare noun echoes its canonical typed form.
+    expect(runTty(["Hobbies", "--db", path])).toContain("≡ things area show Hobbies");
+    // Piped (default harness) it is absent.
+    expect(runCli(["Hobbies", "--db", path]).stdout).not.toContain("≡ things area show");
+    // A canonical TTY invocation echoes nothing.
+    expect(runTty(["area", "show", "Hobbies", "--db", path])).not.toContain("≡ things");
+    // --json never carries the echo line.
+    expect(runCli(["Hobbies", "--json", "--db", path]).stdout).not.toContain("≡");
+  });
+});
+
+describe("cli open — plural keywords are not openable", () => {
+  it("open projects/areas/tags error with the fix, launching nothing", () => {
+    fx = buildFixtureDb();
+    const cases: Array<readonly [string, string]> = [
+      ["projects", "project"],
+      ["areas", "area"],
+      ["tags", "item"],
+    ];
+    for (const [kw, noun] of cases) {
+      const out = runCli(["open", kw, "--json", "--db", fx.path]);
+      expect(out.exitCode, kw).not.toBe(0);
+      const msg = JSON.parse(out.stdout).error.message;
+      expect(msg, kw).toContain(`the app has no ${kw} list to open`);
+      expect(msg, kw).toContain(`open a specific ${noun}`);
+    }
   });
 });
 

@@ -12,12 +12,13 @@ import { registerDoctor } from "./commands/doctor.ts";
 import { registerMcp } from "./commands/mcp.ts";
 import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
-import { registerReadCommands, VIEW_KEYWORDS } from "./commands/reads.ts";
+import { registerReadCommands } from "./commands/reads.ts";
 import { registerSetup } from "./commands/setup.ts";
 import { registerShowCommands } from "./commands/show.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
+import { resolveInvocation } from "./resolve-invocation.ts";
 import { ExitCode, PKG_VERSION } from "../contracts.ts";
 
 const AGENT_NOTES = `
@@ -62,37 +63,16 @@ export function buildProgram(): Command {
   return program;
 }
 
-/**
- * Bare-noun shorthand over user args (argv without the node/script prefix):
- * a first argument that is not a flag and not a registered command name (or
- * alias) becomes `show <ref>` — commands are RESERVED and always win. The
- * inserted hidden marker lets an unresolvable ref error as "no command or
- * item". `show <view keyword>` rewrites to the view command itself.
- */
-export function expandShorthand(program: Command, args: string[]): string[] {
-  const first = args[0];
-  if (first === undefined || first.startsWith("-")) return args;
-  const known = new Set<string>(["help"]);
-  for (const c of program.commands) {
-    known.add(c.name());
-    for (const alias of c.aliases()) known.add(alias);
-  }
-  if (known.has(first)) {
-    const second = args[1];
-    if (first === "show" && second !== undefined && VIEW_KEYWORDS.has(second.toLowerCase())) {
-      return [second.toLowerCase(), ...args.slice(2)];
-    }
-    return args;
-  }
-  return ["show", "--via-shorthand", ...args];
-}
-
 export function runCli(): void {
   const program = buildProgram();
   program.exitOverride((err) => {
     process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);
   });
-  program.parse(expandShorthand(program, process.argv.slice(2)), { from: "user" });
+  // The single router (docs/design/cli-grammar.md): classify the invocation,
+  // then dispatch its normalized argv. Sugar forms (bare noun, keyword-in-show)
+  // normalize into the canonical grammar here.
+  const { argv } = resolveInvocation(program, process.argv.slice(2));
+  program.parse(argv, { from: "user" });
 }
 
 // Direct-run detection must survive the npm .bin symlink (argv[1] ends with
