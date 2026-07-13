@@ -9,6 +9,7 @@ import { type Command, Option } from "commander";
 
 import type { AnyTask } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
+import { ExitCode } from "../../contracts.ts";
 import type { ProjectView } from "../../read/project-view.ts";
 import type { ShowTarget } from "../../read/show-target.ts";
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
@@ -108,7 +109,7 @@ export function registerShowCommands(program: Command): void {
             "error: --limit is not available on show — areas cap per section with " +
               "--area-limit / --project-limit; project and to-do cards are uncapped\n",
           );
-          process.exitCode = 2;
+          process.exitCode = ExitCode.Usage;
           return;
         }
         const areaCap = parseCap(

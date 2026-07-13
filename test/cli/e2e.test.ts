@@ -12,6 +12,11 @@ afterEach(() => {
   fx = null;
 });
 
+/** The TTY-only preamble a headered view leads with (title + its deep link). */
+function viewPreamble(view: string): string {
+  return `${view.charAt(0).toUpperCase()}${view.slice(1)} (things:///show?id=${view})`;
+}
+
 /** Run the CLI in-process, capturing stdout lines. */
 function runCli(argv: string[]): { stdout: string; exitCode: number } {
   const chunks: string[] = [];
@@ -99,30 +104,45 @@ describe("view header preambles (TTY-only)", () => {
     }
   };
 
-  it("prepends the bold title + dim deep link on a TTY", () => {
-    fx = buildFixtureDb();
-    seedTodo(fx.db, { title: "capture me", start: "inbox" });
-    const { stdout } = withTty(true, () => runCli(["inbox", "--db", fx!.path]));
-    expect(stdout.startsWith("Inbox (things:///show?id=inbox)\n\n")).toBe(true);
-    expect(stdout).toContain("capture me");
-  });
+  // Every headered view, matrixed so a future view wired WITHOUT the header
+  // arg (or added here without wiring) fails a test. The command name is also
+  // the deep-link id; the title is that name capitalized (viewHeaderLines).
+  const HEADERED_VIEWS = [
+    "today",
+    "inbox",
+    "anytime",
+    "someday",
+    "upcoming",
+    "logbook",
+    "trash",
+  ] as const;
 
-  it("suppresses the header off a TTY so piped output stays clean", () => {
-    fx = buildFixtureDb();
-    seedTodo(fx.db, { title: "capture me", start: "inbox" });
-    const { stdout } = withTty(undefined, () => runCli(["inbox", "--db", fx!.path]));
-    expect(stdout).not.toContain("things:///show?id=inbox");
-    expect(stdout).toContain("capture me");
-  });
+  for (const view of HEADERED_VIEWS) {
+    describe(view, () => {
+      it("prepends the bold title + dim deep link on a TTY", () => {
+        fx = buildFixtureDb();
+        seedTodo(fx.db, { title: "capture me", start: "inbox" });
+        const { stdout } = withTty(true, () => runCli([view, "--db", fx!.path]));
+        expect(stdout.startsWith(`${viewPreamble(view)}\n\n`)).toBe(true);
+      });
 
-  it("never adds the header to --json, even on a TTY", () => {
-    fx = buildFixtureDb();
-    seedTodo(fx.db, { title: "capture me", start: "inbox" });
-    const { stdout } = withTty(true, () => runCli(["inbox", "--json", "--db", fx!.path]));
-    const envelope = JSON.parse(stdout);
-    expect(envelope.kind).toBe("inbox");
-    expect(stdout).not.toContain("things:///show?id=inbox");
-  });
+      it("suppresses the header off a TTY so piped output stays clean", () => {
+        fx = buildFixtureDb();
+        seedTodo(fx.db, { title: "capture me", start: "inbox" });
+        const { stdout } = withTty(undefined, () => runCli([view, "--db", fx!.path]));
+        expect(stdout).not.toContain(`things:///show?id=${view}`);
+      });
+
+      it("never adds the header to --json, even on a TTY", () => {
+        fx = buildFixtureDb();
+        seedTodo(fx.db, { title: "capture me", start: "inbox" });
+        const { stdout } = withTty(true, () => runCli([view, "--json", "--db", fx!.path]));
+        const envelope = JSON.parse(stdout);
+        expect(envelope.kind).toBe(view);
+        expect(stdout).not.toContain(`things:///show?id=${view}`);
+      });
+    });
+  }
 });
 
 describe("cli search (Phase 12 ergonomics)", () => {

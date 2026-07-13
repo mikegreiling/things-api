@@ -6,6 +6,7 @@ import type { Command } from "commander";
 
 import type { Project, Todo } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
+import { ExitCode } from "../../contracts.ts";
 import { localToday } from "../../model/dates.ts";
 import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
@@ -205,7 +206,7 @@ export function registerAreaCommands(program: Command): void {
           process.stderr.write(
             "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
           );
-          process.exitCode = 2;
+          process.exitCode = ExitCode.Usage;
           return;
         }
         const areaCap = parseCap(

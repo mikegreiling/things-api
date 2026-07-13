@@ -376,10 +376,8 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
           ? ""
           : ` (${item.area.title})`
         : "";
-  const shownUuid =
-    uuidWidth > 0 && item.uuid.length > uuidWidth
-      ? item.uuid.slice(0, uuidWidth)
-      : item.uuid.padEnd(uuidWidth);
+  // width 0 (the default) means "no column" — show the full uuid untouched.
+  const shownUuid = uuidWidth > 0 ? uuidCol(item.uuid, uuidWidth) : item.uuid;
   let title = item.title;
   if (asTitle) title = bold(underline(title));
   else if (item.status === "canceled") title = dim(strike(title));
@@ -444,6 +442,15 @@ export function uuidDisplayWidth(items: Array<{ uuid: string }>): number {
     needed = Math.max(needed, common + 1);
   }
   return Math.max(UUID_DISPLAY_MIN, needed);
+}
+
+/**
+ * Fit a uuid into the shared id column: truncate to `width` when longer, pad
+ * to it when shorter, so ids line up under one another regardless of prefix
+ * length. `width` is the value from uuidDisplayWidth.
+ */
+export function uuidCol(uuid: string, width: number): string {
+  return uuid.length > width ? uuid.slice(0, width) : uuid.padEnd(width);
 }
 
 function renderList(items: ListItem[]): string[] {
@@ -919,11 +926,9 @@ function renderSomedayPreview(
       lines.push(bold("── From active projects ──"));
       for (const group of trailing) {
         blank();
-        const uuidCol =
-          group.project.uuid.length > w
-            ? group.project.uuid.slice(0, w)
-            : group.project.uuid.padEnd(w);
-        lines.push(`${dim(uuidCol)}  ${bold(underline(group.project.title))}`);
+        lines.push(
+          `${dim(uuidCol(group.project.uuid, w))}  ${bold(underline(group.project.title))}`,
+        );
         const shown = takeUpTo(group.items, limits.project);
         for (const item of shown) {
           lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
@@ -1543,7 +1548,7 @@ export function registerReadCommands(program: Command): void {
         const w = uuidDisplayWidth(data);
         return data.map(
           (a) =>
-            `${dim(a.uuid.length > w ? a.uuid.slice(0, w) : a.uuid.padEnd(w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
+            `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
         );
       }) as (d: never) => string[]);
     });

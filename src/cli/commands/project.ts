@@ -15,7 +15,7 @@ import {
   thingsLink,
   whenValue,
 } from "../glyphs.ts";
-import { formatItem, openInThings, uuidDisplayWidth, withClient } from "./reads.ts";
+import { formatItem, openInThings, uuidCol, uuidDisplayWidth, withClient } from "./reads.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
@@ -119,7 +119,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     const members = [...group.items, ...(laterByHeading.get(group.heading.uuid) ?? [])];
     lines.push(
       "",
-      `${dim(group.heading.uuid.slice(0, w))}  ${dim(underline(group.heading.title))}`,
+      `${dim(uuidCol(group.heading.uuid, w))}  ${dim(underline(group.heading.title))}`,
       ...(members.length > 0 ? members.map(fmt) : ["(none)"]),
     );
   }

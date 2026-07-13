@@ -327,13 +327,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
-        active_project_items: z
+        show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
           .optional()
           .describe(
             "someday only: include someday to-dos inside active projects, clustered per " +
               "project after each group; a number caps each project's list (true: every item)",
           ),
+        active_project_items: z
+          .union([z.boolean(), z.number().int().min(1)])
+          .optional()
+          .describe("compatibility alias for show_active_project_items"),
         horizon: z
           .number()
           .int()
@@ -370,6 +374,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
+        // show_active_project_items is the preferred name; active_project_items
+        // stays accepted as a compatibility alias.
+        const showActiveProjectItems = args.show_active_project_items ?? args.active_project_items;
         const isGrouped = args.view === "anytime" || args.view === "someday";
         if (isGrouped && args.limit !== undefined) {
           return usage(
@@ -380,12 +387,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (!isGrouped && (args.area_limit !== undefined || args.project_limit !== undefined)) {
           return usage(`area_limit/project_limit apply only to anytime/someday, not ${args.view}`);
         }
-        if (args.view !== "someday" && args.active_project_items !== undefined) {
-          return usage("active_project_items applies only to someday");
+        if (args.view !== "someday" && showActiveProjectItems !== undefined) {
+          return usage("show_active_project_items applies only to someday");
         }
         if (args.view === "someday" && args.project_limit !== undefined) {
           return usage(
-            "project_limit does not apply to someday — pass a number as active_project_items " +
+            "project_limit does not apply to someday — pass a number as show_active_project_items " +
               "to cap that section's project lists",
           );
         }
@@ -426,9 +433,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return paginatedResult(data, pagination);
           }
           case "someday": {
-            const active = args.active_project_items;
+            const active = showActiveProjectItems;
             if (typeof active === "number" && args.all === true) {
-              return usage("pass at most one of a numeric active_project_items / all");
+              return usage("pass at most one of a numeric show_active_project_items / all");
             }
             const limits: GroupedLimits = {
               area: areaLimit,

@@ -432,22 +432,25 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     // horizon > 1: later occurrences PROJECTED from the decoded rule,
     // anchored on the app's own materialized next instance. The until bound
     // clips projections the same way it clips stored rows.
-    return projectOccurrences(
-      rule,
-      startDate,
-      {
-        count: horizon,
-        ...(until !== undefined && { until }),
-      },
-      deadlined,
-    )
-      .filter((o) => until === undefined || o.startDate <= until)
-      .filter((o) => since === undefined || o.startDate >= since)
-      .map((o) => ({
-        ...template,
-        startDate: o.startDate,
-        deadline: o.deadline,
-      }));
+    return (
+      projectOccurrences(
+        rule,
+        startDate,
+        {
+          count: horizon,
+          ...(until !== undefined && { until }),
+        },
+        deadlined,
+      )
+        .filter((o) => until === undefined || o.startDate <= until)
+        .filter((o) => since === undefined || o.startDate >= since)
+        // oxlint-disable-next-line no-map-spread -- building fresh occurrence objects, not mutating
+        .map((o) => ({
+          ...template,
+          startDate: o.startDate,
+          deadline: o.deadline,
+        }))
+    );
   });
 
   // Within a day the UI's drag order is todayIndex ASC (live-verified
@@ -724,6 +727,7 @@ export function changesView(
      ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
     [sinceEpoch, ...(cap === null ? [] : [cap])],
   );
+  // oxlint-disable-next-line no-map-spread -- building fresh change objects, not mutating
   return materialize(db, rows).map((item, i) => ({
     ...item,
     changeKind:
