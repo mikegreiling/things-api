@@ -6,7 +6,8 @@ The working queue for the next session(s). Everything here was triaged with Mike
 
 - **Hide `── Repeating To-Dos ──` behind a flag in `upcoming`?** The dateless resting-template section (~15 rows in his library) always renders and survives every `--until` bound (a date bound can't apply to dateless rows — deliberate, PR #77). If maximum brevity wins, add `--repeats`/`--all`-style gating.
 - **Today/anytime showing checked-unswept items?** Closed items the log-move sweep hasn't passed stay checked in place in project/area views (GUI parity, completion≠logged model). Whether the flat `today`/`anytime` lists should also show them was flagged ~2026-07-10 and never ruled.
-- **Stateful display preferences** (roadmap §H): config-file/env defaults for the growing toggle family (`--show-later`, `--show-logged`, `--until`, `--all`). Decide the config surface + precedence; wary of plist-driven defaults confusing agents.
+- **Stateful display preferences** (roadmap §H): config-file/env defaults for the growing toggle family (`--show-later`, `--show-logged`, `--until`, `--all`, and the #89/#93 limit knobs). Decide the config surface + precedence; wary of plist-driven defaults confusing agents. Scope grew 2026-07-12 (see §H for full context): `limitMode fixed|fit|none` (height-fit deliberately not default), `pager auto|never` (git-style `less -FRX`), and a global `--plain`/`--pretty` chrome override pair.
+- **Productize the dedicated-Mac "ui" write vector?** UI1 (PR #90) green-lit it: VNC synthetic input reliably drives real GUI dialogs (repeat create verified end-to-end), and it is the ONLY path for repeat rule create/edit, sidebar ordering (P6 closed automation conclusively), and to-do↔project convert. Build decision + hardware question (a dedicated always-on Mac, or lab-VM-only offering); Accessibility/AS UI-scripting is NOT a fallback (SIP-blocked in VMs).
 - **Glyph palette doc + `⧉`**: Mike asked whether `⧉` (U+29C9) was ever considered (it wasn't — whole blocks like Misc Math Symbols-B were never mined). Open offer: a curated single-cell/color-safe candidate inventory under `docs/design/` to feed future picks and the §H cross-terminal audit. Also unanswered: did Mike have a slot in mind for `⧉`?
 - **When to send the Cultured Code report**: `docs/things-app-oddities.md` is effectively the draft (crashes §1/§6/§7, silent-failure families §2/§5, the double-trash black hole §6½). Last evidence gaps below.
 
@@ -33,6 +34,7 @@ The working queue for the next session(s). Everything here was triaged with Mike
 
 ## 5. Smaller code items (unblocked, low effort)
 
+- **TUI-idiom follow-ups (parked 2026-07-12, full context in roadmap §H)**: height-fit/pager display modes, the width-handling polish pass (GUI-parity `…` truncation vs hanging indent — Mike leans truncation), the `--plain`/`--pretty` chrome override, and the possible far-future `things ui` interactive subcommand. All deliberately deferred; pick up with the §H stateful-prefs decision.
 - **Suppress "(archived)"-titled areas?** Mike's three empty areas render `(no projects)` (correct sidebar mirroring — Things has no area-archive feature; "(archived)" is his naming). If he wants them hidden it's a deliberate divergence (config/pattern filter) — needs his call first (overlaps §1 preferences item).
 
 ### New follow-ups from lab round 3 (2026-07-12, PR mg/lab-round3)
