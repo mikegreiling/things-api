@@ -9,7 +9,8 @@ vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
 import { execFileSync } from "node:child_process";
 
-import { buildProgram, expandShorthand } from "../../src/cli/main.ts";
+import { buildProgram } from "../../src/cli/main.ts";
+import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedTodo } from "../fixtures/seed.ts";
 
@@ -32,7 +33,7 @@ function runCli(argv: string[]): { stdout: string; exitCode: number } {
   try {
     const program = buildProgram();
     program.exitOverride();
-    program.parse(expandShorthand(program, argv), { from: "user" });
+    program.parse(resolveInvocation(program, argv).argv, { from: "user" });
     return { stdout: chunks.join(""), exitCode: Number(process.exitCode ?? 0) };
   } finally {
     process.stdout.write = originalWrite;

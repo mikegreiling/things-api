@@ -103,6 +103,12 @@ export interface EnvelopeMeta {
   pagination?: Pagination;
   /** Per-block truncation metadata; present only on grouped views (anytime/someday). */
   grouped?: GroupedPagination;
+  /**
+   * The canonical `things …` command a sugar invocation normalized to (bare
+   * noun, keyword-in-show, uuid/share-link routing). Present only on routed
+   * reads reached via a sugar form; absent for canonical invocations.
+   */
+  resolvedCommand?: string;
 }
 
 export interface OkEnvelope<T> {

@@ -115,5 +115,11 @@ Font-test observations already banked (Mike's terminal, 2026-07-10): `◑` rende
 
 `things capabilities` now renders a per-op `undo:` line (`reversible` / `reversible-with-loss` / `conditional` / `irreversible` + the honest-caveat note), and the same data rides the `--json` envelope and MCP capabilities tool as an additive `undo` field, sourced from `REVERSIBILITY` and locked by a capabilities↔matrix cross-check test.
 
+## §J. CLI grammar — consolidated (branch `mg/cli-grammar`); Phase 2 parked
+
+The read-side routing sugar (bare noun, `show`/`open` keyword rewrites, loose reference routers) is now ONE resolver + ONE precedence chain, specified in [design/cli-grammar.md](design/cli-grammar.md). Shipped in the same change: `things show projects|areas|tags` (show accepts every list-view name; open still only the seven URL ids, plurals rejected with a fix), a TTY normalized-form echo (`≡ things area show …`), and `meta.resolvedCommand` on routed-read `--json`.
+
+**Phase 2 — parked (specified, not built):** resource-scoped closed-enum verbs, gh-style — `things project <ref> add-heading <title>`, `things project <ref> add-todo <title>`. Fixed slots (position 2 = ref, position 3 = verb from a closed enum), flags for everything else. This is the honest ergonomic home for heading creation (headings are subordinate resources); `things heading create` stays for type-consistency. The closed enum is the discipline that keeps it from drifting into the free-form write grammar that is a deliberate non-goal. Spec: [design/cli-grammar.md](design/cli-grammar.md) § Phase 2.
+
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)
