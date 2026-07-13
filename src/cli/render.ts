@@ -7,7 +7,12 @@
  * (agents and humans both need stable references); colors engage on a TTY only
  * (../cli/style.ts).
  */
-import { isTodayMember, type ListItem, type SidebarSection } from "../read/views.ts";
+import {
+  isTodayMember,
+  type ListItem,
+  type SidebarSection,
+  type TodayView,
+} from "../read/views.ts";
 import { localToday } from "../model/dates.ts";
 import { templateStatus } from "../model/recurrence.ts";
 import { blue, bold, dim, strike, underline } from "./style.ts";
@@ -229,6 +234,46 @@ export function uuidCol(uuid: string, width: number): string {
 export function renderList(items: ListItem[]): string[] {
   const w = uuidDisplayWidth(items);
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
+}
+
+/**
+ * The `things today` split. The membership glyph lives in the SECTION HEADER,
+ * not on every row — a yellow ★ in the Today header (which also carries the
+ * sidebar badge split) and a blue ⏾ in the This Evening header — so the rows
+ * drop the redundant per-item marker (the same convention that suppresses a
+ * `(project)` context inside that project's own view). Every OTHER view keeps
+ * the per-row ★/⏾, where the marker still carries information.
+ *
+ * This Evening mirrors the GUI: it renders ONLY when evening items exist —
+ * a truly-empty evening has no header at all. `full` is the pre-cap view and
+ * `shown` the rows that survived the global `--limit`; the split lets the
+ * section stay honest under truncation. When the cap hid some or all evening
+ * rows, an honest muted hint counts the hidden ones and names the `--limit`
+ * that reveals them — never the misleading `(empty)` a truncated evening used
+ * to show. `base` is the user's own invocation (flags echoed). The global
+ * footer (row driver) still reports the whole-view remainder separately.
+ */
+export function renderToday(full: TodayView, shown: TodayView, base: string): string[] {
+  const w = uuidDisplayWidth([...shown.today, ...shown.evening]);
+  const lines: string[] = [
+    `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${full.badge.dueOrOverdue} due/overdue · ${full.badge.other} other) ──`)}`,
+    ...(shown.today.length === 0 ? ["(empty)"] : shown.today.map((i) => formatItem(i, w))),
+  ];
+  if (full.evening.length > 0) {
+    lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
+    for (const i of shown.evening) lines.push(formatItem(i, w));
+    const hidden = full.evening.length - shown.evening.length;
+    if (hidden > 0) {
+      const total = full.today.length + full.evening.length;
+      const more = shown.evening.length > 0 ? "more " : "";
+      lines.push(
+        dim(
+          `… ${hidden} ${more}evening item${hidden === 1 ? "" : "s"} — \`${base} --limit ${total}\` · all: \`${base} --all\``,
+        ),
+      );
+    }
+  }
+  return lines;
 }
 
 /**
