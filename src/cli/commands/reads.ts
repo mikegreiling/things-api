@@ -8,7 +8,6 @@
 import { Option, type Command } from "commander";
 import { execFileSync } from "node:child_process";
 
-import type { ThingsClient } from "../../client.ts";
 import type { ListItem, TodayView } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
@@ -36,11 +35,12 @@ import {
   parseLimit,
   runRead,
   shellQuote,
+  truncationHint,
   withClient,
   type GlobalReadOpts,
 } from "../read-driver.ts";
 import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
-import { ExitCode, okEnvelope, type EnvelopeMeta, type Pagination } from "../../contracts.ts";
+import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 import {
   AREA_PREVIEW_LIMIT,
   PROJECT_PREVIEW_LIMIT,
@@ -70,60 +70,6 @@ export function openInThings(uuid: string): string {
   const uri = `things:///show?id=${uuid}`;
   execFileSync("/usr/bin/open", [uri]);
   return uri;
-}
-
-/**
- * One flat list view (today/inbox): its option wiring plus the typed
- * `{fetch, render, paginate}` triple. Generic over the payload `T` so the
- * fetch return type flows into `render` and `paginate` — no renderer casts.
- */
-interface ListViewSpec<T> {
-  name: string;
-  description: string;
-  fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => T;
-  render: (data: T) => string[];
-  /** Truncate to the row limit + compute pagination. */
-  paginate: (data: T, limit: number | null) => { data: T; pagination: Pagination };
-}
-
-function registerListView<T>(program: Command, spec: ListViewSpec<T>): void {
-  program
-    .command(spec.name)
-    .description(spec.description)
-    .option(
-      "--tag <ref>",
-      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
-    )
-    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
-    .option("--limit <n>", LIMIT_DESC)
-    .option("--all", ALL_DESC)
-    .option("--json", "emit versioned JSON envelope on stdout")
-    .option("--db <path>", "explicit database path")
-    .action(
-      (
-        opts: GlobalReadOpts & {
-          tag?: string;
-          exactTag?: boolean;
-          limit?: string;
-          all?: boolean;
-        },
-      ) => {
-        const lim = parseLimit(opts);
-        if (!lim.ok) return;
-        const base = invocation(spec.name, [
-          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
-          opts.exactTag === true && "--exact-tag",
-        ]);
-        runRead(
-          opts,
-          spec.name,
-          (c) => spec.paginate(spec.fetch(c, opts.tag, opts.exactTag), lim.limit),
-          spec.render,
-          base,
-          spec.name,
-        );
-      },
-    );
 }
 
 export function registerReadCommands(program: Command): void {
@@ -213,14 +159,106 @@ export function registerReadCommands(program: Command): void {
       },
     );
 
-  registerListView(program, {
-    name: "inbox",
-    description: "Unprocessed captures (Inbox)",
-    fetch: (c, tag, exactTag) =>
-      c.read.inbox(tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) }),
-    render: renderList,
-    paginate: paginateList,
-  });
+  program
+    .command("inbox")
+    .description(
+      "Unprocessed captures (Inbox). Bound the CREATION date with --since/--until — an " +
+        "item's arrival into Things (a demoted item keeps its original creation date, so " +
+        "this is not strictly when it entered the Inbox).",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--since <when>", `only captures created on/after this bound: ${PERIOD_SINCE}`)
+    .option("--until <when>", `only captures created on/before this bound: ${PERIOD_UNTIL}`)
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          since?: string;
+          until?: string;
+          limit?: string;
+          all?: boolean;
+        },
+      ) => {
+        const lim = parseLimit(opts);
+        if (!lim.ok) return;
+        const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
+        const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
+        for (const [flag, value] of [
+          ["--since", since],
+          ["--until", until],
+        ] as const) {
+          if (value !== undefined && Number.isNaN(value.getTime())) {
+            process.stderr.write(`error: ${flag} is not a parseable date\n`);
+            process.exitCode = ExitCode.Usage;
+            return;
+          }
+        }
+        // Bounds-&-defaults lift rule (identical to logbook): an explicit range
+        // bound (--since/--until) drops the default row cap unless --limit is
+        // also stated — the creation window the user named IS the bound, not an
+        // arbitrary 50-row cut.
+        const boundGiven = opts.since !== undefined || opts.until !== undefined;
+        const effectiveLimit =
+          opts.limit === undefined && opts.all !== true && boundGiven ? null : lim.limit;
+        const base = invocation("inbox", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+          opts.since !== undefined && `--since ${shellQuote(opts.since)}`,
+          opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
+        ]);
+        runRead(
+          opts,
+          "inbox",
+          (c) => {
+            const { data, pagination } = paginateList(
+              c.read.inbox({
+                ...(opts.tag !== undefined && { tag: opts.tag }),
+                ...(opts.exactTag === true && { exactTag: true }),
+                ...(since !== undefined && { since }),
+                ...(until !== undefined && { until }),
+              }),
+              effectiveLimit,
+            );
+            const lines = renderList(data);
+            // Standard row-truncation hint (bigger --limit / --all), as every
+            // flat view — handled here (not via the driver's hintBase) so the
+            // creation-window note can sit last, mirroring upcoming's window
+            // footer mechanics.
+            const hint = truncationHint(base, pagination);
+            if (hint !== null) lines.push("", hint);
+            // Presentation order is unchanged (manual ORDER BY index); the date
+            // bound is an invisible axis in the rows, so name the effective
+            // window in a dim footer note. Human output only — the precomputed
+            // lines never ride --json.
+            if (boundGiven) {
+              const today = localToday();
+              const sinceLabel = since !== undefined ? shortDate(localToday(since), today) : null;
+              const untilLabel = until !== undefined ? shortDate(localToday(until), today) : null;
+              const note =
+                sinceLabel !== null && untilLabel !== null
+                  ? `(created ${sinceLabel} – ${untilLabel})`
+                  : sinceLabel !== null
+                    ? `(created since ${sinceLabel})`
+                    : `(created through ${untilLabel})`;
+              lines.push("", dim(note));
+            }
+            return { data, pagination, lines };
+          },
+          renderList,
+          undefined,
+          "inbox",
+        );
+      },
+    );
 
   program
     .command("anytime")

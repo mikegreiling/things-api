@@ -162,6 +162,8 @@ Worked examples on `upcoming` (default window `--until 1m`, default cap `--limit
 
 `logbook` follows the same rule for its `--since`/`--until` bounds against the `--limit 50` default.
 
+**Range bounds key each view's own natural timeline.** `--since`/`--until` do not name one universal clock — they filter whatever timeline the view is *about*: `logbook` = the logged (stop) date, `upcoming` = the scheduled-appearance date, `changes` = the modification date. `inbox`'s natural timeline is ARRIVAL, proxied by the item's **creation date** (`inbox --since 2w` = captures created in the last two weeks). Two caveats are recorded and accepted: a re-inboxed item (demoted back from a project/area) keeps its ORIGINAL creation date, so this is arrival-into-Things, not strictly arrival-into-the-Inbox; and "untouched since" — modification-keyed stale-backlog filtering — was considered and deliberately NOT overloaded onto `inbox --since` (that is `things changes --since` territory, or a future explicitly-named flag). Because `inbox`'s presentation order stays the manual `ORDER BY index`, the creation bound is an invisible axis in the rows, so a bound-active human run appends a dim footer note naming the effective window (`(created since Jun 29)`) — never in `--json`.
+
 **Required-flag exception.** A REQUIRED bound carries no lift signal, because the user had no choice about stating it. `things changes` requires `--since`, so its presence does NOT lift the default `--limit 50`; `changes` behavior is unchanged.
 
 Rationale: defaults exist to keep the bare invocation small; once the user states any explicit bound they have taken over output sizing, so a stale second default must not silently re-clamp the result.

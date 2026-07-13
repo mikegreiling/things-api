@@ -32,6 +32,7 @@ import {
   trashView,
   upcomingView,
   type ChangedItem,
+  type InboxFilter,
   type LiteSearchResult,
   type ListItem,
   type LogbookFilter,
@@ -119,7 +120,7 @@ export interface ThingsClient {
   fingerprint(): FingerprintStatus;
   read: {
     today(filter?: TodayFilter): TodayView;
-    inbox(filter?: ViewFilter): ListItem[];
+    inbox(filter?: InboxFilter): ListItem[];
     anytime(filter?: ViewFilter): SidebarSection[];
     upcoming(filter?: UpcomingFilter): ListItem[];
     someday(filter?: SomedayFilter): SidebarSection[];

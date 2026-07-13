@@ -455,6 +455,153 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
   });
 });
 
+describe("cli inbox — creation-date bounds (--since/--until)", () => {
+  /** Epoch SECONDS `daysAgo` before the real now (the CLI uses the real clock). */
+  const epoch = (daysAgo: number): number => {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return d.getTime() / 1000;
+  };
+  const titles = (stdout: string): string[] =>
+    JSON.parse(stdout).data.map((i: { title: string }) => i.title);
+
+  it("--since keeps only captures created on/after the bound", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "old", start: "inbox", creationDate: epoch(40) });
+    seedTodo(fx.db, { title: "recent", start: "inbox", creationDate: epoch(3) });
+    const out = runCli(["inbox", "--since", "2w", "--json", "--db", fx.path]).stdout;
+    expect(titles(out)).toEqual(["recent"]);
+  });
+
+  it("--since is inclusive of the boundary instant (creation date, not packed)", () => {
+    fx = buildFixtureDb();
+    // Created exactly at local midnight on the since day — parsePeriodStart
+    // lands on that same instant, and the comparison is >= (inclusive).
+    const boundary = new Date(2024, 5, 1).getTime() / 1000; // 2024-06-01 00:00 local
+    seedTodo(fx.db, { title: "onboundary", start: "inbox", creationDate: boundary });
+    seedTodo(fx.db, { title: "before", start: "inbox", creationDate: boundary - 1 });
+    const out = runCli(["inbox", "--since", "2024-06-01", "--json", "--db", fx.path]).stdout;
+    expect(titles(out)).toEqual(["onboundary"]);
+  });
+
+  it("--until is inclusive through the END of the named period", () => {
+    fx = buildFixtureDb();
+    const lastMinute = new Date(2024, 5, 1, 23, 59, 0).getTime() / 1000; // 2024-06-01 23:59
+    const nextDay = new Date(2024, 5, 2, 0, 0, 1).getTime() / 1000; // 2024-06-02 00:00:01
+    seedTodo(fx.db, { title: "lastminute", start: "inbox", creationDate: lastMinute });
+    seedTodo(fx.db, { title: "nextday", start: "inbox", creationDate: nextDay });
+    const out = runCli(["inbox", "--until", "2024-06-01", "--json", "--db", fx.path]).stdout;
+    expect(titles(out)).toEqual(["lastminute"]);
+  });
+
+  it("--since and --until compose as an inclusive intersection", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "may",
+      start: "inbox",
+      creationDate: new Date(2024, 4, 15).getTime() / 1000,
+    });
+    seedTodo(fx.db, {
+      title: "jun",
+      start: "inbox",
+      creationDate: new Date(2024, 5, 15).getTime() / 1000,
+    });
+    seedTodo(fx.db, {
+      title: "jul",
+      start: "inbox",
+      creationDate: new Date(2024, 6, 15).getTime() / 1000,
+    });
+    const out = runCli([
+      "inbox",
+      "--since",
+      "2024-06-01",
+      "--until",
+      "2024-06-30",
+      "--json",
+      "--db",
+      fx.path,
+    ]).stdout;
+    expect(titles(out)).toEqual(["jun"]);
+  });
+
+  it("lift rule: explicit --since drops the default 50 row cap; bare keeps it", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "cap", start: "inbox", creationDate: epoch(1) });
+    const bare = runCli(["inbox", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(bare).meta.pagination.limit).toBe(50);
+    const since = runCli(["inbox", "--since", "2000", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+  });
+
+  it("lift rule: an explicit --limit composes with --since (both honored)", () => {
+    fx = buildFixtureDb();
+    for (let i = 0; i < 5; i++) {
+      seedTodo(fx.db, { title: `c${i}`, start: "inbox", index: i, creationDate: epoch(1) });
+    }
+    const out = runCli([
+      "inbox",
+      "--since",
+      "2000",
+      "--limit",
+      "2",
+      "--json",
+      "--db",
+      fx.path,
+    ]).stdout;
+    expect(JSON.parse(out).meta.pagination.limit).toBe(2);
+    expect(JSON.parse(out).data).toHaveLength(2);
+  });
+
+  it("--all semantics identical to logbook: --limit+--all conflicts, --all+--since is fine", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "x", start: "inbox", creationDate: epoch(1) });
+    expect(runCli(["inbox", "--limit", "10", "--all", "--db", fx.path]).exitCode).toBe(2);
+    const allSince = runCli(["inbox", "--all", "--since", "2w", "--json", "--db", fx.path]);
+    expect(allSince.exitCode).toBe(0);
+    expect(JSON.parse(allSince.stdout).meta.pagination.limit).toBeNull();
+  });
+
+  it("rejects an unparseable --since/--until loudly (exit 2)", () => {
+    fx = buildFixtureDb();
+    expect(runCli(["inbox", "--since", "not-a-date", "--db", fx.path]).exitCode).toBe(2);
+    expect(runCli(["inbox", "--until", "not-a-date", "--db", fx.path]).exitCode).toBe(2);
+  });
+
+  it("footer note names the effective window in human output only, never in --json", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "recent", start: "inbox", creationDate: epoch(3) });
+    const human = runCli(["inbox", "--since", "2w", "--db", fx.path]).stdout;
+    expect(human).toContain("created since");
+    const json = runCli(["inbox", "--since", "2w", "--json", "--db", fx.path]).stdout;
+    expect(json).not.toContain("created since");
+  });
+
+  it("footer note wording covers since-only, until-only, and the both-bounds range", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "x",
+      start: "inbox",
+      creationDate: new Date(2024, 5, 15).getTime() / 1000,
+    });
+    expect(runCli(["inbox", "--since", "2024-06-01", "--db", fx.path]).stdout).toContain(
+      "(created since Jun 1 2024)",
+    );
+    expect(runCli(["inbox", "--until", "2024-06-30", "--db", fx.path]).stdout).toContain(
+      "(created through Jun 30 2024)",
+    );
+    expect(
+      runCli(["inbox", "--since", "2024-06-01", "--until", "2024-06-30", "--db", fx.path]).stdout,
+    ).toContain("(created Jun 1 2024 – Jun 30 2024)");
+  });
+
+  it("bare inbox appends no creation-window note", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "x", start: "inbox" });
+    const human = runCli(["inbox", "--db", fx.path]).stdout;
+    expect(human).not.toContain("created ");
+  });
+});
+
 describe("cli anytime — per-block preview (--area-limit / --project-limit)", () => {
   function seedCatalogue(): void {
     const area = seedArea(fx!.db, "Hobbies");
