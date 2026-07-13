@@ -106,6 +106,51 @@ describe("precedence 3 — references", () => {
     ]);
   });
 
+  it("leading global flags are skipped: `--json <noun>` routes like `<noun> --json`", () => {
+    const r = resolve(["--json", "Hobbies"]);
+    expect(r.form).toBe("bare-noun");
+    expect(r.argv).toEqual(["show", "--json", "Hobbies"]);
+    expect(r.ref).toBe("Hobbies");
+  });
+
+  it("a value-taking leading flag skips its value too (never misread as the noun)", () => {
+    const r = resolve(["--db", "/tmp/x.sqlite", "Hobbies"]);
+    expect(r.form).toBe("bare-noun");
+    expect(r.argv).toEqual(["show", "--db", "/tmp/x.sqlite", "Hobbies"]);
+    expect(r.ref).toBe("Hobbies");
+    // --db=<value> single-token form too.
+    expect(resolve(["--db=/tmp/x.sqlite", "Hobbies"]).ref).toBe("Hobbies");
+    // The flag's value alone is never a subject.
+    expect(resolve(["--db", "/tmp/x.sqlite"]).form).toBe("canonical");
+  });
+
+  it("mixed leading flags find the noun; trailing flags still pass through", () => {
+    const r = resolve(["--json", "--db", "/tmp/x.sqlite", "Hobbies", "--show-later"]);
+    expect(r.form).toBe("bare-noun");
+    expect(r.argv).toEqual(["show", "--json", "--db", "/tmp/x.sqlite", "Hobbies", "--show-later"]);
+    expect(r.ref).toBe("Hobbies");
+  });
+
+  it("canary: a flags-only argv stays canonical and untouched", () => {
+    for (const argv of [["--json"], ["--json", "--db", "/tmp/x.sqlite"], ["--help"]]) {
+      const r = resolve(argv);
+      expect(r.form, argv.join(" ")).toBe("canonical");
+      expect(r.argv).toEqual(argv);
+    }
+  });
+
+  it("an unknown leading flag keeps the plain fall-through (no guessing at values)", () => {
+    const r = resolve(["--verbose", "Hobbies"]);
+    expect(r.form).toBe("canonical");
+    expect(r.argv).toEqual(["--verbose", "Hobbies"]);
+  });
+
+  it("a registered command reached through leading flags stays untouched", () => {
+    const r = resolve(["--json", "inbox"]);
+    expect(r.form).toBe("canonical");
+    expect(r.argv).toEqual(["--json", "inbox"]);
+  });
+
   it("an explicit `show <ref>` is a loose-show, argv unchanged", () => {
     const r = resolve(["show", "Firmware"]);
     expect(r.form).toBe("loose-show");

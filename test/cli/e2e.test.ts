@@ -522,6 +522,34 @@ describe("cli bare-noun shorthand + show keywords", () => {
     expect(env.data.type).toBe("area");
   });
 
+  it("leading global flags route too: `things --json <name>` = `things <name> --json`", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+
+    // --json leading the noun.
+    const jsonFirst = runCli(["--json", "Hobbies", "--db", fx.path]);
+    expect(jsonFirst.exitCode).toBe(0);
+    const env = JSON.parse(jsonFirst.stdout);
+    expect(env.kind).toBe("show");
+    expect(env.data.type).toBe("area");
+    // meta.resolvedCommand rides the same path.
+    expect(env.meta.resolvedCommand).toBe("things area show Hobbies");
+
+    // --db <value> leading: the value is never misread as the noun.
+    const dbFirst = runCli(["--db", fx.path, "Hobbies", "--json"]);
+    expect(dbFirst.exitCode).toBe(0);
+    expect(JSON.parse(dbFirst.stdout).data.type).toBe("area");
+
+    // Both flags leading, noun last.
+    const bothFirst = runCli(["--json", "--db", fx.path, "Hobbies"]);
+    expect(bothFirst.exitCode).toBe(0);
+    expect(JSON.parse(bothFirst.stdout).meta.resolvedCommand).toBe("things area show Hobbies");
+
+    // Canary: `things --json` alone (no noun) still errors as before — it is
+    // not silently routed anywhere.
+    expect(() => runCli(["--json"])).toThrow();
+  });
+
   it("registered command names are reserved and always win", () => {
     fx = buildFixtureDb();
     const legend = runCli(["legend", "--json"]);

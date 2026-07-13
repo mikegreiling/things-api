@@ -35,6 +35,8 @@ Every invocation is classified by walking this chain in order; the first rule th
 
 Steps 1–2 run in the resolver (`resolveInvocation`, pre-commander, argv-level). Step 3 runs at action time in `classifyShowTarget` (it needs the database). The resolver never touches the database.
 
+**Leading global flags.** Classification skips over leading global read flags to find the token it classifies, so `things --json Hobbies` routes exactly like `things Hobbies --json` (this fixes a bug the old `expandShorthand` had: any flag-led argv silently skipped routing). Only the global read options are recognized — `--json` (boolean) and `--db <path>` / `--db=<path>` (value-taking; the value is skipped too, never misread as the subject). An **unknown** leading flag keeps the plain fall-through to commander (which reports it) rather than guessing whether the next token is that flag's value or the subject; a flags-only argv (`things --json` alone) likewise stays commander's to error on; and a registered command reached through leading flags is left untouched (program-level flags before a command were an error before and stay one).
+
 ## Keyword vocabularies (deliberately asymmetric)
 
 The two verbs accept different keyword sets, on purpose: `show` renders our own views, so it accepts every list-view command name; `open` hands an id to the app's URL scheme, so it accepts only ids the app itself understands.

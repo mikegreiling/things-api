@@ -102,10 +102,39 @@ export function resolveInvocation(program: Command, args: string[]): ResolvedInv
   return current;
 }
 
+/**
+ * Skip over LEADING GLOBAL-STYLE FLAGS to find the token being classified, so
+ * `things --json Hobbies` routes exactly like `things Hobbies --json`. Only
+ * the global read options are recognized here — `--json` (boolean) and `--db`
+ * (value-taking: its value is skipped too, never misread as the subject).
+ * Any other leading flag returns null — an unknown flag keeps the plain
+ * fall-through to commander (which reports it), rather than guessing whether
+ * the next token is that flag's value or the subject.
+ */
+function indexPastLeadingFlags(args: string[]): number | null {
+  let i = 0;
+  while (i < args.length) {
+    const tok = args[i] ?? "";
+    if (!tok.startsWith("-")) return i;
+    if (tok === "--json") {
+      i += 1;
+    } else if (tok === "--db") {
+      i += 2; // skip the flag AND its value
+    } else if (tok.startsWith("--db=")) {
+      i += 1;
+    } else {
+      return null; // unknown leading flag — commander's to handle
+    }
+  }
+  return i; // flags only, no subject (e.g. bare `things --json`)
+}
+
 function classify(program: Command, args: string[]): ResolvedInvocation {
-  const first = args[0];
-  // A flag-led or empty argv is commander's to handle (help, --version, error).
-  if (first === undefined || first.startsWith("-")) {
+  const at = indexPastLeadingFlags(args);
+  const first = at === null ? undefined : args[at];
+  // An empty, flags-only, or unknown-flag-led argv is commander's to handle
+  // (help, --version, error).
+  if (first === undefined) {
     return { form: "canonical", argv: args, canonical: null, ref: null };
   }
 
@@ -113,6 +142,18 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
   for (const c of program.commands) {
     known.add(c.name());
     for (const alias of c.aliases()) known.add(alias);
+  }
+
+  if (at !== 0) {
+    // A registered command reached THROUGH leading flags stays untouched:
+    // program-level flags before a command were an error before and stay one.
+    if (known.has(first)) {
+      return { form: "canonical", argv: args, canonical: null, ref: null };
+    }
+    // Precedence 3 through leading global flags: a bare-noun subject routes
+    // through `show` with the flags left in place — commander accepts options
+    // before arguments on the subcommand.
+    return { form: "bare-noun", argv: ["show", ...args], canonical: null, ref: first };
   }
 
   // Precedence 1: a registered command/alias always wins (names are reserved).
