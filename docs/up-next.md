@@ -34,7 +34,6 @@ The working queue for the next session(s). Everything here was triaged with Mike
 ## 5. Smaller code items (unblocked, low effort)
 
 - **Suppress "(archived)"-titled areas?** Mike's three empty areas render `(no projects)` (correct sidebar mirroring — Things has no area-archive feature; "(archived)" is his naming). If he wants them hidden it's a deliberate divergence (config/pattern filter) — needs his call first (overlaps §1 preferences item).
-- **`things logbook --limit` default vs `--since` interplay** — no known bug; noted only that logbook predates the relative-period vocabulary added in #77/#85 and could default tighter. Optional polish.
 
 ### New follow-ups from lab round 3 (2026-07-12, PR mg/lab-round3)
 

@@ -362,20 +362,29 @@ export interface UpcomingFilter extends ViewFilter {
    * a date bound cannot apply to rows with no date.
    */
   until?: IsoDate;
+  /**
+   * Only rows scheduled on/after this date (inclusive) — skip occurrences
+   * before it. The dateless resting templates always survive, as with
+   * `until` (a date bound cannot apply to rows with no date).
+   */
+  since?: IsoDate;
 }
 
 export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
   const until = filter?.until;
+  const since = filter?.since;
   const untilSql = until === undefined ? "" : " AND t.startDate <= ?";
   const untilBinds = until === undefined ? [] : [encodePackedDate(until)];
+  const sinceSql = since === undefined ? "" : " AND t.startDate >= ?";
+  const sinceBinds = since === undefined ? [] : [encodePackedDate(since)];
   const tf = tagFilter(db, filter);
   const rows = fetchTaskRows(
     db,
     `${OPEN} AND ${CONTAINER_UNTRASHED}
-     AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${tf.sql}
+     AND t.start = 2 AND t.startDate IS NOT NULL AND t.startDate > ?${untilSql}${sinceSql}${tf.sql}
      ORDER BY t.startDate ASC, t."index" ASC`,
-    [packedToday, ...untilBinds, ...tf.binds],
+    [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
   );
   const items = materialize(db, rows);
   if (filter?.repeats === false) return items;
@@ -390,9 +399,9 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
      AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
      AND t.rt1_instanceCreationPaused = 0
-     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${until === undefined ? "" : " AND t.rt1_nextInstanceStartDate <= ?"}${tf.sql}
+     AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?${until === undefined ? "" : " AND t.rt1_nextInstanceStartDate <= ?"}${since === undefined ? "" : " AND t.rt1_nextInstanceStartDate >= ?"}${tf.sql}
      ORDER BY t.rt1_nextInstanceStartDate ASC, t."index" ASC`,
-    [packedToday, ...untilBinds, ...tf.binds],
+    [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
   );
   const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
@@ -433,6 +442,7 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
       deadlined,
     )
       .filter((o) => until === undefined || o.startDate <= until)
+      .filter((o) => since === undefined || o.startDate >= since)
       .map((o) => ({
         ...template,
         startDate: o.startDate,
@@ -515,11 +525,27 @@ export function somedayView(
      AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql} ORDER BY t."index" ASC`,
     [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds],
   );
-  return groupBySidebar(db, materialize(db, rows));
+  const sections = groupBySidebar(db, materialize(db, rows));
+  // GUI order within a Someday group (live side-by-side, 2026-07-12):
+  // PROJECT rows first (their sidebar order preserved), then direct to-dos in
+  // drag order. Someday children of active projects (the activeProjectItems
+  // toggle) trail the group, still clustered by their project — surfaces
+  // present them as a separate "From active projects" section.
+  const isChild = (i: ListItem) =>
+    i.type === "to-do" && (i.project !== null || i.headingProject !== null);
+  return sections.map((s) => ({
+    area: s.area,
+    items: [
+      ...s.items.filter((i) => i.type === "project"),
+      ...s.items.filter((i) => i.type === "to-do" && !isChild(i)),
+      ...s.items.filter(isChild),
+    ],
+  }));
 }
 
 export interface LogbookFilter extends ViewFilter {
-  limit?: number;
+  /** Row cap; `null` returns every match (surfaces slice for display). */
+  limit?: number | null;
   /**
    * Area scope: the area's direct items, its project rows, and every to-do
    * of its projects — INCLUDING heading-nested ones (heading → project →
@@ -535,7 +561,7 @@ export interface LogbookFilter extends ViewFilter {
 }
 
 export function logbookView(db: DatabaseSync, options?: LogbookFilter): ListItem[] {
-  const limit = options?.limit ?? 100;
+  const cap = options?.limit === null ? null : (options?.limit ?? 100);
   const tf = tagFilter(db, options);
   const where: string[] = [];
   const binds: (string | number)[] = [];
@@ -563,19 +589,19 @@ export function logbookView(db: DatabaseSync, options?: LogbookFilter): ListItem
   // checked in their original lists, exactly like the GUI's Logbook.
   const rows = fetchTaskRows(
     db,
-    `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC LIMIT ?`,
-    [logBoundary(db).getTime() / 1000, ...binds, ...tf.binds, limit],
+    `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC${cap === null ? "" : " LIMIT ?"}`,
+    [logBoundary(db).getTime() / 1000, ...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
   );
   return materialize(db, rows);
 }
 
-export function trashView(db: DatabaseSync, options?: { limit?: number }): ListItem[] {
-  const limit = options?.limit ?? 200;
+export function trashView(db: DatabaseSync, options?: { limit?: number | null }): ListItem[] {
+  const cap = options?.limit === null ? null : (options?.limit ?? 200);
   const rows = fetchTaskRows(
     db,
     `t.type IN (0, 1) AND t.trashed = 1 AND ${NOT_TEMPLATE}
-     ORDER BY t.userModificationDate DESC LIMIT ?`,
-    [limit],
+     ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
+    cap === null ? [] : [cap],
   );
   return materialize(db, rows);
 }
@@ -660,7 +686,8 @@ export function projectsView(
 }
 
 export interface SearchOptions extends ViewFilter {
-  limit?: number;
+  /** Row cap; `null` returns every match (surfaces slice for display). */
+  limit?: number | null;
   /** Restrict to one project's children (headed children included). */
   project?: string;
   /** Restrict to one area's direct members. */
@@ -687,15 +714,15 @@ export type ChangedItem = ListItem & { changeKind: ChangeKind };
  */
 export function changesView(
   db: DatabaseSync,
-  options: { since: Date; limit?: number },
+  options: { since: Date; limit?: number | null },
 ): ChangedItem[] {
-  const limit = options.limit ?? 200;
+  const cap = options.limit === null ? null : (options.limit ?? 200);
   const sinceEpoch = options.since.getTime() / 1000;
   const rows = fetchTaskRows(
     db,
     `t.type IN (0, 1) AND t.userModificationDate > ?
-     ORDER BY t.userModificationDate DESC LIMIT ?`,
-    [sinceEpoch, limit],
+     ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
+    [sinceEpoch, ...(cap === null ? [] : [cap])],
   );
   return materialize(db, rows).map((item, i) => ({
     ...item,
@@ -705,7 +732,7 @@ export function changesView(
 }
 
 export function searchView(db: DatabaseSync, query: string, options?: SearchOptions): ListItem[] {
-  const limit = options?.limit ?? 50;
+  const cap = options?.limit === null ? null : (options?.limit ?? 50);
   const needle = `%${query}%`;
   const where: string[] = [`${NOT_TEMPLATE} AND (t.title LIKE ? OR t.notes LIKE ?)`];
   const binds: unknown[] = [needle, needle];
@@ -744,8 +771,8 @@ export function searchView(db: DatabaseSync, query: string, options?: SearchOpti
   const rows = fetchTaskRows(
     db,
     `${where.join(" AND ")}${tf.sql}
-     ORDER BY t.userModificationDate DESC LIMIT ?`,
-    [...binds, ...tf.binds, limit],
+     ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
+    [...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
   );
   return materialize(db, rows);
 }

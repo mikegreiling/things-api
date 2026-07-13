@@ -15,9 +15,28 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
-import { PKG_VERSION } from "../contracts.ts";
+import { PKG_VERSION, type GroupedPagination, type Pagination } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
-import { DATE_FORMAT, REF_FORMAT, REMINDER_FORMAT, WHEN_VALUES } from "../surface-copy.ts";
+import {
+  AREA_PREVIEW_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  PROJECT_PREVIEW_LIMIT,
+  paginateList,
+  paginateToday,
+  previewSections,
+  previewSomedaySections,
+  type GroupedLimits,
+} from "../read/pagination.ts";
+import {
+  ALL_DESC,
+  AREA_LIMIT_DESC,
+  DATE_FORMAT,
+  LIMIT_DESC,
+  PROJECT_LIMIT_DESC,
+  REF_FORMAT,
+  REMINDER_FORMAT,
+  WHEN_VALUES,
+} from "../surface-copy.ts";
 import { capabilitiesTable } from "../write/capabilities.ts";
 import { OPERATION_KINDS, type OperationKind } from "../write/operations.ts";
 import type { MutationResult, WriteOptions } from "../write/pipeline.ts";
@@ -38,6 +57,68 @@ type ToolResult = {
 function jsonResult(data: unknown): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
+
+/**
+ * A read result carrying truncation metadata: the data (already limited) in
+ * the first content block, and a second block with the {@link Pagination}
+ * numbers plus a one-line note the agent can read when rows were dropped.
+ */
+function paginatedResult(data: unknown, pagination: Pagination): ToolResult {
+  const note = pagination.truncated
+    ? `showing ${pagination.shown} of ${pagination.total} items — pass limit (or all: true) to see more`
+    : undefined;
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(data) },
+      { type: "text", text: JSON.stringify({ pagination, ...(note !== undefined && { note }) }) },
+    ],
+  };
+}
+
+/**
+ * Grouped read result (anytime/someday): the per-block-truncated sections plus
+ * a second block carrying the {@link GroupedPagination} counts and, when
+ * anything was hidden, a one-line note the agent can read.
+ */
+function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
+  const note = grouped.truncated
+    ? "some blocks are previews — raise area_limit/project_limit for more per block, or all: true for every item"
+    : undefined;
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(data) },
+      { type: "text", text: JSON.stringify({ grouped, ...(note !== undefined && { note }) }) },
+    ],
+  };
+}
+
+/**
+ * Resolve one cap param against `all` into a row cap (null = every row);
+ * "conflict" when an explicit value combines with all: true.
+ */
+function resolveCap(
+  value: number | undefined,
+  all: boolean | undefined,
+  defaultLimit: number,
+): number | null | "conflict" {
+  if (all === true && value !== undefined) return "conflict";
+  if (all === true) return null;
+  return value ?? defaultLimit;
+}
+
+/** Resolve MCP limit/all (flat read tools) into a row cap (null = every row). */
+function resolveLimit(args: {
+  limit?: number | undefined;
+  all?: boolean | undefined;
+}): number | null | "conflict" {
+  return resolveCap(args.limit, args.all, DEFAULT_LIST_LIMIT);
+}
+
+/** Shared limit/all input schema fragment for the flat read tools. */
+const limitShape = {
+  limit: z.number().int().min(1).optional().describe(LIMIT_DESC),
+  all: z.boolean().optional().describe(ALL_DESC),
+};
 
 function errorResult(error: {
   code: string;
@@ -235,14 +316,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sidebar-ordered sections (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
-        "from anytime — the project row represents them.",
+        "from anytime — the project row represents them; someday lists each group's " +
+        "project rows before its to-dos. Flat views (today/inbox/upcoming/logbook/trash) " +
+        `return at most ${DEFAULT_LIST_LIMIT} items by default (raise with limit); ` +
+        "anytime/someday always return every group and cap per block instead — " +
+        `area_limit (default ${AREA_PREVIEW_LIMIT}) per area block, and on anytime ` +
+        `project_limit (default ${PROJECT_PREVIEW_LIMIT}) per project block. ` +
+        "all: true lifts every cap; the result's second block reports the counts.",
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
         active_project_items: z
-          .boolean()
+          .union([z.boolean(), z.number().int().min(1)])
           .optional()
-          .describe("someday only: also list someday to-dos inside active projects"),
+          .describe(
+            "someday only: include someday to-dos inside active projects, clustered per " +
+              "project after each group; a number caps each project's list (true: every item)",
+          ),
         horizon: z
           .number()
           .int()
@@ -250,44 +340,122 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .max(10)
           .optional()
           .describe("upcoming only: occurrences shown per repeating item (default 1)"),
-        limit: z.number().int().min(1).optional().describe("logbook/trash only (default 50)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`flat views only (not anytime/someday): ${LIMIT_DESC}`),
+        area_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`anytime/someday only: ${AREA_LIMIT_DESC}`),
+        project_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`anytime only: ${PROJECT_LIMIT_DESC}`),
+        all: z
+          .boolean()
+          .optional()
+          .describe(
+            "show everything (flat views: no row limit; anytime/someday: no per-block caps)",
+          ),
       },
       annotations: READ_ONLY,
     },
     async (args) =>
       guard(() => {
+        const isGrouped = args.view === "anytime" || args.view === "someday";
+        if (isGrouped && args.limit !== undefined) {
+          return usage(
+            `limit does not apply to ${args.view} — cap blocks with area_limit` +
+              `${args.view === "anytime" ? "/project_limit" : ""}, or pass all: true`,
+          );
+        }
+        if (!isGrouped && (args.area_limit !== undefined || args.project_limit !== undefined)) {
+          return usage(`area_limit/project_limit apply only to anytime/someday, not ${args.view}`);
+        }
+        if (args.view !== "someday" && args.active_project_items !== undefined) {
+          return usage("active_project_items applies only to someday");
+        }
+        if (args.view === "someday" && args.project_limit !== undefined) {
+          return usage(
+            "project_limit does not apply to someday — pass a number as active_project_items " +
+              "to cap that section's project lists",
+          );
+        }
+        const limit = resolveLimit(args);
+        if (limit === "conflict") return usage("pass at most one of limit / all");
+        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+        const projectLimit = resolveCap(args.project_limit, args.all, PROJECT_PREVIEW_LIMIT);
+        if (areaLimit === "conflict" || projectLimit === "conflict") {
+          return usage("pass at most one of area_limit/project_limit / all");
+        }
         const c = getClient();
         const filter = {
           ...(args.tag !== undefined && { tag: args.tag }),
           ...(args.exact_tag === true && { exactTag: true }),
         };
         switch (args.view) {
-          case "today":
-            return jsonResult(c.read.today(filter));
-          case "inbox":
-            return jsonResult(c.read.inbox(filter));
-          case "anytime":
-            return jsonResult(c.read.anytime(filter));
-          case "upcoming":
-            return jsonResult(
+          case "today": {
+            const { data, pagination } = paginateToday(c.read.today(filter), limit);
+            return paginatedResult(data, pagination);
+          }
+          case "inbox": {
+            const { data, pagination } = paginateList(c.read.inbox(filter), limit);
+            return paginatedResult(data, pagination);
+          }
+          case "anytime": {
+            const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
+            const { data, grouped } = previewSections(c.read.anytime(filter), limits);
+            return groupedResult(data, grouped);
+          }
+          case "upcoming": {
+            const { data, pagination } = paginateList(
               c.read.upcoming({
                 ...filter,
                 ...(args.horizon !== undefined && { horizon: args.horizon }),
               }),
+              limit,
             );
-          case "someday":
-            return jsonResult(
+            return paginatedResult(data, pagination);
+          }
+          case "someday": {
+            const active = args.active_project_items;
+            if (typeof active === "number" && args.all === true) {
+              return usage("pass at most one of a numeric active_project_items / all");
+            }
+            const limits: GroupedLimits = {
+              area: areaLimit,
+              // true = every item per project; a number caps each list.
+              project: typeof active === "number" ? active : null,
+            };
+            const { data, grouped } = previewSomedaySections(
               c.read.someday({
                 ...filter,
-                ...(args.active_project_items === true && { activeProjectItems: true }),
+                ...((active === true || typeof active === "number") && {
+                  activeProjectItems: true,
+                }),
               }),
+              limits,
             );
-          case "logbook":
-            return jsonResult(
-              c.read.logbook({ ...filter, ...(args.limit !== undefined && { limit: args.limit }) }),
+            return groupedResult(data, grouped);
+          }
+          case "logbook": {
+            const { data, pagination } = paginateList(
+              c.read.logbook({ ...filter, limit: null }),
+              limit,
             );
-          case "trash":
-            return jsonResult(c.read.trash(args.limit !== undefined ? { limit: args.limit } : {}));
+            return paginatedResult(data, pagination);
+          }
+          case "trash": {
+            const { data, pagination } = paginateList(c.read.trash({ limit: null }), limit);
+            return paginatedResult(data, pagination);
+          }
         }
       }),
   );
@@ -313,15 +481,21 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         type: z.enum(["to-do", "project"]).optional(),
         logged: z.boolean().optional().describe("Also include completed/canceled items"),
         trashed: z.boolean().optional().describe("Also include trashed items"),
-        all: z.boolean().optional().describe("Everything: open + logged + trashed"),
-        limit: z.number().int().min(1).optional().describe("Default 50"),
+        all: z
+          .boolean()
+          .optional()
+          .describe("Everything, unbounded: open + logged + trashed, no row limit"),
+        limit: z.number().int().min(1).optional().describe(LIMIT_DESC),
       },
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() =>
-        jsonResult(
+      guard(() => {
+        const limit = resolveLimit(args);
+        if (limit === "conflict") return usage("pass at most one of limit / all");
+        const { data, pagination } = paginateList(
           getClient().read.search(args.query, {
+            limit: null,
             ...(args.tag !== undefined && { tag: args.tag }),
             ...(args.exact_tag === true && { exactTag: true }),
             ...(args.project !== undefined && { project: args.project }),
@@ -330,10 +504,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(args.logged === true && { logged: true }),
             ...(args.trashed === true && { trashed: true }),
             ...(args.all === true && { all: true }),
-            ...(args.limit !== undefined && { limit: args.limit }),
           }),
-        ),
-      ),
+          limit,
+        );
+        return paginatedResult(data, pagination);
+      }),
   );
 
   server.registerTool(
@@ -345,22 +520,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "areas, and checklist items do not mark the containing item as modified.",
       inputSchema: {
         since: z.string().describe("ISO date-time, e.g. 2026-07-06T08:00:00"),
-        limit: z.number().int().min(1).optional().describe("Default 200"),
+        ...limitShape,
       },
       annotations: READ_ONLY,
     },
     async (args) =>
       guard(() => {
+        const limit = resolveLimit(args);
+        if (limit === "conflict") return usage("pass at most one of limit / all");
         const since = new Date(args.since);
         if (Number.isNaN(since.getTime())) {
           return usage(`since is not a parseable date: ${args.since}`);
         }
-        return jsonResult(
-          getClient().read.changes({
-            since,
-            ...(args.limit !== undefined && { limit: args.limit }),
-          }),
+        const { data, pagination } = paginateList(
+          getClient().read.changes({ since, limit: null }),
+          limit,
         );
+        return paginatedResult(data, pagination);
       }),
   );
 

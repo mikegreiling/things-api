@@ -2,7 +2,7 @@
  * Read-only list commands. Each renders a compact human table (UUIDs always
  * shown — agents and humans both need stable references) or a --json envelope.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { execFileSync } from "node:child_process";
 
 import { openThings, type ThingsClient } from "../../client.ts";
@@ -28,29 +28,88 @@ import {
   todoBox,
 } from "../glyphs.ts";
 
-import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
+import {
+  errorEnvelope,
+  ExitCode,
+  okEnvelope,
+  type EnvelopeMeta,
+  type GroupedPagination,
+  type Pagination,
+} from "../../contracts.ts";
+import {
+  AREA_PREVIEW_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  PROJECT_PREVIEW_LIMIT,
+  paginateList,
+  paginateToday,
+  partitionSomedaySection,
+  previewSections,
+  previewSomedaySections,
+  splitSectionBlocks,
+  type GroupedLimits,
+} from "../../read/pagination.ts";
+import {
+  ALL_DESC,
+  AREA_LIMIT_DESC,
+  GROUPED_ALL_DESC,
+  LIMIT_DESC,
+  PERIOD_SINCE,
+  PERIOD_UNTIL,
+  PROJECT_LIMIT_DESC,
+} from "../../surface-copy.ts";
 
 interface GlobalReadOpts {
   json?: boolean;
   db?: string;
 }
 
-export function withClient(
+interface PagedResult<T> {
+  data: T;
+  /** Flat-view truncation — carried into meta and the appended hint. */
+  pagination?: Pagination;
+  /** Grouped-view (anytime/someday) per-block truncation — carried into meta. */
+  grouped?: GroupedPagination;
+  /**
+   * Precomputed human lines. Grouped views render inside `fn` (where the full
+   * per-block totals live) and hand the finished lines back here; when absent,
+   * `render(data)` produces them.
+   */
+  lines?: string[];
+}
+
+/**
+ * The shared read driver: open the client, stamp the envelope meta (including
+ * fingerprint + optional pagination), and either emit the `--json` envelope or
+ * render human lines. When `hintBase` is given and the result was truncated,
+ * the muted "N more items" hint (reconstructing the user's own invocation) is
+ * appended to the human output — never to `--json`.
+ */
+function runRead<T>(
   opts: GlobalReadOpts,
   kind: string,
-  fn: (client: ThingsClient) => unknown,
-  render: (data: never) => string[],
+  fn: (client: ThingsClient) => PagedResult<T>,
+  render: (data: T) => string[],
+  hintBase?: string,
 ): void {
   const started = Date.now();
+  // An empty --db would silently fall through to the default database path —
+  // reject it loudly instead of reading somewhere the caller did not name.
+  if (opts.db !== undefined && opts.db.trim() === "") {
+    process.stderr.write("error: --db requires a non-empty path\n");
+    process.exitCode = ExitCode.Usage;
+    return;
+  }
   let client: ThingsClient | null = null;
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
     const fp = client.fingerprint();
-    const data = fn(client);
+    const { data, pagination, grouped, lines: precomputed } = fn(client);
     const meta: EnvelopeMeta = {
       dbVersion: fp.observation.databaseVersion,
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
       elapsedMs: Date.now() - started,
+      ...(pagination !== undefined && { pagination }),
+      ...(grouped !== undefined && { grouped }),
     };
     if (fp.kind !== "ok") {
       process.stderr.write(
@@ -60,7 +119,12 @@ export function withClient(
     if (opts.json) {
       process.stdout.write(`${JSON.stringify(okEnvelope(kind, data, meta))}\n`);
     } else {
-      process.stdout.write(`${render(data as never).join("\n")}\n`);
+      const lines = precomputed ?? render(data);
+      if (pagination !== undefined && hintBase !== undefined) {
+        const hint = truncationHint(hintBase, pagination);
+        if (hint !== null) lines.push("", hint);
+      }
+      process.stdout.write(`${lines.join("\n")}\n`);
     }
     process.exitCode = ExitCode.Ok;
   } catch (err) {
@@ -82,6 +146,84 @@ export function withClient(
   } finally {
     client?.close();
   }
+}
+
+export function withClient(
+  opts: GlobalReadOpts,
+  kind: string,
+  fn: (client: ThingsClient) => unknown,
+  render: (data: never) => string[],
+): void {
+  runRead(opts, kind, (client) => ({ data: fn(client) }), render as (data: unknown) => string[]);
+}
+
+/** Result of resolving `--limit`/`--all`; `limit: null` means every row. */
+type LimitResolution = { ok: true; limit: number | null } | { ok: false };
+
+/**
+ * Resolve the shared `--limit`/`--all` pair (flat views) into a row cap
+ * (null = no cap), writing a loud usage error and setting the exit code on
+ * bad input: `--limit` must be a positive integer, and it may not combine
+ * with `--all`.
+ */
+function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
+  return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true);
+}
+
+/**
+ * Resolve one cap flag (`--limit`, `--area-limit`, `--project-limit`) against
+ * `--all`: positive integer required, `--all` conflicts with an explicit
+ * value and otherwise lifts the cap (null).
+ */
+function parseCap(
+  flag: string,
+  value: string | undefined,
+  defaultLimit: number,
+  all: boolean,
+): LimitResolution {
+  if (all && value !== undefined) {
+    process.stderr.write(`error: ${flag} and --all are mutually exclusive\n`);
+    process.exitCode = ExitCode.Usage;
+    return { ok: false };
+  }
+  if (all) return { ok: true, limit: null };
+  if (value === undefined) return { ok: true, limit: defaultLimit };
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    process.stderr.write(`error: ${flag} must be a positive integer\n`);
+    process.exitCode = ExitCode.Usage;
+    return { ok: false };
+  }
+  return { ok: true, limit: n };
+}
+
+/** Shell-safe rendering of a flag value for the reconstructed hint command. */
+function shellQuote(v: string): string {
+  return /^[\w./@:+-]+$/.test(v) ? v : `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
+/** Reconstruct `things <name> <flags…>`, dropping falsy/empty parts. */
+function invocation(name: string, parts: Array<string | false | undefined>): string {
+  return [
+    "things",
+    name,
+    ...parts.filter((p): p is string => typeof p === "string" && p !== ""),
+  ].join(" ");
+}
+
+/**
+ * The unified truncation hint: a muted `── N more items — see more: … · all:
+ * … ──` line whose commands echo the user's actual invocation, so a bigger
+ * `--limit` or `--all` is one copy-paste away. Returns null when nothing was
+ * dropped or the caller already asked for every row.
+ */
+function truncationHint(base: string, pagination: Pagination): string | null {
+  if (!pagination.truncated || pagination.limit === null) return null;
+  const more = pagination.total - pagination.shown;
+  const bigger = pagination.limit * 2;
+  return dim(
+    `── ${more} more item${more === 1 ? "" : "s"} — see more: \`${base} --limit ${bigger}\` · all: \`${base} --all\` ──`,
+  );
 }
 
 export interface FormatOpts {
@@ -466,10 +608,10 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
 /**
  * Logbook rows under GUI-style date headings, month granularity throughout
  * — `── July ──` within the current year, `── March 2025 ──` beyond (finer
- * than the GUI's bare per-year buckets, deliberately). When the row count
- * hits the limit, a trailing note says the range is NOT exhaustive.
+ * than the GUI's bare per-year buckets, deliberately). Truncation past the
+ * row limit is reported by the shared hint the command appends, not here.
  */
-export function renderLogbook(items: ListItem[], limit: number, now?: Date): string[] {
+export function renderLogbook(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
   const currentYear = localToday(now).slice(0, 4);
@@ -488,11 +630,6 @@ export function renderLogbook(items: ListItem[], limit: number, now?: Date): str
     }
     lines.push(formatItem(item, w, now === undefined ? {} : { now }));
   }
-  if (items.length >= limit)
-    lines.push(
-      "",
-      dim(`(${items.length} shown — --limit reached; raise --limit or narrow --since/--until)`),
-    );
   return lines;
 }
 
@@ -549,14 +686,227 @@ export function renderSections(sections: SidebarSection[], star = false): string
   return lines;
 }
 
+/** Single-quote a title for a copy-pasteable drill-down command. */
+function quoteTitle(title: string): string {
+  return `'${title.replace(/'/g, "'\\''")}'`;
+}
+
+const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
+  limit === null ? items : items.slice(0, limit);
+
+/** Muted per-block truncation line: `… N more — \`drill-down\``. */
+function blockMoreLine(total: number, shown: number, drill: string | null): string {
+  return dim(`  … ${total - shown} more${drill === null ? "" : ` — \`${drill}\``}`);
+}
+
+/**
+ * Type-aware variant for blocks that mix project rows and to-dos (someday's
+ * loose/area blocks): the hidden remainder is split by type — `… 5 more
+ * projects, 14 more to-dos` — omitting a type with nothing hidden and
+ * pluralizing per count.
+ */
+function mixedMoreLine(hidden: ListItem[], drill: string | null): string {
+  const projects = hidden.filter((i) => i.type === "project").length;
+  const todos = hidden.length - projects;
+  const parts = [
+    ...(projects > 0 ? [`${projects} more project${projects === 1 ? "" : "s"}`] : []),
+    ...(todos > 0 ? [`${todos} more to-do${todos === 1 ? "" : "s"}`] : []),
+  ];
+  return dim(`  … ${parts.join(", ")}${drill === null ? "" : ` — \`${drill}\``}`);
+}
+
+/**
+ * Muted bottom line for a truncated grouped view: `── more per group — see
+ * more: \`<base> <bigger flags>\` · all: \`<base> --all\` ──`, where the
+ * bigger-flags command doubles exactly the caps that actually truncated.
+ */
+function groupedBottomLine(base: string, escalations: string[], allBase = base): string {
+  const seeMore = escalations.length > 0 ? `see more: \`${base} ${escalations.join(" ")}\` · ` : "";
+  return dim(`── more per group — ${seeMore}all: \`${allBase} --all\` ──`);
+}
+
+/**
+ * The anytime preview: the FULL block skeleton — every area header and every
+ * project row — always renders; `limits.area` caps the loose block and each
+ * area's direct to-dos, `limits.project` each project's to-dos. A truncated
+ * block trails a muted `… N more — \`things (project|area) show '…'\``
+ * drill-down (the loose block has no container, so it shows only the count),
+ * and the view ends with one line escalating the caps that hit. Today members
+ * are starred. Mirrors renderSections' layout exactly.
+ */
+function renderAnytimePreview(
+  sections: SidebarSection[],
+  limits: GroupedLimits,
+  base: string,
+): string[] {
+  const all = sections.flatMap((s) => s.items);
+  if (all.length === 0) return ["(empty)"];
+  const w = uuidDisplayWidth(all);
+  const lines: string[] = [];
+  let areaHit = false;
+  let projectHit = false;
+  const blank = () => {
+    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
+  };
+  for (const section of sections) {
+    if (section.area !== null) {
+      blank();
+      lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
+    }
+    const { direct, projects } = splitSectionBlocks(section);
+    const suppressArea = section.area?.uuid ?? null;
+    const shownDirect = takeUpTo(direct, limits.area);
+    for (const item of shownDirect) {
+      lines.push(formatItem(item, w, { suppressArea, mark: todayMark(item) }));
+    }
+    if (direct.length > shownDirect.length) {
+      areaHit = true;
+      const drill =
+        section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
+      lines.push(blockMoreLine(direct.length, shownDirect.length, drill));
+    }
+    for (const { project, items: children } of projects) {
+      blank();
+      lines.push(
+        formatItem(project, w, { projectTitle: true, suppressArea, mark: todayMark(project) }),
+      );
+      const shownChildren = takeUpTo(children, limits.project);
+      for (const item of shownChildren) {
+        lines.push(
+          formatItem(item, w, {
+            suppressProject: project.uuid,
+            suppressArea,
+            mark: todayMark(item),
+          }),
+        );
+      }
+      if (children.length > shownChildren.length) {
+        projectHit = true;
+        lines.push(
+          blockMoreLine(
+            children.length,
+            shownChildren.length,
+            `things project show ${quoteTitle(project.title)}`,
+          ),
+        );
+      }
+    }
+  }
+  if (areaHit || projectHit) {
+    const escalations = [
+      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
+      ...(projectHit && limits.project !== null ? [`--project-limit ${limits.project * 2}`] : []),
+    ];
+    lines.push("", groupedBottomLine(base, escalations));
+  }
+  return lines;
+}
+
+/**
+ * The someday preview, mirroring the GUI (side-by-side, 2026-07-12): inside
+ * each group the project rows render as PLAIN items — `(~)` circle, count
+ * chip, no header styling, no surrounding blank lines — listed before the
+ * direct to-dos; `limits.area` caps each group's combined list. With
+ * `showActive` (the --show-active-project-items toggle) the someday to-dos
+ * living inside active projects append as a separate trailing
+ * `── From active projects ──` section — a flat run of project-header blocks
+ * (no area grouping), each capped at `limits.project` (null = every item).
+ * When the toggle is off and such items exist, a muted bottom hint counts
+ * them and names the flag.
+ */
+function renderSomedayPreview(
+  sections: SidebarSection[],
+  limits: GroupedLimits,
+  base: string,
+  showActive: boolean,
+  hiddenActiveItems: number,
+): string[] {
+  const all = sections.flatMap((s) => s.items);
+  const lines: string[] = [];
+  let areaHit = false;
+  let projectHit = false;
+  const blank = () => {
+    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
+  };
+  if (all.length === 0) {
+    lines.push("(empty)");
+  } else {
+    const w = uuidDisplayWidth(all);
+    const trailing: Array<{ project: { uuid: string; title: string }; items: ListItem[] }> = [];
+    for (const section of sections) {
+      const { own, children } = partitionSomedaySection(section);
+      trailing.push(...children);
+      if (section.area !== null) {
+        blank();
+        lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
+      }
+      const suppressArea = section.area?.uuid ?? null;
+      const shownOwn = takeUpTo(own, limits.area);
+      for (const item of shownOwn) lines.push(formatItem(item, w, { suppressArea }));
+      if (own.length > shownOwn.length) {
+        areaHit = true;
+        const drill =
+          section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
+        lines.push(mixedMoreLine(own.slice(shownOwn.length), drill));
+      }
+    }
+    if (trailing.length > 0) {
+      blank();
+      lines.push(bold("── From active projects ──"));
+      for (const group of trailing) {
+        blank();
+        const uuidCol =
+          group.project.uuid.length > w
+            ? group.project.uuid.slice(0, w)
+            : group.project.uuid.padEnd(w);
+        lines.push(`${dim(uuidCol)}  ${bold(underline(group.project.title))}`);
+        const shown = takeUpTo(group.items, limits.project);
+        for (const item of shown) {
+          lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
+        }
+        if (group.items.length > shown.length) {
+          projectHit = true;
+          lines.push(
+            blockMoreLine(
+              group.items.length,
+              shown.length,
+              `things project show ${quoteTitle(group.project.title)}`,
+            ),
+          );
+        }
+      }
+    }
+  }
+  if (areaHit || projectHit) {
+    const escalations = [
+      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
+      ...(projectHit && limits.project !== null
+        ? [`--show-active-project-items ${limits.project * 2}`]
+        : []),
+    ];
+    // The bare flag keeps the active-projects section visible under --all.
+    const allBase = showActive ? `${base} --show-active-project-items` : base;
+    lines.push("", groupedBottomLine(base, escalations, allBase));
+  }
+  if (!showActive && hiddenActiveItems > 0) {
+    blank();
+    lines.push(
+      dim(
+        `(${hiddenActiveItems} someday to-do${hiddenActiveItems === 1 ? "" : "s"} inside active projects — visible with \`things someday --show-active-project-items\`)`,
+      ),
+    );
+  }
+  return lines;
+}
+
 export function registerReadCommands(program: Command): void {
   const listCommands: Array<{
     name: string;
     description: string;
-    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean, extra?: boolean) => unknown;
+    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => unknown;
     render?: (data: never) => string[];
-    /** One extra boolean option: [flags, description, opts-key]. */
-    extraOption?: [string, string, string];
+    /** Truncate to the row limit + compute pagination (default: flat list). */
+    paginate?: (data: never, limit: number | null) => { data: unknown; pagination: Pagination };
   }> = [
     {
       name: "today",
@@ -585,6 +935,10 @@ export function registerReadCommands(program: Command): void {
             : data.evening.map((i) => formatItem(i, w, { mark: eveningMoon() }))),
         ];
       },
+      paginate: paginateToday as (
+        data: never,
+        limit: number | null,
+      ) => { data: unknown; pagination: Pagination },
     },
     {
       name: "inbox",
@@ -594,42 +948,10 @@ export function registerReadCommands(program: Command): void {
           tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
         ),
     },
-    {
-      name: "anytime",
-      description:
-        "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
-        "area: direct to-dos, then each project with its members). Today members are " +
-        "starred (★). Children of someday/future-scheduled projects are excluded — the " +
-        "project row represents them",
-      fetch: (c, tag, exactTag) =>
-        c.read.anytime(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
-      render: (sections: SidebarSection[]) => renderSections(sections, true),
-    },
-    {
-      name: "someday",
-      description:
-        "Someday items (incubated, undated) in sidebar order. Project children are " +
-        "represented by their project row; --active-project-items also lists someday " +
-        "to-dos inside active projects (the UI's 'Show items from active projects' toggle)",
-      fetch: (c, tag, exactTag, activeProjectItems) =>
-        c.read.someday({
-          ...(tag !== undefined && { tag }),
-          ...(exactTag === true && { exactTag }),
-          ...(activeProjectItems === true && { activeProjectItems }),
-        }),
-      render: (sections: SidebarSection[]) => renderSections(sections),
-      extraOption: [
-        "--active-project-items",
-        "also list someday to-dos inside active projects",
-        "activeProjectItems",
-      ],
-    },
   ];
 
   for (const cmd of listCommands) {
-    const command = program
+    program
       .command(cmd.name)
       .description(cmd.description)
       .option(
@@ -637,21 +959,214 @@ export function registerReadCommands(program: Command): void {
         "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
       )
       .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+      .option("--limit <n>", LIMIT_DESC)
+      .option("--all", ALL_DESC)
       .option("--json", "emit versioned JSON envelope on stdout")
-      .option("--db <path>", "explicit database path");
-    if (cmd.extraOption) command.option(cmd.extraOption[0], cmd.extraOption[1]);
-    command.action(
-      (opts: GlobalReadOpts & { tag?: string; exactTag?: boolean } & Record<string, unknown>) => {
-        const extra = cmd.extraOption ? opts[cmd.extraOption[2]] === true : undefined;
-        withClient(
+      .option("--db <path>", "explicit database path")
+      .action(
+        (
+          opts: GlobalReadOpts & {
+            tag?: string;
+            exactTag?: boolean;
+            limit?: string;
+            all?: boolean;
+          },
+        ) => {
+          const lim = parseLimit(opts);
+          if (!lim.ok) return;
+          const base = invocation(cmd.name, [
+            opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+            opts.exactTag === true && "--exact-tag",
+          ]);
+          const paginate = cmd.paginate ?? paginateList;
+          runRead(
+            opts,
+            cmd.name,
+            (c) => paginate(cmd.fetch(c, opts.tag, opts.exactTag) as never, lim.limit),
+            (cmd.render ?? renderList) as (d: unknown) => string[],
+            base,
+          );
+        },
+      );
+  }
+
+  program
+    .command("anytime")
+    .description(
+      "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
+        "area: direct to-dos, then each project with its members). Today members are " +
+        "starred (★). Children of someday/future-scheduled projects are excluded — the " +
+        "project row represents them. Every group and project row is always shown; " +
+        "--area-limit caps each area's direct list, --project-limit each project's list, " +
+        "--all shows everything",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--area-limit <n>", AREA_LIMIT_DESC)
+    .option("--project-limit <n>", PROJECT_LIMIT_DESC)
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          areaLimit?: string;
+          projectLimit?: string;
+          all?: boolean;
+          limit?: string;
+        },
+      ) => {
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on anytime — cap blocks with --area-limit / --project-limit, or pass --all\n",
+          );
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const area = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!area.ok) return;
+        const project = parseCap(
+          "--project-limit",
+          opts.projectLimit,
+          PROJECT_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!project.ok) return;
+        const limits: GroupedLimits = { area: area.limit, project: project.limit };
+        const base = invocation("anytime", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
           opts,
-          cmd.name,
-          (c) => cmd.fetch(c, opts.tag, opts.exactTag, extra),
-          (cmd.render ?? renderList) as (d: never) => string[],
+          "anytime",
+          (c) => {
+            const full = c.read.anytime(
+              opts.tag === undefined
+                ? undefined
+                : { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) },
+            );
+            const { data, grouped } = previewSections(full, limits);
+            return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
+          },
+          renderList as (d: unknown) => string[],
         );
       },
     );
-  }
+
+  program
+    .command("someday")
+    .description(
+      "Someday items (incubated, undated) in sidebar order — inside each group the " +
+        "someday projects list first, then the to-dos; project children are represented " +
+        "by their project row. --show-active-project-items [n] appends a trailing section " +
+        "of someday to-dos inside active projects, grouped under their project (the UI's " +
+        "'Show items from active projects' toggle; n caps each project's list). " +
+        "--area-limit caps each group, --all shows everything",
+    )
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--area-limit <n>", AREA_LIMIT_DESC)
+    .option(
+      "--show-active-project-items [n]",
+      "append someday to-dos inside active projects, grouped under their project; " +
+        "n caps each project's list (bare flag: every item)",
+    )
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          areaLimit?: string;
+          showActiveProjectItems?: boolean | string;
+          all?: boolean;
+          limit?: string;
+        },
+      ) => {
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on someday — cap groups with --area-limit, or pass --all\n",
+          );
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
+        const showActive = opts.showActiveProjectItems !== undefined;
+        let projectCap: number | null = null;
+        if (typeof opts.showActiveProjectItems === "string") {
+          const capped = parseCap(
+            "--show-active-project-items",
+            opts.showActiveProjectItems,
+            0,
+            opts.all === true,
+          );
+          if (!capped.ok) return;
+          projectCap = capped.limit;
+        }
+        const area = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!area.ok) return;
+        const limits: GroupedLimits = { area: area.limit, project: projectCap };
+        const filter = {
+          ...(opts.tag !== undefined && { tag: opts.tag }),
+          ...(opts.exactTag === true && { exactTag: true }),
+        };
+        const base = invocation("someday", [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
+          opts,
+          "someday",
+          (c) => {
+            const full = c.read.someday({
+              ...filter,
+              ...(showActive && { activeProjectItems: true }),
+            });
+            // Hidden-items-never-silent: when the toggle is off, one extra
+            // query counts what it would reveal so the hint can say so.
+            const hiddenActiveItems = showActive
+              ? 0
+              : c.read
+                  .someday({ ...filter, activeProjectItems: true })
+                  .reduce(
+                    (n, s) =>
+                      n +
+                      partitionSomedaySection(s).children.reduce((m, g) => m + g.items.length, 0),
+                    0,
+                  );
+            const { data, grouped } = previewSomedaySections(full, limits);
+            return {
+              data,
+              grouped,
+              lines: renderSomedayPreview(full, limits, base, showActive, hiddenActiveItems),
+            };
+          },
+          renderList as (d: unknown) => string[],
+        );
+      },
+    );
 
   program
     .command("upcoming")
@@ -666,12 +1181,12 @@ export function registerReadCommands(program: Command): void {
     )
     .option(
       "--until <period>",
-      "only items scheduled through this bound: `2w`/`3m`/`1y` from today, or `2026-09`, " +
-        "`2026-09-15`, `2026` (whole periods)",
+      `only items scheduled through this bound: ${PERIOD_UNTIL} (whole periods)`,
       "1m",
     )
-    .option("--all", "no date bound — every future-scheduled item (the app's full Upcoming)")
-    .option("--limit <n>", "maximum rows (applied after the date bound)")
+    .option("--since <period>", `skip items scheduled before this bound: ${PERIOD_SINCE}`)
+    .option("--all", "no date bound and no row limit — the app's full Upcoming")
+    .option("--limit <n>", LIMIT_DESC)
     .option(
       "--tag <ref>",
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
@@ -684,6 +1199,7 @@ export function registerReadCommands(program: Command): void {
       (
         opts: GlobalReadOpts & {
           until: string;
+          since?: string;
           all?: boolean;
           limit?: string;
           tag?: string;
@@ -693,49 +1209,51 @@ export function registerReadCommands(program: Command): void {
         command: Command,
       ) => {
         const untilGiven = command.getOptionValueSource("until") !== "default";
-        if (opts.all === true && untilGiven) {
-          process.stderr.write("error: --all and --until are mutually exclusive\n");
+        const sinceGiven = opts.since !== undefined;
+        if (opts.all === true && (untilGiven || sinceGiven)) {
+          process.stderr.write("error: --all does not combine with --until/--since\n");
           process.exitCode = ExitCode.Usage;
           return;
         }
+        const lim = parseLimit(opts);
+        if (!lim.ok) return;
         const untilDate = opts.all === true ? undefined : parsePeriodEnd(opts.until);
         if (untilDate !== undefined && Number.isNaN(untilDate.getTime())) {
           process.stderr.write(`error: --until is not a parseable period: ${opts.until}\n`);
           process.exitCode = ExitCode.Usage;
           return;
         }
-        const until = untilDate === undefined ? undefined : localToday(untilDate);
-        const limit = opts.limit === undefined ? undefined : Number(opts.limit);
-        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-          process.stderr.write(`error: --limit must be a positive integer\n`);
+        const sinceDate = sinceGiven ? parsePeriodStart(opts.since as string) : undefined;
+        if (sinceDate !== undefined && Number.isNaN(sinceDate.getTime())) {
+          process.stderr.write(`error: --since is not a parseable period: ${opts.since}\n`);
           process.exitCode = ExitCode.Usage;
           return;
         }
-        let clipped = false;
-        withClient(
+        const until = untilDate === undefined ? undefined : localToday(untilDate);
+        const since = sinceDate === undefined ? undefined : localToday(sinceDate);
+        const base = invocation("upcoming", [
+          untilGiven && `--until ${shellQuote(opts.until)}`,
+          sinceGiven && `--since ${shellQuote(opts.since as string)}`,
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+          opts.horizon !== undefined && `--horizon ${shellQuote(opts.horizon)}`,
+        ]);
+        runRead(
           opts,
           "upcoming",
-          (c) => {
-            const items = c.read.upcoming({
-              ...(until !== undefined && { until }),
-              ...(opts.tag !== undefined && { tag: opts.tag }),
-              ...(opts.exactTag === true && { exactTag: true }),
-              ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
-            });
-            if (limit !== undefined && items.length > limit) {
-              clipped = true;
-              return items.slice(0, limit);
-            }
-            return items;
-          },
+          (c) =>
+            paginateList(
+              c.read.upcoming({
+                ...(until !== undefined && { until }),
+                ...(since !== undefined && { since }),
+                ...(opts.tag !== undefined && { tag: opts.tag }),
+                ...(opts.exactTag === true && { exactTag: true }),
+                ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
+              }),
+              lim.limit,
+            ),
           ((items: ListItem[]) => {
             const lines = renderUpcoming(items);
-            if (clipped && limit !== undefined) {
-              lines.push(
-                "",
-                dim(`(${limit} shown — --limit reached; raise --limit or widen --until)`),
-              );
-            }
             if (until !== undefined) {
               lines.push(
                 "",
@@ -743,7 +1261,8 @@ export function registerReadCommands(program: Command): void {
               );
             }
             return lines;
-          }) as (d: never) => string[],
+          }) as (d: unknown) => string[],
+          base,
         );
       },
     );
@@ -756,18 +1275,12 @@ export function registerReadCommands(program: Command): void {
         "projects' children, heading-nested included) / --project (all children, " +
         "heading-nested included) / --tag; bound the logged date with --since/--until.",
     )
-    .option("--limit <n>", "maximum items to return", "100")
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
     .option("--area <ref>", "restrict to an area: direct items plus its projects' children")
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
-    .option(
-      "--since <when>",
-      "only entries logged on/after this bound: `2w`/`3m`/`1y` back from today, or " +
-        "`2024`, `2024-03`, `2024-03-05` (whole periods)",
-    )
-    .option(
-      "--until <when>",
-      "only entries logged on/before this date (2024 or 2024-03 cover the whole period)",
-    )
+    .option("--since <when>", `only entries logged on/after this bound: ${PERIOD_SINCE}`)
+    .option("--until <when>", `only entries logged on/before this bound: ${PERIOD_UNTIL}`)
     .option("--tag <ref>", "filter by tag (uuid or unique name), direct OR inherited")
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -775,7 +1288,8 @@ export function registerReadCommands(program: Command): void {
     .action(
       (
         opts: GlobalReadOpts & {
-          limit: string;
+          limit?: string;
+          all?: boolean;
           area?: string;
           project?: string;
           since?: string;
@@ -784,6 +1298,8 @@ export function registerReadCommands(program: Command): void {
           exactTag?: boolean;
         },
       ) => {
+        const lim = parseLimit(opts);
+        if (!lim.ok) return;
         const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
         const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
         for (const [flag, value] of [
@@ -796,21 +1312,32 @@ export function registerReadCommands(program: Command): void {
             return;
           }
         }
-        const limit = Number(opts.limit);
-        withClient(
+        const base = invocation("logbook", [
+          opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
+          opts.project !== undefined && `--project ${shellQuote(opts.project)}`,
+          opts.since !== undefined && `--since ${shellQuote(opts.since)}`,
+          opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
           opts,
           "logbook",
           (c) =>
-            c.read.logbook({
-              limit,
-              ...(opts.area !== undefined && { area: opts.area }),
-              ...(opts.project !== undefined && { project: opts.project }),
-              ...(since !== undefined && { since }),
-              ...(until !== undefined && { until }),
-              ...(opts.tag !== undefined && { tag: opts.tag }),
-              ...(opts.exactTag === true && { exactTag: true }),
-            }),
-          ((items: ListItem[]) => renderLogbook(items, limit)) as (d: never) => string[],
+            paginateList(
+              c.read.logbook({
+                limit: null,
+                ...(opts.area !== undefined && { area: opts.area }),
+                ...(opts.project !== undefined && { project: opts.project }),
+                ...(since !== undefined && { since }),
+                ...(until !== undefined && { until }),
+                ...(opts.tag !== undefined && { tag: opts.tag }),
+                ...(opts.exactTag === true && { exactTag: true }),
+              }),
+              lim.limit,
+            ),
+          ((items: ListItem[]) => renderLogbook(items)) as (d: unknown) => string[],
+          base,
         );
       },
     );
@@ -818,29 +1345,19 @@ export function registerReadCommands(program: Command): void {
   program
     .command("trash")
     .description("Trashed items (trashed=1 flag, any status), most recently modified first")
-    .option("--limit <n>", "maximum items to return", "200")
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { limit: string }) => {
-      const limit = Number(opts.limit);
-      let clipped = false;
-      withClient(
+    .action((opts: GlobalReadOpts & { limit?: string; all?: boolean }) => {
+      const lim = parseLimit(opts);
+      if (!lim.ok) return;
+      runRead(
         opts,
         "trash",
-        (c) => {
-          // Fetch one past the limit so truncation is loud, never silent.
-          const items = c.read.trash({ limit: limit + 1 });
-          if (items.length > limit) {
-            clipped = true;
-            return items.slice(0, limit);
-          }
-          return items;
-        },
-        ((items: ListItem[]) => {
-          const lines = renderList(items);
-          if (clipped) lines.push("", dim(`(${limit} shown — --limit reached; raise --limit)`));
-          return lines;
-        }) as (d: never) => string[],
+        (c) => paginateList(c.read.trash({ limit: null }), lim.limit),
+        renderList as (d: unknown) => string[],
+        invocation("trash", []),
       );
     });
 
@@ -952,26 +1469,37 @@ export function registerReadCommands(program: Command): void {
         "trashed/status/repeating on each item. Caveats: tag/area edits and checklist-item " +
         "edits don't bump tasks and are invisible here.",
     )
-    .requiredOption("--since <when>", "ISO date/datetime (e.g. 2026-07-05T14:30:00)")
-    .option("--limit <n>", "maximum items", "200")
+    .requiredOption(
+      "--since <when>",
+      `ISO date/datetime (e.g. 2026-07-05T14:30:00), or ${PERIOD_SINCE}`,
+    )
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { since: string; limit: string }) => {
-      const since = new Date(opts.since);
+    .action((opts: GlobalReadOpts & { since: string; limit?: string; all?: boolean }) => {
+      const lim = parseLimit(opts);
+      if (!lim.ok) return;
+      const since = parsePeriodStart(opts.since);
       if (Number.isNaN(since.getTime())) {
         process.stderr.write(`error: --since is not a parseable date: ${opts.since}\n`);
         process.exitCode = ExitCode.Usage;
         return;
       }
-      withClient(opts, "changes", (c) => c.read.changes({ since, limit: Number(opts.limit) }), ((
-        items: Array<ListItem & { changeKind: string }>,
-      ) =>
-        items.length === 0
-          ? ["(no changes)"]
-          : items.map(
-              (i) =>
-                `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.trashed ? " [trashed]" : ""}`,
-            )) as (d: never) => string[]);
+      const base = invocation("changes", [`--since ${shellQuote(opts.since)}`]);
+      runRead(
+        opts,
+        "changes",
+        (c) => paginateList(c.read.changes({ since, limit: null }), lim.limit),
+        ((items: Array<ListItem & { changeKind: string }>) =>
+          items.length === 0
+            ? ["(no changes)"]
+            : items.map(
+                (i) =>
+                  `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.trashed ? " [trashed]" : ""}`,
+              )) as (d: unknown) => string[],
+        base,
+      );
     });
 
   program
@@ -988,33 +1516,56 @@ export function registerReadCommands(program: Command): void {
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
     .option("--trashed", "include trashed items")
-    .option("--all", "legacy behavior: everything (open + logged + trashed)")
-    .option("--limit <n>", "maximum results", "50")
+    .option(
+      "--all",
+      "everything, unbounded: open + logged + trashed, with no row limit (excludes --limit)",
+    )
+    .option("--limit <n>", LIMIT_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((query: string, opts: GlobalReadOpts & Record<string, unknown>) => {
       const type = opts["type"] as string | undefined;
       if (type !== undefined && type !== "todo" && type !== "project") {
         process.stderr.write("error: --type must be todo or project\n");
-        process.exitCode = 2;
+        process.exitCode = ExitCode.Usage;
         return;
       }
-      withClient(
+      const all = opts["all"] === true;
+      const limitOpt = opts["limit"] as string | undefined;
+      // --all widens the scope AND lifts the row limit — combining it with an
+      // explicit --limit is contradictory (like every other view).
+      const lim = parseLimit({ all, ...(limitOpt !== undefined && { limit: limitOpt }) });
+      if (!lim.ok) return;
+      const base = invocation("search", [
+        shellQuote(query),
+        opts["project"] !== undefined && `--project ${shellQuote(opts["project"] as string)}`,
+        opts["area"] !== undefined && `--area ${shellQuote(opts["area"] as string)}`,
+        opts["tag"] !== undefined && `--tag ${shellQuote(opts["tag"] as string)}`,
+        opts["exactTag"] === true && "--exact-tag",
+        type !== undefined && `--type ${type}`,
+        opts["logged"] === true && "--logged",
+        opts["trashed"] === true && "--trashed",
+      ]);
+      runRead(
         opts,
         "search",
         (c) =>
-          c.read.search(query, {
-            limit: Number(opts["limit"] ?? 50),
-            ...(opts["project"] !== undefined && { project: opts["project"] as string }),
-            ...(opts["area"] !== undefined && { area: opts["area"] as string }),
-            ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
-            ...(opts["exactTag"] === true && { exactTag: true }),
-            ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
-            ...(opts["logged"] === true && { logged: true }),
-            ...(opts["trashed"] === true && { trashed: true }),
-            ...(opts["all"] === true && { all: true }),
-          }),
-        renderList as (d: never) => string[],
+          paginateList(
+            c.read.search(query, {
+              limit: null,
+              ...(opts["project"] !== undefined && { project: opts["project"] as string }),
+              ...(opts["area"] !== undefined && { area: opts["area"] as string }),
+              ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
+              ...(opts["exactTag"] === true && { exactTag: true }),
+              ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
+              ...(opts["logged"] === true && { logged: true }),
+              ...(opts["trashed"] === true && { trashed: true }),
+              ...(all && { all: true }),
+            }),
+            lim.limit,
+          ),
+        renderList as (d: unknown) => string[],
+        base,
       );
     });
 }

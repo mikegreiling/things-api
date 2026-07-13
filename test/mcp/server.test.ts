@@ -170,6 +170,127 @@ describe("things MCP server", () => {
     expect(logged).toHaveLength(2);
   });
 
+  it("read_view caps at 50 by default and reports pagination in a second block", async () => {
+    for (let i = 0; i < 60; i++)
+      seedTodo(fixture.db, { title: `cap ${i}`, start: "inbox", index: i });
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({ name: "read_view", arguments: { view: "inbox" } });
+    const data = textOf(result) as unknown[];
+    expect(data).toHaveLength(50);
+    const content = (result as { content: { text: string }[] }).content;
+    const meta = JSON.parse(content[1]?.text ?? "{}") as {
+      pagination: { shown: number; total: number; truncated: boolean };
+      note: string;
+    };
+    expect(meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
+    expect(meta.note).toContain("showing 50 of 60");
+  });
+
+  it("read_view all: true lifts the cap; limit overrides it", async () => {
+    for (let i = 0; i < 60; i++)
+      seedTodo(fixture.db, { title: `cap ${i}`, start: "inbox", index: i });
+    await connect([fakeVector(null).vector]);
+    const all = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "inbox", all: true } }),
+    ) as unknown[];
+    expect(all).toHaveLength(60);
+    const limited = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "inbox", limit: 10 } }),
+    ) as unknown[];
+    expect(limited).toHaveLength(10);
+    const conflict = await client.callTool({
+      name: "read_view",
+      arguments: { view: "inbox", limit: 10, all: true },
+    });
+    expect(conflict.isError).toBe(true);
+    expect((textOf(conflict) as { code: string }).code).toBe("usage");
+  });
+
+  it("read_view anytime previews 3 per project block by default; all lifts every cap", async () => {
+    const area = seedArea(fixture.db, "Hobbies");
+    const proj = seedProject(fixture.db, { title: "Firmware", area, index: 1 });
+    for (let i = 0; i < 8; i++) seedTodo(fixture.db, { title: `fw ${i}`, project: proj, index: i });
+    await connect([fakeVector(null).vector]);
+
+    const result = await client.callTool({ name: "read_view", arguments: { view: "anytime" } });
+    const content = (result as { content: { text: string }[] }).content;
+    const meta = JSON.parse(content[1]?.text ?? "{}") as {
+      grouped: {
+        truncated: boolean;
+        blocks: { title: string; shown: number; total: number; limit: number | null }[];
+      };
+      note: string;
+    };
+    expect(meta.grouped.truncated).toBe(true);
+    expect(meta.grouped.blocks).toContainEqual(
+      expect.objectContaining({ kind: "project", title: "Firmware", shown: 3, total: 8, limit: 3 }),
+    );
+    expect(meta.note).toContain("per block");
+
+    const wider = await client.callTool({
+      name: "read_view",
+      arguments: { view: "anytime", project_limit: 5 },
+    });
+    const widerMeta = JSON.parse(
+      (wider as { content: { text: string }[] }).content[1]?.text ?? "{}",
+    ) as { grouped: { blocks: { title: string | null; shown: number }[] } };
+    expect(widerMeta.grouped.blocks.find((b) => b.title === "Firmware")?.shown).toBe(5);
+
+    const all = await client.callTool({
+      name: "read_view",
+      arguments: { view: "anytime", all: true },
+    });
+    const allMeta = JSON.parse(
+      (all as { content: { text: string }[] }).content[1]?.text ?? "{}",
+    ) as { grouped: { truncated: boolean } };
+    expect(allMeta.grouped.truncated).toBe(false);
+  });
+
+  it("read_view someday: numeric active_project_items caps that section; limit rejected on grouped views", async () => {
+    const area = seedArea(fixture.db, "Hobbies");
+    const active = seedProject(fixture.db, { title: "Active Proj", area, index: 1 });
+    for (let i = 0; i < 4; i++) {
+      seedTodo(fixture.db, {
+        title: `parked ${i}`,
+        project: active,
+        start: "someday",
+        index: 10 + i,
+      });
+    }
+    await connect([fakeVector(null).vector]);
+
+    const capped = await client.callTool({
+      name: "read_view",
+      arguments: { view: "someday", active_project_items: 2 },
+    });
+    const meta = JSON.parse(
+      (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
+    ) as {
+      grouped: { blocks: { kind: string; title: string | null; shown: number; total: number }[] };
+    };
+    expect(meta.grouped.blocks).toContainEqual(
+      expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
+    );
+
+    // Absent toggle: no children in the data at all.
+    const hidden = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "someday" } }),
+    ) as { items: { title: string }[] }[];
+    expect(hidden.flatMap((s) => s.items.map((i) => i.title))).not.toContain("parked 0");
+
+    for (const args of [
+      { view: "anytime", limit: 10 },
+      { view: "someday", limit: 10 },
+      { view: "inbox", area_limit: 10 },
+      { view: "someday", project_limit: 5 },
+      { view: "inbox", active_project_items: true },
+    ]) {
+      const bad = await client.callTool({ name: "read_view", arguments: args });
+      expect(bad.isError, JSON.stringify(args)).toBe(true);
+      expect((textOf(bad) as { code: string }).code).toBe("usage");
+    }
+  });
+
   it("get_item returns a not-found error for unknown uuids", async () => {
     await connect([fakeVector(null).vector]);
     const result = await client.callTool({ name: "get_item", arguments: { uuid: "nope" } });

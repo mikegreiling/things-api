@@ -473,7 +473,7 @@ describe("logbook", () => {
   it("renders month headings (year appended beyond the current year) and no heading rows", () => {
     fixture = buildFixtureDb();
     const { area } = seedLoggedWorld(fixture);
-    const lines = renderLogbook(logbookView(fixture.db, { area }), 100, NOW);
+    const lines = renderLogbook(logbookView(fixture.db, { area }), NOW);
     expect(lines[0]).toBe("── July ──");
     expect(lines).toContain("── June ──");
     expect(lines).toContain("── March 2025 ──");
@@ -527,13 +527,6 @@ describe("logbook", () => {
     const phase = view.headings.find((g) => g.heading.title === "Phase 1");
     expect(phase?.items.map((i) => i.title)).toEqual(["Fresh headed win"]);
     expect(view.logged.map((i) => i.title)).toEqual(["Old headed win"]);
-  });
-
-  it("flags a limit-truncated range loudly", () => {
-    fixture = buildFixtureDb();
-    const { area } = seedLoggedWorld(fixture);
-    const lines = renderLogbook(logbookView(fixture.db, { area, limit: 3 }), 3, NOW);
-    expect(lines.at(-1)).toContain("--limit reached");
   });
 
   it("parsePeriodEnd expands whole periods (local time)", () => {
@@ -633,6 +626,17 @@ describe("upcoming", () => {
     expect(titles).not.toContain("Outside");
     expect(titles).not.toContain("Template far");
     expect(titles).toContain("Resting"); // dateless — a date bound cannot apply
+  });
+
+  it("since skips occurrences before the bound; dateless resting templates survive", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, { title: "Early", start: "someday", startDate: "2026-07-20" });
+    seedTodo(fixture.db, { title: "Late", start: "someday", startDate: "2026-09-01" });
+    seedTodo(fixture.db, { title: "Resting", recurrenceRule: true });
+    const titles = upcomingView(fixture.db, NOW, { since: "2026-08-01" }).map((i) => i.title);
+    expect(titles).not.toContain("Early");
+    expect(titles).toContain("Late");
+    expect(titles).toContain("Resting"); // dateless — a since bound cannot apply
   });
 
   it("orders within a day by todayIndex (the UI's drag order), not index", () => {

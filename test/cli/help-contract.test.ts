@@ -157,6 +157,25 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("invisible");
   });
 
+  it("flat list views expose --limit/--all; grouped views expose per-block caps", () => {
+    for (const name of ["today", "inbox", "upcoming", "logbook", "trash", "changes"]) {
+      const help = helpFor(name);
+      expect(help, name).toContain("--limit <n>");
+      expect(help, name).toContain("--all");
+    }
+    const anytime = helpFor("anytime");
+    expect(anytime).toContain("--area-limit <n>");
+    expect(anytime).toContain("--project-limit <n>");
+    expect(anytime).toContain("--all");
+    const someday = helpFor("someday");
+    expect(someday).toContain("--area-limit <n>");
+    expect(someday).not.toContain("--project-limit");
+    expect(someday).toContain("--show-active-project-items [n]");
+    // --limit exists on the grouped views only as a hidden usage-error trap.
+    expect(anytime).not.toContain("--limit <n>");
+    expect(someday).not.toContain("--limit <n>");
+  });
+
   it("list views + search expose --exact-tag alongside --tag", () => {
     for (const name of ["today", "inbox", "search", "logbook"]) {
       const help = helpFor(name);
