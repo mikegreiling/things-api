@@ -39,7 +39,7 @@ import {
   withClient,
   type GlobalReadOpts,
 } from "../read-driver.ts";
-import { parsePeriodEnd, parsePeriodStart } from "../period.ts";
+import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
 import { ExitCode, okEnvelope, type EnvelopeMeta, type Pagination } from "../../contracts.ts";
 import {
   AREA_PREVIEW_LIMIT,
@@ -451,6 +451,7 @@ export function registerReadCommands(program: Command): void {
       ) => {
         const untilGiven = command.getOptionValueSource("until") !== "default";
         const sinceGiven = opts.since !== undefined;
+        const limitGiven = opts.limit !== undefined;
         if (opts.all === true && (untilGiven || sinceGiven)) {
           process.stderr.write("error: --all does not combine with --until/--since\n");
           process.exitCode = ExitCode.Usage;
@@ -458,7 +459,16 @@ export function registerReadCommands(program: Command): void {
         }
         const lim = parseLimit(opts);
         if (!lim.ok) return;
-        const untilDate = opts.all === true ? undefined : parsePeriodEnd(opts.until);
+        // Bounds-&-defaults rule: an explicit volume cap (--limit) or range
+        // bound (--until/--since) disables the OTHER class's default. So an
+        // explicit --limit drops the default window (the next N scheduled
+        // items), and an explicit window drops the default row cap — each
+        // stated bound takes over output sizing.
+        const dropWindowDefault = !untilGiven && (limitGiven || sinceGiven);
+        const dropLimitDefault = !limitGiven && opts.all !== true && (untilGiven || sinceGiven);
+        const effectiveLimit = dropLimitDefault ? null : lim.limit;
+        const untilDate =
+          opts.all === true || dropWindowDefault ? undefined : parsePeriodEnd(opts.until);
         if (untilDate !== undefined && Number.isNaN(untilDate.getTime())) {
           process.stderr.write(`error: --until is not a parseable period: ${opts.until}\n`);
           process.exitCode = ExitCode.Usage;
@@ -472,6 +482,10 @@ export function registerReadCommands(program: Command): void {
         }
         const until = untilDate === undefined ? undefined : localToday(untilDate);
         const since = sinceDate === undefined ? undefined : localToday(sinceDate);
+        // The default window is in force only for a bare invocation (no
+        // explicit cap or bound); that is the one case whose footer names the
+        // window itself alongside the levers.
+        const defaultWindowActive = until !== undefined && !untilGiven;
         const base = invocation("upcoming", [
           untilGiven && `--until ${shellQuote(opts.until)}`,
           sinceGiven && `--since ${shellQuote(opts.since as string)}`,
@@ -482,8 +496,8 @@ export function registerReadCommands(program: Command): void {
         runRead(
           opts,
           "upcoming",
-          (c) =>
-            paginateList(
+          (c) => {
+            const { data, pagination } = paginateList(
               c.read.upcoming({
                 ...(until !== undefined && { until }),
                 ...(since !== undefined && { since }),
@@ -491,19 +505,55 @@ export function registerReadCommands(program: Command): void {
                 ...(opts.exactTag === true && { exactTag: true }),
                 ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
               }),
-              lim.limit,
-            ),
-          (items: ListItem[]) => {
-            const lines = renderUpcoming(items);
-            if (until !== undefined) {
+              effectiveLimit,
+            );
+            const lines = renderUpcoming(data);
+            if (defaultWindowActive && until !== undefined) {
+              const windowLabel = shortDate(until, localToday());
+              if (pagination.truncated && pagination.limit !== null) {
+                // Bare invocation, row cap biting inside the default window: one
+                // line names BOTH the window and the two levers, so neither the
+                // limit nor the horizon is a hidden second bound.
+                const more = pagination.total - pagination.shown;
+                lines.push(
+                  "",
+                  dim(
+                    `── ${more} more item${more === 1 ? "" : "s"} through ${windowLabel} — ` +
+                      `see more: \`${base} --limit ${pagination.limit * 2}\` · ` +
+                      `full horizon: \`${base} --all\` ──`,
+                  ),
+                );
+              } else {
+                // Default window active, row cap NOT biting: the only useful
+                // lever is a wider window (or everything).
+                lines.push(
+                  "",
+                  dim(
+                    `(through ${windowLabel} — wider: \`${base} --until ${doublePeriod(opts.until)}\`` +
+                      ` · everything: \`${base} --all\`)`,
+                  ),
+                );
+              }
+            } else if (pagination.truncated && pagination.limit !== null) {
+              // The user stated a bound: no window line, only a row hint, and
+              // only when an explicit --limit truncated. A stated --until/--since
+              // makes --all a usage error (and would discard the very window
+              // they asked for), so a bounded run offers just a bigger cap.
+              const more = pagination.total - pagination.shown;
+              const bounded = untilGiven || sinceGiven;
+              const allLever = bounded ? "" : ` · all: \`${base} --all\``;
               lines.push(
                 "",
-                dim(`(through ${shortDate(until, localToday())} — --all for the full horizon)`),
+                dim(
+                  `── ${more} more item${more === 1 ? "" : "s"} — ` +
+                    `see more: \`${base} --limit ${pagination.limit * 2}\`${allLever} ──`,
+                ),
               );
             }
-            return lines;
+            return { data, pagination, lines };
           },
-          base,
+          (items: ListItem[]) => renderUpcoming(items),
+          undefined,
           "upcoming",
         );
       },
@@ -554,6 +604,12 @@ export function registerReadCommands(program: Command): void {
             return;
           }
         }
+        // Bounds-&-defaults rule: an explicit range bound (--since/--until)
+        // drops the default row cap unless --limit is also stated — the logged
+        // window the user named is the bound, not an arbitrary 50-row cut.
+        const boundGiven = opts.since !== undefined || opts.until !== undefined;
+        const effectiveLimit =
+          opts.limit === undefined && opts.all !== true && boundGiven ? null : lim.limit;
         const base = invocation("logbook", [
           opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
           opts.project !== undefined && `--project ${shellQuote(opts.project)}`,
@@ -576,7 +632,7 @@ export function registerReadCommands(program: Command): void {
                 ...(opts.tag !== undefined && { tag: opts.tag }),
                 ...(opts.exactTag === true && { exactTag: true }),
               }),
-              lim.limit,
+              effectiveLimit,
             ),
           (items: ListItem[]) => renderLogbook(items),
           base,
