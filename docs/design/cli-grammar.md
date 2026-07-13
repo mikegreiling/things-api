@@ -139,6 +139,33 @@ The `--plain` / `--pretty` output pair joins this universal set when roadmap §H
 
 A help-contract test enforces the charter mechanically: every registered list/detail command's `--help` must offer `--json`, `--db`, and `--all`.
 
+### Bounds & defaults doctrine (Mike-approved)
+
+The optional flags on a read view fall into four classes:
+
+- **Volume caps** — `--limit`, `--area-limit`, `--project-limit`. How many rows/blocks to show.
+- **Range bounds** — `--since`, `--until`. The time window the view covers.
+- **Content scopes** — `--tag`, `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
+- **Visibility toggles** — `--show-later`, `--logged`, `--trashed`, `--evening`. Whether an otherwise-hidden class is folded in.
+
+`--all` is its own thing: it removes restrictions (see the `--all` doctrine above) and conflicts with an explicit cap/bound exactly as before.
+
+**The lift rule.** Defaults for volume caps and range bounds exist ONLY for the bare invocation. Passing ANY explicit optional flag from those two classes disables the remaining DEFAULTS of both classes. Explicit values are always honored and compose as an intersection. Content scopes and visibility toggles never lift a default.
+
+Worked examples on `upcoming` (default window `--until 1m`, default cap `--limit 50`):
+
+- `things upcoming` → both defaults apply: the next month, first 50 rows.
+- `things upcoming --limit 100` → the window default drops; "the next 100 scheduled items" over an unbounded horizon.
+- `things upcoming --until 2m` → the row-cap default drops; every item through two months out.
+- `things upcoming --until 2m --limit 100` → both stated, both honored (intersection).
+- `things upcoming --tag work` → a content scope, so both defaults still apply (next month, 50 rows, tagged `work`).
+
+`logbook` follows the same rule for its `--since`/`--until` bounds against the `--limit 50` default.
+
+**Required-flag exception.** A REQUIRED bound carries no lift signal, because the user had no choice about stating it. `things changes` requires `--since`, so its presence does NOT lift the default `--limit 50`; `changes` behavior is unchanged.
+
+Rationale: defaults exist to keep the bare invocation small; once the user states any explicit bound they have taken over output sizing, so a stale second default must not silently re-clamp the result.
+
 ## Did-you-mean fallback (unresolved subjects)
 
 When a show / bare-noun subject fails resolution at every tier (a not-found, distinct from an *ambiguous* reference — those still list their candidates verbatim), the CLI does not stop at the bare error. It runs a **lite title-search** and offers candidates:

@@ -58,6 +58,18 @@ function relativePeriodDate(m: RegExpExecArray, now: Date, sign: 1 | -1): Date {
 }
 
 /**
+ * Double a relative period for a "wider window" suggestion: `1m`→`2m`,
+ * `2w`→`4w`, `1y`→`2y`. A non-relative input (an absolute calendar period
+ * like `2026-09`) comes back unchanged — there is nothing sensible to double.
+ * Deliberately dumb: it only scales the count of a `\d+[dwmy]` period.
+ */
+export function doublePeriod(period: string): string {
+  const m = RELATIVE_PERIOD.exec(period.trim());
+  if (m === null) return period;
+  return `${Number(m[1]) * 2}${(m[2] ?? "").toLowerCase()}`;
+}
+
+/**
  * `--until` accepting whole periods: `2024` means through Dec 31 2024,
  * `2024-03` through Mar 31, `2024-03-05` through end of that day; relative
  * periods (`2w`, `1m`, `1y`) count FORWARD from now through the end of the

@@ -329,6 +329,132 @@ describe("cli list limits + truncation hint", () => {
   });
 });
 
+describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
+  /** ISO calendar date `days` from the real today (the CLI uses the real clock). */
+  function isoFromToday(days: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  function seedUpcoming(count: number, dayOffset: number): void {
+    for (let i = 0; i < count; i++) {
+      seedTodo(fx!.db, {
+        title: `sched ${dayOffset}-${i}`,
+        start: "someday",
+        startDate: isoFromToday(dayOffset),
+        index: i,
+      });
+    }
+  }
+  const titles = (stdout: string): string[] =>
+    JSON.parse(stdout).data.map((i: { title: string }) => i.title);
+
+  it("upcoming --limit N drops the default month window — reaches a far item", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "near", start: "someday", startDate: isoFromToday(10) });
+    seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
+
+    const bare = runCli(["upcoming", "--json", "--db", fx.path]).stdout;
+    expect(titles(bare)).toContain("near");
+    expect(titles(bare)).not.toContain("far"); // default 1m window excludes it
+    expect(JSON.parse(bare).meta.pagination.limit).toBe(50); // default cap present
+
+    const wide = runCli(["upcoming", "--limit", "100", "--json", "--db", fx.path]).stdout;
+    expect(titles(wide)).toContain("near");
+    expect(titles(wide)).toContain("far"); // window default lifted by explicit --limit
+    expect(JSON.parse(wide).meta.pagination.limit).toBe(100);
+  });
+
+  it("upcoming --until / --since drop the default row cap (limit=null)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
+
+    const until = runCli(["upcoming", "--until", "3m", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(until).meta.pagination.limit).toBeNull();
+    expect(titles(until)).toContain("far");
+
+    const since = runCli(["upcoming", "--since", "2000", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+  });
+
+  it("upcoming --tag is a content scope — it lifts NO default (window + cap stay)", () => {
+    fx = buildFixtureDb();
+    const t = seedTag(fx.db, "work");
+    const near = seedTodo(fx.db, { title: "near", start: "someday", startDate: isoFromToday(10) });
+    const far = seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
+    tagTask(fx.db, near, t);
+    tagTask(fx.db, far, t);
+    const env = runCli(["upcoming", "--tag", "work", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(env).meta.pagination.limit).toBe(50);
+    expect(titles(env)).toContain("near");
+    expect(titles(env)).not.toContain("far"); // window default still applies under a scope
+  });
+
+  it("logbook --since drops the default row cap; bare keeps it", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "done",
+      status: "completed",
+      stopDate: new Date().getTime() / 1000,
+    });
+    const bare = runCli(["logbook", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(bare).meta.pagination.limit).toBe(50);
+    const since = runCli(["logbook", "--since", "2000", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+  });
+
+  it("changes --since is REQUIRED, so it does NOT lift the row cap", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "recent" });
+    const env = runCli(["changes", "--since", "1y", "--json", "--db", fx.path]).stdout;
+    expect(JSON.parse(env).meta.pagination.limit).toBe(50);
+  });
+
+  it("hint: bare upcoming, cap biting inside the window names the window + both levers", () => {
+    fx = buildFixtureDb();
+    seedUpcoming(55, 12); // 55 items inside the default month window → 5 dropped
+    const { stdout } = runCli(["upcoming", "--db", fx.path]);
+    expect(stdout).toContain("5 more items through");
+    expect(stdout).toContain("see more: `things upcoming --limit 100`");
+    expect(stdout).toContain("full horizon: `things upcoming --all`");
+    expect(stdout).not.toContain("wider:"); // not the window-only footer
+  });
+
+  it("hint: bare upcoming, cap NOT biting offers a wider window", () => {
+    fx = buildFixtureDb();
+    seedUpcoming(3, 12);
+    const { stdout } = runCli(["upcoming", "--db", fx.path]);
+    expect(stdout).toContain("(through");
+    expect(stdout).toContain("wider: `things upcoming --until 2m`");
+    expect(stdout).toContain("everything: `things upcoming --all`");
+    expect(stdout).not.toContain("more items");
+  });
+
+  it("hint: explicit --until drops the window line and (no explicit --limit) the row hint", () => {
+    fx = buildFixtureDb();
+    seedUpcoming(3, 12);
+    const { stdout } = runCli(["upcoming", "--until", "3m", "--db", fx.path]);
+    expect(stdout).not.toContain("through");
+    expect(stdout).not.toContain("more items");
+  });
+
+  it("hint: explicit --until + truncating --limit gives the row hint, but NOT --all", () => {
+    fx = buildFixtureDb();
+    seedUpcoming(5, 12);
+    const { stdout } = runCli(["upcoming", "--until", "3m", "--limit", "2", "--db", fx.path]);
+    expect(stdout).toContain("more items");
+    expect(stdout).toContain("see more: `things upcoming --until 3m --limit 4`");
+    expect(stdout).not.toContain("--all"); // --all conflicts with the stated window
+    expect(stdout).not.toContain("through");
+  });
+
+  it("upcoming --all still rejects an explicit --since/--until (semantics unchanged)", () => {
+    fx = buildFixtureDb();
+    expect(runCli(["upcoming", "--all", "--since", "2w", "--db", fx.path]).exitCode).toBe(2);
+    expect(runCli(["upcoming", "--all", "--until", "3m", "--db", fx.path]).exitCode).toBe(2);
+  });
+});
+
 describe("cli anytime — per-block preview (--area-limit / --project-limit)", () => {
   function seedCatalogue(): void {
     const area = seedArea(fx!.db, "Hobbies");
