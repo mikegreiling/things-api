@@ -21,8 +21,6 @@ import {
 import { projectView } from "../../src/read/project-view.ts";
 import {
   formatItem,
-  parsePeriodEnd,
-  parsePeriodStart,
   renderLegend,
   renderLogbook,
   renderProjectsSidebar,
@@ -30,7 +28,8 @@ import {
   renderUpcoming,
   todayMark,
   viewHeaderLines,
-} from "../../src/cli/commands/reads.ts";
+} from "../../src/cli/render.ts";
+import { parsePeriodEnd, parsePeriodStart } from "../../src/cli/period.ts";
 import {
   areaMark,
   CHECKLIST_MARK,

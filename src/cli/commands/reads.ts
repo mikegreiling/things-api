@@ -1,54 +1,52 @@
 /**
- * Read-only list commands. Each renders a compact human table (UUIDs always
- * shown — agents and humans both need stable references) or a --json envelope.
+ * Read-only list commands: option/description wiring per view, delegating to
+ * the read driver (../read-driver.ts) for envelope/output and to the pure
+ * renderers (../render.ts) for human lines. Each command renders a compact
+ * human table (UUIDs always shown — agents and humans both need stable
+ * references) or a --json envelope.
  */
 import { Option, type Command } from "commander";
 import { execFileSync } from "node:child_process";
 
-import { openThings, type ThingsClient } from "../../client.ts";
-import { ThingsDbNotFoundError } from "../../db/locate.ts";
-import { ThingsDbOpenError } from "../../db/connection.ts";
-import { isTodayMember, type ListItem, type SidebarSection } from "../../read/views.ts";
+import type { ThingsClient } from "../../client.ts";
+import type { ListItem, TodayView } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
-import { templateStatus } from "../../model/recurrence.ts";
-import { blue, bold, dim, strike, underline } from "../style.ts";
-import { getInvocation } from "../resolve-invocation.ts";
+import { dim } from "../style.ts";
+import { areaMark, eveningMoon, LEGEND, shortDate, todayStar } from "../glyphs.ts";
 import {
-  areaMark,
-  CHECKLIST_MARK,
-  countChip,
-  dateChip,
-  deadlineToken,
-  eveningMoon,
-  LEGEND,
-  LEGEND_GROUPS,
-  loggedDate,
-  NOTES_MARK,
-  projectCircle,
-  REMINDER_MARK,
-  shortDate,
-  todayStar,
-  todoBox,
-} from "../glyphs.ts";
-
+  formatItem,
+  renderAnytimePreview,
+  renderLegend,
+  renderList,
+  renderLogbook,
+  renderProjectsSidebar,
+  renderSections,
+  renderSomedayPreview,
+  renderUpcoming,
+  stripAnsi,
+  uuidCol,
+  uuidDisplayWidth,
+  type LaterHints,
+} from "../render.ts";
 import {
-  errorEnvelope,
-  ExitCode,
-  okEnvelope,
-  type EnvelopeMeta,
-  type GroupedPagination,
-  type Pagination,
-} from "../../contracts.ts";
+  invocation,
+  parseCap,
+  parseLimit,
+  runRead,
+  shellQuote,
+  withClient,
+  type GlobalReadOpts,
+} from "../read-driver.ts";
+import { parsePeriodEnd, parsePeriodStart } from "../period.ts";
+import { ExitCode, okEnvelope, type EnvelopeMeta, type Pagination } from "../../contracts.ts";
 import {
   AREA_PREVIEW_LIMIT,
-  DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
   paginateList,
   paginateToday,
   partitionSomedaySection,
   previewSections,
   previewSomedaySections,
-  splitSectionBlocks,
   type GroupedLimits,
 } from "../../read/pagination.ts";
 import {
@@ -61,356 +59,6 @@ import {
   PROJECT_LIMIT_DESC,
 } from "../../surface-copy.ts";
 
-interface GlobalReadOpts {
-  json?: boolean;
-  db?: string;
-}
-
-export interface PagedResult<T> {
-  data: T;
-  /** Flat-view truncation — carried into meta and the appended hint. */
-  pagination?: Pagination;
-  /** Grouped-view (anytime/someday) per-block truncation — carried into meta. */
-  grouped?: GroupedPagination;
-  /**
-   * Precomputed human lines. Grouped views render inside `fn` (where the full
-   * per-block totals live) and hand the finished lines back here; when absent,
-   * `render(data)` produces them.
-   */
-  lines?: string[];
-}
-
-/**
- * A view's TTY-only title preamble: bold view name + its dim Things deep link,
- * then a blank line — e.g. `Anytime (things:///show?id=anytime)`. The id is the
- * app's documented show id (identical to the command name for these views).
- * Suppressed off a TTY so `things inbox | grep …` stays clean, and never part
- * of `--json`; the caller gates on both.
- */
-export function viewHeaderLines(view: string): string[] {
-  const title = view.charAt(0).toUpperCase() + view.slice(1);
-  return [`${bold(title)} ${dim(`(things:///show?id=${view})`)}`, ""];
-}
-
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-const stripAnsi = (s: string): string => s.replace(ANSI, "");
-const visibleWidth = (s: string): number => [...stripAnsi(s)].length;
-
-/** Left-column width for the legend's glyph samples (short marks align; long textual samples overflow). */
-const LEGEND_GUTTER = 10;
-
-/**
- * The `things legend` layout: the visual language grouped into sections
- * (`── To-dos ──`, …), each row the glyph as it actually renders (color on a
- * TTY) followed by its meaning. Content comes straight from glyphs.ts's LEGEND
- * table, so it can never drift from what the list renderers emit.
- */
-export function renderLegend(): string[] {
-  const lines: string[] = [];
-  for (const group of LEGEND_GROUPS) {
-    const entries = LEGEND.filter((e) => e.group === group);
-    if (entries.length === 0) continue;
-    if (lines.length > 0) lines.push("");
-    lines.push(bold(`── ${group} ──`));
-    for (const e of entries) {
-      const pad = " ".repeat(Math.max(0, LEGEND_GUTTER - visibleWidth(e.glyph)));
-      lines.push(`${e.glyph}${pad}  ${e.meaning}`);
-    }
-  }
-  return lines;
-}
-
-/**
- * The shared read driver: open the client, stamp the envelope meta (including
- * fingerprint + optional pagination), and either emit the `--json` envelope or
- * render human lines. When `hintBase` is given and the result was truncated,
- * the muted "N more items" hint (reconstructing the user's own invocation) is
- * appended to the human output — never to `--json`. When `header` names a view,
- * its title preamble leads the human output on a TTY only (viewHeaderLines).
- */
-export function runRead<T>(
-  opts: GlobalReadOpts,
-  kind: string,
-  fn: (client: ThingsClient) => PagedResult<T>,
-  render: (data: T) => string[],
-  hintBase?: string,
-  header?: string,
-): void {
-  const started = Date.now();
-  // An empty --db would silently fall through to the default database path —
-  // reject it loudly instead of reading somewhere the caller did not name.
-  if (opts.db !== undefined && opts.db.trim() === "") {
-    process.stderr.write("error: --db requires a non-empty path\n");
-    process.exitCode = ExitCode.Usage;
-    return;
-  }
-  let client: ThingsClient | null = null;
-  try {
-    client = openThings(opts.db ? { dbPath: opts.db } : {});
-    const fp = client.fingerprint();
-    const { data, pagination, grouped, lines: precomputed } = fn(client);
-    // The canonical command a sugar invocation normalized to — known now that
-    // `fn` has resolved any reference. Present only for the routing sugars
-    // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
-    const resolvedCommand = getInvocation()?.canonical ?? null;
-    const meta: EnvelopeMeta = {
-      dbVersion: fp.observation.databaseVersion,
-      fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
-      elapsedMs: Date.now() - started,
-      ...(pagination !== undefined && { pagination }),
-      ...(grouped !== undefined && { grouped }),
-      ...(resolvedCommand !== null && { resolvedCommand }),
-    };
-    if (fp.kind !== "ok") {
-      process.stderr.write(
-        `warning: schema fingerprint ${meta.fingerprint} — reads best-effort, writes disabled (run \`things doctor\`)\n`,
-      );
-    }
-    if (opts.json) {
-      process.stdout.write(`${JSON.stringify(okEnvelope(kind, data, meta))}\n`);
-    } else {
-      const lines = precomputed ?? render(data);
-      if (pagination !== undefined && hintBase !== undefined) {
-        const hint = truncationHint(hintBase, pagination);
-        if (hint !== null) lines.push("", hint);
-      }
-      // The view title preamble is a TTY-only affordance (`things inbox | grep`
-      // must stay clean) and never rides --json — both gates already hold here.
-      const withHeader =
-        header !== undefined && process.stdout.isTTY === true
-          ? [...viewHeaderLines(header), ...lines]
-          : lines;
-      // The normalized-form echo: one dim line naming the canonical command a
-      // sugar invocation resolved to, adjacent to the header. Same gates as the
-      // preamble (TTY-only, never in --json) — canonical invocations echo
-      // nothing because `resolvedCommand` is null for them.
-      const out =
-        resolvedCommand !== null && process.stdout.isTTY === true
-          ? [dim(`≡ ${resolvedCommand}`), ...withHeader]
-          : withHeader;
-      process.stdout.write(`${out.join("\n")}\n`);
-    }
-    process.exitCode = ExitCode.Ok;
-  } catch (err) {
-    const meta: EnvelopeMeta = {
-      dbVersion: null,
-      fingerprint: "unknown",
-      elapsedMs: Date.now() - started,
-    };
-    const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;
-    const message = err instanceof Error ? err.message : String(err);
-    if (opts.json) {
-      process.stdout.write(
-        `${JSON.stringify(errorEnvelope({ code: isEnv ? "environment" : "unexpected", message }, meta))}\n`,
-      );
-    } else {
-      process.stderr.write(`error: ${message}\n`);
-    }
-    process.exitCode = isEnv ? ExitCode.Environment : ExitCode.Unexpected;
-  } finally {
-    client?.close();
-  }
-}
-
-export function withClient(
-  opts: GlobalReadOpts,
-  kind: string,
-  fn: (client: ThingsClient) => unknown,
-  render: (data: never) => string[],
-): void {
-  runRead(opts, kind, (client) => ({ data: fn(client) }), render as (data: unknown) => string[]);
-}
-
-/** Result of resolving `--limit`/`--all`; `limit: null` means every row. */
-type LimitResolution = { ok: true; limit: number | null } | { ok: false };
-
-/**
- * Resolve the shared `--limit`/`--all` pair (flat views) into a row cap
- * (null = no cap), writing a loud usage error and setting the exit code on
- * bad input: `--limit` must be a positive integer, and it may not combine
- * with `--all`.
- */
-export function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
-  return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true);
-}
-
-/**
- * Resolve one cap flag (`--limit`, `--area-limit`, `--project-limit`) against
- * `--all`: positive integer required, `--all` conflicts with an explicit
- * value and otherwise lifts the cap (null).
- */
-export function parseCap(
-  flag: string,
-  value: string | undefined,
-  defaultLimit: number,
-  all: boolean,
-): LimitResolution {
-  if (all && value !== undefined) {
-    process.stderr.write(`error: ${flag} and --all are mutually exclusive\n`);
-    process.exitCode = ExitCode.Usage;
-    return { ok: false };
-  }
-  if (all) return { ok: true, limit: null };
-  if (value === undefined) return { ok: true, limit: defaultLimit };
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) {
-    process.stderr.write(`error: ${flag} must be a positive integer\n`);
-    process.exitCode = ExitCode.Usage;
-    return { ok: false };
-  }
-  return { ok: true, limit: n };
-}
-
-/** Shell-safe rendering of a flag value for the reconstructed hint command. */
-export function shellQuote(v: string): string {
-  return /^[\w./@:+-]+$/.test(v) ? v : `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
-}
-
-/** Reconstruct `things <name> <flags…>`, dropping falsy/empty parts. */
-export function invocation(name: string, parts: Array<string | false | undefined>): string {
-  return [
-    "things",
-    name,
-    ...parts.filter((p): p is string => typeof p === "string" && p !== ""),
-  ].join(" ");
-}
-
-/**
- * The unified truncation hint: a muted `── N more items — see more: … · all:
- * … ──` line whose commands echo the user's actual invocation, so a bigger
- * `--limit` or `--all` is one copy-paste away. Returns null when nothing was
- * dropped or the caller already asked for every row.
- */
-export function truncationHint(base: string, pagination: Pagination): string | null {
-  if (!pagination.truncated || pagination.limit === null) return null;
-  const more = pagination.total - pagination.shown;
-  const bigger = pagination.limit * 2;
-  return dim(
-    `── ${more} more item${more === 1 ? "" : "s"} — see more: \`${base} --limit ${bigger}\` · all: \`${base} --all\` ──`,
-  );
-}
-
-export interface FormatOpts {
-  /**
-   * Render a grouped project TITLE row: bold+underlined title (the GUI's
-   * project-header look) — the circle glyph and count chip still apply.
-   */
-  projectTitle?: boolean;
-  /** Container uuids already implied by surrounding output — their context suffix is dropped. */
-  suppressProject?: string | null;
-  suppressArea?: string | null;
-  /** Reference instant for date-relative tokens (tests pin this; defaults to now). */
-  now?: Date;
-  /** Pre-styled Today/Evening mark (★/⏾), rendered right after the box — GUI position. */
-  mark?: string | null;
-  /** Dim status word after the box (the GUI's waiting/paused/ended chips on repeating templates). */
-  statusWord?: string;
-  /** Suppress the ‹date› chip (rows under a day header already carry the date). */
-  hideDateChip?: boolean;
-}
-
-/**
- * One item line:
- * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
- * Repeating templates seat ↻ INSIDE the box (`[↻]`/`(↻)`) rather than as a
- * separate mark; open project rows render their circle and title blue.
- * The box is the glyph-language state carrier (../glyphs.ts): `[ ]`-family
- * for to-dos, `( )`-family for projects — state survives with color
- * stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
- * mark keeps the state when strike/ANSI is unavailable). Human output shows
- * a SHORTENED uuid prefix (every command accepts unique prefixes >= 6
- * chars); `uuidWidth` is the display length from uuidDisplayWidth — never
- * below 8 so a copied prefix stays unique across the whole database, not
- * just the rendered list. Tags follow the title (`#`-prefixed, green — GUI
- * color), after the count chip (projects), notes marker, and container.
- * Heading-nested to-dos label their parent PROJECT (via headingProject),
- * never the heading — GUI behavior. Colors engage on a TTY only
- * (../style.ts); `--json` always carries full uuids.
- */
-export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {}): string {
-  const todayIso = localToday(opts.now);
-  const asTitle = opts.projectTitle === true && item.type === "project";
-  const box = item.type === "project" ? projectCircle(item) : todoBox(item);
-  const meta: string[] = [];
-  if (opts.mark != null) meta.push(opts.mark);
-  // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
-  if (opts.statusWord !== undefined) meta.push(dim(opts.statusWord));
-  if (item.status !== "open" && item.stopped !== null)
-    meta.push(loggedDate(item.stopped, todayIso));
-  if (opts.hideDateChip === true) {
-    // rows under a day header — the header carries the date
-  } else if (item.status === "open" && item.startDate !== null && item.startDate > todayIso)
-    meta.push(dateChip(item.startDate, todayIso));
-  // Repeating templates chip their app-materialized next occurrence.
-  else if (item.repeating.isTemplate && item.repeating.nextOccurrence != null)
-    meta.push(dateChip(item.repeating.nextOccurrence, todayIso));
-  // List rows mute their tags (the GUI's gray pills); tags go green only on
-  // the opened resource (todo show / the project|area header row).
-  const tags =
-    item.tags.length > 0 ? ` ${dim(`#${item.tags.map((t) => t.title).join(" #")}`)}` : "";
-  // Closed rows drop the deadline flag — a months-old red "n days ago" on a
-  // logged item is noise (the GUI doesn't flag logbook rows either). Raw
-  // template rows drop it via the sentinel guard: their deadline column
-  // carries app-internal 4001-01-01 sentinels (upcoming's synthesized
-  // occurrences carry REAL rule-derived deadlines and must keep the flag).
-  const rule = item.repeating.rule;
-  const deadline =
-    item.status === "open" && item.deadline !== null && item.deadline < "4000"
-      ? ` ${deadlineToken(item.deadline, todayIso)}`
-      : // The GUI's bare flag on no-date repeating templates: the rule WILL
-        // assign each occurrence a deadline (fixed rules always do; after-
-        // completion only with a start offset), date unknown until spawned.
-        item.repeating.isTemplate &&
-          rule !== undefined &&
-          (rule.type === "fixed" || rule.startOffsetDays < 0)
-        ? ` ${bold(dim("⚑"))}`
-        : "";
-  const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
-  const context =
-    container !== null
-      ? container.uuid === opts.suppressProject
-        ? ""
-        : ` (${container.title})`
-      : item.area
-        ? item.area.uuid === opts.suppressArea
-          ? ""
-          : ` (${item.area.title})`
-        : "";
-  // width 0 (the default) means "no column" — show the full uuid untouched.
-  const shownUuid = uuidWidth > 0 ? uuidCol(item.uuid, uuidWidth) : item.uuid;
-  let title = item.title;
-  if (asTitle) title = bold(underline(title));
-  else if (item.status === "canceled") title = dim(strike(title));
-  else if (item.status === "completed") title = dim(title);
-  // Open project rows render their title blue — GUI parity (list accent) and
-  // a color cue reinforcing the round bracket. To-dos stay default-colored.
-  else if (item.type === "project") title = blue(title);
-  // GUI indicator order after the title: bell, document, checklist.
-  const tail = [
-    ...(item.type === "project" ? [countChip(item)] : []),
-    ...(item.reminder !== null ? [dim(REMINDER_MARK)] : []),
-    ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
-    ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
-  ];
-  return [
-    `${dim(shownUuid)} `,
-    box,
-    ...meta,
-    `${title}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}${tags}${context === "" ? "" : dim(context)}${deadline}`,
-  ].join(" ");
-}
-
-/**
- * Row prefix in today-aware views: yellow ★ for Today members, cyan ⏾ for
- * effective This-Evening members (raw evening assignment counts only while
- * startDate is exactly today — the UI's daily expiry), null otherwise.
- */
-export function todayMark(item: ListItem, now?: Date): string | null {
-  if (!isTodayMember(item, now)) return null;
-  const evening = item.todaySection === "evening" && item.startDate === localToday(now);
-  return evening ? eveningMoon() : todayStar();
-}
-
 /**
  * Foreground the Things app on a resource via its share URI. A GUI action
  * on this Mac — NOT headless; the shared implementation behind every
@@ -422,550 +70,58 @@ export function openInThings(uuid: string): string {
   return uri;
 }
 
-/** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
-const UUID_DISPLAY_MIN = 8;
-
 /**
- * Display width for a list's uuid column: the shortest prefix that is
- * unique WITHIN the list, floored at UUID_DISPLAY_MIN (list-local
- * uniqueness at 2–3 chars would still collide database-wide).
+ * One flat list view (today/inbox): its option wiring plus the typed
+ * `{fetch, render, paginate}` triple. Generic over the payload `T` so the
+ * fetch return type flows into `render` and `paginate` — no renderer casts.
  */
-export function uuidDisplayWidth(items: Array<{ uuid: string }>): number {
-  if (items.length === 0) return UUID_DISPLAY_MIN;
-  const sorted = items.map((i) => i.uuid).toSorted();
-  let needed = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    const a = sorted[i - 1] ?? "";
-    const b = sorted[i] ?? "";
-    let common = 0;
-    while (common < a.length && common < b.length && a[common] === b[common]) common++;
-    needed = Math.max(needed, common + 1);
-  }
-  return Math.max(UUID_DISPLAY_MIN, needed);
+interface ListViewSpec<T> {
+  name: string;
+  description: string;
+  fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => T;
+  render: (data: T) => string[];
+  /** Truncate to the row limit + compute pagination. */
+  paginate: (data: T, limit: number | null) => { data: T; pagination: Pagination };
 }
 
-/**
- * Fit a uuid into the shared id column: truncate to `width` when longer, pad
- * to it when shorter, so ids line up under one another regardless of prefix
- * length. `width` is the value from uuidDisplayWidth.
- */
-export function uuidCol(uuid: string, width: number): string {
-  return uuid.length > width ? uuid.slice(0, width) : uuid.padEnd(width);
-}
-
-function renderList(items: ListItem[]): string[] {
-  const w = uuidDisplayWidth(items);
-  return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
-}
-
-/** Hidden-later counts per sidebar group (null area = the loose block). */
-export interface LaterHints {
-  /** Sidebar-ordered, INCLUDING groups whose every project is later. */
-  groups: Array<{ area: { uuid: string; title: string } | null; hidden: number }>;
-}
-
-/**
- * The sidebar mirror for `things projects`: loose projects first (the GUI
- * lists them above the areas), then a `── ⬡ Area ──` header per area with
- * its projects beneath (the redundant `(Area)` suffix suppressed). Items
- * arrive from projectsView already in sidebar order — this only inserts the
- * headers. Denser than renderSections on purpose: no title styling and no
- * blank line per project (every row here IS a project). With `hints`,
- * default-hidden later projects are never silent: each group trails a muted
- * `…n later projects` count (a later-only area still gets its header), and
- * the output ends with the flag that reveals them.
- */
-export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): string[] {
-  const total = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
-  if (items.length === 0 && total === 0 && (hints === undefined || hints.groups.length === 0))
-    return ["(empty)"];
-  const w = uuidDisplayWidth(items);
-  const byGroup = new Map<string | null, ListItem[]>();
-  for (const item of items) {
-    const key = item.area?.uuid ?? null;
-    byGroup.set(key, [...(byGroup.get(key) ?? []), item]);
-  }
-  // hints (when present) carry the full sidebar group order, including
-  // later-only groups the visible items can't reveal.
-  const groups =
-    hints?.groups ??
-    [...byGroup.keys()].map((key) => ({
-      area: key === null ? null : (items.find((i) => i.area?.uuid === key)?.area ?? null),
-      hidden: 0,
-    }));
-  const lines: string[] = [];
-  for (const group of groups) {
-    const rows = byGroup.get(group.area?.uuid ?? null) ?? [];
-    // The loose block only exists when it has content; areas mirror the
-    // sidebar and render even when empty.
-    if (group.area === null && rows.length === 0 && group.hidden === 0) continue;
-    if (group.area !== null) {
-      if (lines.length > 0) lines.push("");
-      lines.push(`${bold("──")} ${areaMark()} ${bold(`${group.area.title} ──`)}`);
-    }
-    lines.push(
-      ...rows.map((item) => formatItem(item, w, { suppressArea: group.area?.uuid ?? null })),
+function registerListView<T>(program: Command, spec: ListViewSpec<T>): void {
+  program
+    .command(spec.name)
+    .description(spec.description)
+    .option(
+      "--tag <ref>",
+      "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
+    )
+    .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action(
+      (
+        opts: GlobalReadOpts & {
+          tag?: string;
+          exactTag?: boolean;
+          limit?: string;
+          all?: boolean;
+        },
+      ) => {
+        const lim = parseLimit(opts);
+        if (!lim.ok) return;
+        const base = invocation(spec.name, [
+          opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
+          opts.exactTag === true && "--exact-tag",
+        ]);
+        runRead(
+          opts,
+          spec.name,
+          (c) => spec.paginate(spec.fetch(c, opts.tag, opts.exactTag), lim.limit),
+          spec.render,
+          base,
+          spec.name,
+        );
+      },
     );
-    if (group.hidden > 0)
-      lines.push(dim(`…${group.hidden} later project${group.hidden === 1 ? "" : "s"}`));
-    else if (group.area !== null && rows.length === 0) lines.push(dim("(no projects)"));
-  }
-  if (total > 0)
-    lines.push(
-      "",
-      dim(
-        `(${total} later project${total === 1 ? "" : "s"} — visible with \`things projects --show-later\`)`,
-      ),
-    );
-  return lines;
-}
-
-const FULL_MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-] as const;
-
-/**
- * Relative period: `3d`/`2w`/`1m`/`1y` (days/weeks/calendar months/years),
- * counted from `now` — FORWARD for an until-bound, BACKWARD for a since-
- * bound (each command's natural direction; the flag name carries it).
- */
-const RELATIVE_PERIOD = /^(\d+)([dwmy])$/i;
-
-function relativePeriodDate(m: RegExpExecArray, now: Date, sign: 1 | -1): Date {
-  const n = sign * Number(m[1]);
-  const unit = (m[2] ?? "").toLowerCase();
-  const d = new Date(now);
-  if (unit === "d") d.setDate(d.getDate() + n);
-  else if (unit === "w") d.setDate(d.getDate() + 7 * n);
-  else if (unit === "m") d.setMonth(d.getMonth() + n);
-  else d.setFullYear(d.getFullYear() + n);
-  return d;
-}
-
-/**
- * `--until` accepting whole periods: `2024` means through Dec 31 2024,
- * `2024-03` through Mar 31, `2024-03-05` through end of that day; relative
- * periods (`2w`, `1m`, `1y`) count FORWARD from now through the end of the
- * landing day; anything else parses as an instant.
- */
-export function parsePeriodEnd(s: string, now: Date = new Date()): Date {
-  const rel = RELATIVE_PERIOD.exec(s.trim());
-  if (rel !== null) {
-    const d = relativePeriodDate(rel, now, 1);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-  }
-  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
-  if (m === null) return new Date(s);
-  const year = Number(m[1]);
-  // Day 0 of month n+1 = the last day of month n.
-  if (m[2] === undefined) return new Date(year, 11, 31, 23, 59, 59, 999);
-  const month = Number(m[2]) - 1;
-  if (m[3] === undefined) return new Date(year, month + 1, 0, 23, 59, 59, 999);
-  return new Date(year, month, Number(m[3]), 23, 59, 59, 999);
-}
-
-/**
- * `--since` accepting the same vocabulary at the period's START: `2024` =
- * Jan 1 2024 00:00, `2024-03` = Mar 1, `2024-03-05` = that midnight;
- * relative periods (`2w`, `1m`) count BACKWARD from now to the landing
- * day's midnight; anything else parses as an instant.
- */
-export function parsePeriodStart(s: string, now: Date = new Date()): Date {
-  const rel = RELATIVE_PERIOD.exec(s.trim());
-  if (rel !== null) {
-    const d = relativePeriodDate(rel, now, -1);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  }
-  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
-  if (m === null) return new Date(s);
-  const year = Number(m[1]);
-  if (m[2] === undefined) return new Date(year, 0, 1);
-  const month = Number(m[2]) - 1;
-  if (m[3] === undefined) return new Date(year, month, 1);
-  return new Date(year, month, Number(m[3]));
-}
-
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-const SHORT_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-] as const;
-
-/**
- * GUI-style Upcoming bucket for a date, granularity decaying with distance:
- * individual days for the next week ("Wed Jul 15"), the remainder of the
- * current month ("Jul 19–31"), months through the end of NEXT year
- * ("August", "January 2027"), then bare years ("2028").
- */
-function upcomingBucket(iso: string, todayIso: string): { label: string; isDay: boolean } {
-  const [y, m, d] = iso.split("-").map(Number);
-  const [y0, m0, d0] = todayIso.split("-").map(Number);
-  const diff = Math.round(
-    (Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1) - Date.UTC(y0 ?? 0, (m0 ?? 1) - 1, d0 ?? 1)) /
-      86_400_000,
-  );
-  if (diff <= 7) {
-    const weekday = WEEKDAYS[new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1)).getUTCDay()];
-    return { label: `${weekday} ${SHORT_MONTHS[(m ?? 1) - 1]} ${d}`, isDay: true };
-  }
-  if (y === y0 && m === m0) {
-    const lastDay = new Date(y ?? 0, m ?? 1, 0).getDate();
-    return { label: `${SHORT_MONTHS[(m ?? 1) - 1]} ${(d0 ?? 1) + 8}–${lastDay}`, isDay: false };
-  }
-  if ((y ?? 0) <= (y0 ?? 0) + 1) {
-    const month = FULL_MONTHS[(m ?? 1) - 1];
-    return { label: y === y0 ? `${month}` : `${month} ${y}`, isDay: false };
-  }
-  return { label: `${y}`, isDay: false };
-}
-
-/**
- * Upcoming rows under GUI-style date headers (empty periods are simply
- * absent), with the trailing Repeating To-Dos section: templates with no
- * set next occurrence, carrying their waiting/paused/ended status word and
- * the bare ⚑ when the rule will assign a deadline per occurrence.
- */
-export function renderUpcoming(items: ListItem[], now?: Date): string[] {
-  if (items.length === 0) return ["(empty)"];
-  const todayIso = localToday(now);
-  const w = uuidDisplayWidth(items);
-  const fmtOpts = now === undefined ? {} : { now };
-  const dated = items.filter((i) => i.startDate !== null);
-  const resting = items.filter((i) => i.startDate === null && i.repeating.isTemplate);
-  const lines: string[] = [];
-  let openHeader: string | null = null;
-  for (const item of dated) {
-    const bucket = upcomingBucket(item.startDate ?? "", todayIso);
-    if (bucket.label !== openHeader) {
-      if (lines.length > 0) lines.push("");
-      lines.push(bold(`── ${bucket.label} ──`));
-      openHeader = bucket.label;
-    }
-    lines.push(formatItem(item, w, { ...fmtOpts, hideDateChip: bucket.isDay }));
-  }
-  if (resting.length > 0) {
-    if (lines.length > 0) lines.push("");
-    lines.push(bold("── Repeating To-Dos ──"));
-    for (const item of resting) {
-      lines.push(
-        formatItem(item, w, { ...fmtOpts, statusWord: templateStatus(item.repeating, todayIso) }),
-      );
-    }
-  }
-  return lines;
-}
-
-/**
- * Logbook rows under GUI-style date headings, month granularity throughout
- * — `── July ──` within the current year, `── March 2025 ──` beyond (finer
- * than the GUI's bare per-year buckets, deliberately). Truncation past the
- * row limit is reported by the shared hint the command appends, not here.
- */
-export function renderLogbook(items: ListItem[], now?: Date): string[] {
-  if (items.length === 0) return ["(empty)"];
-  const w = uuidDisplayWidth(items);
-  const currentYear = localToday(now).slice(0, 4);
-  const lines: string[] = [];
-  let openHeading: string | null = null;
-  for (const item of items) {
-    const s = item.stopped;
-    const heading =
-      s === null
-        ? "no logged date"
-        : `${FULL_MONTHS[s.getMonth()]}${String(s.getFullYear()) === currentYear ? "" : ` ${s.getFullYear()}`}`;
-    if (heading !== openHeading) {
-      if (lines.length > 0) lines.push("");
-      lines.push(bold(`── ${heading} ──`));
-      openHeading = heading;
-    }
-    lines.push(formatItem(item, w, now === undefined ? {} : { now }));
-  }
-  return lines;
-}
-
-/**
- * Sidebar-grouped views (anytime/someday), rendered the way the GUI reads:
- * the area-less block headerless first, then one `── <area> ──` header per
- * area; inside a section, loose to-dos first, then each project GROUP — a
- * blank line, the project's bold+underlined title row, then its members.
- * Container names implied by the grouping are not repeated on member rows
- * (an area header covers its rows; a project title row covers the to-dos
- * beneath it — a clustered child whose project row is absent, e.g. under a
- * tag filter, keeps its `(project)` suffix). `star` prefixes each item line
- * with the Today-membership mark (★, or ⏾ for This-Evening members).
- */
-export function renderSections(sections: SidebarSection[], star = false): string[] {
-  const all = sections.flatMap((s) => s.items);
-  if (all.length === 0) return ["(empty)"];
-  const w = uuidDisplayWidth(all);
-  const lines: string[] = [];
-  const blank = () => {
-    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
-  };
-  for (const section of sections) {
-    if (section.area !== null) {
-      blank();
-      lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
-    }
-    // The uuid of the project whose title row is directly above (its member
-    // rows drop their redundant `(project)` suffix).
-    let openProject: string | null = null;
-    for (const item of section.items) {
-      const mark = star ? todayMark(item) : null;
-      if (item.type === "project") {
-        openProject = item.uuid;
-        blank();
-        lines.push(
-          formatItem(item, w, {
-            projectTitle: true,
-            suppressArea: section.area?.uuid ?? null,
-            mark,
-          }),
-        );
-      } else {
-        lines.push(
-          formatItem(item, w, {
-            suppressProject: openProject,
-            suppressArea: section.area?.uuid ?? null,
-            mark,
-          }),
-        );
-      }
-    }
-  }
-  return lines;
-}
-
-/** Single-quote a title for a copy-pasteable drill-down command. */
-function quoteTitle(title: string): string {
-  return `'${title.replace(/'/g, "'\\''")}'`;
-}
-
-const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
-  limit === null ? items : items.slice(0, limit);
-
-/** Muted per-block truncation line: `… N more — \`drill-down\``. */
-function blockMoreLine(total: number, shown: number, drill: string | null): string {
-  return dim(`  … ${total - shown} more${drill === null ? "" : ` — \`${drill}\``}`);
-}
-
-/**
- * Type-aware variant for blocks that mix project rows and to-dos (someday's
- * loose/area blocks): the hidden remainder is split by type — `… 5 more
- * projects, 14 more to-dos` — omitting a type with nothing hidden and
- * pluralizing per count.
- */
-function mixedMoreLine(hidden: ListItem[], drill: string | null): string {
-  const projects = hidden.filter((i) => i.type === "project").length;
-  const todos = hidden.length - projects;
-  const parts = [
-    ...(projects > 0 ? [`${projects} more project${projects === 1 ? "" : "s"}`] : []),
-    ...(todos > 0 ? [`${todos} more to-do${todos === 1 ? "" : "s"}`] : []),
-  ];
-  return dim(`  … ${parts.join(", ")}${drill === null ? "" : ` — \`${drill}\``}`);
-}
-
-/**
- * Muted bottom line for a truncated grouped view: `── more per group — see
- * more: \`<base> <bigger flags>\` · all: \`<base> --all\` ──`, where the
- * bigger-flags command doubles exactly the caps that actually truncated.
- */
-function groupedBottomLine(base: string, escalations: string[], allBase = base): string {
-  const seeMore = escalations.length > 0 ? `see more: \`${base} ${escalations.join(" ")}\` · ` : "";
-  return dim(`── more per group — ${seeMore}all: \`${allBase} --all\` ──`);
-}
-
-/**
- * The anytime preview: the FULL block skeleton — every area header and every
- * project row — always renders; `limits.area` caps the loose block and each
- * area's direct to-dos, `limits.project` each project's to-dos. A truncated
- * block trails a muted `… N more — \`things (project|area) show '…'\``
- * drill-down (the loose block has no container, so it shows only the count),
- * and the view ends with one line escalating the caps that hit. Today members
- * are starred. Mirrors renderSections' layout exactly.
- */
-function renderAnytimePreview(
-  sections: SidebarSection[],
-  limits: GroupedLimits,
-  base: string,
-): string[] {
-  const all = sections.flatMap((s) => s.items);
-  if (all.length === 0) return ["(empty)"];
-  const w = uuidDisplayWidth(all);
-  const lines: string[] = [];
-  let areaHit = false;
-  let projectHit = false;
-  const blank = () => {
-    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
-  };
-  for (const section of sections) {
-    if (section.area !== null) {
-      blank();
-      lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
-    }
-    const { direct, projects } = splitSectionBlocks(section);
-    const suppressArea = section.area?.uuid ?? null;
-    const shownDirect = takeUpTo(direct, limits.area);
-    for (const item of shownDirect) {
-      lines.push(formatItem(item, w, { suppressArea, mark: todayMark(item) }));
-    }
-    if (direct.length > shownDirect.length) {
-      areaHit = true;
-      const drill =
-        section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-      lines.push(blockMoreLine(direct.length, shownDirect.length, drill));
-    }
-    for (const { project, items: children } of projects) {
-      blank();
-      lines.push(
-        formatItem(project, w, { projectTitle: true, suppressArea, mark: todayMark(project) }),
-      );
-      const shownChildren = takeUpTo(children, limits.project);
-      for (const item of shownChildren) {
-        lines.push(
-          formatItem(item, w, {
-            suppressProject: project.uuid,
-            suppressArea,
-            mark: todayMark(item),
-          }),
-        );
-      }
-      if (children.length > shownChildren.length) {
-        projectHit = true;
-        lines.push(
-          blockMoreLine(
-            children.length,
-            shownChildren.length,
-            `things project show ${quoteTitle(project.title)}`,
-          ),
-        );
-      }
-    }
-  }
-  if (areaHit || projectHit) {
-    const escalations = [
-      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
-      ...(projectHit && limits.project !== null ? [`--project-limit ${limits.project * 2}`] : []),
-    ];
-    lines.push("", groupedBottomLine(base, escalations));
-  }
-  return lines;
-}
-
-/**
- * The someday preview, mirroring the GUI (side-by-side, 2026-07-12): inside
- * each group the project rows render as PLAIN items — `(~)` circle, count
- * chip, no header styling, no surrounding blank lines — listed before the
- * direct to-dos; `limits.area` caps each group's combined list. With
- * `showActive` (the --show-active-project-items toggle) the someday to-dos
- * living inside active projects append as a separate trailing
- * `── From active projects ──` section — a flat run of project-header blocks
- * (no area grouping), each capped at `limits.project` (null = every item).
- * When the toggle is off and such items exist, a muted bottom hint counts
- * them and names the flag.
- */
-function renderSomedayPreview(
-  sections: SidebarSection[],
-  limits: GroupedLimits,
-  base: string,
-  showActive: boolean,
-  hiddenActiveItems: number,
-): string[] {
-  const all = sections.flatMap((s) => s.items);
-  const lines: string[] = [];
-  let areaHit = false;
-  let projectHit = false;
-  const blank = () => {
-    if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
-  };
-  if (all.length === 0) {
-    lines.push("(empty)");
-  } else {
-    const w = uuidDisplayWidth(all);
-    const trailing: Array<{ project: { uuid: string; title: string }; items: ListItem[] }> = [];
-    for (const section of sections) {
-      const { own, children } = partitionSomedaySection(section);
-      trailing.push(...children);
-      if (section.area !== null) {
-        blank();
-        lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
-      }
-      const suppressArea = section.area?.uuid ?? null;
-      const shownOwn = takeUpTo(own, limits.area);
-      for (const item of shownOwn) lines.push(formatItem(item, w, { suppressArea }));
-      if (own.length > shownOwn.length) {
-        areaHit = true;
-        const drill =
-          section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-        lines.push(mixedMoreLine(own.slice(shownOwn.length), drill));
-      }
-    }
-    if (trailing.length > 0) {
-      blank();
-      lines.push(bold("── From active projects ──"));
-      for (const group of trailing) {
-        blank();
-        lines.push(
-          `${dim(uuidCol(group.project.uuid, w))}  ${bold(underline(group.project.title))}`,
-        );
-        const shown = takeUpTo(group.items, limits.project);
-        for (const item of shown) {
-          lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
-        }
-        if (group.items.length > shown.length) {
-          projectHit = true;
-          lines.push(
-            blockMoreLine(
-              group.items.length,
-              shown.length,
-              `things project show ${quoteTitle(group.project.title)}`,
-            ),
-          );
-        }
-      }
-    }
-  }
-  if (areaHit || projectHit) {
-    const escalations = [
-      ...(areaHit && limits.area !== null ? [`--area-limit ${limits.area * 2}`] : []),
-      ...(projectHit && limits.project !== null
-        ? [`--show-active-project-items ${limits.project * 2}`]
-        : []),
-    ];
-    // The bare flag keeps the active-projects section visible under --all.
-    const allBase = showActive ? `${base} --show-active-project-items` : base;
-    lines.push("", groupedBottomLine(base, escalations, allBase));
-  }
-  if (!showActive && hiddenActiveItems > 0) {
-    blank();
-    lines.push(
-      dim(
-        `(${hiddenActiveItems} someday to-do${hiddenActiveItems === 1 ? "" : "s"} inside active projects — visible with \`things someday --show-active-project-items\`)`,
-      ),
-    );
-  }
-  return lines;
 }
 
 export function registerReadCommands(program: Command): void {
@@ -997,96 +153,38 @@ export function registerReadCommands(program: Command): void {
       process.exitCode = ExitCode.Ok;
     });
 
-  const listCommands: Array<{
-    name: string;
-    description: string;
-    fetch: (client: ThingsClient, tag?: string, exactTag?: boolean) => unknown;
-    render?: (data: never) => string[];
-    /** Truncate to the row limit + compute pagination (default: flat list). */
-    paginate?: (data: never, limit: number | null) => { data: unknown; pagination: Pagination };
-  }> = [
-    {
-      name: "today",
-      description:
-        "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
-      fetch: (c, tag, exactTag) =>
-        c.read.today(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
-      render: (data: {
-        today: ListItem[];
-        evening: ListItem[];
-        badge: { dueOrOverdue: number; other: number };
-      }) => {
-        // GUI parity: every Today row carries the star, every This-Evening
-        // row the crescent, right after the box (one shared uuid column).
-        const w = uuidDisplayWidth([...data.today, ...data.evening]);
-        return [
-          `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
-          ...(data.today.length === 0
-            ? ["(empty)"]
-            : data.today.map((i) => formatItem(i, w, { mark: todayStar() }))),
-          "── This Evening ──",
-          ...(data.evening.length === 0
-            ? ["(empty)"]
-            : data.evening.map((i) => formatItem(i, w, { mark: eveningMoon() }))),
-        ];
-      },
-      paginate: paginateToday as (
-        data: never,
-        limit: number | null,
-      ) => { data: unknown; pagination: Pagination },
+  registerListView(program, {
+    name: "today",
+    description:
+      "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
+    fetch: (c, tag, exactTag) =>
+      c.read.today(tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) }),
+    render: (data: TodayView) => {
+      // GUI parity: every Today row carries the star, every This-Evening
+      // row the crescent, right after the box (one shared uuid column).
+      const w = uuidDisplayWidth([...data.today, ...data.evening]);
+      return [
+        `── Today (badge: ${data.badge.dueOrOverdue} due/overdue · ${data.badge.other} other) ──`,
+        ...(data.today.length === 0
+          ? ["(empty)"]
+          : data.today.map((i) => formatItem(i, w, { mark: todayStar() }))),
+        "── This Evening ──",
+        ...(data.evening.length === 0
+          ? ["(empty)"]
+          : data.evening.map((i) => formatItem(i, w, { mark: eveningMoon() }))),
+      ];
     },
-    {
-      name: "inbox",
-      description: "Unprocessed captures (Inbox)",
-      fetch: (c, tag, exactTag) =>
-        c.read.inbox(
-          tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) },
-        ),
-    },
-  ];
+    paginate: paginateToday,
+  });
 
-  for (const cmd of listCommands) {
-    program
-      .command(cmd.name)
-      .description(cmd.description)
-      .option(
-        "--tag <ref>",
-        "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
-      )
-      .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
-      .option("--limit <n>", LIMIT_DESC)
-      .option("--all", ALL_DESC)
-      .option("--json", "emit versioned JSON envelope on stdout")
-      .option("--db <path>", "explicit database path")
-      .action(
-        (
-          opts: GlobalReadOpts & {
-            tag?: string;
-            exactTag?: boolean;
-            limit?: string;
-            all?: boolean;
-          },
-        ) => {
-          const lim = parseLimit(opts);
-          if (!lim.ok) return;
-          const base = invocation(cmd.name, [
-            opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
-            opts.exactTag === true && "--exact-tag",
-          ]);
-          const paginate = cmd.paginate ?? paginateList;
-          runRead(
-            opts,
-            cmd.name,
-            (c) => paginate(cmd.fetch(c, opts.tag, opts.exactTag) as never, lim.limit),
-            (cmd.render ?? renderList) as (d: unknown) => string[],
-            base,
-            cmd.name,
-          );
-        },
-      );
-  }
+  registerListView(program, {
+    name: "inbox",
+    description: "Unprocessed captures (Inbox)",
+    fetch: (c, tag, exactTag) =>
+      c.read.inbox(tag === undefined ? undefined : { tag, ...(exactTag === true && { exactTag }) }),
+    render: renderList,
+    paginate: paginateList,
+  });
 
   program
     .command("anytime")
@@ -1158,7 +256,10 @@ export function registerReadCommands(program: Command): void {
             const { data, grouped } = previewSections(full, limits);
             return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
           },
-          renderList as (d: unknown) => string[],
+          // Grouped views hand back precomputed `lines`; renderSections is the
+          // type-correct fallback for the SidebarSection[] payload but is never
+          // reached here.
+          renderSections,
           undefined,
           "anytime",
         );
@@ -1263,7 +364,9 @@ export function registerReadCommands(program: Command): void {
               lines: renderSomedayPreview(full, limits, base, showActive, hiddenActiveItems),
             };
           },
-          renderList as (d: unknown) => string[],
+          // Precomputed lines above; renderSections is the type-correct
+          // SidebarSection[] fallback, never reached here.
+          renderSections,
           undefined,
           "someday",
         );
@@ -1354,7 +457,7 @@ export function registerReadCommands(program: Command): void {
               }),
               lim.limit,
             ),
-          ((items: ListItem[]) => {
+          (items: ListItem[]) => {
             const lines = renderUpcoming(items);
             if (until !== undefined) {
               lines.push(
@@ -1363,7 +466,7 @@ export function registerReadCommands(program: Command): void {
               );
             }
             return lines;
-          }) as (d: unknown) => string[],
+          },
           base,
           "upcoming",
         );
@@ -1439,7 +542,7 @@ export function registerReadCommands(program: Command): void {
               }),
               lim.limit,
             ),
-          ((items: ListItem[]) => renderLogbook(items)) as (d: unknown) => string[],
+          (items: ListItem[]) => renderLogbook(items),
           base,
           "logbook",
         );
@@ -1460,7 +563,7 @@ export function registerReadCommands(program: Command): void {
         opts,
         "trash",
         (c) => paginateList(c.read.trash({ limit: null }), lim.limit),
-        renderList as (d: unknown) => string[],
+        renderList,
         invocation("trash", []),
         "trash",
       );
@@ -1520,7 +623,7 @@ export function registerReadCommands(program: Command): void {
         },
         // Scoped to one area the list is flat (the scope names the group);
         // unscoped it mirrors the sidebar with ⬡ area headers.
-        ((items: ListItem[]) => {
+        (items) => {
           if (opts.area === undefined) return renderProjectsSidebar(items, hints);
           const lines = renderList(items);
           const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
@@ -1532,7 +635,7 @@ export function registerReadCommands(program: Command): void {
               ),
             );
           return lines;
-        }) as (d: never) => string[],
+        },
       );
     });
 
@@ -1542,15 +645,18 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts) => {
-      withClient(opts, "areas", (c) => c.read.areas(), ((
-        data: Array<{ uuid: string; title: string; tags: Array<{ title: string }> }>,
-      ) => {
-        const w = uuidDisplayWidth(data);
-        return data.map(
-          (a) =>
-            `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
-        );
-      }) as (d: never) => string[]);
+      withClient(
+        opts,
+        "areas",
+        (c) => c.read.areas(),
+        (data) => {
+          const w = uuidDisplayWidth(data);
+          return data.map(
+            (a) =>
+              `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
+          );
+        },
+      );
     });
 
   program
@@ -1559,11 +665,12 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts) => {
-      withClient(opts, "tags", (c) => c.read.tags(), ((
-        data: Array<{ uuid: string; title: string; parent: { title: string } | null }>,
-      ) => data.map((t) => `${t.uuid}  ${t.parent ? `${t.parent.title}/` : ""}${t.title}`)) as (
-        d: never,
-      ) => string[]);
+      withClient(
+        opts,
+        "tags",
+        (c) => c.read.tags(),
+        (data) => data.map((t) => `${t.uuid}  ${t.parent ? `${t.parent.title}/` : ""}${t.title}`),
+      );
     });
 
   program
@@ -1596,13 +703,13 @@ export function registerReadCommands(program: Command): void {
         opts,
         "changes",
         (c) => paginateList(c.read.changes({ since, limit: null }), lim.limit),
-        ((items: Array<ListItem & { changeKind: string }>) =>
+        (items) =>
           items.length === 0
             ? ["(no changes)"]
             : items.map(
                 (i) =>
                   `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.trashed ? " [trashed]" : ""}`,
-              )) as (d: unknown) => string[],
+              ),
         base,
       );
     });
@@ -1669,7 +776,7 @@ export function registerReadCommands(program: Command): void {
             }),
             lim.limit,
           ),
-        renderList as (d: unknown) => string[],
+        renderList,
         base,
       );
     });

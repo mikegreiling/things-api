@@ -13,16 +13,9 @@ import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
-import {
-  formatItem,
-  invocation,
-  openInThings,
-  parseCap,
-  runRead,
-  shellQuote,
-  uuidDisplayWidth,
-  withClient,
-} from "./reads.ts";
+import { openInThings } from "./reads.ts";
+import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
+import { formatItem, uuidDisplayWidth } from "../render.ts";
 import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 
@@ -260,7 +253,7 @@ export function registerAreaCommands(program: Command): void {
             );
           return { uri: openInThings(t.uuid) };
         },
-        ((d: { uri: string }) => [`opened ${d.uri}`]) as (d: never) => string[],
+        (d) => [`opened ${d.uri}`],
       );
     });
 }

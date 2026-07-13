@@ -66,6 +66,15 @@ import {
   tagScopeSql,
   tagWithDescendants,
 } from "./queries.ts";
+import {
+  ANYTIME_SELF,
+  CONTAINER_UNTRASHED,
+  EFF_PROJECT,
+  LIVE,
+  OPEN,
+  PROJECT_ANYTIME_ACTIVE,
+} from "./predicates.ts";
+import { groupBySidebar } from "./sidebar-order.ts";
 
 export type ListItem = Todo | Project;
 
@@ -94,9 +103,6 @@ function tagFilter(
   const uuids = filter.exactTag === true ? [target] : tagWithDescendants(db, target);
   return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
 }
-
-const LIVE = `t.type IN (0, 1) AND t.trashed = 0 AND ${NOT_TEMPLATE}`;
-const OPEN = `${LIVE} AND t.status = 0`;
 
 function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
   const refs = makeRefResolver(db);
@@ -184,44 +190,6 @@ export interface SidebarSection {
   items: ListItem[];
 }
 
-/** An item's own anytime membership: unscheduled-active, or dated <= today. */
-const ANYTIME_SELF = (col: string) =>
-  `((${col}.start = 1 AND (${col}.startDate IS NULL OR ${col}.startDate <= ?))
-    OR (${col}.start = 2 AND ${col}.startDate IS NOT NULL AND ${col}.startDate <= ?))`;
-
-/**
- * The item's effective project: its own link, or its heading's project for
- * headed children (heading rows carry the project link).
- */
-const EFF_PROJECT = `COALESCE(t.project, (SELECT h.project FROM TMTask h WHERE h.uuid = t.heading))`;
-
-/**
- * Container cascade (live-verified against the UI, 2026-07-09): a to-do
- * inside a project that is NOT itself anytime-visible (someday or
- * future-scheduled, logged, or trashed) is absent from Anytime regardless of
- * the to-do's own start state — the project row alone represents it.
- * Projects and container-less to-dos pass through. Two binds (packedToday ×2).
- */
-const PROJECT_ANYTIME_ACTIVE = `(${EFF_PROJECT} IS NULL OR EXISTS (
-     SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
-     AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")}))`;
-
-/**
- * DERIVED-trash exclusion: project deletion is SHALLOW (A24B — only the
- * project row flips trashed=1; children keep trashed=0 and their links, so
- * their Trash membership is derived through the container chain). Every live
- * view must therefore check the chain, not just the row's own flag: the
- * heading (if any) and the effective project (direct or via heading) must
- * both be untrashed. Areas cannot be trashed (they delete permanently), so
- * the chain is at most heading → project. Trash-adjacent surfaces stay
- * exempt on purpose: `things trash` lists directly-flagged rows, and a
- * trashed project's OWN view shows its would-be-recovered children.
- */
-const CONTAINER_UNTRASHED = `(t.heading IS NULL OR EXISTS (
-     SELECT 1 FROM TMTask hh WHERE hh.uuid = t.heading AND hh.trashed = 0))
- AND (${EFF_PROJECT} IS NULL OR EXISTS (
-     SELECT 1 FROM TMTask cc WHERE cc.uuid = ${EFF_PROJECT} AND cc.trashed = 0))`;
-
 export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): SidebarSection[] {
   const packedToday = encodePackedDate(localToday(now));
   const tf = tagFilter(db, filter);
@@ -235,109 +203,6 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
     [packedToday, packedToday, packedToday, packedToday, ...tf.binds],
   );
   return groupBySidebar(db, materialize(db, rows));
-}
-
-/**
- * Arranges view members into the UI's flat sidebar-mirroring order: the
- * area-less block first (direct to-dos, then each top-level project followed
- * by its members), then each area by its sidebar index (direct to-dos, then
- * its projects). Project and area order here mirrors the sidebar exactly —
- * both read the same "index" columns.
- */
-function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
-  if (items.length === 0) return [];
-  const inList = (n: number) => Array.from({ length: n }, () => "?").join(", ");
-
-  // Headed children: resolve heading -> project.
-  const headingUuids = [
-    ...new Set(
-      items.flatMap((i) => (i.type === "to-do" && i.heading !== null ? [i.heading.uuid] : [])),
-    ),
-  ];
-  const headingProject = new Map<string, string | null>();
-  if (headingUuids.length > 0) {
-    for (const row of db
-      .prepare(`SELECT uuid, project FROM TMTask WHERE uuid IN (${inList(headingUuids.length)})`)
-      .all(...headingUuids) as Array<{ uuid: string; project: string | null }>) {
-      headingProject.set(row.uuid, row.project);
-    }
-  }
-  const effProject = (i: ListItem): string | null =>
-    i.type !== "to-do"
-      ? null
-      : (i.project?.uuid ??
-        (i.heading !== null ? (headingProject.get(i.heading.uuid) ?? null) : null));
-
-  // Sidebar rank + title for areas; index + area for every referenced project
-  // (a tag-filtered list can contain a child whose project row didn't match).
-  const areaRows = db
-    .prepare(`SELECT uuid, title, "index" FROM TMArea ORDER BY "index" ASC, uuid ASC`)
-    .all() as Array<{ uuid: string; title: string | null }>;
-  const areaRank = new Map(areaRows.map((a, rank) => [a.uuid, rank]));
-  const areaTitle = new Map(areaRows.map((a) => [a.uuid, a.title ?? ""]));
-  const projectUuids = [
-    ...new Set([
-      ...items.flatMap((i) => (i.type === "project" ? [i.uuid] : [])),
-      ...items.flatMap((i) => {
-        const p = effProject(i);
-        return p === null ? [] : [p];
-      }),
-    ]),
-  ];
-  const projectMeta = new Map<string, { index: number; area: string | null }>();
-  if (projectUuids.length > 0) {
-    for (const row of db
-      .prepare(
-        `SELECT uuid, "index", area FROM TMTask WHERE uuid IN (${inList(projectUuids.length)})`,
-      )
-      .all(...projectUuids) as Array<{ uuid: string; index: number | null; area: string | null }>) {
-      projectMeta.set(row.uuid, { index: row.index ?? 0, area: row.area });
-    }
-  }
-
-  // items arrive in SQL "index" order, so array position IS the per-container
-  // rank (the internal index is no longer exposed on the entity).
-  const sortKey = (i: ListItem, pos: number) => {
-    const project = i.type === "project" ? i.uuid : effProject(i);
-    const meta = project === null ? undefined : projectMeta.get(project);
-    const area = i.area?.uuid ?? meta?.area ?? null;
-    return {
-      areaRank: area === null ? -1 : (areaRank.get(area) ?? areaRows.length),
-      area: area ?? "",
-      inProject: project === null ? 0 : 1,
-      projectIndex: meta?.index ?? 0,
-      project: project ?? "",
-      headerFirst: i.type === "project" ? 0 : 1,
-      pos,
-      uuid: i.uuid,
-    };
-  };
-  const keyed = items.map((item, pos) => ({ item, k: sortKey(item, pos) }));
-  keyed.sort(
-    (a, b) =>
-      a.k.areaRank - b.k.areaRank ||
-      a.k.area.localeCompare(b.k.area) ||
-      a.k.inProject - b.k.inProject ||
-      a.k.projectIndex - b.k.projectIndex ||
-      a.k.project.localeCompare(b.k.project) ||
-      a.k.headerFirst - b.k.headerFirst ||
-      a.k.pos - b.k.pos ||
-      a.k.uuid.localeCompare(b.k.uuid),
-  );
-
-  const sections: SidebarSection[] = [];
-  for (const { item, k } of keyed) {
-    const areaUuid = k.area === "" ? null : k.area;
-    const last = sections.at(-1);
-    if (last === undefined || (last.area?.uuid ?? null) !== areaUuid) {
-      sections.push({
-        area: areaUuid === null ? null : { uuid: areaUuid, title: areaTitle.get(areaUuid) ?? "" },
-        items: [],
-      });
-    }
-    sections.at(-1)?.items.push(item);
-  }
-  return sections;
 }
 
 /** The UI's star marker in Anytime: the item is also a Today member. */

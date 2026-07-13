@@ -6,7 +6,7 @@
 import type { Command } from "commander";
 
 import type { Snapshot } from "../../read/snapshot.ts";
-import { withClient } from "./reads.ts";
+import { withClient } from "../read-driver.ts";
 
 function renderCounts(snapshot: Snapshot): string[] {
   const c = snapshot.counts;
@@ -28,11 +28,6 @@ export function registerSnapshot(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: { json?: boolean; db?: string }) => {
-      withClient(
-        opts,
-        "snapshot",
-        (c) => c.read.snapshot(),
-        renderCounts as (d: never) => string[],
-      );
+      withClient(opts, "snapshot", (c) => c.read.snapshot(), renderCounts);
     });
 }
