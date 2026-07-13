@@ -59,13 +59,14 @@ export interface Pagination {
 }
 
 /**
- * Per-block truncation for the grouped catalogues (anytime/someday). Every
- * area header and project row is always present (sidebar completeness); only
- * the innermost item lists are capped. One entry per non-empty block: the
- * area-less loose block, an area's direct items, or a project's to-dos.
+ * Per-block truncation for the grouped catalogues (anytime/someday) and the
+ * sectioned detail views (`area show`). Every header/section is always
+ * present; only the innermost item lists are capped. One entry per non-empty
+ * block: the area-less loose block, an area's direct items, a project's
+ * to-dos, or — in `area show` — the area's project-ROWS section ("projects").
  */
 export interface BlockCount {
-  kind: "loose" | "area" | "project";
+  kind: "loose" | "area" | "project" | "projects";
   /** Container uuid (area or project); null for the loose block. */
   uuid: string | null;
   /** Container title; null for the loose block. */

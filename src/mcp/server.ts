@@ -21,6 +21,7 @@ import {
   AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
+  capAreaSections,
   paginateList,
   paginateToday,
   previewSections,
@@ -574,12 +575,40 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_area",
     {
       description:
-        "One area's full contents: metadata plus its direct to-dos (active first), its " +
-        "projects in sidebar order, later (scheduled/repeating/someday), and logged items.",
-      inputSchema: { ref: z.string().describe("Area uuid or unique name") },
+        "One area's contents: metadata plus its direct to-dos (active first), its " +
+        "projects in sidebar order, later (scheduled/repeating/someday), and logged items. " +
+        `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
+        "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
+        "second result block reports the counts.",
+      inputSchema: {
+        ref: z.string().describe("Area uuid or unique name"),
+        area_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`maximum direct to-dos to return (default ${AREA_PREVIEW_LIMIT})`),
+        project_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`maximum project rows to return (default ${AREA_PREVIEW_LIMIT})`),
+        all: z.boolean().optional().describe("return both sections in full (no caps)"),
+      },
       annotations: READ_ONLY,
     },
-    async (args) => guard(() => jsonResult(getClient().read.areaView(args.ref))),
+    async (args) =>
+      guard(() => {
+        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+        const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
+        if (areaLimit === "conflict" || projectLimit === "conflict") {
+          return usage("pass at most one of area_limit/project_limit / all");
+        }
+        const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
+        const { data, grouped } = capAreaSections(getClient().read.areaView(args.ref), limits);
+        return groupedResult(data, grouped);
+      }),
   );
 
   server.registerTool(

@@ -9,6 +9,7 @@
  */
 import type { BlockCount, GroupedPagination, Pagination } from "../contracts.ts";
 import type { Ref } from "../model/entities.ts";
+import type { AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
 
@@ -226,4 +227,45 @@ export function previewSomedaySections(
     outSections.push({ area: section.area, items });
   }
   return { data: outSections, grouped: { truncated, blocks } };
+}
+
+/**
+ * Sectioned cap for the `area show` detail view: its sections are containers,
+ * so there is no strict total limit — instead `limits.project` bounds the
+ * project-ROWS section and `limits.area` the direct-to-dos section (null =
+ * uncapped). The toggled later/logged lists and the trashed bucket pass
+ * through untouched. Counts ride the same grouped-block shape the sidebar
+ * catalogues emit (kind "projects" = the project-rows section).
+ */
+export function capAreaSections(
+  view: AreaView,
+  limits: GroupedLimits,
+): { data: AreaView; grouped: GroupedPagination } {
+  const blocks: BlockCount[] = [];
+  let truncated = false;
+  const projects = limits.project === null ? view.projects : view.projects.slice(0, limits.project);
+  if (view.projects.length > 0) {
+    if (projects.length < view.projects.length) truncated = true;
+    blocks.push({
+      kind: "projects",
+      uuid: view.area.uuid,
+      title: view.area.title,
+      shown: projects.length,
+      total: view.projects.length,
+      limit: limits.project,
+    });
+  }
+  const active = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  if (view.active.length > 0) {
+    if (active.length < view.active.length) truncated = true;
+    blocks.push({
+      kind: "area",
+      uuid: view.area.uuid,
+      title: view.area.title,
+      shown: active.length,
+      total: view.active.length,
+      limit: limits.area,
+    });
+  }
+  return { data: { ...view, projects, active }, grouped: { truncated, blocks } };
 }

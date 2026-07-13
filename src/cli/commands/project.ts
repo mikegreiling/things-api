@@ -23,6 +23,18 @@ export interface ProjectShowOpts {
   showLogged?: boolean | string;
 }
 
+/** Reconstruct the show-toggle flags the user passed, for footer echoes. */
+export function showToggleFlags(opts: {
+  showLater?: boolean;
+  showLogged?: boolean | string;
+}): Array<string | false> {
+  return [
+    opts.showLater === true && "--show-later",
+    opts.showLogged === true && "--show-logged",
+    typeof opts.showLogged === "string" && `--show-logged ${opts.showLogged}`,
+  ];
+}
+
 function loggedSlice(view: ProjectView, showLogged: boolean | string | undefined): Todo[] {
   if (showLogged === undefined) return [];
   if (showLogged === true) return view.logged;

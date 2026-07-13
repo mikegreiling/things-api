@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AREA_PREVIEW_LIMIT,
+  capAreaSections,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
   paginateList,
@@ -16,6 +17,7 @@ import {
   previewSomedaySections,
   splitSectionBlocks,
 } from "../../src/read/pagination.ts";
+import type { AreaView } from "../../src/read/area-view.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
 /** Minimal ListItem stand-ins — pagination only inspects type/uuid/refs. */
@@ -212,5 +214,45 @@ describe("previewSomedaySections", () => {
     expect(data[0]?.items).toHaveLength(11);
     expect(meta.truncated).toBe(false);
     expect(meta.blocks.find((b) => b.kind === "project")?.limit).toBeNull();
+  });
+});
+
+describe("capAreaSections (area show per-section caps)", () => {
+  const todos = (n: number, prefix: string) =>
+    Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
+  const view = () =>
+    ({
+      area: { uuid: "a", title: "Busy" },
+      projects: todos(5, "p"),
+      active: todos(7, "t"),
+      later: {
+        scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
+        repeating: [],
+        someday: [],
+      },
+      logged: todos(3, "l"),
+      trashed: [],
+    }) as unknown as AreaView;
+
+  it("caps the project-rows and direct-to-dos sections independently", () => {
+    const { data, grouped } = capAreaSections(view(), { area: 4, project: 2 });
+    expect(data.projects).toHaveLength(2);
+    expect(data.active).toHaveLength(4);
+    // Later/logged sections are containers of their own — never capped here.
+    expect(data.later.scheduled[0]?.items).toHaveLength(2);
+    expect(data.logged).toHaveLength(3);
+    expect(grouped.truncated).toBe(true);
+    expect(grouped.blocks).toEqual([
+      { kind: "projects", uuid: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
+      { kind: "area", uuid: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
+    ]);
+  });
+
+  it("null caps (--all) pass both sections through untouched", () => {
+    const { data, grouped } = capAreaSections(view(), { area: null, project: null });
+    expect(data.projects).toHaveLength(5);
+    expect(data.active).toHaveLength(7);
+    expect(grouped.truncated).toBe(false);
+    expect(grouped.blocks.every((b) => b.shown === b.total && b.limit === null)).toBe(true);
   });
 });

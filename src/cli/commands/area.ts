@@ -9,12 +9,34 @@ import type { AreaView } from "../../read/area-view.ts";
 import { localToday } from "../../model/dates.ts";
 import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
-import { formatItem, openInThings, uuidDisplayWidth, withClient } from "./reads.ts";
+import { Option } from "commander";
+
+import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
+import {
+  formatItem,
+  invocation,
+  openInThings,
+  parseCap,
+  runRead,
+  shellQuote,
+  uuidDisplayWidth,
+  withClient,
+} from "./reads.ts";
+import { showToggleFlags } from "./project.ts";
+import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 
 export interface AreaShowOpts {
   showLater?: boolean;
   /** Commander optional-value flag: true when bare, the raw string when given a count. */
   showLogged?: boolean | string;
+  /**
+   * Per-section caps: `project` bounds the project-ROWS section, `area` the
+   * direct-to-dos section (null = uncapped). The toggled later/logged
+   * sections keep their own existing bounds.
+   */
+  limits?: GroupedLimits;
+  /** The user's invocation, echoed by the per-section truncation footers. */
+  hintBase?: string;
 }
 
 /** Bare `--show-logged` shows this many recent entries (areas accumulate thousands). */
@@ -64,6 +86,22 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
     ...logged,
   ];
   const w = uuidDisplayWidth(shown);
+  // Per-section caps (this view's sections are containers, so there is no
+  // strict total limit): the project-ROWS block and the direct-to-dos block
+  // truncate independently, each with its own exact-count footer. The card
+  // preamble and the toggled later/logged sections are never capped here.
+  const limits = opts.limits ?? { area: null, project: null };
+  const shownProjects =
+    limits.project === null ? activeProjects : activeProjects.slice(0, limits.project);
+  const shownActive = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  const sectionMore = (hidden: number, noun: string, flag: string, cap: number | null): void => {
+    if (hidden <= 0 || opts.hintBase === undefined || cap === null) return;
+    lines.push(
+      dim(
+        `  … ${hidden} more ${noun}${hidden === 1 ? "" : "s"} — \`${opts.hintBase} ${flag} ${cap * 2}\``,
+      ),
+    );
+  };
   // Rows inside this view never repeat the area's own name.
   const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area.uuid });
   const fmtProject = (i: Project) =>
@@ -81,8 +119,15 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   const block = (rows: string[]) => {
     if (rows.length > 0) lines.push("", ...rows);
   };
-  block(activeProjects.map(fmtProject));
-  block(view.active.map(fmt));
+  block(shownProjects.map(fmtProject));
+  sectionMore(
+    activeProjects.length - shownProjects.length,
+    "project",
+    "--project-limit",
+    limits.project,
+  );
+  block(shownActive.map(fmt));
+  sectionMore(view.active.length - shownActive.length, "to-do", "--area-limit", limits.area);
   if (activeProjects.length === 0 && view.active.length === 0) lines.push("", "(no active items)");
   if (opts.showLater === true) {
     if (upcoming.length > 0) {
@@ -138,12 +183,63 @@ export function registerAreaCommands(program: Command): void {
       "--show-logged [n]",
       "include the n most recently logged items (bare flag = 15; full history via `things logbook --area`)",
     )
+    .option("--project-limit <n>", `maximum project rows to show (default ${AREA_PREVIEW_LIMIT})`)
+    .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: AreaShowOpts & { json?: boolean; db?: string }) => {
-      withClient(opts, "area-view", (c) => c.read.areaView(ref), ((d: AreaView) =>
-        renderAreaView(d, opts)) as (d: never) => string[]);
-    });
+    .action(
+      (
+        ref: string,
+        opts: AreaShowOpts & {
+          json?: boolean;
+          db?: string;
+          limit?: string;
+          areaLimit?: string;
+          projectLimit?: string;
+          all?: boolean;
+        },
+      ) => {
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
+          );
+          process.exitCode = 2;
+          return;
+        }
+        const areaCap = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!areaCap.ok) return;
+        const projectCap = parseCap(
+          "--project-limit",
+          opts.projectLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!projectCap.ok) return;
+        const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
+        const hintBase = invocation("area show", [shellQuote(ref), ...showToggleFlags(opts)]);
+        runRead<AreaView>(
+          opts,
+          "area-view",
+          (c) => {
+            const view = c.read.areaView(ref);
+            const { data, grouped } = capAreaSections(view, limits);
+            return {
+              data,
+              grouped,
+              lines: renderAreaView(view, { ...opts, limits, hintBase }),
+            };
+          },
+          () => [],
+        );
+      },
+    );
   area
     .command("open <ref>")
     .description(

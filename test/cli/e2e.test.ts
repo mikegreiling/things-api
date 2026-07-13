@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildProgram } from "../../src/cli/main.ts";
+import { buildProgram, expandShorthand } from "../../src/cli/main.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
@@ -23,7 +23,8 @@ function runCli(argv: string[]): { stdout: string; exitCode: number } {
   try {
     const program = buildProgram();
     program.exitOverride();
-    program.parse(argv, { from: "user" });
+    // Route through the same argv preprocessing the real CLI applies.
+    program.parse(expandShorthand(program, argv), { from: "user" });
     return { stdout: chunks.join(""), exitCode: Number(process.exitCode ?? 0) };
   } finally {
     process.stdout.write = originalWrite;
@@ -481,6 +482,205 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(
       runCli(["someday", "--show-active-project-items", "2", "--all", "--db", fx.path]).exitCode,
     ).toBe(2);
+  });
+});
+
+describe("cli bare-noun shorthand + show keywords", () => {
+  it("things <area name> / <project name> / <todo uuid prefix> route to the right card", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Hobbies");
+    seedProject(fx.db, { title: "Firmware", area, index: 1 });
+    const todo = seedTodo(fx.db, { title: "solder joints", index: 1 });
+
+    const areaOut = runCli(["Hobbies", "--db", fx.path]);
+    expect(areaOut.exitCode).toBe(0);
+    expect(areaOut.stdout).toContain("Area: ⬡ Hobbies");
+
+    const projOut = runCli(["Firmware", "--db", fx.path]);
+    expect(projOut.exitCode).toBe(0);
+    expect(projOut.stdout).toContain("Project:");
+    expect(projOut.stdout).toContain("Firmware");
+
+    const todoOut = runCli([todo.slice(0, 8), "--db", fx.path]);
+    expect(todoOut.exitCode).toBe(0);
+    expect(todoOut.stdout).toContain("To-Do:");
+    expect(todoOut.stdout).toContain("solder joints");
+
+    // Share links route like any ref.
+    const linkOut = runCli([`things:///show?id=${todo}`, "--db", fx.path]);
+    expect(linkOut.stdout).toContain("To-Do:");
+  });
+
+  it("flags pass through the shorthand untouched", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const { stdout, exitCode } = runCli(["Hobbies", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.kind).toBe("show");
+    expect(env.data.type).toBe("area");
+  });
+
+  it("registered command names are reserved and always win", () => {
+    fx = buildFixtureDb();
+    const legend = runCli(["legend", "--json"]);
+    expect(legend.exitCode).toBe(0);
+    expect(JSON.parse(legend.stdout).kind).toBe("legend");
+    const inbox = runCli(["inbox", "--json", "--db", fx.path]);
+    expect(JSON.parse(inbox.stdout).kind).toBe("inbox");
+  });
+
+  it("show <view keyword> IS the view, beating a same-named area", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Anytime");
+    seedTodo(fx.db, { title: "loose now", index: 1 });
+    const view = runCli(["show", "anytime", "--json", "--db", fx.path]);
+    expect(view.exitCode).toBe(0);
+    expect(JSON.parse(view.stdout).kind).toBe("anytime");
+    // The typed form remains the escape hatch to the shadowed area.
+    const escape = runCli(["area", "show", "Anytime", "--json", "--db", fx.path]);
+    expect(JSON.parse(escape.stdout).kind).toBe("area-view");
+    // Keyword dispatch accepts the view's own flags.
+    const flagged = runCli(["show", "someday", "--area-limit", "5", "--json", "--db", fx.path]);
+    expect(JSON.parse(flagged.stdout).kind).toBe("someday");
+  });
+
+  it("an unknown bare word errors naming both possibilities", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["frobnicate", "--json", "--db", fx.path]);
+    expect(exitCode).not.toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.message).toContain('no command or item named "frobnicate"');
+    // Typed `things show <ref>` keeps the plain resolution error.
+    const typed = runCli(["show", "frobnicate", "--json", "--db", fx.path]);
+    expect(JSON.parse(typed.stdout).error.message).not.toContain("no command or item");
+  });
+});
+
+describe("cli detail views — area show per-section caps; project show uncapped", () => {
+  function seedBusyArea(): void {
+    const area = seedArea(fx!.db, "Busy");
+    for (let i = 0; i < 35; i++) {
+      seedProject(fx!.db, { title: `proj ${String(i).padStart(2, "0")}`, area, index: i });
+    }
+    for (let i = 0; i < 35; i++) {
+      seedTodo(fx!.db, { title: `direct ${String(i).padStart(2, "0")}`, area, index: 100 + i });
+    }
+  }
+
+  it("area show caps project rows and direct to-dos at 30 each, with per-section footers", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    const { stdout, exitCode } = runCli(["area", "show", "Busy", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("proj 29");
+    expect(stdout).not.toContain("proj 30");
+    expect(stdout).toContain("direct 29");
+    expect(stdout).not.toContain("direct 30");
+    expect(stdout).toContain("… 5 more projects — `things area show Busy --project-limit 60`");
+    expect(stdout).toContain("… 5 more to-dos — `things area show Busy --area-limit 60`");
+    // The card preamble always renders.
+    expect(stdout).toContain("Area: ⬡ Busy");
+  });
+
+  it("the knobs adjust independently; --all lifts both; JSON carries grouped counts", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    const tty = runCli([
+      "area",
+      "show",
+      "Busy",
+      "--project-limit",
+      "2",
+      "--area-limit",
+      "3",
+      "--db",
+      fx.path,
+    ]).stdout;
+    expect(tty).toContain("… 33 more projects — `things area show Busy --project-limit 4`");
+    expect(tty).toContain("… 32 more to-dos — `things area show Busy --area-limit 6`");
+
+    const json = JSON.parse(
+      runCli([
+        "area",
+        "show",
+        "Busy",
+        "--project-limit",
+        "2",
+        "--area-limit",
+        "3",
+        "--json",
+        "--db",
+        fx.path,
+      ]).stdout,
+    );
+    expect(json.data.projects).toHaveLength(2);
+    expect(json.data.active).toHaveLength(3);
+    expect(json.meta.grouped).toEqual({
+      truncated: true,
+      blocks: [
+        expect.objectContaining({ kind: "projects", title: "Busy", shown: 2, total: 35, limit: 2 }),
+        expect.objectContaining({ kind: "area", title: "Busy", shown: 3, total: 35, limit: 3 }),
+      ],
+    });
+
+    const all = JSON.parse(
+      runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
+    );
+    expect(all.data.projects).toHaveLength(35);
+    expect(all.data.active).toHaveLength(35);
+    expect(all.meta.grouped.truncated).toBe(false);
+    expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
+  });
+
+  it("--limit is a usage error on area show and the loose show; knobs validate", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    for (const argv of [
+      ["area", "show", "Busy", "--limit", "10"],
+      ["show", "Busy", "--limit", "10"],
+      ["area", "show", "Busy", "--area-limit", "0"],
+      ["area", "show", "Busy", "--project-limit", "nope"],
+      ["area", "show", "Busy", "--area-limit", "5", "--all"],
+    ]) {
+      expect(runCli([...argv, "--db", fx.path]).exitCode, argv.join(" ")).toBe(2);
+    }
+  });
+
+  it("project show is UNCAPPED (headings are true containers); --limit is unknown there", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Big Proj", index: 1 });
+    for (let i = 0; i < 60; i++) {
+      seedTodo(fx.db, { title: `task ${String(i).padStart(2, "0")}`, project: proj, index: i });
+    }
+    const tty = runCli(["project", "show", "Big Proj", "--db", fx.path]);
+    expect(tty.exitCode).toBe(0);
+    expect(tty.stdout).toContain("task 59");
+    expect(tty.stdout).not.toContain("more items");
+    const json = JSON.parse(
+      runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
+    );
+    expect(json.data.active).toHaveLength(60);
+    expect(json.meta.pagination).toBeUndefined();
+    // No --limit exists on project show at all — commander rejects it as an
+    // unknown option (error + non-zero exit in the real CLI).
+    expect(() =>
+      runCli(["project", "show", "Big Proj", "--limit", "5", "--db", fx!.path]),
+    ).toThrow();
+  });
+
+  it("the loose show router caps area payloads per section, projects not at all", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    const json = JSON.parse(runCli(["show", "Busy", "--json", "--db", fx.path]).stdout);
+    expect(json.kind).toBe("show");
+    expect(json.data.type).toBe("area");
+    expect(json.data.view.projects).toHaveLength(30);
+    expect(json.meta.grouped.truncated).toBe(true);
+    // …and via the bare shorthand, knobs intact (footer echoes `things show …`).
+    const tty = runCli(["Busy", "--area-limit", "3", "--db", fx.path]);
+    expect(tty.stdout).toContain("… 32 more to-dos — `things show Busy --area-limit 6`");
   });
 });
 
