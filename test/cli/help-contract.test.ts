@@ -196,6 +196,37 @@ describe("write-command help states the contract", () => {
     expect(someday).not.toContain("--limit <n>");
   });
 
+  it("universal-flags charter: every list/detail view accepts --json/--db/--all", () => {
+    // docs/design/cli-grammar.md — the three flags are universal across every
+    // list and detail view (--all is a documented no-op where no default
+    // restriction exists). A new view added without them fails here.
+    const VIEWS: string[][] = [
+      ["today"],
+      ["inbox"],
+      ["anytime"],
+      ["someday"],
+      ["upcoming"],
+      ["logbook"],
+      ["trash"],
+      ["changes"],
+      ["search"],
+      ["projects"],
+      ["areas"],
+      ["tags"],
+      ["show"],
+      ["area", "show"],
+      ["project", "show"],
+      ["todo", "show"],
+    ];
+    for (const path of VIEWS) {
+      const help = helpFor(...path);
+      const name = path.join(" ");
+      expect(help, name).toContain("--json");
+      expect(help, name).toContain("--db <path>");
+      expect(help, name).toContain("--all");
+    }
+  });
+
   it("list views + search expose --exact-tag alongside --tag", () => {
     for (const name of ["today", "inbox", "search", "logbook"]) {
       const help = helpFor(name);

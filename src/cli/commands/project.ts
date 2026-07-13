@@ -16,8 +16,9 @@ import {
   whenValue,
 } from "../glyphs.ts";
 import { openInThings } from "./reads.ts";
-import { withClient } from "../read-driver.ts";
+import { runRead, withClient } from "../read-driver.ts";
 import { formatItem, uuidCol, uuidDisplayWidth } from "../render.ts";
+import { DidYouMeanError } from "../did-you-mean.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
@@ -159,16 +160,42 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
+    .option(
+      "--all",
+      "reveal the later rows (same as --show-later; logged stays behind --show-logged)",
+    )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: ProjectShowOpts & { json?: boolean; db?: string }) => {
-      withClient(
-        opts,
-        "project-view",
-        (c) => c.read.projectView(ref),
-        (d) => renderProjectView(d, opts),
-      );
-    });
+    .action(
+      (ref: string, rawOpts: ProjectShowOpts & { json?: boolean; db?: string; all?: boolean }) => {
+        // --all lifts the view's own default restriction (the hidden later rows).
+        // Logged is a SEPARATE content class and stays behind --show-logged.
+        const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
+          ...rawOpts,
+          showLater: rawOpts.showLater === true || rawOpts.all === true,
+        };
+        runRead(
+          opts,
+          "project-view",
+          (c) => {
+            try {
+              return { data: c.read.projectView(ref) };
+            } catch (err) {
+              // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
+              if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+                throw new DidYouMeanError(
+                  err.message,
+                  ref,
+                  c.read.liteTitleSearch(ref, { type: "project" }),
+                );
+              }
+              throw err;
+            }
+          },
+          (d) => renderProjectView(d, opts),
+        );
+      },
+    );
   project
     .command("open <ref>")
     .description(

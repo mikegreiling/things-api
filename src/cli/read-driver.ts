@@ -11,6 +11,7 @@ import { ThingsDbOpenError } from "../db/connection.ts";
 import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
+import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
 import {
   errorEnvelope,
   ExitCode,
@@ -118,6 +119,29 @@ export function runRead<T>(
       fingerprint: "unknown",
       elapsedMs: Date.now() - started,
     };
+    // An unresolved show/bare-noun subject carries did-you-mean candidates: a
+    // usage-level failure (exit 2) with a lite title-search fallback, not the
+    // generic unexpected path.
+    if (err instanceof DidYouMeanError) {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: "not-found",
+                message: err.message,
+                details: { candidates: candidatesJson(err) },
+              },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(`${renderDidYouMean(err).join("\n")}\n`);
+      }
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;
     const message = err instanceof Error ? err.message : String(err);
     if (opts.json) {
@@ -190,10 +214,7 @@ export function parseCap(
   return { ok: true, limit: decision };
 }
 
-/** Shell-safe rendering of a flag value for the reconstructed hint command. */
-export function shellQuote(v: string): string {
-  return /^[\w./@:+-]+$/.test(v) ? v : `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
-}
+export { shellQuote } from "./shell-quote.ts";
 
 /** Reconstruct `things <name> <flags…>`, dropping falsy/empty parts. */
 export function invocation(name: string, parts: Array<string | false | undefined>): string {

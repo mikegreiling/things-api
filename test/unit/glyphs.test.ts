@@ -5,7 +5,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { Project, Todo } from "../../src/model/entities.ts";
-import { deadlineToken, projectCircle, shortDate, todoBox } from "../../src/cli/glyphs.ts";
+import {
+  deadlineDetail,
+  deadlineToken,
+  projectCircle,
+  shortDate,
+  todoBox,
+  weekdayDate,
+} from "../../src/cli/glyphs.ts";
 
 const TODAY = "2026-07-05";
 
@@ -88,5 +95,27 @@ describe("shortDate", () => {
     expect(shortDate("2026-07-31", TODAY)).toBe("Jul 31");
     expect(shortDate("2027-01-02", TODAY)).toBe("Jan 2 2027");
     expect(shortDate("2025-12-31", TODAY)).toBe("Dec 31 2025");
+  });
+});
+
+describe("weekdayDate (detail-header date)", () => {
+  it("prefixes the weekday; appends the year only when not the current year", () => {
+    expect(weekdayDate("2026-08-28", TODAY)).toBe("Fri, Aug 28");
+    expect(weekdayDate("2027-01-02", TODAY)).toBe("Sat, Jan 2 2027");
+    expect(weekdayDate("2025-12-31", TODAY)).toBe("Wed, Dec 31 2025");
+  });
+});
+
+describe("deadlineDetail (detail-card deadline value)", () => {
+  // Colors are off (non-TTY) so styling collapses to plain text.
+  it("renders the GUI weekday date plus a muted relative hint", () => {
+    expect(deadlineDetail("2026-08-28", TODAY)).toBe("Fri, Aug 28 (54 days left)");
+    expect(deadlineDetail("2026-07-06", TODAY)).toBe("Mon, Jul 6 (1 day left)");
+  });
+
+  it("says `due today` on the day and `n days overdue` once past", () => {
+    expect(deadlineDetail(TODAY, TODAY)).toBe("Sun, Jul 5 (due today)");
+    expect(deadlineDetail("2026-07-04", TODAY)).toBe("Sat, Jul 4 (1 day overdue)");
+    expect(deadlineDetail("2026-06-05", TODAY)).toBe("Fri, Jun 5 (30 days overdue)");
   });
 });

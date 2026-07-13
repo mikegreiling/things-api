@@ -23,6 +23,7 @@ import {
   anytimeView,
   changesView,
   inboxView,
+  liteTitleSearch,
   logbookView,
   projectsView,
   searchView,
@@ -31,9 +32,11 @@ import {
   trashView,
   upcomingView,
   type ChangedItem,
+  type LiteSearchResult,
   type ListItem,
   type LogbookFilter,
   type SearchOptions,
+  type SearchResultItem,
   type SidebarSection,
   type SomedayFilter,
   type TodayView,
@@ -133,7 +136,16 @@ export interface ThingsClient {
     areaView(ref: string): AreaView;
     areas(): Area[];
     tags(): Tag[];
-    search(query: string, options?: SearchOptions): ListItem[];
+    search(query: string, options?: SearchOptions): SearchResultItem[];
+    /**
+     * Did-you-mean fallback: case-insensitive title-only substring match over
+     * areas/projects/to-dos (open + untrashed), ordered and capped. `type`
+     * scopes to one class.
+     */
+    liteTitleSearch(
+      query: string,
+      options?: { type?: "to-do" | "project" | "area"; limit?: number },
+    ): LiteSearchResult;
     /** Rows created/modified since a moment — incl. trashed/logged/templates. */
     changes(options: { since: Date; limit?: number | null }): ChangedItem[];
     byUuid(uuid: string): AnyTask | null;
@@ -395,6 +407,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o),
+      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o),
       changes: (o) => changesView(conn.db, o),
       showTarget: (ref) => classifyShowTarget(conn.db, ref),
       byUuid: (uuid) => {

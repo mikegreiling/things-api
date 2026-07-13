@@ -20,18 +20,32 @@ There is **one canonical order**, and every sugar form normalizes into it:
 |---|---|---|---|
 | **List view** | `things <view>` | `things anytime` | the view command itself |
 | **Typed command** | `things <type> <verb> <subject> [flags]` | `things area show Hobbies` | itself (already canonical) |
+| **Namespace implied-show** (sugar) | `things <type> <subject>` | `things area Hobbies` | `things <type> show <subject>` |
 | **Loose verb** (sugar) | `things <verb> <subject>` | `things show Hobbies` | `things <type> <verb> <subject>` |
 | **Bare noun** (sugar) | `things <subject>` | `things Hobbies` | `things <type> show <subject>` |
 
 `<type>` ∈ {`area`, `project`, `todo`}; `<verb>` ∈ {`show`, `open`}. The loose and bare forms are conveniences: they let a user paste any reference — a name, a uuid prefix, a `things:///show?id=…` share link — without first classifying it. The resolver + reference resolution together decide the `<type>`.
 
+### Namespace implied-show (`things <type> <subject>`)
+
+Inside a TYPE namespace whose `show` verb takes a reference — `area`, `project`, `todo` — the verb may be omitted: `things area hobbies` → `things area show hobbies`. The rule fires only when the token after the group name is **not** a registered subcommand of that group (registered verbs always win — the reserved-word rule), and is not a flag. `config` is deliberately excluded: it has a `show` subcommand but it takes no reference.
+
+Because the `<type>` is fixed by the namespace, the type CONSTRAINS resolution: `things area <project-uuid>` produces a loud type-mismatch (`area not found: …`, exit 2) rather than silently falling back to a project — exactly like the typed `things area show <project-uuid>`. The canonical `things <type> show <subject>` rides the normalized-echo and `meta.resolvedCommand` like every other sugar.
+
 ## Precedence chain (single, documented)
 
 Every invocation is classified by walking this chain in order; the first rule that matches wins:
 
-1. **Registered command / alias** — if the first token names a command or alias, it dispatches to that command. Command names are RESERVED and always win, so `things inbox`, `things areas`, `things today` are the commands, never a lookup of an item so named. (Escape hatch: reach a shadowed item by uuid, or via the typed command — `things area show Anytime`.)
+1. **Registered command / alias** — if the first token names a command or alias, it dispatches to that command. Command names are RESERVED and always win, so `things inbox`, `things areas`, `things today` are the commands, never a lookup of an item so named. (Escape hatch: reach a shadowed item by uuid, or via the typed command — `things area show Anytime`.) Inside a `area`/`project`/`todo` namespace, a non-subcommand next token triggers the **namespace implied-show** rewrite (above) — the group's registered subcommands still win here too.
 2. **View keyword** — inside `show`/`open` only, a first argument that is a view keyword (tables below) routes by keyword rather than by reference. A keyword beats a same-named project or area (mirrors the URL scheme).
-3. **Reference resolution** — anything else is a reference, resolved by [reference-resolution.md](reference-resolution.md)'s tiers: **uuid (full) → uuid prefix (≥6 base-62 chars) → `things:///show?id=…` share link (stripped to its id) → tiered name match (exact → case-insensitive → normalized → uuid-prefix)**. On a name tie, **area beats project** (`classifyShowTarget` tries area before project). A heading reference resolves to its containing project. Tags and checklist items have no show view and are rejected.
+3. **Reference resolution** — anything else is a reference. The tiers differ by path:
+   - **Typed / namespaced paths** (`things area show <ref>`, `things area <ref>`) keep the full [reference-resolution.md](reference-resolution.md) tiers: **uuid (full) → uuid prefix (≥6 base-62 chars) → tiered name match (exact → case-insensitive → normalized → uuid-prefix)**, scoped to the named type.
+   - **Loose / bare-noun sugar** (`things show <ref>`, `things <ref>`) resolves through `classifyShowTarget` and is deliberately NARROWER: a task uuid / ≥6-char prefix / `things:///show?id=…` share link resolves first; then a NAME resolves against AREAS and PROJECTS only, tiers **exact → case-insensitive → normalized** — **no uuid-prefix tier** (the did-you-mean substring fallback supersedes prefix guessing). On a name tie, **area beats project**. A heading reference resolves to its containing project. Tags and checklist items have no show view and are rejected.
+
+Two consequences of the narrower sugar path (Mike-approved rulings):
+
+- **To-do TITLES never route.** `things "Read Thread on Astro City Restoration"` never opens a to-do card even on an exact title match — to-dos are reachable only by uuid/prefix/share-link, or picked from the did-you-mean list (where they appear WITH their uuids). Only area/project names route.
+- **Dash + case forgiveness, quote-free.** The normalized tier folds case, whitespace, and dashes, so `things restore-astro-city-cabinet` resolves to the project "Restore Astro City Cabinet" with no shell quoting — a deliberate ergonomic, not an accident.
 
 Steps 1–2 run in the resolver (`resolveInvocation`, pre-commander, argv-level). Step 3 runs at action time in `classifyShowTarget` (it needs the database). The resolver never touches the database.
 
@@ -77,6 +91,7 @@ When — and only when — an invocation arrives via a sugar form, the TTY rende
 The subject is rendered with the same shell-safe quoting as the truncation footers (`shellQuote`): a plain word is left bare (`≡ things area show Hobbies`), a name with spaces or shell metacharacters is quoted. It fires for the four routing sugars:
 
 - **bare noun** — `things Hobbies` → `≡ things area show Hobbies`
+- **namespace implied-show** — `things area Hobbies` → `≡ things area show Hobbies`
 - **keyword-in-show** — `things show anytime` → `≡ things anytime`
 - **uuid routing** — `things <uuid>` / `things show <uuid>` → `≡ things todo show <uuid>`
 - **share-link** — `things things:///show?id=<uuid>` → `≡ things todo show <uuid>`
@@ -88,6 +103,57 @@ It does **not** fire for canonical invocations (`things inbox`, `things area sho
 The same canonical string rides the `--json` envelope of a routed read as `meta.resolvedCommand` — present exactly when the echo would have fired, absent otherwise. It is additive (no `apiVersion` bump). Example: `things show anytime --json` carries `meta.resolvedCommand: "things anytime"`.
 
 **MCP does not carry it.** The MCP read tools do not route through this path — `read_view` takes a `view` enum and `get_item`/`get_project` take a uuid directly, so there is no loose reference to normalize and nothing to echo.
+
+## Universal flags
+
+Three flags are accepted by **every list and detail view**, so an agent can append them without checking per-command support:
+
+- **`--json`** — the versioned envelope on stdout (logs/errors on stderr).
+- **`--db <path>`** — an explicit database path.
+- **`--all`** — lift the view's own default restrictions.
+
+### `--all` doctrine (Mike-approved)
+
+`--all` removes every default RESTRICTION on the view's **own content** — row/block caps, date bounds, later-hidden sections — but NEVER pulls in a different content CLASS. Logged and trashed items stay behind their own explicit flags (`--show-logged`, `--trashed`), because they are separate classes, not a restricted slice of the current view.
+
+| View | What `--all` lifts |
+|---|---|
+| `today` `inbox` `upcoming` `logbook` `trash` `changes` | the row cap (`--limit`) |
+| `anytime` `someday` `area show` | every per-block cap (`--area-limit` / `--project-limit`) |
+| `upcoming` | the date bound too (full horizon) |
+| `projects` | the hidden later block — exactly `--show-later` |
+| `project show` | the hidden later rows — exactly `--show-later` (logged still needs `--show-logged`) |
+| `areas` `tags` `todo show` | nothing — no default restriction exists; `--all` is an accepted no-op for uniformity |
+
+**Legacy outlier — `search --all`.** `search` keeps its historical meaning: `--all` is the include-EVERYTHING scope (open + logged + trashed, unbounded). That is broader than the charter (it does cross content classes), preserved for backward compatibility and documented as the one exception.
+
+The `--plain` / `--pretty` output pair joins this universal set when roadmap §H lands.
+
+A help-contract test enforces the charter mechanically: every registered list/detail command's `--help` must offer `--json`, `--db`, and `--all`.
+
+## Did-you-mean fallback (unresolved subjects)
+
+When a show / bare-noun subject fails resolution at every tier (a not-found, distinct from an *ambiguous* reference — those still list their candidates verbatim), the CLI does not stop at the bare error. It runs a **lite title-search** and offers candidates:
+
+- Case-insensitive SUBSTRING match on **titles only** — to-dos, projects, areas. Never notes, headings, or checklist items. Open + untrashed only.
+- Ordered: containers (areas, then projects) first, then to-dos; within a group active before someday, then most-recently-modified. Capped at ~10 with a `… n more — \`things search '…'\`` tail.
+- Human output (stderr): the exit-2 error line, the candidate rows (to-dos carry their dim `(container)` context), and always a closing `` or try: `things search '…'` `` suggestion. An empty lite-search still prints the error + suggestion.
+- `--json`: the error envelope gains additive `error.details.candidates` (standard item shapes, capped the same) so an agent can self-correct in one round-trip. `error.code` is `not-found`; exit code 2.
+
+**Type scoping.** When the failed subject came through a TYPE namespace — `things project "x"` (implied-show) or the explicit `things project show x` — the candidate list is scoped to THAT type. Untyped forms (`things "x"`, `things show x`) keep the mixed list.
+
+## Search ranking (deterministic composite)
+
+`things search` ranks matches by a pure composite comparator (`src/read/search-rank.ts`), replacing plain recency. First differing key wins:
+
+1. **match field** — title > notes > heading-via-project > checklist
+2. **type** — projects/areas above to-dos
+3. **status** — active above someday; logged/trashed last (and only when a flag includes them)
+4. **tiebreak** — most-recently-modified
+
+Consequence (deliberate): a someday TITLE match outranks an active NOTES match — field trumps status. Ranking runs BEFORE the row cap, so `--limit`/pagination semantics are unchanged.
+
+**Heading doctrine.** A HEADING-title match surfaces the **parent PROJECT** row (never a bare heading row), annotated `via heading "…"` in human output and carrying additive `matchedVia: { kind: "heading", title }` in `--json`. Heading text is treated exactly as if it lived in the parent project's notes, ranked just below a real notes match. A project matched by its own title/notes never carries the redundant annotation. (Checklist-item text is NOT searched today; the checklist field rank is reserved.)
 
 ## Non-goals (with reasoning)
 

@@ -4,7 +4,14 @@ import { buildProgram } from "../../src/cli/main.ts";
 import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
+import {
+  seedArea,
+  seedHeading,
+  seedProject,
+  seedTag,
+  seedTodo,
+  tagTask,
+} from "../fixtures/seed.ts";
 
 let fx: FixtureDb | null = null;
 afterEach(() => {
@@ -907,5 +914,213 @@ describe("cli changes (Phase 13)", () => {
 
     const bad = runCli(["changes", "--since", "not-a-date", "--db", fx.path]);
     expect(bad.exitCode).toBe(2);
+  });
+});
+
+/** Run the CLI in-process, capturing BOTH stdout and stderr (did-you-mean writes to stderr). */
+function runCliErr(argv: string[]): { stdout: string; stderr: string; exitCode: number } {
+  const out: string[] = [];
+  const err: string[] = [];
+  const ow = process.stdout.write.bind(process.stdout);
+  const ew = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((c: string | Uint8Array) => {
+    out.push(typeof c === "string" ? c : new TextDecoder().decode(c));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((c: string | Uint8Array) => {
+    err.push(typeof c === "string" ? c : new TextDecoder().decode(c));
+    return true;
+  }) as typeof process.stderr.write;
+  const oc = process.exitCode;
+  try {
+    const program = buildProgram();
+    program.exitOverride();
+    try {
+      program.parse(resolveInvocation(program, argv).argv, { from: "user" });
+    } catch {
+      // commander exitOverride throws on usage errors — captured via exitCode
+    }
+    return { stdout: out.join(""), stderr: err.join(""), exitCode: Number(process.exitCode ?? 0) };
+  } finally {
+    process.stdout.write = ow;
+    process.stderr.write = ew;
+    process.exitCode = oc;
+  }
+}
+
+describe("cli namespace implied-show (item 2)", () => {
+  it("`things area <name>` omits the show verb and renders the area card", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const out = runCli(["area", "hobbies", "--db", fx.path]);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("Area: ⬡ Hobbies");
+  });
+
+  it("registered verbs still win (reserved-word rule)", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    // `area show Hobbies` is canonical; a real subcommand is untouched.
+    const shown = runCli(["area", "show", "Hobbies", "--json", "--db", fx.path]);
+    expect(JSON.parse(shown.stdout).kind).toBe("area-view");
+  });
+
+  it("the TYPE constrains resolution — `things area <project-uuid>` errors loudly", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Firmware", index: 1 });
+    const out = runCliErr(["area", proj, "--db", fx.path]);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain("area not found");
+  });
+
+  it("meta.resolvedCommand + normalized echo ride along like other sugar", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const env = JSON.parse(runCli(["area", "hobbies", "--json", "--db", fx.path]).stdout);
+    expect(env.meta.resolvedCommand).toBe("things area show hobbies");
+    // trailing flags pass through
+    expect(runCli(["area", "hobbies", "--show-later", "--json", "--db", fx.path]).exitCode).toBe(0);
+  });
+});
+
+describe("cli did-you-mean fallback (item 4)", () => {
+  function seedWorld(): void {
+    fx = buildFixtureDb();
+    seedArea(fx!.db, "Hobbies");
+    seedProject(fx!.db, { title: "OutRun Restoration", index: 1 });
+    seedProject(fx!.db, { title: "OutRun Wiring", index: 2 });
+    seedTodo(fx!.db, { title: "Read Thread on Astro City Restoration" });
+  }
+
+  it("an unresolved bare noun exits 2 with candidates and a search suggestion (human)", () => {
+    seedWorld();
+    const out = runCliErr(["outru", "--db", fx!.path]);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain('no command or item named "outru"');
+    expect(out.stderr).toContain("did you mean:");
+    expect(out.stderr).toContain("OutRun Restoration");
+    expect(out.stderr).toContain("or try: `things search 'outru'`");
+  });
+
+  it("--json carries error.details.candidates (standard item shapes), exit 2", () => {
+    seedWorld();
+    const out = runCli(["outru", "--json", "--db", fx!.path]);
+    expect(out.exitCode).toBe(2);
+    const env = JSON.parse(out.stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.code).toBe("not-found");
+    const titles = env.error.details.candidates.map((c: { title: string }) => c.title);
+    expect(titles).toEqual(expect.arrayContaining(["OutRun Restoration", "OutRun Wiring"]));
+  });
+
+  it("caps the candidate list at ~10 and reports `… n more`", () => {
+    fx = buildFixtureDb();
+    for (let i = 0; i < 15; i++) seedTodo(fx!.db, { title: `match ${i}`, index: i });
+    // Bare `match` has no exact name, so it fails resolution; did-you-mean then
+    // lists the 15 title-substring matches, capped at 10.
+    const json = runCli(["match", "--json", "--db", fx!.path]);
+    expect(json.exitCode).toBe(2);
+    const env = JSON.parse(json.stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.details.candidates).toHaveLength(10);
+    const human = runCliErr(["match", "--db", fx!.path]);
+    expect(human.exitCode).toBe(2);
+    expect(human.stderr).toContain("5 more — `things search 'match'`");
+  });
+
+  it("empty lite-search = plain error + suggestion, no candidate block", () => {
+    seedWorld();
+    const out = runCliErr(["zzzznope", "--db", fx!.path]);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).not.toContain("did you mean:");
+    expect(out.stderr).toContain("or try:");
+  });
+
+  it("TYPED scoping: namespace/explicit paths list only that type", () => {
+    seedWorld();
+    // `things project <miss>` (namespace implied-show) → projects only.
+    const nsProj = JSON.parse(runCli(["project", "outru", "--json", "--db", fx!.path]).stdout);
+    expect(
+      nsProj.error.details.candidates.every((c: { type?: string }) => c.type === "project"),
+    ).toBe(true);
+    // explicit `things project show <miss>` → projects only.
+    const typedProj = JSON.parse(
+      runCli(["project", "show", "outru", "--json", "--db", fx!.path]).stdout,
+    );
+    expect(typedProj.error.details.candidates.length).toBeGreaterThan(0);
+    // `things area <miss>` → areas only (OutRun projects excluded).
+    const nsArea = JSON.parse(runCli(["area", "outru", "--json", "--db", fx!.path]).stdout);
+    expect(nsArea.error.details.candidates).toHaveLength(0);
+    // untyped bare noun keeps the mixed list.
+    const untyped = JSON.parse(runCli(["outru", "--json", "--db", fx!.path]).stdout);
+    expect(untyped.error.details.candidates.length).toBeGreaterThan(0);
+  });
+
+  it("a to-do TITLE never resolves on the sugar path (reachable only via uuid/did-you-mean)", () => {
+    seedWorld();
+    const out = runCliErr(["Read Thread on Astro City Restoration", "--db", fx!.path]);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain("no command or item named");
+    // …but it DOES appear in the untyped candidate list (with its uuid).
+    const env = JSON.parse(
+      runCli(["Read Thread on Astro City Restoration", "--json", "--db", fx!.path]).stdout,
+    );
+    expect(env.error.details.candidates.map((c: { title: string }) => c.title)).toContain(
+      "Read Thread on Astro City Restoration",
+    );
+  });
+});
+
+describe("cli sugar routing tiers (refinements B/C)", () => {
+  it("dash + case normalization resolves quote-free: `restore-astro-city-cabinet`", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "Restore Astro City Cabinet", index: 1 });
+    const out = runCli(["restore-astro-city-cabinet", "--db", fx.path]);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain("Restore Astro City Cabinet");
+  });
+
+  it("the uuid-PREFIX tier is dropped on the sugar path but kept for typed commands", () => {
+    fx = buildFixtureDb();
+    // Base62 area uuid so a prefix could match the dropped tier.
+    fx.db
+      .prepare(`INSERT INTO TMArea (uuid, title, visible, "index") VALUES (?, ?, 1, 0)`)
+      .run("AbCdEf123456", "Zone");
+    // Bare-noun with a 6-char PREFIX: no longer resolves (did-you-mean, exit 2).
+    expect(runCliErr(["AbCdEf", "--db", fx.path]).exitCode).toBe(2);
+    // The FULL uuid still resolves via the exact-uuid tier.
+    expect(runCli(["AbCdEf123456", "--json", "--db", fx.path]).exitCode).toBe(0);
+    // The typed command keeps the historical prefix tier.
+    const typed = runCli(["area", "show", "AbCdEf", "--json", "--db", fx.path]);
+    expect(typed.exitCode).toBe(0);
+    expect(JSON.parse(typed.stdout).data.area.title).toBe("Zone");
+  });
+});
+
+describe("cli search heading doctrine + ranking (item 5)", () => {
+  it("a heading-title match surfaces the parent project, annotated `via heading`", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Arcade Restoration", index: 1 });
+    seedHeading(fx.db, { title: "Fix OutRun Steering Wheel", project: proj });
+    const human = runCli(["search", "OutRun", "--db", fx.path]);
+    expect(human.stdout).toContain("Arcade Restoration");
+    expect(human.stdout).toContain('(via heading "Fix OutRun Steering Wheel")');
+    const env = JSON.parse(runCli(["search", "OutRun", "--json", "--db", fx.path]).stdout);
+    expect(env.data).toHaveLength(1);
+    expect(env.data[0].type).toBe("project");
+    expect(env.data[0].matchedVia).toEqual({ kind: "heading", title: "Fix OutRun Steering Wheel" });
+  });
+
+  it("ranks title > notes and projects above to-dos (before the cap)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "note only", notes: "widget", modificationDate: 1_790_000_000 });
+    seedTodo(fx.db, { title: "widget todo", modificationDate: 1_700_000_000 });
+    seedProject(fx.db, { title: "widget project", modificationDate: 1_700_000_000, index: 1 });
+    const env = JSON.parse(runCli(["search", "widget", "--json", "--db", fx.path]).stdout);
+    expect(env.data.map((i: { title: string }) => i.title)).toEqual([
+      "widget project",
+      "widget todo",
+      "note only",
+    ]);
   });
 });

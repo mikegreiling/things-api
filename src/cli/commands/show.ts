@@ -26,6 +26,7 @@ import { renderProjectView, showToggleFlags } from "./project.ts";
 import { renderDetail } from "./todo.ts";
 import { openInThings } from "./reads.ts";
 import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
+import { DidYouMeanError } from "../did-you-mean.ts";
 
 /**
  * The canonical typed command a loose/bare reference resolved to, for the
@@ -137,13 +138,17 @@ export function registerShowCommands(program: Command): void {
             try {
               t = c.read.showTarget(ref);
             } catch (err) {
-              // A bare-noun invocation (`things foo`) could equally be a
-              // mistyped command — say so alongside the resolution failure.
-              // The typed `things show foo` keeps the plain resolution error.
-              if (getInvocation()?.form === "bare-noun" && err instanceof Error) {
-                throw new RangeError(`no command or item named "${ref}" — ${err.message}`);
-              }
-              throw err;
+              // An ambiguous reference lists its candidates — surface verbatim.
+              if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
+              if (!(err instanceof Error)) throw err;
+              // Not-found: fall back to a lite title-search (did-you-mean),
+              // untyped/mixed for the loose forms. A bare-noun invocation
+              // (`things foo`) could equally be a mistyped command — say so.
+              const message =
+                getInvocation()?.form === "bare-noun"
+                  ? `no command or item named "${ref}" — ${err.message}`
+                  : err.message;
+              throw new DidYouMeanError(message, ref, c.read.liteTitleSearch(ref));
             }
             // Record the canonical typed command for the echo + resolvedCommand,
             // but only for the routing sugars (a loose show by name is not one).
@@ -152,7 +157,16 @@ export function registerShowCommands(program: Command): void {
             // containers, so no strict total limit applies.
             if (t.kind === "project") {
               const view = c.read.projectView(t.uuid);
-              return { data: { type: "project", view }, lines: renderProjectView(view, opts) };
+              // --all reveals the project card's hidden later rows (charter),
+              // matching `things project show … --all`.
+              const projectOpts = {
+                ...opts,
+                showLater: opts.showLater === true || opts.all === true,
+              };
+              return {
+                data: { type: "project", view },
+                lines: renderProjectView(view, projectOpts),
+              };
             }
             if (t.kind === "area") {
               const view = c.read.areaView(t.uuid);

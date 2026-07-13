@@ -15,6 +15,17 @@
  */
 import type { Command } from "commander";
 
+import { shellQuote } from "./shell-quote.ts";
+
+/**
+ * The type namespaces whose `show` verb takes a reference and may be omitted:
+ * `things area Hobbies` → `things area show Hobbies`. Restricted to the three
+ * TYPE groups — `config show` also exists but takes no reference, so `config`
+ * is deliberately excluded. Registered subcommands (verbs) always win over
+ * this sugar (the reserved-word rule).
+ */
+export const IMPLIED_SHOW_NAMESPACES = new Set(["area", "project", "todo"]);
+
 /**
  * `show`'s keyword vocabulary: EVERY list-view command name. `things show <kw>`
  * dispatches to the identical `things <kw>` command. Wider than the app's URL
@@ -54,6 +65,8 @@ export type InvocationForm =
   | "canonical"
   /** `things <subject>` — the verb `show` was omitted. */
   | "bare-noun"
+  /** `things <type> <subject>` — the `show` verb inside a type namespace was omitted. */
+  | "namespace-show"
   /** `things show <ref>` — explicit loose router by reference. */
   | "loose-show"
   /** `things open <ref>` — explicit loose router by reference. */
@@ -129,6 +142,20 @@ function indexPastLeadingFlags(args: string[]): number | null {
   return i; // flags only, no subject (e.g. bare `things --json`)
 }
 
+/** The registered subcommand names + aliases of a command group (empty when the group is unknown). */
+function subcommandsOf(program: Command, groupName: string): Set<string> {
+  const group = program.commands.find(
+    (c) => c.name() === groupName || c.aliases().includes(groupName),
+  );
+  const names = new Set<string>();
+  if (group === undefined) return names;
+  for (const sub of group.commands) {
+    names.add(sub.name());
+    for (const alias of sub.aliases()) names.add(alias);
+  }
+  return names;
+}
+
 function classify(program: Command, args: string[]): ResolvedInvocation {
   const at = indexPastLeadingFlags(args);
   const first = at === null ? undefined : args[at];
@@ -177,6 +204,26 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
       // plural-not-openable error both need the keyword sets, and open renders
       // no card to anchor an echo to.
       return { form: "loose-open", argv: args, canonical: null, ref: args[1] ?? null };
+    }
+    // Namespace implied-show: inside a TYPE group with a `show` verb, a first
+    // token that is not one of the group's registered subcommands is a subject
+    // with the verb omitted — `things area Hobbies` → `things area show
+    // Hobbies`. Registered verbs win (reserved-word rule); a flag or an absent
+    // token leaves the bare group command to commander (help / usage error).
+    if (at === 0 && IMPLIED_SHOW_NAMESPACES.has(first)) {
+      const second = args[1];
+      if (
+        second !== undefined &&
+        !second.startsWith("-") &&
+        !subcommandsOf(program, first).has(second)
+      ) {
+        return {
+          form: "namespace-show",
+          argv: [first, "show", ...args.slice(1)],
+          canonical: `things ${first} show ${shellQuote(second)}`,
+          ref: second,
+        };
+      }
     }
     return { form: "canonical", argv: args, canonical: null, ref: null };
   }

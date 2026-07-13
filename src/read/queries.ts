@@ -139,6 +139,7 @@ export function resolveNamedRef(
   extraWhere: string,
   extraBinds: (string | number)[],
   refRaw: string,
+  options?: { prefixTier?: boolean },
 ): NamedResolution {
   const ref = stripThingsUri(refRaw);
   type Row = { uuid: string; title: string };
@@ -163,7 +164,11 @@ export function resolveNamedRef(
     if (hits.length > 1) return { resolved: null, matches: hits.length };
   }
 
-  if (ref.length >= 6 && BASE62.test(ref)) {
+  // The uuid-prefix tier is suppressed on the sugar routing path (bare-noun /
+  // loose-show): there, a NAME subject resolves through exact/case/normalized
+  // only, and the did-you-mean substring fallback supersedes prefix guessing.
+  // Typed commands keep the historical tier.
+  if (options?.prefixTier !== false && ref.length >= 6 && BASE62.test(ref)) {
     const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
     const rows = sel("uuid >= ? AND uuid < ?", [ref, upper]);
     if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
@@ -180,8 +185,9 @@ function resolveUuidOrThrow(
   ref: string,
   kind: string,
   listCmd: string,
+  options?: { prefixTier?: boolean },
 ): string {
-  const r = resolveNamedRef(db, table, extraWhere, [], ref);
+  const r = resolveNamedRef(db, table, extraWhere, [], ref, options);
   if (r.resolved !== null) return r.resolved.uuid;
   throw new RangeError(
     r.matches === 0
@@ -202,7 +208,7 @@ export function resolveTagUuid(db: DatabaseSync, ref: string): string {
 export function resolveProjectUuid(
   db: DatabaseSync,
   ref: string,
-  options?: { trashed?: boolean },
+  options?: { trashed?: boolean; prefixTier?: boolean },
 ): string {
   return resolveUuidOrThrow(
     db,
@@ -211,11 +217,16 @@ export function resolveProjectUuid(
     ref,
     "project",
     "things projects",
+    options,
   );
 }
 
-export function resolveAreaUuid(db: DatabaseSync, ref: string): string {
-  return resolveUuidOrThrow(db, "TMArea", "1=1", ref, "area", "things areas");
+export function resolveAreaUuid(
+  db: DatabaseSync,
+  ref: string,
+  options?: { prefixTier?: boolean },
+): string {
+  return resolveUuidOrThrow(db, "TMArea", "1=1", ref, "area", "things areas", options);
 }
 
 export function fetchTaskRows(db: DatabaseSync, where: string, params: unknown[] = []): TaskRow[] {

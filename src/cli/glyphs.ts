@@ -26,11 +26,24 @@ const MONTHS = [
   "Dec",
 ] as const;
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
 /** `Jul 31` — the year is appended only when it differs from today's. */
 export function shortDate(iso: string, todayIso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   const label = `${MONTHS[(m ?? 1) - 1]} ${d}`;
   return String(y) === todayIso.slice(0, 4) ? label : `${label} ${y}`;
+}
+
+/**
+ * `Fri, Aug 28` — the GUI's detail-header date form: weekday abbreviation +
+ * month + day, the year appended only when it differs from today's (same
+ * convention as {@link shortDate} / the ‹date› chip).
+ */
+export function weekdayDate(iso: string, todayIso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const weekday = WEEKDAYS[new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1)).getUTCDay()];
+  return `${weekday}, ${shortDate(iso, todayIso)}`;
 }
 
 /** The GUI's grey schedule pill: `‹Jul 31›` on future-scheduled rows. */
@@ -99,23 +112,29 @@ function daysBetween(fromIso: string, toIso: string): number {
   );
 }
 
-/** Uncapped relative phrasing: `today`, `3 days left`, `253 days ago`. */
-function relativeDays(iso: string, todayIso: string): string {
+/**
+ * Uncapped relative phrasing for the detail-card deadline hint, GUI wording:
+ * `due today`, `46 days left`, `3 days overdue`.
+ */
+function deadlineRelative(iso: string, todayIso: string): string {
   const diff = daysBetween(todayIso, iso);
-  if (diff === 0) return "today";
+  if (diff === 0) return "due today";
   return diff > 0
     ? `${diff} day${diff === 1 ? "" : "s"} left`
-    : `${-diff} day${diff === -1 ? "" : "s"} ago`;
+    : `${-diff} day${diff === -1 ? "" : "s"} overdue`;
 }
 
 /**
- * Detail-card deadline line value (the GUI's "Deadline: Oct 30, 2025 —
- * 253 days ago" row): exact date plus uncapped relative phrasing. Bold red
- * once due; bold dim while upcoming.
+ * Detail-card deadline line value (to-do / project / area cards). GUI parity:
+ * the full `Fri, Aug 28` weekday date (year appended when not the current
+ * year), then a muted relative hint — `(46 days left)` / `(due today)` /
+ * `(3 days overdue)`. The date is bold red once due or overdue, bold otherwise;
+ * the hint is always muted. LIST rows keep the compact {@link deadlineToken}.
  */
 export function deadlineDetail(deadlineIso: string, todayIso: string): string {
-  const text = `⚑ ${shortDate(deadlineIso, todayIso)} (${relativeDays(deadlineIso, todayIso)})`;
-  return daysBetween(todayIso, deadlineIso) <= 0 ? bold(red(text)) : bold(dim(text));
+  const date = weekdayDate(deadlineIso, todayIso);
+  const styledDate = daysBetween(todayIso, deadlineIso) <= 0 ? bold(red(date)) : bold(date);
+  return `${styledDate} ${dim(`(${deadlineRelative(deadlineIso, todayIso)})`)}`;
 }
 
 /** The share link the GUI's context menu copies — pasteable back into any ref argument. */
