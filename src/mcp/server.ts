@@ -28,6 +28,7 @@ import {
   previewSomedaySections,
   type GroupedLimits,
 } from "../read/pagination.ts";
+import { resolveCap } from "../read/caps.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
@@ -91,20 +92,6 @@ function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
       { type: "text", text: JSON.stringify({ grouped, ...(note !== undefined && { note }) }) },
     ],
   };
-}
-
-/**
- * Resolve one cap param against `all` into a row cap (null = every row);
- * "conflict" when an explicit value combines with all: true.
- */
-function resolveCap(
-  value: number | undefined,
-  all: boolean | undefined,
-  defaultLimit: number,
-): number | null | "conflict" {
-  if (all === true && value !== undefined) return "conflict";
-  if (all === true) return null;
-  return value ?? defaultLimit;
 }
 
 /** Resolve MCP limit/all (flat read tools) into a row cap (null = every row). */

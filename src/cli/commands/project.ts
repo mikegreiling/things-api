@@ -15,7 +15,9 @@ import {
   thingsLink,
   whenValue,
 } from "../glyphs.ts";
-import { formatItem, openInThings, uuidCol, uuidDisplayWidth, withClient } from "./reads.ts";
+import { openInThings } from "./reads.ts";
+import { withClient } from "../read-driver.ts";
+import { formatItem, uuidCol, uuidDisplayWidth } from "../render.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
@@ -160,8 +162,12 @@ export function registerProjectCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((ref: string, opts: ProjectShowOpts & { json?: boolean; db?: string }) => {
-      withClient(opts, "project-view", (c) => c.read.projectView(ref), ((d: ProjectView) =>
-        renderProjectView(d, opts)) as (d: never) => string[]);
+      withClient(
+        opts,
+        "project-view",
+        (c) => c.read.projectView(ref),
+        (d) => renderProjectView(d, opts),
+      );
     });
   project
     .command("open <ref>")
@@ -182,7 +188,7 @@ export function registerProjectCommands(program: Command): void {
           }
           return { uri: openInThings(t.uuid) };
         },
-        ((d: { uri: string }) => [`opened ${d.uri}`]) as (d: never) => string[],
+        (d) => [`opened ${d.uri}`],
       );
     });
 }

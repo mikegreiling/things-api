@@ -24,7 +24,8 @@ import {
 import { renderAreaView, type AreaShowOpts } from "./area.ts";
 import { renderProjectView, showToggleFlags } from "./project.ts";
 import { renderDetail } from "./todo.ts";
-import { invocation, openInThings, parseCap, runRead, shellQuote, withClient } from "./reads.ts";
+import { openInThings } from "./reads.ts";
+import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
 
 /**
  * The canonical typed command a loose/bare reference resolved to, for the
@@ -199,7 +200,7 @@ export function registerShowCommands(program: Command): void {
               `the app has no ${lower} list to open — open a specific ${specific}: \`things open <ref>\``,
             );
           },
-          (() => []) as (d: never) => string[],
+          () => [],
         );
         return;
       }
@@ -212,7 +213,7 @@ export function registerShowCommands(program: Command): void {
         (c) => ({
           uri: keyword !== null ? openInThings(keyword) : openInThings(c.read.showTarget(ref).uuid),
         }),
-        ((d: { uri: string }) => [`opened ${d.uri}`]) as (d: never) => string[],
+        (d) => [`opened ${d.uri}`],
       );
     });
 }

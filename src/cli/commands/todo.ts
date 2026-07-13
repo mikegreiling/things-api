@@ -17,7 +17,8 @@ import {
   todoBox,
   whenValue,
 } from "../glyphs.ts";
-import { openInThings, withClient } from "./reads.ts";
+import { openInThings } from "./reads.ts";
+import { withClient } from "../read-driver.ts";
 
 /**
  * The detail card, project-card grammar: type-labeled title row (the box
@@ -117,12 +118,7 @@ export function registerTodoCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((uuid: string, opts: { json?: boolean; db?: string }) => {
-      withClient(
-        opts,
-        "todo-detail",
-        (c) => c.read.byUuid(uuid),
-        renderDetail as (d: never) => string[],
-      );
+      withClient(opts, "todo-detail", (c) => c.read.byUuid(uuid), renderDetail);
     });
   todo
     .command("open <ref>")
@@ -143,7 +139,7 @@ export function registerTodoCommands(program: Command): void {
             );
           return { uri: openInThings(t.uuid) };
         },
-        ((d: { uri: string }) => [`opened ${d.uri}`]) as (d: never) => string[],
+        (d) => [`opened ${d.uri}`],
       );
     });
 }
