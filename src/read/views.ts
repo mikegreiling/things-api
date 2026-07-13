@@ -194,13 +194,37 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
   };
 }
 
-export function inboxView(db: DatabaseSync, filter?: ViewFilter): ListItem[] {
+export interface InboxFilter extends ViewFilter {
+  /**
+   * Only captures created at/after this instant. Keyed on the item's CREATION
+   * timestamp (the raw Cocoa/Unix-epoch creationDate, compared like
+   * `changes`/`logbook` do their epoch columns — NOT the packed startDate
+   * encoding). A demoted item keeps its original creation date, so this is
+   * arrival-into-Things, not arrival-into-the-Inbox.
+   */
+  since?: Date;
+  /** Only captures created at/before this instant (creation timestamp). */
+  until?: Date;
+}
+
+export function inboxView(db: DatabaseSync, filter?: InboxFilter): ListItem[] {
   const tf = tagFilter(db, filter);
-  const rows = fetchTaskRows(
-    db,
-    `${OPEN} AND t.start = 0${tf.sql} ORDER BY t."index" ASC`,
-    tf.binds,
-  );
+  const where = [OPEN, "t.start = 0"];
+  const binds: (string | number)[] = [];
+  // creationDate is an epoch REAL (Unix seconds) — mirror the changes/logbook
+  // comparison (getTime()/1000 against the raw column), never encodePackedDate.
+  if (filter?.since !== undefined) {
+    where.push("t.creationDate >= ?");
+    binds.push(filter.since.getTime() / 1000);
+  }
+  if (filter?.until !== undefined) {
+    where.push("t.creationDate <= ?");
+    binds.push(filter.until.getTime() / 1000);
+  }
+  const rows = fetchTaskRows(db, `${where.join(" AND ")}${tf.sql} ORDER BY t."index" ASC`, [
+    ...binds,
+    ...tf.binds,
+  ]);
   return materialize(db, rows);
 }
 
