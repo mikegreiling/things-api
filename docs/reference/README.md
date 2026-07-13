@@ -29,6 +29,7 @@ Every claim in the living docs carries a probe id. Families, by prefix:
 | SX0–SX4 | shortcut extraction/signing distribution pipeline | lab/scripts/research-sx*.sh + [roadmap §A](../roadmap.md) |
 | SX5 | find-items filter repair (consent-preserving DB surgery) + malformed-predicate crash family (oddities §7 C4) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) "VM repair campaign results" |
 | SX6 | repaired-asset import validation in a fresh clone via VNC synthetic click (first §E½ demonstration) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) "VM repair campaign results" |
+| UI1 | §E½ UI-vector feasibility (VNC-drive `File → New Repeating To-Do`) + the deadline-less-repeat discriminator (template `deadline` column) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) "UI-vector campaign (UI1)"; `lab/scripts/research-ui1.sh` |
 
 Recurring, autonomously-runnable encodings of the locked verdicts live in `lab/suites/*.json` (a/e/o/p/r/s/u/x) and run via `npm run lab:regress`; the guest e2e (`lab/guest/e2e-write-smoke.sh`) exercises the shipped CLI surface end-to-end (106 steps). Coverage gaps: [suite-audit.md](suite-audit.md).
 

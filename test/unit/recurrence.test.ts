@@ -117,13 +117,16 @@ describe("decodeRecurrenceRule", () => {
 describe("upcoming occurrence synthesis", () => {
   const NOW = new Date(2026, 6, 2, 12, 0); // local 2026-07-02
 
-  it("surfaces fixed templates at their next occurrence with the derived deadline", () => {
+  it("surfaces deadlined fixed templates at their next occurrence with the derived deadline", () => {
     const fx = buildFixtureDb();
     seedTodo(fx.db, { title: "plain-upcoming", start: "someday", startDate: "2026-07-10" });
     seedTodo(fx.db, {
       title: "cpap",
       recurrenceRuleXml: BIWEEKLY_SUNDAY,
       nextInstanceStartDate: "2026-07-15",
+      // Deadlined (ts=-4 is only reachable via "Add deadlines"): its own
+      // deadline column holds the 4001-01-01 sentinel (oddities §8a).
+      deadline: "4001-01-01",
     });
     const items = upcomingView(fx.db, NOW);
     expect(items.map((i) => i.title)).toEqual(["plain-upcoming", "cpap"]);
@@ -131,6 +134,24 @@ describe("upcoming occurrence synthesis", () => {
     expect(occ?.startDate).toBe("2026-07-15");
     expect(occ?.deadline).toBe("2026-07-19"); // start − ts(-4)
     expect(occ?.repeating.isTemplate).toBe(true);
+    expect(occ?.repeating.deadlined).toBe(true);
+    fx.close();
+  });
+
+  it("deadline-less fixed templates surface with NO projected deadline (GUI default; UI1)", () => {
+    const fx = buildFixtureDb();
+    // Same rule, but no `deadline` column — the repeat editor's default. The
+    // rule blob is byte-identical to the deadlined case, so only the column
+    // tells them apart (oddities §8a).
+    seedTodo(fx.db, {
+      title: "cpap-nodl",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY,
+      nextInstanceStartDate: "2026-07-15",
+    });
+    const occ = upcomingView(fx.db, NOW)[0];
+    expect(occ?.startDate).toBe("2026-07-15");
+    expect(occ?.deadline).toBe(null);
+    expect(occ?.repeating.deadlined).toBe(false);
     fx.close();
   });
 

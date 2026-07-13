@@ -142,12 +142,13 @@ describe("generateEventDates", () => {
 });
 
 describe("projectOccurrences", () => {
-  it("splits each event into start/deadline via ts (instance-validated model)", () => {
+  it("splits each event into start/deadline via ts (deadlined; instance-validated model)", () => {
     // Biweekly Sunday with a 4-day-early start: app says next start 07-15.
     const occ = projectOccurrences(
       rule({ unit: "weekly", interval: 2, offsets: [{ weekday: 0 }], startOffsetDays: -4 }),
       "2026-07-15",
       { count: 3 },
+      true,
     );
     expect(occ).toEqual([
       { startDate: "2026-07-15", deadline: "2026-07-19" },
@@ -156,13 +157,24 @@ describe("projectOccurrences", () => {
     ]);
   });
 
-  it("ts=0 rules project with deadline = start (fixed rules always deadline the event date)", () => {
-    // Corpus-validated 2026-07-11: every fixed-ts=0 template (birthday
-    // style) spawns instances with deadline = startDate.
-    const occ = projectOccurrences(rule({ unit: "daily" }), "2026-07-10", { count: 2 });
+  it("deadlined ts=0 rules project with deadline = start", () => {
+    // A deadlined ts=0 template (UI "Add deadlines", 0 days earlier) spawns
+    // instances with deadline = startDate (birthday-style).
+    const occ = projectOccurrences(rule({ unit: "daily" }), "2026-07-10", { count: 2 }, true);
     expect(occ).toEqual([
       { startDate: "2026-07-10", deadline: "2026-07-10" },
       { startDate: "2026-07-11", deadline: "2026-07-11" },
+    ]);
+  });
+
+  it("deadline-less templates project with NO deadline (the GUI default; UI1 2026-07-12)", () => {
+    // A deadline-less fixed template — the repeat editor's default — spawns
+    // instances with a startDate but no deadline, even though its rule is
+    // byte-identical to a deadlined ts=0 rule (oddities §8a).
+    const occ = projectOccurrences(rule({ unit: "daily" }), "2026-07-10", { count: 2 }, false);
+    expect(occ).toEqual([
+      { startDate: "2026-07-10", deadline: null },
+      { startDate: "2026-07-11", deadline: null },
     ]);
   });
 });
@@ -191,6 +203,10 @@ describe("upcoming --horizon", () => {
       title: "cpap",
       recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
       nextInstanceStartDate: "2026-07-15",
+      // ts=-4 is only reachable via "Add deadlines … N days earlier", so this
+      // template is deadlined: its `deadline` column holds the 4001-01-01
+      // sentinel (oddities §8a).
+      deadline: "4001-01-01",
     });
     const items = upcomingView(fx.db, NOW, { horizon: 3 });
     expect(items.map((i) => [i.title, i.startDate, i.deadline])).toEqual([
@@ -202,12 +218,31 @@ describe("upcoming --horizon", () => {
     fx.close();
   });
 
+  it("deadline-less templates project every occurrence with no deadline (UI1 2026-07-12)", () => {
+    const fx = buildFixtureDb();
+    // Same rule/next-date as cpap but deadline-less (no `deadline` column):
+    // the GUI default. Every projected occurrence must carry deadline null.
+    seedTodo(fx.db, {
+      title: "dl-less",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+    });
+    const items = upcomingView(fx.db, NOW, { horizon: 3 });
+    expect(items.map((i) => [i.startDate, i.deadline])).toEqual([
+      ["2026-07-15", null],
+      ["2026-07-29", null],
+      ["2026-08-12", null],
+    ]);
+    fx.close();
+  });
+
   it("default horizon stays exactly the UI: one occurrence per template", () => {
     const fx = buildFixtureDb();
     seedTodo(fx.db, {
       title: "cpap",
       recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
       nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
     });
     expect(upcomingView(fx.db, NOW).map((i) => i.startDate)).toEqual(["2026-07-15"]);
     fx.close();
