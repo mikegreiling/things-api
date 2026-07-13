@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   AREA_PREVIEW_LIMIT,
+  capAreaView,
+  capProjectView,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
   paginateList,
@@ -16,6 +18,8 @@ import {
   previewSomedaySections,
   splitSectionBlocks,
 } from "../../src/read/pagination.ts";
+import type { AreaView } from "../../src/read/area-view.ts";
+import type { ProjectView } from "../../src/read/project-view.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
 /** Minimal ListItem stand-ins — pagination only inspects type/uuid/refs. */
@@ -212,5 +216,64 @@ describe("previewSomedaySections", () => {
     expect(data[0]?.items).toHaveLength(11);
     expect(meta.truncated).toBe(false);
     expect(meta.blocks.find((b) => b.kind === "project")?.limit).toBeNull();
+  });
+});
+
+describe("capProjectView / capAreaView (detail-view row caps)", () => {
+  const todos = (n: number, prefix: string) =>
+    Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
+
+  const projectView = (): ProjectView =>
+    ({
+      project: { uuid: "p", title: "P" },
+      active: todos(4, "a"),
+      headings: [
+        { heading: { uuid: "h1", title: "H1" }, items: todos(3, "m") },
+        { heading: { uuid: "h2", title: "H2" }, items: todos(2, "n") },
+      ],
+      later: {
+        scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
+        repeating: [],
+        someday: todos(1, "d"),
+      },
+      logged: todos(3, "l"),
+      trashed: [],
+    }) as unknown as ProjectView;
+
+  it("caps across lists in render order and keeps structure", () => {
+    const { data, pagination } = capProjectView(projectView(), 6);
+    // 4 active + 2 of H1's members; everything after is cut.
+    expect(data.active).toHaveLength(4);
+    expect(data.headings[0]?.items).toHaveLength(2);
+    expect(data.headings[1]?.items).toHaveLength(0);
+    // Heading metadata survives even when its items are emptied…
+    expect(data.headings[1]?.heading.uuid).toBe("h2");
+    // …but emptied scheduled date-groups drop.
+    expect(data.later.scheduled).toHaveLength(0);
+    expect(data.logged).toHaveLength(0);
+    expect(pagination).toEqual({ shown: 6, total: 15, limit: 6, truncated: true });
+  });
+
+  it("null cap returns the view untouched with exact totals", () => {
+    const view = projectView();
+    const { data, pagination } = capProjectView(view, null);
+    expect(data).toBe(view);
+    expect(pagination).toEqual({ shown: 15, total: 15, limit: null, truncated: false });
+  });
+
+  it("area cap consumes projects before direct to-dos", () => {
+    const view = {
+      area: { uuid: "a", title: "A" },
+      projects: todos(3, "p"),
+      active: todos(3, "t"),
+      later: { scheduled: [], repeating: [], someday: [] },
+      logged: todos(2, "l"),
+      trashed: [],
+    } as unknown as AreaView;
+    const { data, pagination } = capAreaView(view, 4);
+    expect(data.projects).toHaveLength(3);
+    expect(data.active).toHaveLength(1);
+    expect(data.logged).toHaveLength(0);
+    expect(pagination).toEqual({ shown: 4, total: 8, limit: 4, truncated: true });
   });
 });

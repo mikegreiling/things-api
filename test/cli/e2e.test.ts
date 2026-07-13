@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildProgram } from "../../src/cli/main.ts";
+import { buildProgram, expandShorthand } from "../../src/cli/main.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
+import {
+  seedArea,
+  seedHeading,
+  seedProject,
+  seedTag,
+  seedTodo,
+  tagTask,
+} from "../fixtures/seed.ts";
 
 let fx: FixtureDb | null = null;
 afterEach(() => {
@@ -23,7 +30,8 @@ function runCli(argv: string[]): { stdout: string; exitCode: number } {
   try {
     const program = buildProgram();
     program.exitOverride();
-    program.parse(argv, { from: "user" });
+    // Route through the same argv preprocessing the real CLI applies.
+    program.parse(expandShorthand(program, argv), { from: "user" });
     return { stdout: chunks.join(""), exitCode: Number(process.exitCode ?? 0) };
   } finally {
     process.stdout.write = originalWrite;
@@ -481,6 +489,187 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(
       runCli(["someday", "--show-active-project-items", "2", "--all", "--db", fx.path]).exitCode,
     ).toBe(2);
+  });
+});
+
+describe("cli bare-noun shorthand + show keywords", () => {
+  it("things <area name> / <project name> / <todo uuid prefix> route to the right card", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Hobbies");
+    seedProject(fx.db, { title: "Firmware", area, index: 1 });
+    const todo = seedTodo(fx.db, { title: "solder joints", index: 1 });
+
+    const areaOut = runCli(["Hobbies", "--db", fx.path]);
+    expect(areaOut.exitCode).toBe(0);
+    expect(areaOut.stdout).toContain("Area: ⬡ Hobbies");
+
+    const projOut = runCli(["Firmware", "--db", fx.path]);
+    expect(projOut.exitCode).toBe(0);
+    expect(projOut.stdout).toContain("Project:");
+    expect(projOut.stdout).toContain("Firmware");
+
+    const todoOut = runCli([todo.slice(0, 8), "--db", fx.path]);
+    expect(todoOut.exitCode).toBe(0);
+    expect(todoOut.stdout).toContain("To-Do:");
+    expect(todoOut.stdout).toContain("solder joints");
+
+    // Share links route like any ref.
+    const linkOut = runCli([`things:///show?id=${todo}`, "--db", fx.path]);
+    expect(linkOut.stdout).toContain("To-Do:");
+  });
+
+  it("flags pass through the shorthand untouched", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobbies");
+    const { stdout, exitCode } = runCli(["Hobbies", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.kind).toBe("show");
+    expect(env.data.type).toBe("area");
+  });
+
+  it("registered command names are reserved and always win", () => {
+    fx = buildFixtureDb();
+    const legend = runCli(["legend", "--json"]);
+    expect(legend.exitCode).toBe(0);
+    expect(JSON.parse(legend.stdout).kind).toBe("legend");
+    const inbox = runCli(["inbox", "--json", "--db", fx.path]);
+    expect(JSON.parse(inbox.stdout).kind).toBe("inbox");
+  });
+
+  it("show <view keyword> IS the view, beating a same-named area", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Anytime");
+    seedTodo(fx.db, { title: "loose now", index: 1 });
+    const view = runCli(["show", "anytime", "--json", "--db", fx.path]);
+    expect(view.exitCode).toBe(0);
+    expect(JSON.parse(view.stdout).kind).toBe("anytime");
+    // The typed form remains the escape hatch to the shadowed area.
+    const escape = runCli(["area", "show", "Anytime", "--json", "--db", fx.path]);
+    expect(JSON.parse(escape.stdout).kind).toBe("area-view");
+    // Keyword dispatch accepts the view's own flags.
+    const flagged = runCli(["show", "someday", "--area-limit", "5", "--json", "--db", fx.path]);
+    expect(JSON.parse(flagged.stdout).kind).toBe("someday");
+  });
+
+  it("an unknown bare word errors naming both possibilities", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["frobnicate", "--json", "--db", fx.path]);
+    expect(exitCode).not.toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.message).toContain('no command or item named "frobnicate"');
+    // Typed `things show <ref>` keeps the plain resolution error.
+    const typed = runCli(["show", "frobnicate", "--json", "--db", fx.path]);
+    expect(JSON.parse(typed.stdout).error.message).not.toContain("no command or item");
+  });
+});
+
+describe("cli detail views — project/area show --limit", () => {
+  function seedBigProject(): string {
+    const proj = seedProject(fx!.db, { title: "Big Proj", index: 1 });
+    for (let i = 0; i < 60; i++) {
+      seedTodo(fx!.db, { title: `task ${String(i).padStart(2, "0")}`, project: proj, index: i });
+    }
+    return proj;
+  }
+
+  it("project show caps item rows at 50 with an exact footer; JSON carries pagination", () => {
+    fx = buildFixtureDb();
+    seedBigProject();
+    const tty = runCli(["project", "show", "Big Proj", "--db", fx.path]);
+    expect(tty.exitCode).toBe(0);
+    expect(tty.stdout).toContain("task 49");
+    expect(tty.stdout).not.toContain("task 50");
+    expect(tty.stdout).toContain(
+      '── 10 more items — see more: `things project show "Big Proj" --limit 100`',
+    );
+    expect(tty.stdout).toContain('all: `things project show "Big Proj" --all`');
+
+    const json = JSON.parse(
+      runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
+    );
+    expect(json.meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
+    expect(json.data.active).toHaveLength(50);
+
+    const all = JSON.parse(
+      runCli(["project", "show", "Big Proj", "--all", "--json", "--db", fx.path]).stdout,
+    );
+    expect(all.data.active).toHaveLength(60);
+    expect(all.meta.pagination.truncated).toBe(false);
+  });
+
+  it("keeps skeletons coherent: partial headings keep their row, fully-cut headings drop", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Sectioned", index: 1 });
+    for (let i = 0; i < 3; i++) {
+      seedTodo(fx.db, { title: `loose ${i}`, project: proj, index: i });
+    }
+    const h1 = seedHeading(fx.db, { title: "First Phase", project: proj, index: 10 });
+    seedTodo(fx.db, { title: "h1 member A", heading: h1, index: 11 });
+    seedTodo(fx.db, { title: "h1 member B", heading: h1, index: 12 });
+    const h2 = seedHeading(fx.db, { title: "Second Phase", project: proj, index: 20 });
+    seedTodo(fx.db, { title: "h2 member A", heading: h2, index: 21 });
+
+    const { stdout } = runCli(["project", "show", "Sectioned", "--limit", "4", "--db", fx.path]);
+    // 3 loose + 1 of h1's members fit; h1's header stays (partial cut)…
+    expect(stdout).toContain("First Phase");
+    expect(stdout).toContain("h1 member A");
+    expect(stdout).not.toContain("h1 member B");
+    // …h2 is fully past the cut: no empty header.
+    expect(stdout).not.toContain("Second Phase");
+    expect(stdout).toContain("── 2 more items");
+    // The card preamble always renders in full, even under a tiny cap.
+    const tiny = runCli(["project", "show", "Sectioned", "--limit", "1", "--db", fx.path]);
+    expect(tiny.stdout).toContain("Project:");
+    expect(tiny.stdout).toContain("uri:");
+  });
+
+  it("area show caps across projects + to-dos; validation matches the flat views", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Busy");
+    for (let i = 0; i < 5; i++) {
+      seedProject(fx.db, { title: `proj ${i}`, area, index: i });
+    }
+    for (let i = 0; i < 5; i++) {
+      seedTodo(fx.db, { title: `direct ${i}`, area, index: 10 + i });
+    }
+    const { stdout, exitCode } = runCli(["area", "show", "Busy", "--limit", "6", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("proj 4");
+    expect(stdout).toContain("direct 0");
+    expect(stdout).not.toContain("direct 1");
+    expect(stdout).toContain("── 4 more items — see more: `things area show Busy --limit 12`");
+
+    const json = JSON.parse(
+      runCli(["area", "show", "Busy", "--limit", "6", "--json", "--db", fx.path]).stdout,
+    );
+    expect(json.meta.pagination).toEqual({ shown: 6, total: 10, limit: 6, truncated: true });
+    expect(json.data.projects).toHaveLength(5);
+    expect(json.data.active).toHaveLength(1);
+
+    for (const argv of [
+      ["area", "show", "Busy", "--limit", "0"],
+      ["project", "show", "x", "--limit", "5", "--all"],
+      ["show", "Busy", "--limit", "nope"],
+    ]) {
+      expect(runCli([...argv, "--db", fx.path]).exitCode, argv.join(" ")).toBe(2);
+    }
+  });
+
+  it("the loose show router applies the cap to project/area payloads", () => {
+    fx = buildFixtureDb();
+    seedBigProject();
+    const json = JSON.parse(runCli(["show", "Big Proj", "--json", "--db", fx.path]).stdout);
+    expect(json.kind).toBe("show");
+    expect(json.data.type).toBe("project");
+    expect(json.data.view.active).toHaveLength(50);
+    expect(json.meta.pagination.total).toBe(60);
+    // …and via the bare shorthand, flags intact.
+    const tty = runCli(["Big Proj", "--limit", "5", "--db", fx.path]);
+    expect(tty.stdout).toContain(
+      '── 55 more items — see more: `things show "Big Proj" --limit 10`',
+    );
   });
 });
 

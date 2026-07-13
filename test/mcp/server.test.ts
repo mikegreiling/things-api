@@ -497,6 +497,33 @@ describe("things MCP server", () => {
     expect(view.project.title).toBe("MCP Proj");
   });
 
+  it("get_project caps item rows at 50 by default; limit/all adjust; conflict is usage", async () => {
+    const proj = seedProject(fixture.db, { title: "Big Proj" });
+    for (let i = 0; i < 60; i++) {
+      seedTodo(fixture.db, { title: `task ${i}`, project: proj, index: i });
+    }
+    await connect([fakeVector(null).vector]);
+    const capped = await client.callTool({ name: "get_project", arguments: { uuid: proj } });
+    const view = textOf(capped) as { active: unknown[] };
+    expect(view.active).toHaveLength(50);
+    const meta = JSON.parse(
+      (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
+    ) as { pagination: { shown: number; total: number; truncated: boolean }; note: string };
+    expect(meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
+    expect(meta.note).toContain("showing 50 of 60");
+
+    const all = textOf(
+      await client.callTool({ name: "get_project", arguments: { uuid: proj, all: true } }),
+    ) as { active: unknown[] };
+    expect(all.active).toHaveLength(60);
+
+    const conflict = await client.callTool({
+      name: "get_project",
+      arguments: { uuid: proj, limit: 5, all: true },
+    });
+    expect(conflict.isError).toBe(true);
+  });
+
   it("undo with an empty audit trail returns an empty item list", async () => {
     await connect([fakeVector(null).vector]);
     const items = textOf(

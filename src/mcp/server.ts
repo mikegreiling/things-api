@@ -21,6 +21,8 @@ import {
   AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
+  capAreaView,
+  capProjectView,
   paginateList,
   paginateToday,
   previewSections,
@@ -563,23 +565,45 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_project",
     {
       description:
-        "One project's full contents: metadata plus its to-dos grouped under their headings.",
-      inputSchema: { uuid: z.string().describe("Project uuid or unique name") },
+        "One project's contents: metadata plus its to-dos grouped under their headings. " +
+        `Item lists are capped at ${DEFAULT_LIST_LIMIT} rows total by default (raise with ` +
+        "limit, or all: true for everything); the second result block reports the counts.",
+      inputSchema: {
+        uuid: z.string().describe("Project uuid or unique name"),
+        ...limitShape,
+      },
       annotations: READ_ONLY,
     },
-    async (args) => guard(() => jsonResult(getClient().read.projectView(args.uuid))),
+    async (args) =>
+      guard(() => {
+        const limit = resolveLimit(args);
+        if (limit === "conflict") return usage("pass at most one of limit / all");
+        const { data, pagination } = capProjectView(getClient().read.projectView(args.uuid), limit);
+        return paginatedResult(data, pagination);
+      }),
   );
 
   server.registerTool(
     "get_area",
     {
       description:
-        "One area's full contents: metadata plus its direct to-dos (active first), its " +
-        "projects in sidebar order, later (scheduled/repeating/someday), and logged items.",
-      inputSchema: { ref: z.string().describe("Area uuid or unique name") },
+        "One area's contents: metadata plus its direct to-dos (active first), its " +
+        "projects in sidebar order, later (scheduled/repeating/someday), and logged items. " +
+        `Item lists are capped at ${DEFAULT_LIST_LIMIT} rows total by default (raise with ` +
+        "limit, or all: true for everything); the second result block reports the counts.",
+      inputSchema: {
+        ref: z.string().describe("Area uuid or unique name"),
+        ...limitShape,
+      },
       annotations: READ_ONLY,
     },
-    async (args) => guard(() => jsonResult(getClient().read.areaView(args.ref))),
+    async (args) =>
+      guard(() => {
+        const limit = resolveLimit(args);
+        if (limit === "conflict") return usage("pass at most one of limit / all");
+        const { data, pagination } = capAreaView(getClient().read.areaView(args.ref), limit);
+        return paginatedResult(data, pagination);
+      }),
   );
 
   server.registerTool(

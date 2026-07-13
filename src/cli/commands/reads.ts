@@ -65,7 +65,7 @@ interface GlobalReadOpts {
   db?: string;
 }
 
-interface PagedResult<T> {
+export interface PagedResult<T> {
   data: T;
   /** Flat-view truncation — carried into meta and the appended hint. */
   pagination?: Pagination;
@@ -127,7 +127,7 @@ export function renderLegend(): string[] {
  * appended to the human output — never to `--json`. When `header` names a view,
  * its title preamble leads the human output on a TTY only (viewHeaderLines).
  */
-function runRead<T>(
+export function runRead<T>(
   opts: GlobalReadOpts,
   kind: string,
   fn: (client: ThingsClient) => PagedResult<T>,
@@ -216,7 +216,7 @@ type LimitResolution = { ok: true; limit: number | null } | { ok: false };
  * bad input: `--limit` must be a positive integer, and it may not combine
  * with `--all`.
  */
-function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
+export function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
   return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true);
 }
 
@@ -248,12 +248,12 @@ function parseCap(
 }
 
 /** Shell-safe rendering of a flag value for the reconstructed hint command. */
-function shellQuote(v: string): string {
+export function shellQuote(v: string): string {
   return /^[\w./@:+-]+$/.test(v) ? v : `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
 /** Reconstruct `things <name> <flags…>`, dropping falsy/empty parts. */
-function invocation(name: string, parts: Array<string | false | undefined>): string {
+export function invocation(name: string, parts: Array<string | false | undefined>): string {
   return [
     "things",
     name,
@@ -267,7 +267,7 @@ function invocation(name: string, parts: Array<string | false | undefined>): str
  * `--limit` or `--all` is one copy-paste away. Returns null when nothing was
  * dropped or the caller already asked for every row.
  */
-function truncationHint(base: string, pagination: Pagination): string | null {
+export function truncationHint(base: string, pagination: Pagination): string | null {
   if (!pagination.truncated || pagination.limit === null) return null;
   const more = pagination.total - pagination.shown;
   const bigger = pagination.limit * 2;

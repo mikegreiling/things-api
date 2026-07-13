@@ -158,6 +158,18 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("invisible");
   });
 
+  it("show router: shorthand + keyword routing documented; detail views expose --limit", () => {
+    const show = helpFor("show");
+    expect(show).toContain("The word `show` may be omitted");
+    expect(show).toContain("command names always win");
+    expect(show).toContain("inbox|today|anytime|upcoming|someday|logbook|trash");
+    for (const path of [["show"], ["project", "show"], ["area", "show"]]) {
+      const help = helpFor(...(path as [string]));
+      expect(help, path.join(" ")).toContain("--limit <n>");
+      expect(help, path.join(" ")).toContain("--all");
+    }
+  });
+
   it("flat list views expose --limit/--all; grouped views expose per-block caps", () => {
     for (const name of ["today", "inbox", "upcoming", "logbook", "trash", "changes"]) {
       const help = helpFor(name);

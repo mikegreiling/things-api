@@ -28,6 +28,8 @@ AGENT NOTES:
     fail with the candidates listed.
   - A Things share link (Share > Copy Link, "things:///show?id=<uuid>") is
     accepted anywhere a uuid or name is expected — it is stripped to the id.
+  - The word \`show\` may be omitted: \`things <ref>\` shows the referenced
+    item whenever <ref> is not a command name (command names always win).
   - Exit codes are stable: 0 ok, 2 usage, 3 verify-failed, 4 blocked,
     5 drift-blocked, 6 unsupported, 7 environment.
   - No command ever prompts interactively; operations with cascading or
@@ -60,12 +62,53 @@ export function buildProgram(): Command {
   return program;
 }
 
+/**
+ * The view keywords of the app's show?id vocabulary: `things show <keyword>`
+ * IS that view (dispatched to the view command so flags and output match
+ * exactly), and the keyword beats a same-named project or area — the typed
+ * forms (`things area show Anytime`) remain the escape hatch.
+ */
+const VIEW_KEYWORDS = new Set([
+  "inbox",
+  "today",
+  "anytime",
+  "upcoming",
+  "someday",
+  "logbook",
+  "trash",
+]);
+
+/**
+ * Bare-noun shorthand over user args (argv without the node/script prefix):
+ * a first argument that is not a flag and not a registered command name (or
+ * alias) becomes `show <ref>` — commands are RESERVED and always win. The
+ * inserted hidden marker lets an unresolvable ref error as "no command or
+ * item". `show <view keyword>` rewrites to the view command itself.
+ */
+export function expandShorthand(program: Command, args: string[]): string[] {
+  const first = args[0];
+  if (first === undefined || first.startsWith("-")) return args;
+  const known = new Set<string>(["help"]);
+  for (const c of program.commands) {
+    known.add(c.name());
+    for (const alias of c.aliases()) known.add(alias);
+  }
+  if (known.has(first)) {
+    const second = args[1];
+    if (first === "show" && second !== undefined && VIEW_KEYWORDS.has(second.toLowerCase())) {
+      return [second.toLowerCase(), ...args.slice(2)];
+    }
+    return args;
+  }
+  return ["show", "--via-shorthand", ...args];
+}
+
 export function runCli(): void {
   const program = buildProgram();
   program.exitOverride((err) => {
     process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);
   });
-  program.parse();
+  program.parse(expandShorthand(program, process.argv.slice(2)), { from: "user" });
 }
 
 // Direct-run detection must survive the npm .bin symlink (argv[1] ends with

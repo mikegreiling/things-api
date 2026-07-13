@@ -15,12 +15,40 @@ import {
   thingsLink,
   whenValue,
 } from "../glyphs.ts";
-import { formatItem, openInThings, uuidDisplayWidth, withClient } from "./reads.ts";
+import { capProjectView } from "../../read/pagination.ts";
+import {
+  formatItem,
+  invocation,
+  openInThings,
+  parseLimit,
+  runRead,
+  shellQuote,
+  truncationHint,
+  uuidDisplayWidth,
+  withClient,
+} from "./reads.ts";
+import { ALL_DESC, LIMIT_DESC } from "../../surface-copy.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
   /** Optional-value flag: bare = the FULL project logbook (finite lifespans), a count to cap it. */
   showLogged?: boolean | string;
+  /** Total item-row cap (null/undefined = uncapped); rows past it are summarized by the footer. */
+  limit?: number | null;
+  /** The user's invocation, echoed by the truncation footer. */
+  hintBase?: string;
+}
+
+/** Reconstruct the show-toggle flags the user passed, for footer echoes. */
+export function showToggleFlags(opts: {
+  showLater?: boolean;
+  showLogged?: boolean | string;
+}): Array<string | false> {
+  return [
+    opts.showLater === true && "--show-later",
+    opts.showLogged === true && "--show-logged",
+    typeof opts.showLogged === "string" && `--show-logged ${opts.showLogged}`,
+  ];
 }
 
 function loggedSlice(view: ProjectView, showLogged: boolean | string | undefined): Todo[] {
@@ -63,6 +91,19 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   const logged = loggedSlice(view, opts.showLogged);
   const everyItem = [...view.active, ...later, ...view.headings.flatMap((g) => g.items), ...logged];
   const w = uuidDisplayWidth([...everyItem, ...view.headings.map((g) => g.heading)]);
+  // Total item-row cap: counts rows in render order (loose block, heading
+  // members, logged) and truncates mid-section; the card preamble is content,
+  // never counted, and no section header renders empty past the cut.
+  const cap = opts.limit ?? null;
+  let budget: number | null = cap;
+  const take = <T>(rows: T[]): T[] => {
+    if (budget === null) return rows;
+    const out = rows.slice(0, Math.max(0, budget));
+    budget -= out.length;
+    return out;
+  };
+  let totalRows = 0;
+  let shownRows = 0;
   // Rows inside this view never repeat the project's own name.
   const fmt = (i: (typeof everyItem)[number]) =>
     formatItem(i, w, { suppressProject: view.project.uuid });
@@ -99,16 +140,27 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     lines.push(`  ${dim("repeating:")} instance of ${p.repeating.templateUuid}`);
   if (p.notes !== "") lines.push("", p.notes);
   const looseRows = [...view.active, ...looseLater];
-  if (looseRows.length > 0) lines.push("", ...looseRows.map(fmt));
+  totalRows += looseRows.length;
+  const shownLoose = take(looseRows);
+  shownRows += shownLoose.length;
+  if (shownLoose.length > 0) lines.push("", ...shownLoose.map(fmt));
   for (const group of view.headings) {
     // Headings are the GUI's dim in-project subheads, not structural
     // sections — rendered like item rows (their uuid IS addressable:
     // heading rename/archive), title dim+underlined.
     const members = [...group.items, ...(laterByHeading.get(group.heading.uuid) ?? [])];
+    totalRows += members.length;
+    const shownMembers = take(members);
+    shownRows += shownMembers.length;
+    // A heading whose every member fell past the cut is dropped with them —
+    // no empty header after the cut (genuinely empty headings keep rendering
+    // while the budget lasts, exactly as without a cap).
+    if (members.length > 0 && shownMembers.length === 0) continue;
+    if (members.length === 0 && budget !== null && budget <= 0) continue;
     lines.push(
       "",
       `${dim(group.heading.uuid.slice(0, w))}  ${dim(underline(group.heading.title))}`,
-      ...(members.length > 0 ? members.map(fmt) : ["(none)"]),
+      ...(shownMembers.length > 0 ? shownMembers.map(fmt) : ["(none)"]),
     );
   }
   // Default-hidden rows are never silent — a muted count names the toggle.
@@ -123,16 +175,28 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
         dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
       );
   }
-  if (logged.length > 0) {
+  totalRows += logged.length;
+  const shownLogged = take(logged);
+  shownRows += shownLogged.length;
+  if (shownLogged.length > 0) {
     const header =
-      logged.length < view.logged.length
-        ? `── Logged (${logged.length} of ${view.logged.length}) ──`
+      shownLogged.length < view.logged.length
+        ? `── Logged (${shownLogged.length} of ${view.logged.length}) ──`
         : `── Logged (${view.logged.length}) ──`;
-    lines.push("", bold(header), ...logged.map(fmt));
-  } else if (view.logged.length > 0) {
+    lines.push("", bold(header), ...shownLogged.map(fmt));
+  } else if (view.logged.length > 0 && logged.length === 0) {
     lines.push("", dim(`…${view.logged.length} logged (--show-logged)`));
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
+  if (cap !== null && shownRows < totalRows && opts.hintBase !== undefined) {
+    const hint = truncationHint(opts.hintBase, {
+      shown: shownRows,
+      total: totalRows,
+      limit: cap,
+      truncated: true,
+    });
+    if (hint !== null) lines.push("", hint);
+  }
   return lines;
 }
 
@@ -145,12 +209,34 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: ProjectShowOpts & { json?: boolean; db?: string }) => {
-      withClient(opts, "project-view", (c) => c.read.projectView(ref), ((d: ProjectView) =>
-        renderProjectView(d, opts)) as (d: never) => string[]);
-    });
+    .action(
+      (
+        ref: string,
+        opts: ProjectShowOpts & { json?: boolean; db?: string; limit?: string; all?: boolean },
+      ) => {
+        const lim = parseLimit(opts as { limit?: string; all?: boolean });
+        if (!lim.ok) return;
+        const hintBase = invocation("project show", [shellQuote(ref), ...showToggleFlags(opts)]);
+        runRead<ProjectView>(
+          opts,
+          "project-view",
+          (c) => {
+            const view = c.read.projectView(ref);
+            const { data, pagination } = capProjectView(view, lim.limit);
+            return {
+              data,
+              pagination,
+              lines: renderProjectView(view, { ...opts, limit: lim.limit, hintBase }),
+            };
+          },
+          () => [],
+        );
+      },
+    );
   project
     .command("open <ref>")
     .description(

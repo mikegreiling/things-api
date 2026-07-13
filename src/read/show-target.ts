@@ -1,14 +1,20 @@
 /**
  * Loose reference classification for `things show` / the `open` commands:
  * anything a user might copy — a full uuid, a >=6-char uuid prefix, a
- * things:/// share link, or an area name — resolves to the resource class
- * that has a show view. Headings resolve to their CONTAINING PROJECT (they
- * have no view of their own); tags and checklist items are rejected (no
- * show view; their uuids simply never match TMTask/TMArea).
+ * things:/// share link, or a unique area/project name — resolves to the
+ * resource class that has a show view (an area wins over a same-named
+ * project). Headings resolve to their CONTAINING PROJECT (they have no view
+ * of their own); tags and checklist items are rejected (no show view; their
+ * uuids simply never match TMTask/TMArea).
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { resolveAreaUuid, resolveTaskUuidPrefix, stripThingsUri } from "./queries.ts";
+import {
+  resolveAreaUuid,
+  resolveProjectUuid,
+  resolveTaskUuidPrefix,
+  stripThingsUri,
+} from "./queries.ts";
 
 export interface ShowTarget {
   kind: "to-do" | "project" | "area";
@@ -42,6 +48,13 @@ export function classifyShowTarget(db: DatabaseSync, ref: string): ShowTarget {
   try {
     return { kind: "area", uuid: resolveAreaUuid(db, stripped) };
   } catch {
+    // fall through to project-name resolution
+  }
+  try {
+    return { kind: "project", uuid: resolveProjectUuid(db, stripped) };
+  } catch (err) {
+    // An ambiguous project name lists its candidates — surface that verbatim.
+    if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
     throw new RangeError(
       `no to-do, project, or area matches "${ref}" (tags and checklist items have no show view)`,
     );
