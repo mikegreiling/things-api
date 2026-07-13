@@ -41,6 +41,7 @@ describe("root help", () => {
     expect(rendered).toContain("0 ok, 2 usage, 3 verify-failed, 4 blocked");
     expect(rendered).toContain("5 drift-blocked, 6 unsupported, 7 environment");
     expect(rendered).toContain("No command ever prompts interactively");
+    expect(rendered).toContain("things legend");
   });
 });
 
@@ -281,6 +282,29 @@ describe("write-command help states the contract", () => {
     const help = helpFor("todo", "clear-reminder");
     expect(help).toContain("date-scheduled");
     expect(help).toContain("things setup shortcuts");
+  });
+
+  it("legend: exists as a read command with --json", () => {
+    const help = helpFor("legend");
+    expect(help).toContain("symbols and colors");
+    expect(help).toContain("--json");
+  });
+
+  it("list views point at `things legend` for the glyph language", () => {
+    // The pointer is an addHelpText(after) epilog, emitted on render (outputHelp)
+    // rather than in helpInformation() — capture the rendered form.
+    const renderedHelp = (name: string): string => {
+      const program = buildProgram();
+      const cmd = program.commands.find((c) => c.name() === name);
+      if (cmd === undefined) throw new Error(`no command: ${name}`);
+      let out = "";
+      cmd.configureOutput({ writeOut: (s) => void (out += s) });
+      cmd.outputHelp();
+      return out;
+    };
+    for (const name of ["today", "inbox", "anytime", "someday", "upcoming", "logbook", "trash"]) {
+      expect(renderedHelp(name), name).toContain("run `things legend`");
+    }
   });
 
   it("setup shortcuts: names the unlocked operations, the click, and --check", () => {

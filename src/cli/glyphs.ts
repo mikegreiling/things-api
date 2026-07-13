@@ -9,7 +9,7 @@
  * (docs/roadmap.md) can retune the language in one file.
  */
 import type { Project, Todo } from "../model/entities.ts";
-import { blue, bold, brightBlue, dim, green, red, yellow } from "./style.ts";
+import { blue, bold, brightBlue, dim, green, red, strike, underline, yellow } from "./style.ts";
 
 const MONTHS = [
   "Jan",
@@ -186,3 +186,117 @@ export const CHECKLIST_MARK = "≔";
 /** Today star / This-Evening crescent, rendered after the box in today-aware views. */
 export const todayStar = (): string => yellow("★");
 export const eveningMoon = (): string => brightBlue("⏾");
+
+/** The sections the legend groups its entries under, in render order. */
+export type LegendGroup =
+  | "To-dos"
+  | "Projects"
+  | "Markers & chips"
+  | "Colors & styles"
+  | "Sections & hints";
+
+export const LEGEND_GROUPS: readonly LegendGroup[] = [
+  "To-dos",
+  "Projects",
+  "Markers & chips",
+  "Colors & styles",
+  "Sections & hints",
+] as const;
+
+/** One legend row: a sample of the glyph as it renders, and what it means. */
+export interface LegendEntry {
+  /** The glyph styled exactly as it renders in a list (color on a TTY). */
+  glyph: string;
+  meaning: string;
+  group: LegendGroup;
+}
+
+/**
+ * The rendered visual language, derived from the glyph helpers above so it
+ * documents what actually renders — never a hand-kept copy that can drift.
+ * Each `glyph` is a real sample built from the same styling the list rows use;
+ * `things legend` groups these for humans and `--json` emits them ANSI-stripped.
+ */
+export const LEGEND: readonly LegendEntry[] = [
+  // To-dos — the [ ]-family box carries state with color stripped.
+  { glyph: "[ ]", meaning: "to-do, open", group: "To-dos" },
+  { glyph: blue("[✓]"), meaning: "to-do, completed", group: "To-dos" },
+  { glyph: blue("[×]"), meaning: "to-do, canceled (title struck through)", group: "To-dos" },
+  { glyph: dim("[~]"), meaning: "to-do, someday (undated)", group: "To-dos" },
+  {
+    glyph: dim("[↻]"),
+    meaning: "repeating to-do — the rule itself (instances are ordinary [ ])",
+    group: "To-dos",
+  },
+  // Projects — round where to-dos are square; open rows render blue.
+  { glyph: blue("( )"), meaning: "project, open", group: "Projects" },
+  { glyph: blue("(✓)"), meaning: "project, completed", group: "Projects" },
+  { glyph: blue("(×)"), meaning: "project, canceled", group: "Projects" },
+  { glyph: blue("(~)"), meaning: "project, someday (undated)", group: "Projects" },
+  {
+    glyph: dim("(↻)"),
+    meaning: "repeating project — the recurring rule itself",
+    group: "Projects",
+  },
+  {
+    glyph: dim("‹2/5›"),
+    meaning: "project progress: remaining/total to-dos (‹0› when it has none)",
+    group: "Projects",
+  },
+  // Markers & chips — trail the title (bell, notes, checklist) or precede it.
+  { glyph: todayStar(), meaning: "Today member", group: "Markers & chips" },
+  { glyph: eveningMoon(), meaning: "This Evening member", group: "Markers & chips" },
+  {
+    glyph: bold(dim("⚑")),
+    meaning: "deadline — bold gray while upcoming, bold red once due or overdue",
+    group: "Markers & chips",
+  },
+  { glyph: dim(NOTES_MARK), meaning: "has notes", group: "Markers & chips" },
+  { glyph: dim(REMINDER_MARK), meaning: "has a reminder time", group: "Markers & chips" },
+  { glyph: dim(CHECKLIST_MARK), meaning: "has a checklist", group: "Markers & chips" },
+  { glyph: areaMark(), meaning: "area", group: "Markers & chips" },
+  {
+    glyph: dim("‹Jul 31›"),
+    meaning: "scheduled date (year appended when not the current year)",
+    group: "Markers & chips",
+  },
+  {
+    glyph: green("#tag"),
+    meaning: "tag — muted on list rows, green on the opened item",
+    group: "Markers & chips",
+  },
+  // Colors & styles — enhancements on top of the shape; never the only cue.
+  {
+    glyph: dim("a1b2c3d4"),
+    meaning: "item id prefix (8+ chars; full id in --json) — pass to any command",
+    group: "Colors & styles",
+  },
+  {
+    glyph: dim("dim text"),
+    meaning: "later, hidden, inactive, or completed row",
+    group: "Colors & styles",
+  },
+  { glyph: strike("struck"), meaning: "canceled item title", group: "Colors & styles" },
+  { glyph: blue("blue"), meaning: "open project (its circle and title)", group: "Colors & styles" },
+  {
+    glyph: bold(underline("bold underline")),
+    meaning: "container header — a project title row, or a section header",
+    group: "Colors & styles",
+  },
+  // Sections & hints — structure and the never-silent truncation notices.
+  {
+    glyph: bold("──"),
+    meaning: "section divider (area, Upcoming date bucket, Logbook month heading)",
+    group: "Sections & hints",
+  },
+  {
+    glyph: dim("… 14 more"),
+    meaning: "a block was truncated; a drill-down command follows",
+    group: "Sections & hints",
+  },
+  {
+    glyph: dim("(23 later — --show-later)"),
+    meaning: "default-hidden rows, and the flag that reveals them",
+    group: "Sections & hints",
+  },
+] as const;
