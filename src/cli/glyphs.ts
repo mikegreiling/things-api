@@ -100,7 +100,7 @@ function daysBetween(fromIso: string, toIso: string): number {
 }
 
 /** Uncapped relative phrasing: `today`, `3 days left`, `253 days ago`. */
-export function relativeDays(iso: string, todayIso: string): string {
+function relativeDays(iso: string, todayIso: string): string {
   const diff = daysBetween(todayIso, iso);
   if (diff === 0) return "today";
   return diff > 0

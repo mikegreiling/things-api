@@ -21,6 +21,7 @@ export function capabilitiesTable(op?: OperationKind): CapabilityEntry[] {
   return ops.map((kind) => ({
     op: kind,
     undo: REVERSIBILITY[kind],
+    // oxlint-disable-next-line no-map-spread -- building fresh capability rows, not mutating
     vectors: vectors.map((v) => ({ vector: v.id, ...(v.matrix[kind] ?? { support: "no" }) })),
   }));
 }

@@ -274,9 +274,13 @@ describe("things projects — sidebar mirror", () => {
     // Loose block: active row then its muted count.
     const looseHint = lines.indexOf("…1 later project");
     expect(looseHint).toBeGreaterThan(lines.findIndex((l) => l.includes("Loose active")));
-    // Zone: count after its active row.
+    // Zone: the later-count follows its active row, within the Zone block
+    // (order, not an exact offset — the block's row count isn't the contract).
     const zoneAt = lines.findIndex((l) => l.includes("⬡ Zone ──"));
-    expect(lines[zoneAt + 2]).toBe("…1 later project");
+    const zoneActiveAt = lines.findIndex((l) => l.includes("Zone active"));
+    const zoneHintAt = lines.indexOf("…1 later project", zoneAt);
+    expect(zoneActiveAt).toBeGreaterThan(zoneAt);
+    expect(zoneHintAt).toBeGreaterThan(zoneActiveAt);
     // Later-only area still gets a header + count, no rows.
     const idleAt = lines.findIndex((l) => l.includes("⬡ Idle ──"));
     expect(idleAt).toBeGreaterThan(zoneAt);

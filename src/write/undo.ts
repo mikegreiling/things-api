@@ -365,6 +365,7 @@ function planChecklistItemInverse(record: AuditRecord, current: AnyTask): Checkl
       if (i === -1) return conflict(`the moved item "${title}" is no longer in the checklist`);
       if (i === -2)
         return conflict(`"${title}" is now a duplicate title — the moved item is ambiguous`);
+      // oxlint-disable-next-line no-map-spread -- cloning specs before splice, not mutating in place
       const next = items.map((c) => ({ ...c }));
       const [moved] = next.splice(i, 1);
       next.splice(Math.max(0, Math.min(next.length, oldPos - 1)), 0, moved as ChecklistSpec);

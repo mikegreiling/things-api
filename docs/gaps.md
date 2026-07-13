@@ -1,6 +1,6 @@
 # Capability gaps — what the API cannot do (yet), and why
 
-Living register of Things-app capabilities that are missing, thin, or janky in things-api, with evidence refs and the planned path (or the reason none exists). Assessed 2026-07-04, post-Phase-7, mid-Phase-8 (reorder in flight on `mg/phase8-reorder`).
+Living register of Things-app capabilities that are missing, thin, or janky in things-api, with evidence refs and the planned path (or the reason none exists). First assessed 2026-07-04 and kept current since: the Phase-8 reorder shipped that day, and later work — the Shortcuts write vector (§A.2) and the Phase-21 environment-awareness campaign among it — is documented in the body below.
 
 > The full CRUD × vector picture (everything that works, not just the gaps) lives in **[capability-matrix.md](capability-matrix.md)** — the living wish-list/checklist. Keep both current in the same change (see repo `CLAUDE.md`).
 

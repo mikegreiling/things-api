@@ -246,7 +246,7 @@ describe("things MCP server", () => {
     expect(allMeta.grouped.truncated).toBe(false);
   });
 
-  it("read_view someday: numeric active_project_items caps that section; limit rejected on grouped views", async () => {
+  it("read_view someday: numeric show_active_project_items caps that section; limit rejected on grouped views", async () => {
     const area = seedArea(fixture.db, "Hobbies");
     const active = seedProject(fixture.db, { title: "Active Proj", area, index: 1 });
     for (let i = 0; i < 4; i++) {
@@ -259,18 +259,25 @@ describe("things MCP server", () => {
     }
     await connect([fakeVector(null).vector]);
 
-    const capped = await client.callTool({
-      name: "read_view",
-      arguments: { view: "someday", active_project_items: 2 },
-    });
-    const meta = JSON.parse(
-      (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as {
-      grouped: { blocks: { kind: string; title: string | null; shown: number; total: number }[] };
+    const capsWith = async (arg: Record<string, unknown>) => {
+      const capped = await client.callTool({
+        name: "read_view",
+        arguments: { view: "someday", ...arg },
+      });
+      const meta = JSON.parse(
+        (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
+      ) as {
+        grouped: {
+          blocks: { kind: string; title: string | null; shown: number; total: number }[];
+        };
+      };
+      expect(meta.grouped.blocks).toContainEqual(
+        expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
+      );
     };
-    expect(meta.grouped.blocks).toContainEqual(
-      expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
-    );
+    // Preferred name and its compatibility alias behave identically.
+    await capsWith({ show_active_project_items: 2 });
+    await capsWith({ active_project_items: 2 });
 
     // Absent toggle: no children in the data at all.
     const hidden = textOf(
@@ -283,6 +290,7 @@ describe("things MCP server", () => {
       { view: "someday", limit: 10 },
       { view: "inbox", area_limit: 10 },
       { view: "someday", project_limit: 5 },
+      { view: "inbox", show_active_project_items: true },
       { view: "inbox", active_project_items: true },
     ]) {
       const bad = await client.callTool({ name: "read_view", arguments: args });
