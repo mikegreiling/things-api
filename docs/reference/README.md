@@ -31,6 +31,7 @@ Every claim in the living docs carries a probe id. Families, by prefix:
 | SX6 | repaired-asset import validation in a fresh clone via VNC synthetic click (first §E½ demonstration) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) "VM repair campaign results" |
 | UI1 | §E½ UI-vector feasibility (VNC-drive `File → New Repeating To-Do`) + the deadline-less-repeat discriminator (template `deadline` column) | [lab/s-campaign-results.md](../lab/s-campaign-results.md) "UI-vector campaign (UI1)"; `lab/scripts/research-ui1.sh` |
 | LOCK1, SYNC1 | headless "closet Mac" research: locked-session vector verdicts (a–e work under lock, f hits the lock screen; headless-lock mechanism) + last-sync/freshness signal archaeology without a cloud account | [lab/headless-research.md](../lab/headless-research.md); `lab/scripts/research-lock1.sh` |
+| SYNC2 | Things Cloud ("Syncrony") conflict-resolution semantics, live-probed (two clones, one throwaway account): per-attribute merge; same-field TEXT conflicts (notes, title) = timestamp-ordered **3-way merge** with `--` separator — NOT last-writer-wins, nothing dropped, both devices converge; checklists merge as union; delete-vs-edit loses nothing; `BSSyncronyMetadata` populates once an account attaches (last-sync-ATTEMPT NSDate at stable key `GryCJ44xPcJG6go5KeTZp1`) | [lab/headless-research.md](../lab/headless-research.md) §SYNC2; `lab/scripts/research-sync2.sh` |
 
 Recurring, autonomously-runnable encodings of the locked verdicts live in `lab/suites/*.json` (a/e/o/p/r/s/u/x) and run via `npm run lab:regress`; the guest e2e (`lab/guest/e2e-write-smoke.sh`) exercises the shipped CLI surface end-to-end (106 steps). Coverage gaps: [suite-audit.md](suite-audit.md).
 
@@ -44,6 +45,7 @@ Recurring, autonomously-runnable encodings of the locked verdicts live in `lab/s
 | Ordering/reorder semantics (any scope) | [lab/o-suite-results.md](../lab/o-suite-results.md) (incl. someday anchor-stack models, Anytime non-determinism) |
 | Reminder time parsing/encoding | [lab/r-suite-results.md](../lab/r-suite-results.md) (codec `hour<<26 | minute<<20`; three lexical classes) |
 | Today membership & sort | [lab/today-order-research.md](../lab/today-order-research.md) |
+| Sync & conflict behavior (Things Cloud / "Syncrony": what merges, is it LWW (no), last-sync signal, locked-screen/headless operation) | [lab/headless-research.md](../lab/headless-research.md) — LOCK1/SYNC1/SYNC2 verdicts |
 | Consent/TCC/"Enable Things URLs" | [lab/phase21b-research.md](../lab/phase21b-research.md) |
 | Shortcuts vector & proxies | [lab/s-campaign-results.md](../lab/s-campaign-results.md); build cards [lab/l5-build-cards.md](../lab/l5-build-cards.md); signed files `shortcuts/` (extraction pipeline: roadmap §A) |
 | Deletes (heterogeneous!) | [lab/a-suite-results.md](../lab/a-suite-results.md) A24–A27, s-campaign P12, oddities 5i |

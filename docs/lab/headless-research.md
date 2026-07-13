@@ -73,7 +73,7 @@ None of these is an authoritative "last synced with the server" timestamp — th
 4. Push/Syncrony state files that would appear in the container once Things Cloud is provisioned.
 5. Conflict-resolution semantics — that is SYNC2 proper (networked, throwaway test account).
 
-## SYNC2 — Thing Cloud conflict semantics (networked, throwaway account)
+## SYNC2 — Things Cloud conflict semantics (networked, throwaway account)
 
 **Question.** With two clones signed into ONE real Things Cloud account, how does Things Cloud resolve concurrent offline edits — the SYNC1 open questions (does `BSSyncronyMetadata` populate with a last-sync signal once an account exists? what is the unified-log sync taxonomy?) plus the headline: is same-field conflict resolution timestamp-LWW or arrival-order-LWW? Script: [lab/scripts/research-sync2.sh](../../lab/scripts/research-sync2.sh). Evidence: `lab/artifacts/things-run-sync2-20260713-124441/` (gitignored) — `report.txt`, `A-*/B-*.png` (the VNC account-create + login walkthrough), `scenario-snapshots/*.sqlite` (both clones per phase), `bssync-{A,B}-raw.txt`, `log-*.txt`, `account-credentials.env`.
 
