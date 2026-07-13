@@ -700,6 +700,22 @@ function blockMoreLine(total: number, shown: number, drill: string | null): stri
 }
 
 /**
+ * Type-aware variant for blocks that mix project rows and to-dos (someday's
+ * loose/area blocks): the hidden remainder is split by type — `… 5 more
+ * projects, 14 more to-dos` — omitting a type with nothing hidden and
+ * pluralizing per count.
+ */
+function mixedMoreLine(hidden: ListItem[], drill: string | null): string {
+  const projects = hidden.filter((i) => i.type === "project").length;
+  const todos = hidden.length - projects;
+  const parts = [
+    ...(projects > 0 ? [`${projects} more project${projects === 1 ? "" : "s"}`] : []),
+    ...(todos > 0 ? [`${todos} more to-do${todos === 1 ? "" : "s"}`] : []),
+  ];
+  return dim(`  … ${parts.join(", ")}${drill === null ? "" : ` — \`${drill}\``}`);
+}
+
+/**
  * Muted bottom line for a truncated grouped view: `── more per group — see
  * more: \`<base> <bigger flags>\` · all: \`<base> --all\` ──`, where the
  * bigger-flags command doubles exactly the caps that actually truncated.
@@ -831,7 +847,7 @@ function renderSomedayPreview(
         areaHit = true;
         const drill =
           section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-        lines.push(blockMoreLine(own.length, shownOwn.length, drill));
+        lines.push(mixedMoreLine(own.slice(shownOwn.length), drill));
       }
     }
     if (trailing.length > 0) {

@@ -193,7 +193,16 @@ describe("previewSomedaySections", () => {
     expect(data[0]?.items.map((i) => i.uuid)).toEqual(["p1", "p2", "u0", "u1", "k0", "k1"]);
     expect(meta.truncated).toBe(true);
     expect(meta.blocks).toEqual([
-      { kind: "area", uuid: "a", title: "Hobbies", shown: 4, total: 8, limit: 4 },
+      {
+        kind: "area",
+        uuid: "a",
+        title: "Hobbies",
+        shown: 4,
+        total: 8,
+        limit: 4,
+        totalProjects: 2,
+        totalTodos: 6,
+      },
       { kind: "project", uuid: "p1", title: "Proj 1", shown: 2, total: 3, limit: 2 },
     ]);
   });

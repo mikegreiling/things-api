@@ -197,6 +197,7 @@ export function previewSomedaySections(
     const shownOwn = takeUpTo(own, limits.area);
     if (own.length > 0) {
       if (own.length > shownOwn.length) truncated = true;
+      const totalProjects = own.filter((i) => i.type === "project").length;
       blocks.push({
         kind: section.area === null ? "loose" : "area",
         uuid: section.area?.uuid ?? null,
@@ -204,6 +205,8 @@ export function previewSomedaySections(
         shown: shownOwn.length,
         total: own.length,
         limit: limits.area,
+        totalProjects,
+        totalTodos: own.length - totalProjects,
       });
     }
     const items: ListItem[] = [...shownOwn];

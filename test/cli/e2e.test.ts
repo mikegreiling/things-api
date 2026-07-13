@@ -340,6 +340,42 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(titles.indexOf("Dormant Proj")).toBeLessThan(titles.indexOf("someday direct A"));
   });
 
+  it("splits a truncated group's remainder by type (projects vs to-dos)", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Mixed");
+    seedProject(fx.db, { title: "SD Proj 1", area, start: "someday", index: 1 });
+    seedProject(fx.db, { title: "SD Proj 2", area, start: "someday", index: 2 });
+    for (let i = 0; i < 3; i++) {
+      seedTodo(fx.db, { title: `sd todo ${i}`, area, start: "someday", index: 10 + i });
+    }
+    // Cap 1: hidden = 1 project + 3 to-dos (projects list first).
+    const both = runCli(["someday", "--area-limit", "1", "--db", fx.path]).stdout;
+    expect(both).toContain("… 1 more project, 3 more to-dos — `things area show 'Mixed'`");
+    // Cap 2: both projects shown — the project part is omitted.
+    const todosOnly = runCli(["someday", "--area-limit", "2", "--db", fx.path]).stdout;
+    expect(todosOnly).toContain("… 3 more to-dos — `things area show 'Mixed'`");
+    expect(todosOnly).not.toContain("more project");
+    // Cap 4: a single hidden to-do stays singular.
+    const singular = runCli(["someday", "--area-limit", "4", "--db", fx.path]).stdout;
+    expect(singular).toContain("… 1 more to-do — `things area show 'Mixed'`");
+    // JSON meta carries the additive type split on the mixed block.
+    const env = JSON.parse(
+      runCli(["someday", "--area-limit", "1", "--json", "--db", fx.path]).stdout,
+    );
+    expect(env.meta.grouped.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "area",
+          title: "Mixed",
+          shown: 1,
+          total: 5,
+          totalProjects: 2,
+          totalTodos: 3,
+        }),
+      ]),
+    );
+  });
+
   it("hides active-project items by default, with a muted counting hint", () => {
     fx = buildFixtureDb();
     seedSomedayWorld();

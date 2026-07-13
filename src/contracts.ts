@@ -74,6 +74,14 @@ export interface BlockCount {
   total: number;
   /** The cap that applied to THIS block (null = uncapped). */
   limit: number | null;
+  /**
+   * Type split for blocks that mix project rows and to-dos (someday's
+   * loose/area blocks; projects always list first, so the hidden split is
+   * `totalProjects - min(shown, totalProjects)` projects, remainder to-dos).
+   * Absent on single-type blocks.
+   */
+  totalProjects?: number;
+  totalTodos?: number;
 }
 
 /** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Pagination}. */
