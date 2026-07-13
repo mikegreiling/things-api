@@ -231,6 +231,22 @@ export function renderList(items: ListItem[]): string[] {
   return items.length === 0 ? ["(empty)"] : items.map((i) => formatItem(i, w));
 }
 
+/**
+ * Search rows: a standard list row, plus — for a project surfaced by a HEADING
+ * title match — a muted `(via heading "…")` suffix crediting the heading whose
+ * text matched (the parent project row stands in for the heading; the GUI has
+ * no bare heading row). Ordinary title/notes matches render as plain rows.
+ */
+export function renderSearch(items: ListItem[]): string[] {
+  if (items.length === 0) return ["(empty)"];
+  const w = uuidDisplayWidth(items);
+  return items.map((i) => {
+    const via = (i as { matchedVia?: { kind: "heading"; title: string } }).matchedVia;
+    const row = formatItem(i, w);
+    return via === undefined ? row : `${row} ${dim(`(via heading "${via.title}")`)}`;
+  });
+}
+
 /** Hidden-later counts per sidebar group (null area = the loose block). */
 export interface LaterHints {
   /** Sidebar-ordered, INCLUDING groups whose every project is later. */

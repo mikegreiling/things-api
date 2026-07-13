@@ -16,6 +16,7 @@ import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
 import { openInThings } from "./reads.ts";
 import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
 import { formatItem, uuidDisplayWidth } from "../render.ts";
+import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 
@@ -222,7 +223,20 @@ export function registerAreaCommands(program: Command): void {
           opts,
           "area-view",
           (c) => {
-            const view = c.read.areaView(ref);
+            let view: AreaView;
+            try {
+              view = c.read.areaView(ref);
+            } catch (err) {
+              // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
+              if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+                throw new DidYouMeanError(
+                  err.message,
+                  ref,
+                  c.read.liteTitleSearch(ref, { type: "area" }),
+                );
+              }
+              throw err;
+            }
             const { data, grouped } = capAreaSections(view, limits);
             return {
               data,

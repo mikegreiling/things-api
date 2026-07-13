@@ -6,6 +6,14 @@
  * project). Headings resolve to their CONTAINING PROJECT (they have no view
  * of their own); tags and checklist items are rejected (no show view; their
  * uuids simply never match TMTask/TMArea).
+ *
+ * NAME resolution on this loose/sugar path is deliberately narrower than the
+ * typed commands' (docs/design/cli-grammar.md): only AREAS and PROJECTS
+ * resolve by name (to-do TITLES never route here — a to-do is reachable only
+ * by uuid/prefix/share-link, or from the did-you-mean list), and the
+ * uuid-PREFIX tier is dropped (`prefixTier: false`) so the did-you-mean
+ * substring fallback supersedes prefix guessing. Task uuid prefixes still
+ * resolve up front via {@link resolveTaskUuidPrefix}.
  */
 import type { DatabaseSync } from "node:sqlite";
 
@@ -46,12 +54,12 @@ export function classifyShowTarget(db: DatabaseSync, ref: string): ShowTarget {
     if (!(err instanceof RangeError)) throw err;
   }
   try {
-    return { kind: "area", uuid: resolveAreaUuid(db, stripped) };
+    return { kind: "area", uuid: resolveAreaUuid(db, stripped, { prefixTier: false }) };
   } catch {
     // fall through to project-name resolution
   }
   try {
-    return { kind: "project", uuid: resolveProjectUuid(db, stripped) };
+    return { kind: "project", uuid: resolveProjectUuid(db, stripped, { prefixTier: false }) };
   } catch (err) {
     // An ambiguous project name lists its candidates — surface that verbatim.
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;

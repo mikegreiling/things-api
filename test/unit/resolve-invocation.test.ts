@@ -165,6 +165,53 @@ describe("precedence 3 — references", () => {
   });
 });
 
+describe("namespace implied-show — `things <type> <subject>`", () => {
+  it("omits the show verb inside area/project/todo, canonical known at resolve time", () => {
+    const r = resolve(["area", "hobbies"]);
+    expect(r.form).toBe("namespace-show");
+    expect(r.argv).toEqual(["area", "show", "hobbies"]);
+    expect(r.canonical).toBe("things area show hobbies");
+    expect(r.ref).toBe("hobbies");
+
+    expect(resolve(["project", "Firmware"]).argv).toEqual(["project", "show", "Firmware"]);
+    expect(resolve(["todo", "a1b2c3d4"]).argv).toEqual(["todo", "show", "a1b2c3d4"]);
+  });
+
+  it("quotes a multi-word subject in the canonical echo", () => {
+    const r = resolve(["project", "Website redesign"]);
+    expect(r.canonical).toBe('things project show "Website redesign"');
+  });
+
+  it("registered verbs always win over the sugar (reserved-word rule)", () => {
+    for (const argv of [
+      ["area", "show", "Hobbies"],
+      ["area", "add", "New"],
+      ["project", "complete", "x"],
+      ["todo", "update", "x"],
+    ]) {
+      const r = resolve(argv);
+      expect(r.form, argv.join(" ")).toBe("canonical");
+      expect(r.argv).toEqual(argv);
+    }
+  });
+
+  it("does not fire on config (a non-type group whose show takes no ref)", () => {
+    const r = resolve(["config", "foo"]);
+    expect(r.form).toBe("canonical");
+    expect(r.argv).toEqual(["config", "foo"]);
+  });
+
+  it("a bare group name (no subject) or a flag stays canonical for commander", () => {
+    expect(resolve(["area"]).form).toBe("canonical");
+    expect(resolve(["area", "--json"]).form).toBe("canonical");
+  });
+
+  it("trailing flags pass through after the implied subject", () => {
+    const r = resolve(["area", "hobbies", "--show-later", "--json"]);
+    expect(r.argv).toEqual(["area", "show", "hobbies", "--show-later", "--json"]);
+  });
+});
+
 describe("invocation context", () => {
   it("records the current invocation and lets the action fill in canonical", () => {
     resolve(["Hobbies"]);

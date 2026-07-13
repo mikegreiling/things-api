@@ -10,6 +10,7 @@ import {
   changesView,
   inboxView,
   isTodayMember,
+  liteTitleSearch,
   logbookView,
   searchView,
   somedayView,
@@ -498,6 +499,105 @@ describe("searchView (Phase 12 ergonomics)", () => {
     expect(() => searchView(fx.db, "widget", { project: "nope" })).toThrow(/project not found/);
     expect(() => searchView(fx.db, "widget", { area: "nope" })).toThrow(/area not found/);
     expect(() => searchView(fx.db, "widget", { tag: "nope" })).toThrow(/tag not found/);
+  });
+});
+
+describe("searchView heading doctrine + ranking (item 5)", () => {
+  it("a heading-title match surfaces the PARENT PROJECT (matchedVia), never a bare heading", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Arcade Restoration", index: 1 });
+    seedHeading(fx.db, { title: "Fix OutRun Steering Wheel", project: proj });
+    seedTodo(fx.db, { title: "buy paint", project: proj });
+
+    const hits = searchView(fx.db, "OutRun");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.type).toBe("project");
+    expect(hits[0]?.title).toBe("Arcade Restoration");
+    expect(hits[0]?.matchedVia).toEqual({ kind: "heading", title: "Fix OutRun Steering Wheel" });
+  });
+
+  it("a project matched by its own title/notes never carries a redundant matchedVia", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "OutRun cabinet", index: 1 });
+    seedHeading(fx.db, { title: "OutRun wiring", project: proj });
+    const hits = searchView(fx.db, "OutRun");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.matchedVia).toBeUndefined();
+  });
+
+  it("heading matches do not apply to a --type todo search", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Arcade", index: 1 });
+    seedHeading(fx.db, { title: "OutRun bits", project: proj });
+    expect(searchView(fx.db, "OutRun", { type: "to-do" })).toHaveLength(0);
+  });
+
+  it("ranks title > notes; field trumps status (someday title beats active notes)", () => {
+    fx = buildFixtureDb();
+    // active NOTES match, most recently modified
+    seedTodo(fx.db, {
+      title: "alpha active",
+      notes: "mentions zeta",
+      start: "active",
+      modificationDate: 1_790_000_000,
+    });
+    // someday TITLE match, older
+    seedTodo(fx.db, { title: "zeta someday", start: "someday", modificationDate: 1_700_000_000 });
+    const titles = searchView(fx.db, "zeta").map((i) => i.title);
+    expect(titles).toEqual(["zeta someday", "alpha active"]);
+  });
+
+  it("ranks projects above to-dos, then most-recently-modified within a tier", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "kappa todo", modificationDate: 1_790_000_000 });
+    seedProject(fx.db, { title: "kappa proj", modificationDate: 1_700_000_000, index: 1 });
+    const titles = searchView(fx.db, "kappa").map((i) => i.title);
+    expect(titles).toEqual(["kappa proj", "kappa todo"]);
+  });
+});
+
+describe("liteTitleSearch (did-you-mean fallback)", () => {
+  function seedWorld() {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Hobby Corner");
+    seedProject(fx.db, { title: "Hobby Firmware", index: 1 });
+    seedTodo(fx.db, { title: "hobby solder", modificationDate: 1_790_000_000 });
+    seedTodo(fx.db, { title: "hobby archived", status: "completed" });
+    seedTodo(fx.db, { title: "unrelated", notes: "hobby appears only in notes" });
+  }
+
+  it("matches TITLES only (never notes); containers first, then to-dos; open only", () => {
+    seedWorld();
+    const { candidates } = liteTitleSearch(fx.db, "hobby");
+    const labels = candidates.map((c) => (c.kind === "area" ? c.area.title : c.task.title));
+    // Area + project first, then the open to-do; the notes-only + logged rows excluded.
+    expect(labels).toEqual(["Hobby Corner", "Hobby Firmware", "hobby solder"]);
+  });
+
+  it("type scope narrows to one class", () => {
+    seedWorld();
+    expect(liteTitleSearch(fx.db, "hobby", { type: "area" }).candidates.map((c) => c.kind)).toEqual(
+      ["area"],
+    );
+    expect(
+      liteTitleSearch(fx.db, "hobby", { type: "project" }).candidates.map((c) =>
+        c.kind === "task" ? c.task.title : c.kind,
+      ),
+    ).toEqual(["Hobby Firmware"]);
+    expect(liteTitleSearch(fx.db, "hobby", { type: "to-do" }).candidates).toHaveLength(1);
+  });
+
+  it("reports the pre-cap total and caps the returned rows", () => {
+    fx = buildFixtureDb();
+    for (let i = 0; i < 15; i++) seedTodo(fx.db, { title: `match ${i}`, index: i });
+    const { candidates, total } = liteTitleSearch(fx.db, "match", { limit: 10 });
+    expect(candidates).toHaveLength(10);
+    expect(total).toBe(15);
+  });
+
+  it("a miss returns no candidates, total 0", () => {
+    seedWorld();
+    expect(liteTitleSearch(fx.db, "zzz")).toEqual({ candidates: [], total: 0 });
   });
 });
 

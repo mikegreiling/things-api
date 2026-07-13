@@ -18,7 +18,8 @@ import {
   whenValue,
 } from "../glyphs.ts";
 import { openInThings } from "./reads.ts";
-import { withClient } from "../read-driver.ts";
+import { runRead, withClient } from "../read-driver.ts";
+import { DidYouMeanError } from "../did-you-mean.ts";
 
 /**
  * The detail card, project-card grammar: type-labeled title row (the box
@@ -115,10 +116,28 @@ export function registerTodoCommands(program: Command): void {
     .description(
       "Full detail for one record by UUID — includes checklist items, inherited tags, and repeating flags; finds records list views hide (templates, trashed)",
     )
+    .option("--all", "show the full record (single-record card — no default restriction to lift)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((uuid: string, opts: { json?: boolean; db?: string }) => {
-      withClient(opts, "todo-detail", (c) => c.read.byUuid(uuid), renderDetail);
+    .action((uuid: string, opts: { json?: boolean; db?: string; all?: boolean }) => {
+      runRead(
+        opts,
+        "todo-detail",
+        (c) => {
+          const detail = c.read.byUuid(uuid);
+          // A miss gets a type-scoped did-you-mean (to-dos only), not a bare
+          // "(not found)". Ambiguous prefixes still throw from byUuid verbatim.
+          if (detail === null) {
+            throw new DidYouMeanError(
+              `no to-do matches "${uuid}"`,
+              uuid,
+              c.read.liteTitleSearch(uuid, { type: "to-do" }),
+            );
+          }
+          return { data: detail };
+        },
+        renderDetail,
+      );
     });
   todo
     .command("open <ref>")

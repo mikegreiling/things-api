@@ -137,6 +137,13 @@ export interface ErrorEnvelope {
     /** Actionable next step for the caller, when one exists. */
     remediation?: string;
     detail?: unknown;
+    /**
+     * Structured, machine-readable failure context (ADDITIVE). For an
+     * unresolved show/bare-noun subject it carries `candidates` — the
+     * did-you-mean title matches (standard item shapes, capped) so an agent
+     * can self-correct without a second round-trip.
+     */
+    details?: { candidates?: unknown[] };
   };
   meta: EnvelopeMeta;
 }

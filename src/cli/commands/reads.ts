@@ -20,6 +20,7 @@ import {
   renderList,
   renderLogbook,
   renderProjectsSidebar,
+  renderSearch,
   renderSections,
   renderSomedayPreview,
   renderUpcoming,
@@ -579,9 +580,14 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--show-later", "include someday/future-scheduled projects after each active block")
+    .option("--all", "include someday/future-scheduled projects (same as --show-later)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { area?: string; showLater?: boolean }) => {
+    .action((opts: GlobalReadOpts & { area?: string; showLater?: boolean; all?: boolean }) => {
+      // --all lifts the sole default restriction here — the hidden later block
+      // — so it is exactly --show-later (the charter: --all removes every
+      // default restriction on the view's own content).
+      const showLater = opts.showLater === true || opts.all === true;
       let hints: LaterHints | undefined;
       withClient(
         opts,
@@ -590,13 +596,13 @@ export function registerReadCommands(program: Command): void {
           const scope = opts.area !== undefined ? { areaUuid: opts.area } : {};
           const visible = c.read.projects({
             ...scope,
-            ...(opts.showLater === true && { later: true }),
+            ...(showLater && { later: true }),
           });
           if (opts.area === undefined) {
             // Sidebar scaffold: every VISIBLE area renders (project-less
             // ones say so), in sidebar order; the loose block leads. One
             // extra projects query buys the hidden-later counts.
-            const full = opts.showLater === true ? visible : c.read.projects({ later: true });
+            const full = showLater ? visible : c.read.projects({ later: true });
             const shown = new Set(visible.map((i) => i.uuid));
             const groups: LaterHints["groups"] = [
               { area: null, hidden: 0 },
@@ -614,7 +620,7 @@ export function registerReadCommands(program: Command): void {
               if (g !== undefined) g.hidden += 1;
             }
             hints = { groups };
-          } else if (opts.showLater !== true) {
+          } else if (!showLater) {
             // --area scoped: only the bottom hint needs a count.
             const full = c.read.projects({ ...scope, later: true });
             hints = { groups: [{ area: null, hidden: full.length - visible.length }] };
@@ -642,6 +648,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("areas")
     .description("All areas with their direct tags")
+    .option("--all", "show every area (no default restriction applies)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts) => {
@@ -662,6 +669,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("tags")
     .description("Tag taxonomy (parent → child hierarchy flattened with refs)")
+    .option("--all", "show every tag (no default restriction applies)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts) => {
@@ -717,9 +725,12 @@ export function registerReadCommands(program: Command): void {
   program
     .command("search <query>")
     .description(
-      "Title/notes substring search, most recently modified first. Default scope: OPEN + " +
-        "untrashed items only — widen with --logged / --trashed / --all. Scope with " +
-        "--project / --area / --tag (tag matches include hierarchy descendants) / --type.",
+      "Title/notes substring search, ranked: title matches first, then notes, then a " +
+        "project surfaced by a matching heading title (shown as its parent project, " +
+        "`via heading`); projects rank above to-dos, active above someday, ties broken by " +
+        "most-recently-modified. Default scope: OPEN + untrashed items only — widen with " +
+        "--logged / --trashed / --all. Scope with --project / --area / --tag (tag matches " +
+        "include hierarchy descendants) / --type.",
     )
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
@@ -776,7 +787,7 @@ export function registerReadCommands(program: Command): void {
             }),
             lim.limit,
           ),
-        renderList,
+        renderSearch,
         base,
       );
     });

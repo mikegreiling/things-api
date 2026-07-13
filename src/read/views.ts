@@ -75,6 +75,9 @@ import {
   PROJECT_ANYTIME_ACTIVE,
 } from "./predicates.ts";
 import { groupBySidebar } from "./sidebar-order.ts";
+import type { Area } from "../model/entities.ts";
+import { areasView } from "./tags.ts";
+import { compareSearchMatches, type MatchField, type SearchMatch } from "./search-rank.ts";
 
 export type ListItem = Todo | Project;
 
@@ -600,48 +603,171 @@ export function changesView(
   }));
 }
 
-export function searchView(db: DatabaseSync, query: string, options?: SearchOptions): ListItem[] {
+/** One did-you-mean candidate: an area, or a task (project / to-do). */
+export type LiteCandidate = { kind: "area"; area: Area } | { kind: "task"; task: ListItem };
+
+export interface LiteSearchResult {
+  /** Ordered (containers first, then to-dos; within a group: active before someday, then most-recently-modified) and capped. */
+  candidates: LiteCandidate[];
+  /** Total matches before the cap. */
+  total: number;
+}
+
+/**
+ * The did-you-mean fallback search: a case-insensitive SUBSTRING match on
+ * TITLES ONLY (never notes, headings, or checklist items), across areas,
+ * projects, and to-dos — open + untrashed only. Ordered per the house
+ * doctrine: containers (areas, then projects) first, then to-dos; within a
+ * group active rows precede someday rows, then most-recently-modified. `type`
+ * scopes to a single class (the typed-namespace paths). Results are capped
+ * (default 10); `total` reports the pre-cap match count so the caller can
+ * append a "… n more" tail.
+ */
+const somedayRank = (i: ListItem): number => (i.start === "someday" ? 1 : 0);
+
+/** Lite-search order within a task group: active before someday, then most-recently-modified. */
+function byStatusThenRecent(a: ListItem, b: ListItem): number {
+  return somedayRank(a) - somedayRank(b) || b.modified.getTime() - a.modified.getTime();
+}
+
+export function liteTitleSearch(
+  db: DatabaseSync,
+  query: string,
+  options?: { type?: "to-do" | "project" | "area"; limit?: number },
+): LiteSearchResult {
+  const cap = options?.limit ?? 10;
+  const type = options?.type;
+  const needle = query.toLowerCase();
+
+  const areas =
+    type === undefined || type === "area"
+      ? areasView(db)
+          .filter((a) => a.title.toLowerCase().includes(needle))
+          .toSorted((a, b) => a.title.localeCompare(b.title))
+      : [];
+
+  let tasks: ListItem[] = [];
+  if (type === undefined || type === "to-do" || type === "project") {
+    const typeSql =
+      type === "to-do" ? "t.type = 0" : type === "project" ? "t.type = 1" : "t.type IN (0, 1)";
+    const rows = fetchTaskRows(
+      db,
+      `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?`,
+      [`%${query}%`],
+    );
+    tasks = materialize(db, rows);
+  }
+
+  const projects = tasks.filter((t) => t.type === "project").toSorted(byStatusThenRecent);
+  const todos = tasks.filter((t) => t.type === "to-do").toSorted(byStatusThenRecent);
+
+  const ordered: LiteCandidate[] = [
+    ...areas.map((area): LiteCandidate => ({ kind: "area", area })),
+    ...projects.map((task): LiteCandidate => ({ kind: "task", task })),
+    ...todos.map((task): LiteCandidate => ({ kind: "task", task })),
+  ];
+  return { candidates: ordered.slice(0, cap), total: ordered.length };
+}
+
+/** A search result annotated with WHY it surfaced (additive; `matchedVia` present only for heading-credited projects). */
+export type SearchResultItem = ListItem & { matchedVia?: { kind: "heading"; title: string } };
+
+export function searchView(
+  db: DatabaseSync,
+  query: string,
+  options?: SearchOptions,
+): SearchResultItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 50);
   const needle = `%${query}%`;
-  const where: string[] = [`${NOT_TEMPLATE} AND (t.title LIKE ? OR t.notes LIKE ?)`];
-  const binds: unknown[] = [needle, needle];
 
-  where.push(
+  // The scope predicates (everything except the match needle), reused verbatim
+  // for the needle query AND the heading-credited-project query so both honor
+  // the same type/status/scope constraints.
+  const scope: string[] = [NOT_TEMPLATE];
+  const scopeBinds: unknown[] = [];
+  scope.push(
     options?.type === "to-do"
       ? "t.type = 0"
       : options?.type === "project"
         ? "t.type = 1"
         : "t.type IN (0, 1)",
   );
-
   // Scope: open + untrashed by default; --logged/--trashed widen; --all is
   // the legacy include-everything behavior. Untrashed means the whole
   // container chain (derived trash, A24B), not just the row's own flag.
   if (options?.all !== true) {
     const statuses = options?.logged === true ? "(0, 2, 3)" : "(0)";
-    where.push(`t.status IN ${statuses}`);
-    if (options?.trashed !== true) where.push(`t.trashed = 0 AND ${CONTAINER_UNTRASHED}`);
+    scope.push(`t.status IN ${statuses}`);
+    if (options?.trashed !== true) scope.push(`t.trashed = 0 AND ${CONTAINER_UNTRASHED}`);
   }
-
   if (options?.project !== undefined) {
     const uuid = resolveProjectUuid(db, options.project);
     // Children incl. headed ones (heading rows carry the project link).
-    where.push(
+    scope.push(
       "(t.project = ? OR t.heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?))",
     );
-    binds.push(uuid, uuid);
+    scopeBinds.push(uuid, uuid);
   }
   if (options?.area !== undefined) {
     const uuid = resolveAreaUuid(db, options.area);
-    where.push("t.area = ?");
-    binds.push(uuid);
+    scope.push("t.area = ?");
+    scopeBinds.push(uuid);
   }
   const tf = tagFilter(db, options);
+
+  // Needle matches: title OR notes. No SQL LIMIT — ranking runs before the cap.
   const rows = fetchTaskRows(
     db,
-    `${where.join(" AND ")}${tf.sql}
-     ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
-    [...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
+    `${scope.join(" AND ")} AND (t.title LIKE ? OR t.notes LIKE ?)${tf.sql}`,
+    [...scopeBinds, needle, needle, ...tf.binds],
   );
-  return materialize(db, rows);
+  const needleLower = query.toLowerCase();
+  const matches = new Map<string, SearchMatch>();
+  for (const item of materialize(db, rows)) {
+    // Field credit: title beats notes when both carry the substring.
+    const field: MatchField = item.title.toLowerCase().includes(needleLower) ? "title" : "notes";
+    matches.set(item.uuid, { item, field });
+  }
+
+  // Heading titles are treated as if they lived in the parent PROJECT's notes:
+  // a heading-title match surfaces the parent project (never a bare heading
+  // row), credited at the heading-via-project field rank. A to-do-only search
+  // has no project rows, so headings do not apply there.
+  if (options?.type !== "to-do") {
+    const headingRows = db
+      .prepare(
+        `SELECT project AS projectUuid, title FROM TMTask
+         WHERE type = 2 AND project IS NOT NULL AND trashed = 0 AND title LIKE ?`,
+      )
+      .all(needle) as unknown as Array<{ projectUuid: string; title: string | null }>;
+    const headingTitleFor = new Map<string, string>();
+    for (const h of headingRows) {
+      if (!headingTitleFor.has(h.projectUuid)) headingTitleFor.set(h.projectUuid, h.title ?? "");
+    }
+    // Surface only the projects NOT already matched by their own title/notes
+    // (a higher-ranked field already represents them), and only those passing
+    // the view's scope.
+    const wanted = [...headingTitleFor.keys()].filter((uuid) => !matches.has(uuid));
+    if (wanted.length > 0) {
+      const placeholders = wanted.map(() => "?").join(", ");
+      const projectRows = fetchTaskRows(
+        db,
+        `${scope.join(" AND ")} AND t.type = 1 AND t.uuid IN (${placeholders})${tf.sql}`,
+        [...scopeBinds, ...wanted, ...tf.binds],
+      );
+      for (const item of materialize(db, projectRows)) {
+        const matchedVia = {
+          kind: "heading" as const,
+          title: headingTitleFor.get(item.uuid) ?? "",
+        };
+        // Annotate the freshly materialized entity in place (owned here).
+        (item as SearchResultItem).matchedVia = matchedVia;
+        matches.set(item.uuid, { item, field: "heading", matchedVia });
+      }
+    }
+  }
+
+  const ranked = [...matches.values()].toSorted(compareSearchMatches);
+  const sliced = cap === null ? ranked : ranked.slice(0, cap);
+  return sliced.map((m) => m.item as SearchResultItem);
 }
