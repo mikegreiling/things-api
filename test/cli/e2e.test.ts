@@ -83,6 +83,46 @@ describe("cli end-to-end (fixture db)", () => {
   });
 });
 
+describe("view header preambles (TTY-only)", () => {
+  // Simulate (or clear) a terminal in-process; runRead gates the header on the
+  // live process.stdout.isTTY. Colors stay off (style.ts caches non-TTY at
+  // module load), so the header renders as plain, assertable text.
+  const withTty = <T>(value: boolean | undefined, fn: () => T): T => {
+    const original = process.stdout.isTTY;
+    (process.stdout as { isTTY: boolean | undefined }).isTTY = value;
+    try {
+      return fn();
+    } finally {
+      (process.stdout as { isTTY: boolean | undefined }).isTTY = original;
+    }
+  };
+
+  it("prepends the bold title + dim deep link on a TTY", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "capture me", start: "inbox" });
+    const { stdout } = withTty(true, () => runCli(["inbox", "--db", fx!.path]));
+    expect(stdout.startsWith("Inbox (things:///show?id=inbox)\n\n")).toBe(true);
+    expect(stdout).toContain("capture me");
+  });
+
+  it("suppresses the header off a TTY so piped output stays clean", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "capture me", start: "inbox" });
+    const { stdout } = withTty(undefined, () => runCli(["inbox", "--db", fx!.path]));
+    expect(stdout).not.toContain("things:///show?id=inbox");
+    expect(stdout).toContain("capture me");
+  });
+
+  it("never adds the header to --json, even on a TTY", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "capture me", start: "inbox" });
+    const { stdout } = withTty(true, () => runCli(["inbox", "--json", "--db", fx!.path]));
+    const envelope = JSON.parse(stdout);
+    expect(envelope.kind).toBe("inbox");
+    expect(stdout).not.toContain("things:///show?id=inbox");
+  });
+});
+
 describe("cli search (Phase 12 ergonomics)", () => {
   it("defaults to open+untrashed; --all restores the legacy scope", () => {
     fx = buildFixtureDb();

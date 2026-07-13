@@ -6,6 +6,7 @@ A typed TypeScript library + CLI (`things`) for programmatic interaction with [T
 
 ```sh
 things today --json                # read: your Today list, Evening split, UI order
+things legend                      # the symbols & colors the list views use
 things upcoming --horizon 5       # date plan incl. projected repeat occurrences
 things todo add "Buy milk" --when today --tags errands --dry-run   # plan without executing
 things undo --dry-run              # inverse plan for the last mutation (audit replay)
