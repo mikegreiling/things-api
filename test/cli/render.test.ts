@@ -656,6 +656,25 @@ describe("upcoming", () => {
     expect(titles).toContain("Resting"); // dateless — a since bound cannot apply
   });
 
+  it("forecasts a future-deadline row under its DEADLINE header with a bare flag, no date pill (UPC1)", () => {
+    fixture = buildFixtureDb();
+    // NOW = Sun Jul 5: a deadline 08-28 lands in the "August" month bucket.
+    seedTodo(fixture.db, { title: "Forecast", start: "someday", deadline: "2026-08-28" });
+    const items = upcomingView(fixture.db, NOW);
+    // JSON honesty: no faked when-date on the forecast row.
+    const forecast = items.find((i) => i.title === "Forecast");
+    expect(forecast?.startDate).toBeNull();
+    expect(forecast?.deadline).toBe("2026-08-28");
+
+    const lines = renderUpcoming(items, NOW);
+    expect(lines).toContain("── August ──");
+    const row = lines.find((l) => l.includes("Forecast"));
+    // The header carries the date — no ‹when› pill on the forecast row — but
+    // the ⚑ deadline flag still renders (the GUI's bare-flag anatomy).
+    expect(row).not.toContain("‹");
+    expect(row).toContain("⚑");
+  });
+
   it("orders within a day by todayIndex (the UI's drag order), not index", () => {
     fixture = buildFixtureDb();
     seedTodo(fixture.db, {
