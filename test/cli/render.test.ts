@@ -811,6 +811,27 @@ describe("renderToday (things today split)", () => {
     expect(lines).toContain("(empty)");
     expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
   });
+
+  it("--evening renders ONLY the This Evening block — no Today header, no `(empty)`", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 2);
+    const lines = renderToday(full, full, base, { eveningOnly: true });
+    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(false);
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
+    expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(2);
+    // The filtered-out Today section never leaves an `(empty)` placeholder.
+    expect(lines).not.toContain("(empty)");
+    expect(lines.some((l) => /day \d/.test(l))).toBe(false);
+  });
+
+  it("--evening with no evening members shows an honest `(empty)`, still no Today header", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 0);
+    const lines = renderToday(full, full, base, { eveningOnly: true });
+    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(false);
+    expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
+    expect(lines).toContain("(empty)");
+  });
 });
 
 describe("renderLegend (things legend)", () => {

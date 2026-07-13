@@ -252,13 +252,25 @@ export function renderList(items: ListItem[]): string[] {
  * that reveals them — never the misleading `(empty)` a truncated evening used
  * to show. `base` is the user's own invocation (flags echoed). The global
  * footer (row driver) still reports the whole-view remainder separately.
+ *
+ * `options.eveningOnly` (the `--evening` section filter) renders ONLY the This
+ * Evening block — the Today header and its `(empty)` placeholder are suppressed
+ * because that section is deliberately filtered out, not merely empty.
  */
-export function renderToday(full: TodayView, shown: TodayView, base: string): string[] {
+export function renderToday(
+  full: TodayView,
+  shown: TodayView,
+  base: string,
+  options?: { eveningOnly?: boolean },
+): string[] {
   const w = uuidDisplayWidth([...shown.today, ...shown.evening]);
-  const lines: string[] = [
-    `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${full.badge.dueOrOverdue} due/overdue · ${full.badge.other} other) ──`)}`,
-    ...(shown.today.length === 0 ? ["(empty)"] : shown.today.map((i) => formatItem(i, w))),
-  ];
+  const eveningOnly = options?.eveningOnly === true;
+  const lines: string[] = eveningOnly
+    ? []
+    : [
+        `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${full.badge.dueOrOverdue} due/overdue · ${full.badge.other} other) ──`)}`,
+        ...(shown.today.length === 0 ? ["(empty)"] : shown.today.map((i) => formatItem(i, w))),
+      ];
   if (full.evening.length > 0) {
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
     for (const i of shown.evening) lines.push(formatItem(i, w));
@@ -272,6 +284,10 @@ export function renderToday(full: TodayView, shown: TodayView, base: string): st
         ),
       );
     }
+  } else if (eveningOnly) {
+    // Evening filter with no evening members: the section is genuinely empty
+    // (nothing was filtered out here), so an honest `(empty)` is correct.
+    lines.push("(empty)");
   }
   return lines;
 }

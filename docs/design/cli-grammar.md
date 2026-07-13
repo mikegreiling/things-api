@@ -63,8 +63,9 @@ The two verbs accept different keyword sets, on purpose: `show` renders our own 
 |---|---|
 | `inbox` `today` `anytime` `upcoming` `someday` `logbook` `trash` | the seven singular view ids (the app's `show?id=` vocabulary) |
 | `projects` `areas` `tags` | the plural collection commands |
+| `evening` | a **section sugar** — expands to `things today --evening` (the This Evening slice of Today) |
 
-Ten keywords, all of them real commands. `things show projects` → `things projects`.
+Eleven keywords. Ten are real commands (`things show projects` → `things projects`); `evening` is the lone **section sugar** — it is not its own command but expands to a command plus a flag (`things today --evening`). The section sugars are the one case where a keyword that is NOT a registered command still routes at the **bare** level too, so `things evening` and `things show evening` both run `things today --evening`.
 
 ### `open` keywords → launch `things:///show?id=<kw>` directly
 
@@ -76,6 +77,12 @@ The plurals are deliberately **not** openable — the app has no such list scree
 
 ```
 the app has no projects list to open — open a specific project: `things open <ref>`
+```
+
+`evening` is not openable either — it is not a valid `things:///show?id=` id (the app has no This Evening screen). `things open evening` errors with copy pointing at the CLI section filter:
+
+```
+the app has no This Evening screen to open — use `things today --evening`
 ```
 
 A non-keyword `open` reference (`things open Hobbies`, `things open <uuid>`) resolves like `show` and foregrounds that resource in the GUI.
@@ -93,6 +100,7 @@ The subject is rendered with the same shell-safe quoting as the truncation foote
 - **bare noun** — `things Hobbies` → `≡ things area show Hobbies`
 - **namespace implied-show** — `things area Hobbies` → `≡ things area show Hobbies`
 - **keyword-in-show** — `things show anytime` → `≡ things anytime`
+- **section sugar** — `things evening` / `things show evening` → `≡ things today --evening`
 - **uuid routing** — `things <uuid>` / `things show <uuid>` → `≡ things todo show <uuid>`
 - **share-link** — `things things:///show?id=<uuid>` → `≡ things todo show <uuid>`
 

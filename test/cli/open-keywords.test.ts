@@ -67,6 +67,16 @@ describe("things open — view keywords", () => {
     expect(JSON.parse(byUuid.stdout).data.uri).toBe(`things:///show?id=${areaUuid}`);
   });
 
+  it("`open evening` errors (no app screen) and points at `things today --evening`, no launch", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["open", "evening", "--json", "--db", fx.path]);
+    expect(exitCode).not.toBe(0);
+    const msg = JSON.parse(stdout).error.message as string;
+    expect(msg).toContain("This Evening");
+    expect(msg).toContain("things today --evening");
+    expect(vi.mocked(execFileSync)).not.toHaveBeenCalled();
+  });
+
   it("non-keyword refs resolve as before; unknown refs error loudly with no launch", () => {
     fx = buildFixtureDb();
     const todo = seedTodo(fx.db, { title: "openable", index: 1 });

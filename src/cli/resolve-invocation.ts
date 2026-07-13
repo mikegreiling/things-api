@@ -27,9 +27,12 @@ import { shellQuote } from "./shell-quote.ts";
 export const IMPLIED_SHOW_NAMESPACES = new Set(["area", "project", "todo"]);
 
 /**
- * `show`'s keyword vocabulary: EVERY list-view command name. `things show <kw>`
- * dispatches to the identical `things <kw>` command. Wider than the app's URL
- * ids because `show` renders our own views — the plurals are real commands too.
+ * `show`'s keyword vocabulary: EVERY list-view command name, PLUS the section
+ * sugars in {@link KEYWORD_EXPANSIONS}. `things show <kw>` (and the bare
+ * `things <kw>`) dispatches to the identical `things <kw>` command — except the
+ * expansion keywords, which route to a command PLUS flags. Wider than the app's
+ * URL ids because `show` renders our own views — the plurals are real commands
+ * too, and `evening` is the This-Evening slice of Today.
  */
 export const SHOW_KEYWORDS = new Set([
   "inbox",
@@ -42,7 +45,33 @@ export const SHOW_KEYWORDS = new Set([
   "projects",
   "areas",
   "tags",
+  "evening",
 ]);
+
+/**
+ * SHOW_KEYWORDS that are NOT a same-named command but a section/filter sugar:
+ * they expand to a real command PLUS flags. `evening` is the This-Evening
+ * section of Today, so `things evening` / `things show evening` both normalize
+ * to `things today --evening`.
+ */
+const KEYWORD_EXPANSIONS: Record<string, string[]> = {
+  evening: ["today", "--evening"],
+};
+
+/**
+ * Build the show-keyword dispatch for a view keyword: a plain keyword becomes
+ * its own command; an expansion keyword becomes its command plus the fixed
+ * flags. `rest` carries the user's trailing tokens through unchanged.
+ */
+function keywordDispatch(kw: string, rest: string[]): ResolvedInvocation {
+  const expansion = KEYWORD_EXPANSIONS[kw] ?? [kw];
+  return {
+    form: "show-keyword",
+    argv: [...expansion, ...rest],
+    canonical: `things ${expansion.join(" ")}`,
+    ref: kw,
+  };
+}
 
 /**
  * `open`'s keyword vocabulary: ONLY the app's verified URL-scheme show ids.
@@ -187,15 +216,10 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
   if (known.has(first)) {
     if (first === "show") {
       const second = args[1];
-      // Precedence 2 (show): a view keyword routes to that view command.
+      // Precedence 2 (show): a view keyword routes to that view command (or,
+      // for a section sugar like `evening`, to its command + flags).
       if (second !== undefined && SHOW_KEYWORDS.has(second.toLowerCase())) {
-        const kw = second.toLowerCase();
-        return {
-          form: "show-keyword",
-          argv: [kw, ...args.slice(2)],
-          canonical: `things ${kw}`,
-          ref: kw,
-        };
+        return keywordDispatch(second.toLowerCase(), args.slice(2));
       }
       return { form: "loose-show", argv: args, canonical: null, ref: second ?? null };
     }
@@ -226,6 +250,14 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
       }
     }
     return { form: "canonical", argv: args, canonical: null, ref: null };
+  }
+
+  // A view-keyword sugar that is NOT itself a registered command (the section
+  // sugars, e.g. `evening`) still normalizes to its canonical command form —
+  // exactly as `things show evening` would. Registered commands never reach
+  // here (they were handled above), so this only fires for the expansions.
+  if (SHOW_KEYWORDS.has(first.toLowerCase()) && !known.has(first.toLowerCase())) {
+    return keywordDispatch(first.toLowerCase(), args.slice(1));
   }
 
   // Precedence 3: not a command — a bare-noun reference, routed through `show`.

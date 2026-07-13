@@ -156,6 +156,30 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view today with evening: true returns only the This Evening section", async () => {
+    seedTodo(fixture.db, { title: "MCP-Day", startDate: "2026-07-05" });
+    seedTodo(fixture.db, { title: "MCP-Night", startDate: "2026-07-05", evening: true });
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({
+      name: "read_view",
+      arguments: { view: "today", evening: true },
+    });
+    const view = textOf(result) as { today: unknown[]; evening: { title: string }[] };
+    expect(view.today).toEqual([]);
+    expect(view.evening.map((i) => i.title)).toEqual(["MCP-Night"]);
+    expect(result.isError ?? false).toBe(false);
+  });
+
+  it("read_view rejects evening on a non-today view", async () => {
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({
+      name: "read_view",
+      arguments: { view: "inbox", evening: true },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatchObject({ code: "usage" });
+  });
+
   it("search respects the open-by-default scope", async () => {
     seedTodo(fixture.db, { title: "findable open" });
     seedTodo(fixture.db, { title: "findable done", status: "completed" });

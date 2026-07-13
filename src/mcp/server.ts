@@ -314,6 +314,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
+        evening: z.boolean().optional().describe("today only: show only the This Evening section"),
         show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
           .optional()
@@ -377,6 +378,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.view !== "someday" && showActiveProjectItems !== undefined) {
           return usage("show_active_project_items applies only to someday");
         }
+        if (args.view !== "today" && args.evening === true) {
+          return usage(`evening applies only to today, not ${args.view}`);
+        }
         if (args.view === "someday" && args.project_limit !== undefined) {
           return usage(
             "project_limit does not apply to someday — pass a number as show_active_project_items " +
@@ -397,7 +401,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         };
         switch (args.view) {
           case "today": {
-            const { data, pagination } = paginateToday(c.read.today(filter), limit);
+            const { data, pagination } = paginateToday(
+              c.read.today({ ...filter, ...(args.evening === true && { eveningOnly: true }) }),
+              limit,
+            );
             return paginatedResult(data, pagination);
           }
           case "inbox": {
