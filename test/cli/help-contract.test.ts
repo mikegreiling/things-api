@@ -158,16 +158,23 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("invisible");
   });
 
-  it("show router: shorthand + keyword routing documented; detail views expose --limit", () => {
+  it("show router: shorthand + keyword routing documented; area sections expose caps", () => {
     const show = helpFor("show");
     expect(show).toContain("The word `show` may be omitted");
     expect(show).toContain("command names always win");
     expect(show).toContain("inbox|today|anytime|upcoming|someday|logbook|trash");
-    for (const path of [["show"], ["project", "show"], ["area", "show"]]) {
+    for (const path of [["show"], ["area", "show"]]) {
       const help = helpFor(...(path as [string]));
-      expect(help, path.join(" ")).toContain("--limit <n>");
+      expect(help, path.join(" ")).toContain("--project-limit <n>");
+      expect(help, path.join(" ")).toContain("--area-limit <n>");
       expect(help, path.join(" ")).toContain("--all");
+      // No strict total cap on detail views — --limit is not offered.
+      expect(help, path.join(" ")).not.toContain("--limit <n>");
     }
+    // project show is UNCAPPED: headings are true containers.
+    const project = helpFor("project", "show");
+    expect(project).not.toContain("--limit <n>");
+    expect(project).not.toContain("--area-limit");
   });
 
   it("flat list views expose --limit/--all; grouped views expose per-block caps", () => {

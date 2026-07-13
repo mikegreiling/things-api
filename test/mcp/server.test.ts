@@ -497,29 +497,44 @@ describe("things MCP server", () => {
     expect(view.project.title).toBe("MCP Proj");
   });
 
-  it("get_project caps item rows at 50 by default; limit/all adjust; conflict is usage", async () => {
-    const proj = seedProject(fixture.db, { title: "Big Proj" });
-    for (let i = 0; i < 60; i++) {
-      seedTodo(fixture.db, { title: `task ${i}`, project: proj, index: i });
+  it("get_area caps project rows and direct to-dos at 30 each; all lifts; conflict is usage", async () => {
+    const area = seedArea(fixture.db, "Busy");
+    for (let i = 0; i < 35; i++) {
+      seedProject(fixture.db, { title: `proj ${i}`, area, index: i });
+    }
+    for (let i = 0; i < 35; i++) {
+      seedTodo(fixture.db, { title: `direct ${i}`, area, index: 100 + i });
     }
     await connect([fakeVector(null).vector]);
-    const capped = await client.callTool({ name: "get_project", arguments: { uuid: proj } });
-    const view = textOf(capped) as { active: unknown[] };
-    expect(view.active).toHaveLength(50);
+    const capped = await client.callTool({ name: "get_area", arguments: { ref: "Busy" } });
+    const view = textOf(capped) as { projects: unknown[]; active: unknown[] };
+    expect(view.projects).toHaveLength(30);
+    expect(view.active).toHaveLength(30);
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as { pagination: { shown: number; total: number; truncated: boolean }; note: string };
-    expect(meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
-    expect(meta.note).toContain("showing 50 of 60");
+    ) as {
+      grouped: { truncated: boolean; blocks: { kind: string; shown: number; total: number }[] };
+    };
+    expect(meta.grouped.truncated).toBe(true);
+    expect(meta.grouped.blocks).toEqual([
+      expect.objectContaining({ kind: "projects", shown: 30, total: 35 }),
+      expect.objectContaining({ kind: "area", shown: 30, total: 35 }),
+    ]);
 
     const all = textOf(
-      await client.callTool({ name: "get_project", arguments: { uuid: proj, all: true } }),
-    ) as { active: unknown[] };
-    expect(all.active).toHaveLength(60);
+      await client.callTool({ name: "get_area", arguments: { ref: "Busy", all: true } }),
+    ) as { projects: unknown[] };
+    expect(all.projects).toHaveLength(35);
+
+    const narrowed = textOf(
+      await client.callTool({ name: "get_area", arguments: { ref: "Busy", project_limit: 2 } }),
+    ) as { projects: unknown[]; active: unknown[] };
+    expect(narrowed.projects).toHaveLength(2);
+    expect(narrowed.active).toHaveLength(30);
 
     const conflict = await client.callTool({
-      name: "get_project",
-      arguments: { uuid: proj, limit: 5, all: true },
+      name: "get_area",
+      arguments: { ref: "Busy", area_limit: 5, all: true },
     });
     expect(conflict.isError).toBe(true);
   });

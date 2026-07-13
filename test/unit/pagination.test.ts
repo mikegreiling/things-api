@@ -7,8 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AREA_PREVIEW_LIMIT,
-  capAreaView,
-  capProjectView,
+  capAreaSections,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
   paginateList,
@@ -19,7 +18,6 @@ import {
   splitSectionBlocks,
 } from "../../src/read/pagination.ts";
 import type { AreaView } from "../../src/read/area-view.ts";
-import type { ProjectView } from "../../src/read/project-view.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
 /** Minimal ListItem stand-ins — pagination only inspects type/uuid/refs. */
@@ -219,61 +217,42 @@ describe("previewSomedaySections", () => {
   });
 });
 
-describe("capProjectView / capAreaView (detail-view row caps)", () => {
+describe("capAreaSections (area show per-section caps)", () => {
   const todos = (n: number, prefix: string) =>
     Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
-
-  const projectView = (): ProjectView =>
+  const view = () =>
     ({
-      project: { uuid: "p", title: "P" },
-      active: todos(4, "a"),
-      headings: [
-        { heading: { uuid: "h1", title: "H1" }, items: todos(3, "m") },
-        { heading: { uuid: "h2", title: "H2" }, items: todos(2, "n") },
-      ],
+      area: { uuid: "a", title: "Busy" },
+      projects: todos(5, "p"),
+      active: todos(7, "t"),
       later: {
         scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
         repeating: [],
-        someday: todos(1, "d"),
+        someday: [],
       },
       logged: todos(3, "l"),
       trashed: [],
-    }) as unknown as ProjectView;
+    }) as unknown as AreaView;
 
-  it("caps across lists in render order and keeps structure", () => {
-    const { data, pagination } = capProjectView(projectView(), 6);
-    // 4 active + 2 of H1's members; everything after is cut.
+  it("caps the project-rows and direct-to-dos sections independently", () => {
+    const { data, grouped } = capAreaSections(view(), { area: 4, project: 2 });
+    expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
-    expect(data.headings[0]?.items).toHaveLength(2);
-    expect(data.headings[1]?.items).toHaveLength(0);
-    // Heading metadata survives even when its items are emptied…
-    expect(data.headings[1]?.heading.uuid).toBe("h2");
-    // …but emptied scheduled date-groups drop.
-    expect(data.later.scheduled).toHaveLength(0);
-    expect(data.logged).toHaveLength(0);
-    expect(pagination).toEqual({ shown: 6, total: 15, limit: 6, truncated: true });
+    // Later/logged sections are containers of their own — never capped here.
+    expect(data.later.scheduled[0]?.items).toHaveLength(2);
+    expect(data.logged).toHaveLength(3);
+    expect(grouped.truncated).toBe(true);
+    expect(grouped.blocks).toEqual([
+      { kind: "projects", uuid: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
+      { kind: "area", uuid: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
+    ]);
   });
 
-  it("null cap returns the view untouched with exact totals", () => {
-    const view = projectView();
-    const { data, pagination } = capProjectView(view, null);
-    expect(data).toBe(view);
-    expect(pagination).toEqual({ shown: 15, total: 15, limit: null, truncated: false });
-  });
-
-  it("area cap consumes projects before direct to-dos", () => {
-    const view = {
-      area: { uuid: "a", title: "A" },
-      projects: todos(3, "p"),
-      active: todos(3, "t"),
-      later: { scheduled: [], repeating: [], someday: [] },
-      logged: todos(2, "l"),
-      trashed: [],
-    } as unknown as AreaView;
-    const { data, pagination } = capAreaView(view, 4);
-    expect(data.projects).toHaveLength(3);
-    expect(data.active).toHaveLength(1);
-    expect(data.logged).toHaveLength(0);
-    expect(pagination).toEqual({ shown: 4, total: 8, limit: 4, truncated: true });
+  it("null caps (--all) pass both sections through untouched", () => {
+    const { data, grouped } = capAreaSections(view(), { area: null, project: null });
+    expect(data.projects).toHaveLength(5);
+    expect(data.active).toHaveLength(7);
+    expect(grouped.truncated).toBe(false);
+    expect(grouped.blocks.every((b) => b.shown === b.total && b.limit === null)).toBe(true);
   });
 });

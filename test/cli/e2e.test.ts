@@ -3,14 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildProgram, expandShorthand } from "../../src/cli/main.ts";
 import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import {
-  seedArea,
-  seedHeading,
-  seedProject,
-  seedTag,
-  seedTodo,
-  tagTask,
-} from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
 
 let fx: FixtureDb | null = null;
 afterEach(() => {
@@ -565,111 +558,129 @@ describe("cli bare-noun shorthand + show keywords", () => {
   });
 });
 
-describe("cli detail views — project/area show --limit", () => {
-  function seedBigProject(): string {
-    const proj = seedProject(fx!.db, { title: "Big Proj", index: 1 });
-    for (let i = 0; i < 60; i++) {
-      seedTodo(fx!.db, { title: `task ${String(i).padStart(2, "0")}`, project: proj, index: i });
+describe("cli detail views — area show per-section caps; project show uncapped", () => {
+  function seedBusyArea(): void {
+    const area = seedArea(fx!.db, "Busy");
+    for (let i = 0; i < 35; i++) {
+      seedProject(fx!.db, { title: `proj ${String(i).padStart(2, "0")}`, area, index: i });
     }
-    return proj;
+    for (let i = 0; i < 35; i++) {
+      seedTodo(fx!.db, { title: `direct ${String(i).padStart(2, "0")}`, area, index: 100 + i });
+    }
   }
 
-  it("project show caps item rows at 50 with an exact footer; JSON carries pagination", () => {
+  it("area show caps project rows and direct to-dos at 30 each, with per-section footers", () => {
     fx = buildFixtureDb();
-    seedBigProject();
-    const tty = runCli(["project", "show", "Big Proj", "--db", fx.path]);
-    expect(tty.exitCode).toBe(0);
-    expect(tty.stdout).toContain("task 49");
-    expect(tty.stdout).not.toContain("task 50");
-    expect(tty.stdout).toContain(
-      '── 10 more items — see more: `things project show "Big Proj" --limit 100`',
-    );
-    expect(tty.stdout).toContain('all: `things project show "Big Proj" --all`');
+    seedBusyArea();
+    const { stdout, exitCode } = runCli(["area", "show", "Busy", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("proj 29");
+    expect(stdout).not.toContain("proj 30");
+    expect(stdout).toContain("direct 29");
+    expect(stdout).not.toContain("direct 30");
+    expect(stdout).toContain("… 5 more projects — `things area show Busy --project-limit 60`");
+    expect(stdout).toContain("… 5 more to-dos — `things area show Busy --area-limit 60`");
+    // The card preamble always renders.
+    expect(stdout).toContain("Area: ⬡ Busy");
+  });
+
+  it("the knobs adjust independently; --all lifts both; JSON carries grouped counts", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    const tty = runCli([
+      "area",
+      "show",
+      "Busy",
+      "--project-limit",
+      "2",
+      "--area-limit",
+      "3",
+      "--db",
+      fx.path,
+    ]).stdout;
+    expect(tty).toContain("… 33 more projects — `things area show Busy --project-limit 4`");
+    expect(tty).toContain("… 32 more to-dos — `things area show Busy --area-limit 6`");
 
     const json = JSON.parse(
-      runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
+      runCli([
+        "area",
+        "show",
+        "Busy",
+        "--project-limit",
+        "2",
+        "--area-limit",
+        "3",
+        "--json",
+        "--db",
+        fx.path,
+      ]).stdout,
     );
-    expect(json.meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
-    expect(json.data.active).toHaveLength(50);
+    expect(json.data.projects).toHaveLength(2);
+    expect(json.data.active).toHaveLength(3);
+    expect(json.meta.grouped).toEqual({
+      truncated: true,
+      blocks: [
+        expect.objectContaining({ kind: "projects", title: "Busy", shown: 2, total: 35, limit: 2 }),
+        expect.objectContaining({ kind: "area", title: "Busy", shown: 3, total: 35, limit: 3 }),
+      ],
+    });
 
     const all = JSON.parse(
-      runCli(["project", "show", "Big Proj", "--all", "--json", "--db", fx.path]).stdout,
+      runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
-    expect(all.data.active).toHaveLength(60);
-    expect(all.meta.pagination.truncated).toBe(false);
+    expect(all.data.projects).toHaveLength(35);
+    expect(all.data.active).toHaveLength(35);
+    expect(all.meta.grouped.truncated).toBe(false);
+    expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
 
-  it("keeps skeletons coherent: partial headings keep their row, fully-cut headings drop", () => {
+  it("--limit is a usage error on area show and the loose show; knobs validate", () => {
     fx = buildFixtureDb();
-    const proj = seedProject(fx.db, { title: "Sectioned", index: 1 });
-    for (let i = 0; i < 3; i++) {
-      seedTodo(fx.db, { title: `loose ${i}`, project: proj, index: i });
-    }
-    const h1 = seedHeading(fx.db, { title: "First Phase", project: proj, index: 10 });
-    seedTodo(fx.db, { title: "h1 member A", heading: h1, index: 11 });
-    seedTodo(fx.db, { title: "h1 member B", heading: h1, index: 12 });
-    const h2 = seedHeading(fx.db, { title: "Second Phase", project: proj, index: 20 });
-    seedTodo(fx.db, { title: "h2 member A", heading: h2, index: 21 });
-
-    const { stdout } = runCli(["project", "show", "Sectioned", "--limit", "4", "--db", fx.path]);
-    // 3 loose + 1 of h1's members fit; h1's header stays (partial cut)…
-    expect(stdout).toContain("First Phase");
-    expect(stdout).toContain("h1 member A");
-    expect(stdout).not.toContain("h1 member B");
-    // …h2 is fully past the cut: no empty header.
-    expect(stdout).not.toContain("Second Phase");
-    expect(stdout).toContain("── 2 more items");
-    // The card preamble always renders in full, even under a tiny cap.
-    const tiny = runCli(["project", "show", "Sectioned", "--limit", "1", "--db", fx.path]);
-    expect(tiny.stdout).toContain("Project:");
-    expect(tiny.stdout).toContain("uri:");
-  });
-
-  it("area show caps across projects + to-dos; validation matches the flat views", () => {
-    fx = buildFixtureDb();
-    const area = seedArea(fx.db, "Busy");
-    for (let i = 0; i < 5; i++) {
-      seedProject(fx.db, { title: `proj ${i}`, area, index: i });
-    }
-    for (let i = 0; i < 5; i++) {
-      seedTodo(fx.db, { title: `direct ${i}`, area, index: 10 + i });
-    }
-    const { stdout, exitCode } = runCli(["area", "show", "Busy", "--limit", "6", "--db", fx.path]);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("proj 4");
-    expect(stdout).toContain("direct 0");
-    expect(stdout).not.toContain("direct 1");
-    expect(stdout).toContain("── 4 more items — see more: `things area show Busy --limit 12`");
-
-    const json = JSON.parse(
-      runCli(["area", "show", "Busy", "--limit", "6", "--json", "--db", fx.path]).stdout,
-    );
-    expect(json.meta.pagination).toEqual({ shown: 6, total: 10, limit: 6, truncated: true });
-    expect(json.data.projects).toHaveLength(5);
-    expect(json.data.active).toHaveLength(1);
-
+    seedBusyArea();
     for (const argv of [
-      ["area", "show", "Busy", "--limit", "0"],
-      ["project", "show", "x", "--limit", "5", "--all"],
-      ["show", "Busy", "--limit", "nope"],
+      ["area", "show", "Busy", "--limit", "10"],
+      ["show", "Busy", "--limit", "10"],
+      ["area", "show", "Busy", "--area-limit", "0"],
+      ["area", "show", "Busy", "--project-limit", "nope"],
+      ["area", "show", "Busy", "--area-limit", "5", "--all"],
     ]) {
       expect(runCli([...argv, "--db", fx.path]).exitCode, argv.join(" ")).toBe(2);
     }
   });
 
-  it("the loose show router applies the cap to project/area payloads", () => {
+  it("project show is UNCAPPED (headings are true containers); --limit is unknown there", () => {
     fx = buildFixtureDb();
-    seedBigProject();
-    const json = JSON.parse(runCli(["show", "Big Proj", "--json", "--db", fx.path]).stdout);
-    expect(json.kind).toBe("show");
-    expect(json.data.type).toBe("project");
-    expect(json.data.view.active).toHaveLength(50);
-    expect(json.meta.pagination.total).toBe(60);
-    // …and via the bare shorthand, flags intact.
-    const tty = runCli(["Big Proj", "--limit", "5", "--db", fx.path]);
-    expect(tty.stdout).toContain(
-      '── 55 more items — see more: `things show "Big Proj" --limit 10`',
+    const proj = seedProject(fx.db, { title: "Big Proj", index: 1 });
+    for (let i = 0; i < 60; i++) {
+      seedTodo(fx.db, { title: `task ${String(i).padStart(2, "0")}`, project: proj, index: i });
+    }
+    const tty = runCli(["project", "show", "Big Proj", "--db", fx.path]);
+    expect(tty.exitCode).toBe(0);
+    expect(tty.stdout).toContain("task 59");
+    expect(tty.stdout).not.toContain("more items");
+    const json = JSON.parse(
+      runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
+    expect(json.data.active).toHaveLength(60);
+    expect(json.meta.pagination).toBeUndefined();
+    // No --limit exists on project show at all — commander rejects it as an
+    // unknown option (error + non-zero exit in the real CLI).
+    expect(() =>
+      runCli(["project", "show", "Big Proj", "--limit", "5", "--db", fx!.path]),
+    ).toThrow();
+  });
+
+  it("the loose show router caps area payloads per section, projects not at all", () => {
+    fx = buildFixtureDb();
+    seedBusyArea();
+    const json = JSON.parse(runCli(["show", "Busy", "--json", "--db", fx.path]).stdout);
+    expect(json.kind).toBe("show");
+    expect(json.data.type).toBe("area");
+    expect(json.data.view.projects).toHaveLength(30);
+    expect(json.meta.grouped.truncated).toBe(true);
+    // …and via the bare shorthand, knobs intact (footer echoes `things show …`).
+    const tty = runCli(["Busy", "--area-limit", "3", "--db", fx.path]);
+    expect(tty.stdout).toContain("… 32 more to-dos — `things show Busy --area-limit 6`");
   });
 });
 

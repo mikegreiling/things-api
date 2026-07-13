@@ -12,7 +12,7 @@ import { registerDoctor } from "./commands/doctor.ts";
 import { registerMcp } from "./commands/mcp.ts";
 import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
-import { registerReadCommands } from "./commands/reads.ts";
+import { registerReadCommands, VIEW_KEYWORDS } from "./commands/reads.ts";
 import { registerSetup } from "./commands/setup.ts";
 import { registerShowCommands } from "./commands/show.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
@@ -61,22 +61,6 @@ export function buildProgram(): Command {
   registerMcp(program);
   return program;
 }
-
-/**
- * The view keywords of the app's show?id vocabulary: `things show <keyword>`
- * IS that view (dispatched to the view command so flags and output match
- * exactly), and the keyword beats a same-named project or area — the typed
- * forms (`things area show Anytime`) remain the escape hatch.
- */
-const VIEW_KEYWORDS = new Set([
-  "inbox",
-  "today",
-  "anytime",
-  "upcoming",
-  "someday",
-  "logbook",
-  "trash",
-]);
 
 /**
  * Bare-noun shorthand over user args (argv without the node/script prefix):

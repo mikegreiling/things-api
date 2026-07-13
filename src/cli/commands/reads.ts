@@ -225,7 +225,7 @@ export function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolu
  * `--all`: positive integer required, `--all` conflicts with an explicit
  * value and otherwise lifts the cap (null).
  */
-function parseCap(
+export function parseCap(
   flag: string,
   value: string | undefined,
   defaultLimit: number,
@@ -948,6 +948,21 @@ function renderSomedayPreview(
   }
   return lines;
 }
+
+/**
+ * The view keywords of the app's show?id vocabulary: `things show <keyword>`
+ * IS that view, and `things open <keyword>` launches things:///show?id=<kw>
+ * directly. A keyword beats a same-named project or area on both.
+ */
+export const VIEW_KEYWORDS = new Set([
+  "inbox",
+  "today",
+  "anytime",
+  "upcoming",
+  "someday",
+  "logbook",
+  "trash",
+]);
 
 export function registerReadCommands(program: Command): void {
   program

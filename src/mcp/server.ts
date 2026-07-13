@@ -21,8 +21,7 @@ import {
   AREA_PREVIEW_LIMIT,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
-  capAreaView,
-  capProjectView,
+  capAreaSections,
   paginateList,
   paginateToday,
   previewSections,
@@ -565,22 +564,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_project",
     {
       description:
-        "One project's contents: metadata plus its to-dos grouped under their headings. " +
-        `Item lists are capped at ${DEFAULT_LIST_LIMIT} rows total by default (raise with ` +
-        "limit, or all: true for everything); the second result block reports the counts.",
-      inputSchema: {
-        uuid: z.string().describe("Project uuid or unique name"),
-        ...limitShape,
-      },
+        "One project's full contents: metadata plus its to-dos grouped under their headings.",
+      inputSchema: { uuid: z.string().describe("Project uuid or unique name") },
       annotations: READ_ONLY,
     },
-    async (args) =>
-      guard(() => {
-        const limit = resolveLimit(args);
-        if (limit === "conflict") return usage("pass at most one of limit / all");
-        const { data, pagination } = capProjectView(getClient().read.projectView(args.uuid), limit);
-        return paginatedResult(data, pagination);
-      }),
+    async (args) => guard(() => jsonResult(getClient().read.projectView(args.uuid))),
   );
 
   server.registerTool(
@@ -589,20 +577,37 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "One area's contents: metadata plus its direct to-dos (active first), its " +
         "projects in sidebar order, later (scheduled/repeating/someday), and logged items. " +
-        `Item lists are capped at ${DEFAULT_LIST_LIMIT} rows total by default (raise with ` +
-        "limit, or all: true for everything); the second result block reports the counts.",
+        `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
+        "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
+        "second result block reports the counts.",
       inputSchema: {
         ref: z.string().describe("Area uuid or unique name"),
-        ...limitShape,
+        area_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`maximum direct to-dos to return (default ${AREA_PREVIEW_LIMIT})`),
+        project_limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(`maximum project rows to return (default ${AREA_PREVIEW_LIMIT})`),
+        all: z.boolean().optional().describe("return both sections in full (no caps)"),
       },
       annotations: READ_ONLY,
     },
     async (args) =>
       guard(() => {
-        const limit = resolveLimit(args);
-        if (limit === "conflict") return usage("pass at most one of limit / all");
-        const { data, pagination } = capAreaView(getClient().read.areaView(args.ref), limit);
-        return paginatedResult(data, pagination);
+        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+        const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
+        if (areaLimit === "conflict" || projectLimit === "conflict") {
+          return usage("pass at most one of area_limit/project_limit / all");
+        }
+        const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
+        const { data, grouped } = capAreaSections(getClient().read.areaView(args.ref), limits);
+        return groupedResult(data, grouped);
       }),
   );
 

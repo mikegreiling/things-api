@@ -10,7 +10,6 @@
 import type { BlockCount, GroupedPagination, Pagination } from "../contracts.ts";
 import type { Ref } from "../model/entities.ts";
 import type { AreaView } from "./area-view.ts";
-import type { ProjectView } from "./project-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
 
@@ -230,96 +229,43 @@ export function previewSomedaySections(
   return { data: outSections, grouped: { truncated, blocks } };
 }
 
-/** Budget-slicer over successive lists: takes up to the remaining cap. */
-function makeTaker(limit: number | null): { take: <T>(rows: T[]) => T[]; shown: () => number } {
-  let budget = limit;
-  let count = 0;
-  return {
-    take<T>(rows: T[]): T[] {
-      const out = budget === null ? rows : rows.slice(0, Math.max(0, budget));
-      if (budget !== null) budget -= out.length;
-      count += out.length;
-      return out;
-    },
-    shown: () => count,
-  };
-}
-
 /**
- * Detail-view cap for `project show`-shaped payloads: one TOTAL item-row cap
- * across every list, consumed in render order — active, heading members,
- * later (scheduled/repeating/someday), logged, trashed. Structure survives
- * the cut: heading entries keep their metadata (items sliced, possibly to
- * empty); emptied scheduled date-groups are dropped. The project card itself
- * is content, not a row — never counted.
+ * Sectioned cap for the `area show` detail view: its sections are containers,
+ * so there is no strict total limit — instead `limits.project` bounds the
+ * project-ROWS section and `limits.area` the direct-to-dos section (null =
+ * uncapped). The toggled later/logged lists and the trashed bucket pass
+ * through untouched. Counts ride the same grouped-block shape the sidebar
+ * catalogues emit (kind "projects" = the project-rows section).
  */
-export function capProjectView(
-  view: ProjectView,
-  limit: number | null,
-): { data: ProjectView; pagination: Pagination } {
-  const total =
-    view.active.length +
-    view.headings.reduce((n, g) => n + g.items.length, 0) +
-    view.later.scheduled.reduce((n, g) => n + g.items.length, 0) +
-    view.later.repeating.length +
-    view.later.someday.length +
-    view.logged.length +
-    view.trashed.length;
-  if (limit === null || total <= limit) {
-    return { data: view, pagination: { shown: total, total, limit, truncated: false } };
-  }
-  const { take, shown } = makeTaker(limit);
-  const data: ProjectView = {
-    project: view.project,
-    active: take(view.active),
-    headings: view.headings.map((g) => ({ heading: g.heading, items: take(g.items) })),
-    later: {
-      scheduled: view.later.scheduled
-        .map((g) => ({ date: g.date, items: take(g.items) }))
-        .filter((g) => g.items.length > 0),
-      repeating: take(view.later.repeating),
-      someday: take(view.later.someday),
-    },
-    logged: take(view.logged),
-    trashed: take(view.trashed),
-  };
-  return { data, pagination: { shown: shown(), total, limit, truncated: true } };
-}
-
-/**
- * Detail-view cap for `area show`-shaped payloads: same total item-row cap,
- * consumed in render order — projects, direct to-dos, later, logged, trashed.
- * The area card is content, never counted.
- */
-export function capAreaView(
+export function capAreaSections(
   view: AreaView,
-  limit: number | null,
-): { data: AreaView; pagination: Pagination } {
-  const total =
-    view.projects.length +
-    view.active.length +
-    view.later.scheduled.reduce((n, g) => n + g.items.length, 0) +
-    view.later.repeating.length +
-    view.later.someday.length +
-    view.logged.length +
-    view.trashed.length;
-  if (limit === null || total <= limit) {
-    return { data: view, pagination: { shown: total, total, limit, truncated: false } };
+  limits: GroupedLimits,
+): { data: AreaView; grouped: GroupedPagination } {
+  const blocks: BlockCount[] = [];
+  let truncated = false;
+  const projects = limits.project === null ? view.projects : view.projects.slice(0, limits.project);
+  if (view.projects.length > 0) {
+    if (projects.length < view.projects.length) truncated = true;
+    blocks.push({
+      kind: "projects",
+      uuid: view.area.uuid,
+      title: view.area.title,
+      shown: projects.length,
+      total: view.projects.length,
+      limit: limits.project,
+    });
   }
-  const { take, shown } = makeTaker(limit);
-  const data: AreaView = {
-    area: view.area,
-    projects: take(view.projects),
-    active: take(view.active),
-    later: {
-      scheduled: view.later.scheduled
-        .map((g) => ({ date: g.date, items: take(g.items) }))
-        .filter((g) => g.items.length > 0),
-      repeating: take(view.later.repeating),
-      someday: take(view.later.someday),
-    },
-    logged: take(view.logged),
-    trashed: take(view.trashed),
-  };
-  return { data, pagination: { shown: shown(), total, limit, truncated: true } };
+  const active = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  if (view.active.length > 0) {
+    if (active.length < view.active.length) truncated = true;
+    blocks.push({
+      kind: "area",
+      uuid: view.area.uuid,
+      title: view.area.title,
+      shown: active.length,
+      total: view.active.length,
+      limit: limits.area,
+    });
+  }
+  return { data: { ...view, projects, active }, grouped: { truncated, blocks } };
 }

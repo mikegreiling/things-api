@@ -9,28 +9,33 @@ import type { AreaView } from "../../read/area-view.ts";
 import { localToday } from "../../model/dates.ts";
 import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
-import { capAreaView } from "../../read/pagination.ts";
+import { Option } from "commander";
+
+import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
 import {
   formatItem,
   invocation,
   openInThings,
-  parseLimit,
+  parseCap,
   runRead,
   shellQuote,
-  truncationHint,
   uuidDisplayWidth,
   withClient,
 } from "./reads.ts";
 import { showToggleFlags } from "./project.ts";
-import { ALL_DESC, LIMIT_DESC } from "../../surface-copy.ts";
+import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 
 export interface AreaShowOpts {
   showLater?: boolean;
   /** Commander optional-value flag: true when bare, the raw string when given a count. */
   showLogged?: boolean | string;
-  /** Total item-row cap (null/undefined = uncapped); rows past it are summarized by the footer. */
-  limit?: number | null;
-  /** The user's invocation, echoed by the truncation footer. */
+  /**
+   * Per-section caps: `project` bounds the project-ROWS section, `area` the
+   * direct-to-dos section (null = uncapped). The toggled later/logged
+   * sections keep their own existing bounds.
+   */
+  limits?: GroupedLimits;
+  /** The user's invocation, echoed by the per-section truncation footers. */
   hintBase?: string;
 }
 
@@ -81,23 +86,21 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
     ...logged,
   ];
   const w = uuidDisplayWidth(shown);
-  // Total item-row cap: counts rows in render order (projects, direct to-dos,
-  // Upcoming/Someday when toggled, logged) and truncates mid-section; the
-  // card preamble is content, never counted, and no section header renders
-  // empty past the cut.
-  const cap = opts.limit ?? null;
-  let budget: number | null = cap;
-  const take = <T>(rows: T[]): T[] => {
-    if (budget === null) return rows;
-    const out = rows.slice(0, Math.max(0, budget));
-    budget -= out.length;
-    return out;
-  };
-  const totalRows = shown.length;
-  let shownRows = 0;
-  const count = <T>(rows: T[]): T[] => {
-    shownRows += rows.length;
-    return rows;
+  // Per-section caps (this view's sections are containers, so there is no
+  // strict total limit): the project-ROWS block and the direct-to-dos block
+  // truncate independently, each with its own exact-count footer. The card
+  // preamble and the toggled later/logged sections are never capped here.
+  const limits = opts.limits ?? { area: null, project: null };
+  const shownProjects =
+    limits.project === null ? activeProjects : activeProjects.slice(0, limits.project);
+  const shownActive = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  const sectionMore = (hidden: number, noun: string, flag: string, cap: number | null): void => {
+    if (hidden <= 0 || opts.hintBase === undefined || cap === null) return;
+    lines.push(
+      dim(
+        `  … ${hidden} more ${noun}${hidden === 1 ? "" : "s"} — \`${opts.hintBase} ${flag} ${cap * 2}\``,
+      ),
+    );
   };
   // Rows inside this view never repeat the area's own name.
   const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area.uuid });
@@ -116,21 +119,25 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   const block = (rows: string[]) => {
     if (rows.length > 0) lines.push("", ...rows);
   };
-  block(count(take(activeProjects)).map(fmtProject));
-  block(count(take(view.active)).map(fmt));
+  block(shownProjects.map(fmtProject));
+  sectionMore(
+    activeProjects.length - shownProjects.length,
+    "project",
+    "--project-limit",
+    limits.project,
+  );
+  block(shownActive.map(fmt));
+  sectionMore(view.active.length - shownActive.length, "to-do", "--area-limit", limits.area);
   if (activeProjects.length === 0 && view.active.length === 0) lines.push("", "(no active items)");
   if (opts.showLater === true) {
-    const shownUpcoming = count(take(upcoming));
-    if (shownUpcoming.length > 0) {
-      lines.push("", bold("── Upcoming ──"), ...shownUpcoming.map((u) => fmt(u.item)));
+    if (upcoming.length > 0) {
+      lines.push("", bold("── Upcoming ──"), ...upcoming.map((u) => fmt(u.item)));
     }
-    const shownSomedayProjects = count(take(somedayProjects));
-    const shownSomedayTodos = count(take(view.later.someday));
-    if (shownSomedayProjects.length > 0 || shownSomedayTodos.length > 0) {
-      lines.push("", bold("── Someday ──"), ...shownSomedayProjects.map(fmtProject));
-      if (shownSomedayTodos.length > 0) {
-        if (shownSomedayProjects.length > 0) lines.push("");
-        lines.push(...shownSomedayTodos.map(fmt));
+    if (somedayProjects.length > 0 || view.later.someday.length > 0) {
+      lines.push("", bold("── Someday ──"), ...somedayProjects.map(fmtProject));
+      if (view.later.someday.length > 0) {
+        if (somedayProjects.length > 0) lines.push("");
+        lines.push(...view.later.someday.map(fmt));
       }
     }
   }
@@ -143,31 +150,21 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
         dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
       );
   }
-  const shownLogged = count(take(logged));
-  if (shownLogged.length > 0) {
+  if (logged.length > 0) {
     // Truncation is loud: areas accumulate years of history — the full
     // archive belongs to `things logbook --area`.
     const header =
-      shownLogged.length < view.logged.length
-        ? `── Logged (${shownLogged.length} of ${view.logged.length} — see things logbook --area) ──`
+      logged.length < view.logged.length
+        ? `── Logged (${logged.length} of ${view.logged.length} — see things logbook --area) ──`
         : `── Logged (${view.logged.length}) ──`;
-    lines.push("", bold(header), ...shownLogged.map(fmt));
-  } else if (view.logged.length > 0 && logged.length === 0) {
+    lines.push("", bold(header), ...logged.map(fmt));
+  } else if (view.logged.length > 0) {
     lines.push(
       "",
       dim(`…${view.logged.length} logged (--show-logged; full history: things logbook --area)`),
     );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
-  if (cap !== null && shownRows < totalRows && opts.hintBase !== undefined) {
-    const hint = truncationHint(opts.hintBase, {
-      shown: shownRows,
-      total: totalRows,
-      limit: cap,
-      truncated: true,
-    });
-    if (hint !== null) lines.push("", hint);
-  }
   return lines;
 }
 
@@ -186,28 +183,57 @@ export function registerAreaCommands(program: Command): void {
       "--show-logged [n]",
       "include the n most recently logged items (bare flag = 15; full history via `things logbook --area`)",
     )
-    .option("--limit <n>", LIMIT_DESC)
-    .option("--all", ALL_DESC)
+    .option("--project-limit <n>", `maximum project rows to show (default ${AREA_PREVIEW_LIMIT})`)
+    .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
+    .option("--all", GROUPED_ALL_DESC)
+    .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
       (
         ref: string,
-        opts: AreaShowOpts & { json?: boolean; db?: string; limit?: string; all?: boolean },
+        opts: AreaShowOpts & {
+          json?: boolean;
+          db?: string;
+          limit?: string;
+          areaLimit?: string;
+          projectLimit?: string;
+          all?: boolean;
+        },
       ) => {
-        const lim = parseLimit(opts as { limit?: string; all?: boolean });
-        if (!lim.ok) return;
+        if (opts.limit !== undefined) {
+          process.stderr.write(
+            "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
+          );
+          process.exitCode = 2;
+          return;
+        }
+        const areaCap = parseCap(
+          "--area-limit",
+          opts.areaLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!areaCap.ok) return;
+        const projectCap = parseCap(
+          "--project-limit",
+          opts.projectLimit,
+          AREA_PREVIEW_LIMIT,
+          opts.all === true,
+        );
+        if (!projectCap.ok) return;
+        const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
         const hintBase = invocation("area show", [shellQuote(ref), ...showToggleFlags(opts)]);
         runRead<AreaView>(
           opts,
           "area-view",
           (c) => {
             const view = c.read.areaView(ref);
-            const { data, pagination } = capAreaView(view, lim.limit);
+            const { data, grouped } = capAreaSections(view, limits);
             return {
               data,
-              pagination,
-              lines: renderAreaView(view, { ...opts, limit: lim.limit, hintBase }),
+              grouped,
+              lines: renderAreaView(view, { ...opts, limits, hintBase }),
             };
           },
           () => [],
