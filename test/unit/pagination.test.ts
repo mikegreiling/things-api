@@ -61,9 +61,9 @@ describe("paginateList", () => {
     expect(pagination).toEqual({ shown: 1000, total: 1000, limit: null, truncated: false });
   });
 
-  it("the exposed defaults are 50 flat / 50 per area / 3 per project", () => {
+  it("the exposed defaults are 50 flat / 30 per area / 3 per project", () => {
     expect(DEFAULT_LIST_LIMIT).toBe(50);
-    expect(AREA_PREVIEW_LIMIT).toBe(50);
+    expect(AREA_PREVIEW_LIMIT).toBe(30);
     expect(PROJECT_PREVIEW_LIMIT).toBe(3);
   });
 });

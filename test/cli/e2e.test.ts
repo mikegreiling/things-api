@@ -216,7 +216,7 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     for (let i = 0; i < 5; i++) seedTodo(fx!.db, { title: `loose ${i}`, index: 100 + i });
   }
 
-  it("defaults: 50 per area block, 3 per project block, with per-block grouped meta", () => {
+  it("defaults: 30 per area block, 3 per project block, with per-block grouped meta", () => {
     fx = buildFixtureDb();
     seedCatalogue();
     const { stdout, exitCode } = runCli(["anytime", "--json", "--db", fx.path]);
@@ -231,7 +231,7 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     }>;
     expect(blocks).toEqual(
       expect.arrayContaining([
-        { kind: "loose", uuid: null, title: null, shown: 5, total: 5, limit: 50 },
+        { kind: "loose", uuid: null, title: null, shown: 5, total: 5, limit: 30 },
         expect.objectContaining({
           kind: "project",
           title: "Firmware",

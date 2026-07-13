@@ -39,7 +39,7 @@ export const ALL_DESC = "show every matching item, no limit";
 export const PROJECT_PREVIEW_LIMIT = 3;
 
 /** Default per-area-block cap in the grouped catalogues (anytime/someday). */
-export const AREA_PREVIEW_LIMIT = DEFAULT_LIST_LIMIT;
+export const AREA_PREVIEW_LIMIT = 30;
 
 /** `--area-limit`/`area_limit` description (grouped views). */
 export const AREA_LIMIT_DESC = `items shown per area block — including the leading area-less block — before truncating (default ${AREA_PREVIEW_LIMIT}); every block is always shown`;
