@@ -11,6 +11,7 @@ import {
   clipPlain,
   fitRow,
   getFitWidth,
+  resolveFit,
   resolveWidth,
   setFitWidth,
   stripSgr,
@@ -18,7 +19,12 @@ import {
   visibleWidth,
   type RowSegments,
 } from "../../src/cli/width.ts";
-import { formatItem, MIN_FIT_WIDTH, UUID_DISPLAY_MIN } from "../../src/cli/render.ts";
+import {
+  COMPACT_FIT_FLOOR,
+  formatItem,
+  FULL_FIT_FLOOR,
+  UUID_DISPLAY_MIN,
+} from "../../src/cli/render.ts";
 import {
   countChip,
   dateChip,
@@ -260,57 +266,93 @@ describe("deadline gutter (experimental — right-pinned flag column)", () => {
   });
 });
 
-describe("MIN_FIT_WIDTH — the single derived floor", () => {
-  it("recomputes from the enumerated glyph parts (drift guard)", () => {
-    const today = "2000-01-01";
-    const box = "[ ]";
-    const metaChip = dateChip("2027-09-22", today);
-    const countChipWorst = countChip({
-      untrashedLeafActionsCount: 999,
-      openUntrashedLeafActionsCount: 999,
-    } as Project);
-    const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
-    const deadline = deadlineToken("2000-01-15", today);
-    const expected =
-      UUID_DISPLAY_MIN +
-      2 +
-      visibleWidth(box) +
-      1 +
-      visibleWidth(metaChip) +
-      1 +
-      TITLE_MIN +
-      1 +
-      visibleWidth(tail) +
-      1 +
-      visibleWidth("#…") +
-      1 +
-      visibleWidth(deadline);
-    expect(MIN_FIT_WIDTH).toBe(expected);
+describe("the two derived floors — FULL_FIT_FLOOR / COMPACT_FIT_FLOOR", () => {
+  const today = "2000-01-01";
+  const box = "[ ]";
+  const metaChip = dateChip("2027-09-22", today);
+  const countChipWorst = countChip({
+    untrashedLeafActionsCount: 999,
+    openUntrashedLeafActionsCount: 999,
+  } as Project);
+  const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
+  // Shared furniture: everything but the deadline token (and its leading space).
+  const furniture =
+    UUID_DISPLAY_MIN +
+    2 +
+    visibleWidth(box) +
+    1 +
+    visibleWidth(metaChip) +
+    1 +
+    TITLE_MIN +
+    1 +
+    visibleWidth(tail) +
+    1 +
+    visibleWidth("#…") +
+    1;
+
+  it("FULL_FIT_FLOOR recomputes from the enumerated parts (drift guard)", () => {
+    const fullDeadline = deadlineToken("2000-01-15", today); // ⚑ 14 days left
+    expect(FULL_FIT_FLOOR).toBe(furniture + visibleWidth(fullDeadline));
   });
 
-  it("at width == MIN_FIT_WIDTH a maximal-furniture row's title is exactly TITLE_MIN", () => {
-    const today = "2000-01-01";
+  it("COMPACT_FIT_FLOOR recomputes from the enumerated parts (drift guard)", () => {
+    // Widest token that appears in compact mode: narrow relative OR a kept
+    // year-bearing far date (both 10 cells incl. the ⚑ + space).
+    const compactDeadline = Math.max(
+      visibleWidth(deadlineToken("2000-01-15", today, true)), // ⚑ 14d left
+      visibleWidth(deadlineToken("2001-02-10", today, true)), // ⚑ Feb 2001
+    );
+    expect(COMPACT_FIT_FLOOR).toBe(furniture + compactDeadline);
+  });
+
+  it("the compact floor sits strictly BELOW the full floor (compaction buys width)", () => {
+    expect(COMPACT_FIT_FLOOR).toBeLessThan(FULL_FIT_FLOOR);
+  });
+
+  it("at width == FULL_FIT_FLOOR a maximal-furniture (full-deadline) row's title is exactly TITLE_MIN", () => {
     const left = `${"x".repeat(UUID_DISPLAY_MIN)}  [ ] ${dateChip("2027-09-22", today)}`;
-    const tail = ` ${[
-      countChip({ untrashedLeafActionsCount: 999, openUntrashedLeafActionsCount: 999 } as Project),
-      REMINDER_MARK,
-      NOTES_MARK,
-      CHECKLIST_MARK,
-    ].join(" ")}`;
-    const deadline = ` ${deadlineToken("2000-01-15", today)}`;
-    const s = seg({ rawTitle: "A".repeat(40), tagNames: ["tag"], left, tail, deadline });
-    const out = fitRow(s, MIN_FIT_WIDTH);
-    // The fitted title (raw A's plus the ellipsis) sits at exactly TITLE_MIN.
+    const tailStr = ` ${tail}`;
+    const deadline = ` ${deadlineToken("2000-01-15", today)}`; // full form
+    const s = seg({ rawTitle: "A".repeat(40), tagNames: ["tag"], left, tail: tailStr, deadline });
+    const out = fitRow(s, FULL_FIT_FLOOR);
     const titleMatch = /A+…/.exec(stripSgr(out));
     expect(titleMatch).not.toBeNull();
     expect(visibleWidth(titleMatch?.[0] ?? "")).toBe(TITLE_MIN);
   });
 
-  it("a lighter-furniture row keeps a LONGER title at the same floor width", () => {
+  it("at width == COMPACT_FIT_FLOOR a maximal-furniture (compact-deadline) row's title is exactly TITLE_MIN", () => {
+    const left = `${"x".repeat(UUID_DISPLAY_MIN)}  [ ] ${dateChip("2027-09-22", today)}`;
+    const tailStr = ` ${tail}`;
+    const deadline = ` ${deadlineToken("2000-01-15", today, true)}`; // compact form
+    const s = seg({ rawTitle: "A".repeat(40), tagNames: ["tag"], left, tail: tailStr, deadline });
+    const out = fitRow(s, COMPACT_FIT_FLOOR);
+    const titleMatch = /A+…/.exec(stripSgr(out));
+    expect(titleMatch).not.toBeNull();
+    expect(visibleWidth(titleMatch?.[0] ?? "")).toBe(TITLE_MIN);
+  });
+
+  it("a lighter-furniture row keeps a LONGER title at the compact floor width", () => {
     const s = seg({ rawTitle: "A".repeat(30), tagNames: ["a"], left: "xxxxxxxx  [ ]" });
-    const out = fitRow(s, MIN_FIT_WIDTH);
-    // Little furniture ⇒ the whole 30-col title fits (well above TITLE_MIN).
+    const out = fitRow(s, COMPACT_FIT_FLOOR);
     expect(stripSgr(out)).toContain("A".repeat(30));
+  });
+});
+
+describe("resolveFit — the single full-vs-compact decision point", () => {
+  it("width ≥ full floor → full forms, fit to the raw width", () => {
+    const fit = resolveFit(FULL_FIT_FLOOR + 10, FULL_FIT_FLOOR, COMPACT_FIT_FLOOR);
+    expect(fit).toEqual({ width: FULL_FIT_FLOOR + 10, compact: false });
+  });
+  it("at exactly the full floor the form is still full (≥, not >)", () => {
+    expect(resolveFit(FULL_FIT_FLOOR, FULL_FIT_FLOOR, COMPACT_FIT_FLOOR).compact).toBe(false);
+  });
+  it("compact floor ≤ width < full floor → compact, fit to the raw width", () => {
+    const fit = resolveFit(FULL_FIT_FLOOR - 1, FULL_FIT_FLOOR, COMPACT_FIT_FLOOR);
+    expect(fit).toEqual({ width: FULL_FIT_FLOOR - 1, compact: true });
+  });
+  it("width < compact floor → clamp UP to the compact floor and stay compact", () => {
+    const fit = resolveFit(5, FULL_FIT_FLOOR, COMPACT_FIT_FLOOR);
+    expect(fit).toEqual({ width: COMPACT_FIT_FLOOR, compact: true });
   });
 });
 
@@ -365,15 +407,15 @@ describe("formatItem width plumbing", () => {
     expect(fit.replace(/ +⚑/, " ⚑")).toBe(unfit);
   });
 
-  it("clamps to MIN_FIT_WIDTH — a sub-floor width renders identically to the floor", () => {
+  it("clamps to COMPACT_FIT_FLOOR — a sub-floor width renders identically to the floor", () => {
     const longTodo = { ...todo, title: "B".repeat(80) } as typeof todo;
-    setFitWidth(5); // far below the floor
+    setFitWidth(5); // far below the compact floor
     const subFloor = formatItem(longTodo, 8);
-    setFitWidth(MIN_FIT_WIDTH);
+    setFitWidth(COMPACT_FIT_FLOOR);
     expect(formatItem(longTodo, 8)).toBe(subFloor);
     // …and the floor row truncates (never wraps) rather than printing 80 B's.
     expect(subFloor).toContain("…");
-    expect(visibleWidth(subFloor)).toBeLessThanOrEqual(MIN_FIT_WIDTH);
+    expect(visibleWidth(subFloor)).toBeLessThanOrEqual(COMPACT_FIT_FLOOR);
   });
 
   it("a narrow width truncates the title with a trailing ellipsis", () => {
@@ -382,6 +424,87 @@ describe("formatItem width plumbing", () => {
     const out = formatItem(longTodo, 8);
     expect(out).toContain("…");
     expect(visibleWidth(out)).toBeLessThanOrEqual(100);
+  });
+});
+
+// A to-do carrying a deadline (colors off), for the compact-form view tests.
+const mkDeadlineTodo = (uuid: string, title: string, deadline: string) =>
+  ({
+    type: "to-do",
+    uuid,
+    title,
+    notes: "",
+    status: "open",
+    logged: false,
+    trashed: false,
+    start: "active",
+    startDate: null,
+    todaySection: null,
+    deadline,
+    reminder: null,
+    area: null,
+    tags: [],
+    repeating: { isTemplate: false, isInstance: false, templateUuid: null },
+    created: new Date(0),
+    modified: new Date(0),
+    stopped: null,
+    project: null,
+    heading: null,
+    checklistItemsCount: 0,
+    openChecklistItemsCount: 0,
+  }) as unknown as Parameters<typeof formatItem>[0];
+
+describe("compact deadline forms across a view (formatItem, end-to-end)", () => {
+  const now = new Date("2027-01-01T12:00:00Z");
+  const mk = mkDeadlineTodo;
+
+  // One of each deadline SHAPE: a relative (9 days out), a same-year month-day
+  // absolute (>14 days out), and a year-bearing far date.
+  const rows = [
+    mk("aaaa0001", "Relative row", "2027-01-10"), // 9 days left
+    mk("bbbb0002", "Absolute row", "2027-08-12"), // same-year month-day
+    mk("cccc0003", "Year-bearing row", "2028-03-01"), // far, keeps its year
+  ];
+  const opts = { now };
+  const render = (w: number) => {
+    setFitWidth(w);
+    return rows.map((r) => stripSgr(formatItem(r, 8, opts)));
+  };
+
+  it("at full-floor − 1 EVERY deadline renders COMPACT and uniform (no mixed forms)", () => {
+    const [rel, abs, year] = render(FULL_FIT_FLOOR - 1);
+    expect(rel).toContain("⚑ 9d left");
+    expect(abs).toContain("⚑ 8/12"); // no zero-padding
+    expect(year).toContain("⚑ Mar 2028"); // year-bearing kept full even compact
+    // Uniformity: none of the full relative/absolute spellings leak in.
+    expect(rel).not.toContain("days left");
+    expect(abs).not.toContain("Aug 12");
+    // The gutter pins every deadline flush at the effective width.
+    for (const line of render(FULL_FIT_FLOOR - 1))
+      expect(visibleWidth(line)).toBe(FULL_FIT_FLOOR - 1);
+  });
+
+  it("at the full floor every deadline renders in the FULL form", () => {
+    const [rel, abs, year] = render(FULL_FIT_FLOOR);
+    expect(rel).toContain("⚑ 9 days left");
+    expect(abs).toContain("⚑ Aug 12");
+    expect(year).toContain("⚑ Mar 2028");
+  });
+
+  it("below the compact floor renders identically to the compact floor (clamp + wrap)", () => {
+    setFitWidth(5); // far sub-floor
+    const clamped = rows.map((r) => formatItem(r, 8, opts));
+    setFitWidth(COMPACT_FIT_FLOOR);
+    const atFloor = rows.map((r) => formatItem(r, 8, opts));
+    expect(clamped).toEqual(atFloor);
+    // …and the deadlines are the compact forms at the clamped floor.
+    expect(stripSgr(clamped[1] ?? "")).toContain("⚑ 8/12");
+  });
+
+  it("a wide fit (≥ full floor) is compact-free — full forms, gutter aside", () => {
+    const [rel, abs] = render(FULL_FIT_FLOOR + 40);
+    expect(rel).toContain("⚑ 9 days left");
+    expect(abs).toContain("⚑ Aug 12");
   });
 });
 

@@ -238,8 +238,8 @@ describe("formatItem styling (color on)", () => {
 describe("width fitting + styling interplay (color on)", () => {
   it("truncates inside the SGR run — the clip/ellipsis boundary never splits an escape", async () => {
     const w = await width();
-    w.setFitWidth(40); // clamps up to MIN_FIT_WIDTH; a long project title truncates
-    const { formatItem, MIN_FIT_WIDTH } = await render();
+    w.setFitWidth(40); // clamps up to COMPACT_FIT_FLOOR; a long project title truncates
+    const { formatItem, COMPACT_FIT_FLOOR } = await render();
     const line = formatItem(project({ title: "Z".repeat(120) }), 8);
     w.setFitWidth(null);
     // The bold title wrap survives truncation: the ellipsis sits INSIDE the run
@@ -250,6 +250,6 @@ describe("width fitting + styling interplay (color on)", () => {
     expect(stripSgr(line)).not.toContain(String.fromCharCode(27));
     expect(stripSgr(line)).toContain("…");
     // And the fitted, styled row respects the effective width.
-    expect(visibleWidth(line)).toBeLessThanOrEqual(MIN_FIT_WIDTH);
+    expect(visibleWidth(line)).toBeLessThanOrEqual(COMPACT_FIT_FLOOR);
   });
 });

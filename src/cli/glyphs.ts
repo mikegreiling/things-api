@@ -196,17 +196,39 @@ export function whenValue(
  * past; `⚑ today` on the day), then the date shorthand — `Sep 16` within
  * the current year, `Feb 2027` beyond it. Overdue and due-today render
  * bold red; upcoming renders bold dim (the GUI's gray).
+ *
+ * `compact` selects the narrow forms the Things iOS app uses when the row is
+ * width-pinched (Mike's screenshot oracle, 2026-07-14) — the caller decides
+ * ONCE per view whether the gutter is compact (../cli/width.ts + render.ts's
+ * two floors), never per row, so a view's deadline column never mixes forms:
+ *   - month-day absolutes shorten to `M/D` with NO zero-padding (`Aug 12` →
+ *     `8/12`, `May 4` → `5/4`);
+ *   - day-relatives shorten to `Nd left` / `Nd ago` (`58 days ago` → `58d ago`,
+ *     `1 day left` → `1d left` — iOS shows no pluralization, so `1d`).
+ * Year-bearing FAR dates (`Feb 2027`, `Mar 2025`) keep their full form even in
+ * compact mode: `2/27` would be ambiguous with an M/D date and the iOS oracle
+ * doesn't cover them (docs/design/width-aware-tty.md § Compact deadline forms).
+ * `⚑ today` is already minimal and is unchanged.
  */
-export function deadlineToken(deadlineIso: string, todayIso: string): string {
+export function deadlineToken(deadlineIso: string, todayIso: string, compact = false): string {
   const diff = daysBetween(todayIso, deadlineIso);
   let label: string;
   if (diff === 0) label = "today";
-  else if (diff > 0 && diff <= 14) label = `${diff} day${diff === 1 ? "" : "s"} left`;
-  else if (diff < 0 && diff >= -59) label = `${-diff} day${diff === -1 ? "" : "s"} ago`;
+  else if (diff > 0 && diff <= 14)
+    label = compact ? `${diff}d left` : `${diff} day${diff === 1 ? "" : "s"} left`;
+  else if (diff < 0 && diff >= -59)
+    label = compact ? `${-diff}d ago` : `${-diff} day${diff === -1 ? "" : "s"} ago`;
   else {
     const [y, m, d] = deadlineIso.split("-").map(Number);
     const month = MONTHS[(m ?? 1) - 1];
-    label = String(y) === todayIso.slice(0, 4) ? `${month} ${d}` : `${month} ${y}`;
+    // Same-year month-day compacts to M/D; a year-bearing far date keeps its
+    // `MMM YYYY` form (M/D would be ambiguous — deliberate, per the oracle).
+    label =
+      String(y) === todayIso.slice(0, 4)
+        ? compact
+          ? `${m}/${d}`
+          : `${month} ${d}`
+        : `${month} ${y}`;
   }
   const chip = `⚑ ${label}`;
   return diff <= 0 ? bold(red(chip)) : bold(dim(chip));

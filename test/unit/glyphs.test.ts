@@ -88,6 +88,33 @@ describe("deadlineToken", () => {
     expect(deadlineToken("2027-02-10", TODAY)).toBe("⚑ Feb 2027");
     expect(deadlineToken("2025-03-01", TODAY)).toBe("⚑ Mar 2025");
   });
+
+  describe("compact form (iOS narrow-width oracle, 2026-07-14)", () => {
+    it("shortens same-year month-day absolutes to M/D with NO zero-padding", () => {
+      expect(deadlineToken("2026-09-16", TODAY, true)).toBe("⚑ 9/16");
+      expect(deadlineToken("2026-05-04", TODAY, true)).toBe("⚑ 5/4"); // no zero-pad
+      expect(deadlineToken("2026-08-12", TODAY, true)).toBe("⚑ 8/12");
+      expect(deadlineToken("2026-12-31", TODAY, true)).toBe("⚑ 12/31");
+    });
+
+    it("shortens day-relatives to `Nd left` / `Nd ago` (singular gets no plural)", () => {
+      expect(deadlineToken("2026-07-06", TODAY, true)).toBe("⚑ 1d left"); // iOS: 1d, no plural
+      expect(deadlineToken("2026-07-19", TODAY, true)).toBe("⚑ 14d left");
+      expect(deadlineToken("2026-07-04", TODAY, true)).toBe("⚑ 1d ago");
+      expect(deadlineToken("2026-05-08", TODAY, true)).toBe("⚑ 58d ago");
+      expect(deadlineToken("2026-05-07", TODAY, true)).toBe("⚑ 59d ago"); // -59 cutoff
+    });
+
+    it("keeps year-bearing far dates in the FULL form even when compact (deliberate)", () => {
+      // `2/27` would be ambiguous with an M/D date; the oracle doesn't cover them.
+      expect(deadlineToken("2027-02-10", TODAY, true)).toBe("⚑ Feb 2027");
+      expect(deadlineToken("2025-03-01", TODAY, true)).toBe("⚑ Mar 2025");
+    });
+
+    it("leaves `⚑ today` unchanged (already minimal)", () => {
+      expect(deadlineToken("2026-07-05", TODAY, true)).toBe("⚑ today");
+    });
+  });
 });
 
 describe("shortDate", () => {
