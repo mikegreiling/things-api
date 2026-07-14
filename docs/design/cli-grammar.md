@@ -147,7 +147,7 @@ The optional flags on a read view fall into four classes:
 
 - **Volume caps** — `--limit`, `--area-limit`, `--project-limit`. How many rows/blocks to show.
 - **Range bounds** — `--since`, `--until`. The time window the view covers.
-- **Content scopes** — `--tag`, `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
+- **Content scopes** — `--tag`, `--untagged` (its inversion — the GUI's "No Tag", mutually exclusive with `--tag`/`--exact-tag`), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
 - **Visibility toggles** — `--show-later`, `--logged`, `--trashed`, `--evening`. Whether an otherwise-hidden class is folded in.
 
 `--all` is its own thing: it removes restrictions (see the `--all` doctrine above) and conflicts with an explicit cap/bound exactly as before.

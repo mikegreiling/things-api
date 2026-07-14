@@ -17,7 +17,7 @@ import { createThingsMcpServer } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
 import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -178,6 +178,48 @@ describe("things MCP server", () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toMatchObject({ code: "usage" });
+  });
+
+  it("read_view untagged returns only untagged items; conflicts with tag", async () => {
+    const focus = seedTag(fixture.db, "focus");
+    const tagged = seedTodo(fixture.db, { title: "MCP tagged", startDate: "2026-07-05" });
+    tagTask(fixture.db, tagged, focus);
+    seedTodo(fixture.db, { title: "MCP bare", startDate: "2026-07-05" });
+    await connect([fakeVector(null).vector]);
+    const view = textOf(
+      await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", untagged: true },
+      }),
+    ) as { today: { title: string }[] };
+    expect(view.today.map((i) => i.title)).toEqual(["MCP bare"]);
+    const conflict = await client.callTool({
+      name: "read_view",
+      arguments: { view: "today", untagged: true, tag: "focus" },
+    });
+    expect(conflict.isError).toBe(true);
+    expect(textOf(conflict)).toMatchObject({ code: "usage" });
+  });
+
+  it("search untagged narrows results; conflicts with exact_tag", async () => {
+    const focus = seedTag(fixture.db, "focus");
+    const tagged = seedTodo(fixture.db, { title: "note tagged" });
+    tagTask(fixture.db, tagged, focus);
+    seedTodo(fixture.db, { title: "note bare" });
+    await connect([fakeVector(null).vector]);
+    const hits = textOf(
+      await client.callTool({
+        name: "search",
+        arguments: { query: "note", untagged: true },
+      }),
+    ) as { title: string }[];
+    expect(hits.map((i) => i.title)).toEqual(["note bare"]);
+    const conflict = await client.callTool({
+      name: "search",
+      arguments: { query: "note", untagged: true, exact_tag: true },
+    });
+    expect(conflict.isError).toBe(true);
+    expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
   it("search respects the open-by-default scope", async () => {

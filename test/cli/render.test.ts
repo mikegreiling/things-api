@@ -832,6 +832,23 @@ describe("renderToday (things today split)", () => {
     expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
   });
 
+  it("separates This Evening from Today with a blank line (matches other grouped views)", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 2, 2);
+    const lines = renderToday(full, full, base);
+    const headerIdx = lines.findIndex((l) => l.includes("This Evening"));
+    expect(headerIdx).toBeGreaterThan(0);
+    // The line immediately above the Evening header is blank.
+    expect(lines[headerIdx - 1]).toBe("");
+  });
+
+  it("--evening puts the This Evening header first — no leading blank line", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 2);
+    const lines = renderToday(full, full, base, { eveningOnly: true });
+    expect(lines[0]).toContain("This Evening");
+  });
+
   it("--evening renders ONLY the This Evening block — no Today header, no `(empty)`", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 2);

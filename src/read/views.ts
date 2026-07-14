@@ -80,6 +80,7 @@ import {
   tagScopeBinds,
   tagScopeSql,
   tagWithDescendants,
+  untaggedScopeSql,
 } from "./queries.ts";
 import {
   ANYTIME_SELF,
@@ -110,12 +111,22 @@ export interface ViewFilter {
    * parent tag has its own direct assignments distinct from its children's.
    */
   exactTag?: boolean;
+  /**
+   * Only items with NO tag — neither a direct tag nor one inherited through
+   * the project/area/heading chain (the GUI's "No Tag"). The exact inversion
+   * of `tag`: an item is untagged iff no possible `tag` value could ever
+   * match it, so this negates the WHOLE direct+inherited membership relation,
+   * not merely the row's own direct assignments. Mutually exclusive with
+   * `tag`/`exactTag` (the CLI/MCP surfaces reject the combination).
+   */
+  untagged?: boolean;
 }
 
 function tagFilter(
   db: DatabaseSync,
   filter: ViewFilter | undefined,
 ): { sql: string; binds: string[] } {
+  if (filter?.untagged === true) return { sql: ` AND ${untaggedScopeSql()}`, binds: [] };
   if (filter?.tag === undefined) return { sql: "", binds: [] };
   const target = resolveTagUuid(db, filter.tag);
   const uuids = filter.exactTag === true ? [target] : tagWithDescendants(db, target);

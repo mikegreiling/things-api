@@ -166,7 +166,20 @@ const tagFilterShape = {
     .optional()
     .describe(`Filter by tag (${REF_FORMAT}); includes items carrying any nested child tag`),
   exact_tag: z.boolean().optional().describe("Match only the named tag, not its nested children"),
+  untagged: z
+    .boolean()
+    .optional()
+    .describe("Only items with no tag (direct or inherited); not combinable with tag/exact_tag"),
 };
+
+/** untagged inverts tag, so pairing them is contradictory (surface guard). */
+function untaggedConflict(args: {
+  untagged?: boolean | undefined;
+  tag?: string | undefined;
+  exact_tag?: boolean | undefined;
+}): boolean {
+  return args.untagged === true && (args.tag !== undefined || args.exact_tag === true);
+}
 
 const dryRunShape = {
   dry_run: z.boolean().optional().describe("Preview the planned change without applying anything"),
@@ -362,6 +375,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
+        if (untaggedConflict(args)) return usage("pass untagged, or tag/exact_tag — not both");
         // show_active_project_items is the preferred name; active_project_items
         // stays accepted as a compatibility alias.
         const showActiveProjectItems = args.show_active_project_items ?? args.active_project_items;
@@ -398,6 +412,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const filter = {
           ...(args.tag !== undefined && { tag: args.tag }),
           ...(args.exact_tag === true && { exactTag: true }),
+          ...(args.untagged === true && { untagged: true }),
         };
         switch (args.view) {
           case "today": {
@@ -493,6 +508,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
+        if (untaggedConflict(args)) return usage("pass untagged, or tag/exact_tag — not both");
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
         const { data, pagination } = paginateList(
@@ -500,6 +516,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             limit: null,
             ...(args.tag !== undefined && { tag: args.tag }),
             ...(args.exact_tag === true && { exactTag: true }),
+            ...(args.untagged === true && { untagged: true }),
             ...(args.project !== undefined && { project: args.project }),
             ...(args.area !== undefined && { area: args.area }),
             ...(args.type !== undefined && { type: args.type }),

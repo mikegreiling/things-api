@@ -38,6 +38,29 @@ export function tagScopeBinds(uuids: string[]): string[] {
 }
 
 /**
+ * The negation of tag membership — the SQL behind the `untagged` filter (the
+ * GUI's "No Tag"). It mirrors tagScopeSql's SAME six direct+inherited
+ * relations (heading → project → area, T18/U18/A13) but with the tag-set
+ * restriction dropped: "carries ANY tag by any hop", wrapped in NOT. An item
+ * is untagged iff NO possible `--tag X` could ever match it — so this negates
+ * the whole membership relation, not merely the row's own direct assignments.
+ * Takes no binds. KEEP THE SIX CLAUSES IN LOCKSTEP WITH tagScopeSql.
+ */
+export function untaggedScopeSql(): string {
+  return `NOT (
+  EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid)
+  OR EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project)
+  OR EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area)
+  OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = t.project
+             AND EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = p.area))
+  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTaskTag tt ON tt.tasks = h.project
+             WHERE h.uuid = t.heading)
+  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
+             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading)
+)`;
+}
+
+/**
  * A tag plus every hierarchy descendant. Filtering by a parent tag matches
  * child-tagged items — DOCUMENTED app behavior (the UI's tag filter works
  * this way), not lab-oracled: the UI's filter clicks aren't automatable.

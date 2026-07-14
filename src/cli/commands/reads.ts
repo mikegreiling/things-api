@@ -72,6 +72,23 @@ export function openInThings(uuid: string): string {
   return uri;
 }
 
+/** Help copy for the `--untagged` content scope (the GUI's "No Tag"). */
+const UNTAGGED_DESC = "only items with no tag (direct or inherited)";
+
+/**
+ * Shared usage guard: `--untagged` is a content scope that inverts `--tag`, so
+ * pairing it with `--tag`/`--exact-tag` is contradictory. Emits the usage error
+ * (same style as the view's other conflicts) and returns true when it fires.
+ */
+function untaggedConflict(opts: { untagged?: boolean; tag?: string; exactTag?: boolean }): boolean {
+  if (opts.untagged === true && (opts.tag !== undefined || opts.exactTag === true)) {
+    process.stderr.write("error: --untagged does not combine with --tag/--exact-tag\n");
+    process.exitCode = ExitCode.Usage;
+    return true;
+  }
+  return false;
+}
+
 export function registerReadCommands(program: Command): void {
   program
     .command("legend")
@@ -111,6 +128,7 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--evening", "show only the This Evening section")
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
@@ -121,22 +139,26 @@ export function registerReadCommands(program: Command): void {
         opts: GlobalReadOpts & {
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
           evening?: boolean;
           limit?: string;
           all?: boolean;
         },
       ) => {
+        if (untaggedConflict(opts)) return;
         const lim = parseLimit(opts);
         if (!lim.ok) return;
         const eveningOnly = opts.evening === true;
         const base = invocation("today", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
           eveningOnly && "--evening",
         ]);
         const filter = {
           ...(opts.tag !== undefined && { tag: opts.tag }),
           ...(opts.exactTag === true && { exactTag: true }),
+          ...(opts.untagged === true && { untagged: true }),
           ...(eveningOnly && { eveningOnly: true }),
         };
         runRead(
@@ -171,6 +193,7 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--since <when>", `only captures created on/after this bound: ${PERIOD_SINCE}`)
     .option("--until <when>", `only captures created on/before this bound: ${PERIOD_UNTIL}`)
     .option("--limit <n>", LIMIT_DESC)
@@ -182,12 +205,14 @@ export function registerReadCommands(program: Command): void {
         opts: GlobalReadOpts & {
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
           since?: string;
           until?: string;
           limit?: string;
           all?: boolean;
         },
       ) => {
+        if (untaggedConflict(opts)) return;
         const lim = parseLimit(opts);
         if (!lim.ok) return;
         const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
@@ -212,6 +237,7 @@ export function registerReadCommands(program: Command): void {
         const base = invocation("inbox", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
           opts.since !== undefined && `--since ${shellQuote(opts.since)}`,
           opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
         ]);
@@ -223,6 +249,7 @@ export function registerReadCommands(program: Command): void {
               c.read.inbox({
                 ...(opts.tag !== undefined && { tag: opts.tag }),
                 ...(opts.exactTag === true && { exactTag: true }),
+                ...(opts.untagged === true && { untagged: true }),
                 ...(since !== undefined && { since }),
                 ...(until !== undefined && { until }),
               }),
@@ -275,6 +302,7 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option("--project-limit <n>", PROJECT_LIMIT_DESC)
     .option("--all", GROUPED_ALL_DESC)
@@ -286,12 +314,14 @@ export function registerReadCommands(program: Command): void {
         opts: GlobalReadOpts & {
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
           areaLimit?: string;
           projectLimit?: string;
           all?: boolean;
           limit?: string;
         },
       ) => {
+        if (untaggedConflict(opts)) return;
         if (opts.limit !== undefined) {
           process.stderr.write(
             "error: --limit is not available on anytime — cap blocks with --area-limit / --project-limit, or pass --all\n",
@@ -317,15 +347,18 @@ export function registerReadCommands(program: Command): void {
         const base = invocation("anytime", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
         ]);
         runRead(
           opts,
           "anytime",
           (c) => {
             const full = c.read.anytime(
-              opts.tag === undefined
-                ? undefined
-                : { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) },
+              opts.tag !== undefined
+                ? { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) }
+                : opts.untagged === true
+                  ? { untagged: true }
+                  : undefined,
             );
             const { data, grouped } = previewSections(full, limits);
             return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
@@ -355,6 +388,7 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option(
       "--show-active-project-items [n]",
@@ -370,12 +404,14 @@ export function registerReadCommands(program: Command): void {
         opts: GlobalReadOpts & {
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
           areaLimit?: string;
           showActiveProjectItems?: boolean | string;
           all?: boolean;
           limit?: string;
         },
       ) => {
+        if (untaggedConflict(opts)) return;
         if (opts.limit !== undefined) {
           process.stderr.write(
             "error: --limit is not available on someday — cap groups with --area-limit, or pass --all\n",
@@ -406,10 +442,12 @@ export function registerReadCommands(program: Command): void {
         const filter = {
           ...(opts.tag !== undefined && { tag: opts.tag }),
           ...(opts.exactTag === true && { exactTag: true }),
+          ...(opts.untagged === true && { untagged: true }),
         };
         const base = invocation("someday", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
         ]);
         runRead(
           opts,
@@ -471,6 +509,7 @@ export function registerReadCommands(program: Command): void {
       "filter by tag (uuid or unique name): direct, inherited, or descendant-tagged",
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -483,10 +522,12 @@ export function registerReadCommands(program: Command): void {
           limit?: string;
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
           horizon?: string;
         },
         command: Command,
       ) => {
+        if (untaggedConflict(opts)) return;
         const untilGiven = command.getOptionValueSource("until") !== "default";
         const sinceGiven = opts.since !== undefined;
         const limitGiven = opts.limit !== undefined;
@@ -529,6 +570,7 @@ export function registerReadCommands(program: Command): void {
           sinceGiven && `--since ${shellQuote(opts.since as string)}`,
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
           opts.horizon !== undefined && `--horizon ${shellQuote(opts.horizon)}`,
         ]);
         runRead(
@@ -541,6 +583,7 @@ export function registerReadCommands(program: Command): void {
                 ...(since !== undefined && { since }),
                 ...(opts.tag !== undefined && { tag: opts.tag }),
                 ...(opts.exactTag === true && { exactTag: true }),
+                ...(opts.untagged === true && { untagged: true }),
                 ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
               }),
               effectiveLimit,
@@ -613,6 +656,7 @@ export function registerReadCommands(program: Command): void {
     .option("--until <when>", `only entries logged on/before this bound: ${PERIOD_UNTIL}`)
     .option("--tag <ref>", "filter by tag (uuid or unique name), direct OR inherited")
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -626,8 +670,10 @@ export function registerReadCommands(program: Command): void {
           until?: string;
           tag?: string;
           exactTag?: boolean;
+          untagged?: boolean;
         },
       ) => {
+        if (untaggedConflict(opts)) return;
         const lim = parseLimit(opts);
         if (!lim.ok) return;
         const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
@@ -655,6 +701,7 @@ export function registerReadCommands(program: Command): void {
           opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
+          opts.untagged === true && "--untagged",
         ]);
         runRead(
           opts,
@@ -669,6 +716,7 @@ export function registerReadCommands(program: Command): void {
                 ...(until !== undefined && { until }),
                 ...(opts.tag !== undefined && { tag: opts.tag }),
                 ...(opts.exactTag === true && { exactTag: true }),
+                ...(opts.untagged === true && { untagged: true }),
               }),
               effectiveLimit,
             ),
@@ -865,6 +913,7 @@ export function registerReadCommands(program: Command): void {
     .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
     .option("--tag <ref>", "restrict by tag: direct, inherited, or descendant-tagged")
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
+    .option("--untagged", UNTAGGED_DESC)
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
     .option("--trashed", "include trashed items")
@@ -882,6 +931,14 @@ export function registerReadCommands(program: Command): void {
         process.exitCode = ExitCode.Usage;
         return;
       }
+      if (
+        untaggedConflict({
+          untagged: opts["untagged"] === true,
+          ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
+          exactTag: opts["exactTag"] === true,
+        })
+      )
+        return;
       const all = opts["all"] === true;
       const limitOpt = opts["limit"] as string | undefined;
       // --all widens the scope AND lifts the row limit — combining it with an
@@ -894,6 +951,7 @@ export function registerReadCommands(program: Command): void {
         opts["area"] !== undefined && `--area ${shellQuote(opts["area"] as string)}`,
         opts["tag"] !== undefined && `--tag ${shellQuote(opts["tag"] as string)}`,
         opts["exactTag"] === true && "--exact-tag",
+        opts["untagged"] === true && "--untagged",
         type !== undefined && `--type ${type}`,
         opts["logged"] === true && "--logged",
         opts["trashed"] === true && "--trashed",
@@ -909,6 +967,7 @@ export function registerReadCommands(program: Command): void {
               ...(opts["area"] !== undefined && { area: opts["area"] as string }),
               ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
               ...(opts["exactTag"] === true && { exactTag: true }),
+              ...(opts["untagged"] === true && { untagged: true }),
               ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
               ...(opts["logged"] === true && { logged: true }),
               ...(opts["trashed"] === true && { trashed: true }),

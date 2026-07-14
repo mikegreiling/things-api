@@ -538,6 +538,75 @@ describe("tag-hierarchy descendants (Phase 12)", () => {
   });
 });
 
+describe('untagged filter (GUI "No Tag")', () => {
+  // One world exercising every inheritance hop the positive --tag path covers,
+  // so the inversion is proven against the SAME relations (not just direct
+  // assignments). Bare rows carry no tag by any hop and must survive.
+  function seedUntaggedWorld() {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const work = seedArea(fx.db, "Work"); // area-tagged
+    tagArea(fx.db, work, focus);
+    const home = seedArea(fx.db, "Home"); // untagged area
+    // Projects sit in Someday so they never pollute the Today list.
+    const tagged = seedProject(fx.db, { title: "Ptag", area: home, start: "someday" });
+    tagTask(fx.db, tagged, focus); // direct-tagged project
+    const heading = seedHeading(fx.db, { title: "H", project: tagged });
+    const bareProject = seedProject(fx.db, { title: "Pbare", area: home, start: "someday" });
+
+    const D = "2026-07-02";
+    // Tagged by each hop — every one must be EXCLUDED by --untagged:
+    const direct = seedTodo(fx.db, { title: "wid direct", startDate: D });
+    tagTask(fx.db, direct, focus);
+    seedTodo(fx.db, { title: "wid via-project", project: tagged, startDate: D });
+    seedTodo(fx.db, { title: "wid via-area", area: work, startDate: D });
+    seedTodo(fx.db, { title: "wid via-heading", heading, startDate: D });
+    // Genuinely bare — must be INCLUDED:
+    seedTodo(fx.db, { title: "wid bare", startDate: D });
+    seedTodo(fx.db, { title: "wid in-bare-project", project: bareProject, startDate: D });
+    seedTodo(fx.db, { title: "wid in-bare-area", area: home, startDate: D });
+    return { focus };
+  }
+
+  it("today: keeps only genuinely bare items, dropping direct + every inherited hop", () => {
+    seedUntaggedWorld();
+    const titles = todayView(fx.db, NOW, { untagged: true })
+      .today.map((i) => i.title)
+      .toSorted();
+    expect(titles).toEqual(["wid bare", "wid in-bare-area", "wid in-bare-project"]);
+  });
+
+  it("is the exact inversion of --tag on the same view (partition, no overlap)", () => {
+    seedUntaggedWorld();
+    const all = todayView(fx.db, NOW).today.map((i) => i.title);
+    const tagged = todayView(fx.db, NOW, { tag: "focus" }).today.map((i) => i.title);
+    const untagged = todayView(fx.db, NOW, { untagged: true }).today.map((i) => i.title);
+    // Every Today row is in exactly one side; the two sides are disjoint and cover all.
+    expect([...tagged, ...untagged].toSorted()).toEqual([...all].toSorted());
+    expect(tagged.filter((t) => untagged.includes(t))).toEqual([]);
+  });
+
+  it("search: narrows a needle to the untagged matches", () => {
+    seedUntaggedWorld();
+    const titles = searchView(fx.db, "wid", { untagged: true })
+      .map((i) => i.title)
+      .toSorted();
+    expect(titles).toEqual(["wid bare", "wid in-bare-area", "wid in-bare-project"]);
+  });
+
+  it("filters grouped someday the same way (direct tag excluded, bare kept)", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const taggedSomeday = seedTodo(fx.db, { title: "someday tagged", start: "someday" });
+    tagTask(fx.db, taggedSomeday, focus);
+    seedTodo(fx.db, { title: "someday bare", start: "someday" });
+    const titles = flat(somedayView(fx.db, NOW, { untagged: true }))
+      .map((i) => i.title)
+      .toSorted();
+    expect(titles).toEqual(["someday bare"]);
+  });
+});
+
 describe("searchView (Phase 12 ergonomics)", () => {
   function seedSearchWorld() {
     fx = buildFixtureDb();
