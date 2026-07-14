@@ -272,24 +272,23 @@ describe("things projects — sidebar mirror", () => {
       }
     }
     const lines = renderProjectsSidebar(visible, { groups });
-    // Loose block: active row then its muted count.
-    const looseHint = lines.indexOf("…1 later project");
+    // Loose block: active row then its muted per-group locator count (spaced
+    // ellipsis, no command — the single reveal command rides the bottom line).
+    const looseHint = lines.indexOf("… 1 later project");
     expect(looseHint).toBeGreaterThan(lines.findIndex((l) => l.includes("Loose active")));
     // Zone: the later-count follows its active row, within the Zone block
     // (order, not an exact offset — the block's row count isn't the contract).
     const zoneAt = lines.findIndex((l) => l.includes("⬡ Zone ──"));
     const zoneActiveAt = lines.findIndex((l) => l.includes("Zone active"));
-    const zoneHintAt = lines.indexOf("…1 later project", zoneAt);
+    const zoneHintAt = lines.indexOf("… 1 later project", zoneAt);
     expect(zoneActiveAt).toBeGreaterThan(zoneAt);
     expect(zoneHintAt).toBeGreaterThan(zoneActiveAt);
     // Later-only area still gets a header + count, no rows.
     const idleAt = lines.findIndex((l) => l.includes("⬡ Idle ──"));
     expect(idleAt).toBeGreaterThan(zoneAt);
-    expect(lines[idleAt + 1]).toBe("…1 later project");
-    // Bottom line names the flag.
-    expect(lines.at(-1)).toContain(
-      "3 later projects — visible with `things projects --show-later`",
-    );
+    expect(lines[idleAt + 1]).toBe("… 1 later project");
+    // Bottom line: the whole-view disclosure hint in the one grammar.
+    expect(lines.at(-1)).toContain("… 3 later projects — `things projects --show-later`");
     // No hints when none are hidden.
     expect(renderProjectsSidebar(visible).join("\n")).not.toContain("later project");
   });

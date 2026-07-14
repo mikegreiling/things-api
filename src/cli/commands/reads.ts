@@ -14,6 +14,7 @@ import { dim } from "../style.ts";
 import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
   formatItem,
+  disclosureHint,
   renderAnytimePreview,
   renderLegend,
   renderList,
@@ -810,13 +811,15 @@ export function registerReadCommands(program: Command): void {
           if (opts.area === undefined) return renderProjectsSidebar(items, hints);
           const lines = renderList(items);
           const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
-          if (hidden > 0)
-            lines.push(
-              "",
-              dim(
-                `(${hidden} later project${hidden === 1 ? "" : "s"} — visible with \`--show-later\`)`,
-              ),
-            );
+          if (hidden > 0) {
+            // Hidden-section placeholder: the reveal command echoes the user's
+            // own scope (--area) plus the flag that surfaces the later block.
+            const reveal = invocation("projects", [
+              opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
+              "--show-later",
+            ]);
+            lines.push("", disclosureHint(hidden, "later project", [{ command: reveal }]));
+          }
           return lines;
         },
       );

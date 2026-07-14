@@ -839,7 +839,7 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(stdout).not.toContain("parked 0");
     expect(stdout).not.toContain("From active projects");
     expect(stdout).toContain(
-      "(4 someday to-dos inside active projects — visible with `things someday --show-active-project-items`)",
+      "… 4 someday to-dos inside active projects — `things someday --show-active-project-items`",
     );
   });
 
@@ -1165,11 +1165,69 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const all = runCli(["area", "show", "Old Stuff", "--show-logged", "9", "--db", fx.path]).stdout;
     expect(all).toContain("── Logged (3) ──");
     expect(all).not.toContain("more — `things logbook");
-    // Collapsed (toggle off): the hint names the toggle AND the ready-to-paste drill.
+    // Collapsed (toggle off): the hidden-section placeholder echoes the recent
+    // --show-logged reveal (labeled: it shows only 15) AND the full logbook drill.
     const off = runCli(["area", "show", "Old Stuff", "--db", fx.path]).stdout;
     expect(off).toContain(
-      "…3 logged (--show-logged; full history: `things logbook --area 'Old Stuff'`)",
+      `… 3 logged items — recent: \`things area show "Old Stuff" --show-logged\` · \`things logbook --area 'Old Stuff'\``,
     );
+  });
+
+  it("disclosure hints: truncation footer indents two spaces; hidden-section placeholders stand flush (plural counts)", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Mixed Bag");
+    for (let i = 0; i < 3; i++) seedTodo(fx.db, { title: `active ${i}`, area, index: i });
+    for (let i = 0; i < 2; i++)
+      seedTodo(fx.db, { title: `later ${i}`, area, start: "someday", index: 10 + i });
+    const lines = runCli([
+      "area",
+      "show",
+      "Mixed Bag",
+      "--area-limit",
+      "1",
+      "--db",
+      fx.path,
+    ]).stdout.split("\n");
+    // TRUNCATION FOOTER — its block is partially shown above, so it is indented
+    // two spaces; the command doubles the cap that hit.
+    expect(lines).toContain(`  … 2 more to-dos — \`things area show "Mixed Bag" --area-limit 2\``);
+    // HIDDEN-SECTION PLACEHOLDER — the whole later section is unrendered, so it
+    // is flush at the position that section would occupy, with the full command.
+    expect(lines).toContain(`… 2 later items — \`things area show "Mixed Bag" --show-later\``);
+  });
+
+  it("disclosure hints: hidden-section commands preserve the user's show-toggle flags (singular count)", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Kept Flags");
+    seedTodo(fx.db, { title: "active", area, index: 0 });
+    seedTodo(fx.db, { title: "later", area, start: "someday", index: 1 });
+    // `--show-logged 5` reveals the logged section, so the still-hidden later
+    // placeholder must echo the invocation WITH that flag, then add --show-later.
+    const lines = runCli([
+      "area",
+      "show",
+      "Kept Flags",
+      "--show-logged",
+      "5",
+      "--db",
+      fx.path,
+    ]).stdout.split("\n");
+    expect(lines).toContain(
+      `… 1 later item — \`things area show "Kept Flags" --show-logged 5 --show-later\``,
+    );
+  });
+
+  it("disclosure hints: project show hidden placeholders echo full commands (unlabeled --show-logged)", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Roadmap" });
+    seedTodo(fx.db, { title: "active", project: proj, index: 0 });
+    seedTodo(fx.db, { title: "someday", project: proj, start: "someday", index: 1 });
+    seedTodo(fx.db, { title: "done", project: proj, status: "completed", stopDate: 1_500_000_000 });
+    const lines = runCli(["project", "show", "Roadmap", "--db", fx.path]).stdout.split("\n");
+    expect(lines).toContain("… 1 later item — `things project show Roadmap --show-later`");
+    // A project logbook is finite, so bare --show-logged is the FULL history —
+    // the command reads its own effect and takes no `recent:` label.
+    expect(lines).toContain("… 1 logged item — `things project show Roadmap --show-logged`");
   });
 
   it("the knobs adjust independently; --all lifts both; JSON carries grouped counts", () => {

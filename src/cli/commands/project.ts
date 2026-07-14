@@ -16,14 +16,16 @@ import {
   whenValue,
 } from "../glyphs.ts";
 import { openInThings } from "./reads.ts";
-import { runRead, withClient } from "../read-driver.ts";
-import { formatItem, uuidCol, uuidDisplayWidth } from "../render.ts";
+import { invocation, runRead, shellQuote, withClient } from "../read-driver.ts";
+import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
   /** Optional-value flag: bare = the FULL project logbook (finite lifespans), a count to cap it. */
   showLogged?: boolean | string;
+  /** The user's invocation, echoed by the disclosure hints. */
+  hintBase?: string;
 }
 
 /** Reconstruct the show-toggle flags the user passed, for footer echoes. */
@@ -126,7 +128,11 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
       ...(members.length > 0 ? members.map(fmt) : ["(none)"]),
     );
   }
-  // Default-hidden rows are never silent — a muted count names the toggle.
+  // The user's invocation, echoed by the disclosure hints (fallback for a
+  // caller that omits it, e.g. a direct unit test).
+  const base = opts.hintBase ?? `things project show ${quoteTitle(view.project.title)}`;
+  // Default-hidden rows are never silent — a HIDDEN-SECTION placeholder (flush,
+  // full command) stands where the later rows would render.
   if (opts.showLater !== true) {
     const hiddenLater =
       view.later.scheduled.reduce((n, d) => n + d.items.length, 0) +
@@ -135,7 +141,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     if (hiddenLater > 0)
       lines.push(
         "",
-        dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
+        disclosureHint(hiddenLater, "later item", [{ command: `${base} --show-later` }]),
       );
   }
   if (logged.length > 0) {
@@ -145,7 +151,12 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
         : `── Logged (${view.logged.length}) ──`;
     lines.push("", bold(header), ...logged.map(fmt));
   } else if (view.logged.length > 0) {
-    lines.push("", dim(`…${view.logged.length} logged (--show-logged)`));
+    // Bare `--show-logged` is the FULL project logbook, so the command reads
+    // its own effect — no label needed.
+    lines.push(
+      "",
+      disclosureHint(view.logged.length, "logged item", [{ command: `${base} --show-logged` }]),
+    );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
   return lines;
@@ -173,6 +184,7 @@ export function registerProjectCommands(program: Command): void {
         const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
           ...rawOpts,
           showLater: rawOpts.showLater === true || rawOpts.all === true,
+          hintBase: invocation("project show", [shellQuote(ref), ...showToggleFlags(rawOpts)]),
         };
         runRead(
           opts,

@@ -162,6 +162,7 @@ export function registerShowCommands(program: Command): void {
               const projectOpts = {
                 ...opts,
                 showLater: opts.showLater === true || opts.all === true,
+                hintBase,
               };
               return {
                 data: { type: "project", view },
