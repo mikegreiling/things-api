@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Project, Todo } from "../../src/model/entities.ts";
+import { stripSgr, visibleWidth } from "../../src/cli/width.ts";
 
 // SGR codes (see src/cli/style.ts). We assert on these rather than full strings
 // because nested wraps produce compound sequences.
@@ -42,6 +43,7 @@ afterEach(() => {
 
 const glyphs = () => import("../../src/cli/glyphs.ts");
 const render = () => import("../../src/cli/render.ts");
+const width = () => import("../../src/cli/width.ts");
 
 function todo(overrides: Partial<Todo>): Todo {
   return {
@@ -206,5 +208,24 @@ describe("formatItem styling (color on)", () => {
       { statusWord: "waiting" },
     );
     expect(line).toContain(`${DIM}‹waiting›`);
+  });
+});
+
+describe("width fitting + styling interplay (color on)", () => {
+  it("truncates inside the SGR run — the clip/ellipsis boundary never splits an escape", async () => {
+    const w = await width();
+    w.setFitWidth(40); // clamps up to MIN_FIT_WIDTH; a long project title truncates
+    const { formatItem, MIN_FIT_WIDTH } = await render();
+    const line = formatItem(project({ title: "Z".repeat(120) }), 8);
+    w.setFitWidth(null);
+    // The bold title wrap survives truncation: the ellipsis sits INSIDE the run
+    // (styled), with the reset immediately after it — no escape was cut.
+    expect(line).toContain(`…${String.fromCharCode(27)}[22m`);
+    expect(line).toContain(BOLD);
+    // Stripping SGR leaves clean text (a split escape would strand an ESC byte).
+    expect(stripSgr(line)).not.toContain(String.fromCharCode(27));
+    expect(stripSgr(line)).toContain("…");
+    // And the fitted, styled row respects the effective width.
+    expect(visibleWidth(line)).toBeLessThanOrEqual(MIN_FIT_WIDTH);
   });
 });

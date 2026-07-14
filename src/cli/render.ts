@@ -39,6 +39,15 @@ import {
   type GroupedLimits,
 } from "../read/pagination.ts";
 import { FULL_MONTHS, upcomingBucket } from "./period.ts";
+import type { Project } from "../model/entities.ts";
+import {
+  fitRow,
+  getFitWidth,
+  stripSgr,
+  TITLE_MIN,
+  visibleWidth,
+  type RowSegments,
+} from "./width.ts";
 
 /**
  * A view's TTY-only title preamble: bold view name + its dim Things deep link,
@@ -52,9 +61,8 @@ export function viewHeaderLines(view: string): string[] {
   return [`${bold(title)} ${dim(`(things:///show?id=${view})`)}`, ""];
 }
 
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-export const stripAnsi = (s: string): string => s.replace(ANSI, "");
-const visibleWidth = (s: string): number => [...stripAnsi(s)].length;
+/** Re-export the canonical ANSI-stripper (impl in ./width.ts) — the legend and `--json` legend path use it. */
+export const stripAnsi = stripSgr;
 
 /** Left-column width for the legend's glyph samples (short marks align; long textual samples overflow). */
 const LEGEND_GUTTER = 10;
@@ -196,12 +204,18 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   //               routed through the single law projectTitleAccent (glyphs.ts)
   //   underline — heading ROLE only (asTitle): a project that heads its own
   //               to-do group, never a plain project row
-  let title = item.title;
+  // Title styling is a closure over the raw text so the width fitter can
+  // truncate the PLAIN title and re-apply the same wraps — the ellipsis/clip
+  // boundary always lands outside the SGR runs (a cut never splits an escape).
   const resolved = item.status === "completed" || item.status === "canceled";
-  if (item.status === "canceled") title = strike(title);
-  if (resolved && opts.resolvedNormal !== true) title = dim(title);
-  if (item.type === "project") title = projectTitleAccent(title);
-  if (asTitle) title = underline(title);
+  const styleTitle = (text: string): string => {
+    let t = text;
+    if (item.status === "canceled") t = strike(t);
+    if (resolved && opts.resolvedNormal !== true) t = dim(t);
+    if (item.type === "project") t = projectTitleAccent(t);
+    if (asTitle) t = underline(t);
+    return t;
+  };
   // GUI indicator order after the title: bell, document, checklist.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
@@ -209,12 +223,34 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
     ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
   ];
-  return [
-    `${dim(shownUuid)} `,
-    box,
-    ...meta,
-    `${title}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}${tags}${context === "" ? "" : dim(context)}${deadline}`,
-  ].join(" ");
+  // Named segments (docs/design/width-aware-tty.md): the fixed left run (uuid +
+  // box + meta chips), the fixed tail markers, the collapsible tags, the CLI-
+  // only container, and the full deadline. `styleTags` wraps a `#a #b` form in
+  // the row's dim styling (incl. its leading space); the fitter folds the list.
+  const left = `${dim(shownUuid)}  ${box}${meta.length > 0 ? ` ${meta.join(" ")}` : ""}`;
+  const tailStr = tail.length > 0 ? ` ${tail.join(" ")}` : "";
+  const ctxStr = context === "" ? "" : dim(context);
+  const tagNames = item.tags.map((t) => t.title);
+  const styleTags = (form: string): string => ` ${dim(form)}`;
+  const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${deadline}`;
+  // width null (the default — pipes/grep/--json/non-TTY) means NO fitting:
+  // return the fully-composed row, byte-identical to before this feature.
+  const fitWidth = getFitWidth();
+  if (fitWidth === null) return full;
+  const seg: RowSegments = {
+    left,
+    rawTitle: item.title,
+    styleTitle,
+    tail: tailStr,
+    tagNames,
+    styleTags,
+    context: ctxStr,
+    deadline,
+    full,
+  };
+  // Fit to the effective width: never below the derived floor (a sub-floor
+  // terminal renders at MIN_FIT_WIDTH and wraps, rather than clipping metadata).
+  return fitRow(seg, Math.max(fitWidth, MIN_FIT_WIDTH));
 }
 
 /**
@@ -229,7 +265,57 @@ export function todayMark(item: ListItem, now?: Date): string | null {
 }
 
 /** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
-const UUID_DISPLAY_MIN = 8;
+export const UUID_DISPLAY_MIN = 8;
+
+/**
+ * The single, DERIVED width floor (docs/design/width-aware-tty.md). Not chosen:
+ * computed from the actual glyph inventory as the worst-case FIXED furniture a
+ * row can carry plus a {@link TITLE_MIN}-column title. The driver fits every
+ * row to `max(terminalWidth, MIN_FIT_WIDTH)`, so the worst-furniture row's
+ * title lands at exactly TITLE_MIN and every lighter row's title is wider — no
+ * per-row raggedness, and below the floor the terminal wraps (nothing is
+ * clipped). This mirrors the GUI, whose minimum WINDOW width is the same
+ * worst-case derivation. Enumerated parts (any glyph change re-derives this;
+ * `width.test.ts` recomputes it independently so it cannot silently drift):
+ *   - the id column (never shrinks) + its two-space separator
+ *   - the checkbox glyph
+ *   - a space + the widest meta chip (a future ‹date› carrying a year)
+ *   - a space + the tail: project count chip + all three marks ◷ ≡ ≔
+ *     (a conservative superset — the count chip and checklist never truly
+ *     co-occur on one row, but budgeting both keeps the floor safe)
+ *   - a space + the bare `#…` marker (tags never fully vanish)
+ *   - a space + the longest deadline token (`⚑ NN days left`)
+ *   - a space + a TITLE_MIN-column title
+ */
+function computeMinFitWidth(): number {
+  const todayIso = "2000-01-01";
+  const box = "[ ]"; // every box form is 3 cells
+  const metaChip = dateChip("2027-09-22", todayIso); // widest ‹date› (with year)
+  const countChipWorst = countChip({
+    untrashedLeafActionsCount: 999,
+    openUntrashedLeafActionsCount: 999,
+  } as Project);
+  const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
+  const deadline = deadlineToken("2000-01-15", todayIso); // ⚑ 14 days left — the longest form
+  return (
+    UUID_DISPLAY_MIN +
+    2 + // the two spaces after the id column
+    visibleWidth(box) +
+    1 +
+    visibleWidth(metaChip) + // space + widest meta chip
+    1 + // the space before the title
+    TITLE_MIN +
+    1 +
+    visibleWidth(tail) + // space + count chip + ◷ ≡ ≔
+    1 +
+    visibleWidth("#…") + // space + the bare tag marker
+    1 +
+    visibleWidth(deadline) // space + the longest deadline token
+  );
+}
+
+/** The derived TTY row floor — see {@link computeMinFitWidth}. */
+export const MIN_FIT_WIDTH = computeMinFitWidth();
 
 /**
  * Display width for a list's uuid column: the shortest prefix that is
