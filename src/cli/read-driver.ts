@@ -226,8 +226,8 @@ export function invocation(name: string, parts: Array<string | false | undefined
 }
 
 /**
- * The unified truncation hint: a muted `── N more items — see more: … · all:
- * … ──` line whose commands echo the user's actual invocation, so a bigger
+ * The unified truncation hint: a muted `── N more items — see more: … · … ──`
+ * line whose commands echo the user's actual invocation, so a bigger
  * `--limit` or `--all` is one copy-paste away. Returns null when nothing was
  * dropped or the caller already asked for every row.
  */
@@ -236,6 +236,6 @@ export function truncationHint(base: string, pagination: Pagination): string | n
   const more = pagination.total - pagination.shown;
   const bigger = pagination.limit * 2;
   return dim(
-    `── ${more} more item${more === 1 ? "" : "s"} — see more: \`${base} --limit ${bigger}\` · all: \`${base} --all\` ──`,
+    `── ${more} more item${more === 1 ? "" : "s"} — see more: \`${base} --limit ${bigger}\` · \`${base} --all\` ──`,
   );
 }

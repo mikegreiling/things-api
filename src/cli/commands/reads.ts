@@ -601,7 +601,7 @@ export function registerReadCommands(program: Command): void {
                   dim(
                     `── ${more} more item${more === 1 ? "" : "s"} through ${windowLabel} — ` +
                       `see more: \`${base} --limit ${pagination.limit * 2}\` · ` +
-                      `full horizon: \`${base} --all\` ──`,
+                      `\`${base} --all\` ──`,
                   ),
                 );
               } else {
@@ -611,7 +611,7 @@ export function registerReadCommands(program: Command): void {
                   "",
                   dim(
                     `(through ${windowLabel} — wider: \`${base} --until ${doublePeriod(opts.until)}\`` +
-                      ` · everything: \`${base} --all\`)`,
+                      ` · \`${base} --all\`)`,
                   ),
                 );
               }
@@ -622,7 +622,7 @@ export function registerReadCommands(program: Command): void {
               // they asked for), so a bounded run offers just a bigger cap.
               const more = pagination.total - pagination.shown;
               const bounded = untilGiven || sinceGiven;
-              const allLever = bounded ? "" : ` · all: \`${base} --all\``;
+              const allLever = bounded ? "" : ` · \`${base} --all\``;
               lines.push(
                 "",
                 dim(
