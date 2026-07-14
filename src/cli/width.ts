@@ -128,9 +128,11 @@ export function clipPlain(s: string, cols: number): string {
 // ── Row fitting ─────────────────────────────────────────────────────────────
 
 /**
- * TITLE : TAGS relative max-width ratio (tunable — ONE place). Both segments
- * divvy up the collapsible budget; while both are over their share the title
- * truncates and the tags fold from the end. 4:1 keeps the title dominant.
+ * TITLE : TAGS relative max-width ratio (tunable — ONE place). It arbitrates the
+ * collapsible budget ONLY under contention — when BOTH segments' natural widths
+ * exceed their shares. Otherwise the fit is lazy: the side within its share keeps
+ * its natural width and the other takes everything left (see {@link fitRow}). 4:1
+ * keeps the title dominant when they do genuinely contend.
  */
 const TITLE_RATIO = 4;
 const TAGS_RATIO = 1;
@@ -153,7 +155,7 @@ export const TITLE_MIN = 16;
  */
 export type FitStage =
   | "full" // nothing dropped
-  | "both-shrink" // title truncates + tags fold from the end, container kept (4:1)
+  | "both-shrink" // title truncates + tags fold LAZILY to their widest fitting level, container kept (4:1 only under contention)
   | "container-drop" // CLI-only container dropped WHOLE, tags hold at `#first #…`
   | "tags-bare"; // last tag folds to bare `#…`, container already gone
 
@@ -214,15 +216,38 @@ function pickTagLevel(names: string[], cap: number, floorK: number): number {
 }
 
 /**
+ * EXPERIMENTAL — the right-aligned deadline gutter (GUI flag-column parity). When
+ * fitting is active, every fitted row's `⚑` token is pushed flush to the effective
+ * width so all deadlines in a view line up in one gutter, exactly like the app's
+ * right-pinned flag column. `body` is the composed row WITHOUT its deadline and
+ * `deadline` the pre-styled ` ⚑ …` segment (its leading space + token) or "".
+ * The padding is plain spaces OUTSIDE the styled token, and there is always ≥ 1
+ * space — so a row that already fills the width is byte-identical to the inline
+ * (unguttered) form, and a row with no deadline is returned untouched (ragged
+ * right, as the GUI leaves flag-less rows). This is only ever reached from
+ * {@link fitRow} (fitting active), so the byte-stable null path never sees it.
+ * Reverting the experiment is deleting this function and its two `fitRow` calls.
+ */
+function alignDeadline(body: string, deadline: string, width: number): string {
+  if (deadline === "") return body;
+  // deadline = " " + token; swap that single inline space for the gutter run.
+  const pad = width - visibleWidth(body) - visibleWidth(deadline) + 1;
+  return `${body}${" ".repeat(Math.max(1, pad))}${deadline.slice(1)}`;
+}
+
+/**
  * Fit one row into `width` terminal cells per the ratified collapse order. The
  * always-present parts (uuid, box, meta chips, tail markers, full deadline)
- * never shrink; title and tags divvy up what remains (4:1), then the CLI-only
- * container is sacrificed WHOLE (before the last tag folds), then the last tag
- * folds to bare `#…`, and the title bottoms at TITLE_MIN. `width` is the
- * caller's effective width (already max'd with MIN_FIT_WIDTH), so the final
+ * never shrink; title and tags divvy up what remains LAZILY — tags fold to the
+ * widest progressive level that fits and the 4:1 ratio arbitrates only when both
+ * genuinely contend (slack an under-share side leaves flows to the other). Then
+ * the CLI-only container is sacrificed WHOLE (before the last tag folds), then
+ * the last tag folds to bare `#…`, and the title bottoms at TITLE_MIN. `width` is
+ * the caller's effective width (already max'd with MIN_FIT_WIDTH), so the final
  * stage always satisfies the floor; a sub-floor width would simply let the
- * terminal wrap (the title is kept whole rather than clipped). A row that
- * already fits returns its full form unchanged (byte-identical).
+ * terminal wrap (the title is kept whole rather than clipped). A row that already
+ * fits keeps its full content; the only always-applied transform is the
+ * experimental deadline gutter ({@link alignDeadline}), which right-pins the `⚑`.
  */
 export function fitRow(seg: RowSegments, width: number): string {
   const names = seg.tagNames;
@@ -241,16 +266,30 @@ export function fitRow(seg: RowSegments, width: number): string {
       : seg.styleTitle(`${clipPlain(seg.rawTitle, budget - 1)}…`);
   const renderRow = (title: string, k: number, ctx: boolean): string => {
     const tags = names.length > 0 ? seg.styleTags(tagForm(names, k)) : "";
-    return `${seg.left} ${title}${seg.tail}${tags}${ctx ? seg.context : ""}${seg.deadline}`;
+    const body = `${seg.left} ${title}${seg.tail}${tags}${ctx ? seg.context : ""}`;
+    return alignDeadline(body, seg.deadline, width);
   };
 
   // Stage "full": everything fits with tags whole and the container present.
+  // (The deadline is still pushed to the gutter — GUI flags pin right even on a
+  // short row — but the null path returns seg.full before reaching the fitter.)
   const budgetFull = width - fixed(true);
-  if (wTitle + tagWidth(names, names.length) <= budgetFull) return seg.full;
+  if (wTitle + tagWidth(names, names.length) <= budgetFull) {
+    const body = seg.full.slice(0, seg.full.length - seg.deadline.length);
+    return alignDeadline(body, seg.deadline, width);
+  }
 
-  // Stage "both-shrink": tags fold from the end toward `#first #…` under their
-  // 1/(4+1) budget cap while the title truncates; the container stays put.
-  const tagCap = Math.floor((budgetFull * TAGS_RATIO) / (TITLE_RATIO + TAGS_RATIO));
+  // Stage "both-shrink": tags fold LAZILY — to the WIDEST progressive level that
+  // fits, not an eager 1/5 cap. The 4:1 ratio arbitrates ONLY under contention
+  // (both natural widths exceed their shares of the collapsible budget). When the
+  // title is within its 4/5 share it keeps its natural width and the tags get
+  // everything left (their widest fitting level); when instead the tags are
+  // within their 1/5 share they stay whole and the title gets the rest. Either
+  // way, slack a discrete tag level does not consume flows BACK to the title, and
+  // neither side is shrunk below what the budget actually forces. Container kept.
+  const tagShare = Math.floor((budgetFull * TAGS_RATIO) / (TITLE_RATIO + TAGS_RATIO));
+  const titleShare = budgetFull - tagShare;
+  const tagCap = wTitle <= titleShare ? budgetFull - wTitle : tagShare;
   const k = pickTagLevel(names, tagCap, 1);
   const titleBudgetB = budgetFull - tagWidth(names, k);
   if (titleBudgetB >= titleNeed) return renderRow(fitTitle(titleBudgetB), k, true);
