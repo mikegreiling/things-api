@@ -300,6 +300,10 @@ export function renderToday(
         ...(shown.today.length === 0 ? ["(empty)"] : shown.today.map((i) => formatItem(i, w))),
       ];
   if (full.evening.length > 0) {
+    // A blank line before the header matches every other grouped renderer's
+    // section spacing — but only when the Today section rendered above it. In
+    // --evening mode the header is the first line, so no leading blank.
+    if (!eveningOnly) lines.push("");
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
     for (const i of shown.evening) lines.push(formatItem(i, w));
     const hidden = full.evening.length - shown.evening.length;

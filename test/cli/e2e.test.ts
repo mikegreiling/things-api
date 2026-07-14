@@ -241,6 +241,52 @@ describe("cli search (Phase 12 ergonomics)", () => {
   });
 });
 
+describe('cli --untagged (GUI "No Tag")', () => {
+  function seedTagged() {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const tagged = seedTodo(fx.db, { title: "tagged one", startDate: "2026-07-02" });
+    tagTask(fx.db, tagged, focus);
+    seedTodo(fx.db, { title: "bare one", startDate: "2026-07-02" });
+  }
+
+  it("today --untagged keeps only untagged items (human + JSON)", () => {
+    seedTagged();
+    const json = runCli(["today", "--untagged", "--json", "--db", fx!.path]);
+    expect(json.exitCode).toBe(0);
+    const titles = JSON.parse(json.stdout).data.today.map((i: { title: string }) => i.title);
+    expect(titles).toEqual(["bare one"]);
+    const human = runCli(["today", "--untagged", "--db", fx!.path]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("bare one");
+    expect(human.stdout).not.toContain("tagged one");
+  });
+
+  it("search --untagged narrows results", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const tagged = seedTodo(fx.db, { title: "note tagged" });
+    tagTask(fx.db, tagged, focus);
+    seedTodo(fx.db, { title: "note bare" });
+    const json = runCli(["search", "note", "--untagged", "--json", "--db", fx.path]);
+    expect(json.exitCode).toBe(0);
+    const titles = JSON.parse(json.stdout).data.map((i: { title: string }) => i.title);
+    expect(titles).toEqual(["note bare"]);
+  });
+
+  it("--untagged is mutually exclusive with --tag/--exact-tag (usage error)", () => {
+    seedTagged();
+    for (const view of ["today", "inbox", "anytime", "someday", "upcoming", "logbook", "search"]) {
+      const argv =
+        view === "search"
+          ? ["search", "x", "--untagged", "--tag", "focus", "--db", fx!.path]
+          : [view, "--untagged", "--tag", "focus", "--db", fx!.path];
+      expect(runCli(argv).exitCode).toBe(2);
+    }
+    expect(runCli(["today", "--untagged", "--exact-tag", "--db", fx!.path]).exitCode).toBe(2);
+  });
+});
+
 describe("cli list limits + truncation hint", () => {
   function seedInbox(n: number, tag?: string): void {
     const t = tag !== undefined ? seedTag(fx!.db, tag) : null;
