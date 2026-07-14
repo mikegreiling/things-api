@@ -20,7 +20,18 @@
  *             overdue bucket=1 items roll back into Today proper (live-
  *             verified against the UI, 2026-07-02).
  *             Sidebar badge split: red = items with deadline <= today,
- *             gray = the rest (exact 270/122 reconciliation on live data).
+ *             gray = the rest (exact 270/122 reconciliation on live data). The
+ *             badge counts OPEN members only — a checked-but-unswept row is in
+ *             the list but out of the count (the GUI badge is remaining work).
+ *             CHECKED-BUT-UNSWEPT (GUI-parity ruling 2026-07-14, Mike — "this
+ *             is the behavior of the Things GUI and I like it"): membership is
+ *             OPEN_OR_UNSWEPT, not OPEN — a completed/canceled row the log-move
+ *             sweep has NOT yet passed (completion ≠ logged; see
+ *             log-boundary.ts) stays in Today IN PLACE, keeping the exact
+ *             comparator slot (startBucket / referenceDate / todayIndex) it held
+ *             open. It leaves when the sweep boundary advances past its stopDate
+ *             (boundary-relative, no new state). Mixed-context resolved styling
+ *             (dim / dim+strike) applies automatically in formatItem.
  * - anytime:  ALL active items — unscheduled PLUS Today members (the UI
  *             renders Today members with a star; live-verified via screenshot
  *             2026-07-02: starred = in Today, unstarred = unscheduled).
@@ -29,6 +40,13 @@
  *             project that is not itself anytime-visible (someday/future/
  *             logged/trashed) are excluded — the project row represents
  *             them. Result is grouped in sidebar order (SidebarSection[]).
+ *             CHECKED-BUT-UNSWEPT (GUI-parity ruling 2026-07-14, Mike): like
+ *             Today, membership is OPEN_OR_UNSWEPT — a closed row the sweep has
+ *             not passed keeps its index slot until the boundary moves past its
+ *             stopDate. A closed-but-unswept PROJECT row shows in place and its
+ *             children stay cascade-excluded (PROJECT_ANYTIME_ACTIVE still tests
+ *             p.status = 0): the checked project row represents its children,
+ *             the same precedent as a logged/someday container.
  * - upcoming: TWO cohorts merged, grouped/sorted by COALESCE(startDate,
  *             deadline) (UPC1, GUI-verified, docs/lab/upcoming-research.md):
  *             (1) SCHEDULED — start=2 AND startDate > today, grouped under its
@@ -88,6 +106,7 @@ import {
   EFF_PROJECT,
   LIVE,
   OPEN,
+  OPEN_OR_UNSWEPT,
   PROJECT_ANYTIME_ACTIVE,
 } from "./predicates.ts";
 import { groupBySidebar } from "./sidebar-order.ts";
@@ -133,7 +152,7 @@ function tagFilter(
   return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
 }
 
-function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
+function materialize(db: DatabaseSync, rows: TaskRow[], boundary = logBoundary(db)): ListItem[] {
   const refs = makeRefResolver(db);
   const headingProject = makeHeadingProjectResolver(db);
   const tags = fetchTagsForTasks(
@@ -149,7 +168,10 @@ function materialize(db: DatabaseSync, rows: TaskRow[]): ListItem[] {
     }
     return todo;
   });
-  return markLogged(items, logBoundary(db));
+  // The caller may pass the boundary it already used for the SQL membership
+  // filter so the `logged` flag and the row's presence agree (a checked-unswept
+  // row must materialize with logged=false).
+  return markLogged(items, boundary);
 }
 
 export interface TodayView {
@@ -183,9 +205,14 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
   //    (the date the item ENTERED Today: its startDate, or its deadline for
   //    deadline-driven members), then todayIndex ASC, then uuid (observed
   //    stable tiebreak).
+  // Membership is OPEN_OR_UNSWEPT (not OPEN): a checked row the log-move sweep
+  // has not yet passed keeps its comparator slot in place (GUI-parity ruling
+  // 2026-07-14). The boundary is threaded into both the SQL filter and
+  // materialize so the row's presence and its `logged` flag agree.
+  const boundary = logBoundary(db, now);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND ${CONTAINER_UNTRASHED} AND (
+    `${OPEN_OR_UNSWEPT} AND ${CONTAINER_UNTRASHED} AND (
        (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
        OR (t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
            AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))
@@ -193,30 +220,36 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
      ORDER BY t.startBucket ASC,
               COALESCE(t.todayIndexReferenceDate, t.startDate, t.deadline) DESC,
               t.todayIndex ASC, t.uuid ASC`,
-    [packedToday, packedToday, ...tf.binds],
+    [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds],
   );
-  const items = materialize(db, rows);
+  const items = materialize(db, rows, boundary);
   // Evening membership expires daily: raw startBucket=1 counts only while
   // startDate is exactly today; stale evening items belong to Today proper.
   const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
   const evening = items.filter(isEvening);
   const dueIn = (list: ListItem[]) =>
     list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
+  // Badge = OPEN members only (the GUI badge counts remaining work). A
+  // checked-but-unswept row is present in the list but never moves the badge —
+  // this preserves the exact live reconciliation computed under OPEN membership.
+  const isOpen = (i: ListItem) => i.status === "open";
   // The evening filter mirrors the tag filter's badge treatment: the badge
   // reflects exactly the members the view now returns (here, evening only).
   if (filter?.eveningOnly === true) {
-    const eveningDue = dueIn(evening);
+    const openEvening = evening.filter(isOpen);
+    const eveningDue = dueIn(openEvening);
     return {
       today: [],
       evening,
-      badge: { dueOrOverdue: eveningDue, other: evening.length - eveningDue },
+      badge: { dueOrOverdue: eveningDue, other: openEvening.length - eveningDue },
     };
   }
-  const dueOrOverdue = dueIn(items);
+  const openItems = items.filter(isOpen);
+  const dueOrOverdue = dueIn(openItems);
   return {
     today: items.filter((i) => !isEvening(i)),
     evening,
-    badge: { dueOrOverdue, other: items.length - dueOrOverdue },
+    badge: { dueOrOverdue, other: openItems.length - dueOrOverdue },
   };
 }
 
@@ -270,14 +303,20 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
   const tf = tagFilter(db, filter);
   // Mirrors UI membership: every active item, including Today members
   // (starred in the UI) and pending-promotion rows (start=2, past-dated) —
-  // MINUS children of non-active containers (the project cascade).
+  // MINUS children of non-active containers (the project cascade). Membership
+  // is OPEN_OR_UNSWEPT (GUI-parity ruling 2026-07-14): a checked row the sweep
+  // has not passed keeps its index slot. PROJECT_ANYTIME_ACTIVE still requires
+  // the parent project be open, so a closed-but-unswept project's children stay
+  // cascade-excluded — the checked project row represents them. The boundary is
+  // threaded into the SQL filter and materialize so presence and `logged` agree.
+  const boundary = logBoundary(db, now);
   const rows = fetchTaskRows(
     db,
-    `${OPEN} AND ${ANYTIME_SELF("t")}
+    `${OPEN_OR_UNSWEPT} AND ${ANYTIME_SELF("t")}
      AND ${PROJECT_ANYTIME_ACTIVE}${tf.sql} ORDER BY t."index" ASC`,
-    [packedToday, packedToday, packedToday, packedToday, ...tf.binds],
+    [boundary.getTime() / 1000, packedToday, packedToday, packedToday, packedToday, ...tf.binds],
   );
-  return groupBySidebar(db, materialize(db, rows));
+  return groupBySidebar(db, materialize(db, rows, boundary));
 }
 
 /** The UI's star marker in Anytime: the item is also a Today member. */

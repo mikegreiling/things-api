@@ -15,6 +15,23 @@ export const LIVE = `t.type IN (0, 1) AND t.trashed = 0 AND ${NOT_TEMPLATE}`;
 /** {@link LIVE} restricted to open (status = 0) rows. */
 export const OPEN = `${LIVE} AND t.status = 0`;
 
+/**
+ * The GUI-visible set: open rows PLUS closed (completed/canceled) rows the
+ * periodic log-move sweep has NOT yet carried to the Logbook — completion ≠
+ * logged (src/read/log-boundary.ts). A closed row keeps its slot in its list
+ * until the sweep passes it, exactly as the GUI keeps it checked in place; it
+ * leaves when the sweep boundary advances past its stopDate (boundary-relative,
+ * no new state). This is {@link LIVE} widened to that set: swept iff
+ * status IN (2,3) AND stopDate IS NOT NULL AND stopDate <= boundary — the
+ * negation of the {@link markLogged} `logged` predicate, so an included closed
+ * row always materializes with `logged=false`. Mirrors the project/area card
+ * precedent (project-view.ts / area-view.ts keep a closed-but-unswept row
+ * checked in place). ONE bind: the log boundary as epoch seconds
+ * (logBoundary(db, now).getTime() / 1000). Ruling 2026-07-14 (Mike): GUI parity
+ * — `today` and `anytime` show checked-but-unswept rows.
+ */
+export const OPEN_OR_UNSWEPT = `${LIVE} AND NOT (t.status IN (2, 3) AND t.stopDate IS NOT NULL AND t.stopDate <= ?)`;
+
 /** An item's own anytime membership: unscheduled-active, or dated <= today. */
 export const ANYTIME_SELF = (col: string): string =>
   `((${col}.start = 1 AND (${col}.startDate IS NULL OR ${col}.startDate <= ?))
