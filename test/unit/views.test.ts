@@ -22,6 +22,7 @@ import {
   seedArea,
   seedHeading,
   seedProject,
+  seedSettings,
   seedTag,
   seedTodo,
   tagArea,
@@ -29,6 +30,7 @@ import {
 } from "../fixtures/seed.ts";
 
 const NOW = new Date(2026, 6, 2, 12, 0); // local 2026-07-02
+const NOW_EPOCH = NOW.getTime() / 1000;
 
 /** Flattens grouped anytime/someday sections back to items for membership checks. */
 const flat = (sections: SidebarSection[]) => sections.flatMap((s) => s.items);
@@ -183,6 +185,91 @@ describe("todayView", () => {
     });
     const view = todayView(fx.db, NOW);
     expect(view.today.map((i) => i.title)).toEqual(["new-1", "tie-a", "tie-b", "old-a", "old-b"]);
+  });
+
+  // GUI-parity ruling 2026-07-14 (Mike): Today shows CHECKED-BUT-UNSWEPT rows —
+  // a completed/canceled item the log-move sweep has not passed stays checked
+  // IN PLACE (completion ≠ logged), leaving only when the boundary advances.
+  it("keeps a checked-but-unswept row in its slot; it leaves once the sweep passes", () => {
+    fx = buildFixtureDb();
+    // Manual boundary at yesterday noon: a stopDate after it is unswept.
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    seedTodo(fx.db, { title: "open-a", startDate: "2026-07-02", todayIndex: 10 });
+    seedTodo(fx.db, {
+      title: "checked",
+      startDate: "2026-07-02",
+      todayIndex: 20,
+      status: "completed",
+      stopDate: NOW_EPOCH,
+    });
+    seedTodo(fx.db, { title: "open-b", startDate: "2026-07-02", todayIndex: 30 });
+
+    // Before the sweep: the checked row keeps its comparator slot (todayIndex).
+    const before = todayView(fx.db, NOW);
+    expect(before.today.map((i) => i.title)).toEqual(["open-a", "checked", "open-b"]);
+    const checked = before.today.find((i) => i.title === "checked");
+    expect(checked?.status).toBe("completed"); // JSON surfaces the real status
+    expect(checked?.logged).toBe(false); // unswept, so not logged
+
+    // Advance the boundary past the checked row's stopDate → it is swept away.
+    fx.db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH + 60);
+    const after = todayView(fx.db, NOW);
+    expect(after.today.map((i) => i.title)).toEqual(["open-a", "open-b"]);
+  });
+
+  it("keeps a CANCELED-but-unswept row in place too (both closed statuses)", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    seedTodo(fx.db, { title: "open", startDate: "2026-07-02", todayIndex: 10 });
+    seedTodo(fx.db, {
+      title: "dropped",
+      startDate: "2026-07-02",
+      todayIndex: 20,
+      status: "canceled",
+      stopDate: NOW_EPOCH,
+    });
+    const view = todayView(fx.db, NOW);
+    expect(view.today.map((i) => i.title)).toEqual(["open", "dropped"]);
+    expect(view.today.find((i) => i.title === "dropped")?.status).toBe("canceled");
+  });
+
+  it("badge counts OPEN members only — a checked-unswept row is listed but does not move it", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    // One open due-today item (red), one open item (gray).
+    seedTodo(fx.db, { title: "due", startDate: "2026-07-01", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "plain", startDate: "2026-07-02" });
+    const baseline = todayView(fx.db, NOW);
+    expect(baseline.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    // Adding a checked-unswept row — even one carrying a due deadline — must not
+    // move the badge (the GUI badge counts remaining work).
+    seedTodo(fx.db, {
+      title: "checked-due",
+      startDate: "2026-07-02",
+      deadline: "2026-07-02",
+      status: "completed",
+      stopDate: NOW_EPOCH,
+    });
+    const view = todayView(fx.db, NOW);
+    expect(view.today.map((i) => i.title)).toContain("checked-due");
+    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+  });
+
+  it("a checked-but-unswept EVENING item stays in the This Evening section", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    seedTodo(fx.db, {
+      title: "tonight-done",
+      startDate: "2026-07-02",
+      evening: true,
+      status: "completed",
+      stopDate: NOW_EPOCH,
+    });
+    const view = todayView(fx.db, NOW);
+    expect(view.evening.map((i) => i.title)).toEqual(["tonight-done"]);
+    expect(view.today).toEqual([]);
+    // A checked evening row still contributes nothing to the badge.
+    expect(view.badge).toEqual({ dueOrOverdue: 0, other: 0 });
   });
 });
 
@@ -343,6 +430,52 @@ describe("anytime container cascade + sidebar grouping", () => {
     expect(titles).not.toContain("sd-proj");
     expect(titles).not.toContain("hidden-sd-child");
     expect(titles).not.toContain("hidden-future-child");
+  });
+
+  // GUI-parity ruling 2026-07-14: anytime shows checked-but-unswept rows too.
+  it("keeps a checked-but-unswept row in its index slot; it leaves once the sweep passes", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    seedTodo(fx.db, { title: "open-1", start: "active", index: 1 });
+    seedTodo(fx.db, {
+      title: "checked",
+      start: "active",
+      index: 2,
+      status: "completed",
+      stopDate: NOW_EPOCH,
+    });
+    seedTodo(fx.db, { title: "open-2", start: "active", index: 3 });
+
+    const before = flat(anytimeView(fx.db, NOW));
+    expect(before.map((i) => i.title)).toEqual(["open-1", "checked", "open-2"]);
+    expect(before.find((i) => i.title === "checked")?.logged).toBe(false);
+
+    fx.db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH + 60);
+    const after = flat(anytimeView(fx.db, NOW));
+    expect(after.map((i) => i.title)).toEqual(["open-1", "open-2"]);
+  });
+
+  it("shows a closed-but-unswept PROJECT row in place but keeps its children cascade-excluded", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    // A project checked-off but not yet swept: it stays in Anytime, and its
+    // children remain represented BY the (checked) project row, not listed.
+    const closedProj = seedProject(fx.db, {
+      title: "closed-proj",
+      status: "completed",
+      stopDate: NOW_EPOCH,
+    });
+    seedTodo(fx.db, { title: "hidden-child", project: closedProj });
+    const activeProj = seedProject(fx.db, { title: "active-proj" });
+    seedTodo(fx.db, { title: "visible-child", project: activeProj });
+
+    const items = flat(anytimeView(fx.db, NOW));
+    const titles = items.map((i) => i.title);
+    expect(titles).toContain("closed-proj");
+    expect(items.find((i) => i.title === "closed-proj")?.status).toBe("completed");
+    expect(titles).not.toContain("hidden-child");
+    expect(titles).toContain("active-proj");
+    expect(titles).toContain("visible-child");
   });
 
   it("cascades through headings (a headed child reaches its project via the heading row)", () => {

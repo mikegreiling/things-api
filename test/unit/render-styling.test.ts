@@ -186,6 +186,28 @@ describe("formatItem styling (color on)", () => {
     expect(canceled).toContain(`${DIM}${STRIKE}Abandoned`);
   });
 
+  // The today render path is a mixed context (open rows are the norm), so a
+  // checked-but-unswept row must pick up the delta-7 resolved styling
+  // automatically — no new render option (GUI-parity ruling 2026-07-14).
+  it("render path: today applies dim (completed) / dim+strike (canceled) to checked-unswept rows", async () => {
+    const { renderToday } = await render();
+    const view = {
+      today: [
+        todo({ title: "StillOpen" }),
+        todo({ title: "CheckedWin", status: "completed", stopped: new Date() }),
+        todo({ title: "CheckedDrop", status: "canceled", stopped: new Date() }),
+      ],
+      evening: [],
+      badge: { dueOrOverdue: 0, other: 1 },
+    };
+    const out = renderToday(view, view, "things today").join("\n");
+    expect(out).toContain(`${DIM}CheckedWin`);
+    expect(out).toContain(`${DIM}${STRIKE}CheckedDrop`);
+    // The open row carries none of the resolved wraps on its title.
+    expect(out).not.toContain(`${DIM}StillOpen`);
+    expect(out).not.toContain(`${STRIKE}StillOpen`);
+  });
+
   it("delta 6: a completed PROJECT row in the Logbook is bold (delta 1) without dim", async () => {
     const { formatItem } = await render();
     const line = formatItem(project({ title: "ShippedProj", status: "completed" }), 8, {

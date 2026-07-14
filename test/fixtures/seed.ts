@@ -98,6 +98,23 @@ export const seedTodo = (db: DatabaseSync, opts: SeedTaskOpts = {}) => insertTas
 export const seedProject = (db: DatabaseSync, opts: SeedTaskOpts = {}) => insertTask(db, 1, opts);
 export const seedHeading = (db: DatabaseSync, opts: SeedTaskOpts = {}) => insertTask(db, 2, opts);
 
+/**
+ * Control the log-move boundary (src/read/log-boundary.ts): logInterval
+ * (0=Immediately, 1=Daily, 4=Manually) + manualLogDate (epoch REAL seconds).
+ * With no TMSettings row logBoundary falls back to logInterval 0 (boundary =
+ * now), so an explicit row is needed to hold closed items unswept for a test.
+ */
+export function seedSettings(
+  db: DatabaseSync,
+  opts: { logInterval?: number; manualLogDate?: number | null } = {},
+): void {
+  db.prepare(`INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES (?, ?, ?)`).run(
+    uid("settings"),
+    opts.logInterval ?? 0,
+    opts.manualLogDate ?? null,
+  );
+}
+
 export function seedArea(db: DatabaseSync, title: string, index = 0): string {
   const uuid = uid("area");
   db.prepare(`INSERT INTO TMArea (uuid, title, visible, "index") VALUES (?, ?, 1, ?)`).run(
