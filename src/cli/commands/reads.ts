@@ -73,7 +73,7 @@ export function openInThings(uuid: string): string {
 }
 
 /** Help copy for the `--untagged` content scope (the GUI's "No Tag"). */
-const UNTAGGED_DESC = "only items with no tag (direct or inherited)";
+const UNTAGGED_DESC = 'only items with no tag, direct or inherited — the app\'s "No Tag" filter';
 
 /**
  * Shared usage guard: `--untagged` is a content scope that inverts `--tag`, so
