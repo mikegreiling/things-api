@@ -31,7 +31,13 @@ export interface AutomationProbeDeps {
 
 const PROBE_SCRIPT = 'tell application "Things3" to count of areas';
 
-function defaultIsAppRunning(): boolean {
+/**
+ * Is the Things app process present? No app = a frozen database (there is no
+ * background sync daemon). The single stable process-check shape in this
+ * binary — reused by the sync-health section so macOS never sees a second
+ * command shape.
+ */
+export function isThingsRunning(): boolean {
   try {
     execFileSync("pgrep", ["-x", "Things3"], { stdio: "ignore" });
     return true;
@@ -39,6 +45,8 @@ function defaultIsAppRunning(): boolean {
     return false;
   }
 }
+
+const defaultIsAppRunning = isThingsRunning;
 
 function defaultRun(script: string, timeoutMs: number): string {
   return execFileSync("osascript", ["-e", script], { encoding: "utf8", timeout: timeoutMs });
