@@ -49,7 +49,7 @@ Both floors (computed once in `render.ts` `computeFitFloors`, with a comment enu
 - a space + the longest deadline token — **full worst case `⚑ 14 days left` (14 cells) for `FULL_FIT_FLOOR`; compact worst case (10 cells) for `COMPACT_FIT_FLOOR`**
 - a space + a `TITLE_MIN`-column title
 
-The compact deadline worst case is the widest token that can appear IN compact mode: either the narrow relative `⚑ 14d left` or a year-bearing far date `⚑ Feb 2001` (kept full even when compact — see § Compact deadline forms), both 10 cells. So the two floors today are `FULL_FIT_FLOOR = 78` and `COMPACT_FIT_FLOOR = 74` — a 4-column gap that compaction buys back.
+The compact deadline worst case is the widest token that can appear IN compact mode: the narrow relative `⚑ 14d left` (10 cells) governs, since year-bearing far dates collapse to the bare year (`⚑ 2001`, 6 cells — see § Compact deadline forms). So the two floors today are `FULL_FIT_FLOOR = 78` and `COMPACT_FIT_FLOOR = 74` — a 4-column gap that compaction buys back.
 
 **Effective width = `max(terminalWidth, COMPACT_FIT_FLOOR)`** (the lower floor is the hard minimum). Every row fits to the effective width via the sacrifice order. Because the floor budgets the worst-case furniture, the heaviest row's title lands at exactly 16 at whichever floor is active, and every lighter-furnitured row's title is automatically ≥ 16 (less furniture = more budget) — this eliminates the per-row raggedness where heavy rows bottom out and overflow at widths where light rows still fit.
 
@@ -79,7 +79,7 @@ Canon. A SECOND oracle, measured from the Things **iOS** app (Mike's screenshots
 **Scope of the compact forms — the two COMMON shapes only:**
 
 - month-day absolutes (`Aug 12` → `8/12`) and day-relatives (`N days ago/left` → `Nd ago` / `Nd left`). iOS shows `1d` with no pluralization, so no singular special-casing is needed.
-- **Year-bearing far dates (`Oct 2020`, `Feb 2027`) KEEP their current rendering even in compact mode.** This is a deliberate judgment: `10/20` would be ambiguous with an M/D date, and the iOS oracle doesn't cover year-bearing dates. Because such a date can still appear in a compact view, `COMPACT_FIT_FLOOR` budgets it as (a co-)worst case.
+- **Year-bearing far dates collapse to the BARE YEAR in compact mode** (`Oct 2020` → `⚑ 2020`, `Feb 2027` → `⚑ 2027`) — Mike's ruling 2026-07-14, superseding the initial keep-full judgment: four digits are unambiguous against M/D (which never reaches four digits before the slash), and at that distance the month carries little signal. The iOS oracle doesn't cover year-bearing dates; this is our own extension in its spirit.
 - `⚑ today` is already minimal and is unchanged.
 
 **`width === null`** (non-TTY, `--json`, `THINGS_WIDTH=0`) is byte-identical to today — always full forms, the compatibility contract stands. `‹date›` chips, logged dates, and detail cards are OUT of scope (deadline token only).

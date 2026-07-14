@@ -284,8 +284,9 @@ export const UUID_DISPLAY_MIN = 8;
  * worst-case FIXED furniture a row can carry plus a {@link TITLE_MIN}-column
  * title. The only part that differs between the floors is the deadline token —
  * the FULL floor budgets the full worst-case form (`⚑ 14 days left`), the
- * COMPACT floor the narrow iOS-oracle worst case (`⚑ 14d left`, tied with a
- * year-bearing `⚑ Feb 2001` that stays full even when compact). Everything else
+ * COMPACT floor the narrow iOS-oracle worst case (`⚑ 14d left`; year-bearing
+ * far dates collapse to the bare year in compact mode, so they no longer
+ * compete — Mike's ruling 2026-07-14). Everything else
  * is shared, so this returns both from one enumeration. Enumerated parts (any
  * glyph change re-derives these; `width.test.ts` recomputes them independently
  * so they cannot silently drift):
@@ -317,13 +318,13 @@ function computeFitFloors(): { full: number; compact: number } {
   } as Project);
   const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
   const fullDeadline = deadlineToken("2000-01-15", todayIso); // ⚑ 14 days left — longest full form
-  // Compact worst case: the widest token that can appear in compact mode — the
-  // narrow relative `⚑ 14d left` OR a year-bearing far date `⚑ Feb 2001` (kept
-  // full even when compact, per the oracle). Both are 10 cells; take the max so
-  // the floor is safe whichever wins if the glyph vocabulary shifts.
+  // Compact worst case: the widest token that can appear in compact mode. Far
+  // dates collapse to the bare year (`⚑ 2001`, 6 cells), so the narrow
+  // relative `⚑ 14d left` (10 cells) governs; keep the max() so the floor
+  // stays safe if the compact vocabulary ever shifts.
   const compactDeadline = Math.max(
     visibleWidth(deadlineToken("2000-01-15", todayIso, true)), // ⚑ 14d left
-    visibleWidth(deadlineToken("2001-02-10", todayIso, true)), // ⚑ Feb 2001 (year-bearing)
+    visibleWidth(deadlineToken("2001-02-10", todayIso, true)), // ⚑ 2001 (year-only far date)
   );
   const furniture =
     UUID_DISPLAY_MIN +
