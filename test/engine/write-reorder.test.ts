@@ -54,6 +54,7 @@ function config(allowExperimental: boolean): ThingsApiConfig {
     auditEnabled: true,
     acceptedFingerprint: null,
     allowExperimental,
+    ui: { enabled: false },
     host: "test-host",
   };
 }

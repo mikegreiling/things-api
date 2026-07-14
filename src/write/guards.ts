@@ -3,7 +3,7 @@
  * the failure mode is real. Guards run against the pre-read; a blocked
  * result means the app was never touched.
  */
-import type { Acknowledgements, OperationKind } from "./operations.ts";
+import { isUiDriveOp, type Acknowledgements, type OperationKind } from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 
 export const HAZARD_IDS = [
@@ -21,6 +21,7 @@ export const HAZARD_IDS = [
   "H-BACKDATE-OPEN",
   "H-HEADING-CHILDREN",
   "H-NO-REMINDER",
+  "H-UI-DRIVE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -394,6 +395,21 @@ const GUARDS: Record<HazardId, GuardFn> = {
       hazard: "H-PERMANENT-DELETE",
       detail: `${what}; no tombstones are written while sync is off`,
       remediation: "pass dangerouslyPermanent (--dangerously-permanent) to proceed",
+    };
+  },
+  "H-UI-DRIVE": ({ op, acks }) => {
+    if (!isUiDriveOp(op) || acks.dangerouslyDriveGui === true) return null;
+    return {
+      hazard: "H-UI-DRIVE",
+      detail:
+        "this operation drives the local Things app through the Accessibility API — it may " +
+        "briefly interact with the app's UI. On current evidence (AXVM1) element presses do " +
+        "NOT steal window focus and work even under a locked session, so the disruption is far " +
+        "milder than screen-driving would be; it is still gated because it drives the real GUI",
+      remediation:
+        "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also " +
+        "requires `things config set ui-enabled true` and Accessibility granted to this " +
+        "process (see docs/setup.md)",
     };
   },
 };

@@ -35,7 +35,7 @@ import type { AnyTask } from "../model/entities.ts";
 import { localToday } from "../model/dates.ts";
 import { getField } from "./verify/delta.ts";
 import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
-import type { OperationKind, ReorderParams } from "./operations.ts";
+import { isUiDriveOp, type OperationKind, type ReorderParams } from "./operations.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 
@@ -196,6 +196,21 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "heading.create":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",
+  "todo.make-repeating":
+    "making a to-do repeat is an identity replacement (UI2-a): the original uuid is destroyed " +
+    "and a new template row is born — there is no un-repeat that restores the original",
+  "todo.convert-to-project":
+    "converting a to-do to a project is an identity replacement (UI2-d): the to-do uuid is " +
+    "destroyed and a new project is born — the app offers no convert-back",
+  "heading.convert-to-project":
+    "converting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
+    "destroyed and a new project is born — no convert-back",
+  "todo.stop-repeat":
+    "stopping a repeat is terminal (UI2-i): the template uuid is destroyed and replaced by a new " +
+    "plain to-do with the rule cleared — there is no Resume; make it repeat again from scratch",
+  "todo.reschedule-repeat":
+    "the rule mutated in place (UI2-b) but the minimal GUI vocabulary cannot faithfully restore " +
+    "an arbitrary prior recurrence rule — reschedule again by hand",
   // NB: todo.clear-dated-reminder is NOT here — it IS reversible. The URL
   // scheme re-SETS a dated reminder (update?id=X&when=<date>@<time>, R17/R18),
   // so its inverse re-attaches the captured reminder to the item's current
@@ -1141,6 +1156,27 @@ export function planUndo(
       };
     }
 
+    // The ui-vector reversible pair: pause ↔ resume. Both drive the GUI, so
+    // the inverse carries the drive acknowledgement (added in runUndo).
+    case "todo.pause-repeat": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "todo.resume-repeat", params: { uuid } }],
+        notes,
+      };
+    }
+    case "todo.resume-repeat": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "todo.pause-repeat", params: { uuid } }],
+        notes,
+      };
+    }
+
     default:
       return irreversible(`no inverse is defined for operation "${record.op}"`);
   }
@@ -1298,6 +1334,10 @@ export async function runUndo(
             acknowledgeChecklistReset: true,
           }),
           ...(needsPermanent && { dangerouslyPermanent: true }),
+          // A GUI-driven inverse (pause ↔ resume) replays a change the user
+          // already acknowledged when they made it — carry the drive ack so it
+          // is not re-gated by H-UI-DRIVE.
+          ...(isUiDriveOp(step.op) && { dangerouslyDriveGui: true }),
         };
         const result =
           step.op === "reorder"

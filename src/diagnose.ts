@@ -12,10 +12,21 @@ import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
 import { compareToBaseline, observeSchema } from "./db/fingerprint.ts";
 import { locateThingsDb, ThingsDbNotFoundError } from "./db/locate.ts";
 import {
+  isThingsRunning,
   probeAutomation,
   type AutomationProbeDeps,
   type AutomationProbeStatus,
 } from "./write/automation-probe.ts";
+import {
+  probeAccessibility,
+  type AccessibilityProbeDeps,
+  type AccessibilityProbeStatus,
+} from "./write/accessibility-probe.ts";
+import {
+  allCertifications,
+  UI_CERTIFICATION_PROFILE,
+  type CertificationStatus,
+} from "./write/vectors/ui-certification.ts";
 import {
   readShortcutProxies,
   readUrlSchemeEnabled,
@@ -114,6 +125,26 @@ export interface DiagnoseReport {
     status: AutomationProbeStatus | "not-probed";
     detail: string;
   };
+  /**
+   * The Accessibility GUI ("ui") vector's health: whether it is enabled on
+   * this machine, whether the app is running, the Accessibility grant + recipe
+   * canary (opt-in, --probe-accessibility, mirroring the Automation probe so a
+   * diagnostic never triggers a surprise TCC prompt), and per-op certification.
+   */
+  ui: {
+    /** config.ui.enabled — the first of the vector's two keys. */
+    enabled: boolean;
+    appRunning: boolean;
+    accessibility: {
+      status: AccessibilityProbeStatus | "not-probed";
+      detail: string;
+    };
+    /** Manifest profile ("provisional" until a real-hardware sitting lands). */
+    certificationProfile: string;
+    /** Per-op certification: recipes ship uncertified until certified on hardware. */
+    certification: { op: string; status: CertificationStatus }[];
+    reason: string;
+  };
   availability: {
     /** On-disk 'Enable Things URLs' state (group-container plist; Phase 21b). */
     urlScheme: UrlSchemeState;
@@ -148,8 +179,16 @@ export interface DiagnoseOptions {
    * not running so a diagnostic never launches the app.
    */
   probeAutomation?: boolean;
+  /**
+   * Actively test Accessibility consent + the ui recipe canary by querying the
+   * Things UI tree once. Opt-in for the same reason as probeAutomation: the
+   * probe itself can make macOS show the Accessibility prompt.
+   */
+  probeAccessibility?: boolean;
   /** Test seams. */
   probeDeps?: AutomationProbeDeps;
+  /** Test seam for the Accessibility probe. */
+  accessibilityProbeDeps?: AccessibilityProbeDeps;
   environment?: EnvironmentTracker;
   availability?: AvailabilityDeps;
   /** Test seams for the sync-health section (clock, process check, WAL/plist readers). */
@@ -276,6 +315,29 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
                 "opt-in: pass --probe-automation to actively test Automation consent (may " +
                 "show a one-time macOS prompt; skipped when Things is not running)",
             },
+      ui: {
+        enabled: config.ui.enabled,
+        appRunning: isThingsRunning(),
+        accessibility:
+          options.probeAccessibility === true
+            ? probeAccessibility(options.accessibilityProbeDeps)
+            : {
+                status: "not-probed",
+                detail:
+                  "opt-in: pass --probe-accessibility to test Accessibility consent + the recipe " +
+                  "canary (may show a one-time macOS prompt; skipped when Things is not running)",
+              },
+        certificationProfile: UI_CERTIFICATION_PROFILE,
+        certification: allCertifications().map(({ op, entry }) => ({
+          op,
+          status: entry.status,
+        })),
+        reason: config.ui.enabled
+          ? "on — GUI-driven ops available (each still needs --dangerously-drive-gui and grants " +
+            "Accessibility; recipes are uncertified until a real-hardware sitting)"
+          : "off — GUI-driven ops unavailable (`things config set ui-enabled true` to opt in; " +
+            "intended for a dedicated always-on Mac, see docs/setup.md)",
+      },
       availability: {
         urlScheme: readUrlSchemeEnabled(options.availability),
         shortcuts: readShortcutProxies(options.availability),

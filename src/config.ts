@@ -29,6 +29,14 @@ export interface ThingsApiConfig {
    * sdef reorder command). Guarded further by the pipeline's sdef canary.
    */
   allowExperimental: boolean;
+  /**
+   * The Accessibility GUI ("ui") write vector. When disabled the vector does
+   * not exist on this machine: its GUI-only operations report unsupported.
+   * Enabling it is the FIRST of two keys — every ui-vector call still needs a
+   * per-call `dangerouslyDriveGui` acknowledgement. Intended for a dedicated
+   * always-on Mac ("closet mini") kept unlocked; see docs/design/ui-vector.md.
+   */
+  ui: { enabled: boolean };
   host: string;
 }
 
@@ -44,6 +52,7 @@ interface ConfigFile {
   auditEnabled?: boolean;
   acceptedFingerprint?: string;
   allowExperimental?: boolean;
+  uiEnabled?: boolean;
 }
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
@@ -88,6 +97,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     acceptedFingerprint: file.acceptedFingerprint ?? null,
     allowExperimental:
       env["THINGS_API_ALLOW_EXPERIMENTAL"] === "true" || file.allowExperimental === true,
+    ui: {
+      enabled: env["THINGS_API_UI_ENABLED"] === "true" || file.uiEnabled === true,
+    },
     host: hostname(),
   };
 }

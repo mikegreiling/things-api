@@ -261,6 +261,7 @@ const writeOptions = (args: {
   acknowledge_project_reopen?: boolean | undefined;
   dangerously_permanent?: boolean | undefined;
   acknowledge_tag_subtree?: boolean | undefined;
+  dangerously_drive_gui?: boolean | undefined;
 }): WriteOptions => ({
   actor: "mcp",
   ...(args.dry_run === true && { dryRun: true }),
@@ -269,6 +270,7 @@ const writeOptions = (args: {
   ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
   ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
   ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+  ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
 });
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
@@ -1210,6 +1212,136 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         return r.heading.kind === "ok" || r.heading.kind === "dry-run"
           ? jsonResult(r)
           : mutationResult(r.heading);
+      }),
+  );
+
+  // -------------------------------------------- GUI-driven (Accessibility)
+
+  const driveGuiShape = {
+    dangerously_drive_gui: z
+      .boolean()
+      .optional()
+      .describe(
+        "Required: this drives the local Things app through its accessibility interface to " +
+          "make a change the app offers nowhere else. It briefly interacts with the app's UI " +
+          "on the machine running this server, and must be turned on first with `things config " +
+          "set ui-enabled true`. Intended for a dedicated always-on Mac.",
+      ),
+  };
+  const repeatRuleShape = {
+    frequency: z.enum(["daily", "weekly", "monthly", "yearly"]).describe("How often it repeats"),
+    interval: z.number().int().min(1).max(99).describe("Every N units (1–99)"),
+  };
+
+  server.registerTool(
+    "make_repeating",
+    {
+      description:
+        "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new recurring " +
+        "series — the original disappears and a fresh repeating item takes its place, so it " +
+        "cannot be undone. Only a frequency and an interval are supported. Returns the new " +
+        "item's uuid.",
+      inputSchema: {
+        uuid: z.string().describe("The to-do to make repeating"),
+        ...repeatRuleShape,
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.run(
+            "todo.make-repeating",
+            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "reschedule_repeat",
+    {
+      description:
+        "Change a repeating to-do's frequency and interval, keeping the same item. Only a " +
+        "frequency and an interval are supported; other repeat details (weekday choices, end " +
+        "bounds) are left as they are and cannot be changed here.",
+      inputSchema: {
+        uuid: z.string().describe("The repeating to-do to reschedule"),
+        ...repeatRuleShape,
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.run(
+            "todo.reschedule-repeat",
+            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "set_repeat_state",
+    {
+      description:
+        "Pause, resume, or stop a repeating to-do. 'pause' stops it spawning new occurrences " +
+        "but keeps its rule (reversible with 'resume'). 'stop' REPLACES it with a single plain " +
+        "to-do — the recurring series is removed for good (any occurrence already created stays " +
+        "as its own item); this is terminal and cannot be undone.",
+      inputSchema: {
+        uuid: z.string().describe("The repeating to-do"),
+        state: z.enum(["pause", "resume", "stop"]),
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const op =
+          args.state === "pause"
+            ? "todo.pause-repeat"
+            : args.state === "resume"
+              ? "todo.resume-repeat"
+              : "todo.stop-repeat";
+        return mutationResult(
+          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
+        );
+      }),
+  );
+
+  server.registerTool(
+    "convert_to_project",
+    {
+      description:
+        "Convert a to-do or a heading into a project. This REPLACES the original with a new " +
+        "project (a converted to-do keeps its notes; a converted heading is promoted alongside " +
+        "its project and its to-dos move under the new project). The original is gone and this " +
+        "cannot be undone. Returns the new project's uuid.",
+      inputSchema: {
+        uuid: z.string().describe("The to-do or heading to convert"),
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const item = getClient().read.byUuid(args.uuid);
+        if (item === null) throw new RangeError(`no item with uuid ${args.uuid}`);
+        const op =
+          item.type === "heading" ? "heading.convert-to-project" : "todo.convert-to-project";
+        return mutationResult(
+          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
+        );
       }),
   );
 
