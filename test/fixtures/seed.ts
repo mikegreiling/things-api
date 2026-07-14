@@ -125,11 +125,16 @@ export function seedArea(db: DatabaseSync, title: string, index = 0): string {
   return uuid;
 }
 
-export function seedTag(db: DatabaseSync, title: string, parent: string | null = null): string {
+export function seedTag(
+  db: DatabaseSync,
+  title: string,
+  parent: string | null = null,
+  index = 0,
+): string {
   const uuid = uid("tag");
   db.prepare(
-    `INSERT INTO TMTag (uuid, title, shortcut, usedDate, parent, "index") VALUES (?, ?, NULL, NULL, ?, 0)`,
-  ).run(uuid, title, parent);
+    `INSERT INTO TMTag (uuid, title, shortcut, usedDate, parent, "index") VALUES (?, ?, NULL, NULL, ?, ?)`,
+  ).run(uuid, title, parent, index);
   return uuid;
 }
 

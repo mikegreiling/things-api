@@ -26,6 +26,8 @@ Each visual channel carries **one** kind of meaning. Reading a row means decodin
 
 The blue channel is deliberately *not* spent on project titles: the round bracket plus the bold weight already say "project", so blue is freed to mean the checkbox accent and the resolved marks alone.
 
+**Tag order is the app's canonical order (ratified 2026-07-14), not alphabetical.** A row's tag pills render in ascending `TMTag."index"` — the user-draggable rank from the app's Tags window — so the CLI matches the GUI (`#recurring #home #housekeeping`, not the alphabetical `#home #housekeeping #recurring`). This is the array order everywhere tags appear (list rows, detail cards, area/project headers, `--json` arrays), and it is why the width fitter — which folds from the end — keeps the canonically-first tags. The comparator lives in `fetchTagsForTasks` (`src/read/queries.ts`); the nested-tag interleave (a child's flat index can precede its parent's) is an open question documented there. The `things tags` listing is the one exception — it renders the tag TREE depth-first so a child always follows its parent (`tagsView`).
+
 ## Per-view roles
 
 Two contextual decisions drive `formatItem` options. "Project role" is whether a project row heads its own to-do group (underlined heading) or is just a row (plain bold). "Resolved" is whether completed/canceled rows are the view's norm (plain / strike-only) or a deviation (dim / dim+strike).

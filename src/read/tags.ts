@@ -23,20 +23,49 @@ interface TagRow {
   index: number | null;
 }
 
+/**
+ * The `things tags` listing: the tag TREE, depth-first, so a child always
+ * FOLLOWS its parent. Siblings (and roots) order by canonical `TMTag."index"`
+ * (the app's Tags-window rank), title tiebreak.
+ *
+ * DFS is unambiguous here and matches the Tags window: this is a listing of the
+ * hierarchy itself, where the parent→child relationship is the structure. That
+ * is DISTINCT from a flat multi-tag pill row (fetchTagsForTasks / areaTags),
+ * where the ratified order is flat ascending `index` and the nested-tag
+ * interleave is an open question — see fetchTagsForTasks for that caveat.
+ */
 export function tagsView(db: DatabaseSync): Tag[] {
   const rows = db
-    .prepare(`SELECT ${selectList("TMTag")} FROM TMTag ORDER BY ${q("index")} ASC`)
+    .prepare(`SELECT ${selectList("TMTag")} FROM TMTag ORDER BY ${q("index")} ASC, title ASC`)
     .all() as unknown as TagRow[];
   const byUuid = new Map(rows.map((r) => [r.uuid, r]));
-  return rows.map((row) => {
+  // Children grouped under their parent uuid, each list already in index/title
+  // order (the SQL sort is stable and preserves the sibling ordering).
+  const childrenOf = new Map<string, TagRow[]>();
+  for (const row of rows) {
+    if (!row.parent) continue;
+    (childrenOf.get(row.parent) ?? childrenOf.set(row.parent, []).get(row.parent)!).push(row);
+  }
+  const out: Tag[] = [];
+  const seen = new Set<string>();
+  const visit = (row: TagRow): void => {
+    if (seen.has(row.uuid)) return; // cycle guard (bad parent data can't loop)
+    seen.add(row.uuid);
     const parentRow = row.parent ? byUuid.get(row.parent) : undefined;
-    return {
+    out.push({
       uuid: row.uuid,
       title: row.title ?? "",
       shortcut: row.shortcut,
       parent: parentRow ? { uuid: parentRow.uuid, title: parentRow.title ?? "" } : null,
-    };
-  });
+    });
+    for (const child of childrenOf.get(row.uuid) ?? []) visit(child);
+  };
+  // Roots first (no parent, or an orphan whose parent uuid is absent), in index
+  // order; DFS pulls each subtree. A final pass emits any row a parent cycle
+  // left unreached, so the listing never silently drops a tag.
+  for (const row of rows) if (!row.parent || !byUuid.has(row.parent)) visit(row);
+  for (const row of rows) visit(row);
+  return out;
 }
 
 interface AreaRow {
@@ -59,11 +88,13 @@ export function areasView(db: DatabaseSync): Area[] {
 }
 
 export function areaTags(db: DatabaseSync, areaUuid: string): Ref[] {
+  // Canonical pill order: ascending TMTag."index" (the app's Tags-window rank),
+  // title tiebreak. Same comparator + nested-tag caveat as fetchTagsForTasks.
   const rows = db
     .prepare(
       `SELECT tg.uuid AS uuid, tg.title AS title
        FROM TMAreaTag at JOIN TMTag tg ON tg.uuid = at.tags
-       WHERE at.areas = ? ORDER BY tg.title`,
+       WHERE at.areas = ? ORDER BY tg.${q("index")}, tg.title`,
     )
     .all(areaUuid) as unknown as Array<{ uuid: string; title: string | null }>;
   return rows.map((r) => ({ uuid: r.uuid, title: r.title ?? "" }));

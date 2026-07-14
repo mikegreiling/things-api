@@ -379,6 +379,44 @@ describe("formatItem width plumbing", () => {
   });
 });
 
+describe("canonical tag order survives the width fold (CPAP row, end-to-end)", () => {
+  let fixture: FixtureDb | null = null;
+  afterEach(() => {
+    fixture?.close();
+    fixture = null;
+    setFitWidth(null);
+  });
+
+  it("folds from the END, so the canonically-FIRST tag (#recurring) is what survives", () => {
+    fixture = buildFixtureDb();
+    // Live CPAP indexes: recurring sorts first canonically, home/housekeeping after.
+    const recurring = seedTag(fixture.db, "recurring", null, -16139);
+    const home = seedTag(fixture.db, "home", null, -13475);
+    const housekeeping = seedTag(fixture.db, "housekeeping", null, -13442);
+    const t = seedTodo(fixture.db, { title: "Replace CPAP mask", startDate: "2026-07-02" });
+    // Non-canonical assignment order — the render must still lead with #recurring.
+    tagTask(fixture.db, t, home);
+    tagTask(fixture.db, t, housekeeping);
+    tagTask(fixture.db, t, recurring);
+
+    const item = anytimeView(fixture.db)
+      .flatMap((s) => s.items)
+      .find((i) => i.title === "Replace CPAP mask");
+    // The rendered tag ARRAY is canonical — exactly the order the fitter folds.
+    expect(item?.tags.map((tg) => tg.title)).toEqual(["recurring", "home", "housekeeping"]);
+
+    // render.ts builds RowSegments.tagNames straight from item.tags (array
+    // order); the fitter folds that list from the END. So at a folding width
+    // the canonically-FIRST tag survives — the alphabetical guess (#home first)
+    // would instead have folded #recurring away.
+    const tagNames = (item as NonNullable<typeof item>).tags.map((tg) => tg.title);
+    const s = seg({ rawTitle: "A".repeat(10), tagNames });
+    const out = stripSgr(fitRow(s, 42)); // narrow: only the first tag + marker fit
+    expect(out).toContain("#recurring #…");
+    expect(out).not.toContain("#housekeeping");
+  });
+});
+
 describe("byte-stability regression (real rows, colors off)", () => {
   let fixture: FixtureDb | null = null;
   afterEach(() => {

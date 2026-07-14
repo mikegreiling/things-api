@@ -270,7 +270,25 @@ export function fetchChecklistRows(db: DatabaseSync, taskUuid: string): Checklis
   return db.prepare(sql).all(taskUuid) as unknown as ChecklistRow[];
 }
 
-/** Direct tags for a set of tasks, in one query. Returns uuid -> Ref[] (sorted by tag title). */
+/**
+ * Direct tags for a set of tasks, in one query. Returns uuid -> Ref[] in the
+ * app's CANONICAL tag order.
+ *
+ * CANONICAL ORDER (ratified 2026-07-14): `TMTag."index"` (INTEGER, often
+ * negative) is the user-draggable order from the app's Tags window, and the GUI
+ * renders every multi-tag pill row in ascending `index`. Live oracle: the
+ * `Replace CPAP mask & air filter` to-do shows `#recurring #home #housekeeping`,
+ * matching the tags' indexes, NOT their alphabetical order. `title` is a
+ * deterministic tiebreak for equal indexes only.
+ *
+ * NESTED-TAG CAVEAT (open question, deliberately unsolved): child tags' indexes
+ * interleave globally with top-level ones (a parent at -3281 can sit above its
+ * children at -12063), so a flat-index sort can place a child BEFORE its parent
+ * in a multi-tag row. No live item carries a nested tag alongside another tag,
+ * so there is no GUI oracle for the interleaved case — flat ascending `index` is
+ * the ratified comparator, isolated HERE. If a GUI oracle ever contradicts it,
+ * the fix is a DFS-rank swap in this one ORDER BY (rank children after parents).
+ */
 export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<string, Ref[]> {
   const map = new Map<string, Ref[]>();
   if (taskUuids.length === 0) return map;
@@ -278,7 +296,7 @@ export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<st
   const sql = `SELECT tt.tasks AS task, tg.uuid AS uuid, tg.title AS title
                FROM TMTaskTag tt JOIN TMTag tg ON tg.uuid = tt.tags
                WHERE tt.tasks IN (${placeholders})
-               ORDER BY tg.title`;
+               ORDER BY tg.${q("index")}, tg.title`;
   const rows = db.prepare(sql).all(...taskUuids) as unknown as Array<{
     task: string;
     uuid: string;
