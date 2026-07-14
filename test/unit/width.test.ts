@@ -160,6 +160,100 @@ describe("fitRow — the ratified sacrifice order", () => {
   });
 });
 
+describe("fitRow — lazy tag folding (widest fitting level, not an eager cap)", () => {
+  // Mike's live repro shape: fixed furniture (left 14 + ` (Proj)` container),
+  // tags `#home #recurring #housekeeping`, a 20-col title. Everything fits at
+  // W=72; the collapse must step through the tag levels ONE at a time — never
+  // jump straight to `#home #…` the moment folding begins.
+  const accept = seg({
+    rawTitle: "Water all the plants", // 20 cols
+    tagNames: ["home", "recurring", "housekeeping"],
+    context: " (Proj)",
+  });
+
+  it("at W everything fits; at W−1 only the LAST tag folds (not straight to `#first #…`)", () => {
+    expect(stripSgr(fitRow(accept, 72))).toBe(
+      "id123456  [ ] Water all the plants #home #recurring #housekeeping (Proj)",
+    );
+    // The bug fix: W−1 keeps TWO tags + the marker, and the title stays whole.
+    expect(stripSgr(fitRow(accept, 71))).toBe(
+      "id123456  [ ] Water all the plants #home #recurring #… (Proj)",
+    );
+  });
+
+  it("steps through `#home #…` (container kept), then container-drop, then bare `#…`", () => {
+    expect(stripSgr(fitRow(accept, 55))).toBe("id123456  [ ] Water all the plants #home #… (Proj)");
+    // container-drop: the ` (Proj)` yields WHOLE while a real tag still shows.
+    expect(stripSgr(fitRow(accept, 43))).toBe("id123456  [ ] Water all the plants #home #…");
+    // tags-bare: the last tag folds once the container is already gone.
+    expect(stripSgr(fitRow(accept, 37))).toBe("id123456  [ ] Water all the plants #…");
+  });
+
+  it("slack a discrete tag level leaves flows BACK to the title (not clamped to 4/5)", () => {
+    // budgetFull = 45; tagShare = 9, titleShare = 36. The title (60) is over its
+    // share and the tags (#ab #cd #ef, nat 12) over theirs — contention — but the
+    // widest tag level that fits the 9-col cap is `#ab #…` at 7 cols, leaving 2
+    // cols of slack. Those 2 cols go to the title: 38, not the bare 36 share.
+    const s = seg({ rawTitle: "A".repeat(60), tagNames: ["ab", "cd", "ef"] });
+    const out = stripSgr(fitRow(s, 59));
+    expect(out).toContain("#ab #…");
+    const titleChunk = /A+…/.exec(out)?.[0] ?? "";
+    expect(visibleWidth(titleChunk)).toBe(38); // 36 share + 2 reclaimed
+  });
+
+  it("contention (both over their shares) arbitrates by the 4:1 ratio", () => {
+    // Large title (40) + 4 tags, width 60: both exceed their shares, so the ratio
+    // decides — tags capped at their 1/5, title truncated toward its 4/5.
+    const s = seg({ rawTitle: "A".repeat(40), tagNames: ["a", "b", "c", "d"] });
+    const out = stripSgr(fitRow(s, 60));
+    expect(out).toBe("id123456  [ ] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA… #a #b #…");
+    expect(visibleWidth(out)).toBe(60);
+  });
+
+  it("when the TITLE is within its share, tags take everything left (Mike's bug direction)", () => {
+    // Small title (10), three fat tags: the OLD eager 1/5 cap folded tags to
+    // `#home #…` the instant fitting began; lazily they keep their widest level.
+    const s = seg({ rawTitle: "A".repeat(10), tagNames: ["home", "recurring", "housekeeping"] });
+    // budgetFull just one short of the full 41 → only the last tag folds.
+    const out = stripSgr(fitRow(s, 54));
+    expect(out).toContain("#home #recurring #…");
+    expect(out).toContain("AAAAAAAAAA"); // the 10-col title survives whole
+  });
+});
+
+describe("deadline gutter (experimental — right-pinned flag column)", () => {
+  it("right-aligns the deadline token at the effective width across rows", () => {
+    const short = seg({ rawTitle: "Short", tagNames: [], deadline: " ⚑ Aug 28" });
+    const long = seg({ rawTitle: "A much longer title here", tagNames: [], deadline: " ⚑ Sep 1" });
+    const a = fitRow(short, 60);
+    const b = fitRow(long, 60);
+    // Both rows fill exactly the effective width — the deadline lands in the
+    // gutter (its token flush at the right edge), regardless of content length.
+    expect(visibleWidth(a)).toBe(60);
+    expect(visibleWidth(b)).toBe(60);
+    expect(a.endsWith("⚑ Aug 28")).toBe(true);
+    expect(b.endsWith("⚑ Sep 1")).toBe(true);
+    // A shorter row gets MORE padding before the flag than a longer one.
+    const padA = a.length - a.replace(/ +⚑/, "⚑").length;
+    const padB = b.length - b.replace(/ +⚑/, "⚑").length;
+    expect(padA).toBeGreaterThan(padB);
+  });
+
+  it("a row with no deadline is left ragged (no gutter padding)", () => {
+    const s = seg({ rawTitle: "No deadline here", tagNames: [] });
+    expect(fitRow(s, 60)).toBe("id123456  [ ] No deadline here");
+  });
+
+  it("a row that already fills the width keeps its inline deadline (≥ 1 space, byte-identical)", () => {
+    // Title long enough that content + deadline already spans the width: the
+    // gutter collapses to the single inline space (no change vs the unfitted form).
+    const s = seg({ rawTitle: "A".repeat(60), tagNames: [], deadline: " ⚑ Sep 1" });
+    const out = fitRow(s, 40);
+    expect(out).not.toMatch(/ {2,}⚑/); // no gutter run — the row is full
+    expect(out.endsWith(" ⚑ Sep 1")).toBe(true);
+  });
+});
+
 describe("MIN_FIT_WIDTH — the single derived floor", () => {
   it("recomputes from the enumerated glyph parts (drift guard)", () => {
     const today = "2000-01-01";
@@ -243,9 +337,26 @@ describe("formatItem width plumbing", () => {
   it("null (the default) does NOT fit — byte-identical to the composed row", () => {
     setFitWidth(null);
     const unfit = formatItem(todo, 8);
-    setFitWidth(500); // comfortably wide: a fit that changes nothing
+    setFitWidth(500); // comfortably wide: a fit that changes nothing (no deadline)
     expect(formatItem(todo, 8)).toBe(unfit);
     expect(getFitWidth()).toBe(500);
+  });
+
+  it("the deadline gutter is TTY-only — the null path never right-pins the flag", () => {
+    const dueTodo = { ...todo, deadline: "2027-02-06" } as typeof todo;
+    const opts = { now: new Date("2027-01-01T12:00:00Z") };
+    setFitWidth(null);
+    const unfit = formatItem(dueTodo, 8, opts);
+    // Null path: the deadline stays inline — a single space before the flag.
+    expect(unfit).toContain("⚑");
+    expect(unfit).not.toMatch(/ {2,}⚑/);
+    // Fitted at a wide width: the flag is pushed to the gutter (right edge).
+    setFitWidth(120);
+    const fit = formatItem(dueTodo, 8, opts);
+    expect(fit).toMatch(/ {2,}⚑/);
+    expect(visibleWidth(fit)).toBe(120);
+    // …and collapsing that gutter run to one space reproduces the null-path row.
+    expect(fit.replace(/ +⚑/, " ⚑")).toBe(unfit);
   });
 
   it("clamps to MIN_FIT_WIDTH — a sub-floor width renders identically to the floor", () => {
@@ -276,7 +387,12 @@ describe("byte-stability regression (real rows, colors off)", () => {
     setFitWidth(null);
   });
 
-  it("a comfortably-wide fit is a no-op — every representative row is unchanged", () => {
+  // A wide fit changes nothing about a row's CONTENT; the one transform it adds
+  // is the experimental deadline gutter (right-pinning the ⚑). Collapse that
+  // gutter run back to the single inline space to compare against the null path.
+  const collapseGutter = (s: string): string => s.replace(/ +⚑/, " ⚑");
+
+  it("a comfortably-wide fit changes only the deadline gutter — content is unchanged", () => {
     fixture = buildFixtureDb();
     const area = seedArea(fixture.db, "Home");
     const project = seedProject(fixture.db, { title: "Garage", area });
@@ -292,15 +408,22 @@ describe("byte-stability regression (real rows, colors off)", () => {
     seedTodo(fixture.db, { title: "Repeats", recurrenceRule: true });
     const items = [
       ...anytimeView(fixture.db).flatMap((s) => s.items),
+      ...searchView(fixture.db, "fasteners"), // the deadline-carrying row
       ...searchView(fixture.db, "Someday"),
       ...searchView(fixture.db, "Repeats"),
     ];
     expect(items.length).toBeGreaterThan(0);
+    let sawGutter = false;
     for (const item of items) {
       setFitWidth(null);
       const unfit = formatItem(item, 8);
       setFitWidth(500);
-      expect(formatItem(item, 8), `row changed under a wide fit: ${unfit}`).toBe(unfit);
+      const fit = formatItem(item, 8);
+      if (fit !== unfit) sawGutter = true;
+      expect(collapseGutter(fit), `row content changed under a wide fit: ${unfit}`).toBe(unfit);
     }
+    // The deadline-carrying row proves the gutter actually fired (else this
+    // regression would silently pass even if the gutter never ran).
+    expect(sawGutter).toBe(true);
   });
 });

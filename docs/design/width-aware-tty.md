@@ -1,6 +1,6 @@
 # Width-aware TTY rendering
 
-Status: **SHIPPED** (2026-07-13). Segment-aware row fitting for list rows: `src/cli/width.ts` (the fitter + vendored wcwidth) and `src/cli/render.ts` (`formatItem` composes named segments). Ratified by Mike's GUI-measured collapse oracle (below). The right-pinned deadline gutter remains **phase 2** (§ Deadline gutter).
+Status: **SHIPPED** (2026-07-13). Segment-aware row fitting for list rows: `src/cli/width.ts` (the fitter + vendored wcwidth) and `src/cli/render.ts` (`formatItem` composes named segments). Ratified by Mike's GUI-measured collapse oracle (below). The right-pinned deadline gutter is now **shipped (experimental)** (§ Deadline gutter).
 
 ## Problem
 
@@ -13,8 +13,11 @@ Note the `--help` contrast: commander *reflows prose* to terminal width. List ro
 Canon. Measured from the Things app; the fitter reproduces it.
 
 - **The always-present parts NEVER shrink or drop**: the uuid column, the checkbox glyph, the meta chips (`‹date›` / `‹waiting›` …), the tail markers (`◷ ≡ ≔`, the project count chip), and the FULL deadline token (`⚑ Aug 28` / `⚑ 2 days left`).
-- **TITLE and TAGS divvy up the remaining collapsible space**, sharing a relative max-width ratio of ~**4:1** (title:tags — a single tunable constant pair, `TITLE_RATIO`/`TAGS_RATIO` in `width.ts`). While both are over their share, **tags fold progressively from the END** (`#first #second #…` — dropped tags collapse into a dim `#…` marker) while the **title truncates with a trailing `…`**.
-- **Threshold 2** — tags reach `#first #…` (one tag always visible + the overflow marker); from here only the title shrinks.
+- **TITLE and TAGS divvy up the remaining collapsible space** with a **lazy fold**, not a hard cap. Tags render at the **WIDEST progressive level that fits their available budget** — all tags → `#a #b #…` → `#first #…` → bare `#…` — dropped tags collapsing into a dim `#…` marker, and the **title truncates with a trailing `…`** only when it must. The **4:1 ratio (`TITLE_RATIO`/`TAGS_RATIO` in `width.ts`) arbitrates ONLY under contention** — when BOTH natural widths exceed their shares of the collapsible budget. Otherwise:
+  - if `title_nat ≤ its 4/5 share`, the title keeps its natural width and the tags get everything left (their widest fitting level);
+  - if `tags_nat ≤ their 1/5 share`, the tags stay whole and the title gets the rest.
+  - Either way, **slack that a discrete tag level does not use flows BACK to the title**, and neither side is ever shrunk below what the budget actually forces. (This is the lazy-fold fix: a row losing one column drops one tag, `#home #recurring #housekeeping` → `#home #recurring #…`, not straight to `#home #…`.)
+- **Threshold 2** — under contention, tags floor at `#first #…` (one tag always visible + the overflow marker); from here only the title shrinks.
 - **Threshold 3** — all tags collapse to the bare `#…`; the title keeps shrinking toward its protected minimum (`TITLE_MIN = 16`).
 
 ### The ratified sacrifice order (with the CLI-only container rule)
@@ -25,7 +28,7 @@ Container placement is OURS, not from the GUI oracle — the GUI puts the contai
 
 So the container dies WHOLE (never ellipsized — a truncated dim parenthetical is worse than nothing) one stage **before** the last tag folds to bare. Full order, widest → narrowest:
 
-1. **`both-shrink`** — tags fold from the end toward `#first #…` (4:1 budget cap) while the title truncates. Container kept.
+1. **`both-shrink`** — tags fold LAZILY to their widest fitting level while the title truncates; the 4:1 split arbitrates only under contention (otherwise the under-share side keeps its natural width and the slack flows to the other). Container kept.
 2. Tags reach `#first #…` — only the title shrinks. Container kept.
 3. **`container-drop`** — the container drops whole; tags hold at `#first #…`; the reclaimed width goes to the title.
 4. **`tags-bare`** — the last tag folds to bare `#…` (container already gone); the title floors at `TITLE_MIN`.
@@ -64,6 +67,15 @@ There is **no per-row title clamp**. `TITLE_MIN = 16` is an *input*, not a per-r
 
 **Item rows only** — every renderer that calls `formatItem`. Headers, hints, footers, detail cards, and notes are NOT fitted and NOT clipped in v1 (a wrapped hint keeps its copy-paste command intact — deliberate). Multi-tag rendering stays space-separated dim `#a #b`; the overflow marker is dim `#…`. Pipes, grep, and `--json` are untouched by construction.
 
-## Deadline gutter (phase 2)
+## Deadline gutter (shipped — experimental, revert is one place)
 
-The GUI pins flags right-aligned at the window edge. The terminal analog (pad titles so deadlines align at the right margin) is visually excellent but a bigger step: column alignment across rows, raggedness when only some rows carry flags, interaction with day-group sections. Deferred — the deadline stays inline at line end, just never dropped. Evaluate after living with no-wrap truncation.
+The GUI pins flags right-aligned at the window edge. The terminal analog is now shipped as an **experiment** (Mike: "let's see how we like it"): when fitting is ACTIVE (a non-null fit width), every fitted row's deadline token is pushed flush to the effective width, so all deadlines in a view line up in one gutter — exactly like the app's flag column.
+
+Rules:
+
+- **Only when fitting is active.** When the fit width is null (non-TTY, `--json`, `THINGS_WIDTH=0`), there is **NO gutter** — the deadline stays inline at line end and the row is byte-identical to before this feature. The #120 byte-stability contract is unchanged; the gutter exists only in fitted TTY output.
+- **Rows without a deadline end where they end** (ragged right is correct — the GUI leaves flag-less rows ragged too).
+- **Minimum one space** between content and the gutter. A row that already fills the width keeps its single inline space (byte-identical to the un-guttered inline form). The fitter already treats the deadline as fixed budget; only its PLACEMENT changes.
+- **Padding goes OUTSIDE the styled runs** (plain spaces between the row body and the pre-styled `⚑ …` token).
+
+Isolated as a single named function `alignDeadline` in `width.ts`, called from the two `fitRow` return paths (the full-fit fast path and `renderRow`). **Reverting the experiment is deleting that function and its two call sites** — one place, by design.
