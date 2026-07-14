@@ -2,7 +2,9 @@
 # UPC1 — Upcoming membership & deadline forecasting (docs/lab/upcoming-research.md).
 # ONE clone, --vnc-experimental. Reuses the research-ui1.sh / research-lock1.sh VNC
 # synthetic-input mechanics (tart --vnc-experimental + vncdotool → hardware-level
-# HID, no TCC; Accessibility is NOT granted in the golden). Membership is read via
+# HID, no TCC; Accessibility is NOT granted in the golden — but IS grantable via
+# the user-path toggle with SIP on, AXVM1, docs/lab/axvm1-accessibility.md).
+# Membership is read via
 # the GUI's own AppleScript list oracle (`to dos of list "…"` — a pure read against
 # the running app, the today-order-research.md technique) AND corroborated by the
 # GUI screenshots; DB dumps give the ground-truth field values.

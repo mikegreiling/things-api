@@ -3,7 +3,10 @@
 # "Queued 2026-07-13"). ONE clone, --vnc-experimental. Reuses the research-ui1.sh
 # / research-sx6.sh VNC synthetic-input mechanics (tart --vnc-experimental +
 # vncdotool → hardware-level HID, no TCC; Accessibility is NOT granted in the
-# golden, so there is no AppleScript UI-scripting fallback).
+# golden, so there is no AppleScript UI-scripting fallback IN THIS RUN — but see
+# AXVM1: the user-path TCC toggle grants in-guest AX with SIP ON, and AX press
+# works UNDER LOCK where the VNC click hits the lock screen — the LOCK1 arm-(f)
+# counterpoint; docs/lab/axvm1-accessibility.md).
 #
 # LOCK1 — locked-session vector probe. Enable a screensaver password, LOCK the
 #   session (ctrl+cmd+Q via VNC keystroke → loginwindow), screenshot the lock

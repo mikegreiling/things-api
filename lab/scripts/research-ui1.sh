@@ -4,7 +4,9 @@
 # Reuses the research-sx6.sh VNC synthetic-input mechanics (tart --vnc-experimental
 # + vncdotool → hardware-level HID, no TCC). Accessibility is NOT granted in the
 # golden image (osascript System Events → -1719), so ALL GUI driving is VNC clicks
-# + VNC keyboard; there is no AppleScript UI-scripting fallback.
+# + VNC keyboard; there is no AppleScript UI-scripting fallback IN THIS RUN.
+# [AXVM1 2026-07-14: "not granted" ≠ "not grantable" — a one-time user-path TCC
+#  toggle enables in-guest AX with SIP ON; see docs/lab/axvm1-accessibility.md.]
 #
 #   A (§E½ feasibility): VNC-drive File → New Repeating To-Do end-to-end, create a
 #       FIXED daily repeat (deadline-less, the GUI default), save, verify an
