@@ -60,7 +60,7 @@ export function observeSchema(db: DatabaseSync): SchemaObservation {
     const extraColumns = rows
       .map((r) => r.name)
       .filter((name) => !declaredSet.has(name))
-      .sort();
+      .toSorted();
     return { table, present: rows.length > 0, columns, extraColumns };
   });
 

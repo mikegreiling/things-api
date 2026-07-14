@@ -88,6 +88,13 @@ describe("resolveWidth", () => {
   });
 });
 
+const tagForm = (names: string[]): string => names.map((n) => `#${n}`).join(" ");
+
+// A wide fit changes nothing about a row's CONTENT; the one transform it adds
+// is the experimental deadline gutter (right-pinning the ⚑). Collapse that
+// gutter run back to the single inline space to compare against the null path.
+const collapseGutter = (s: string): string => s.replace(/ +⚑/, " ⚑");
+
 // A RowSegments builder for the fitter, colors OFF (styleTitle/styleTags are
 // identity + the leading-space wrap). `full` is composed exactly as the fitter
 // composes a full row, so a fitting no-op returns this string verbatim.
@@ -98,7 +105,6 @@ function seg(over: Partial<RowSegments> & { rawTitle: string; tagNames: string[]
   const deadline = over.deadline ?? "";
   const styleTitle = over.styleTitle ?? ((t: string) => t);
   const styleTags = over.styleTags ?? ((form: string) => ` ${form}`);
-  const tagForm = (names: string[]): string => names.map((n) => `#${n}`).join(" ");
   const tags = over.tagNames.length > 0 ? styleTags(tagForm(over.tagNames)) : "";
   const full = `${left} ${styleTitle(over.rawTitle)}${tail}${tags}${context}${deadline}`;
   return {
@@ -424,11 +430,6 @@ describe("byte-stability regression (real rows, colors off)", () => {
     fixture = null;
     setFitWidth(null);
   });
-
-  // A wide fit changes nothing about a row's CONTENT; the one transform it adds
-  // is the experimental deadline gutter (right-pinning the ⚑). Collapse that
-  // gutter run back to the single inline space to compare against the null path.
-  const collapseGutter = (s: string): string => s.replace(/ +⚑/, " ⚑");
 
   it("a comfortably-wide fit changes only the deadline gutter — content is unchanged", () => {
     fixture = buildFixtureDb();

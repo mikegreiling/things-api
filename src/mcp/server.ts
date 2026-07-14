@@ -190,6 +190,10 @@ const containerRef = (ref: string): { uuid: string; title: string } => ({ uuid: 
 /** Cap on project titles inlined into the server instructions. */
 const INSTRUCTIONS_MAX_PROJECTS = 100;
 
+/** A tag's display label: nested tags show `parent > child`. */
+const tagLabel = (t: { title: string; parent: { title: string } | null }): string =>
+  t.parent === null ? t.title : `${t.parent.title} > ${t.title}`;
+
 /**
  * Live-inventory preamble: conventions plus the user's actual areas, tags,
  * and open projects, read once at server start so models can reference real
@@ -220,8 +224,6 @@ function buildInstructions(getClient: () => ThingsClient): string {
     const areas = c.read.areas();
     const tags = c.read.tags();
     const projects = c.read.projects();
-    const tagLabel = (t: { title: string; parent: { title: string } | null }): string =>
-      t.parent === null ? t.title : `${t.parent.title} > ${t.title}`;
     const shown = projects.slice(0, INSTRUCTIONS_MAX_PROJECTS);
     const overflow = projects.length - shown.length;
     lines.push(
@@ -251,6 +253,24 @@ function checklistTarget(args: { item?: string | undefined; index?: number | und
   return args.index !== undefined ? { index: args.index } : { item: args.item ?? "" };
 }
 
+/** Translate the shared MCP write-tool args into pipeline WriteOptions. */
+const writeOptions = (args: {
+  dry_run?: boolean | undefined;
+  verify_timeout_ms?: number | undefined;
+  acknowledge_checklist_reset?: boolean | undefined;
+  acknowledge_project_reopen?: boolean | undefined;
+  dangerously_permanent?: boolean | undefined;
+  acknowledge_tag_subtree?: boolean | undefined;
+}): WriteOptions => ({
+  actor: "mcp",
+  ...(args.dry_run === true && { dryRun: true }),
+  ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
+  ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
+  ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
+  ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
+  ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+});
+
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
   // One lazily-opened client for the server's lifetime; SQLite read
   // snapshots are per-statement, so fresh reads see external commits.
@@ -278,23 +298,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       return errorResult({ code, message });
     }
   };
-
-  const writeOptions = (args: {
-    dry_run?: boolean | undefined;
-    verify_timeout_ms?: number | undefined;
-    acknowledge_checklist_reset?: boolean | undefined;
-    acknowledge_project_reopen?: boolean | undefined;
-    dangerously_permanent?: boolean | undefined;
-    acknowledge_tag_subtree?: boolean | undefined;
-  }): WriteOptions => ({
-    actor: "mcp",
-    ...(args.dry_run === true && { dryRun: true }),
-    ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
-    ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
-    ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
-    ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
-    ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
-  });
 
   /** Resolve a uuid to to-do/project for the type-generic item tools. */
   const itemType = (uuid: string): "to-do" | "project" => {

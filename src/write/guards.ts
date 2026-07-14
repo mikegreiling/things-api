@@ -41,7 +41,7 @@ export interface GuardInput {
 type GuardFn = (input: GuardInput) => GuardBlock | null;
 
 /** Ops where a schedule/status-class write on a repeating template is destructive. */
-const REPEAT_SENSITIVE: OperationKind[] = [
+const REPEAT_SENSITIVE = new Set<OperationKind>([
   "todo.complete",
   "todo.cancel",
   "todo.reopen",
@@ -54,14 +54,14 @@ const REPEAT_SENSITIVE: OperationKind[] = [
   "project.cancel", // unvalidated on repeating projects (P01 probed a plain project)
   "project.reopen", // unvalidated on repeating projects (P02/P05 probed plain projects)
   "project.restore", // unvalidated on repeating projects (P06 probed a plain project)
-];
+]);
 
 const GUARDS: Record<HazardId, GuardFn> = {
   "H-REPEAT-SCHEDULE": ({ op, params, pre }) => {
     if (!isRepeatingTemplate(pre.target)) return null;
     const touchesSchedule =
       op === "todo.update" && (params["when"] !== undefined || params["deadline"] !== undefined);
-    if (!touchesSchedule && !REPEAT_SENSITIVE.includes(op)) return null;
+    if (!touchesSchedule && !REPEAT_SENSITIVE.has(op)) return null;
     return {
       hazard: "H-REPEAT-SCHEDULE",
       detail:

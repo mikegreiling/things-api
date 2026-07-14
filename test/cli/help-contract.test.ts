@@ -25,6 +25,25 @@ function helpFor(...path: string[]): string {
   return cmd.helpInformation().replace(/\s+/g, " ");
 }
 
+// The pointer is an addHelpText(after) epilog, emitted on render (outputHelp)
+// rather than in helpInformation() — capture the rendered form.
+const renderedHelp = (name: string): string => {
+  const program = buildProgram();
+  const cmd = program.commands.find((c) => c.name() === name);
+  if (cmd === undefined) throw new Error(`no command: ${name}`);
+  let out = "";
+  cmd.configureOutput({ writeOut: (s) => void (out += s) });
+  cmd.outputHelp();
+  return out;
+};
+
+function allHelp(cmd: Command, path: string[]): [string, string][] {
+  const own: [string, string][] = [
+    [path.join(" ") || "(root)", cmd.helpInformation().replace(/\s+/g, " ")],
+  ];
+  return [...own, ...cmd.commands.flatMap((c) => allHelp(c, [...path, c.name()]))];
+}
+
 describe("root help", () => {
   it("carries the agent notes: --json, stable exit codes, no prompts", () => {
     const program = buildProgram();
@@ -346,17 +365,6 @@ describe("write-command help states the contract", () => {
   });
 
   it("list views point at `things legend` for the glyph language", () => {
-    // The pointer is an addHelpText(after) epilog, emitted on render (outputHelp)
-    // rather than in helpInformation() — capture the rendered form.
-    const renderedHelp = (name: string): string => {
-      const program = buildProgram();
-      const cmd = program.commands.find((c) => c.name() === name);
-      if (cmd === undefined) throw new Error(`no command: ${name}`);
-      let out = "";
-      cmd.configureOutput({ writeOut: (s) => void (out += s) });
-      cmd.outputHelp();
-      return out;
-    };
     for (const name of ["today", "inbox", "anytime", "someday", "upcoming", "logbook", "trash"]) {
       expect(renderedHelp(name), name).toContain("run `things legend`");
     }
@@ -385,13 +393,6 @@ describe("surface copy contract (docs/design/surface-copy.md)", () => {
     /\b(?:unprobed|probed|unvalidated|validated)\b/i,
     /\bsdef\b/,
   ];
-
-  function allHelp(cmd: Command, path: string[]): [string, string][] {
-    const own: [string, string][] = [
-      [path.join(" ") || "(root)", cmd.helpInformation().replace(/\s+/g, " ")],
-    ];
-    return [...own, ...cmd.commands.flatMap((c) => allHelp(c, [...path, c.name()]))];
-  }
 
   it("no --help string leaks internals", () => {
     const program = buildProgram();

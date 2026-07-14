@@ -204,8 +204,9 @@ export function getField(entity: AnyTask, path: string): unknown {
   return current;
 }
 
+const p = (n: number): string => String(n).padStart(2, "0");
+
 function localIsoDate(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 

@@ -46,7 +46,7 @@ export function locateThingsDb(options?: { dbPath?: string; home?: string }): Lo
   }
   const byMtime = matches
     .map((path) => ({ path, mtime: statSync(path).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
+    .toSorted((a, b) => b.mtime - a.mtime);
   const first = byMtime[0];
   if (!first) throw new ThingsDbNotFoundError(join(home, CONTAINER_GLOB));
   return {

@@ -59,9 +59,9 @@ interface CLItem {
 }
 
 function seedChecklist(uuid: string, items: CLItem[]): void {
-  items.forEach((it, i) =>
-    seedChecklistItem(fixture.db, uuid, it.title, {
-      status: it.completed ? "completed" : "open",
+  items.forEach((item, i) =>
+    seedChecklistItem(fixture.db, uuid, item.title, {
+      status: item.completed ? "completed" : "open",
       index: i,
     }),
   );

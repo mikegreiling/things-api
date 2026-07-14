@@ -158,7 +158,7 @@ export function compareVerdicts(
 ): { identical: boolean; diffs: string[] } {
   const diffs: string[] = [];
   const ids = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const id of [...ids].sort()) {
+  for (const id of [...ids].toSorted()) {
     const va = a[id];
     const vb = b[id];
     if (va === undefined || vb === undefined) {

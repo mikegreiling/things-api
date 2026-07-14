@@ -210,8 +210,8 @@ function seedChecklist(
   uuid: string,
   items: { title: string; status?: "open" | "completed" | "canceled" }[],
 ): void {
-  items.forEach((it, i) =>
-    seedChecklistItem(fixture.db, uuid, it.title, { status: it.status ?? "open", index: i }),
+  items.forEach((item, i) =>
+    seedChecklistItem(fixture.db, uuid, item.title, { status: item.status ?? "open", index: i }),
   );
 }
 

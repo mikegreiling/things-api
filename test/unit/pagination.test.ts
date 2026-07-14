@@ -44,6 +44,9 @@ const childOf = (uuid: string, projectUuid: string, projectTitle: string): ListI
     headingProject: null,
   }) as unknown as ListItem;
 
+const todos = (n: number, prefix: string) =>
+  Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
+
 describe("paginateList", () => {
   it("returns everything untruncated under the limit", () => {
     const { data, pagination } = paginateList(items(3), 50);
@@ -218,8 +221,6 @@ describe("previewSomedaySections", () => {
 });
 
 describe("capAreaSections (area show per-section caps)", () => {
-  const todos = (n: number, prefix: string) =>
-    Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
   const view = () =>
     ({
       area: { uuid: "a", title: "Busy" },

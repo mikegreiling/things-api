@@ -21,6 +21,10 @@ import { openInThings } from "./reads.ts";
 import { runRead, withClient } from "../read-driver.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 
+// The opened resource shows its tags green (GUI: list pills are gray).
+const tagList = (tags: Array<{ title: string }>) =>
+  green(`#${tags.map((t) => t.title).join(" #")}`);
+
 /**
  * The detail card, project-card grammar: type-labeled title row (the box
  * carries open/completed/canceled; only `trashed` needs words), uri, then
@@ -85,9 +89,6 @@ export function renderDetail(item: AnyTask | null): string[] {
     meta("project", (item.project ?? item.headingProject)?.title);
     meta("heading", item.heading?.title);
   }
-  // The opened resource shows its tags green (GUI: list pills are gray).
-  const tagList = (tags: Array<{ title: string }>) =>
-    green(`#${tags.map((t) => t.title).join(" #")}`);
   if (item.tags.length > 0) meta("tags", tagList(item.tags));
   if (item.inheritedTags !== undefined && item.inheritedTags.length > 0)
     meta("inherited", tagList(item.inheritedTags));

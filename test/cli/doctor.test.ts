@@ -12,6 +12,19 @@ afterEach(() => {
   fixture = null;
 });
 
+const ruleXml = (rrv: number) => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>${rrv}</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>
+</dict>
+</plist>`;
+
 describe("doctor core", () => {
   it("reports healthy against a pristine fixture DB", () => {
     fixture = buildFixtureDb();
@@ -94,18 +107,6 @@ describe("doctor environment & automation sections", () => {
   it("counts repeating templates and flags undecodable rule blobs (format canary)", () => {
     fixture = buildFixtureDb();
     // One healthy corpus-shaped rule, one future-format rule (rrv=5).
-    const ruleXml = (rrv: number) => `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>fa</key><integer>1</integer>
-  <key>fu</key><integer>16</integer>
-  <key>rc</key><integer>0</integer>
-  <key>rrv</key><integer>${rrv}</integer>
-  <key>tp</key><integer>0</integer>
-  <key>ts</key><integer>0</integer>
-</dict>
-</plist>`;
     seedTodo(fixture.db, { title: "healthy", recurrenceRuleXml: ruleXml(4) });
     seedTodo(fixture.db, { title: "future-format", recurrenceRuleXml: ruleXml(5) });
     const { report } = diagnose(fixture.path, {
