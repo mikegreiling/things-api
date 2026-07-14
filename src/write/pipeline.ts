@@ -167,9 +167,11 @@ async function defaultEnsureRunning(alreadyRunning: boolean): Promise<boolean> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (defaultIsAppRunning()) {
+      // oxlint-disable-next-line no-await-in-loop -- the post-launch settle wait must happen once, right after the process is first detected, before returning
       await new Promise((r) => setTimeout(r, 2000)); // post-launch settle
       return true;
     }
+    // oxlint-disable-next-line no-await-in-loop -- launch-detection retries are inherently sequential polling of the same process state
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
@@ -218,6 +220,11 @@ function capturePre(
     return { modDates, fields, trashedCount: pre.trashedCount };
   }
   return { modDates, fields };
+}
+
+/** Attach failure-hint attribution (likelyCause/hint) to a result, if any was classified. */
+function withHint<T extends object>(base: T, hint: FailureHint | null): T {
+  return hint === null ? base : { ...base, likelyCause: hint.likelyCause, hint: hint.hint };
 }
 
 export async function runMutation<K extends OperationKind>(
@@ -464,8 +471,6 @@ export async function runMutation<K extends OperationKind>(
       deps.environment !== undefined
         ? diffEnvironment(deps.environment.load(), deps.environment.capture())
         : [];
-    const withHint = <T extends object>(base: T, hint: FailureHint | null): T =>
-      hint === null ? base : { ...base, likelyCause: hint.likelyCause, hint: hint.hint };
 
     const preCapture = capturePre(delta, deps, pre);
     const executeResult = await vector.execute(invocation);
@@ -520,10 +525,10 @@ export async function runMutation<K extends OperationKind>(
       if (deps.environment !== undefined) {
         deps.environment.record(deps.environment.capture());
       }
-      // The token identifies THIS record on the trail (see undoToken); a leg's
-      // token would be its shared txn id, but legs are never undone directly,
-      // so we only surface it for non-leg writes.
-      const token =
+      // The undo token identifies THIS record on the trail (see undoToken); a
+      // leg's token would be its shared txn id, but legs are never undone
+      // directly, so we only surface it for non-leg writes.
+      const resultToken =
         options.txn?.role === "leg"
           ? undefined
           : undoToken({
@@ -541,7 +546,7 @@ export async function runMutation<K extends OperationKind>(
         observed: outcome.observed,
         vector: vector.id,
         tier: effectiveTier,
-        ...(token !== undefined && { undoToken: token }),
+        ...(resultToken !== undefined && { undoToken: resultToken }),
         ...(envChanges.length > 0 && {
           warnings: [
             `environment changed since the last verified write: ` +

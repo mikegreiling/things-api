@@ -11,6 +11,9 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { ListItem, SidebarSection } from "./views.ts";
 
+/** `?, ?, …` SQL placeholder list of length n. */
+const inList = (n: number) => Array.from({ length: n }, () => "?").join(", ");
+
 /**
  * Arranges view members into the UI's flat sidebar-mirroring order: the
  * area-less block first (direct to-dos, then each top-level project followed
@@ -20,7 +23,6 @@ import type { ListItem, SidebarSection } from "./views.ts";
  */
 export function groupBySidebar(db: DatabaseSync, items: ListItem[]): SidebarSection[] {
   if (items.length === 0) return [];
-  const inList = (n: number) => Array.from({ length: n }, () => "?").join(", ");
 
   // Headed children: resolve heading -> project.
   const headingUuids = [

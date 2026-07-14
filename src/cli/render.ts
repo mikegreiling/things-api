@@ -117,6 +117,9 @@ export interface FormatOpts {
   resolvedNormal?: boolean;
 }
 
+/** Wraps a `#a #b` tag form in the row's dim styling (incl. its leading space). */
+const styleTags = (form: string): string => ` ${dim(form)}`;
+
 /**
  * One item line:
  * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
@@ -231,7 +234,6 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const tailStr = tail.length > 0 ? ` ${tail.join(" ")}` : "";
   const ctxStr = context === "" ? "" : dim(context);
   const tagNames = item.tags.map((t) => t.title);
-  const styleTags = (form: string): string => ` ${dim(form)}`;
   const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${deadline}`;
   // width null (the default — pipes/grep/--json/non-TTY) means NO fitting:
   // return the fully-composed row, byte-identical to before this feature.
@@ -497,6 +499,10 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
   return lines;
 }
 
+/** Upcoming rows group under startDate, or under deadline for non-template rows. */
+const groupDate = (i: ListItem): string | null =>
+  i.startDate ?? (i.repeating.isTemplate ? null : i.deadline);
+
 /**
  * Upcoming rows under GUI-style date headers (empty periods are simply
  * absent), with the trailing Repeating To-Dos section: templates with no
@@ -514,8 +520,6 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
   const todayIso = localToday(now);
   const w = uuidDisplayWidth(items);
   const fmtOpts = now === undefined ? {} : { now };
-  const groupDate = (i: ListItem): string | null =>
-    i.startDate ?? (i.repeating.isTemplate ? null : i.deadline);
   const dated = items.filter((i) => groupDate(i) !== null);
   const resting = items.filter((i) => i.startDate === null && i.repeating.isTemplate);
   const lines: string[] = [];

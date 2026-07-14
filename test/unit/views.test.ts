@@ -586,7 +586,7 @@ describe("inherited tags", () => {
     const row = fetchTaskByUuid(fx.db, todo);
     expect(row).not.toBeNull();
     const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
-    expect(inherited.map((t) => t.title).sort()).toEqual(["area-tag", "proj-tag"]);
+    expect(inherited.map((t) => t.title).toSorted()).toEqual(["area-tag", "proj-tag"]);
   });
 });
 

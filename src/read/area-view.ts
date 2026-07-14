@@ -87,8 +87,8 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
   const logged: Todo[] = [];
   const trashed: Todo[] = [];
 
-  for (const { row, todo } of todos) {
-    if (row.trashed === 1) {
+  for (const { row: todoRow, todo } of todos) {
+    if (todoRow.trashed === 1) {
       trashed.push(todo);
       continue;
     }
@@ -96,21 +96,21 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
       repeating.push(todo);
       continue;
     }
-    if (row.status !== 0) {
+    if (todoRow.status !== 0) {
       // Completion ≠ logged: closed-but-unswept items stay checked in the
       // active block, like the GUI.
       if (todo.logged) logged.push(todo);
       else active.push(todo);
       continue;
     }
-    if (row.start === 2 && row.startDate === null) {
+    if (todoRow.start === 2 && todoRow.startDate === null) {
       someday.push(todo);
       continue;
     }
-    if (row.startDate !== null && row.startDate > packedToday) {
+    if (todoRow.startDate !== null && todoRow.startDate > packedToday) {
       scheduledRows.push({
-        date: decodePackedDate(row.startDate) ?? "",
-        ti: row.todayIndex ?? 0,
+        date: decodePackedDate(todoRow.startDate) ?? "",
+        ti: todoRow.todayIndex ?? 0,
         todo,
       });
       continue;
@@ -121,7 +121,7 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
   logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
   const scheduled: IsoDateGroup<Todo>[] = [];
   // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
-  for (const { date, todo } of scheduledRows.sort(
+  for (const { date, todo } of scheduledRows.toSorted(
     (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
   )) {
     const last = scheduled[scheduled.length - 1];

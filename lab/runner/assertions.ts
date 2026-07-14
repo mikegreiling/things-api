@@ -210,7 +210,7 @@ function matchRows(
       const row = table[key];
       return row !== undefined && rowMatches(row, resolved);
     })
-    .sort();
+    .toSorted();
 }
 
 function rowMatches(row: Record<string, CellValue>, where: Where): boolean {
@@ -239,7 +239,7 @@ export function resolveValue(
     const rows = source[table] ?? {};
     const keys = Object.keys(rows)
       .filter((k) => cellEquals(rows[k]?.[col] ?? null, literal))
-      .sort();
+      .toSorted();
     const first = keys[0];
     if (first === undefined) throw new Error(`@uuidOf: no ${table} row with ${col}=${literal}`);
     if (keys.length > 1) throw new Error(`@uuidOf: ambiguous ${table} ${col}=${literal}`);

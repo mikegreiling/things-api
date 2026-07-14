@@ -24,6 +24,59 @@ function viewPreamble(view: string): string {
   return `${view.charAt(0).toUpperCase()}${view.slice(1)} (things:///show?id=${view})`;
 }
 
+// Simulate (or clear) a terminal in-process; runRead gates the header on the
+// live process.stdout.isTTY. Colors stay off (style.ts caches non-TTY at
+// module load), so the header renders as plain, assertable text.
+const withTty = <T>(value: boolean | undefined, fn: () => T): T => {
+  const original = process.stdout.isTTY;
+  (process.stdout as { isTTY: boolean | undefined }).isTTY = value;
+  try {
+    return fn();
+  } finally {
+    (process.stdout as { isTTY: boolean | undefined }).isTTY = original;
+  }
+};
+
+/** ISO calendar date `days` from the real today (the CLI uses the real clock). */
+function isoFromToday(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const titlesOf = (stdout: string): string[] =>
+  JSON.parse(stdout).data.map((i: { title: string }) => i.title);
+
+/** Epoch SECONDS `daysAgo` before the real now (the CLI uses the real clock). */
+const epoch = (daysAgo: number): number => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.getTime() / 1000;
+};
+
+/** A TTY-forcing harness (the default runCli leaves isTTY falsy = piped). */
+function runTty(argv: string[]): string {
+  const chunks: string[] = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  const originalIsTty = process.stdout.isTTY;
+  process.stdout.isTTY = true;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  const originalExitCode = process.exitCode;
+  try {
+    const program = buildProgram();
+    program.exitOverride();
+    program.parse(resolveInvocation(program, argv).argv, { from: "user" });
+    return chunks.join("");
+  } finally {
+    process.stdout.write = originalWrite;
+    process.stdout.isTTY = originalIsTty;
+    process.exitCode = originalExitCode;
+  }
+}
+
 /** Run the CLI in-process, capturing stdout lines. */
 function runCli(argv: string[]): { stdout: string; exitCode: number } {
   const chunks: string[] = [];
@@ -160,19 +213,6 @@ describe("cli end-to-end (fixture db)", () => {
 });
 
 describe("view header preambles (TTY-only)", () => {
-  // Simulate (or clear) a terminal in-process; runRead gates the header on the
-  // live process.stdout.isTTY. Colors stay off (style.ts caches non-TTY at
-  // module load), so the header renders as plain, assertable text.
-  const withTty = <T>(value: boolean | undefined, fn: () => T): T => {
-    const original = process.stdout.isTTY;
-    (process.stdout as { isTTY: boolean | undefined }).isTTY = value;
-    try {
-      return fn();
-    } finally {
-      (process.stdout as { isTTY: boolean | undefined }).isTTY = original;
-    }
-  };
-
   // Every headered view, matrixed so a future view wired WITHOUT the header
   // arg (or added here without wiring) fails a test. The command name is also
   // the deep-link id; the title is that name capitalized (viewHeaderLines).
@@ -388,12 +428,6 @@ describe("cli list limits + truncation hint", () => {
 });
 
 describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
-  /** ISO calendar date `days` from the real today (the CLI uses the real clock). */
-  function isoFromToday(days: number): string {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
-  }
   function seedUpcoming(count: number, dayOffset: number): void {
     for (let i = 0; i < count; i++) {
       seedTodo(fx!.db, {
@@ -404,8 +438,6 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
       });
     }
   }
-  const titles = (stdout: string): string[] =>
-    JSON.parse(stdout).data.map((i: { title: string }) => i.title);
 
   it("upcoming --limit N drops the default month window — reaches a far item", () => {
     fx = buildFixtureDb();
@@ -413,13 +445,13 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
 
     const bare = runCli(["upcoming", "--json", "--db", fx.path]).stdout;
-    expect(titles(bare)).toContain("near");
-    expect(titles(bare)).not.toContain("far"); // default 1m window excludes it
+    expect(titlesOf(bare)).toContain("near");
+    expect(titlesOf(bare)).not.toContain("far"); // default 1m window excludes it
     expect(JSON.parse(bare).meta.pagination.limit).toBe(50); // default cap present
 
     const wide = runCli(["upcoming", "--limit", "100", "--json", "--db", fx.path]).stdout;
-    expect(titles(wide)).toContain("near");
-    expect(titles(wide)).toContain("far"); // window default lifted by explicit --limit
+    expect(titlesOf(wide)).toContain("near");
+    expect(titlesOf(wide)).toContain("far"); // window default lifted by explicit --limit
     expect(JSON.parse(wide).meta.pagination.limit).toBe(100);
   });
 
@@ -429,7 +461,7 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
 
     const until = runCli(["upcoming", "--until", "3m", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(until).meta.pagination.limit).toBeNull();
-    expect(titles(until)).toContain("far");
+    expect(titlesOf(until)).toContain("far");
 
     const since = runCli(["upcoming", "--since", "2000", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(since).meta.pagination.limit).toBeNull();
@@ -444,8 +476,8 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     tagTask(fx.db, far, t);
     const env = runCli(["upcoming", "--tag", "work", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(env).meta.pagination.limit).toBe(50);
-    expect(titles(env)).toContain("near");
-    expect(titles(env)).not.toContain("far"); // window default still applies under a scope
+    expect(titlesOf(env)).toContain("near");
+    expect(titlesOf(env)).not.toContain("far"); // window default still applies under a scope
   });
 
   it("logbook --since drops the default row cap; bare keeps it", () => {
@@ -518,21 +550,12 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
 });
 
 describe("cli inbox — creation-date bounds (--since/--until)", () => {
-  /** Epoch SECONDS `daysAgo` before the real now (the CLI uses the real clock). */
-  const epoch = (daysAgo: number): number => {
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    return d.getTime() / 1000;
-  };
-  const titles = (stdout: string): string[] =>
-    JSON.parse(stdout).data.map((i: { title: string }) => i.title);
-
   it("--since keeps only captures created on/after the bound", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "old", start: "inbox", creationDate: epoch(40) });
     seedTodo(fx.db, { title: "recent", start: "inbox", creationDate: epoch(3) });
     const out = runCli(["inbox", "--since", "2w", "--json", "--db", fx.path]).stdout;
-    expect(titles(out)).toEqual(["recent"]);
+    expect(titlesOf(out)).toEqual(["recent"]);
   });
 
   it("--since is inclusive of the boundary instant (creation date, not packed)", () => {
@@ -543,7 +566,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
     seedTodo(fx.db, { title: "onboundary", start: "inbox", creationDate: boundary });
     seedTodo(fx.db, { title: "before", start: "inbox", creationDate: boundary - 1 });
     const out = runCli(["inbox", "--since", "2024-06-01", "--json", "--db", fx.path]).stdout;
-    expect(titles(out)).toEqual(["onboundary"]);
+    expect(titlesOf(out)).toEqual(["onboundary"]);
   });
 
   it("--until is inclusive through the END of the named period", () => {
@@ -553,7 +576,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
     seedTodo(fx.db, { title: "lastminute", start: "inbox", creationDate: lastMinute });
     seedTodo(fx.db, { title: "nextday", start: "inbox", creationDate: nextDay });
     const out = runCli(["inbox", "--until", "2024-06-01", "--json", "--db", fx.path]).stdout;
-    expect(titles(out)).toEqual(["lastminute"]);
+    expect(titlesOf(out)).toEqual(["lastminute"]);
   });
 
   it("--since and --until compose as an inclusive intersection", () => {
@@ -583,7 +606,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
       "--db",
       fx.path,
     ]).stdout;
-    expect(titles(out)).toEqual(["jun"]);
+    expect(titlesOf(out)).toEqual(["jun"]);
   });
 
   it("lift rule: explicit --since drops the default 50 row cap; bare keeps it", () => {
@@ -1068,28 +1091,6 @@ describe("cli normalized-form echo + meta.resolvedCommand", () => {
     fx = buildFixtureDb();
     seedArea(fx.db, "Hobbies");
     const path = fx.path;
-    // A TTY-forcing harness (the default runCli leaves isTTY falsy = piped).
-    const runTty = (argv: string[]): string => {
-      const chunks: string[] = [];
-      const originalWrite = process.stdout.write.bind(process.stdout);
-      const originalIsTty = process.stdout.isTTY;
-      process.stdout.isTTY = true;
-      process.stdout.write = ((chunk: string | Uint8Array) => {
-        chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
-        return true;
-      }) as typeof process.stdout.write;
-      const originalExitCode = process.exitCode;
-      try {
-        const program = buildProgram();
-        program.exitOverride();
-        program.parse(resolveInvocation(program, argv).argv, { from: "user" });
-        return chunks.join("");
-      } finally {
-        process.stdout.write = originalWrite;
-        process.stdout.isTTY = originalIsTty;
-        process.exitCode = originalExitCode;
-      }
-    };
 
     // On a TTY the bare noun echoes its canonical typed form.
     expect(runTty(["Hobbies", "--db", path])).toContain("≡ things area show Hobbies");

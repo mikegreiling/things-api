@@ -395,8 +395,8 @@ describe("bounce reorder (verified when= round-trips)", () => {
       expect(result.detail).toContain("no longer open");
       expect(result.cause).toBeNull();
     }
-    const summary = auditRecords.filter((r) => r.op === "reorder");
-    expect(summary[0]?.result).toBe("verify-failed:mismatch");
+    const summary = auditRecords.find((r) => r.op === "reorder");
+    expect(summary?.result).toBe("verify-failed:mismatch");
   });
 
   it("reports a stranded item when leg 2 fails", async () => {
@@ -683,7 +683,7 @@ describe("someday scope (P8b two-call anchor protocol)", () => {
     // one osascript invocation carrying the two-call protocol
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('list "Someday"');
-    const ranks = [c, a, d, b].map(
+    const indexes = [c, a, d, b].map(
       (u) =>
         (
           fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
@@ -691,7 +691,7 @@ describe("someday scope (P8b two-call anchor protocol)", () => {
           }
         ).r,
     );
-    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+    expect([...indexes].toSorted((x, y) => x - y)).toEqual(indexes);
   });
 
   it("rejects containered someday to-dos (only loose ones are members)", async () => {
@@ -716,7 +716,7 @@ describe("projects scope (P8e sidebar bounce)", () => {
     expect(calls.filter((c) => c.includes("when=someday"))).toHaveLength(3);
     expect(calls.filter((c) => c.includes("when=anytime"))).toHaveLength(3);
     expect(calls[0]).toContain(p1);
-    const ranks = [p2, p3, p1].map(
+    const indexes = [p2, p3, p1].map(
       (u) =>
         (
           fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
@@ -724,7 +724,7 @@ describe("projects scope (P8e sidebar bounce)", () => {
           }
         ).r,
     );
-    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+    expect([...indexes].toSorted((x, y) => x - y)).toEqual(indexes);
     // state preserved: plain anytime, undated
     for (const u of [p1, p2, p3]) {
       const row = fixture.db
@@ -814,7 +814,7 @@ describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
     // call 1 pushes the desired-bottom (p2); call 2 = anchor + FORWARD rest
     expect(calls[0]).toContain(`with ids "${p2}"`);
     expect(calls[0]).toContain(`with ids "${p2},${p3},${p1},${p4}"`);
-    const ranks = [p3, p1, p4, p2].map(
+    const indexes = [p3, p1, p4, p2].map(
       (u) =>
         (
           fixture.db.prepare(`SELECT "index" AS r FROM TMTask WHERE uuid = ?`).get(u) as {
@@ -822,7 +822,7 @@ describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
           }
         ).r,
     );
-    expect([...ranks].toSorted((x, y) => x - y)).toEqual(ranks);
+    expect([...indexes].toSorted((x, y) => x - y)).toEqual(indexes);
   });
 
   it("rejects mixed to-do + project someday requests and area'd someday projects", async () => {

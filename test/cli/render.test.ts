@@ -61,6 +61,8 @@ afterEach(() => {
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
+const stopAt = (iso: string) => new Date(iso).getTime() / 1000;
+
 function seedHobbies(fx: FixtureDb): { area: string; firmware: string; fasteners: string } {
   const area = seedArea(fx.db, "Hobbies");
   const firmware = seedProject(fx.db, { title: "Firmware Updates", area, index: 1 });
@@ -430,8 +432,6 @@ describe("formatItem", () => {
 });
 
 describe("logbook", () => {
-  const stopAt = (iso: string) => new Date(iso).getTime() / 1000;
-
   function seedLoggedWorld(fx: FixtureDb): { area: string; project: string } {
     const area = seedArea(fx.db, "Home");
     const project = seedProject(fx.db, { title: "Garage", area });

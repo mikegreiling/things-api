@@ -190,6 +190,9 @@ export interface TodayFilter extends ViewFilter {
   eveningOnly?: boolean;
 }
 
+/** Badge = OPEN members only (the GUI badge counts remaining work). */
+const isOpen = (i: ListItem) => i.status === "open";
+
 export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): TodayView {
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
@@ -232,7 +235,6 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
   // Badge = OPEN members only (the GUI badge counts remaining work). A
   // checked-but-unswept row is present in the list but never moves the badge —
   // this preserves the exact live reconciliation computed under OPEN membership.
-  const isOpen = (i: ListItem) => i.status === "open";
   // The evening filter mirrors the tag filter's badge treatment: the badge
   // reflects exactly the members the view now returns (here, evening only).
   if (filter?.eveningOnly === true) {
@@ -349,6 +351,12 @@ export interface UpcomingFilter extends ViewFilter {
   since?: IsoDate;
 }
 
+/**
+ * The merged date-ordered stream keys on COALESCE(startDate, deadline) — a
+ * scheduled row groups under its when-date, a forecast row under its deadline.
+ */
+const groupKey = (i: ListItem): string => i.startDate ?? i.deadline ?? "";
+
 export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
   const until = filter?.until;
@@ -397,7 +405,6 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   // — then the UI's within-day drag order (todayIndex ASC; live-verified
   // 2026-07-11 against the GUI — plain `index` disagrees), then a stable
   // seed-order/uuid tiebreak.
-  const groupKey = (i: ListItem): string => i.startDate ?? i.deadline ?? "";
   const sortDated = (list: ListItem[], indexRows: TaskRow[]): ListItem[] => {
     const todayIndexOf = new Map<string, number>(indexRows.map((r) => [r.uuid, r.todayIndex ?? 0]));
     return list
@@ -523,6 +530,10 @@ export interface SomedayFilter extends ViewFilter {
   activeProjectItems?: boolean;
 }
 
+/** A someday to-do nested under a project (directly or via a heading). */
+const isChild = (i: ListItem) =>
+  i.type === "to-do" && (i.project !== null || i.headingProject !== null);
+
 export function somedayView(
   db: DatabaseSync,
   now?: Date,
@@ -550,8 +561,6 @@ export function somedayView(
   // drag order. Someday children of active projects (the activeProjectItems
   // toggle) trail the group, still clustered by their project — surfaces
   // present them as a separate "From active projects" section.
-  const isChild = (i: ListItem) =>
-    i.type === "to-do" && (i.project !== null || i.headingProject !== null);
   return sections.map((s) => ({
     area: s.area,
     items: [

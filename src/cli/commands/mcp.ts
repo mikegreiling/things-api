@@ -29,6 +29,7 @@ export function registerMcp(program: Command): void {
       await server.connect(transport);
       process.stderr.write("things-api MCP server listening on stdio\n");
       // The transport keeps the process alive; exit cleanly when it closes.
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Transport exposes an onclose property, not an EventTarget
       transport.onclose = () => process.exit(0);
     });
 }

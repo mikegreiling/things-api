@@ -88,6 +88,7 @@ export async function executeRun(options: RunOptions): Promise<RunOutcome> {
       const bootLog = readFileSync(join(artifactsDir, "tart-run.log"), "utf8").trim();
       throw new Error(
         `${(err as Error).message}${bootLog ? `\ntart run output:\n${bootLog}` : ""}`,
+        { cause: err },
       );
     }
     log(`ssh up at ${ip}`);
@@ -240,6 +241,7 @@ async function waitForGuest(ip: string, command: string, timeoutSeconds: number)
   while (Date.now() < deadline) {
     const r = ssh(ip, command, { allowFailure: true });
     if (r.exitCode === 0) return;
+    // oxlint-disable-next-line no-await-in-loop -- polling loop: each retry must wait for the prior guest-condition check before re-checking
     await sleep(2000);
   }
   throw new Error(`guest condition never became true (${timeoutSeconds}s): ${command}`);
@@ -307,7 +309,7 @@ function evaluate(
   // ahead of same-millisecond marks.
   const monitorEvents = parseEventLog(readFileSync(join(artifactsDir, "events.ndjson"), "utf8"));
   const marks = parseEventLog(readFileSync(join(guestRun, "marks.ndjson"), "utf8"));
-  const events = [...monitorEvents, ...marks].sort((a, b) =>
+  const events = [...monitorEvents, ...marks].toSorted((a, b) =>
     a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0,
   );
 

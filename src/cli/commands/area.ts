@@ -44,6 +44,11 @@ function loggedCount(showLogged: boolean | string | undefined): number {
   return Number.isInteger(n) && n > 0 ? n : RECENT_LOGGED_DEFAULT;
 }
 
+// Closed-but-unswept projects always sit in the active block (checked),
+// never in Upcoming/Someday — start/startDate only classify OPEN rows.
+const isSomedayProject = (p: Project) =>
+  p.status === "open" && p.start === "someday" && p.startDate === null;
+
 /**
  * GUI layout: active projects first (sidebar order), then the area's direct
  * to-dos. `--show-later` reveals the GUI's toggled sections — Upcoming
@@ -53,10 +58,6 @@ function loggedCount(showLogged: boolean | string | undefined): number {
  */
 export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   const todayIso = localToday();
-  // Closed-but-unswept projects always sit in the active block (checked),
-  // never in Upcoming/Someday — start/startDate only classify OPEN rows.
-  const isSomedayProject = (p: Project) =>
-    p.status === "open" && p.start === "someday" && p.startDate === null;
   const isScheduledProject = (p: Project) =>
     p.status === "open" && p.startDate !== null && p.startDate > todayIso;
   const activeProjects = view.projects.filter(
@@ -69,7 +70,7 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
     ...view.projects.filter(isScheduledProject).map((p) => ({ date: p.startDate ?? "", item: p })),
     ...view.later.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.date, item: t }))),
     ...view.later.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
-  ].sort((a, b) => a.date.localeCompare(b.date));
+  ].toSorted((a, b) => a.date.localeCompare(b.date));
 
   const logged = view.logged.slice(0, loggedCount(opts.showLogged));
   const shown: Array<Todo | Project> = [

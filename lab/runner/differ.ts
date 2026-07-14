@@ -9,11 +9,11 @@ export function diffSnapshots(before: DbSnapshot, after: DbSnapshot): DbDelta {
   const delta: DbDelta = { inserted: [], deleted: [], changed: [] };
   const tables = new Set([...Object.keys(before), ...Object.keys(after)]);
 
-  for (const table of [...tables].sort()) {
+  for (const table of [...tables].toSorted()) {
     const b = before[table] ?? {};
     const a = after[table] ?? {};
 
-    for (const key of Object.keys(a).sort()) {
+    for (const key of Object.keys(a).toSorted()) {
       const rowAfter = a[key];
       if (rowAfter === undefined) continue;
       const rowBefore = b[key];
@@ -35,7 +35,7 @@ export function diffSnapshots(before: DbSnapshot, after: DbSnapshot): DbDelta {
       }
     }
 
-    for (const key of Object.keys(b).sort()) {
+    for (const key of Object.keys(b).toSorted()) {
       const rowBefore = b[key];
       if (rowBefore !== undefined && a[key] === undefined) {
         delta.deleted.push({ table, key, row: rowBefore });

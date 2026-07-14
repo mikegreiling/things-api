@@ -152,7 +152,7 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
   logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
   const scheduled: IsoDateGroup<Todo>[] = [];
   // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
-  for (const { date, todo } of scheduledRows.sort(
+  for (const { date, todo } of scheduledRows.toSorted(
     (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
   )) {
     const last = scheduled[scheduled.length - 1];

@@ -49,6 +49,14 @@ function addWriteFlags(cmd: Command): Command {
     .option("--actor <name>", "author name recorded for this change (default: from config)");
 }
 
+/** A commander flag value when present-with-value (bare presence yields `true`). */
+const flagVal = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+/** Writes one batch result as an NDJSON line to stdout. */
+const emit = (r: BatchItemResult): void => {
+  process.stdout.write(`${JSON.stringify(r)}\n`);
+};
+
 function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}): WriteOptions {
   const maxDisruption: DisruptionTier | undefined = opts.allowVeryDisruptive
     ? 3
@@ -563,7 +571,6 @@ export function registerWriteCommands(program: Command): void {
       }
       // Target: --index (1-based) OR the action flag's title value. When a
       // targeting flag is present without a value commander yields `true`.
-      const flagVal = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
       const target: { index?: number; item?: string } =
         opts["index"] !== undefined
           ? { index: Number(opts["index"]) }
@@ -1272,9 +1279,6 @@ export function registerWriteCommands(program: Command): void {
       let client: ThingsClient | null = null;
       try {
         client = openThings(opts.db ? { dbPath: opts.db } : {});
-        const emit = (r: BatchItemResult): void => {
-          process.stdout.write(`${JSON.stringify(r)}\n`);
-        };
         const results = await client.write.batch(
           ops,
           {

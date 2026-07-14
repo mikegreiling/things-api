@@ -17,6 +17,12 @@ afterEach(() => fx?.close());
 
 const resolveArea = (ref: string) => resolveNamedRef(fx.db, "TMArea", "1=1", [], ref);
 
+const list = (): ChecklistItemSpec[] => [
+  { title: "get milk", completed: true },
+  { title: "get eggs", completed: false },
+  { title: "get milk", completed: false },
+];
+
 describe("normalizeNameKey", () => {
   it("folds case, whitespace, and dashes but keeps emoji/symbols", () => {
     expect(normalizeNameKey("On Hold")).toBe("onhold");
@@ -108,12 +114,6 @@ describe("tiered name resolution (areas/tags)", () => {
 });
 
 describe("checklist targeting (best-effort title + 1-based index)", () => {
-  const list = (): ChecklistItemSpec[] => [
-    { title: "get milk", completed: true },
-    { title: "get eggs", completed: false },
-    { title: "get milk", completed: false },
-  ];
-
   it("check by title targets the first UNCHECKED match (best-effort on duplicates)", () => {
     const out = applyChecklistEdit(list(), { action: "check", item: "get milk" });
     // the second 'get milk' (index 2) was unchecked → it gets checked; the first stays
