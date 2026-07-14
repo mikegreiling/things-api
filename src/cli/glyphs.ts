@@ -345,13 +345,13 @@ export const LEGEND: readonly LegendEntry[] = [
     group: "Sections & hints",
   },
   {
-    glyph: dim("… 14 more"),
-    meaning: "a block was truncated; a drill-down command follows",
+    glyph: dim("  … 14 more — `…`"),
+    meaning: "a truncated block, indented; the command that shows more",
     group: "Sections & hints",
   },
   {
-    glyph: dim("(23 later — --show-later)"),
-    meaning: "default-hidden rows, and the flag that reveals them",
+    glyph: dim("… 23 later items — `…`"),
+    meaning: "a whole hidden section, flush; the reveal command",
     group: "Sections & hints",
   },
 ] as const;

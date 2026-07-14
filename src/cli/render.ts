@@ -482,16 +482,17 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
     lines.push(
       ...rows.map((item) => formatItem(item, w, { suppressArea: group.area?.uuid ?? null })),
     );
+    // A per-group locator count (not a standalone disclosure): it marks WHERE
+    // the hidden later projects sit; the single reveal command rides the
+    // whole-view placeholder below.
     if (group.hidden > 0)
-      lines.push(dim(`…${group.hidden} later project${group.hidden === 1 ? "" : "s"}`));
+      lines.push(dim(`… ${group.hidden} later project${group.hidden === 1 ? "" : "s"}`));
     else if (group.area !== null && rows.length === 0) lines.push(dim("(no projects)"));
   }
   if (total > 0)
     lines.push(
       "",
-      dim(
-        `(${total} later project${total === 1 ? "" : "s"} — visible with \`things projects --show-later\`)`,
-      ),
+      disclosureHint(total, "later project", [{ command: "things projects --show-later" }]),
     );
   return lines;
 }
@@ -629,6 +630,38 @@ export function renderSections(sections: SidebarSection[], star = false): string
 /** Single-quote a title for a copy-pasteable drill-down command. */
 export function quoteTitle(title: string): string {
   return `'${title.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The one disclosure-hint grammar (docs/design/render-language.md § Disclosure
+ * hints): a muted `… <count> <noun> — [label:] `command` [· [label:] `command`]`.
+ * Every muted hint that discloses more content routes through here so the
+ * grammar lives in ONE place (the same one-law pattern as projectTitleAccent).
+ *
+ * `count` pluralizes `noun` (pass a `{ one, many }` pair when the plural is not
+ * a trailing `s`); each action is a FULL command echoing the user's own
+ * invocation, and a `label` prefixes an action only where it adds semantics the
+ * command text doesn't carry (e.g. `recent:` before a capped `--show-logged`).
+ * `indent` marks a TRUNCATION FOOTER — two spaces under its partially-shown
+ * section — whereas a HIDDEN-SECTION placeholder stays flush at the position
+ * its unrendered section would occupy.
+ */
+export function disclosureHint(
+  count: number,
+  noun: string | { one: string; many: string },
+  actions: Array<{ label?: string; command: string }>,
+  opts: { indent?: boolean } = {},
+): string {
+  const phrase =
+    typeof noun === "string"
+      ? `${noun}${count === 1 ? "" : "s"}`
+      : count === 1
+        ? noun.one
+        : noun.many;
+  const acts = actions
+    .map((a) => `${a.label === undefined ? "" : `${a.label}: `}\`${a.command}\``)
+    .join(" · ");
+  return dim(`${opts.indent === true ? "  " : ""}… ${count} ${phrase} — ${acts}`);
 }
 
 const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
@@ -829,8 +862,13 @@ export function renderSomedayPreview(
   if (!showActive && hiddenActiveItems > 0) {
     blank();
     lines.push(
-      dim(
-        `(${hiddenActiveItems} someday to-do${hiddenActiveItems === 1 ? "" : "s"} inside active projects — visible with \`things someday --show-active-project-items\`)`,
+      disclosureHint(
+        hiddenActiveItems,
+        {
+          one: "someday to-do inside active projects",
+          many: "someday to-dos inside active projects",
+        },
+        [{ command: `${base} --show-active-project-items` }],
       ),
     );
   }

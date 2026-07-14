@@ -51,6 +51,30 @@ Only the **Logbook** treats resolved as normal. Only **anytime**, the **anytime 
 
 `projectTitleAccent(title)` in `glyphs.ts` is the ONE place project-title weight/color is decided. It returns `bold(title)` — bold, default color. Every project-title call site routes through it: `formatItem`'s title composition and the hand-built project-header lines (`someday` preview). Reverting to blue, or bold-blue, is a one-line change to that function and nowhere else.
 
+## Disclosure hints
+
+Ratified by Mike, 2026-07-14. Every muted line that discloses *more content than is shown* — a truncated block, or an entirely hidden section — follows ONE grammar, built by the single helper `disclosureHint(count, noun, actions, { indent })` in `render.ts` (the same one-law pattern as `projectTitleAccent`):
+
+```
+… <count> <noun-phrase> — [label:] `command` [· [label:] `command`]
+```
+
+- **Ellipsis, then one space.** Always `… 71`, never the compressed `…71`.
+- **Count + a real noun phrase.** `71 later items`, `365 logged items`, `239 more to-dos` — never a bare `logged` or a bare `71`. Pass a `{ one, many }` pair when the plural is not a trailing `s` (`someday to-do inside active projects`).
+- **Em-dash, then the action(s).** Every action is a FULL backticked command that echoes the user's own invocation with their flags preserved (the `hintBase` mechanism — the same base the truncation footers already thread). Never a bare parenthesized flag like `(--show-later)`, and never a `(… — visible with `…`)` parenthetical.
+- **Labels only where they add semantics the command text doesn't carry.** `recent:` prefixes `--show-logged` on an area (it shows the recent 15, not all) — that qualifies. An `--all`-style reveal or a logbook drill reads its own effect and takes no label (established doctrine, PR #122). A project's bare `--show-logged` is the FULL finite logbook, so it too is unlabeled.
+
+**Two classes, distinguished ONLY by indentation:**
+
+| Class | Indent | When |
+|---|---|---|
+| **Truncation footer** | two spaces, under its block | the section IS shown above, just partially (`  … 239 more to-dos — `…``) |
+| **Hidden-section placeholder** | flush | the whole section is unrendered; the line stands at the position that section would occupy (`… 71 later items — `…``) |
+
+A truncation footer that sits directly under a rail header naming its content (`── Logged (15 of 380) ──`) inherits the noun from that header and may read the terser `… N more — `…`` (the header carries the noun; `blockMoreLine`, `mixedMoreLine`, and the area logbook footer). The whole-view `── N more items — see more: … ──` **rail footers** (`truncationHint`) are a deliberately distinct third class and are NOT disclosure hints — do not fold them into this grammar.
+
+Per-group locator counts in the `projects` sidebar (`… 3 later projects` under each area) are breakdown counts, not standalone disclosures: the single reveal command rides ONE whole-view placeholder at the bottom.
+
 ## The nine deltas (the 2026-07-13 change)
 
 1. **Project titles bold + default (white), never blue, in all list rows** — via the single law `projectTitleAccent`.

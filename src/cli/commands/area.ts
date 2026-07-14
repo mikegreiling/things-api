@@ -15,7 +15,7 @@ import { Option } from "commander";
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
 import { openInThings } from "./reads.ts";
 import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
-import { formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
+import { disclosureHint, formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
@@ -89,12 +89,17 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   const shownProjects =
     limits.project === null ? activeProjects : activeProjects.slice(0, limits.project);
   const shownActive = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  // The user's invocation, echoed by every disclosure hint (falls back to a
+  // canonical typed command when a caller omits it, e.g. a direct unit test).
+  const base = opts.hintBase ?? `things area show ${quoteTitle(view.area.title)}`;
+  // A per-block TRUNCATION FOOTER (indented two spaces under its partially-
+  // shown block): `  … N more <noun>s — `<base> <flag> <bigger>``.
   const sectionMore = (hidden: number, noun: string, flag: string, cap: number | null): void => {
     if (hidden <= 0 || opts.hintBase === undefined || cap === null) return;
     lines.push(
-      dim(
-        `  … ${hidden} more ${noun}${hidden === 1 ? "" : "s"} — \`${opts.hintBase} ${flag} ${cap * 2}\``,
-      ),
+      disclosureHint(hidden, `more ${noun}`, [{ command: `${opts.hintBase} ${flag} ${cap * 2}` }], {
+        indent: true,
+      }),
     );
   };
   // Rows inside this view never repeat the area's own name. The area's top
@@ -139,13 +144,14 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
       }
     }
   }
-  // Default-hidden rows are never silent — a muted count names the toggle.
+  // Default-hidden rows are never silent — a HIDDEN-SECTION placeholder (flush,
+  // full command) stands where the Upcoming/Someday sections would render.
   if (opts.showLater !== true) {
     const hiddenLater = upcoming.length + somedayProjects.length + view.later.someday.length;
     if (hiddenLater > 0)
       lines.push(
         "",
-        dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
+        disclosureHint(hiddenLater, "later item", [{ command: `${base} --show-later` }]),
       );
   }
   // The full archive belongs to `things logbook --area <ref>` — echoed
@@ -163,9 +169,15 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
     lines.push("", bold(header), ...logged.map(fmt));
     if (more > 0) lines.push(dim(`… ${more} more — \`${logbookCmd}\``));
   } else if (view.logged.length > 0) {
+    // Hidden-section placeholder: `--show-logged` reveals only the RECENT 15
+    // (areas accumulate years), so it is labeled; the logbook drill reads its
+    // own effect and needs none.
     lines.push(
       "",
-      dim(`…${view.logged.length} logged (--show-logged; full history: \`${logbookCmd}\`)`),
+      disclosureHint(view.logged.length, "logged item", [
+        { label: "recent", command: `${base} --show-logged` },
+        { command: logbookCmd },
+      ]),
     );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
