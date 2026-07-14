@@ -629,7 +629,7 @@ export function renderSections(sections: SidebarSection[], star = false): string
 }
 
 /** Single-quote a title for a copy-pasteable drill-down command. */
-function quoteTitle(title: string): string {
+export function quoteTitle(title: string): string {
   return `'${title.replace(/'/g, "'\\''")}'`;
 }
 

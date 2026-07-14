@@ -1146,6 +1146,32 @@ describe("cli detail views — area show per-section caps; project show uncapped
     expect(stdout).toContain("Area: ⬡ Busy");
   });
 
+  it("--show-logged: shown-of-total header, drill footer with the real area ref", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Old Stuff");
+    for (let i = 0; i < 3; i++) {
+      seedTodo(fx.db, {
+        title: `done ${i}`,
+        area,
+        status: "completed",
+        stopDate: 1_500_000_000 + i,
+      });
+    }
+    // Truncated: count stays in the header, the drill rides the footer.
+    const cut = runCli(["area", "show", "Old Stuff", "--show-logged", "2", "--db", fx.path]).stdout;
+    expect(cut).toContain("── Logged (2 of 3) ──");
+    expect(cut).toContain("… 1 more — `things logbook --area 'Old Stuff'`");
+    // Complete: plain count like Trashed, no footer.
+    const all = runCli(["area", "show", "Old Stuff", "--show-logged", "9", "--db", fx.path]).stdout;
+    expect(all).toContain("── Logged (3) ──");
+    expect(all).not.toContain("more — `things logbook");
+    // Collapsed (toggle off): the hint names the toggle AND the ready-to-paste drill.
+    const off = runCli(["area", "show", "Old Stuff", "--db", fx.path]).stdout;
+    expect(off).toContain(
+      "…3 logged (--show-logged; full history: `things logbook --area 'Old Stuff'`)",
+    );
+  });
+
   it("the knobs adjust independently; --all lifts both; JSON carries grouped counts", () => {
     fx = buildFixtureDb();
     seedBusyArea();
