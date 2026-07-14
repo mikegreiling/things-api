@@ -48,6 +48,24 @@ Reads open the Things database directly, read-only, WAL-aware. Things does **not
 1. Things → Settings: check **"Allow Shortcuts app to edit large amounts of data without confirmation"** — otherwise bulk edits raise confirmation dialogs no automation can click.
 2. Shortcuts.app must have been opened once (first-run dialog dismissed); required proxy shortcuts and their per-app consents will be documented with the vector.
 
+## Writes — ui vector (Closet-mini) *(ships UNCERTIFIED; ratified 2026-07-14)*
+
+The fourth write vector drives the real Things GUI through the macOS **Accessibility API** (semantic element paths, no coordinate clicks) for the handful of transforms that exist on no headless surface — make/reschedule/pause/resume/stop a repeat rule, and to-do/heading → project conversion. It is the **most-disruptive tier**: driving foregrounds Things and briefly takes over UI focus on the machine, so its home is a **dedicated always-on Mac ("closet mini")** that runs things-api and drives its own GUI locally, not a machine anyone is working on. Architecture: [design/ui-vector.md](design/ui-vector.md). The ops ship **uncertified** (fail-closed, per-op certification pending a one-time real-hardware sitting, [lab/ui-certification-runbook.md](lab/ui-certification-runbook.md)).
+
+Two keys must BOTH be present for any ui op to run:
+
+1. **Enable the vector**: `things config set ui-enabled true`. Unset/false ⇒ every ui op reports unsupported with a remediation pointing here.
+2. **Per-call acknowledgment**: pass `--dangerously-drive-gui` (CLI) / `dangerouslyDriveGui: true` (MCP/library) on every call — without it the op is blocked, because it drives the local GUI and briefly foregrounds Things.
+
+Environment requirements for the closet mini:
+
+- **Keep the session unlocked.** A locked session presents only the lock screen and the driver cannot reach Things behind it — disable screen lock and display/system sleep (as in the dedicated-Mac checklist below).
+- **Grant Accessibility to the driving process** (System Settings → Privacy & Security → **Accessibility**). Like the Full Disk Access and Automation grants, the grantee is the process running things-api: your terminal app for interactive use, `/usr/libexec/sshd-keygen-wrapper` for SSH-driven use. The grant attaches to that host identity and persists.
+- **Screen Sharing / remote access** enabled as for any dedicated automation Mac (also how you click the one-time Accessibility consent).
+- **Verify the grant**: `things doctor --probe-accessibility` — an opt-in probe (mirrors `--probe-automation`) that actively tests Accessibility and will summon the consent dialog on an ungranted machine; it never triggers a surprise TCC prompt otherwise. The doctor ui-vector section also reports config-enabled, Things-running, the recipe canary, and each op's certification status.
+
+**Certification note:** every ui op ships `uncertified` — the recipes' element paths are lab-derived but not yet confirmed end-to-end on this build. Uncertified ops still run and self-verify by DB diff, but their result carries a warning naming the status; `things capabilities` and `things doctor` show it too. Certification is a lab operation (AXVM1 proved Accessibility is grantable in a VM guest, so the suite runs in a clone per Things version) with a final confirmation on the target hardware — both against a scratch/test database, never a prod library. See [ui-certification-runbook.md](lab/ui-certification-runbook.md).
+
 ## Dedicated automation Mac (headless-ish) checklist
 
 For a Mac mini in a closet driven over SSH:
@@ -59,6 +77,9 @@ For a Mac mini in a closet driven over SSH:
 - [ ] Automation consent: sshd → Things3 (trigger via `osascript` over SSH, click Allow via Screen Sharing)
 - [ ] Things URLs enabled in Things settings
 - [ ] Config profile set to `dedicated-server` (raises the default allowed disruption tier — nobody is watching the screen)
+- [ ] *(ui vector only)* Session kept UNLOCKED (screen lock disabled) — the GUI driver hits the lock screen otherwise
+- [ ] *(ui vector only)* `things config set ui-enabled true`
+- [ ] *(ui vector only)* Accessibility granted to the driving process (`sshd-keygen-wrapper` for SSH), verified via `things doctor --probe-accessibility`
 
 ## Hardening against consent prompts (headless / automation Macs)
 

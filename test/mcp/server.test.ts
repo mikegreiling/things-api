@@ -101,6 +101,11 @@ const EXPECTED_TOOLS = [
   "rename_heading",
   "unarchive_heading",
   "clear_reminder",
+  // ui vector (Accessibility GUI)
+  "make_repeating",
+  "reschedule_repeat",
+  "set_repeat_state",
+  "convert_to_project",
   // reads
   "read_view",
   "search",
@@ -563,6 +568,7 @@ describe("things MCP server", () => {
       "url-scheme",
       "applescript",
       "shortcuts",
+      "ui",
     ]);
   });
 

@@ -16,7 +16,13 @@ import {
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import type { HazardId } from "./guards.ts";
-import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "./operations.ts";
+import type {
+  ContainerRef,
+  OperationKind,
+  OperationParamsMap,
+  RepeatFrequency,
+  WhenValue,
+} from "./operations.ts";
 import {
   childTagTitles,
   computeReorderPre,
@@ -34,7 +40,15 @@ import {
 } from "./pre-state.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
-import type { CompiledInvocation, VectorId } from "./vectors/types.ts";
+import {
+  convertToProjectRecipe,
+  makeRepeatingRecipe,
+  pauseRepeatRecipe,
+  rescheduleRepeatRecipe,
+  resumeRepeatRecipe,
+  stopRepeatRecipe,
+} from "./vectors/ui-recipes.ts";
+import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
 import type { DeltaSpec, FieldAssertion } from "./verify/delta.ts";
 
 export interface CompileCtx {
@@ -1600,6 +1614,207 @@ const todoClearDatedReminder: CommandSpec<"todo.clear-dated-reminder"> = {
   },
 };
 
+// ------------------------------------------------------- ui (GUI) vector
+
+/** A compiled Accessibility recipe as a CompiledInvocation (no secrets). */
+function uiDrive(recipe: UiRecipe): CompiledInvocation {
+  const rendered = `ui-drive ${recipe.op} on ${recipe.targetUuid}: ${recipe.steps
+    .map((s) => s.label)
+    .join(" → ")}`;
+  return { vector: "ui", kind: "ui-drive", payload: rendered, redactedPayload: rendered, recipe };
+}
+
+function assertRepeatRule(params: { frequency: RepeatFrequency; interval: number }): void {
+  const units: RepeatFrequency[] = ["daily", "weekly", "monthly", "yearly"];
+  if (!units.includes(params.frequency)) {
+    throw new RangeError(`invalid frequency "${params.frequency}" — expected ${units.join(" | ")}`);
+  }
+  if (!Number.isInteger(params.interval) || params.interval < 1 || params.interval > 99) {
+    throw new RangeError(`invalid interval ${params.interval} — expected an integer 1–99`);
+  }
+}
+
+/** ui ops all guard existence/type + the H-UI-DRIVE acknowledgement. */
+const UI_HAZARDS: HazardId[] = ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"];
+
+const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
+  op: "todo.make-repeating",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    assertRepeatRule(params);
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, params, ctx) {
+    // Identity REPLACEMENT (UI2-a): the original to-do uuid dies; a NEW
+    // template row (type=0 with a recurrence rule) is born. Discover it with
+    // the create probe, and pick the template (not the spawned instance) by
+    // asserting it IS a template.
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    return {
+      mode: "create",
+      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "repeating.isTemplate", equals: true }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(makeRepeatingRecipe(params.uuid, params.frequency, params.interval));
+  },
+};
+
+const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
+  op: "todo.reschedule-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    assertRepeatRule(params);
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
+    // place. Assert the decoded rule's frequency + interval.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [
+        { field: "repeating.rule.unit", equals: params.frequency },
+        { field: "repeating.rule.interval", equals: params.interval },
+      ],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(rescheduleRepeatRecipe(params.uuid, params.frequency, params.interval));
+  },
+};
+
+const todoPauseRepeat: CommandSpec<"todo.pause-repeat"> = {
+  op: "todo.pause-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Pause (UI2-c): rt1_instanceCreationPaused → 1; identity preserved.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "repeating.paused", equals: true }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(pauseRepeatRecipe(params.uuid));
+  },
+};
+
+const todoResumeRepeat: CommandSpec<"todo.resume-repeat"> = {
+  op: "todo.resume-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Resume (UI2-c): rt1_instanceCreationPaused → 0; identity preserved.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "repeating.paused", equals: false }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(resumeRepeatRecipe(params.uuid));
+  },
+};
+
+const todoStopRepeat: CommandSpec<"todo.stop-repeat"> = {
+  op: "todo.stop-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // Stop (UI2-i): terminal IDENTITY REPLACEMENT un-repeat — the template
+    // uuid is hard-deleted and replaced by a NEW plain to-do with the rule
+    // cleared (the already-spawned instance survives independently). Discover
+    // the fresh plain row and confirm it is NOT a template.
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    return {
+      mode: "create",
+      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "repeating.isTemplate", equals: false }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(stopRepeatRecipe(params.uuid));
+  },
+};
+
+const todoConvertToProject: CommandSpec<"todo.convert-to-project"> = {
+  op: "todo.convert-to-project",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // Identity REPLACEMENT (UI2-d): the to-do uuid dies; a NEW type=1 project
+    // is born, notes preserved. Discover it (its uuid is returned).
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    const notes = target !== null && target.type !== "heading" ? target.notes : "";
+    return {
+      mode: "create",
+      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "notes", equals: notes }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(convertToProjectRecipe("todo.convert-to-project", params.uuid));
+  },
+};
+
+const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
+  op: "heading.convert-to-project",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // Identity REPLACEMENT (UI2-d): the heading uuid dies; a NEW type=1
+    // project is born (promoted into the parent project's area, children
+    // reparented). Discover the new project by its (former heading) title.
+    const target = pre.target;
+    const title = target !== null ? target.title : "";
+    return {
+      mode: "create",
+      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(convertToProjectRecipe("heading.convert-to-project", params.uuid));
+  },
+};
+
 const trashEmpty: CommandSpec<"trash.empty"> = {
   op: "trash.empty",
   hazards: ["H-PERMANENT-DELETE"],
@@ -1655,4 +1870,11 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "heading.unarchive": headingUnarchive,
   "heading.create": headingCreate,
   "todo.clear-dated-reminder": todoClearDatedReminder,
+  "todo.make-repeating": todoMakeRepeating,
+  "todo.reschedule-repeat": todoRescheduleRepeat,
+  "todo.pause-repeat": todoPauseRepeat,
+  "todo.resume-repeat": todoResumeRepeat,
+  "todo.stop-repeat": todoStopRepeat,
+  "todo.convert-to-project": todoConvertToProject,
+  "heading.convert-to-project": headingConvertToProject,
 };

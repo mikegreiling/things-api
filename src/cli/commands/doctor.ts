@@ -35,6 +35,19 @@ function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
   ];
 }
 
+/** The `── ui vector ──` section: config + app + Accessibility + certification. */
+function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
+  const certified = ui.certification.filter((c) => c.status === "certified").length;
+  return [
+    "── ui vector (Accessibility GUI) ──",
+    `enabled:       ${ui.enabled ? "yes" : "no"} — ${ui.reason}`,
+    `app running:   ${ui.appRunning ? "yes" : "no"}`,
+    `accessibility: ${ui.accessibility.status} — ${ui.accessibility.detail}`,
+    `certification: ${certified}/${ui.certification.length} certified (${ui.certificationProfile}) — ` +
+      "recipes ship uncertified until confirmed on device (docs/lab/ui-certification-runbook.md)",
+  ];
+}
+
 export function registerDoctor(program: Command): void {
   program
     .command("doctor")
@@ -54,51 +67,65 @@ export function registerDoctor(program: Command): void {
       "actively test whether automation of Things is authorized (may show a one-time macOS " +
         "consent prompt; skipped when Things is not running)",
     )
-    .action((opts: { json?: boolean; db?: string; probeAutomation?: boolean }) => {
-      const started = Date.now();
-      const { report, error, exitCode, meta } = diagnose(opts.db, {
-        ...(opts.probeAutomation === true && { probeAutomation: true }),
-      });
-      const fullMeta: EnvelopeMeta = { ...meta, elapsedMs: Date.now() - started };
-      if (opts.json) {
-        const envelope = report
-          ? okEnvelope("doctor", report, fullMeta)
-          : errorEnvelope(error ?? { code: "unexpected", message: "no report" }, fullMeta);
-        process.stdout.write(`${JSON.stringify(envelope)}\n`);
-      } else if (report) {
-        const lines = [
-          `db:          ${report.db.path} (${report.db.source})`,
-          `db version:  ${report.db.databaseVersion ?? "unknown"}`,
-          `fingerprint: ${report.fingerprint.status} (${report.fingerprint.value.slice(0, 23)}…)`,
-          ...report.fingerprint.detail.map((d) => `  drift: ${d}`),
-          `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
-          `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
-          `experimental: ${report.experimental.reason}`,
-          `environment: ${environmentLine(report.environment)}`,
-          `automation:  ${report.automation.status}${
-            report.automation.status === "granted" ? "" : ` — ${report.automation.detail}`
-          }`,
-          `url scheme:  ${
-            report.availability.urlScheme.enabled === true
-              ? "enabled"
-              : report.availability.urlScheme.enabled === false
-                ? "DISABLED"
-                : "unknown"
-          } — ${report.availability.urlScheme.detail}`,
-          `shortcuts:   ${report.availability.shortcuts.present.length}/${
-            report.availability.shortcuts.present.length +
-            report.availability.shortcuts.missing.length
-          } proxies installed — ${report.availability.shortcuts.detail}`,
-          `repeats:     ${report.recurrence.templates} template(s), ${
-            report.recurrence.undecodable
-          } undecodable${report.recurrence.undecodable > 0 ? ` — ${report.recurrence.detail}` : ""}`,
-          ...syncHealthLines(report.syncHealth),
-        ];
-        process.stdout.write(`${lines.join("\n")}\n`);
-      } else if (error) {
-        process.stderr.write(`doctor: ${error.message}\n`);
-        if (error.remediation) process.stderr.write(`  remediation: ${error.remediation}\n`);
-      }
-      process.exitCode = exitCode;
-    });
+    .option(
+      "--probe-accessibility",
+      "actively test whether the ui vector's Accessibility access is granted and its GUI " +
+        "recipe resolves (may show a one-time macOS prompt; skipped when Things is not running)",
+    )
+    .action(
+      (opts: {
+        json?: boolean;
+        db?: string;
+        probeAutomation?: boolean;
+        probeAccessibility?: boolean;
+      }) => {
+        const started = Date.now();
+        const { report, error, exitCode, meta } = diagnose(opts.db, {
+          ...(opts.probeAutomation === true && { probeAutomation: true }),
+          ...(opts.probeAccessibility === true && { probeAccessibility: true }),
+        });
+        const fullMeta: EnvelopeMeta = { ...meta, elapsedMs: Date.now() - started };
+        if (opts.json) {
+          const envelope = report
+            ? okEnvelope("doctor", report, fullMeta)
+            : errorEnvelope(error ?? { code: "unexpected", message: "no report" }, fullMeta);
+          process.stdout.write(`${JSON.stringify(envelope)}\n`);
+        } else if (report) {
+          const lines = [
+            `db:          ${report.db.path} (${report.db.source})`,
+            `db version:  ${report.db.databaseVersion ?? "unknown"}`,
+            `fingerprint: ${report.fingerprint.status} (${report.fingerprint.value.slice(0, 23)}…)`,
+            ...report.fingerprint.detail.map((d) => `  drift: ${d}`),
+            `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
+            `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
+            `experimental: ${report.experimental.reason}`,
+            `environment: ${environmentLine(report.environment)}`,
+            `automation:  ${report.automation.status}${
+              report.automation.status === "granted" ? "" : ` — ${report.automation.detail}`
+            }`,
+            `url scheme:  ${
+              report.availability.urlScheme.enabled === true
+                ? "enabled"
+                : report.availability.urlScheme.enabled === false
+                  ? "DISABLED"
+                  : "unknown"
+            } — ${report.availability.urlScheme.detail}`,
+            `shortcuts:   ${report.availability.shortcuts.present.length}/${
+              report.availability.shortcuts.present.length +
+              report.availability.shortcuts.missing.length
+            } proxies installed — ${report.availability.shortcuts.detail}`,
+            `repeats:     ${report.recurrence.templates} template(s), ${
+              report.recurrence.undecodable
+            } undecodable${report.recurrence.undecodable > 0 ? ` — ${report.recurrence.detail}` : ""}`,
+            ...syncHealthLines(report.syncHealth),
+            ...uiVectorLines(report.ui),
+          ];
+          process.stdout.write(`${lines.join("\n")}\n`);
+        } else if (error) {
+          process.stderr.write(`doctor: ${error.message}\n`);
+          if (error.remediation) process.stderr.write(`  remediation: ${error.remediation}\n`);
+        }
+        process.exitCode = exitCode;
+      },
+    );
 }

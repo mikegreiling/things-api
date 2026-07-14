@@ -32,6 +32,7 @@ import { acquireMutationLock, MutationLockError } from "./lock.ts";
 import type { Acknowledgements, OperationKind, OperationParamsMap } from "./operations.ts";
 import { planVector } from "./planner.ts";
 import type { PreState } from "./pre-state.ts";
+import { certificationOf } from "./vectors/ui-certification.ts";
 import type { CompiledInvocation, VectorId, WriteVector } from "./vectors/types.ts";
 import {
   createDbReader,
@@ -250,7 +251,12 @@ export async function runMutation<K extends OperationKind>(
   const spec = COMMANDS[op] as CommandSpec<K>;
   const config = deps.config;
   const actor = options.actor ?? config.actor;
-  const maxDisruption = options.maxDisruption ?? config.maxDisruption;
+  // The GUI-drive acknowledgement is the second of the ui vector's two keys;
+  // it also lifts the disruption ceiling to the top tier so the caller does
+  // not additionally need --allow-very-disruptive for a change they already
+  // acknowledged drives the GUI.
+  const maxDisruption: DisruptionTier =
+    options.dangerouslyDriveGui === true ? 3 : (options.maxDisruption ?? config.maxDisruption);
 
   const audit = (partial: Partial<AuditRecord> & { result: AuditRecord["result"] }): void => {
     const fp = deps.fingerprint();
@@ -335,6 +341,9 @@ export async function runMutation<K extends OperationKind>(
       }),
       ...(options.acknowledgeTagSubtree !== undefined && {
         acknowledgeTagSubtree: options.acknowledgeTagSubtree,
+      }),
+      ...(options.dangerouslyDriveGui !== undefined && {
+        dangerouslyDriveGui: options.dangerouslyDriveGui,
       }),
     };
     const block: GuardBlock | null = evaluateGuards(spec.hazards, {
@@ -539,6 +548,26 @@ export async function runMutation<K extends OperationKind>(
               uuid,
               ...(options.txn !== undefined && { txn: options.txn }),
             });
+      const warnings: string[] = [];
+      if (vector.id === "ui") {
+        warnings.push(
+          "this change was applied by driving the local Things app through the Accessibility API",
+        );
+        const cert = certificationOf(op);
+        if (cert !== undefined && cert.status !== "certified") {
+          warnings.push(
+            `this operation is ${cert.status}: its GUI recipe has not been confirmed on real ` +
+              "hardware (see `things doctor` / docs/lab/ui-certification-runbook.md)",
+          );
+        }
+      }
+      if (envChanges.length > 0) {
+        warnings.push(
+          `environment changed since the last verified write: ` +
+            `${describeEnvironmentChanges(envChanges)} — the first use of another ` +
+            `capability may show a macOS consent prompt`,
+        );
+      }
       return {
         kind: "ok",
         op,
@@ -547,13 +576,7 @@ export async function runMutation<K extends OperationKind>(
         vector: vector.id,
         tier: effectiveTier,
         ...(resultToken !== undefined && { undoToken: resultToken }),
-        ...(envChanges.length > 0 && {
-          warnings: [
-            `environment changed since the last verified write: ` +
-              `${describeEnvironmentChanges(envChanges)} — the first use of another ` +
-              `capability may show a macOS consent prompt`,
-          ],
-        }),
+        ...(warnings.length > 0 && { warnings }),
       };
     }
 

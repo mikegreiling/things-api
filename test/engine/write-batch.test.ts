@@ -55,6 +55,7 @@ const CONFIG: ThingsApiConfig = {
   auditEnabled: true,
   acceptedFingerprint: null,
   allowExperimental: false,
+  ui: { enabled: false },
   host: "test-host",
 };
 

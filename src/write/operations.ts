@@ -43,9 +43,40 @@ export const OPERATION_KINDS = [
   "heading.unarchive",
   "heading.create",
   "todo.clear-dated-reminder",
+  "todo.make-repeating",
+  "todo.reschedule-repeat",
+  "todo.pause-repeat",
+  "todo.resume-repeat",
+  "todo.stop-repeat",
+  "todo.convert-to-project",
+  "heading.convert-to-project",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
+
+/**
+ * Operations delivered EXCLUSIVELY through the Accessibility GUI ("ui")
+ * vector — GUI-only transforms with no headless spelling. Each drives the
+ * local Things app, so all are two-key gated: the `ui.enabled` config plus a
+ * per-call `dangerouslyDriveGui` acknowledgement (H-UI-DRIVE). Kept as data so
+ * the guard and the pipeline agree on the set.
+ */
+export const UI_DRIVE_OPS: readonly OperationKind[] = [
+  "todo.make-repeating",
+  "todo.reschedule-repeat",
+  "todo.pause-repeat",
+  "todo.resume-repeat",
+  "todo.stop-repeat",
+  "todo.convert-to-project",
+  "heading.convert-to-project",
+] as const;
+
+export function isUiDriveOp(op: OperationKind): boolean {
+  return UI_DRIVE_OPS.includes(op);
+}
+
+/** Recurrence frequency the minimal v1 GUI rule vocabulary supports. */
+export type RepeatFrequency = "daily" | "weekly" | "monthly" | "yearly";
 
 /** `when` scheduling value: list keyword or a concrete date. */
 export type WhenValue = "today" | "evening" | "anytime" | "someday" | IsoDate;
@@ -351,6 +382,19 @@ export interface ReorderParams {
 
 export type EmptyParams = Record<string, never>;
 
+/**
+ * Set (make-repeating) or edit (reschedule-repeat) a to-do's recurrence rule
+ * through the GUI's Repeat dialog. The v1 vocabulary is deliberately minimal:
+ * frequency + interval only. Weekday pickers, ends-bounds, and reminders in
+ * the repeat dialog are future increments (docs/design/ui-vector.md).
+ */
+export interface RepeatRuleParams {
+  uuid: string;
+  frequency: RepeatFrequency;
+  /** "every N units", 1–99. */
+  interval: number;
+}
+
 export interface OperationParamsMap {
   "todo.add": TodoAddParams;
   "todo.update": TodoUpdateParams;
@@ -389,6 +433,13 @@ export interface OperationParamsMap {
   "heading.unarchive": HeadingUnarchiveParams;
   "heading.create": HeadingCreateParams;
   "todo.clear-dated-reminder": UuidParams;
+  "todo.make-repeating": RepeatRuleParams;
+  "todo.reschedule-repeat": RepeatRuleParams;
+  "todo.pause-repeat": UuidParams;
+  "todo.resume-repeat": UuidParams;
+  "todo.stop-repeat": UuidParams;
+  "todo.convert-to-project": UuidParams;
+  "heading.convert-to-project": UuidParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */
@@ -401,4 +452,11 @@ export interface Acknowledgements {
   dangerouslyPermanent?: boolean;
   /** Confirm that deleting a parent tag permanently deletes ALL of its descendant tags. */
   acknowledgeTagSubtree?: boolean;
+  /**
+   * Confirm a GUI-driven ("ui" vector) operation: it drives the LOCAL Things
+   * app through the Accessibility API, may foreground Things and briefly take
+   * over UI focus on this machine, and requires an unlocked session. The
+   * second of the two keys (the first is the `ui.enabled` config).
+   */
+  dangerouslyDriveGui?: boolean;
 }

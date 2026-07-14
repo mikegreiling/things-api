@@ -13,7 +13,12 @@ import { openThings, type ThingsClient } from "../../client.ts";
 import { saveConfigKey, type DisruptionTier } from "../../config.ts";
 import { ThingsDbNotFoundError } from "../../db/locate.ts";
 import { ThingsDbOpenError } from "../../db/connection.ts";
-import type { OperationKind, ReorderScope, ReorderStrategy } from "../../write/operations.ts";
+import type {
+  OperationKind,
+  RepeatFrequency,
+  ReorderScope,
+  ReorderStrategy,
+} from "../../write/operations.ts";
 import type { WriteOptions } from "../../write/pipeline.ts";
 import { capabilitiesTable } from "../../write/capabilities.ts";
 import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
@@ -32,6 +37,7 @@ interface WriteFlagOpts {
   allowVeryDisruptive?: boolean;
   verifyTimeout?: string;
   actor?: string;
+  dangerouslyDriveGui?: boolean;
 }
 
 function addWriteFlags(cmd: Command): Command {
@@ -41,7 +47,7 @@ function addWriteFlags(cmd: Command): Command {
     .option("--dry-run", "preview the planned change and its expected effect; nothing executes")
     .option(
       "--vector <id>",
-      "force how the change is delivered: url-scheme | applescript | shortcuts",
+      "force how the change is delivered: url-scheme | applescript | shortcuts | ui",
     )
     .option("--allow-disruptive", "permit changes that briefly steal window focus")
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
@@ -69,8 +75,19 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
     ...(maxDisruption !== undefined && { maxDisruption }),
     ...(opts.verifyTimeout !== undefined && { verifyTimeoutMs: Number(opts.verifyTimeout) }),
     ...(opts.actor !== undefined && { actor: opts.actor }),
+    ...(opts.dangerouslyDriveGui === true && { dangerouslyDriveGui: true }),
     ...extra,
   };
+}
+
+/** Add the mandatory GUI-drive acknowledgement to a ui-vector command. */
+function addDriveGuiFlag(cmd: Command): Command {
+  return cmd.option(
+    "--dangerously-drive-gui",
+    "required: this drives the local Things app through its accessibility interface to make a " +
+      "change the app offers nowhere else; also needs `things config set ui-enabled true`. " +
+      "Intended for a dedicated always-on Mac.",
+  );
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -700,6 +717,84 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
+  // --- ui vector: GUI-driven transforms (two-key gated) --------------------
+
+  const REPEAT_FREQ_HELP = "daily | weekly | monthly | yearly";
+  const REPEAT_INTERVAL_HELP = "every N units (1–99)";
+
+  for (const [verb, op, desc] of [
+    [
+      "make-repeating",
+      "todo.make-repeating",
+      "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new repeating " +
+        "series — the original disappears and a fresh recurring item takes its place " +
+        "(cannot be undone). Supported rule: a frequency and an interval only.",
+    ],
+    [
+      "reschedule-repeat",
+      "todo.reschedule-repeat",
+      "Change an existing repeating to-do's frequency/interval in place (the item keeps its " +
+        "identity). Supported rule: a frequency and an interval only; other rule details (weekday " +
+        "pickers, end bounds) are left as they are and cannot be changed here.",
+    ],
+  ] as const) {
+    addDriveGuiFlag(
+      addWriteFlags(
+        todo
+          .command(`${verb} <uuid>`)
+          .description(desc)
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
+    ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) =>
+        c.write.run(
+          op,
+          {
+            uuid,
+            frequency: opts["frequency"] as RepeatFrequency,
+            interval: Number(opts["interval"]),
+          },
+          writeOptionsFrom(opts),
+        ),
+      );
+    });
+  }
+
+  for (const [verb, op, desc] of [
+    [
+      "pause-repeat",
+      "todo.pause-repeat",
+      "Pause a repeating to-do: it stops spawning new occurrences but keeps its rule. Reversible " +
+        "with `things todo resume-repeat`.",
+    ],
+    [
+      "resume-repeat",
+      "todo.resume-repeat",
+      "Resume a paused repeating to-do: it starts spawning occurrences again.",
+    ],
+    [
+      "stop-repeat",
+      "todo.stop-repeat",
+      "Stop a to-do from repeating for good: this REPLACES it with a single plain to-do (the " +
+        "recurring series is removed and any occurrence already created stays as its own item). " +
+        "Terminal — there is no resume, and it cannot be undone.",
+    ],
+    [
+      "convert-to-project",
+      "todo.convert-to-project",
+      "Convert a to-do into a project. This REPLACES the to-do with a new project (its notes are " +
+        "kept); the to-do's identity is gone and it cannot be undone. The new project's uuid is " +
+        "printed on success.",
+    ],
+  ] as const) {
+    addDriveGuiFlag(addWriteFlags(todo.command(`${verb} <uuid>`).description(desc))).action(
+      async (uuid: string, opts: WriteFlagOpts) => {
+        await runWrite(opts, (c) => c.write.run(op, { uuid }, writeOptionsFrom(opts)));
+      },
+    );
+  }
+
   const heading = group(program, "heading", "Heading-scoped operations");
 
   addWriteFlags(
@@ -777,6 +872,23 @@ export function registerWriteCommands(program: Command): void {
       }
       return outcome.heading;
     });
+  });
+
+  addDriveGuiFlag(
+    addWriteFlags(
+      heading
+        .command("convert-to-project <uuid>")
+        .description(
+          "Convert a heading into a project. This REPLACES the heading with a new project — it " +
+            "is promoted alongside its parent project (into the same area) and the heading's " +
+            "to-dos move under the new project. The heading's identity is gone and it cannot be " +
+            "undone. The new project's uuid is printed on success.",
+        ),
+    ),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) =>
+      c.write.run("heading.convert-to-project", { uuid }, writeOptionsFrom(opts)),
+    );
   });
 
   const project = group(program, "project", "Project-scoped operations");
@@ -1481,6 +1593,12 @@ export function registerWriteCommands(program: Command): void {
         process.stdout.write(
           `  undo: ${entry.undo.class}${entry.undo.ack !== undefined ? ` (ack: ${entry.undo.ack})` : ""} — ${entry.undo.note}\n`,
         );
+        if (entry.certification !== undefined) {
+          process.stdout.write(
+            `  certification: ${entry.certification.status}` +
+              `${entry.certification.evidence.length > 0 ? ` (${entry.certification.evidence.join(", ")})` : ""}\n`,
+          );
+        }
         for (const v of entry.vectors) {
           const s = v as {
             support: string;
@@ -1520,7 +1638,7 @@ export function registerWriteCommands(program: Command): void {
     .command("set <key> <value>")
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
-        "accepted-fingerprint | allow-experimental",
+        "accepted-fingerprint | allow-experimental | ui-enabled",
     )
     .action((key: string, value: string) => {
       const map: Record<string, string> = {
@@ -1530,6 +1648,7 @@ export function registerWriteCommands(program: Command): void {
         auditEnabled: "auditEnabled",
         "accepted-fingerprint": "acceptedFingerprint",
         "allow-experimental": "allowExperimental",
+        "ui-enabled": "uiEnabled",
       };
       const target = map[key];
       if (target === undefined) {
@@ -1540,7 +1659,7 @@ export function registerWriteCommands(program: Command): void {
       const parsed: string | number | boolean =
         target === "maxDisruption"
           ? Number(value)
-          : target === "auditEnabled" || target === "allowExperimental"
+          : target === "auditEnabled" || target === "allowExperimental" || target === "uiEnabled"
             ? value === "true"
             : value;
       saveConfigKey(target as never, parsed);

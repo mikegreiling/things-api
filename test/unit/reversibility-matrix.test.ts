@@ -72,6 +72,7 @@ const CONFIG: ThingsApiConfig = {
   auditEnabled: true,
   acceptedFingerprint: null,
   allowExperimental: true,
+  ui: { enabled: true },
   host: "test-host",
 };
 
@@ -155,6 +156,26 @@ function osaVector(
       if (effect === null) throw new Error("this vector must not dispatch (refusal expected)");
       const id = /id "([^"]+)"/.exec(inv.payload)?.[1] ?? "";
       effect(id, inv.payload);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+/** A ui-vector fake: parses the op + uuid from the recipe payload and applies. */
+function uiVector(
+  ops: OperationKind[],
+  effect: ((op: string, uuid: string) => void) | null,
+): { vector: WriteVector; calls: string[] } {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "ui",
+    matrix: matrixFor(ops),
+    async execute(inv) {
+      calls.push(inv.payload);
+      if (effect === null) throw new Error("this vector must not dispatch (refusal expected)");
+      const m = /^ui-drive (\S+) on (\S+):/.exec(inv.payload);
+      effect(m?.[1] ?? "", m?.[2] ?? "");
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   };
@@ -1396,6 +1417,110 @@ const CASES: Record<OperationKind, CaseDef> = {
         const plan = planUndo(auditRecord({ op: "heading.create", uuid: "H-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
         expect(plan.reason).toContain("interactive-only");
+      });
+    },
+  },
+
+  // ---- ui (GUI) vector: reversible pause↔resume pair, the rest irreversible
+
+  "todo.pause-repeat": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo RESUMES a paused repeat (GUI-driven inverse)", async () => {
+        const uuid = seedTodo(fixture.db, {
+          title: "Repeater",
+          recurrenceRule: true,
+          instanceCreationPaused: true,
+        });
+        writeAudit([auditRecord({ op: "todo.pause-repeat", uuid, vector: "ui", disruption: 3 })]);
+        const ui = uiVector(["todo.pause-repeat", "todo.resume-repeat"], (op, id) => {
+          set(id, "rt1_instanceCreationPaused = ?", [op === "todo.resume-repeat" ? 0 : 1]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("todo.resume-repeat");
+        expect(items[0]?.outcome).toBe("ok");
+        expect(
+          (
+            fixture.db
+              .prepare("SELECT rt1_instanceCreationPaused AS p FROM TMTask WHERE uuid=?")
+              .get(uuid) as { p: number }
+          ).p,
+        ).toBe(0);
+      });
+    },
+  },
+  "todo.resume-repeat": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo PAUSES a resumed repeat (GUI-driven inverse)", async () => {
+        const uuid = seedTodo(fixture.db, {
+          title: "Repeater",
+          recurrenceRule: true,
+          instanceCreationPaused: false,
+        });
+        writeAudit([auditRecord({ op: "todo.resume-repeat", uuid, vector: "ui", disruption: 3 })]);
+        const ui = uiVector(["todo.pause-repeat", "todo.resume-repeat"], (op, id) => {
+          set(id, "rt1_instanceCreationPaused = ?", [op === "todo.resume-repeat" ? 0 : 1]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("todo.pause-repeat");
+        expect(items[0]?.outcome).toBe("ok");
+        expect(
+          (
+            fixture.db
+              .prepare("SELECT rt1_instanceCreationPaused AS p FROM TMTask WHERE uuid=?")
+              .get(uuid) as { p: number }
+          ).p,
+        ).toBe(1);
+      });
+    },
+  },
+  "todo.make-repeating": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (identity replacement — new template uuid)", () => {
+        const plan = planUndo(auditRecord({ op: "todo.make-repeating", uuid: "T-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("identity replacement");
+      });
+    },
+  },
+  "todo.reschedule-repeat": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (minimal vocabulary cannot restore the prior rule)", () => {
+        const plan = planUndo(auditRecord({ op: "todo.reschedule-repeat", uuid: "T-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+      });
+    },
+  },
+  "todo.stop-repeat": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (terminal — no Resume; new plain to-do)", () => {
+        const plan = planUndo(auditRecord({ op: "todo.stop-repeat", uuid: "T-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("terminal");
+      });
+    },
+  },
+  "todo.convert-to-project": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (identity replacement — new project uuid)", () => {
+        const plan = planUndo(auditRecord({ op: "todo.convert-to-project", uuid: "T-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("identity replacement");
+      });
+    },
+  },
+  "heading.convert-to-project": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (identity replacement — new project uuid)", () => {
+        const plan = planUndo(auditRecord({ op: "heading.convert-to-project", uuid: "H-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("identity replacement");
       });
     },
   },
