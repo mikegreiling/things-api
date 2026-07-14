@@ -37,11 +37,16 @@ describe("root help", () => {
     } catch {
       // exitOverride throws after help renders — expected
     }
-    expect(rendered).toContain("AGENT NOTES");
-    expect(rendered).toContain("0 ok, 2 usage, 3 verify-failed, 4 blocked");
-    expect(rendered).toContain("5 drift-blocked, 6 unsupported, 7 environment");
-    expect(rendered).toContain("No command ever prompts interactively");
-    expect(rendered).toContain("things legend");
+    // The epilog reflows to the terminal width at render time, so assertions
+    // are wrap-agnostic: collapse whitespace before matching (line breaks may
+    // land anywhere).
+    const flat = rendered.replace(/\s+/g, " ");
+    expect(flat).toContain("AGENT NOTES");
+    expect(flat).toContain(
+      "0 ok, 2 usage, 3 verify-failed, 4 blocked, 5 drift-blocked, 6 unsupported, 7 environment",
+    );
+    expect(flat).toContain("No command ever prompts interactively");
+    expect(flat).toContain("things legend");
   });
 });
 
