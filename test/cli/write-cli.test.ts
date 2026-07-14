@@ -258,3 +258,68 @@ describe("batch (Phase 13)", () => {
     expect(lines[1].outcome.kind).toBe("skipped");
   });
 });
+
+describe("undo selection flags", () => {
+  async function seedAudit(records: Record<string, unknown>[]): Promise<void> {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const dir = join(stateDir, "audit");
+    mkdirSync(dir, { recursive: true });
+    const base = {
+      v: 1,
+      ts: "2026-07-05T10:00:00.000Z",
+      actor: "mike",
+      host: "test-host",
+      op: "todo.update",
+      uuid: null,
+      vector: "url-scheme",
+      disruption: 0,
+      invocation: "x",
+      requested: {},
+      pre: null,
+      observed: null,
+      result: "ok",
+      verify: null,
+      durationMs: 1,
+      env: { pkg: "0.1.0", dbVersion: 26, fingerprint: "ok" },
+    };
+    writeFileSync(
+      join(dir, "2026-07.jsonl"),
+      records.map((r) => JSON.stringify({ ...base, ...r })).join("\n"),
+    );
+  }
+
+  it("--txn and --last are mutually exclusive (usage error, exit 2)", async () => {
+    await run(["undo", "--txn", "m-abc", "--last", "2"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("--txn cannot be combined with --last or --by");
+  });
+
+  it("--txn with an unknown token is a loud usage error", async () => {
+    await seedAudit([{ op: "todo.add", uuid: "A", actor: "mike" }]);
+    await run(["undo", "--txn", "m-does-not-exist"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("no undoable mutation has undo token");
+  });
+
+  it("CLI undo defaults to GLOBAL — dry-run picks the newest regardless of author", async () => {
+    await seedAudit([
+      { ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "M1", actor: "mcp" },
+      { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: "H1", actor: "mike" },
+    ]);
+    await run(["undo", "--dry-run"]);
+    const item = JSON.parse(stdout.join("").trim().split("\n")[0] ?? "{}");
+    expect(item.plan.target.uuid).toBe("H1");
+    expect(item.plan.target.actor).toBe("mike");
+  });
+
+  it("--by mcp narrows to the agent's record even when a human's is newer", async () => {
+    await seedAudit([
+      { ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "M1", actor: "mcp" },
+      { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: "H1", actor: "mike" },
+    ]);
+    await run(["undo", "--by", "mcp", "--dry-run"]);
+    const item = JSON.parse(stdout.join("").trim().split("\n")[0] ?? "{}");
+    expect(item.plan.target.uuid).toBe("M1");
+    expect(item.plan.target.actor).toBe("mcp");
+  });
+});

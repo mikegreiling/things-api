@@ -30,7 +30,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AuditRecord } from "../audit/schema.ts";
+import { undoToken, type AuditRecord } from "../audit/schema.ts";
 import type { AnyTask } from "../model/entities.ts";
 import { localToday } from "../model/dates.ts";
 import { getField } from "./verify/delta.ts";
@@ -59,7 +59,7 @@ export interface UndoStep {
 
 export interface UndoPlan {
   /** The audit record being undone. */
-  target: { ts: string; op: string; uuid: string | null; actor: string };
+  target: { ts: string; op: string; uuid: string | null; actor: string; token: string };
   kind: "invertible" | "irreversible";
   steps: UndoStep[];
   /** Fidelity caveats — what the inverse cannot restore. */
@@ -78,10 +78,28 @@ export interface UndoItemResult {
 export interface UndoOptions {
   /** How many trailing mutations to undo (default 1). */
   last?: number;
+  /**
+   * SELECTION filter — undo only mutations recorded under this actor. An exact
+   * actor string (e.g. "mcp", "mike") or "*" for all actors. Undefined means
+   * all (the CLI's global default); the MCP surface defaults it to "mcp".
+   *
+   * Matching is EXACT: `by: "mcp"` selects records whose actor is exactly
+   * "mcp" and never an undo record (`undo:mcp`) — inverse mutations are their
+   * own actor and are never themselves undo targets. NOT the same as `actor`
+   * below, which names who the NEW inverse mutation is attributed to.
+   */
+  by?: string;
+  /**
+   * EXACT selection by undo token (from a mutation result's `undoToken`).
+   * Undoes precisely that one record, immune to interleaving. Mutually
+   * exclusive with `last`/`by` (enforced at the call surfaces).
+   */
+  txn?: string;
   dryRun?: boolean;
   /** Required for inverses that delete areas/tags permanently. */
   dangerouslyPermanent?: boolean;
   verifyTimeoutMs?: number;
+  /** Author RECORDED for the inverse mutation (as `undo:<actor>`); see `by`. */
   actor?: string;
 }
 
@@ -118,18 +136,49 @@ export function readAuditRecords(dir: string): AuditRecord[] {
   return records.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }
 
+export interface UndoSelector {
+  /** How many trailing targets to take (default 1); ignored when `txn` is set. */
+  last?: number;
+  /** Actor filter: exact actor string, or "*"/undefined for all. */
+  by?: string;
+  /** Exact undo-token selection: returns the single matching target (or none). */
+  txn?: string;
+}
+
 /**
- * The last N undoable targets, NEWEST FIRST (undo unwinds a stack). Only
- * successful mutations qualify; inverse mutations (actor `undo:…`) never do.
+ * Which audit records are undoable at all: only SUCCESSFUL mutations, never an
+ * inverse mutation (actor `undo:…` — no undo-the-undo), and never a compound
+ * leg (its summary record is the single undoable unit for the whole sequence).
  */
-export function selectUndoTargets(records: AuditRecord[], last: number): AuditRecord[] {
-  // Compound operations undo as ONE unit: legs are excluded here; their
-  // summary record replays every inverse (or, for reorders, issues a single
-  // inverse reorder from the recorded pre-ranks).
-  return records
-    .filter((r) => r.result === "ok" && !r.actor.startsWith("undo:") && r.txn?.role !== "leg")
-    .slice(-Math.max(1, last))
-    .toReversed();
+function undoableRecords(records: AuditRecord[]): AuditRecord[] {
+  return records.filter(
+    (r) => r.result === "ok" && !r.actor.startsWith("undo:") && r.txn?.role !== "leg",
+  );
+}
+
+/**
+ * The undoable targets to unwind, NEWEST FIRST (undo unwinds a stack).
+ *
+ *  - `txn` wins when present: the ONE record whose undo token matches (or an
+ *    empty array — the caller distinguishes not-found from already-undone).
+ *  - otherwise the last `last` records, optionally narrowed to actor `by`
+ *    (exact match; "*"/undefined = every actor). `by` NEVER matches an
+ *    `undo:<actor>` record — those are excluded from undoability entirely.
+ */
+export function selectUndoTargets(
+  records: AuditRecord[],
+  selector: UndoSelector = {},
+): AuditRecord[] {
+  const undoable = undoableRecords(records);
+  if (selector.txn !== undefined) {
+    const match = undoable.find((r) => undoToken(r) === selector.txn);
+    return match === undefined ? [] : [match];
+  }
+  const byActor =
+    selector.by === undefined || selector.by === "*"
+      ? undoable
+      : undoable.filter((r) => r.actor === selector.by);
+  return byActor.slice(-Math.max(1, selector.last ?? 1)).toReversed();
 }
 
 // -------------------------------------------------------------- plan builder
@@ -418,7 +467,13 @@ export function planUndo(
   allRecords: AuditRecord[] = [],
   current?: AnyTask | null,
 ): UndoPlan {
-  const target = { ts: record.ts, op: record.op, uuid: record.uuid, actor: record.actor };
+  const target = {
+    ts: record.ts,
+    op: record.op,
+    uuid: record.uuid,
+    actor: record.actor,
+    token: undoToken(record),
+  };
   const todayIso = localToday(now);
   const notes: string[] = [];
   const irreversible = (reason: string): UndoPlan => ({
@@ -1154,7 +1209,31 @@ export async function runUndo(
   onItem?: (item: UndoItemResult) => void,
 ): Promise<UndoItemResult[]> {
   const records = readAuditRecords(auditDirPath);
-  const targets = selectUndoTargets(records, options.last ?? 1);
+  // Exact-token selection is loud and specific: distinguish a token that was
+  // already undone (an inverse for it is on the trail) from one that never
+  // named an undoable mutation. Both are usage errors (RangeError → exit 2).
+  if (options.txn !== undefined) {
+    const alreadyUndone = records.some(
+      (r) => r.undoOf === options.txn && r.result === "ok" && r.actor.startsWith("undo:"),
+    );
+    if (alreadyUndone) {
+      throw new RangeError(
+        `mutation "${options.txn}" has already been undone (an inverse for it is in the audit ` +
+          "trail); there is nothing left to undo",
+      );
+    }
+    if (selectUndoTargets(records, { txn: options.txn }).length === 0) {
+      throw new RangeError(
+        `no undoable mutation has undo token "${options.txn}" — check the token from the ` +
+          "mutation result, or run `things undo --dry-run` to list recent targets",
+      );
+    }
+  }
+  const targets = selectUndoTargets(records, {
+    ...(options.last !== undefined && { last: options.last }),
+    ...(options.by !== undefined && { by: options.by }),
+    ...(options.txn !== undefined && { txn: options.txn }),
+  });
   const now = deps.now?.() ?? new Date();
   const items: UndoItemResult[] = [];
 
@@ -1209,6 +1288,9 @@ export async function runUndo(
         }
         const writeOptions: WriteOptions = {
           actor: `undo:${options.actor ?? deps.config.actor}`,
+          // Back-reference the mutation being reversed so a later
+          // `undo --txn <token>` can report it as already undone.
+          undoOf: plan.target.token,
           ...(options.verifyTimeoutMs !== undefined && {
             verifyTimeoutMs: options.verifyTimeoutMs,
           }),

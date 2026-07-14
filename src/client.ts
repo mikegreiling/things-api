@@ -324,8 +324,10 @@ export interface ThingsClient {
       onResult?: (result: BatchItemResult) => void,
     ): Promise<BatchItemResult[]>;
     /**
-     * Undo the last N changes made through this client, newest first, by
-     * applying the inverse change. Irreversible changes are reported as
+     * Undo changes made through this client, newest first, by applying the
+     * inverse change. Selection: `last` trailing changes (default 1), narrowed
+     * to author `by` (exact actor, or `*`/undefined for all), or `txn` for one
+     * exact change by its `undoToken`. Irreversible changes are reported as
      * such, never guessed at.
      */
     undo(options?: UndoOptions, onItem?: (item: UndoItemResult) => void): Promise<UndoItemResult[]>;

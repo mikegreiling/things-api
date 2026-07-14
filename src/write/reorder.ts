@@ -157,6 +157,7 @@ async function runBounce(
 ): Promise<ReorderResult> {
   const startedAt = deps.now?.() ?? new Date();
   const now = deps.now ?? (() => new Date());
+  const actor = options.actor ?? deps.config.actor;
   const scope = params.scope as "today" | "evening" | "projects";
   const rankKey: "index" | "todayIndex" = scope === "projects" ? "index" : "todayIndex";
   const legOp = scope === "projects" ? ("project.update" as const) : ("todo.update" as const);
@@ -202,6 +203,7 @@ async function runBounce(
     auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
       pre: preRanks,
       txnId,
+      actor,
     });
     return result;
   }
@@ -244,7 +246,7 @@ async function runBounce(
         startedAt,
         "verify-failed:mismatch",
         { placed: [...placed] },
-        { pre: preRanks, txnId },
+        { pre: preRanks, txnId, actor },
       );
       return {
         kind: "bounce-aborted",
@@ -264,7 +266,7 @@ async function runBounce(
         startedAt,
         "verify-failed:mismatch",
         { placed: [...placed] },
-        { pre: preRanks, txnId },
+        { pre: preRanks, txnId, actor },
       );
       return {
         kind: "bounce-aborted",
@@ -283,7 +285,7 @@ async function runBounce(
         startedAt,
         "verify-failed:mismatch",
         { placed: [...placed] },
-        { pre: preRanks, txnId },
+        { pre: preRanks, txnId, actor },
       );
       return {
         kind: "bounce-aborted",
@@ -317,7 +319,7 @@ async function runBounce(
         startedAt,
         "verify-failed:mismatch",
         { placed: [...placed] },
-        { pre: preRanks, txnId },
+        { pre: preRanks, txnId, actor },
       );
       return {
         kind: "bounce-aborted",
@@ -335,7 +337,7 @@ async function runBounce(
   const reader = createDbReader(deps.db);
   const observed: Record<string, unknown> = {};
   for (const uuid of params.uuids) observed[uuid] = reader.rankOf(uuid, rankKey);
-  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId });
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
   return {
     kind: "ok",
     op: "reorder",
@@ -343,6 +345,9 @@ async function runBounce(
     observed,
     vector: "url-scheme",
     tier: 0,
+    // A bounce reorder is a summary txn, so its token is the txn id (matches
+    // the audit record's undoToken); pass it to `things undo --txn <token>`.
+    undoToken: txnId,
   };
 }
 
@@ -415,13 +420,13 @@ function auditSummary(
   startedAt: Date,
   result: AuditRecord["result"],
   observed: Record<string, unknown> | null,
-  extras?: { pre?: Record<string, unknown>; txnId?: string },
+  extras?: { pre?: Record<string, unknown>; txnId?: string; actor?: string },
 ): void {
   const fp = deps.fingerprint();
   const record: AuditRecord = {
     v: 1,
     ts: startedAt.toISOString(),
-    actor: deps.config.actor,
+    actor: extras?.actor ?? deps.config.actor,
     host: deps.config.host,
     op: "reorder",
     uuid: null,
