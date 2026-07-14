@@ -15,7 +15,7 @@ import {
 } from "../read/views.ts";
 import { localToday } from "../model/dates.ts";
 import { templateStatus } from "../model/recurrence.ts";
-import { blue, bold, dim, strike, underline } from "./style.ts";
+import { bold, dim, strike, underline } from "./style.ts";
 import {
   areaMark,
   CHECKLIST_MARK,
@@ -28,6 +28,7 @@ import {
   loggedDate,
   NOTES_MARK,
   projectCircle,
+  projectTitleAccent,
   REMINDER_MARK,
   todayStar,
   todoBox,
@@ -81,8 +82,12 @@ export function renderLegend(): string[] {
 
 export interface FormatOpts {
   /**
-   * Render a grouped project TITLE row: bold+underlined title (the GUI's
-   * project-header look) — the circle glyph and count chip still apply.
+   * Render this project as a group HEADING: underline the title (its heading
+   * ROLE — the project heads the to-do group beneath it, anytime/someday).
+   * Bold is UNIVERSAL for project titles (projectTitleAccent, the render-
+   * language delta-1 law), so this adds ONLY the underline; the circle glyph
+   * and count chip still apply. A plain project ROW (e.g. area-detail's top
+   * projects, the projects sidebar) omits this — bold without underline.
    */
   projectTitle?: boolean;
   /** Container uuids already implied by surrounding output — their context suffix is dropped. */
@@ -92,21 +97,32 @@ export interface FormatOpts {
   now?: Date;
   /** Pre-styled Today/Evening mark (★/⏾), rendered right after the box — GUI position. */
   mark?: string | null;
-  /** Dim status word after the box (the GUI's waiting/paused/ended chips on repeating templates). */
+  /** Repeating-template scheduling word (waiting/paused/ended), rendered as a dim ‹chevron› chip after the box — matches the ‹date› chip form. */
   statusWord?: string;
   /** Suppress the ‹date› chip (rows under a day header already carry the date). */
   hideDateChip?: boolean;
+  /**
+   * The container's normal IS the resolved state (the Logbook): completed rows
+   * render plain and canceled rows keep their strikethrough but drop the dim —
+   * a row marks only its DEVIATIONS from the container. Mixed contexts
+   * (project/area show, search --logged/--trashed) omit this, so a resolved row
+   * among open ones stays dim/dim-strike. Never changes the status GLYPHS.
+   */
+  resolvedNormal?: boolean;
 }
 
 /**
  * One item line:
  * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
  * Repeating templates seat ↻ INSIDE the box (`[↻]`/`(↻)`) rather than as a
- * separate mark; open project rows render their circle and title blue.
- * The box is the glyph-language state carrier (../glyphs.ts): `[ ]`-family
- * for to-dos, `( )`-family for projects — state survives with color
- * stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
- * mark keeps the state when strike/ANSI is unavailable). Human output shows
+ * separate mark; open project circles render blue, and project TITLES render
+ * bold + default-colored in every state (projectTitleAccent — the render-
+ * language law). The box is the glyph-language state carrier (../glyphs.ts):
+ * `[ ]`-family for to-dos, `( )`-family for projects — state survives with
+ * color stripped. Completed titles dim; canceled titles dim+strike (the `[×]`
+ * mark keeps the state when strike/ANSI is unavailable) — except where a view
+ * declares resolved its norm (Logbook, `resolvedNormal`), where completed is
+ * plain and canceled keeps only its strike. Human output shows
  * a SHORTENED uuid prefix (every command accepts unique prefixes >= 6
  * chars); `uuidWidth` is the display length from uuidDisplayWidth — never
  * below 8 so a copied prefix stays unique across the whole database, not
@@ -123,7 +139,10 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const meta: string[] = [];
   if (opts.mark != null) meta.push(opts.mark);
   // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
-  if (opts.statusWord !== undefined) meta.push(dim(opts.statusWord));
+  // The repeat scheduling word renders as a ‹chevron› chip matching the ‹date›
+  // chip's form; wrapping it at this single meta slot means every list caller
+  // inherits it. (The detail card's prose repeat state is NOT chipped.)
+  if (opts.statusWord !== undefined) meta.push(dim(`‹${opts.statusWord}›`));
   if (item.status !== "open" && item.stopped !== null)
     meta.push(loggedDate(item.stopped, todayIso));
   if (opts.hideDateChip === true) {
@@ -167,13 +186,22 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
         : "";
   // width 0 (the default) means "no column" — show the full uuid untouched.
   const shownUuid = uuidWidth > 0 ? uuidCol(item.uuid, uuidWidth) : item.uuid;
+  // Title styling composes four independent channels (docs/design/render-
+  // language.md) — a row marks only its deviations from the container's normal:
+  //   strike    — a canceled item (kept in EVERY context, GUI parity)
+  //   dim       — a resolved row DEVIATING from its list's norm (completed/
+  //               canceled among open rows); dropped where resolved IS the norm
+  //               (the Logbook passes resolvedNormal)
+  //   bold      — the project TYPE weight, every project row and every state,
+  //               routed through the single law projectTitleAccent (glyphs.ts)
+  //   underline — heading ROLE only (asTitle): a project that heads its own
+  //               to-do group, never a plain project row
   let title = item.title;
-  if (asTitle) title = bold(underline(title));
-  else if (item.status === "canceled") title = dim(strike(title));
-  else if (item.status === "completed") title = dim(title);
-  // Open project rows render their title blue — GUI parity (list accent) and
-  // a color cue reinforcing the round bracket. To-dos stay default-colored.
-  else if (item.type === "project") title = blue(title);
+  const resolved = item.status === "completed" || item.status === "canceled";
+  if (item.status === "canceled") title = strike(title);
+  if (resolved && opts.resolvedNormal !== true) title = dim(title);
+  if (item.type === "project") title = projectTitleAccent(title);
+  if (asTitle) title = underline(title);
   // GUI indicator order after the title: bell, document, checklist.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
@@ -419,6 +447,9 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
  * — `── July ──` within the current year, `── March 2025 ──` beyond (finer
  * than the GUI's bare per-year buckets, deliberately). Truncation past the
  * row limit is reported by the shared hint the command appends, not here.
+ * Resolved is the Logbook's NORM, so rows pass `resolvedNormal`: completed
+ * titles render plain and canceled titles keep their strikethrough but drop
+ * the dim (the blue `[✓]`/`[×]` marks and logged date are unchanged).
  */
 export function renderLogbook(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
@@ -437,7 +468,11 @@ export function renderLogbook(items: ListItem[], now?: Date): string[] {
       lines.push(bold(`── ${heading} ──`));
       openHeading = heading;
     }
-    lines.push(formatItem(item, w, now === undefined ? {} : { now }));
+    // The Logbook's normal IS the resolved state — rows render plain
+    // (completed) / strike-only (canceled), never dim (render-language delta 6).
+    lines.push(
+      formatItem(item, w, { resolvedNormal: true, ...(now === undefined ? {} : { now }) }),
+    );
   }
   return lines;
 }
@@ -665,7 +700,7 @@ export function renderSomedayPreview(
       for (const group of trailing) {
         blank();
         lines.push(
-          `${dim(uuidCol(group.project.uuid, w))}  ${bold(underline(group.project.title))}`,
+          `${dim(uuidCol(group.project.uuid, w))}  ${underline(projectTitleAccent(group.project.title))}`,
         );
         const shown = takeUpTo(group.items, limits.project);
         for (const item of shown) {
