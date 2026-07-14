@@ -43,6 +43,7 @@ import type { Project } from "../model/entities.ts";
 import {
   fitRow,
   getFitWidth,
+  resolveFit,
   stripSgr,
   TITLE_MIN,
   visibleWidth,
@@ -172,10 +173,18 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   // template rows drop it via the sentinel guard: their deadline column
   // carries app-internal 4001-01-01 sentinels (upcoming's synthesized
   // occurrences carry REAL rule-derived deadlines and must keep the flag).
+  // The full-vs-compact deadline form is decided ONCE per view from the effective
+  // width against the two derived floors (width.ts resolveFit) — never per row —
+  // so the right-pinned gutter never mixes `Aug 12` and `8/12`. The null path
+  // (pipes/grep/--json/non-TTY) is always full-form (byte-identical contract).
+  const rawFitWidth = getFitWidth();
+  const fit =
+    rawFitWidth === null ? null : resolveFit(rawFitWidth, FULL_FIT_FLOOR, COMPACT_FIT_FLOOR);
+  const compact = fit?.compact === true;
   const rule = item.repeating.rule;
   const deadline =
     item.status === "open" && item.deadline !== null && item.deadline < "4000"
-      ? ` ${deadlineToken(item.deadline, todayIso)}`
+      ? ` ${deadlineToken(item.deadline, todayIso, compact)}`
       : // The GUI's bare flag on no-date repeating templates: the rule WILL
         // assign each occurrence a deadline (fixed rules always do; after-
         // completion only with a start offset), date unknown until spawned.
@@ -237,8 +246,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${deadline}`;
   // width null (the default — pipes/grep/--json/non-TTY) means NO fitting:
   // return the fully-composed row, byte-identical to before this feature.
-  const fitWidth = getFitWidth();
-  if (fitWidth === null) return full;
+  if (fit === null) return full;
   const seg: RowSegments = {
     left,
     rawTitle: item.title,
@@ -250,9 +258,10 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     deadline,
     full,
   };
-  // Fit to the effective width: never below the derived floor (a sub-floor
-  // terminal renders at MIN_FIT_WIDTH and wraps, rather than clipping metadata).
-  return fitRow(seg, Math.max(fitWidth, MIN_FIT_WIDTH));
+  // Fit to the effective width: never below the compact floor (a sub-floor
+  // terminal renders at COMPACT_FIT_FLOOR and wraps, rather than clipping
+  // metadata). resolveFit already clamped fit.width up to the compact floor.
+  return fitRow(seg, fit.width);
 }
 
 /**
@@ -270,15 +279,16 @@ export function todayMark(item: ListItem, now?: Date): string | null {
 export const UUID_DISPLAY_MIN = 8;
 
 /**
- * The single, DERIVED width floor (docs/design/width-aware-tty.md). Not chosen:
- * computed from the actual glyph inventory as the worst-case FIXED furniture a
- * row can carry plus a {@link TITLE_MIN}-column title. The driver fits every
- * row to `max(terminalWidth, MIN_FIT_WIDTH)`, so the worst-furniture row's
- * title lands at exactly TITLE_MIN and every lighter row's title is wider — no
- * per-row raggedness, and below the floor the terminal wraps (nothing is
- * clipped). This mirrors the GUI, whose minimum WINDOW width is the same
- * worst-case derivation. Enumerated parts (any glyph change re-derives this;
- * `width.test.ts` recomputes it independently so it cannot silently drift):
+ * The two DERIVED width floors (docs/design/width-aware-tty.md § Compact
+ * deadline forms). Not chosen: computed from the actual glyph inventory as the
+ * worst-case FIXED furniture a row can carry plus a {@link TITLE_MIN}-column
+ * title. The only part that differs between the floors is the deadline token —
+ * the FULL floor budgets the full worst-case form (`⚑ 14 days left`), the
+ * COMPACT floor the narrow iOS-oracle worst case (`⚑ 14d left`, tied with a
+ * year-bearing `⚑ Feb 2001` that stays full even when compact). Everything else
+ * is shared, so this returns both from one enumeration. Enumerated parts (any
+ * glyph change re-derives these; `width.test.ts` recomputes them independently
+ * so they cannot silently drift):
  *   - the id column (never shrinks) + its two-space separator
  *   - the checkbox glyph
  *   - a space + the widest meta chip (a future ‹date› carrying a year)
@@ -286,10 +296,18 @@ export const UUID_DISPLAY_MIN = 8;
  *     (a conservative superset — the count chip and checklist never truly
  *     co-occur on one row, but budgeting both keeps the floor safe)
  *   - a space + the bare `#…` marker (tags never fully vanish)
- *   - a space + the longest deadline token (`⚑ NN days left`)
+ *   - a space + the longest deadline token (full or compact worst case)
  *   - a space + a TITLE_MIN-column title
+ *
+ * The driver fits every row to at least the COMPACT floor
+ * (`max(terminalWidth, COMPACT_FIT_FLOOR)`); a width in `[compact, full)` renders
+ * compact deadlines and every wider width the full form. So the worst-furniture
+ * row's title lands at exactly TITLE_MIN at whichever floor is active, every
+ * lighter row's title is wider (no per-row raggedness), and below the compact
+ * floor the terminal wraps (nothing is clipped) — mirroring the GUI, whose
+ * minimum WINDOW width is the same worst-case derivation.
  */
-function computeMinFitWidth(): number {
+function computeFitFloors(): { full: number; compact: number } {
   const todayIso = "2000-01-01";
   const box = "[ ]"; // every box form is 3 cells
   const metaChip = dateChip("2027-09-22", todayIso); // widest ‹date› (with year)
@@ -298,8 +316,16 @@ function computeMinFitWidth(): number {
     openUntrashedLeafActionsCount: 999,
   } as Project);
   const tail = [countChipWorst, REMINDER_MARK, NOTES_MARK, CHECKLIST_MARK].join(" ");
-  const deadline = deadlineToken("2000-01-15", todayIso); // ⚑ 14 days left — the longest form
-  return (
+  const fullDeadline = deadlineToken("2000-01-15", todayIso); // ⚑ 14 days left — longest full form
+  // Compact worst case: the widest token that can appear in compact mode — the
+  // narrow relative `⚑ 14d left` OR a year-bearing far date `⚑ Feb 2001` (kept
+  // full even when compact, per the oracle). Both are 10 cells; take the max so
+  // the floor is safe whichever wins if the glyph vocabulary shifts.
+  const compactDeadline = Math.max(
+    visibleWidth(deadlineToken("2000-01-15", todayIso, true)), // ⚑ 14d left
+    visibleWidth(deadlineToken("2001-02-10", todayIso, true)), // ⚑ Feb 2001 (year-bearing)
+  );
+  const furniture =
     UUID_DISPLAY_MIN +
     2 + // the two spaces after the id column
     visibleWidth(box) +
@@ -311,13 +337,20 @@ function computeMinFitWidth(): number {
     visibleWidth(tail) + // space + count chip + ◷ ≡ ≔
     1 +
     visibleWidth("#…") + // space + the bare tag marker
-    1 +
-    visibleWidth(deadline) // space + the longest deadline token
-  );
+    1; // the space before the deadline token
+  return {
+    full: furniture + visibleWidth(fullDeadline),
+    compact: furniture + compactDeadline,
+  };
 }
 
-/** The derived TTY row floor — see {@link computeMinFitWidth}. */
-export const MIN_FIT_WIDTH = computeMinFitWidth();
+const FIT_FLOORS = computeFitFloors();
+
+/** The full-form TTY row floor — worst-case furniture + full deadline. See {@link computeFitFloors}. */
+export const FULL_FIT_FLOOR = FIT_FLOORS.full;
+
+/** The compact-form TTY row floor — worst-case furniture + compact deadline. See {@link computeFitFloors}. */
+export const COMPACT_FIT_FLOOR = FIT_FLOORS.compact;
 
 /**
  * Display width for a list's uuid column: the shortest prefix that is

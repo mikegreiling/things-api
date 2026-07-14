@@ -139,9 +139,10 @@ const TAGS_RATIO = 1;
 
 /**
  * The title's protected minimum, in columns. NOT a per-row clamp: it is the
- * input to the single derived floor (render.ts MIN_FIT_WIDTH = worst-case
- * furniture + TITLE_MIN) and the threshold the sacrifice order protects the
- * title down to. Because the driver fits every row to max(width, MIN_FIT_WIDTH),
+ * input to the derived floors (render.ts FULL_FIT_FLOOR / COMPACT_FIT_FLOOR =
+ * worst-case furniture + TITLE_MIN) and the threshold the sacrifice order
+ * protects the title down to. Because the driver fits every row to at least the
+ * compact floor (max(width, COMPACT_FIT_FLOOR)),
  * the worst-furniture row's title lands at exactly TITLE_MIN and every lighter
  * row's title is automatically wider — so this floor is always satisfiable and
  * there is no sub-floor clip (below the floor the terminal wraps, losing nothing).
@@ -243,7 +244,7 @@ function alignDeadline(body: string, deadline: string, width: number): string {
  * genuinely contend (slack an under-share side leaves flows to the other). Then
  * the CLI-only container is sacrificed WHOLE (before the last tag folds), then
  * the last tag folds to bare `#…`, and the title bottoms at TITLE_MIN. `width` is
- * the caller's effective width (already max'd with MIN_FIT_WIDTH), so the final
+ * the caller's effective width (already max'd with COMPACT_FIT_FLOOR), so the final
  * stage always satisfies the floor; a sub-floor width would simply let the
  * terminal wrap (the title is kept whole rather than clipped). A row that already
  * fits keeps its full content; the only always-applied transform is the
@@ -308,6 +309,43 @@ export function fitRow(seg: RowSegments, width: number): string {
   const titleBudgetD = budgetNoCtx - tagWidth(names, 0);
   const dTitle = titleBudgetD >= 1 ? fitTitle(titleBudgetD) : seg.styleTitle(seg.rawTitle);
   return renderRow(dTitle, 0, false);
+}
+
+// ── Effective fit + deadline-form decision (the ONE place) ───────────────────
+
+/**
+ * The resolved fit for a view: the effective width every row is fitted to, plus
+ * whether deadline tokens render in the COMPACT form (the Things iOS narrow-
+ * width oracle — `8/12`, `58d ago` — docs/design/width-aware-tty.md § Compact
+ * deadline forms). `compact` is decided ONCE from the effective width against
+ * the two derived floors, never per row, so a view's right-pinned gutter never
+ * mixes `Aug 12` and `8/12`.
+ */
+export interface EffectiveFit {
+  /** Width to fit each row to — the raw fit width clamped up to the compact floor. */
+  width: number;
+  /** True when the effective width sits below the full-form floor. */
+  compact: boolean;
+}
+
+/**
+ * Resolve the effective fit from the once-resolved fit width and the two
+ * glyph-derived floors (`render.ts`: FULL_FIT_FLOOR / COMPACT_FIT_FLOOR). This
+ * is the SINGLE decision point for the full-vs-compact deadline form:
+ *   - `width ≥ full`        → full forms, fit to width (today's behavior);
+ *   - `compact ≤ width < full` → all deadlines compact, fit to width;
+ *   - `width < compact`     → clamp to the compact floor and wrap (sub-floor
+ *                             rule at the lower floor), still compact.
+ * The floors live in render.ts because their derivation needs the glyph
+ * inventory; the branching lives here so it is pure and unit-testable.
+ */
+export function resolveFit(
+  fitWidth: number,
+  fullFloor: number,
+  compactFloor: number,
+): EffectiveFit {
+  const width = Math.max(fitWidth, compactFloor);
+  return { width, compact: width < fullFloor };
 }
 
 // ── Width resolution + the module-level fit width ────────────────────────────
