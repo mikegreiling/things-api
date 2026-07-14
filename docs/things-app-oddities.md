@@ -258,6 +258,15 @@ The [today-order-research](lab/today-order-research.md) F-DL model calls `deadli
 
 Recorded here for completeness (the campaign was asked to rule bug-vs-indicator): a someday **project** whose deadline is **past-due** renders its dashed progress circle in the app **accent colour (blue)** instead of gray — the list-view analog of the red overdue flag. It is **not** a bug: it tracks the overdue deadline (future-deadline someday projects render gray), it is **not** "in Today" (the prod blue rows are suppressed, hence still in Someday) and **not** "suppressed per se" (the equally-suppressed someday *to-do* stays gray — the effect is project-circle-only). No CC report item. Verdict detail: [lab/upcoming-research.md](lab/upcoming-research.md) §blue-circle.
 
+### 8g. Repeat/convert GUI transforms are IDENTITY REPLACEMENTS; there is no "Stop repeating" command (UI2, 2026-07-14)
+
+Behaviors recorded from GUI driving (not bugs — model notes with automation consequences), evidence [lab/ui-vector-research.md](lab/ui-vector-research.md):
+- **Making an existing to-do repeat** (Items → Repeat…) **destroys the original uuid** and spawns a NEW template row (carrying `rt1_recurrenceRule`) + a spawned instance. The row you "made repeat" is gone; anything holding its uuid is now dangling. (Contrast: **editing** an existing rule via Reschedule… mutates the rule bytes IN PLACE — same uuid.)
+- **Convert to Project** (to-do OR heading) is likewise an **identity replacement**: new type=1 project uuid, old uuid dead, irreversible, behind a confirmation dialog. A converted **heading** is promoted into the parent project's **area** and its children reparent to the new project (`heading`→NULL).
+- **There is no "Stop repeating" command anywhere** — the Repeat submenu (identical on the menu bar and the right-click context menu) offers only Reschedule / Pause↔Resume / Show Latest. To end a rule you Pause (`rt1_instanceCreationPaused=1`, also clears `rt1_nextInstanceStartDate`), set an "Ends after/on date" bound in Reschedule, or delete the template. You **cannot** turn a repeating item back into a plain non-repeating to-do via the UI.
+
+These are why the ui vector treats make-repeat/convert as identity-replacing transforms (any wrapper must re-fetch the new uuid), and why "unrepeat" has no UI spelling.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

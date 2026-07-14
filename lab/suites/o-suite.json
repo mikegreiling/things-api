@@ -666,6 +666,152 @@
           }
         ]
       }
+    },
+    {
+      "id": "O15",
+      "title": "SOMEDAY to-dos: the validated TWO-CALL anchor-stack protocol (P8b). The Someday handler STACKS each sent id above the list's ORIGINAL top (later-sent higher for to-dos), so the shipped compile emits (1) push desired-bottom to top as the anchor, (2) send the REVERSED wire list — the two calls realize the exact requested order [O-SD1,O-SD2,O-SD3] (index ascending). Consistency lock for reorder --scope someday (to-do arm; s-suite/e2e-locked).",
+      "vector": "applescript",
+      "operation": "order.someday-todos",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-SD1&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SD1' AND start=2 AND startDate IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=O-SD2&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SD2' AND start=2 AND startDate IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=O-SD3&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SD3' AND start=2 AND startDate IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Someday\" with ids \"{uuid:O-SD3}\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Someday\" with ids \"{uuid:O-SD3},{uuid:O-SD2},{uuid:O-SD1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SD1') < (SELECT \"index\" FROM TMTask WHERE title='O-SD2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SD2') < (SELECT \"index\" FROM TMTask WHERE title='O-SD3')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SD1"
+            },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SD3"
+            },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SD2"
+            },
+            "fields": ["start", "startDate", "status", "type"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O16",
+      "title": "SOMEDAY area-less PROJECTS: the INVERTED two-call anchor-stack protocol (P9e). Someday projects DESCEND (earlier-sent higher — OPPOSITE of to-dos), so the compile keeps call 1 (push desired-bottom to top) but call 2 is anchor + FORWARD rest; realizes the exact requested order [O-SP1,O-SP2,O-SP3]. Consistency lock for reorder --scope someday (project arm; P9e locked, s-suite/e2e). NOTE: someday projects show in the Someday view only, not the sidebar.",
+      "vector": "applescript",
+      "operation": "order.someday-projects",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-SP1&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SP1' AND type=1 AND start=2 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-SP2&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SP2' AND type=1 AND start=2 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-SP3&when=someday"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SP3' AND type=1 AND start=2 AND area IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Someday\" with ids \"{uuid:O-SP3}\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Someday\" with ids \"{uuid:O-SP3},{uuid:O-SP1},{uuid:O-SP2}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SP1') < (SELECT \"index\" FROM TMTask WHERE title='O-SP2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SP2') < (SELECT \"index\" FROM TMTask WHERE title='O-SP3')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SP1"
+            },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SP3"
+            },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-SP2"
+            },
+            "fields": ["start", "startDate", "area", "type", "status"]
+          }
+        ]
+      }
     }
   ]
 }
