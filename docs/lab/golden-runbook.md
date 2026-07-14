@@ -62,6 +62,20 @@ To enable (recommended before the AppleScript/Shortcuts campaigns, where modal-t
    lab/scripts/suppress-screencapture-nag.sh
    ```
 
+### Accessibility (L3-accessibility) — **[CLICK]**, OPTIONAL — for a ui-vector AX golden (v2)
+
+Not part of golden v1 (the monitor doesn't need AX). Bake this ONLY if a future golden is meant to certify the **ui-vector's AX driving path** (System Events UI-scripting). Verified by **AXVM1 (2026-07-14)** to work in a stock guest **with SIP enabled** and to **persist across reboot** — full evidence + rationale in [axvm1-accessibility.md](axvm1-accessibility.md). Do NOT rebuild the current golden for this; it is a recipe for a derived v2 layer.
+
+Recipe (in a clone, then re-freeze as v2 — never against v1):
+1. Provoke the toggleable entry: launch Things, then over SSH run a real AX op so TCC auto-creates the disabled row —
+   ```sh
+   osascript -e 'tell application "System Events" to tell process "Things3" to get name of every menu of menu bar 1'
+   # → -1719; now `sudo sqlite3 .../TCC.db "SELECT ... WHERE service LIKE '%Accessibility%'"`
+   #   shows: kTCCServiceAccessibility | /usr/libexec/sshd-keygen-wrapper | 1 | 0
+   ```
+2. **[CLICK]** (VNC) Open `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`; flip the lone **sshd-keygen-wrapper** toggle; authenticate `admin`/`admin` at the "Privacy & Security is trying to modify your system settings" sheet. `auth_value` flips 0→2 (via `tccd` — a direct `TCC.db` INSERT is read-only under SIP, SX4). Automatable headlessly with `vncdo` (see `lab/scripts/research-axvm1.sh`, rung b — toggle at framebuffer `1642 332`, password field `1017 870`, Modify Settings `1017 963`).
+3. Verify: the same AX op now returns the menu-bar list, exit 0. If baking, add `"L3-accessibility"` to `humanLayersDone` and note `accessibility: "granted to sshd-keygen-wrapper (user-path toggle; SIP on)"` in the v2 metadata.
+
 ## 4. LaunchAgent for the monitor — scripted, done (2026-07-03)
 
 Installed and verified emitting in the Aqua session:

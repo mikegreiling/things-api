@@ -5,7 +5,9 @@
 # research-ui1.sh / research-sx6.sh VNC synthetic-input mechanics (tart
 # --vnc-experimental + vncdotool → hardware-level HID, no TCC). Accessibility is
 # NOT granted in the golden (osascript System Events → -1719), so ALL GUI driving
-# is VNC clicks; there is no AppleScript UI-scripting fallback.
+# is VNC clicks; there is no AppleScript UI-scripting fallback IN THIS RUN.
+# [AXVM1 2026-07-14: "not granted" ≠ "not grantable" — a one-time user-path TCC
+#  toggle enables in-guest AX with SIP ON; see docs/lab/axvm1-accessibility.md.]
 #
 # HYBRID DOCTRINE probed: create/edit CONTENT via the quiet vectors (things:///add,
 # AppleScript), drive the GUI ONLY for the transforms that have no other spelling.
