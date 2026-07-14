@@ -197,15 +197,17 @@ describe("formatItem styling (color on)", () => {
     expect(line).toContain(BLUE);
   });
 
-  it("delta 9: the repeat status word renders as a dim ‹chevron› chip", async () => {
+  it("delta 9: a template with no next date derives its dim ‹chevron› status chip", async () => {
     const { formatItem } = await render();
+    // No nextOccurrence and no rule → after-completion template → ‹waiting›,
+    // derived inside formatItem so EVERY list view inherits it (the area-show
+    // Upcoming section regression, 2026-07-14).
     const line = formatItem(
       todo({
         title: "Rule",
         repeating: { isTemplate: true, isInstance: false, templateUuid: null },
       }),
       8,
-      { statusWord: "waiting" },
     );
     expect(line).toContain(`${DIM}‹waiting›`);
   });
