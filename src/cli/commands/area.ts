@@ -15,7 +15,7 @@ import { Option } from "commander";
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
 import { openInThings } from "./reads.ts";
 import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
-import { formatItem, uuidDisplayWidth } from "../render.ts";
+import { formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
@@ -148,18 +148,24 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
         dim(`…${hiddenLater} later item${hiddenLater === 1 ? "" : "s"} (--show-later)`),
       );
   }
+  // The full archive belongs to `things logbook --area <ref>` — echoed
+  // ready-to-paste with the real area name, like every other drill hint.
+  const logbookCmd = `things logbook --area ${quoteTitle(view.area.title)}`;
   if (logged.length > 0) {
-    // Truncation is loud: areas accumulate years of history — the full
-    // archive belongs to `things logbook --area`.
+    // Truncation is loud: areas accumulate years of history. The header keeps
+    // the shown-of-total count for orientation; the actionable drill rides a
+    // section footer (matching the other truncated sections), never the header.
+    const more = view.logged.length - logged.length;
     const header =
-      logged.length < view.logged.length
-        ? `── Logged (${logged.length} of ${view.logged.length} — see things logbook --area) ──`
+      more > 0
+        ? `── Logged (${logged.length} of ${view.logged.length}) ──`
         : `── Logged (${view.logged.length}) ──`;
     lines.push("", bold(header), ...logged.map(fmt));
+    if (more > 0) lines.push(dim(`… ${more} more — \`${logbookCmd}\``));
   } else if (view.logged.length > 0) {
     lines.push(
       "",
-      dim(`…${view.logged.length} logged (--show-logged; full history: things logbook --area)`),
+      dim(`…${view.logged.length} logged (--show-logged; full history: \`${logbookCmd}\`)`),
     );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
