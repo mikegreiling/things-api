@@ -75,6 +75,8 @@ A truncation footer that sits directly under a rail header naming its content (`
 
 Per-group locator counts in the `projects` sidebar (`… 3 later projects` under each area) are breakdown counts, not standalone disclosures: the single reveal command rides ONE whole-view placeholder at the bottom.
 
+The **PLOG1 stranded-open-child advisory** on `project show` (`contains 2 unfinished to-dos — invisible in the app's live views`, flush + dim) borrows this class's shape but is a deliberately distinct sibling, NOT a disclosure hint: the open children ARE rendered in the card body above (a completed/canceled — including logged — project can still hold them; the app buries them in every live view but this card does not), so the line takes **no leading `…`** (nothing is hidden HERE) and **no reveal command** (none exists — the rows are already on screen). It names what the app hides so the stranded item is discoverable. Additive JSON counterpart: `ProjectView.openChildrenWhileResolved`.
+
 ## The nine deltas (the 2026-07-13 change)
 
 1. **Project titles bold + default (white), never blue, in all list rows** — via the single law `projectTitleAccent`.

@@ -19,6 +19,7 @@ import {
   upcomingView,
 } from "../../src/read/views.ts";
 import { projectView } from "../../src/read/project-view.ts";
+import { renderProjectView } from "../../src/cli/commands/project.ts";
 import {
   formatItem,
   renderLegend,
@@ -569,6 +570,85 @@ describe("logbook", () => {
     expect([q1.getFullYear(), q1.getMonth(), q1.getDate()]).toEqual([2024, 2, 1]);
     const year = parsePeriodStart("2024", now);
     expect([year.getMonth(), year.getDate()]).toEqual([0, 1]);
+  });
+});
+
+describe("PLOG1 — stranded open children of a resolved project", () => {
+  const HINT = /contains \d+ unfinished to-dos? — invisible in the app's live views/;
+
+  it("counts untrashed OPEN children only when the project is itself resolved", () => {
+    fixture = buildFixtureDb();
+    const project = seedProject(fixture.db, {
+      title: "Wrapped",
+      status: "completed",
+      stopDate: 1_780_000_050,
+    });
+    const heading = seedHeading(fixture.db, { title: "Phase 1", project });
+    seedTodo(fixture.db, { title: "loose open", project }); // open, loose
+    seedTodo(fixture.db, { title: "headed open", heading, project: null }); // open, headed
+    seedTodo(fixture.db, { title: "someday open", project, start: "someday" }); // open, someday
+    seedTodo(fixture.db, { title: "done child", project, status: "completed", stopDate: 40 });
+    seedTodo(fixture.db, { title: "trashed open", project, trashed: true }); // excluded
+    seedTodo(fixture.db, { title: "tpl", project, recurrenceRule: true }); // excluded
+
+    const view = projectView(fixture.db, project, NOW);
+    expect(view.openChildrenWhileResolved).toBe(3);
+    const lines = renderProjectView(view, {}).join("\n");
+    expect(lines).toMatch(HINT);
+    expect(lines).toContain("contains 3 unfinished to-dos — invisible in the app's live views");
+  });
+
+  it("fires for a canceled parent and for a swept/logged parent, singularizing at 1", () => {
+    // Canceled parent, exactly one open child → singular.
+    fixture = buildFixtureDb();
+    const canceled = seedProject(fixture.db, {
+      title: "Dropped",
+      status: "canceled",
+      stopDate: 1_780_000_050,
+    });
+    seedTodo(fixture.db, { title: "lone open", project: canceled });
+    const cv = projectView(fixture.db, canceled, NOW);
+    expect(cv.openChildrenWhileResolved).toBe(1);
+    expect(renderProjectView(cv, {}).join("\n")).toContain(
+      "contains 1 unfinished to-do — invisible in the app's live views",
+    );
+
+    // Swept-to-Logbook parent (manualLogDate past its stopDate) still counts.
+    fixture.close();
+    fixture = buildFixtureDb();
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, 200)")
+      .run();
+    const logged = seedProject(fixture.db, { title: "Swept", status: "completed", stopDate: 100 });
+    seedTodo(fixture.db, { title: "stranded open", project: logged });
+    const lv = projectView(fixture.db, logged, NOW);
+    expect(lv.project.logged).toBe(true);
+    expect(lv.openChildrenWhileResolved).toBe(1);
+    expect(renderProjectView(lv, {}).join("\n")).toMatch(HINT);
+  });
+
+  it("stays silent for an OPEN parent, and for a resolved parent with no open children", () => {
+    // Open parent WITH open children — the app shows these fine; no advisory.
+    fixture = buildFixtureDb();
+    const open = seedProject(fixture.db, { title: "Live", status: "open" });
+    seedTodo(fixture.db, { title: "open child", project: open });
+    const ov = projectView(fixture.db, open, NOW);
+    expect(ov.openChildrenWhileResolved).toBe(0);
+    expect(renderProjectView(ov, {}).join("\n")).not.toMatch(HINT);
+
+    // Completed parent whose only children are completed / trashed — nothing stranded.
+    fixture.close();
+    fixture = buildFixtureDb();
+    const done = seedProject(fixture.db, {
+      title: "Clean",
+      status: "completed",
+      stopDate: 1_780_000_050,
+    });
+    seedTodo(fixture.db, { title: "done child", project: done, status: "completed", stopDate: 40 });
+    seedTodo(fixture.db, { title: "trashed child", project: done, trashed: true });
+    const dv = projectView(fixture.db, done, NOW);
+    expect(dv.openChildrenWhileResolved).toBe(0);
+    expect(renderProjectView(dv, {}).join("\n")).not.toMatch(HINT);
   });
 });
 

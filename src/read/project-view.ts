@@ -31,6 +31,16 @@ export interface ProjectView {
   };
   logged: Todo[];
   trashed: Todo[];
+  /**
+   * PLOG1 (additive): count of untrashed OPEN (status=0) children this project
+   * still holds while it is ITSELF completed or canceled — including once swept
+   * to the Logbook. Such items are invisible in every live app view (Today /
+   * Anytime / Inbox / Upcoming), reachable only by drilling into this card
+   * (the app's GUI "Put Back" into a completed parent can strand them —
+   * docs/lab/plog1-research.md). 0 when the project is open, or holds no such
+   * child.
+   */
+  openChildrenWhileResolved: number;
 }
 
 export class ProjectNotFoundError extends Error {
@@ -86,6 +96,10 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
   const someday: Todo[] = [];
   const logged: Todo[] = [];
   const trashed: Todo[] = [];
+  // Every untrashed, non-template OPEN child, regardless of which bucket it
+  // lands in below — surfaced (only when the project is itself resolved) as
+  // the PLOG1 stranded-open-child count.
+  let openChildren = 0;
 
   for (const { row, todo } of todos) {
     if (row.trashed === 1) {
@@ -96,6 +110,7 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
       repeating.push(todo);
       continue;
     }
+    if (row.status === 0) openChildren += 1;
     if (row.status !== 0) {
       // Completion ≠ logged: closed items the log-move sweep has not
       // passed stay checked IN PLACE (their heading / the active block),
@@ -155,5 +170,6 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
     later: { scheduled, repeating, someday },
     logged,
     trashed,
+    openChildrenWhileResolved: project.status === "open" ? 0 : openChildren,
   };
 }

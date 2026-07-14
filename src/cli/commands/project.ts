@@ -159,6 +159,21 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     );
   }
   if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
+  // PLOG1 discoverability advisory: a completed/canceled (incl. logged) project
+  // can still hold OPEN children — the app buries them in every live view, and
+  // they surface only here. A flush sibling of the disclosure-hint placeholder
+  // class (docs/design/render-language.md § Disclosure hints): the rows ARE on
+  // screen above, so it takes no `…` and no reveal command — it just names what
+  // the app hides.
+  if (view.openChildrenWhileResolved > 0) {
+    const n = view.openChildrenWhileResolved;
+    lines.push(
+      "",
+      dim(
+        `contains ${n} unfinished to-do${n === 1 ? "" : "s"} — invisible in the app's live views`,
+      ),
+    );
+  }
   return lines;
 }
 
