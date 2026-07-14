@@ -7,7 +7,7 @@ import { execFile, execFileSync } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AuditWriter } from "../audit/log.ts";
-import type { AuditRecord } from "../audit/schema.ts";
+import { undoToken, type AuditRecord } from "../audit/schema.ts";
 import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
@@ -54,6 +54,12 @@ export interface WriteOptions extends Acknowledgements {
   actor?: string;
   /** Compound-operation grouping (set by orchestrators, not callers). */
   txn?: { id: string; role: "leg" | "summary" };
+  /**
+   * Undo back-reference (set by the undo executor, not callers): the token of
+   * the original mutation this write inverts. Recorded on the audit trail so an
+   * already-undone mutation is distinguishable from a nonexistent one.
+   */
+  undoOf?: string;
 }
 
 export interface MutationPlan {
@@ -73,6 +79,12 @@ export type MutationResult =
       observed: Record<string, unknown> | null;
       vector: VectorId;
       tier: DisruptionTier;
+      /**
+       * The undo token for this mutation (ADDITIVE): pass it to
+       * `things undo --txn <token>` (MCP `txn`) to invert exactly this change,
+       * unaffected by any other mutations made in between.
+       */
+      undoToken?: string;
       /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
       warnings?: string[];
     }
@@ -247,6 +259,7 @@ export async function runMutation<K extends OperationKind>(
       invocation: null,
       requested: params as Record<string, unknown>,
       ...(options.txn !== undefined && { txn: options.txn }),
+      ...(options.undoOf !== undefined && { undoOf: options.undoOf }),
       pre: null,
       observed: null,
       verify: null,
@@ -507,6 +520,20 @@ export async function runMutation<K extends OperationKind>(
       if (deps.environment !== undefined) {
         deps.environment.record(deps.environment.capture());
       }
+      // The token identifies THIS record on the trail (see undoToken); a leg's
+      // token would be its shared txn id, but legs are never undone directly,
+      // so we only surface it for non-leg writes.
+      const token =
+        options.txn?.role === "leg"
+          ? undefined
+          : undoToken({
+              ts: startedAt.toISOString(),
+              op,
+              actor,
+              host: config.host,
+              uuid,
+              ...(options.txn !== undefined && { txn: options.txn }),
+            });
       return {
         kind: "ok",
         op,
@@ -514,6 +541,7 @@ export async function runMutation<K extends OperationKind>(
         observed: outcome.observed,
         vector: vector.id,
         tier: effectiveTier,
+        ...(token !== undefined && { undoToken: token }),
         ...(envChanges.length > 0 && {
           warnings: [
             `environment changed since the last verified write: ` +

@@ -1741,14 +1741,32 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "undo",
     {
       description:
-        "Undo the last N changes made through this interface, newest first (changes made " +
-        "directly in the Things app cannot be undone here). Some changes cannot be " +
-        "reversed — permanent deletions, or changes whose prior state is unknown — and are " +
-        "reported as irreversible; a to-do brought back from an undone delete returns to " +
-        "the Inbox without its schedule. Undoing the creation of an area or tag deletes it " +
-        "permanently — requires dangerously_permanent.",
+        "Undo the last N changes, newest first (changes made directly in the Things app " +
+        "cannot be undone here). By default this undoes only changes made through THIS " +
+        'interface (by="mcp") — it will not touch the user\'s own edits unless you pass ' +
+        'by="*" (all authors) or a specific author name; pass a txn token to undo one exact ' +
+        "change. Some changes cannot be reversed — permanent deletions, or changes whose " +
+        "prior state is unknown — and are reported as irreversible; a to-do brought back " +
+        "from an undone delete returns to the Inbox without its schedule. Undoing the " +
+        "creation of an area or tag deletes it permanently — requires dangerously_permanent.",
       inputSchema: {
         last: z.number().int().min(1).optional().describe("How many to unwind (default 1)"),
+        by: z
+          .string()
+          .optional()
+          .describe(
+            'Whose changes to undo: an exact author name, or "*" for everyone. Defaults to ' +
+              '"mcp" (only changes made through this interface). Matches exactly — "mcp" ' +
+              'never matches an "undo:mcp" record. Selects WHICH changes to undo; the undo ' +
+              'itself is always recorded as "undo:mcp". Not combinable with txn.',
+          ),
+        txn: z
+          .string()
+          .optional()
+          .describe(
+            "Undo exactly the one change with this undo token (the undoToken field returned " +
+              "by the mutation); immune to interleaving. Not combinable with last/by.",
+          ),
         dangerously_permanent: z.boolean().optional(),
         ...dryRunShape,
       },
@@ -1756,8 +1774,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
+        if (args.txn !== undefined && (args.last !== undefined || args.by !== undefined)) {
+          return usage("txn cannot be combined with last or by");
+        }
         const items = await getClient().write.undo({
           ...(args.last !== undefined && { last: args.last }),
+          ...(args.txn !== undefined && { txn: args.txn }),
+          // Asymmetric default: agents must not clobber the user's own edits
+          // without explicitly opting in via by:"*".
+          ...(args.txn === undefined && { by: args.by ?? "mcp" }),
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
           actor: "mcp",

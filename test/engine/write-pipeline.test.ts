@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AuditRecord } from "../../src/audit/schema.ts";
+import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
@@ -133,6 +133,23 @@ describe("verified mutations", () => {
       pre: { title: "Old" },
       observed: { title: "New" },
     });
+  });
+
+  it("ok result carries an undoToken matching the audit record (additive)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Old" });
+    const { vector } = fakeVector((db) => {
+      db.prepare("UPDATE TMTask SET title = 'New', userModificationDate = ? WHERE uuid = ?").run(
+        NOW_EPOCH,
+        uuid,
+      );
+    });
+    const result = await runMutation(deps(vector), "todo.update", { uuid, title: "New" });
+    expect(result.kind).toBe("ok");
+    const rec = auditRecords[0];
+    if (result.kind === "ok" && rec !== undefined) {
+      expect(result.undoToken).toBeDefined();
+      expect(result.undoToken).toBe(undoToken(rec)); // write path == read path
+    }
   });
 
   it("ok create: probe discovers the new uuid", async () => {

@@ -1319,28 +1319,53 @@ export function registerWriteCommands(program: Command): void {
     .description(
       "Undo the last N changes made through things-api, newest first — each undo applies " +
         "the INVERSE change (recorded as actor `undo:<actor>`, never itself an undo " +
-        "target). Changes made directly in the Things app cannot be undone here. " +
-        "IRREVERSIBLE changes are reported, not guessed: permanent deletes and changes " +
-        "whose prior state is unknown. Partial restores carry notes (e.g. a delete-undo " +
-        "lands in the Inbox de-scheduled). --dry-run shows every inverse plan without " +
-        "executing. Undoing a CREATED area/tag deletes it permanently — requires " +
+        "target). By default undo is GLOBAL — the owner's Cmd+Z — reversing the latest " +
+        "changes whoever made them; narrow it with --by <actor> to undo only a given " +
+        "author's changes (e.g. `--by mcp` to clean up after an agent), or --txn <token> " +
+        "to undo one exact change by the `undoToken` its result returned (immune to any " +
+        "changes made in between). Changes made directly in the Things app cannot be " +
+        "undone here. IRREVERSIBLE changes are reported, not guessed: permanent deletes " +
+        "and changes whose prior state is unknown. Partial restores carry notes (e.g. a " +
+        "delete-undo lands in the Inbox de-scheduled). --dry-run shows every inverse plan " +
+        "without executing. Undoing a CREATED area/tag deletes it permanently — requires " +
         "--dangerously-permanent. Unwinding stops at the first failed inverse. " +
-        "Exit: 0 all ok · 3 any failed/partial · 0 with per-item detail otherwise.",
+        "Exit: 0 all ok · 3 any failed/partial · 2 nothing matched or bad flags.",
     )
-    .option("--last <n>", "how many trailing mutations to undo", "1")
+    .option("--last <n>", "how many trailing mutations to undo (default 1)")
+    .option(
+      "--by <actor>",
+      "undo only changes recorded under this author — an exact actor name (`mike`, `mcp`) " +
+        "or `*` for all; matches exactly, so `--by mcp` never touches an `undo:mcp` " +
+        "record. This SELECTS which changes to undo; --actor names who the undo is " +
+        "recorded as. Not combinable with --txn.",
+    )
+    .option(
+      "--txn <token>",
+      "undo exactly the one change with this undo token (the `undoToken` field from its " +
+        "result); immune to interleaving. Not combinable with --last/--by.",
+    )
     .option("--dry-run", "show the inverse plans; execute nothing")
     .option("--dangerously-permanent", "allow inverses that delete areas/tags permanently")
     .option("--json", "JSONL per-item results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
     .option("--verify-timeout <ms>", "how long to wait for each inverse change to take effect")
-    .option("--actor <name>", "author name recorded for the undo (as undo:<name>)")
+    .option("--actor <name>", "author name RECORDED for the undo (as undo:<name>); see --by")
     .action(async (opts: WriteFlagOpts & Record<string, unknown>) => {
+      // --txn selects one exact record; --last/--by select a set. Mixing them
+      // is a usage error (house style).
+      if (opts["txn"] !== undefined && (opts["last"] !== undefined || opts["by"] !== undefined)) {
+        process.stderr.write("error: --txn cannot be combined with --last or --by\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
       let client: ThingsClient | null = null;
       try {
         client = openThings(opts.db ? { dbPath: opts.db } : {});
         const items = await client.write.undo(
           {
-            last: Number(opts["last"] ?? 1),
+            ...(opts["last"] !== undefined && { last: Number(opts["last"]) }),
+            ...(opts["by"] !== undefined && { by: String(opts["by"]) }),
+            ...(opts["txn"] !== undefined && { txn: String(opts["txn"]) }),
             ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
             ...(opts["dangerouslyPermanent"] === true && { dangerouslyPermanent: true }),
             ...(opts.verifyTimeout !== undefined && {
@@ -1369,7 +1394,17 @@ export function registerWriteCommands(program: Command): void {
               ? ExitCode.Usage
               : ExitCode.Ok;
         if (items.length === 0) {
-          process.stderr.write("error: no undoable mutations found in the audit trail\n");
+          const scope = opts["by"] !== undefined ? ` for actor ${String(opts["by"])}` : "";
+          process.stderr.write(`error: no undoable mutations found in the audit trail${scope}\n`);
+        }
+      } catch (err) {
+        // runUndo throws RangeError for a --txn token that names no undoable
+        // mutation or one already undone — a usage error (exit 2).
+        if (err instanceof RangeError) {
+          process.stderr.write(`error: ${err.message}\n`);
+          process.exitCode = ExitCode.Usage;
+        } else {
+          throw err;
         }
       } finally {
         client?.close();

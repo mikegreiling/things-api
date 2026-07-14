@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { AuditRecord } from "../../src/audit/schema.ts";
+import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { AnyTask } from "../../src/model/entities.ts";
 import { planUndo, readAuditRecords, selectUndoTargets } from "../../src/write/undo.ts";
 
@@ -61,8 +61,81 @@ describe("selectUndoTargets", () => {
       record({ ts: "2026-07-05T09:20:00Z", op: "todo.complete", uuid: "B" }),
       record({ ts: "2026-07-05T09:30:00Z", op: "todo.reopen", uuid: "B", actor: "undo:mike" }),
     ];
-    const targets = selectUndoTargets(records, 2);
+    const targets = selectUndoTargets(records, { last: 2 });
     expect(targets.map((t) => t.uuid)).toEqual(["B", "A"]);
+  });
+
+  it("--by narrows to an exact actor across interleaved authors, newest first", () => {
+    const records = [
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "H1", actor: "mike" }),
+      record({ ts: "2026-07-05T09:10:00Z", op: "todo.add", uuid: "M1", actor: "mcp" }),
+      record({ ts: "2026-07-05T09:20:00Z", op: "todo.add", uuid: "H2", actor: "mike" }),
+      record({ ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: "M2", actor: "mcp" }),
+    ];
+    expect(selectUndoTargets(records, { by: "mcp", last: 5 }).map((t) => t.uuid)).toEqual([
+      "M2",
+      "M1",
+    ]);
+    expect(selectUndoTargets(records, { by: "mike", last: 1 }).map((t) => t.uuid)).toEqual(["H2"]);
+  });
+
+  it("MCP default (by:'mcp') skips a NEWER human record and picks the mcp one", () => {
+    // The confusion case: agent's mcp add, then the human adds via CLI last;
+    // an mcp-scoped undo must revert the mcp record, not the human's newer one.
+    const records = [
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "M1", actor: "mcp" }),
+      record({ ts: "2026-07-05T09:30:00Z", op: "project.add", uuid: "H1", actor: "mike" }),
+    ];
+    expect(selectUndoTargets(records, { by: "mcp", last: 1 }).map((t) => t.uuid)).toEqual(["M1"]);
+    // Global (by undefined) or by:"*" takes the newest regardless of author.
+    expect(selectUndoTargets(records, { last: 1 }).map((t) => t.uuid)).toEqual(["H1"]);
+    expect(selectUndoTargets(records, { by: "*", last: 1 }).map((t) => t.uuid)).toEqual(["H1"]);
+  });
+
+  it("--by matches EXACTLY: 'mcp' never selects an 'undo:mcp' record", () => {
+    const records = [
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "M1", actor: "mcp" }),
+      // an undo-of-undo carries actor undo:mcp — its own actor, never a target
+      record({ ts: "2026-07-05T09:30:00Z", op: "todo.delete", uuid: "M1", actor: "undo:mcp" }),
+    ];
+    expect(selectUndoTargets(records, { by: "mcp", last: 5 }).map((t) => t.uuid)).toEqual(["M1"]);
+    // Asking for the undo record's actor selects nothing (undo records are
+    // never undoable — no undo-the-undo).
+    expect(selectUndoTargets(records, { by: "undo:mcp", last: 5 })).toEqual([]);
+  });
+
+  it("--txn selects the one record whose undo token matches (or none)", () => {
+    const a = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "A", actor: "mike" });
+    const b = record({ ts: "2026-07-05T09:20:00Z", op: "todo.add", uuid: "B", actor: "mcp" });
+    const tokenA = undoToken(a);
+    expect(selectUndoTargets([a, b], { txn: tokenA }).map((t) => t.uuid)).toEqual(["A"]);
+    expect(selectUndoTargets([a, b], { txn: "m-does-not-exist" })).toEqual([]);
+  });
+
+  it("--txn matches a compound summary by its txn id", () => {
+    const summary = record({
+      ts: "2026-07-05T09:00:00Z",
+      op: "heading.archive",
+      uuid: "H1",
+      txn: { id: "txn-abc", role: "summary" },
+    });
+    expect(undoToken(summary)).toBe("txn-abc");
+    expect(selectUndoTargets([summary], { txn: "txn-abc" }).map((t) => t.uuid)).toEqual(["H1"]);
+  });
+});
+
+describe("undoToken", () => {
+  it("is stable and content-addressed for single-op records", () => {
+    const r = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "A", actor: "mike" });
+    expect(undoToken(r)).toMatch(/^m-[0-9a-f]{12}$/);
+    expect(undoToken(r)).toBe(undoToken(record({ ...r }))); // deterministic
+  });
+
+  it("distinguishes records that differ in any identity field", () => {
+    const base = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "A", actor: "mike" });
+    expect(undoToken(base)).not.toBe(undoToken({ ...base, uuid: "B" }));
+    expect(undoToken(base)).not.toBe(undoToken({ ...base, actor: "mcp" }));
+    expect(undoToken(base)).not.toBe(undoToken({ ...base, ts: "2026-07-05T09:00:01Z" }));
   });
 });
 
@@ -516,7 +589,7 @@ describe("transactional undo (compound operations)", () => {
         pre: { status: "open" },
       }),
     ];
-    const targets = selectUndoTargets(records, 3);
+    const targets = selectUndoTargets(records, { last: 3 });
     expect(targets.map((r) => r.op)).toEqual(["heading.archive"]);
   });
 

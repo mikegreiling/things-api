@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AuditRecord } from "../../src/audit/schema.ts";
+import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
@@ -225,5 +225,80 @@ describe("runUndo", () => {
     const { vector } = fakeVector(() => touch(uuid, "status = 0"));
     const items = await runUndo(deps([vector]), auditDir);
     expect(items[0]?.plan.target.op).toBe("todo.complete");
+  });
+
+  it("by:'mcp' undoes the mcp record even when a human record is newer", async () => {
+    const mcpTodo = seedTodo(fixture.db, { title: "Agent", status: "completed" });
+    const humanTodo = seedTodo(fixture.db, { title: "Human", status: "completed" });
+    writeAudit([
+      auditRecord({
+        ts: "2026-07-05T09:00:00Z",
+        op: "todo.complete",
+        uuid: mcpTodo,
+        actor: "mcp",
+        pre: { status: "open" },
+      }),
+      auditRecord({
+        ts: "2026-07-05T09:30:00Z", // NEWER, but a human's
+        op: "todo.complete",
+        uuid: humanTodo,
+        actor: "mike",
+        pre: { status: "open" },
+      }),
+    ]);
+    const { vector } = fakeVector(() => touch(mcpTodo, "status = 0"));
+    const items = await runUndo(deps([vector]), auditDir, { by: "mcp" });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.plan.target.uuid).toBe(mcpTodo);
+    expect(items[0]?.outcome).toBe("ok");
+  });
+
+  it("undoes exactly one record by --txn token, and back-references it as undoOf", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "completed" });
+    const rec = auditRecord({ op: "todo.complete", uuid, actor: "mcp", pre: { status: "open" } });
+    writeAudit([rec]);
+    const token = undoToken(rec);
+    const { vector } = fakeVector(() => touch(uuid, "status = 0"));
+
+    const items = await runUndo(deps([vector]), auditDir, { txn: token });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.plan.target.token).toBe(token);
+    expect(items[0]?.outcome).toBe("ok");
+    // The inverse mutation's own ok result carries a token, and the audit
+    // record back-references the mutation it reversed.
+    const inverse = items[0]?.results[0];
+    expect(inverse?.kind).toBe("ok");
+    expect(auditRecords[0]?.undoOf).toBe(token);
+  });
+
+  it("--txn for an unknown token is a loud usage error (RangeError)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "completed" });
+    writeAudit([auditRecord({ op: "todo.complete", uuid, pre: { status: "open" } })]);
+    const { vector } = fakeVector(null);
+    await expect(runUndo(deps([vector]), auditDir, { txn: "m-nope" })).rejects.toThrow(
+      /no undoable mutation has undo token/,
+    );
+  });
+
+  it("--txn for an already-undone mutation reports it specifically", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "open" });
+    const rec = auditRecord({ op: "todo.complete", uuid, pre: { status: "open" } });
+    const token = undoToken(rec);
+    writeAudit([
+      rec,
+      // a prior inverse for the same token is on the trail
+      auditRecord({
+        ts: "2026-07-05T11:00:00Z",
+        op: "todo.reopen",
+        uuid,
+        actor: "undo:mike",
+        undoOf: token,
+        pre: { status: "completed" },
+      }),
+    ]);
+    const { vector } = fakeVector(null);
+    await expect(runUndo(deps([vector]), auditDir, { txn: token })).rejects.toThrow(
+      /has already been undone/,
+    );
   });
 });

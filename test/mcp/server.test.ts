@@ -5,7 +5,7 @@
  * tools route to the right operations, and that every description obeys the
  * consumer-voice contract (docs/design/surface-copy.md).
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
+import type { AuditRecord } from "../../src/audit/schema.ts";
 import { createThingsMcpServer } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
 import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
@@ -657,6 +658,87 @@ describe("things MCP server", () => {
       expect(instructions).toContain("doctor");
       await localClient.close();
       await server.close();
+    });
+  });
+
+  describe("undo scoping", () => {
+    function seedAuditTrail(records: Partial<AuditRecord>[]): void {
+      const dir = join(stateDir, "audit");
+      mkdirSync(dir, { recursive: true });
+      const full = records.map((r) => ({
+        v: 1,
+        ts: "2026-07-05T10:00:00.000Z",
+        actor: "mike",
+        host: "test-host",
+        op: "todo.update",
+        uuid: null,
+        vector: "url-scheme",
+        disruption: 0,
+        invocation: "x",
+        requested: {},
+        pre: null,
+        observed: null,
+        result: "ok",
+        verify: null,
+        durationMs: 1,
+        env: { pkg: "0.1.0", dbVersion: 26, fingerprint: "ok" },
+        ...r,
+      }));
+      writeFileSync(join(dir, "2026-07.jsonl"), full.map((r) => JSON.stringify(r)).join("\n"));
+    }
+
+    it("defaults to by:'mcp' — skips a NEWER human record, reverses the mcp one", async () => {
+      const mcpTodo = seedTodo(fixture.db, { title: "Agent", status: "completed" });
+      const humanTodo = seedTodo(fixture.db, { title: "Human" });
+      seedAuditTrail([
+        {
+          ts: "2026-07-05T09:00:00Z",
+          op: "todo.complete",
+          uuid: mcpTodo,
+          actor: "mcp",
+          pre: { status: "open" },
+        },
+        { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: humanTodo, actor: "mike" },
+      ]);
+      const { vector } = fakeVector(
+        (payload) => {
+          if (payload.includes(mcpTodo)) {
+            fixture.db.prepare("UPDATE TMTask SET status = 0 WHERE uuid = ?").run(mcpTodo);
+          }
+        },
+        { ops: ["todo.reopen", "todo.delete"] },
+      );
+      await connect([vector]);
+      const result = await client.callTool({ name: "undo", arguments: {} });
+      const items = textOf(result) as { plan: { target: { uuid: string; actor: string } } }[];
+      expect(items).toHaveLength(1);
+      expect(items[0]?.plan.target.uuid).toBe(mcpTodo);
+      expect(items[0]?.plan.target.actor).toBe("mcp");
+    });
+
+    it("by:'*' reaches the human record (newest wins)", async () => {
+      const humanTodo = seedTodo(fixture.db, { title: "Human" });
+      seedAuditTrail([
+        { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: humanTodo, actor: "mike" },
+      ]);
+      const { vector } = fakeVector(null, { ops: ["todo.delete"] });
+      await connect([vector]);
+      const result = await client.callTool({
+        name: "undo",
+        arguments: { by: "*", dry_run: true },
+      });
+      const items = textOf(result) as { plan: { target: { uuid: string } } }[];
+      expect(items[0]?.plan.target.uuid).toBe(humanTodo);
+    });
+
+    it("txn combined with last/by is a usage error", async () => {
+      await connect([fakeVector(null).vector]);
+      const bad = await client.callTool({
+        name: "undo",
+        arguments: { txn: "m-abc", last: 2 },
+      });
+      expect(bad.isError).toBe(true);
+      expect(JSON.stringify(bad)).toContain("txn cannot be combined");
     });
   });
 

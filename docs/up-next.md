@@ -42,15 +42,15 @@ The working queue for the next session(s). Everything here was triaged with Mike
 
 ## 5. Smaller code items (unblocked, low effort)
 
-### Approved design 2026-07-13: undo actor-scoping (implement next; files disjoint from the polish pass)
+### ~~Approved design 2026-07-13: undo actor-scoping~~ — DONE 2026-07-14 (PR mg/undo-actor-scoping)
 
-Today the audit log (`~/.local/state/things-api/audit/YYYY-MM.jsonl`) records an `actor` per mutation (CLI = config actor, MCP = `"mcp"`, undos = `undo:<actor>`) but `selectUndoTargets` picks the newest N GLOBALLY — actor recorded, never consulted. Confirmed confusion case (Mike, 2026-07-13): human adds a project via CLI, agent then calls MCP undo → the HUMAN's project is reverted. The precondition guard prevents state clobber, not intent confusion. Approved three-layer fix (Mike ratified the asymmetric defaults):
+Shipped exactly as ratified. `selectUndoTargets` now consults the recorded actor and supports exact-token selection instead of always picking the newest N globally. The three layers:
 
-1. **`--by <actor>` selection filter** on `things undo` + a `by` param on the MCP undo tool ("undo the last N changes made by X"). Note the existing `--actor` flag names the actor recorded FOR the undo — keep both, document the difference loudly.
-2. **Asymmetric defaults**: MCP undo defaults to `by: "mcp"` (agents must not clobber human edits without an explicit `by: "*"`); CLI `things undo` stays GLOBAL (human owner's Cmd+Z), with `--by mcp` for cleaning up after an agent.
-3. **Undo tokens (the strong fix)**: mutation results (JSON envelope + MCP tool responses) return the audit record/txn id; `things undo --txn <id>` (+ MCP param) undoes THAT record exactly — immune to interleaving by construction. Positional `--last N` stays as the human convenience. Implementation note: compound ops already carry `txn{id,role}`; single-op records need a stable id in the result path (record ts+hash or a real id — decide in-implementation, keep additive).
+1. **`--by <actor>` selection filter** on `things undo` + a `by` param on the MCP undo tool. Exact match (or `*` for all); `--by mcp` never matches an `undo:mcp` record (inverse mutations are their own actor and are never undo targets). The existing `--actor`/`actor` flag (who the inverse is RECORDED as) is unchanged; the --help/description now contrast the two loudly.
+2. **Asymmetric defaults**: MCP undo defaults to `by: "mcp"` (an agent must pass `by: "*"` to touch the owner's edits); CLI `things undo` stays GLOBAL, with `--by mcp` to clean up after an agent. Engine + unit + MCP + CLI tests cover the "newer human record skipped under mcp scoping" case.
+3. **Undo tokens**: every mutation `ok` result (JSON envelope + MCP response, including compound summaries and bounce reorders) now carries an additive `undoToken`; `things undo --txn <token>` (MCP `txn`) inverts exactly that record. **Id mechanism chosen: a compound op's shared `txn.id`, or — for a single op — a content-addressed `m-<sha256(ts+op+actor+host+uuid)[..12]>`, derived (never stored) so the write path and the trail scan always agree** (`undoToken()` in `src/audit/schema.ts`). `--txn` is mutually exclusive with `--last`/`--by` (usage error, exit 2); an unknown or already-undone token fails loud and specific (the additive `undoOf` back-reference on inverse records distinguishes already-undone from nonexistent). Also fixed in passing: the bounce-reorder summary audit record now honors `options.actor` (previously always the config actor). Doctrine: [docs/design/architecture.md](design/architecture.md) (§ Undo selection).
 
-Optional fourth layer, parked: session-qualified actors (`mcp:<session>`) with prefix matching on `by:` — only if parallel agents become real.
+Optional fourth layer, still parked: session-qualified actors (`mcp:<session>`) with prefix matching on `by:` — only if parallel agents become real.
 
 ### Other queued noodling (2026-07-13)
 
