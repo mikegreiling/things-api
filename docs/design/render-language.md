@@ -2,6 +2,8 @@
 
 Ratified by Mike, 2026-07-13. This is the canon for how the read views style a row on a terminal — the doctrine behind `src/cli/glyphs.ts` (the glyph vocabulary + the `LEGEND` table) and `src/cli/render.ts` (`formatItem` and the view renderers). Plain-text output (piped, `NO_COLOR`, `--json`) is unaffected by everything here: shape carries state, color/weight/dim are enhancements on top, and the tests that assert styling force color on deliberately (`test/unit/render-styling.test.ts`).
 
+**Width-aware fitting is an orthogonal layer UNDER this canon** ([width-aware-tty.md](width-aware-tty.md), SHIPPED 2026-07-13). The channels here decide *what a segment carries and how it is styled*; the fitter decides *how much of the collapsible segments (title, tags) survives a narrow terminal*, never altering the always-present, meaning-bearing parts (uuid, box, chips, tail markers, deadline). It engages only when a TTY width is resolved; `width: null` (pipes, `--json`) is byte-identical to the composition below.
+
 ## The principle
 
 **A row never re-states what its container already says; a row marks only its deviations from the container's normal.**

@@ -19,6 +19,7 @@ import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
+import { resolveWidth, setFitWidth } from "./width.ts";
 import { ExitCode, PKG_VERSION } from "../contracts.ts";
 
 const AGENT_NOTES = `
@@ -64,6 +65,18 @@ export function buildProgram(): Command {
 }
 
 export function runCli(): void {
+  // Resolve the width-aware row fit ONCE at startup (docs/design/width-aware-
+  // tty.md): THINGS_WIDTH override, else stdout.columns on a TTY, else null (no
+  // fitting — pipes/grep/--json byte-stable). Threaded to the renderers via the
+  // module-level fit width in ./width.ts, so every human list path inherits it
+  // and MCP/--json never touch it.
+  setFitWidth(
+    resolveWidth({
+      env: process.env,
+      columns: process.stdout.columns,
+      isTTY: process.stdout.isTTY === true,
+    }),
+  );
   const program = buildProgram();
   program.exitOverride((err) => {
     process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);
