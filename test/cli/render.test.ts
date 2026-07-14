@@ -784,9 +784,10 @@ describe("renderToday (things today split)", () => {
     const lines = renderToday(full, data, base);
     expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(2);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
-    expect(lines).toContain(
-      "… 2 more evening items — `things today --limit 7` · all: `things today --all`",
-    );
+    // A pure section pointer — the global truncation footer (appended by the
+    // driver) already carries the quantity levers, so this only points at the
+    // isolated Evening view.
+    expect(lines).toContain("… 2 more evening items — `things today --evening`");
   });
 
   it("(b) a cap consuming evening entirely shows the header + hidden-count hint, never `(empty)`", () => {
@@ -798,9 +799,7 @@ describe("renderToday (things today split)", () => {
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
     expect(lines).not.toContain("(empty)");
     expect(lines.some((l) => /night \d/.test(l))).toBe(false);
-    expect(lines).toContain(
-      "… 4 evening items — `things today --limit 9` · all: `things today --all`",
-    );
+    expect(lines).toContain("… 4 evening items — `things today --evening`");
   });
 
   it("(c) a truly-empty evening renders NO This Evening header at all (GUI parity)", () => {
@@ -840,6 +839,44 @@ describe("renderToday (things today split)", () => {
     expect(headerIdx).toBeGreaterThan(0);
     // The line immediately above the Evening header is blank.
     expect(lines[headerIdx - 1]).toBe("");
+  });
+
+  it("pins the truncated layout: today rows, blank, evening header, rows, pointer hint", () => {
+    fixture = buildFixtureDb();
+    const full = build(fixture, 3, 4); // 3 today + 4 evening
+    const { data } = paginateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
+    const lines = renderToday(full, data, base);
+    const evIdx = lines.findIndex((l) => l.includes("This Evening"));
+    // A blank line separates the Today block from the Evening header.
+    expect(lines[evIdx - 1]).toBe("");
+    // The two shown evening rows sit directly under the header…
+    expect(lines[evIdx + 1]).toContain("night 0");
+    expect(lines[evIdx + 2]).toContain("night 1");
+    // …and the pointer hint is the LAST line, adjacent to the rows (no blank —
+    // the driver appends the blank + global footer AFTER this).
+    expect(lines.at(-1)).toBe("… 2 more evening items — `things today --evening`");
+  });
+
+  it("--evening truncation keeps the limit levers (--evening is already active)", () => {
+    fixture = buildFixtureDb();
+    // Build the view AS the CLI does under --evening: today is filtered out.
+    for (let i = 0; i < 4; i++) {
+      seedTodo(fixture.db, {
+        title: `night ${i}`,
+        startDate: "2026-07-05",
+        evening: true,
+        todayIndex: i,
+      });
+    }
+    const full = todayView(fixture.db, NOW, { eveningOnly: true });
+    const { data } = paginateToday(full, 2); // 2 evening shown, 2 hidden
+    const eveningBase = "things today --evening";
+    const lines = renderToday(full, data, eveningBase, { eveningOnly: true });
+    // The pointer would be redundant here, so the hint offers the levers that
+    // actually reveal rows — with the --all escalation UNLABELED.
+    expect(lines).toContain(
+      "… 2 more evening items — `things today --evening --limit 4` · `things today --evening --all`",
+    );
   });
 
   it("--evening puts the This Evening header first — no leading blank line", () => {

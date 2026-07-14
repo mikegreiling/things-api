@@ -103,13 +103,23 @@ describe("cli end-to-end (fixture db)", () => {
     // section-specific hint replaces the old misleading "(empty)".
     expect(stdout).toContain("⏾ This Evening ──");
     expect(stdout).not.toContain("(empty)");
-    // Evening-specific number (20) + the exact --limit (75) that reveals them.
-    expect(stdout).toContain(
-      "… 20 evening items — `things today --limit 75` · all: `things today --all`",
-    );
+    // The evening hint is now a pure section pointer — the quantity levers live
+    // on the global footer below, so the evening line only names --evening.
+    expect(stdout).toContain("… 20 evening items — `things today --evening`");
     // The global footer counts ALL hidden rows (25) — the two compose sensibly.
     expect(stdout).toContain("25 more items");
     expect(stdout).toContain("see more: `things today --limit 100`");
+    // Full truncated layout, in order: the evening header, then the evening
+    // pointer hint, then a BLANK line separating it from the global footer.
+    const lines = stdout.split("\n");
+    const evIdx = lines.findIndex((l) => l.includes("This Evening ──"));
+    const hintIdx = lines.findIndex((l) => l.includes("evening items — `things today --evening`"));
+    const footerIdx = lines.findIndex((l) => l.includes("25 more items"));
+    expect(evIdx).toBeGreaterThanOrEqual(0);
+    expect(hintIdx).toBeGreaterThan(evIdx);
+    expect(footerIdx).toBeGreaterThan(hintIdx);
+    // Exactly one blank line between the evening hint and the global footer.
+    expect(lines.slice(hintIdx + 1, footerIdx)).toEqual([""]);
     // JSON is unchanged (fields, not glyphs): the split still carries counts.
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
     expect(env.data.today).toHaveLength(50);
@@ -312,7 +322,9 @@ describe("cli list limits + truncation hint", () => {
     const { stdout } = runCli(["inbox", "--db", fx.path]);
     expect(stdout).toContain("10 more items");
     expect(stdout).toContain("see more: `things inbox --limit 100`");
-    expect(stdout).toContain("all: `things inbox --all`");
+    // The --all escalation is unlabeled — its effect reads from the command.
+    expect(stdout).toContain("· `things inbox --all` ──");
+    expect(stdout).not.toContain("all: `things inbox --all`");
   });
 
   it("the hint echoes the flags the user actually passed", () => {
@@ -462,7 +474,9 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     const { stdout } = runCli(["upcoming", "--db", fx.path]);
     expect(stdout).toContain("5 more items through");
     expect(stdout).toContain("see more: `things upcoming --limit 100`");
-    expect(stdout).toContain("full horizon: `things upcoming --all`");
+    // The --all escalation is now unlabeled (its effect reads from the command).
+    expect(stdout).toContain("· `things upcoming --all`");
+    expect(stdout).not.toContain("full horizon:");
     expect(stdout).not.toContain("wider:"); // not the window-only footer
   });
 
@@ -472,7 +486,9 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     const { stdout } = runCli(["upcoming", "--db", fx.path]);
     expect(stdout).toContain("(through");
     expect(stdout).toContain("wider: `things upcoming --until 2m`");
-    expect(stdout).toContain("everything: `things upcoming --all`");
+    // --all stays unlabeled here too; the semantic `wider:` label is retained.
+    expect(stdout).toContain("· `things upcoming --all`)");
+    expect(stdout).not.toContain("everything:");
     expect(stdout).not.toContain("more items");
   });
 

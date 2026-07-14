@@ -362,10 +362,12 @@ export function renderList(items: ListItem[]): string[] {
  * a truly-empty evening has no header at all. `full` is the pre-cap view and
  * `shown` the rows that survived the global `--limit`; the split lets the
  * section stay honest under truncation. When the cap hid some or all evening
- * rows, an honest muted hint counts the hidden ones and names the `--limit`
- * that reveals them — never the misleading `(empty)` a truncated evening used
- * to show. `base` is the user's own invocation (flags echoed). The global
- * footer (row driver) still reports the whole-view remainder separately.
+ * rows, an honest muted hint counts the hidden ones and points at the isolated
+ * `--evening` view — never the misleading `(empty)` a truncated evening used to
+ * show. (In `--evening` mode that pointer is redundant, so the hint keeps the
+ * `--limit`/`--all` levers instead.) `base` is the user's own invocation (flags
+ * echoed). The global footer (row driver) still reports the whole-view
+ * remainder separately.
  *
  * `options.eveningOnly` (the `--evening` section filter) renders ONLY the This
  * Evening block — the Today header and its `(empty)` placeholder are suppressed
@@ -394,13 +396,19 @@ export function renderToday(
     for (const i of shown.evening) lines.push(formatItem(i, w));
     const hidden = full.evening.length - shown.evening.length;
     if (hidden > 0) {
-      const total = full.today.length + full.evening.length;
       const more = shown.evening.length > 0 ? "more " : "";
-      lines.push(
-        dim(
-          `… ${hidden} ${more}evening item${hidden === 1 ? "" : "s"} — \`${base} --limit ${total}\` · all: \`${base} --all\``,
-        ),
-      );
+      const count = `${hidden} ${more}evening item${hidden === 1 ? "" : "s"}`;
+      // Normal Today view: the global truncation footer already carries the
+      // quantity levers (a bigger --limit / --all), so this hint is a pure
+      // pointer to the isolated This Evening view. In --evening mode that
+      // pointer is redundant (--evening is already active), so keep offering
+      // the levers that actually reveal more rows.
+      if (eveningOnly) {
+        const total = full.today.length + full.evening.length;
+        lines.push(dim(`… ${count} — \`${base} --limit ${total}\` · \`${base} --all\``));
+      } else {
+        lines.push(dim(`… ${count} — \`${base} --evening\``));
+      }
     }
   } else if (eveningOnly) {
     // Evening filter with no evening members: the section is genuinely empty
@@ -651,12 +659,12 @@ function mixedMoreLine(hidden: ListItem[], drill: string | null): string {
 
 /**
  * Muted bottom line for a truncated grouped view: `── more per group — see
- * more: \`<base> <bigger flags>\` · all: \`<base> --all\` ──`, where the
- * bigger-flags command doubles exactly the caps that actually truncated.
+ * more: \`<base> <bigger flags>\` · \`<base> --all\` ──`, where the bigger-flags
+ * command doubles exactly the caps that actually truncated.
  */
 function groupedBottomLine(base: string, escalations: string[], allBase = base): string {
   const seeMore = escalations.length > 0 ? `see more: \`${base} ${escalations.join(" ")}\` · ` : "";
-  return dim(`── more per group — ${seeMore}all: \`${allBase} --all\` ──`);
+  return dim(`── more per group — ${seeMore}\`${allBase} --all\` ──`);
 }
 
 /**
