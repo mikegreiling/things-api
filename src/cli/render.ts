@@ -105,8 +105,6 @@ export interface FormatOpts {
   now?: Date;
   /** Pre-styled Today/Evening mark (★/⏾), rendered right after the box — GUI position. */
   mark?: string | null;
-  /** Repeating-template scheduling word (waiting/paused/ended), rendered as a dim ‹chevron› chip after the box — matches the ‹date› chip form. */
-  statusWord?: string;
   /** Suppress the ‹date› chip (rows under a day header already carry the date). */
   hideDateChip?: boolean;
   /**
@@ -147,10 +145,6 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const meta: string[] = [];
   if (opts.mark != null) meta.push(opts.mark);
   // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
-  // The repeat scheduling word renders as a ‹chevron› chip matching the ‹date›
-  // chip's form; wrapping it at this single meta slot means every list caller
-  // inherits it. (The detail card's prose repeat state is NOT chipped.)
-  if (opts.statusWord !== undefined) meta.push(dim(`‹${opts.statusWord}›`));
   if (item.status !== "open" && item.stopped !== null)
     meta.push(loggedDate(item.stopped, todayIso));
   if (opts.hideDateChip === true) {
@@ -160,6 +154,12 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   // Repeating templates chip their app-materialized next occurrence.
   else if (item.repeating.isTemplate && item.repeating.nextOccurrence != null)
     meta.push(dateChip(item.repeating.nextOccurrence, todayIso));
+  // A template with NO next date chips its scheduling word instead
+  // (waiting/paused/ended), in the same ‹chevron› form — derived HERE so every
+  // list view inherits it, not just upcoming's Repeating To-Dos section. (The
+  // detail card's prose repeat state is NOT chipped.)
+  else if (item.repeating.isTemplate)
+    meta.push(dim(`‹${templateStatus(item.repeating, todayIso)}›`));
   // List rows mute their tags (the GUI's gray pills); tags go green only on
   // the opened resource (todo show / the project|area header row).
   const tags =
@@ -531,11 +531,9 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
   if (resting.length > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(bold("── Repeating To-Dos ──"));
-    for (const item of resting) {
-      lines.push(
-        formatItem(item, w, { ...fmtOpts, statusWord: templateStatus(item.repeating, todayIso) }),
-      );
-    }
+    // The ‹waiting›/‹paused›/‹ended› chip is derived inside formatItem
+    // (a template with no next date), so resting rows need no special opts.
+    for (const item of resting) lines.push(formatItem(item, w, fmtOpts));
   }
   return lines;
 }
