@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { areaView } from "../../src/read/area-view.ts";
 import { projectView } from "../../src/read/project-view.ts";
-import { inheritedTagsFor } from "../../src/read/tags.ts";
+import { areaTags, inheritedTagsFor, tagsView } from "../../src/read/tags.ts";
 import { fetchTaskByUuid } from "../../src/read/queries.ts";
 import {
   anytimeView,
@@ -587,6 +587,64 @@ describe("inherited tags", () => {
     expect(row).not.toBeNull();
     const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
     expect(inherited.map((t) => t.title).sort()).toEqual(["area-tag", "proj-tag"]);
+  });
+});
+
+describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
+  it("renders a to-do's tags in ascending TMTag.index, not alphabetical (CPAP oracle)", () => {
+    fx = buildFixtureDb();
+    // Live indexes from the acceptance oracle `Replace CPAP mask & air filter`.
+    const recurring = seedTag(fx.db, "recurring", null, -16139);
+    const home = seedTag(fx.db, "home", null, -13475);
+    const housekeeping = seedTag(fx.db, "housekeeping", null, -13442);
+    const todo = seedTodo(fx.db, { title: "Replace CPAP mask", startDate: "2026-07-02" });
+    // Assigned in a deliberately non-canonical (and non-alphabetical) order.
+    tagTask(fx.db, todo, home);
+    tagTask(fx.db, todo, housekeeping);
+    tagTask(fx.db, todo, recurring);
+
+    const item = todayView(fx.db, NOW).today.find((i) => i.title === "Replace CPAP mask");
+    expect(item?.tags.map((t) => t.title)).toEqual(["recurring", "home", "housekeeping"]);
+  });
+
+  it("breaks equal-index ties by title (deterministic)", () => {
+    fx = buildFixtureDb();
+    const zeta = seedTag(fx.db, "zeta", null, 5);
+    const alpha = seedTag(fx.db, "alpha", null, 5);
+    const todo = seedTodo(fx.db, { title: "tied", startDate: "2026-07-02" });
+    tagTask(fx.db, todo, zeta);
+    tagTask(fx.db, todo, alpha);
+
+    const item = todayView(fx.db, NOW).today.find((i) => i.title === "tied");
+    expect(item?.tags.map((t) => t.title)).toEqual(["alpha", "zeta"]);
+  });
+
+  it("orders area pill tags canonically too", () => {
+    fx = buildFixtureDb();
+    const later = seedTag(fx.db, "later", null, 200);
+    const earlier = seedTag(fx.db, "earlier", null, -200);
+    const area = seedArea(fx.db, "Work");
+    tagArea(fx.db, area, later);
+    tagArea(fx.db, area, earlier);
+
+    expect(areaTags(fx.db, area).map((t) => t.title)).toEqual(["earlier", "later"]);
+  });
+
+  it("lists the `tags` tree depth-first: children follow their parent, siblings by index", () => {
+    fx = buildFixtureDb();
+    // A parent whose index sits ABOVE its children's — the interleave case that
+    // makes a flat global sort put a child before its parent. DFS must not.
+    const parent = seedTag(fx.db, "errands", null, -3281);
+    const childB = seedTag(fx.db, "z-groceries", parent, -12063);
+    seedTag(fx.db, "a-hardware", parent, -12000);
+    seedTag(fx.db, "calls", null, -3000); // later root
+
+    const order = tagsView(fx.db).map((t) => t.title);
+    // errands precedes BOTH children despite its higher (later) index; the two
+    // children order by their own index (childB -12063 before childA -12000);
+    // the sibling root `calls` follows the whole errands subtree.
+    expect(order).toEqual(["errands", "z-groceries", "a-hardware", "calls"]);
+    expect(tagsView(fx.db).find((t) => t.uuid === childB)?.parent?.uuid).toBe(parent);
   });
 });
 
