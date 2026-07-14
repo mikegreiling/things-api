@@ -105,10 +105,13 @@ describe("deadlineToken", () => {
       expect(deadlineToken("2026-05-07", TODAY, true)).toBe("⚑ 59d ago"); // -59 cutoff
     });
 
-    it("keeps year-bearing far dates in the FULL form even when compact (deliberate)", () => {
-      // `2/27` would be ambiguous with an M/D date; the oracle doesn't cover them.
-      expect(deadlineToken("2027-02-10", TODAY, true)).toBe("⚑ Feb 2027");
-      expect(deadlineToken("2025-03-01", TODAY, true)).toBe("⚑ Mar 2025");
+    it("collapses year-bearing far dates to the bare YEAR when compact (Mike's ruling)", () => {
+      // Four digits are unambiguous against M/D; at that distance the month
+      // carries little signal.
+      expect(deadlineToken("2027-02-10", TODAY, true)).toBe("⚑ 2027");
+      expect(deadlineToken("2025-03-01", TODAY, true)).toBe("⚑ 2025");
+      // Full form untouched.
+      expect(deadlineToken("2027-02-10", TODAY)).toBe("⚑ Feb 2027");
     });
 
     it("leaves `⚑ today` unchanged (already minimal)", () => {

@@ -205,9 +205,10 @@ export function whenValue(
  *     `8/12`, `May 4` → `5/4`);
  *   - day-relatives shorten to `Nd left` / `Nd ago` (`58 days ago` → `58d ago`,
  *     `1 day left` → `1d left` — iOS shows no pluralization, so `1d`).
- * Year-bearing FAR dates (`Feb 2027`, `Mar 2025`) keep their full form even in
- * compact mode: `2/27` would be ambiguous with an M/D date and the iOS oracle
- * doesn't cover them (docs/design/width-aware-tty.md § Compact deadline forms).
+ * Year-bearing FAR dates collapse to the YEAR alone in compact mode (`Feb
+ * 2027` → `2027`, `Oct 2020` → `2020`) — Mike's ruling 2026-07-14: unambiguous
+ * against M/D (always 4 digits), and at that distance the month carries little
+ * signal (docs/design/width-aware-tty.md § Compact deadline forms).
  * `⚑ today` is already minimal and is unchanged.
  */
 export function deadlineToken(deadlineIso: string, todayIso: string, compact = false): string {
@@ -221,14 +222,16 @@ export function deadlineToken(deadlineIso: string, todayIso: string, compact = f
   else {
     const [y, m, d] = deadlineIso.split("-").map(Number);
     const month = MONTHS[(m ?? 1) - 1];
-    // Same-year month-day compacts to M/D; a year-bearing far date keeps its
-    // `MMM YYYY` form (M/D would be ambiguous — deliberate, per the oracle).
+    // Same-year month-day compacts to M/D; a year-bearing far date compacts
+    // to the YEAR alone (4 digits — unambiguous against M/D).
     label =
       String(y) === todayIso.slice(0, 4)
         ? compact
           ? `${m}/${d}`
           : `${month} ${d}`
-        : `${month} ${y}`;
+        : compact
+          ? `${y}`
+          : `${month} ${y}`;
   }
   const chip = `⚑ ${label}`;
   return diff <= 0 ? bold(red(chip)) : bold(dim(chip));

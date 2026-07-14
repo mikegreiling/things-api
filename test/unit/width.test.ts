@@ -296,11 +296,11 @@ describe("the two derived floors — FULL_FIT_FLOOR / COMPACT_FIT_FLOOR", () => 
   });
 
   it("COMPACT_FIT_FLOOR recomputes from the enumerated parts (drift guard)", () => {
-    // Widest token that appears in compact mode: narrow relative OR a kept
-    // year-bearing far date (both 10 cells incl. the ⚑ + space).
+    // Widest token that appears in compact mode: the narrow relative governs
+    // (far dates collapse to the bare year, 6 cells — Mike's ruling 2026-07-14).
     const compactDeadline = Math.max(
       visibleWidth(deadlineToken("2000-01-15", today, true)), // ⚑ 14d left
-      visibleWidth(deadlineToken("2001-02-10", today, true)), // ⚑ Feb 2001
+      visibleWidth(deadlineToken("2001-02-10", today, true)), // ⚑ 2001
     );
     expect(COMPACT_FIT_FLOOR).toBe(furniture + compactDeadline);
   });
@@ -475,7 +475,7 @@ describe("compact deadline forms across a view (formatItem, end-to-end)", () => 
     const [rel, abs, year] = render(FULL_FIT_FLOOR - 1);
     expect(rel).toContain("⚑ 9d left");
     expect(abs).toContain("⚑ 8/12"); // no zero-padding
-    expect(year).toContain("⚑ Mar 2028"); // year-bearing kept full even compact
+    expect(year).toContain("⚑ 2028"); // year-bearing collapses to the bare year
     // Uniformity: none of the full relative/absolute spellings leak in.
     expect(rel).not.toContain("days left");
     expect(abs).not.toContain("Aug 12");
