@@ -141,6 +141,41 @@ export function tagArea(db: DatabaseSync, areaUuid: string, tagUuid: string): vo
   db.prepare(`INSERT INTO TMAreaTag (areas, tags) VALUES (?, ?)`).run(areaUuid, tagUuid);
 }
 
+/**
+ * Encode a bplist whose top object is a single scalar double — either a real
+ * (marker 0x23) or an NSDate (marker 0x33). Mirrors the on-disk shape of the
+ * BSSyncronyMetadata values (a scalar per row); consumed by the sync-health
+ * decoder and the fixtures below.
+ */
+export function bplistScalarDouble(value: number, opts: { date?: boolean } = {}): Uint8Array {
+  const marker = opts.date ? 0x33 : 0x23;
+  const buf = Buffer.alloc(8 + 9 + 1 + 32);
+  buf.write("bplist00", 0, "latin1");
+  buf[8] = marker;
+  buf.writeDoubleBE(value, 9); // object body: 8-byte big-endian IEEE double
+  const offsetTableOffset = 17;
+  buf[offsetTableOffset] = 8; // one offset entry (offsetIntSize=1): object at byte 8
+  const trailer = offsetTableOffset + 1;
+  buf[trailer + 6] = 1; // offsetIntSize
+  buf[trailer + 7] = 1; // objectRefSize
+  writeU64BE(buf, trailer + 8, 1); // numObjects
+  writeU64BE(buf, trailer + 16, 0); // topObject
+  writeU64BE(buf, trailer + 24, offsetTableOffset);
+  return new Uint8Array(buf);
+}
+
+function writeU64BE(buf: Buffer, offset: number, value: number): void {
+  for (let i = 7; i >= 0; i--) {
+    buf[offset + i] = value & 0xff;
+    value = Math.floor(value / 256);
+  }
+}
+
+/** Insert one BSSyncronyMetadata key/value row (value = raw bplist BLOB). */
+export function seedSyncronyMetadata(db: DatabaseSync, uuid: string, value: Uint8Array): void {
+  db.prepare("INSERT INTO BSSyncronyMetadata (uuid, value) VALUES (?, ?)").run(uuid, value);
+}
+
 export function seedChecklistItem(
   db: DatabaseSync,
   taskUuid: string,

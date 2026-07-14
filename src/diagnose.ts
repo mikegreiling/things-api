@@ -31,6 +31,7 @@ import {
   type EnvironmentTuple,
 } from "./write/environment.ts";
 import { sdefDeclaresPrivateReorder } from "./write/experimental.ts";
+import { computeSyncHealth, type SyncHealth, type SyncHealthDeps } from "./sync-health.ts";
 import { ExitCode, PKG_VERSION, type EnvelopeMeta } from "./contracts.ts";
 
 const THINGS_APP = "/Applications/Things3.app";
@@ -130,6 +131,13 @@ export interface DiagnoseReport {
     undecodable: number;
     detail: string;
   };
+  /**
+   * Freshness + sync-liveness proxies for long-running headless operation
+   * (docs/lab/headless-research.md SYNC1 + SYNC2): app-running, WAL write
+   * activity, last local edit, last foreground, and — only when a Things Cloud
+   * account is attached — the sync engine's last-attempt timestamp.
+   */
+  syncHealth: SyncHealth;
 }
 
 export interface DiagnoseOptions {
@@ -144,6 +152,8 @@ export interface DiagnoseOptions {
   probeDeps?: AutomationProbeDeps;
   environment?: EnvironmentTracker;
   availability?: AvailabilityDeps;
+  /** Test seams for the sync-health section (clock, process check, WAL/plist readers). */
+  syncHealth?: SyncHealthDeps;
 }
 
 export interface DiagnoseResult {
@@ -271,6 +281,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
         shortcuts: readShortcutProxies(options.availability),
       },
       recurrence: scanRecurrenceRules(conn.db),
+      syncHealth: computeSyncHealth(conn.db, located.path, options.syncHealth),
     };
     return {
       report,

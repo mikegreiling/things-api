@@ -23,14 +23,28 @@ function environmentLine(env: DiagnoseReport["environment"]): string {
   );
 }
 
+/** The `── Sync health ──` section: freshness proxies + the cloud last-attempt signal. */
+function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
+  return [
+    "── Sync health ──",
+    `app:         ${sh.appRunning.verdict}`,
+    `wal:         ${sh.wal.verdict}`,
+    `last edit:   ${sh.lastLocalEdit.verdict}`,
+    `foreground:  ${sh.lastForeground.verdict}`,
+    `cloud:       ${sh.cloud.verdict}`,
+  ];
+}
+
 export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description(
       "Check environment health: database location, database schema compatibility, app " +
         "presence, any one-time setup still needed (macOS permissions, the app's " +
-        "'Enable Things URLs' setting), and whether the environment changed since the last " +
-        "successful write — with steps to fix. " +
+        "'Enable Things URLs' setting), whether the environment changed since the last " +
+        "successful write, and a sync-health summary (whether the app is running, how recently " +
+        "the data changed, and — when a Things Cloud account is attached — the last sync " +
+        "attempt) — with steps to fix. " +
         "Exit 0 healthy; 5 schema drift (writes disabled); 7 environment problem.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -78,6 +92,7 @@ export function registerDoctor(program: Command): void {
           `repeats:     ${report.recurrence.templates} template(s), ${
             report.recurrence.undecodable
           } undecodable${report.recurrence.undecodable > 0 ? ` — ${report.recurrence.detail}` : ""}`,
+          ...syncHealthLines(report.syncHealth),
         ];
         process.stdout.write(`${lines.join("\n")}\n`);
       } else if (error) {

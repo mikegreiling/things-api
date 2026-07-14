@@ -1343,6 +1343,32 @@ describe("cli --db validation", () => {
   });
 });
 
+describe("cli doctor sync-health (fixture db, real environment path)", () => {
+  it("--json carries syncHealth; empty BSSyncronyMetadata takes the no-account path without crashing", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "anything" });
+    const { stdout, exitCode } = runCli(["doctor", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const envelope = JSON.parse(stdout);
+    expect(envelope.ok).toBe(true);
+    expect(envelope.kind).toBe("doctor");
+    const sh = envelope.data.syncHealth;
+    expect(sh).toBeTruthy();
+    expect(typeof sh.appRunning.running).toBe("boolean");
+    // The pristine fixture DB has the table with zero rows → no attached account.
+    expect(sh.cloud.accountAttached).toBe(false);
+    expect(sh.cloud.lastSyncAttempt).toBeNull();
+  });
+
+  it("human output renders a Sync health section", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["doctor", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("── Sync health ──");
+    expect(stdout).toContain("cloud:");
+  });
+});
+
 describe("cli --exact-tag (Phase 12c)", () => {
   it("inbox --tag works (12a regression) and --exact-tag narrows", () => {
     fx = buildFixtureDb();

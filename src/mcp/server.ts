@@ -1789,8 +1789,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Check the environment: whether the Things app and its database are reachable, " +
         "whether changes can be made, any one-time setup still needed (macOS permissions, " +
-        "the app's 'Enable Things URLs' setting), and whether the environment changed since " +
-        "the last successful write, with steps to fix.",
+        "the app's 'Enable Things URLs' setting), whether the environment changed since " +
+        "the last successful write, and a sync-health summary (whether the app is running, how " +
+        "recently the data changed, and — when a Things Cloud account is attached — the last " +
+        "sync attempt), with steps to fix.",
       inputSchema: {
         probe_automation: z
           .boolean()

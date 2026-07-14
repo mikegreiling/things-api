@@ -4,7 +4,7 @@ import { runDoctor } from "../../src/cli/commands/doctor.ts";
 import { diagnose } from "../../src/diagnose.ts";
 import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedTodo } from "../fixtures/seed.ts";
+import { bplistScalarDouble, seedSyncronyMetadata, seedTodo } from "../fixtures/seed.ts";
 
 let fixture: FixtureDb | null = null;
 afterEach(() => {
@@ -114,6 +114,55 @@ describe("doctor environment & automation sections", () => {
     expect(report?.recurrence.templates).toBe(2);
     expect(report?.recurrence.undecodable).toBe(1);
     expect(report?.recurrence.detail).toContain("rrv=5");
+  });
+
+  it("emits a structured syncHealth object; empty BSSyncronyMetadata = no-account, no crash", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, { title: "edited", modificationDate: 1_783_900_000 });
+    const now = 1_783_966_462_000; // fixed clock
+    const { report, exitCode } = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+      syncHealth: {
+        now: () => now,
+        isAppRunning: () => true,
+        walMtimeMs: () => now - 5_000,
+        readForegroundMs: () => null,
+      },
+    });
+    expect(exitCode).toBe(0);
+    const sh = report?.syncHealth;
+    expect(sh?.appRunning.running).toBe(true);
+    expect(sh?.wal.stale).toBe(false);
+    expect(sh?.wal.ageSeconds).toBe(5);
+    expect(sh?.lastLocalEdit.at).toBe(new Date(1_783_900_000 * 1000).toISOString());
+    expect(sh?.lastForeground.at).toBeNull();
+    // The pristine fixture has the BSSyncronyMetadata table but zero rows.
+    expect(sh?.cloud.accountAttached).toBe(false);
+    expect(sh?.cloud.lastSyncAttempt).toBeNull();
+    expect(sh?.cloud.verdict).toContain("no Things Cloud account");
+  });
+
+  it("surfaces an attached-account last-sync attempt from BSSyncronyMetadata", () => {
+    fixture = buildFixtureDb();
+    const now = 1_783_966_462_000;
+    const nsdate = now / 1000 - 978_307_200 - 30; // 30s ago, NSDate 2001-epoch
+    seedSyncronyMetadata(
+      fixture.db,
+      "GryCJ44xPcJG6go5KeTZp1",
+      bplistScalarDouble(nsdate, { date: true }),
+    );
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+      syncHealth: {
+        now: () => now,
+        isAppRunning: () => true,
+        walMtimeMs: () => now,
+        readForegroundMs: () => null,
+      },
+    });
+    expect(report?.syncHealth.cloud.accountAttached).toBe(true);
+    expect(report?.syncHealth.cloud.keySource).toBe("known-key");
+    expect(report?.syncHealth.cloud.ageSeconds).toBe(30);
   });
 
   it("reports the on-disk URL-scheme state and proxy-shortcut presence", () => {
