@@ -97,10 +97,13 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
       ),
     );
   };
-  // Rows inside this view never repeat the area's own name.
+  // Rows inside this view never repeat the area's own name. The area's top
+  // projects are plain ROWS here (not group headings — they don't head a to-do
+  // group in this view), so they get the bold project title from delta 1 but NO
+  // underline; only ANYTIME treats projects as headings. So a project renders
+  // exactly like any other row here — no projectTitle opt.
   const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area.uuid });
-  const fmtProject = (i: Project) =>
-    formatItem(i, w, { projectTitle: true, suppressArea: view.area.uuid });
+  const fmtProject = fmt;
 
   // Card header: glyph + name, the GUI's share link (carries the uuid — it
   // pastes back into any ref argument), then labeled meta lines. The opened

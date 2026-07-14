@@ -70,7 +70,9 @@ export function todoBox(item: Todo): string {
   // brackets (still a to-do) but seat ↻ INSIDE them so the row reads as
   // "the recurring one" at a glance, distinct from its spawned instances
   // (which are ordinary [ ] rows). Never someday, though the DB stores it so.
-  if (item.repeating.isTemplate) return dim("[↻]");
+  // The box stays PLAIN — the GUI's repeat pseudo-checkbox is white, and the ↻
+  // inside already marks the rule row (no muting).
+  if (item.repeating.isTemplate) return "[↻]";
   if (item.start === "someday" && item.startDate === null) return dim("[~]");
   return "[ ]";
 }
@@ -84,13 +86,34 @@ export function todoBox(item: Todo): string {
 export function projectCircle(item: Project): string {
   if (item.status === "completed") return blue("(✓)");
   if (item.status === "canceled") return blue("(×)");
-  // Repeating project template: ↻ inside the circle (the to-do rule above).
-  if (item.repeating.isTemplate) return dim("(↻)");
+  // Repeating project template: ↻ inside the circle. A template is still a
+  // project, so its circle keeps the blue accent — the GUI shows a solid blue
+  // circle with the arrow, not a muted glyph.
+  if (item.repeating.isTemplate) return blue("(↻)");
+  // Someday projects are muted like someday to-dos — the GUI greys a someday
+  // project the same way. Its type is still carried by the round bracket and
+  // the bold title (projectTitleAccent), so the circle spends dim, not blue.
+  if (item.start === "someday" && item.startDate === null) return dim("(~)");
   // Open projects render blue — GUI parity (the sidebar/list accent) and a
   // second, color-independent cue on top of the round bracket that this row
   // is a project, not a to-do.
-  if (item.start === "someday" && item.startDate === null) return blue("(~)");
   return blue("( )");
+}
+
+/**
+ * THE SINGLE LAW for project-title WEIGHT and COLOR in list rows (ratified
+ * 2026-07-13, docs/design/render-language.md).
+ *
+ * Project titles are BOLD and DEFAULT-colored (white) in every view and every
+ * state. The round bracket plus this bold weight already carry "this row is a
+ * project", so the row never spends the blue channel (reserved for the project
+ * checkbox accent and the completed/canceled marks) merely restating its own
+ * type. Every project-title call site routes through here — formatItem and the
+ * hand-built project-header lines — so reverting to blue (or bold-blue) is a
+ * one-line change to this function, nowhere else.
+ */
+export function projectTitleAccent(title: string): string {
+  return bold(title);
 }
 
 /** Progress chip on project rows: `‹remaining/total›` (the GUI shows only the remaining count). */
@@ -243,7 +266,7 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: blue("[×]"), meaning: "to-do, canceled (title struck through)", group: "To-dos" },
   { glyph: dim("[~]"), meaning: "to-do, someday (undated)", group: "To-dos" },
   {
-    glyph: dim("[↻]"),
+    glyph: "[↻]",
     meaning: "repeating to-do — the rule itself (instances are ordinary [ ])",
     group: "To-dos",
   },
@@ -251,9 +274,9 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: blue("( )"), meaning: "project, open", group: "Projects" },
   { glyph: blue("(✓)"), meaning: "project, completed", group: "Projects" },
   { glyph: blue("(×)"), meaning: "project, canceled", group: "Projects" },
-  { glyph: blue("(~)"), meaning: "project, someday (undated)", group: "Projects" },
+  { glyph: dim("(~)"), meaning: "project, someday (undated)", group: "Projects" },
   {
-    glyph: dim("(↻)"),
+    glyph: blue("(↻)"),
     meaning: "repeating project — the recurring rule itself",
     group: "Projects",
   },
@@ -276,7 +299,7 @@ export const LEGEND: readonly LegendEntry[] = [
   { glyph: areaMark(), meaning: "area", group: "Markers & chips" },
   {
     glyph: dim("‹Jul 31›"),
-    meaning: "scheduled date (year appended when not the current year)",
+    meaning: "scheduled date, or ‹waiting›/‹paused›/‹ended› on a repeat template",
     group: "Markers & chips",
   },
   {
@@ -292,14 +315,27 @@ export const LEGEND: readonly LegendEntry[] = [
   },
   {
     glyph: dim("dim text"),
-    meaning: "later, hidden, inactive, or completed row",
+    meaning: "later, hidden, inactive, or a resolved row out of place",
     group: "Colors & styles",
   },
-  { glyph: strike("struck"), meaning: "canceled item title", group: "Colors & styles" },
-  { glyph: blue("blue"), meaning: "open project (its circle and title)", group: "Colors & styles" },
+  {
+    glyph: strike("struck"),
+    meaning: "canceled item title (kept even in the Logbook)",
+    group: "Colors & styles",
+  },
+  {
+    glyph: blue("blue"),
+    meaning: "project checkbox accent, and the completed/canceled ✓ × marks",
+    group: "Colors & styles",
+  },
+  {
+    glyph: bold("bold"),
+    meaning: "project title — every row, every state",
+    group: "Colors & styles",
+  },
   {
     glyph: bold(underline("bold underline")),
-    meaning: "container header — a project title row, or a section header",
+    meaning: "heading — a project heading its to-dos, or a section header",
     group: "Colors & styles",
   },
   // Sections & hints — structure and the never-silent truncation notices.

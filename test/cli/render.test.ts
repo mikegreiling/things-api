@@ -721,7 +721,8 @@ describe("upcoming", () => {
     // their status word.
     const restingLine = lines.find((l) => l.includes("Between instances"));
     expect(restingLine).toContain("[↻]");
-    expect(restingLine).toContain("waiting");
+    // The repeat status word renders as a ‹chevron› chip (matching ‹date›).
+    expect(restingLine).toContain("‹waiting›");
   });
 });
 

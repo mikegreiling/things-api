@@ -2,6 +2,8 @@
 
 How `things <argv>` becomes a dispatched command. This is the single specification for the read-side routing sugar that accreted across PRs #89/#93/#94 as three independent special cases; it is now one resolver (`src/cli/resolve-invocation.ts`) that normalizes every sugar form into one canonical grammar.
 
+For the sibling concern — how a resolved view then STYLES its rows on a terminal (the glyph/color/weight/dim vocabulary) — see [render-language.md](render-language.md).
+
 ## What this replaced (the patchwork)
 
 Before consolidation the routing lived in three unrelated places:
