@@ -95,3 +95,11 @@ Hazard probes drop the dragged area **squarely on another row's centre** (the wo
 So no drop can convert an area into a child or move a project into an area *via an area drag* — `TMArea` count and every `TMTask.area` were invariant across both worst-case drops. (This is safer than the general drag surface, where dropping a *to-do* onto a project/area *does* nest — but that is not the area-reorder op's gesture.) The residual risk is purely **imprecise rank** (wrong slot), mitigated by the AXDRAG1-a geometry rules + DB re-verify.
 
 - **Escape-abort primitive** (driver `escdragname` / `doEscDrag`): begin the drag (mouse-down + wiggle + interpolate toward a new slot), then post a **Key 53 (Escape) down/up via `CGEventCreateKeyboardEvent` to the HID tap**, then mouse-up. A real reordering move (Area-09 dragged from y=476 toward the top, y=360) was **fully aborted — the `TMArea."index"` vector was byte-identical before and after**, and the trailing mouse-up did not re-drop. This is the clean **abort primitive** for the future op (e.g. bail out if re-resolved geometry looks wrong mid-gesture).
+
+## AXDRAG1-f — reversibility
+
+**Verdict: reorder is REVERSIBLE via pre-rank capture + drag-back — relative order restores exactly, though absolute index values do not.**
+
+Captured the full ordered area list `O0`, applied Move A (Area-07 ↓ below LAB-AREA-B → `LAB-AREA-B, Area-07, …`), then the inverse Move B (Area-07 ↑ above LAB-AREA-B). Result: the ordered UUID/name sequence returned **byte-identical to `O0`** (diff empty). But the underlying `TMArea."index"` *values* were **not** restored (Area-07 −1155 → −2171, LAB-AREA-B −639 → −1815) — each drag extrapolates fresh sparse values.
+
+**Undo classification for the op:** reversible, but the undo cannot be "re-write the moved area's old index" — both because writes are UI-only (no direct SQLite) *and* because the AXDRAG1-a neighbour-renumber quirk means the moved area's index may not have changed at all. The correct pattern is the existing **reorder-undo pattern: capture the full ordered list of area UUIDs pre-op, and to undo, drag to reproduce that exact sequence** (order is the invariant that faithfully round-trips; index values are disposable). This matches the pre-rank-capture reorder-undo already used elsewhere.
