@@ -42,6 +42,7 @@ import type { ThingsApiConfig } from "../../src/config.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
+import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
 import { OPERATION_KINDS, type OperationKind } from "../../src/write/operations.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { runMutation } from "../../src/write/pipeline.ts";
@@ -333,6 +334,25 @@ describe("reversibility matrix — table integrity", () => {
 });
 
 // ================================================================ case registry
+
+/** A decodable XML plist rule blob (the shape Things writes for a template). */
+function ruleXml(entries: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>${entries}</dict></plist>`;
+}
+/** Monthly, "the last Friday" — fu=8, of=[{wd:5, wdo:-1}]. */
+const MONTHLY_LAST_FRIDAY = ruleXml(
+  `<key>fa</key><integer>1</integer><key>fu</key><integer>8</integer>` +
+    `<key>of</key><array><dict><key>wd</key><integer>5</integer><key>wdo</key><integer>-1</integer></dict></array>` +
+    `<key>rrv</key><integer>4</integer><key>tp</key><integer>0</integer>`,
+);
+/** Bi-weekly on Sunday — fu=256, fa=2, of=[{wd:0}]. */
+const BIWEEKLY_SUNDAY = ruleXml(
+  `<key>fa</key><integer>2</integer><key>fu</key><integer>256</integer>` +
+    `<key>of</key><array><dict><key>wd</key><integer>0</integer></dict></array>` +
+    `<key>rrv</key><integer>4</integer><key>tp</key><integer>0</integer>`,
+);
+const encodeXml = (xml: string): Uint8Array => new TextEncoder().encode(xml);
 
 interface CaseDef {
   class: ReversibilityClass;
@@ -1486,10 +1506,47 @@ const CASES: Record<OperationKind, CaseDef> = {
     },
   },
   "todo.reschedule-repeat": {
-    class: "irreversible",
+    class: "conditional",
     register() {
-      it("planUndo reports it irreversible (minimal vocabulary cannot restore the prior rule)", () => {
-        const plan = planUndo(auditRecord({ op: "todo.reschedule-repeat", uuid: "T-1" }), NOW);
+      it("invertible branch: undo re-drives reschedule with the CAPTURED prior rule (monthly last Friday)", async () => {
+        const priorRule = decodeRecurrenceRule(MONTHLY_LAST_FRIDAY);
+        // The template sits in its POST-reschedule state (a weekly rule); the
+        // audit record captured the prior monthly rule.
+        const uuid = seedTodo(fixture.db, {
+          title: "Repeater",
+          recurrenceRuleXml: BIWEEKLY_SUNDAY,
+        });
+        writeAudit([
+          auditRecord({
+            op: "todo.reschedule-repeat",
+            uuid,
+            vector: "ui",
+            disruption: 3,
+            pre: { "repeating.rule": priorRule, "repeating.deadlined": false },
+          }),
+        ]);
+        const ui = uiVector(["todo.reschedule-repeat"], (_op, id) => {
+          set(id, "rt1_recurrenceRule = ?", [encodeXml(MONTHLY_LAST_FRIDAY)]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.kind).toBe("invertible");
+        expect(items[0]?.plan.steps[0]?.op).toBe("todo.reschedule-repeat");
+        expect(items[0]?.plan.steps[0]?.params).toMatchObject({
+          frequency: "monthly",
+          interval: 1,
+          monthly: { weekday: "friday", ordinal: "last" },
+        });
+        expect(items[0]?.outcome).toBe("ok");
+        const row = fixture.db
+          .prepare("SELECT rt1_recurrenceRule AS r FROM TMTask WHERE uuid=?")
+          .get(uuid) as { r: Uint8Array };
+        expect(decodeRecurrenceRule(row.r).unit).toBe("monthly");
+      });
+      it("irreversible branch: the prior rule was not captured", () => {
+        const plan = planUndo(
+          auditRecord({ op: "todo.reschedule-repeat", uuid: "T-1", pre: {} }),
+          NOW,
+        );
         expect(plan.kind).toBe("irreversible");
       });
     },
@@ -1551,10 +1608,52 @@ const CASES: Record<OperationKind, CaseDef> = {
     },
   },
   "project.reschedule-repeat": {
-    class: "irreversible",
+    class: "conditional",
     register() {
-      it("planUndo reports it irreversible (minimal vocabulary cannot restore the prior rule)", () => {
-        const plan = planUndo(auditRecord({ op: "project.reschedule-repeat", uuid: "P-1" }), NOW);
+      it("invertible branch: undo re-drives reschedule with the captured prior rule", async () => {
+        const priorRule = decodeRecurrenceRule(MONTHLY_LAST_FRIDAY);
+        const uuid = seedProject(fixture.db, {
+          title: "ProjRepeater",
+          recurrenceRuleXml: BIWEEKLY_SUNDAY,
+        });
+        writeAudit([
+          auditRecord({
+            op: "project.reschedule-repeat",
+            uuid,
+            vector: "ui",
+            disruption: 3,
+            pre: { "repeating.rule": priorRule, "repeating.deadlined": false },
+          }),
+        ]);
+        const ui = uiVector(["project.reschedule-repeat"], (_op, id) => {
+          set(id, "rt1_recurrenceRule = ?", [encodeXml(MONTHLY_LAST_FRIDAY)]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.kind).toBe("invertible");
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.reschedule-repeat");
+        expect(items[0]?.outcome).toBe("ok");
+        const row = fixture.db
+          .prepare("SELECT rt1_recurrenceRule AS r FROM TMTask WHERE uuid=?")
+          .get(uuid) as { r: Uint8Array };
+        expect(decodeRecurrenceRule(row.r).unit).toBe("monthly");
+      });
+      it("irreversible branch: a prior rule OUTSIDE the dialog's vocabulary (two end bounds)", () => {
+        // ed (end date) AND rc (count) both set — the dialog's Ends is single-choice.
+        const twoBounds = decodeRecurrenceRule(
+          ruleXml(
+            `<key>fa</key><integer>1</integer><key>fu</key><integer>16</integer>` +
+              `<key>ed</key><integer>1800000000</integer><key>rc</key><integer>5</integer>` +
+              `<key>rrv</key><integer>4</integer><key>tp</key><integer>0</integer>`,
+          ),
+        );
+        const plan = planUndo(
+          auditRecord({
+            op: "project.reschedule-repeat",
+            uuid: "P-1",
+            pre: { "repeating.rule": twoBounds, "repeating.deadlined": false },
+          }),
+          NOW,
+        );
         expect(plan.kind).toBe("irreversible");
       });
     },

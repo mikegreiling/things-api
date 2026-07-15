@@ -201,7 +201,8 @@ function capturePre(
     fields[uuid] = captured;
   };
   if (spec.mode === "update" || spec.mode === "state") {
-    captureFor(spec.uuid, spec.assert);
+    const extra = spec.mode === "update" ? (spec.capture ?? []) : [];
+    captureFor(spec.uuid, [...spec.assert, ...extra]);
     if (spec.mode === "state" && spec.cascade !== undefined) {
       for (const c of spec.cascade) captureFor(c.uuid, c.assert);
     }

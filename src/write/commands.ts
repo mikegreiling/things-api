@@ -1700,7 +1700,8 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
-    // place. Assert the decoded rule's frequency + interval.
+    // place. Assert the decoded rule's frequency + interval; ALSO capture the
+    // whole prior rule (+ deadline flag) so the undo can re-drive it faithfully.
     return {
       mode: "update",
       uuid: params.uuid,
@@ -1708,6 +1709,7 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
+      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
   compile(params, vector) {
@@ -1779,7 +1781,8 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
     return pre;
   },
   expectedDelta(_pre, params) {
-    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place.
+    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
+    // capture the prior rule (+ deadline flag) for the faithful undo.
     return {
       mode: "update",
       uuid: params.uuid,
@@ -1787,6 +1790,7 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
+      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
   compile(params, vector) {
