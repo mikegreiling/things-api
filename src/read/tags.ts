@@ -26,7 +26,9 @@ interface TagRow {
 /**
  * The `things tags` listing: the tag TREE, depth-first, so a child always
  * FOLLOWS its parent. Siblings (and roots) order by canonical `TMTag."index"`
- * (the app's Tags-window rank), title tiebreak.
+ * (the app's Tags-window rank), UUID tiebreak (TAGORD1 oracle — the Tags-window
+ * order for index-tied tags is uuid-ascending, not alphabetical; see
+ * fetchTagsForTasks).
  *
  * DFS is unambiguous here and matches the Tags window: this is a listing of the
  * hierarchy itself, where the parent→child relationship is the structure. That
@@ -36,7 +38,7 @@ interface TagRow {
  */
 export function tagsView(db: DatabaseSync): Tag[] {
   const rows = db
-    .prepare(`SELECT ${selectList("TMTag")} FROM TMTag ORDER BY ${q("index")} ASC, title ASC`)
+    .prepare(`SELECT ${selectList("TMTag")} FROM TMTag ORDER BY ${q("index")} ASC, uuid ASC`)
     .all() as unknown as TagRow[];
   const byUuid = new Map(rows.map((r) => [r.uuid, r]));
   // Children grouped under their parent uuid, each list already in index/title
@@ -89,12 +91,12 @@ export function areasView(db: DatabaseSync): Area[] {
 
 export function areaTags(db: DatabaseSync, areaUuid: string): Ref[] {
   // Canonical pill order: ascending TMTag."index" (the app's Tags-window rank),
-  // title tiebreak. Same comparator + nested-tag caveat as fetchTagsForTasks.
+  // UUID tiebreak. Same comparator + nested-tag caveat as fetchTagsForTasks.
   const rows = db
     .prepare(
       `SELECT tg.uuid AS uuid, tg.title AS title
        FROM TMAreaTag at JOIN TMTag tg ON tg.uuid = at.tags
-       WHERE at.areas = ? ORDER BY tg.${q("index")}, tg.title`,
+       WHERE at.areas = ? ORDER BY tg.${q("index")}, tg.uuid`,
     )
     .all(areaUuid) as unknown as Array<{ uuid: string; title: string | null }>;
   return rows.map((r) => ({ uuid: r.uuid, title: r.title ?? "" }));

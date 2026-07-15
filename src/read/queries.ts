@@ -274,20 +274,32 @@ export function fetchChecklistRows(db: DatabaseSync, taskUuid: string): Checklis
  * Direct tags for a set of tasks, in one query. Returns uuid -> Ref[] in the
  * app's CANONICAL tag order.
  *
- * CANONICAL ORDER (ratified 2026-07-14): `TMTag."index"` (INTEGER, often
- * negative) is the user-draggable order from the app's Tags window, and the GUI
- * renders every multi-tag pill row in ascending `index`. Live oracle: the
- * `Replace CPAP mask & air filter` to-do shows `#recurring #home #housekeeping`,
- * matching the tags' indexes, NOT their alphabetical order. `title` is a
- * deterministic tiebreak for equal indexes only.
+ * CANONICAL ORDER (ratified 2026-07-14; tiebreak corrected 2026-07-15 by
+ * TAGORD1): `TMTag."index"` (INTEGER, often negative) is the user-draggable
+ * order from the app's Tags window, and the GUI renders every multi-tag pill row
+ * in ascending `index`. Live oracle: the `Replace CPAP mask & air filter` to-do
+ * shows `#recurring #home #housekeeping`, matching the tags' indexes, NOT their
+ * alphabetical order.
+ *
+ * TIEBREAK = `uuid`, NOT `title` (TAGORD1 lab oracle, docs/lab/taglab-probes.md).
+ * Never-dragged tags ubiquitously tie at `index = 0`; the app breaks that tie by
+ * the tag's UUID (ascending ASCII), NOT alphabetically. Proven across three
+ * surfaces in a VM (Tags window, a to-do's multi-tag pill row — input-order
+ * independent, and the list filter-bar chips): 8 tags seeded reverse-alpha all
+ * tied at 0 displayed in exact uuid order, and `ORDER BY "index", uuid`
+ * reproduced the whole Tags-window order byte-for-byte where `ORDER BY "index",
+ * title` diverged. TMTag has no creation-date column, so creation order is not
+ * even a candidate comparator.
  *
  * NESTED-TAG CAVEAT (open question, deliberately unsolved): child tags' indexes
- * interleave globally with top-level ones (a parent at -3281 can sit above its
- * children at -12063), so a flat-index sort can place a child BEFORE its parent
- * in a multi-tag row. No live item carries a nested tag alongside another tag,
- * so there is no GUI oracle for the interleaved case — flat ascending `index` is
- * the ratified comparator, isolated HERE. If a GUI oracle ever contradicts it,
- * the fix is a DFS-rank swap in this one ORDER BY (rank children after parents).
+ * interleave globally with top-level ones — CONFIRMED by TAGORD1: `TMTag."index"`
+ * is a single GLOBAL space, not per-parent (a seeded child landed at -378 among
+ * root tags at 0/-35/-67). So a flat-index sort can place a child BEFORE its
+ * parent in a multi-tag row. No live item carries a nested tag alongside another
+ * tag, so there is no GUI oracle for the interleaved case — flat ascending
+ * `index` is the ratified comparator, isolated HERE. If a GUI oracle ever
+ * contradicts it, the fix is a DFS-rank swap in this one ORDER BY (rank children
+ * after parents).
  */
 export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<string, Ref[]> {
   const map = new Map<string, Ref[]>();
@@ -296,7 +308,7 @@ export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<st
   const sql = `SELECT tt.tasks AS task, tg.uuid AS uuid, tg.title AS title
                FROM TMTaskTag tt JOIN TMTag tg ON tg.uuid = tt.tags
                WHERE tt.tasks IN (${placeholders})
-               ORDER BY tg.${q("index")}, tg.title`;
+               ORDER BY tg.${q("index")}, tg.uuid`;
   const rows = db.prepare(sql).all(...taskUuids) as unknown as Array<{
     task: string;
     uuid: string;
