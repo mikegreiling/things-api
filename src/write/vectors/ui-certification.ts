@@ -36,7 +36,8 @@ export interface CertificationEntry {
 }
 
 /** The manifest profile — records the tier + Things build the suite certified. */
-export const UI_CERTIFICATION_PROFILE = "UIC1 + UIC3 in-VM (Things 3.22.11) — on-device pending";
+export const UI_CERTIFICATION_PROFILE =
+  "UIC1 + UIC3 + AXDRAG2 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": { status: "lab-certified", evidence: ["UI1", "UI2-a", "UIC1-a"] },
@@ -47,6 +48,10 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "project.reschedule-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
+  "area.reorder-sidebar": {
+    status: "lab-certified",
+    evidence: ["NATIVE1-d", "AXDRAG1-a", "AXDRAG1-b", "AXDRAG1-f", "AXDRAG2-c"],
+  },
   "heading.convert-to-project": {
     status: "uncertified",
     evidence: ["UI2-d", "UIC1-a"],

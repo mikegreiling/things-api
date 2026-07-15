@@ -173,6 +173,10 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "conditional",
     note: "invertible when pre-ranks were captured (native reorders + bounce summaries that recorded pre-ranks); irreversible for bounce summaries with no recorded pre-ranks",
   },
+  "area.reorder-sidebar": {
+    class: "conditional",
+    note: "invertible when the pre-move sidebar order was fully determined (the full ordered area list is captured; the inverse drags the area back before its old successor — order is the invariant that round-trips, index values are not, AXDRAG1-f); irreversible when areas were still unranked (all-zero index) before the move",
+  },
 
   // ---- headings -----------------------------------------------------------
   "heading.archive": {

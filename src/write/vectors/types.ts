@@ -59,7 +59,16 @@ export type UiPrimitive =
    * canaried AX press. Requires Things frontmost (the HID tap posts to the
    * foreground surface, NATIVE1-e), so a recipe using it must activate first.
    */
-  | "click-element";
+  | "click-element"
+  /**
+   * Synthesize a MOUSE DRAG that reorders a sidebar AREA row (the AXDRAG1
+   * primitive). The driver resolves the source row and the destination slot
+   * boundary from the live AX tree per gesture, pre-scrolls (or multi-hops)
+   * when the sidebar is longer than the viewport, and asserts the database
+   * order after every gesture — see src/write/vectors/ui-drag.ts. Foreground-
+   * bound like click-element.
+   */
+  | "drag-reorder";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -107,6 +116,8 @@ export interface UiStep {
    * once certification proves background AXPress works (see the runbook).
    */
   activateFallback?: boolean;
+  /** drag-reorder only: the sidebar move the drag driver performs. */
+  drag?: import("./ui-drag.ts").SidebarDragSpec;
 }
 
 export interface VectorSupport {

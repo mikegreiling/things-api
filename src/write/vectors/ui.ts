@@ -31,6 +31,7 @@ import type { ThingsApiConfig } from "../../config.ts";
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
 import { certificationOf } from "./ui-certification.ts";
+import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import type {
   CompiledInvocation,
   ExecuteResult,
@@ -54,13 +55,22 @@ const WAIT_POLL_MS = 300;
 const SETTLE_AFTER_REVEAL_MS = 1500;
 
 /**
- * Command-level primitives. Extends the recipe `UiPrimitive` set with the two
- * INTERNAL sub-steps a `click-element` recipe step decomposes into: read the
- * target's on-screen frame from the live AX tree (`resolve-frame`), then post a
- * synthetic HID click at its center (`click-point`). Splitting them keeps each
- * subprocess call behind the injectable `run` seam (unit-testable without a GUI).
+ * Command-level primitives. Extends the recipe `UiPrimitive` set with the
+ * INTERNAL sub-steps composite recipe steps decompose into: a `click-element`
+ * step becomes read-the-frame (`resolve-frame`) + click-at-center
+ * (`click-point`); a `drag-reorder` step becomes snapshot/scroll/drag cycles
+ * (`sidebar-snapshot`, `sidebar-scroll`, `sidebar-drag` — ui-drag.ts). Keeping
+ * every subprocess call behind the injectable `run` seam makes the
+ * orchestration unit-testable without a GUI.
  */
-export type UiCommandPrimitive = UiPrimitive | "resolve-frame" | "click-point";
+export type UiCommandPrimitive =
+  | UiPrimitive
+  | "resolve-frame"
+  | "click-point"
+  | "sidebar-snapshot"
+  | "sidebar-scroll"
+  | "sidebar-drag"
+  | "sidebar-held-drag";
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -72,6 +82,8 @@ export interface UiCommand {
   url?: string;
   /** `script` language for the osascript hop; defaults to AppleScript. */
   lang?: "applescript" | "javascript";
+  /** Structured command parameters (test-inspectable; never dispatched). */
+  meta?: Record<string, unknown>;
 }
 
 export interface UiRunResult {
@@ -274,6 +286,16 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         lang: "applescript",
         script: axFrameScript(step.path ?? ""),
       };
+    case "drag-reorder":
+      // Composite step: drive() hands it to the sidebar drag driver, which
+      // dispatches its own snapshot/scroll/drag commands through `run`. This
+      // shape only exists so the step renders/compiles uniformly.
+      return {
+        primitive: "sidebar-snapshot",
+        label: step.label,
+        lang: "javascript",
+        script: jxaSidebarSnapshotScript(),
+      };
   }
 }
 
@@ -330,14 +352,14 @@ async function driveClickElement(
   return { ok: true };
 }
 
-async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
+async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<ExecuteResult> {
   const done: string[] = [];
   const abort = (): Promise<UiRunResult> =>
     run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
-  const partial = (failed: string, why: string): ExecuteResult =>
+  const partial = (failed: string, why: string, dismissed = true): ExecuteResult =>
     refusal(
-      `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}. ` +
-        "The open sheet/popover was dismissed (Escape).",
+      `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.` +
+        (dismissed ? " The open sheet/popover was dismissed (Escape)." : ""),
     );
 
   // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
@@ -396,6 +418,17 @@ async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
         return partial(step.label, "the expected element never appeared within the timeout");
       }
       done.push(step.label);
+      continue;
+    }
+    if (step.primitive === "drag-reorder") {
+      // The sidebar drag driver runs its own snapshot → scroll → drag →
+      // DB-assert ladder (ui-drag.ts); every gesture anchors on frames it
+      // resolves live, and a failed assert triggers a verified recovery drag.
+      if (step.drag === undefined) return partial(step.label, "no drag spec compiled", false);
+      // oxlint-disable-next-line no-await-in-loop -- the drag ladder depends on the UI state the preamble produced
+      const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
+      if (!outcome.ok) return partial(step.label, outcome.detail, false);
+      done.push(`${step.label} (${outcome.detail})`);
       continue;
     }
     if (step.primitive === "click-element") {
@@ -488,7 +521,11 @@ function disabledMatrix(): VectorMatrix {
  * so the operation is never dispatched. When enabled, `execute` runs the
  * compiled recipe fail-closed.
  */
-export function createUiVector(config: ThingsApiConfig, run: UiRunner = defaultRun): WriteVector {
+export function createUiVector(
+  config: ThingsApiConfig,
+  run: UiRunner = defaultRun,
+  aux: UiDriveAux = {},
+): WriteVector {
   const enabled = config.ui.enabled;
   return {
     id: "ui",
@@ -502,7 +539,7 @@ export function createUiVector(config: ThingsApiConfig, run: UiRunner = defaultR
       if (invocation.recipe === undefined) {
         return refusal("ui invocation carried no recipe (compile bug).");
       }
-      return drive(invocation.recipe, run);
+      return drive(invocation.recipe, run, aux);
     },
   };
 }

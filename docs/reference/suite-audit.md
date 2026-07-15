@@ -38,6 +38,10 @@ The `reorder --scope someday` verdicts were already s-suite/e2e-locked (PR mg/so
 
 Both created their own targets (no new seeds). Verified GREEN in a fresh clone: run `o-20260714-065940`, all 15 o-suite probes `ok` (O15/O16 `supported`, tier 0). `reorder` was already listed as covered above; these rows deepen the someday-scope coverage specifically.
 
+## ui-vector ops — coverage model is per-version CERTIFICATION, not lab:regress (noted 2026-07-15)
+
+The GUI-driven op kinds (the repeat family, the converts, and now **`area.reorder-sidebar`** — catalog now 47) are NOT in the autonomous recurring suites: the golden image carries no Accessibility grant (AXVM1 rung-b is applied per campaign via VNC), so `lab:regress` cannot drive them headlessly. Their recurring safety net is the **per-Things-version certification campaign** instead — `lab/scripts/research-uic1.sh` / `research-uic3.sh` / **`research-axdrag2.sh`** re-run the ops through the production CLI in a disposable clone and re-flip `src/write/vectors/ui-certification.ts`, per the [things-update-runbook](../lab/things-update-runbook.md) discipline. Unit-level coverage for `area.reorder-sidebar` is `test/unit/ui-drag.test.ts` (geometry + the full ladder against a scripted sidebar simulator through the injectable runner seam) plus the reversibility-matrix case; the drag driver's own per-hop DB asserts are the in-op live verification. If a future golden bakes the AX grant (AXVM1's optional L3 layer), promoting a rung-1 smoke move into `lab:regress` is the follow-up.
+
 ## Suite-level notes
 
 - **s-suite** (Shortcuts) is auto-runnable and part of `lab:regress` (2026-07-12): its output-class probes (S01–S03 + S-detail) run headless via the runner's `shortcut` DSL step on the golden's inherited Always-Allow; the delete-class probes (S04, S-delperm) are `group:interactive` and skipped by the runner (human sitting via `lab/scripts/l5-consent-absorb.sh`). Backs recurring live coverage of `heading.create` + `todo.clear-dated-reminder`.

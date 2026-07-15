@@ -1243,6 +1243,49 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
+  addDriveGuiFlag(
+    addWriteFlags(
+      area
+        .command("reorder-sidebar <target>")
+        .description(
+          "Move an area to a new position in the sidebar (target by uuid or unique name). " +
+            "Pass exactly one destination: --before/--after another area, or --first/--last. " +
+            "This drives the Things window with the pointer — the app comes to the front and " +
+            "the sidebar may scroll while the area is moved; the area's projects and to-dos " +
+            "are untouched.",
+        )
+        .option("--before <area>", "place it immediately above this area (uuid or unique name)")
+        .option("--after <area>", "place it immediately below this area (uuid or unique name)")
+        .option("--first", "move it to the top of the area list")
+        .option("--last", "move it to the bottom of the area list"),
+    ),
+  ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const chosen = [
+      opts["before"] !== undefined,
+      opts["after"] !== undefined,
+      opts["first"] === true,
+      opts["last"] === true,
+    ].filter(Boolean).length;
+    if (chosen !== 1) {
+      process.stderr.write("error: pass exactly one of --before / --after / --first / --last\n");
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    await runWrite(opts, (c) =>
+      c.write.run(
+        "area.reorder-sidebar",
+        {
+          target,
+          ...(opts["before"] !== undefined && { before: opts["before"] as string }),
+          ...(opts["after"] !== undefined && { after: opts["after"] as string }),
+          ...(opts["first"] === true && { position: "first" as const }),
+          ...(opts["last"] === true && { position: "last" as const }),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
   addWriteFlags(
     area
       .command("delete <target>")

@@ -208,7 +208,12 @@ function capturePre(
   }
   if (spec.mode === "ordering") {
     const preRanks: Record<string, unknown> = {};
-    for (const uuid of spec.sequence) preRanks[uuid] = reader.rankOf(uuid, spec.key);
+    // `capture` may list MORE uuids than the asserted sequence (the full
+    // sidebar order for area.reorder-sidebar) so undo can restore the exact
+    // previous position from the audit record.
+    for (const uuid of spec.capture ?? spec.sequence) {
+      preRanks[uuid] = reader.rankOf(uuid, spec.key);
+    }
     fields["__ordering__"] = preRanks;
   }
   if (spec.mode === "entity-updated") {
@@ -529,7 +534,11 @@ export async function runMutation<K extends OperationKind>(
     if (outcome.kind === "ok") {
       const uuid =
         outcome.discoveredUuid ??
-        (delta.mode === "update" || delta.mode === "state" ? delta.uuid : null);
+        (delta.mode === "update" || delta.mode === "state"
+          ? delta.uuid
+          : delta.mode === "ordering"
+            ? (delta.subject ?? null)
+            : null);
       audit({ ...auditCommon, result: "ok", uuid });
       if (deps.environment !== undefined) {
         deps.environment.record(deps.environment.capture());
@@ -553,6 +562,11 @@ export async function runMutation<K extends OperationKind>(
         warnings.push(
           "this change was applied by driving the local Things app through the Accessibility API",
         );
+        // Surface the drive's own step summary (e.g. how a sidebar move was
+        // performed: one drag / scroll-while-held / N hops) — behavior detail
+        // the caller can log, and the lab's certification evidence.
+        const driveSummary = executeResult.stdout.trim();
+        if (driveSummary !== "") warnings.push(driveSummary);
         const cert = certificationOf(op);
         if (cert !== undefined && cert.status !== "certified") {
           warnings.push(

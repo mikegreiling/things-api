@@ -92,6 +92,7 @@ import {
   type ProjectReopenResult,
 } from "./write/reopen.ts";
 import { defaultVectors } from "./write/vectors/registry.ts";
+import { createUiDriveAux } from "./write/vectors/ui-drag.ts";
 import type { WriteVector } from "./write/vectors/types.ts";
 import type { PollerDeps } from "./write/verify/poller.ts";
 
@@ -365,7 +366,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
 
   const writeDeps: WriteDeps = {
     db: conn.db,
-    vectors: options.vectors ?? defaultVectors(config),
+    vectors: options.vectors ?? defaultVectors(config, createUiDriveAux(conn.db)),
     config,
     audit,
     fingerprint,
