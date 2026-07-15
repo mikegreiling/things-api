@@ -82,3 +82,16 @@ At the VM window height the full area list (17 areas + built-ins + loose project
 So auto-scroll is **reliable** and needs no scroll-wheel synthesis during the gesture — just keep the drag alive (periodic `kCGEventLeftMouseDragged` at the edge point) and hover.
 
 **But it is continuous / time-based, not positional** — while the pointer sits in the edge zone the list keeps scrolling to the end of its range; there is no built-in "scroll exactly one row" from a hover. For a *deterministic* op that must land at a specific rank, the controllable path is **AXDRAG1-b's pre-scroll** (compute from `AXValue`, bring the target row into the visible band, then a same-viewport drag). Auto-scroll's role is to cover the **simultaneous-visibility gap**: because the full list exceeds the viewport (AXDRAG1-b caveat), a far move (e.g. bottom row → to-first) cannot be done in one static gesture. Recommended op recipe for far moves: **pre-scroll the destination into view and drag from a re-resolved source**, or use edge auto-scroll to traverse and release when the destination neighbour enters the visible band (re-resolve + micro-adjust). Auto-scroll alone (drop-while-still-scrolling) is too imprecise to trust for the final landing.
+
+## AXDRAG1-d — drag hazards + Escape-abort
+
+**Verdict: structural nesting is NOT a hazard for area reorder — areas are top-level and cannot be nested; the only failure mode is landing at an unintended rank. Escape mid-drag aborts cleanly.**
+
+Hazard probes drop the dragged area **squarely on another row's centre** (the worst case for an accidental "nest into" indicator), checking the project→area mapping (`TMTask.area`/`.project` for `type=1`) and the area count before/after:
+
+- **D1 — area dropped ON another area's row centre** (Area-05 onto LAB-AREA-A, y=476): **no nesting.** proj→area map unchanged, area count stayed 17, Area-05 stayed an area — it simply reordered to just above LAB-AREA-A (dropping on a centre resolves to *insert-before*).
+- **D2 — area dropped ON a project row centre** (Area-09 onto LAB-PROJ-MIXED, a project nested under LAB-AREA-B, y=436): **no nesting, no reparenting.** proj→area/project map byte-identical, count 17. Area-09 took a rank adjacent to the project but remained a top-level area (Things never reparents an area under a project or another area).
+
+So no drop can convert an area into a child or move a project into an area *via an area drag* — `TMArea` count and every `TMTask.area` were invariant across both worst-case drops. (This is safer than the general drag surface, where dropping a *to-do* onto a project/area *does* nest — but that is not the area-reorder op's gesture.) The residual risk is purely **imprecise rank** (wrong slot), mitigated by the AXDRAG1-a geometry rules + DB re-verify.
+
+- **Escape-abort primitive** (driver `escdragname` / `doEscDrag`): begin the drag (mouse-down + wiggle + interpolate toward a new slot), then post a **Key 53 (Escape) down/up via `CGEventCreateKeyboardEvent` to the HID tap**, then mouse-up. A real reordering move (Area-09 dragged from y=476 toward the top, y=360) was **fully aborted — the `TMArea."index"` vector was byte-identical before and after**, and the trailing mouse-up did not re-drop. This is the clean **abort primitive** for the future op (e.g. bail out if re-resolved geometry looks wrong mid-gesture).
