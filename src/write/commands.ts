@@ -44,9 +44,11 @@ import {
   convertToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
+  projectPauseRepeatRecipe,
+  projectRescheduleRepeatRecipe,
+  projectResumeRepeatRecipe,
   rescheduleRepeatRecipe,
   resumeRepeatRecipe,
-  stopRepeatRecipe,
 } from "./vectors/ui-recipes.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
 import type { DeltaSpec, FieldAssertion } from "./verify/delta.ts";
@@ -1736,30 +1738,80 @@ const todoResumeRepeat: CommandSpec<"todo.resume-repeat"> = {
   },
 };
 
-const todoStopRepeat: CommandSpec<"todo.stop-repeat"> = {
-  op: "todo.stop-repeat",
+// ------------------------------------------------- repeating-PROJECT ops
+// The project analogs of reschedule/pause/resume. Same recurrence codec and
+// Repeat dialog as the to-do ops (identical DB deltas), reached through the
+// project view's always-visible repeat bar (UIC2). No project.stop-repeat is
+// built — the project Stop then selecting the demoted project crashes Things
+// (CRASH1 / oddities §7 C5).
+
+const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
+  op: "project.reschedule-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    assertRepeatRule(params);
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [
+        { field: "repeating.rule.unit", equals: params.frequency },
+        { field: "repeating.rule.interval", equals: params.interval },
+      ],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(projectRescheduleRepeatRecipe(params.uuid, params.frequency, params.interval));
+  },
+};
+
+const projectPauseRepeat: CommandSpec<"project.pause-repeat"> = {
+  op: "project.pause-repeat",
   hazards: UI_HAZARDS,
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     return pre;
   },
-  expectedDelta(pre, _params, ctx) {
-    // Stop (UI2-i): terminal IDENTITY REPLACEMENT un-repeat — the template
-    // uuid is hard-deleted and replaced by a NEW plain to-do with the rule
-    // cleared (the already-spawned instance survives independently). Discover
-    // the fresh plain row and confirm it is NOT a template.
-    const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
+  expectedDelta(_pre, params) {
+    // Pause (UIC2-a): rt1_instanceCreationPaused → 1; identity preserved.
     return {
-      mode: "create",
-      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
-      assert: [{ field: "repeating.isTemplate", equals: false }],
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "repeating.paused", equals: true }],
     };
   },
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(stopRepeatRecipe(params.uuid));
+    return uiDrive(projectPauseRepeatRecipe(params.uuid));
+  },
+};
+
+const projectResumeRepeat: CommandSpec<"project.resume-repeat"> = {
+  op: "project.resume-repeat",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // Resume (UIC2-a): rt1_instanceCreationPaused → 0; identity preserved.
+    return {
+      mode: "update",
+      uuid: params.uuid,
+      assert: [{ field: "repeating.paused", equals: false }],
+    };
+  },
+  compile(params, vector) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    return uiDrive(projectResumeRepeatRecipe(params.uuid));
   },
 };
 
@@ -1874,7 +1926,9 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "todo.reschedule-repeat": todoRescheduleRepeat,
   "todo.pause-repeat": todoPauseRepeat,
   "todo.resume-repeat": todoResumeRepeat,
-  "todo.stop-repeat": todoStopRepeat,
   "todo.convert-to-project": todoConvertToProject,
   "heading.convert-to-project": headingConvertToProject,
+  "project.reschedule-repeat": projectRescheduleRepeat,
+  "project.pause-repeat": projectPauseRepeat,
+  "project.resume-repeat": projectResumeRepeat,
 };

@@ -47,9 +47,11 @@ export const OPERATION_KINDS = [
   "todo.reschedule-repeat",
   "todo.pause-repeat",
   "todo.resume-repeat",
-  "todo.stop-repeat",
   "todo.convert-to-project",
   "heading.convert-to-project",
+  "project.reschedule-repeat",
+  "project.pause-repeat",
+  "project.resume-repeat",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -66,9 +68,11 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "todo.reschedule-repeat",
   "todo.pause-repeat",
   "todo.resume-repeat",
-  "todo.stop-repeat",
   "todo.convert-to-project",
   "heading.convert-to-project",
+  "project.reschedule-repeat",
+  "project.pause-repeat",
+  "project.resume-repeat",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -383,8 +387,8 @@ export interface ReorderParams {
 export type EmptyParams = Record<string, never>;
 
 /**
- * Set (make-repeating) or edit (reschedule-repeat) a to-do's recurrence rule
- * through the GUI's Repeat dialog. The v1 vocabulary is deliberately minimal:
+ * Set (make-repeating) or edit (reschedule-repeat) a to-do's or project's
+ * recurrence rule through the GUI's Repeat dialog. The v1 vocabulary is minimal:
  * frequency + interval only. Weekday pickers, ends-bounds, and reminders in
  * the repeat dialog are future increments (docs/design/ui-vector.md).
  */
@@ -437,9 +441,11 @@ export interface OperationParamsMap {
   "todo.reschedule-repeat": RepeatRuleParams;
   "todo.pause-repeat": UuidParams;
   "todo.resume-repeat": UuidParams;
-  "todo.stop-repeat": UuidParams;
   "todo.convert-to-project": UuidParams;
   "heading.convert-to-project": UuidParams;
+  "project.reschedule-repeat": RepeatRuleParams;
+  "project.pause-repeat": UuidParams;
+  "project.resume-repeat": UuidParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

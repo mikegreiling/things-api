@@ -403,9 +403,11 @@ const GUARDS: Record<HazardId, GuardFn> = {
       hazard: "H-UI-DRIVE",
       detail:
         "this operation drives the local Things app through the Accessibility API — it may " +
-        "briefly interact with the app's UI. On current evidence (AXVM1) element presses do " +
-        "NOT steal window focus and work even under a locked session, so the disruption is far " +
-        "milder than screen-driving would be; it is still gated because it drives the real GUI",
+        "briefly interact with the app's UI. On current evidence (AXVM1) menu-path element " +
+        "presses do NOT steal window focus and work even under a locked session; the " +
+        "repeating-PROJECT ops additionally move the pointer and bring Things to the foreground " +
+        "to open its custom repeat menu (NATIVE1), so they need an unlocked session with the " +
+        "display awake. It is gated because it drives the real GUI",
       remediation:
         "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also " +
         "requires `things config set ui-enabled true` and Accessibility granted to this " +

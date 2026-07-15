@@ -774,13 +774,6 @@ export function registerWriteCommands(program: Command): void {
       "Resume a paused repeating to-do: it starts spawning occurrences again.",
     ],
     [
-      "stop-repeat",
-      "todo.stop-repeat",
-      "Stop a to-do from repeating for good: this REPLACES it with a single plain to-do (the " +
-        "recurring series is removed and any occurrence already created stays as its own item). " +
-        "Terminal — there is no resume, and it cannot be undone.",
-    ],
-    [
       "convert-to-project",
       "todo.convert-to-project",
       "Convert a to-do into a project. This REPLACES the to-do with a new project (its notes are " +
@@ -892,6 +885,53 @@ export function registerWriteCommands(program: Command): void {
   });
 
   const project = group(program, "project", "Project-scoped operations");
+
+  // --- ui vector: repeating-project transforms (two-key gated) -------------
+  addDriveGuiFlag(
+    addWriteFlags(
+      project
+        .command("reschedule-repeat <uuid>")
+        .description(
+          "Change an existing repeating project's frequency/interval in place (the project keeps " +
+            "its identity). Supported rule: a frequency and an interval only; other rule details " +
+            "(weekday pickers, end bounds) are left as they are and cannot be changed here.",
+        )
+        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    await runWrite(opts, (c) =>
+      c.write.run(
+        "project.reschedule-repeat",
+        {
+          uuid,
+          frequency: opts["frequency"] as RepeatFrequency,
+          interval: Number(opts["interval"]),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  for (const [verb, op, desc] of [
+    [
+      "pause-repeat",
+      "project.pause-repeat",
+      "Pause a repeating project: it stops spawning new occurrences but keeps its rule. Reversible " +
+        "with `things project resume-repeat`.",
+    ],
+    [
+      "resume-repeat",
+      "project.resume-repeat",
+      "Resume a paused repeating project: it starts spawning occurrences again.",
+    ],
+  ] as const) {
+    addDriveGuiFlag(addWriteFlags(project.command(`${verb} <uuid>`).description(desc))).action(
+      async (uuid: string, opts: WriteFlagOpts) => {
+        await runWrite(opts, (c) => c.write.run(op, { uuid }, writeOptionsFrom(opts)));
+      },
+    );
+  }
 
   addWriteFlags(
     project

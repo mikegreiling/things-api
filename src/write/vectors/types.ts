@@ -49,7 +49,17 @@ export type UiPrimitive =
   | "set-value"
   | "select-popup"
   | "wait"
-  | "key";
+  | "key"
+  /**
+   * Synthesize a MOUSE click at an AX-resolved element's frame center (the
+   * NATIVE1 JXA ObjC-bridge / HID-tap primitive). Used ONLY for Things' custom
+   * `…` menu / repeat-bar popover, whose items are AX-readable but inert to
+   * AXPress (UIC2). The frame is read from the live AX tree (`position`/`size`)
+   * — never a guessed pixel — so a resolution miss fails closed exactly like a
+   * canaried AX press. Requires Things frontmost (the HID tap posts to the
+   * foreground surface, NATIVE1-e), so a recipe using it must activate first.
+   */
+  | "click-element";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -70,6 +80,20 @@ export interface UiStep {
   keys?: string;
   /** wait: how long to poll for the element before aborting. */
   timeoutMs?: number;
+  /**
+   * click-element only: the element expected to appear right AFTER the click
+   * (a popover opening, a sheet appearing). The driver polls for it and, on
+   * mismatch, sends Escape to dismiss whatever DID open and aborts fail-closed
+   * — so a click that lands somewhere unexpected never cascades into blind
+   * presses. Omitted for a TERMINAL click (one that dismisses the popover with
+   * no successor element); the write pipeline's read-after-write check is the
+   * outcome verifier there.
+   */
+  assertPath?: string;
+  /** click-element only: human-readable name of the asserted element (report). */
+  assertLabel?: string;
+  /** click-element only: how long to poll for `assertPath` before aborting. */
+  assertTimeoutMs?: number;
   /**
    * The element appears only AFTER a preceding press (a sheet/popover), so it
    * is NOT resolvable in the preflight canary — the driver waits for it at run

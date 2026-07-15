@@ -44,15 +44,9 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
-  "todo.stop-repeat": {
-    status: "uncertified",
-    evidence: ["UI2-i", "UIC1-a"],
-    blocker:
-      "the Stop popover lives only on the open to-do card, and the card opens only via a mouse " +
-      "double-click — Things list rows are sparse AX cells with no press/open action and no " +
-      "URL selection handle, so the Accessibility-only vector cannot open the card (UIC1). Needs " +
-      "a native-AXUIElement double-click or a compiled helper to certify.",
-  },
+  "project.reschedule-repeat": { status: "uncertified", evidence: ["UIC2-a"] },
+  "project.pause-repeat": { status: "uncertified", evidence: ["UIC2-a"] },
+  "project.resume-repeat": { status: "uncertified", evidence: ["UIC2-a"] },
   "heading.convert-to-project": {
     status: "uncertified",
     evidence: ["UI2-d", "UIC1-a"],

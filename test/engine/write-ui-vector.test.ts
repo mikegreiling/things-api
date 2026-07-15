@@ -236,3 +236,107 @@ describe("ui vector — two-key gating", () => {
     }
   });
 });
+
+// A minimal mouse-hybrid recipe: reveal → activate → click a repeat bar
+// (asserting a popover) → click a popover item. Mirrors the shape of the project
+// repeat recipes without depending on their exact provisional element paths.
+function clickRecipe(assertTimeoutMs = 5000): UiRecipe {
+  return {
+    op: "project.pause-repeat",
+    targetUuid: "PROJ-1",
+    steps: [
+      { primitive: "reveal", label: "reveal", value: "PROJ-1" },
+      { primitive: "activate", label: "activate" },
+      {
+        primitive: "click-element",
+        label: "open the repeat menu",
+        path: `text area 2 of group 1`,
+        assertPath: `pop over 1`,
+        assertLabel: "the repeat menu",
+        assertTimeoutMs,
+        addressing: "title",
+      },
+      {
+        primitive: "click-element",
+        label: "repeat menu ▸ Pause",
+        path: `(first UI element of pop over 1 whose description is "Pause")`,
+        dynamic: true,
+        addressing: "title",
+      },
+    ],
+  };
+}
+
+// resolve = canary (static repeat bar), resolve-frame = the click target's
+// frame, click-point = the HID click, wait = the post-click assertion.
+function answerHappy(c: UiCommand): UiRunResult {
+  if (c.primitive === "resolve") return ok("true");
+  if (c.primitive === "resolve-frame") return ok("100 200 40 20");
+  if (c.primitive === "wait") return ok("true");
+  return ok();
+}
+
+describe("ui driver — mouse-hybrid click-element (NATIVE1 primitive)", () => {
+  it("resolves the frame from AX, clicks its center via a JXA/HID command, and asserts the outcome", async () => {
+    const { run, commands } = mockRunner(answerHappy);
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(clickRecipe()));
+    expect(res.exitCode).toBe(0);
+    // The static repeat bar was canaried (a resolve), never AXPress'd.
+    expect(commands.some((c) => c.primitive === "resolve")).toBe(true);
+    expect(commands.some((c) => c.primitive === "press")).toBe(false);
+    // The click is a JavaScript (JXA) command posting a CGEvent at the AX-resolved
+    // CENTER (100+40/2, 200+20/2) = (120, 210) — a computed frame center, never a pixel.
+    const click = commands.find((c) => c.primitive === "click-point");
+    expect(click?.lang).toBe("javascript");
+    expect(click?.script).toContain("CGEventPost");
+    expect(click?.script).toContain("$.kCGHIDEventTap");
+    expect(click?.script).toContain("120");
+    expect(click?.script).toContain("210");
+  });
+
+  it("fails closed BEFORE clicking when the element frame does not resolve", async () => {
+    // Canary passes (the bar exists) but the frame read errors → no click is sent.
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "resolve-frame") return { ok: false, stdout: "", stderr: "boom" };
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(clickRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("did not resolve");
+    // The decisive guarantee: no click was ever posted at a guessed point.
+    expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
+  });
+
+  it("dismisses (Escape) and reports partial state when the declared post-click element never appears", async () => {
+    // Frame resolves + click posts, but the asserted popover never shows → abort.
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "resolve-frame") return ok("100 200 40 20");
+      if (c.primitive === "wait") return ok("false"); // assertion never satisfied
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(clickRecipe(10)));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("did not appear");
+    // A click DID post (the first one), then Escape was sent to dismiss whatever opened.
+    expect(commands.some((c) => c.primitive === "click-point")).toBe(true);
+    const abort = commands.filter((c) => c.primitive === "key");
+    expect(abort.some((c) => c.script?.includes("key code 53"))).toBe(true);
+  });
+
+  it("canaries a static mouse target and refuses before any click when it is missing", async () => {
+    // The repeat bar (static) fails to resolve in the canary → refuse, no frame
+    // read, no click — mouse targets are canaried exactly like AX press targets.
+    const { run, commands } = mockRunner((c) => (c.primitive === "resolve" ? ok("false") : ok()));
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(clickRecipe()));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("preflight refused");
+    expect(commands.some((c) => c.primitive === "resolve-frame")).toBe(false);
+    expect(commands.some((c) => c.primitive === "click-point")).toBe(false);
+  });
+});

@@ -205,12 +205,12 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "heading.convert-to-project":
     "converting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",
-  "todo.stop-repeat":
-    "stopping a repeat is terminal (UI2-i): the template uuid is destroyed and replaced by a new " +
-    "plain to-do with the rule cleared — there is no Resume; make it repeat again from scratch",
   "todo.reschedule-repeat":
     "the rule mutated in place (UI2-b) but the minimal GUI vocabulary cannot faithfully restore " +
     "an arbitrary prior recurrence rule — reschedule again by hand",
+  "project.reschedule-repeat":
+    "the project's rule mutated in place (UIC2-a) but the minimal GUI vocabulary cannot " +
+    "faithfully restore an arbitrary prior recurrence rule — reschedule again by hand",
   // NB: todo.clear-dated-reminder is NOT here — it IS reversible. The URL
   // scheme re-SETS a dated reminder (update?id=X&when=<date>@<time>, R17/R18),
   // so its inverse re-attaches the captured reminder to the item's current
@@ -1173,6 +1173,24 @@ export function planUndo(
         target,
         kind: "invertible",
         steps: [{ op: "todo.pause-repeat", params: { uuid } }],
+        notes,
+      };
+    }
+    case "project.pause-repeat": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.resume-repeat", params: { uuid } }],
+        notes,
+      };
+    }
+    case "project.resume-repeat": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.pause-repeat", params: { uuid } }],
         notes,
       };
     }
