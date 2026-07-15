@@ -119,6 +119,14 @@ export async function runMakeRepeatingProject(
     uuid,
     frequency: params.frequency,
     interval: params.interval,
+    ...(params.afterCompletion !== undefined && { afterCompletion: params.afterCompletion }),
+    ...(params.weekdays !== undefined && { weekdays: params.weekdays }),
+    ...(params.monthly !== undefined && { monthly: params.monthly }),
+    ...(params.yearly !== undefined && { yearly: params.yearly }),
+    ...(params.ends !== undefined && { ends: params.ends }),
+    ...(params.reminder !== undefined && { reminder: params.reminder }),
+    ...(params.deadline !== undefined && { deadline: params.deadline }),
+    ...(params.startDaysEarlier !== undefined && { startDaysEarlier: params.startDaysEarlier }),
   };
 
   if (options.dryRun === true) {
@@ -208,7 +216,9 @@ export async function runCreateRepeatingProject(
   params: ProjectCreateRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  assertRepeatRule(params);
+  // create-repeating carries only the base rule vocabulary (the promote can be
+  // followed by a reschedule for a richer rule); validate just that.
+  assertRepeatRule({ frequency: params.frequency, interval: params.interval });
 
   // The promote drives the GUI — block before creating anything if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
