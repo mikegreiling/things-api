@@ -1407,6 +1407,74 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "make_project_repeating",
+    {
+      description:
+        "Turn an existing project into a repeating one. This REPLACES the project with a new " +
+        "recurring series — the original disappears and a fresh repeating project takes its place " +
+        "(its area is kept), so it cannot be undone. An area-less project scheduled for Anytime is " +
+        "moved to Someday first (a cleanup-free intermediate step, shown by dry_run). Only a " +
+        "frequency and an interval are supported. Returns the new project's uuid.",
+      inputSchema: {
+        uuid: z.string().describe("The project to make repeating"),
+        ...repeatRuleShape,
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.makeRepeatingProject(
+            args.uuid,
+            { frequency: args.frequency, interval: args.interval },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "create_repeating_project",
+    {
+      description:
+        "Create a project and make it repeating in one call. TWO operations: the project is " +
+        "created first and PERSISTS even if the make-repeating step refuses; then it is promoted " +
+        "(which drives the GUI). Give an area to place it, or omit it to create in Someday. Only a " +
+        "frequency and an interval are supported. Returns the new repeating project's uuid.",
+      inputSchema: {
+        title: z.string(),
+        notes: z.string().optional(),
+        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
+        deadline: z.string().optional().describe(DATE_FORMAT),
+        todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
+        ...repeatRuleShape,
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.createRepeatingProject(
+            {
+              title: args.title,
+              ...(args.notes !== undefined && { notes: args.notes }),
+              ...(args.area !== undefined && { area: containerRef(args.area) }),
+              ...(args.deadline !== undefined && { deadline: args.deadline }),
+              ...(args.todos !== undefined && { todos: args.todos }),
+              frequency: args.frequency,
+              interval: args.interval,
+            },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
     "convert_to_project",
     {
       description:

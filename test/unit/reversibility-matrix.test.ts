@@ -1629,6 +1629,26 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
+  "project.make-repeating": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (identity replacement — new template project uuid)", () => {
+        const plan = planUndo(auditRecord({ op: "project.make-repeating", uuid: "P-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("identity replacement");
+      });
+    },
+  },
+  "project.create-repeating": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (create-then-promote; the created uuid is destroyed)", () => {
+        const plan = planUndo(auditRecord({ op: "project.create-repeating", uuid: "P-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("identity replacement");
+      });
+    },
+  },
 };
 
 /** Decode a seeded to-do to the shape planUndo's clear-reminder path reads. */

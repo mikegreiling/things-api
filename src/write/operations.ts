@@ -53,6 +53,8 @@ export const OPERATION_KINDS = [
   "project.pause-repeat",
   "project.resume-repeat",
   "area.reorder-sidebar",
+  "project.make-repeating",
+  "project.create-repeating",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -75,6 +77,11 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "project.pause-repeat",
   "project.resume-repeat",
   "area.reorder-sidebar",
+  // Pure-AX (UIC4): the project is selected as a content-table ROW via a
+  // settable AXSelectedRows, then Items ▸ Repeat… drives the same dialog. The
+  // area-less-anytime taxonomy needs a Someday coercion first, orchestrated by
+  // runMakeRepeatingProject — but the drive itself is a ui-vector op.
+  "project.make-repeating",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -417,6 +424,25 @@ export interface RepeatRuleParams {
   interval: number;
 }
 
+/**
+ * Create a project and, in the same call, promote it to a repeating series
+ * (the two-step composite of UIC4-f). The create seeds a pure-AX taxonomy —
+ * an `area` lands the project as a selectable AREA-view row; otherwise it is
+ * created in Someday — so the promote never needs a coercion. The two legs are
+ * NOT atomic: the created project persists even if the promote refuses.
+ */
+export interface ProjectCreateRepeatingParams {
+  title: string;
+  notes?: string;
+  /** Destination area (uuid or unique name); when omitted the project is created in Someday. */
+  area?: ContainerRef;
+  deadline?: IsoDate;
+  todos?: string[];
+  frequency: RepeatFrequency;
+  /** "every N units", 1–99. */
+  interval: number;
+}
+
 export interface OperationParamsMap {
   "todo.add": TodoAddParams;
   "todo.update": TodoUpdateParams;
@@ -465,6 +491,8 @@ export interface OperationParamsMap {
   "project.pause-repeat": UuidParams;
   "project.resume-repeat": UuidParams;
   "area.reorder-sidebar": AreaReorderSidebarParams;
+  "project.make-repeating": RepeatRuleParams;
+  "project.create-repeating": ProjectCreateRepeatingParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

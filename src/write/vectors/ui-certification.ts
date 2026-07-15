@@ -52,6 +52,14 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     status: "lab-certified",
     evidence: ["NATIVE1-d", "AXDRAG1-a", "AXDRAG1-b", "AXDRAG1-f", "AXDRAG2-c"],
   },
+  "project.make-repeating": {
+    status: "uncertified",
+    evidence: ["UIC4-a", "UIC4-b", "UIC4-f"],
+    blocker:
+      "recipe wired from the UIC4 pure-AX row-selection verdict (settable AXSelectedRows + " +
+      "dual-form Repeat editor) but not yet exercised end-to-end through the shipped pipeline — " +
+      "certification is the UIC5 in-VM pass",
+  },
   "heading.convert-to-project": {
     status: "uncertified",
     evidence: ["UI2-d", "UIC1-a"],

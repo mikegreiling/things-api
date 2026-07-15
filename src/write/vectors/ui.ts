@@ -129,6 +129,34 @@ export function axSelectPopupScript(path: string, value: string): string {
   click menu item "${escapeAppleScript(value)}" of menu 1 of pu
 end tell`;
 }
+/**
+ * select-row: select a PROJECT row by title, purely via AX (UIC4-a). Walks the
+ * content table's rows, sets each as the sole `AXSelectedRows` selection, and
+ * reads back Things' `name of selected to dos`; the first row whose readback
+ * equals the target title is LEFT selected and the script returns "OK". Non-
+ * selectable rows (the area/Someday header, spacer) throw on the set and are
+ * skipped. Returns "NOMATCH" if no row selects to the title — the readback is
+ * the selection-landed verification, so a match guarantees the intended row is
+ * selected. One stable command shape per primitive.
+ */
+export function axSelectRowScript(tablePath: string, title: string): string {
+  const t = escapeAppleScript(title);
+  return `tell application "System Events" to tell process "Things3"
+  set theTable to (${tablePath})
+  set n to (count rows of theTable)
+  repeat with i from 1 to n
+    try
+      set value of attribute "AXSelectedRows" of theTable to {row i of theTable}
+      tell application "Things3" to set selNames to (name of selected to dos)
+      if (count of selNames) is 1 and ((item 1 of selNames) as text) is "${t}" then
+        return "OK"
+      end if
+    end try
+  end repeat
+end tell
+return "NOMATCH"`;
+}
+
 /** activate: foreground Things (the fallback preamble step). */
 export function axActivateScript(): string {
   return `tell application "Things3" to activate`;
@@ -236,14 +264,37 @@ function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
       step.primitive !== "press" &&
       step.primitive !== "set-value" &&
       step.primitive !== "resolve" &&
-      step.primitive !== "click-element"
+      step.primitive !== "click-element" &&
+      step.primitive !== "select-row"
     ) {
       continue;
     }
+    // A candidate-addressed step is resolved at run time (its element is
+    // dynamic by construction), so it is never canaried here.
+    if (step.pathCandidates !== undefined) continue;
     const path = step.canaryPath ?? step.path;
     if (path !== undefined) out.push({ path, label: step.label });
   }
   return out;
+}
+
+/**
+ * Resolve a step's effective element path. A `pathCandidates` step dispatches
+ * against the FIRST candidate that exists right now (the dialog-form disjunction
+ * — attached sheet vs detached AXUnknown window, UIC4-a); returns null when none
+ * resolve (fail-closed). A plain step returns its own `path` unchanged.
+ */
+async function resolveStepPath(step: UiStep, run: UiRunner): Promise<string | null> {
+  if (step.pathCandidates === undefined) return step.path ?? null;
+  for (const candidate of step.pathCandidates) {
+    // oxlint-disable-next-line no-await-in-loop -- candidates are tried in priority order; the first hit wins, so a race would blur which form matched
+    const res = await run(
+      { primitive: "resolve", label: step.label, script: axResolveScript(candidate) },
+      STEP_TIMEOUT_MS,
+    );
+    if (res.ok && res.stdout.trim() === "true") return candidate;
+  }
+  return null;
 }
 
 function refusal(detail: string): ExecuteResult {
@@ -275,6 +326,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
       };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
+    case "select-row":
+      return {
+        primitive: "select-row",
+        label: step.label,
+        script: axSelectRowScript(step.path ?? "", step.value ?? ""),
+      };
     case "key":
       return { primitive: "key", label: step.label, script: axKeyScript(step.keys ?? "") };
     case "click-element":
@@ -407,11 +464,17 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
 
   // 2. Execute the remaining steps in order; a dynamic element is waited-for.
   for (let i = idx; i < recipe.steps.length; i += 1) {
-    const step = recipe.steps[i] as UiStep;
-    const command = commandForStep(step, recipe.targetUuid);
+    let step = recipe.steps[i] as UiStep;
     if (step.primitive === "wait") {
+      // A candidate-addressed wait polls for ANY of its shapes to appear (the
+      // dialog opening as an attached sheet OR a detached AXUnknown window).
       // oxlint-disable-next-line no-await-in-loop -- steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs
-      const ok = await waitForElement(command, step.timeoutMs ?? STEP_TIMEOUT_MS, run);
+      const ok = await waitForAnyElement(
+        step.pathCandidates ?? [step.path ?? ""],
+        step.label,
+        step.timeoutMs ?? STEP_TIMEOUT_MS,
+        run,
+      );
       if (!ok) {
         // oxlint-disable-next-line no-await-in-loop -- the abort keystroke must land before returning the partial-state report
         await abort();
@@ -429,6 +492,44 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
       if (!outcome.ok) return partial(step.label, outcome.detail, false);
       done.push(`${step.label} (${outcome.detail})`);
+      continue;
+    }
+    // Resolve a candidate-addressed step's effective element before dispatch
+    // (the sheet-vs-detached-window disjunction). A miss fails closed.
+    if (step.pathCandidates !== undefined) {
+      // oxlint-disable-next-line no-await-in-loop -- the effective form must be resolved before this step can act on it
+      const effective = await resolveStepPath(step, run);
+      if (effective === null) {
+        // oxlint-disable-next-line no-await-in-loop -- dismiss whatever opened before reporting
+        await abort();
+        return partial(
+          step.label,
+          "none of its expected element shapes resolved (neither the attached sheet nor the " +
+            "detached repeat editor window)",
+        );
+      }
+      step = { ...step, path: effective };
+    }
+    const command = commandForStep(step, recipe.targetUuid);
+    if (step.primitive === "select-row") {
+      // Pure-AX row selection with readback verification (UIC4-a): "OK" only
+      // when a row selected to the target title.
+      // oxlint-disable-next-line no-await-in-loop -- the selection must land before the menu that acts on it is pressed
+      const res = await run(command, STEP_TIMEOUT_MS);
+      if (!res.ok || res.stdout.trim() !== "OK") {
+        // oxlint-disable-next-line no-await-in-loop -- clear any transient state before reporting
+        await abort();
+        return partial(
+          step.label,
+          res.ok
+            ? "no content-table row selected to the target project's title — it may not be a " +
+                "selectable row in this view, or its title changed"
+            : res.timedOut === true
+              ? "the row-selection step timed out"
+              : res.stderr.trim() || "the row-selection step failed",
+        );
+      }
+      done.push(step.label);
       continue;
     }
     if (step.primitive === "click-element") {
@@ -469,6 +570,31 @@ async function waitForElement(
     // oxlint-disable-next-line no-await-in-loop -- polling the same element until it appears is inherently sequential
     const res = await run(command, STEP_TIMEOUT_MS);
     if (res.ok && res.stdout.trim() === "true") return true;
+    if (Date.now() >= deadline) return false;
+    // oxlint-disable-next-line no-await-in-loop -- inter-poll delay between sequential existence checks
+    await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
+  }
+}
+
+/** Poll until ANY of the candidate element shapes exists (the sheet-vs-detached-window disjunction). */
+async function waitForAnyElement(
+  paths: string[],
+  label: string,
+  timeoutMs: number,
+  run: UiRunner,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    for (const path of paths) {
+      // Emitted as the `wait` primitive (not `resolve`) so the command stream a
+      // caller observes is unchanged from the single-path waitForElement.
+      // oxlint-disable-next-line no-await-in-loop -- candidates checked in priority order; the first present shape ends the wait
+      const res = await run(
+        { primitive: "wait", label, script: axResolveScript(path) },
+        STEP_TIMEOUT_MS,
+      );
+      if (res.ok && res.stdout.trim() === "true") return true;
+    }
     if (Date.now() >= deadline) return false;
     // oxlint-disable-next-line no-await-in-loop -- inter-poll delay between sequential existence checks
     await new Promise((r) => setTimeout(r, WAIT_POLL_MS));

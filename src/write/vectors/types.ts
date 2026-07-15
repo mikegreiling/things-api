@@ -68,7 +68,18 @@ export type UiPrimitive =
    * order after every gesture — see src/write/vectors/ui-drag.ts. Foreground-
    * bound like click-element.
    */
-  | "drag-reorder";
+  | "drag-reorder"
+  /**
+   * Select a PROJECT as a content-table ROW by matching its title, purely via
+   * AX (UIC4-a): the content table's `AXSelectedRows` is settable, so the
+   * driver walks the table's rows, sets each as the selection, and reads back
+   * `Things3 → name of selected to dos` — leaving the row whose readback equals
+   * the target title selected, or reporting no match. Coordinate-free and
+   * background-capable (no focus steal); the readback IS the
+   * selection-landed verification. `path` is the content table; `value` the
+   * title to match.
+   */
+  | "select-row";
 
 export interface UiStep {
   primitive: UiPrimitive;
@@ -76,6 +87,15 @@ export interface UiStep {
   label: string;
   /** System Events element path (semantic) for resolve/press/set-value/wait. */
   path?: string;
+  /**
+   * Alternative element paths, tried in order — the driver dispatches against
+   * the FIRST that resolves at run time (fail-closed if none do). Used where a
+   * control has two equally-valid shapes: the make-repeating Repeat editor is
+   * an attached `AXSheet` when Things is frontmost but a DETACHED top-level
+   * `AXUnknown` window when backgrounded (UIC4-a), and its controls sit at
+   * different depths in each form. Overrides `path` when present.
+   */
+  pathCandidates?: string[];
   /**
    * Preflight-canary path when the step's own `path` is not statically
    * resolvable (a nested submenu item only populates once its parent opens):

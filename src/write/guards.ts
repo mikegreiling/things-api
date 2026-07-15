@@ -22,6 +22,7 @@ export const HAZARD_IDS = [
   "H-HEADING-CHILDREN",
   "H-NO-REMINDER",
   "H-UI-DRIVE",
+  "H-PROJECT-REPEAT",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -396,6 +397,32 @@ const GUARDS: Record<HazardId, GuardFn> = {
       detail: `${what}; no tombstones are written while sync is off`,
       remediation: "pass dangerouslyPermanent (--dangerously-permanent) to proceed",
     };
+  },
+  "H-PROJECT-REPEAT": ({ op, pre }) => {
+    if (op !== "project.make-repeating") return null;
+    const tax = pre.projectRepeat;
+    if (tax === null) return null; // classified in preRead; absent only for a non-project target (H-UNKNOWN-DESTINATION covers it)
+    if (tax.kind === "area" || tax.kind === "someday") return null;
+    if (tax.kind === "anytime") {
+      // A direct drive can't reach an area-less anytime project's row (it renders
+      // as a header, UIC4-d). The orchestrator coerces it to Someday first.
+      return {
+        hazard: "H-PROJECT-REPEAT",
+        detail:
+          "this project is an area-less Anytime project — it has no selectable row in the " +
+          "Anytime view (it renders as a header, UIC4-d), so the pure-AX drive cannot reach it",
+        remediation:
+          "use `things project make-repeating` (the client's makeRepeatingProject), which moves " +
+          "it to Someday first — a cleanup-free intermediate step — then drives it",
+      };
+    }
+    const remediation =
+      tax.refusal === "ambiguous-row"
+        ? "rename one of the same-titled projects so the target's row is unambiguous"
+        : tax.refusal === "already-repeating"
+          ? "the project already repeats — use `things project reschedule-repeat` to change its rule"
+          : "target an open, un-trashed project";
+    return { hazard: "H-PROJECT-REPEAT", detail: tax.detail, remediation };
   },
   "H-UI-DRIVE": ({ op, acks }) => {
     if (!isUiDriveOp(op) || acks.dangerouslyDriveGui === true) return null;

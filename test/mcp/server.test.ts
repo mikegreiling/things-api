@@ -109,6 +109,8 @@ const EXPECTED_TOOLS = [
   "reschedule_project_repeat",
   "set_project_repeat_state",
   "move_area_in_sidebar",
+  "make_project_repeating",
+  "create_repeating_project",
   // reads
   "read_view",
   "search",
