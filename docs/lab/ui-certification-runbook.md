@@ -1,6 +1,8 @@
 # UI-vector certification runbook — in-VM suite + real-hardware confirmation
 
-The ui vector ([design/ui-vector.md](../design/ui-vector.md)) ships with every op marked **UNCERTIFIED** in `src/write/vectors/ui-certification.ts`. This runbook confirms each recipe against a live Accessibility tree and **flips those entries to `certified`**.
+> **The in-VM suite has RUN (UIC1, 2026-07-14):** [uic1-certification.md](uic1-certification.md) certified **5/7** ops `lab-certified` against Things 3.22.11 and recorded **2 failures** (`stop-repeat`, `heading.convert-to-project` — no AX/URL handle to select a card/heading row). `lab/scripts/research-uic1.sh` is the executable version of §0–§4 below. The manifest now carries a `lab-certified` tier; this runbook's remaining job is the **on-hardware `certified` confirmation** (§5) that appends the hardware evidence id — and re-certification after a Things update.
+
+The ui vector ([design/ui-vector.md](../design/ui-vector.md)) shipped with every op **UNCERTIFIED** in `src/write/vectors/ui-certification.ts`. This runbook confirms each recipe against a live Accessibility tree and flips entries to `lab-certified` (in-VM) then `certified` (on-device).
 
 **Two ways to run it, thanks to AXVM1.** The original plan assumed AX could only be exercised on real hardware (UI1 saw `osascript` → System Events return −1719 in the golden, and we read that as SIP blocking AX in the guest). **AXVM1 (PR #136) falsified that**: Accessibility IS grantable in a Tart guest (SIP on; a one-time user-path TCC toggle, persists reboot), element presses steal no focus and work under a locked session. So:
 

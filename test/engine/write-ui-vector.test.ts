@@ -89,15 +89,23 @@ function mockRunner(answer: (c: UiCommand) => UiRunResult): {
 const ok = (stdout = ""): UiRunResult => ({ ok: true, stdout, stderr: "" });
 
 describe("ui driver — fail-closed", () => {
-  it("resolves every static element in the canary before pressing anything", async () => {
-    // Canary fails on the first resolve → refusal, and NO press is attempted.
+  it("runs the reveal/activate preamble, then refuses in the canary before pressing anything", async () => {
+    // The preamble selects + foregrounds the target so the context-dependent
+    // Items ▸ Repeat submenu populates; the canary then fails on the first
+    // resolve → refusal, and NO element is actuated (nothing pressed).
     const { run, commands } = mockRunner((c) => (c.primitive === "resolve" ? ok("false") : ok()));
     const vector = createUiVector(config(true), run);
     const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("preflight refused");
-    // Only resolve commands ran — no reveal/press/activate.
-    expect(commands.every((c) => c.primitive === "resolve")).toBe(true);
+    // The benign preamble ran (reveal to select), but nothing was actuated.
+    expect(commands.some((c) => c.primitive === "reveal")).toBe(true);
+    expect(
+      commands.some(
+        (c) =>
+          c.primitive === "press" || c.primitive === "set-value" || c.primitive === "select-popup",
+      ),
+    ).toBe(false);
   });
 
   it("emits one stable osascript shape per primitive", async () => {
@@ -199,7 +207,7 @@ describe("ui vector — two-key gating", () => {
     }
   });
 
-  it("succeeds with config + ack, and warns the op is uncertified + GUI-driven", async () => {
+  it("succeeds with config + ack, and warns the op is GUI-driven + not on-device certified", async () => {
     const uuid = seedTodo(fixture.db, {
       title: "R",
       recurrenceRule: true,
@@ -222,7 +230,9 @@ describe("ui vector — two-key gating", () => {
     if (res.kind === "ok") {
       expect(res.vector).toBe("ui");
       expect((res.warnings ?? []).join(" ")).toContain("Accessibility");
-      expect((res.warnings ?? []).join(" ")).toContain("uncertified");
+      // pause-repeat is lab-certified (UIC1) — still not confirmed on device, so
+      // the drive carries a status warning naming that tier.
+      expect((res.warnings ?? []).join(" ")).toContain("lab-certified");
     }
   });
 });
