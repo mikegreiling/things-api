@@ -51,3 +51,23 @@ The sidebar table interleaves **h=24 entity rows with h=16 spacer rows → 40px 
 - **Every subsequent drag reassigns exactly ONE row's index** to a value that slots it into place — an intermediate value strictly between the new neighbors (Move 3: −107 into the (−166, −76) gap — *between* them but **not** the exact midpoint −121), or an extrapolation beyond the current min/max for to-first/to-last (Move 2: −1155, below the −639 minimum).
 - **Quirk — Things may renumber the NEIGHBOR instead of the dragged row** (Move 3: dragged Area-15 kept −76; its neighbor Area-05 was rewritten −22 → −107 to sit above it). Things picks whichever single reassignment realizes the requested order. **Consequence for undo (feeds AXDRAG1-f): you cannot restore by rewriting only the moved area's index — capture the full `TMArea."index"` vector pre-drag.**
 - The sparse gaps mean many future single-value insertions before a full renumber is forced.
+
+## AXDRAG1-b — scrolled sidebar / off-viewport target (scroll-then-drag recipe)
+
+**Verdict: reliable scroll-then-drag recipe established.** Off-viewport rows are brought into view with synthesized scroll-wheel `CGEvent`s, frames re-resolved, then dragged normally.
+
+### AX scroll position IS exposed (compute, don't guess)
+
+The sidebar `AXScrollArea` carries an `AXScrollBar` child (`AXOrientation = AXVerticalOrientation`) whose **`AXValue` is a Float64 scroll fraction 0.0 → 1.0** (driver `scrollinfo`): `0.0` at top, `0.3409…` mid, `+1.0` at bottom. So the recipe can **compute** how far to scroll instead of scroll-and-check. Combined with `winfo` (viewport rect `240×610` @ y 63, visible band y∈[63, 673]) and the target row's virtual frame from `rows`, the required scroll delta is derivable. (In practice a scroll-until-`row.y ∈ visibleBand` loop is simplest and equally robust.)
+
+### Scroll-wheel synthesis works (HID tap)
+
+`CGEventCreateScrollWheelEvent($(), kCGScrollEventUnitLine, 1, delta)` posted to `kCGHIDEventTap`, with the pointer first moved over the sidebar centre (scroll events target the surface under the cursor). Measured **≈30px content travel per click at `delta=3` lines (~10px/line)**. Negative delta scrolls content up (reveals lower rows). Positionless — allowed by the doctrine. Example: 13 clicks took the scrollbar `AXValue` 0.0 → +1.0 and moved `Area-01` from a virtual y≈1072 (off-viewport) to y=632 (in the visible band).
+
+### Payoff — to-last via scroll-then-drag
+
+With the bottom scrolled into view, dragged `Area-14` **below** the (previously off-viewport) last row `Area-01`. First attempt aimed y=608 ≈ the dragged row's own live centre → **4px no-op** (drop landed back in the source slot). Corrected: aim **below the destination neighbour's *live* (post-pickup) position** — Area-01 shifts 632→~592 when Area-14 is lifted, so y=632 lands clearly below it. Result: `Area-14` now sorts **last** (index 1725 = max), its neighbour `Area-01` renumbered 2143 → 1541 to sit above it (same *neighbour-renumber* quirk as AXDRAG1-a Move 3). **to-last confirmed.**
+
+### Simultaneous-visibility caveat (feeds AXDRAG1-c)
+
+At the VM window height the full area list (17 areas + built-ins + loose projects) does **not** fit one viewport. When scrolled to the bottom to expose `Area-01`, the top of the list (where "to-first" would drop) is scrolled off. So **source and a far target are not always simultaneously visible** — a plain pre-scroll+drag cannot cover an arbitrary far move in one gesture; it needs either a taller window or mid-drag auto-scroll (next probe).
