@@ -181,6 +181,142 @@ export function makeRepeatingRecipe(
   };
 }
 
+// ------------------------------------------------- make-repeating a PROJECT
+//
+// A project has no things:///show handle that selects it as a to-do (the reveal
+// URL selects to-dos only, UIC1). UIC4 found the pure-AX path: reveal the
+// project's CONTAINER (its AREA view, or the SOMEDAY view for an area-less
+// someday project), then select the project as a content-table ROW via the
+// SETTABLE `AXSelectedRows` (UIC4-a) — coordinate-free, background-capable, no
+// focus steal. With the row selected, `Items ▸ Repeat…` is present + enabled and
+// opens the SAME Repeat dialog as the to-do op. An area-less ANYTIME project has
+// no selectable row (it renders as a header, UIC4-d) — the orchestrator coerces
+// it to Someday first, so the recipe only ever handles the area / someday cases.
+//
+// Dialog-form wrinkle (UIC4-a): backgrounded, the Repeat editor DETACHES to a
+// top-level `AXUnknown` window instead of an attached `AXSheet`, and its
+// controls sit at different depths. The recipe addresses each control by BOTH
+// shapes (`pathCandidates`); the driver dispatches against whichever resolves.
+
+/** The content list's table (row 0 = header, rows = projects/to-dos). Provisional (pending UIC5). */
+const PROJECT_CONTENT_TABLE = `table 1 of scroll area 1 of ${MAIN_WINDOW}`;
+/** The Repeat editor when Things is frontmost — an attached sheet (interval nested in group 1, UIC1). */
+const REPEAT_SHEET = `sheet 1 of ${MAIN_WINDOW}`;
+/** The Repeat editor when Things is backgrounded — a detached AXUnknown window (controls are direct children, UIC4-a). */
+const REPEAT_DETACHED = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+
+/** Frequency pop-up in either dialog form (sheet | detached window). */
+const DIALOG_FREQUENCY = [
+  `pop up button 1 of ${REPEAT_SHEET}`,
+  `pop up button 1 of ${REPEAT_DETACHED}`,
+];
+/** Interval field in either form — nested in group 1 on the sheet, a direct child on the detached window. */
+const DIALOG_INTERVAL = [
+  `text field 1 of group 1 of ${REPEAT_SHEET}`,
+  `text field 1 of ${REPEAT_DETACHED}`,
+];
+/** OK button in either form. */
+const DIALOG_OK = [`button "OK" of ${REPEAT_SHEET}`, `button "OK" of ${REPEAT_DETACHED}`];
+
+/**
+ * Enter frequency + interval into the open Repeat dialog, addressing every
+ * control by BOTH the attached-sheet and detached-window shapes (UIC4-a) so the
+ * same recipe drives a foreground OR a backgrounded run.
+ */
+function repeatDialogEntryDualForm(frequency: RepeatFrequency, interval: number): UiStep[] {
+  return [
+    {
+      primitive: "wait",
+      label: "the Repeat dialog",
+      pathCandidates: DIALOG_FREQUENCY,
+      dynamic: true,
+      timeoutMs: 5000,
+      addressing: "title",
+    },
+    {
+      primitive: "select-popup",
+      label: `frequency = ${frequency}`,
+      pathCandidates: DIALOG_FREQUENCY,
+      value: frequency,
+      dynamic: true,
+      addressing: "title",
+    },
+    {
+      primitive: "set-value",
+      label: `interval = ${interval}`,
+      pathCandidates: DIALOG_INTERVAL,
+      value: String(interval),
+      dynamic: true,
+      addressing: "title",
+    },
+    {
+      primitive: "press",
+      label: 'press "OK"',
+      pathCandidates: DIALOG_OK,
+      dynamic: true,
+      addressing: "title",
+    },
+  ];
+}
+
+/**
+ * Make a PROJECT repeating (UIC4-f). `containerReveal` is the AREA uuid whose
+ * view renders the project as a row, or the literal "someday" for an area-less
+ * someday project; `title` is matched against the row's selection readback.
+ * The area-less-anytime case is handled by the orchestrator (Someday coercion)
+ * BEFORE this recipe runs, so it always reveals an area or the Someday view.
+ */
+export function projectMakeRepeatingRecipe(
+  containerReveal: string,
+  projectUuid: string,
+  title: string,
+  frequency: RepeatFrequency,
+  interval: number,
+): UiRecipe {
+  return {
+    op: "project.make-repeating",
+    targetUuid: projectUuid,
+    steps: [
+      {
+        primitive: "reveal",
+        label: `reveal the container in Things (things:///show?id=${containerReveal})`,
+        value: containerReveal,
+      },
+      {
+        // Not needed for correctness (pure AX is background-capable), a fallback only.
+        primitive: "activate",
+        label: "bring Things to the foreground (skipped once background AX is certified)",
+        activateFallback: true,
+      },
+      {
+        primitive: "select-row",
+        label: `select the project row for "${title}" (AXSelectedRows)`,
+        path: PROJECT_CONTENT_TABLE,
+        value: title,
+        addressing: "title",
+      },
+      // Items ▸ Repeat… materializes only once the row is selected (UIC1) — so it
+      // is waited-for + pressed dynamically, not resolved in the canary.
+      {
+        primitive: "wait",
+        label: "Items ▸ Repeat… (enabled once the project row is selected)",
+        path: `menu item "Repeat…" of ${ITEMS_MENU}`,
+        dynamic: true,
+        timeoutMs: 5000,
+        addressing: "title",
+      },
+      {
+        primitive: "press",
+        label: "Items ▸ Repeat…",
+        path: `menu item "Repeat…" of ${ITEMS_MENU}`,
+        dynamic: true,
+        addressing: "title",
+      },
+      ...repeatDialogEntryDualForm(frequency, interval),
+    ],
+  };
+}
+
 export function rescheduleRepeatRecipe(
   targetUuid: string,
   frequency: RepeatFrequency,

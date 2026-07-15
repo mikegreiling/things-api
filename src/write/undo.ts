@@ -202,6 +202,13 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "todo.convert-to-project":
     "converting a to-do to a project is an identity replacement (UI2-d): the to-do uuid is " +
     "destroyed and a new project is born — the app offers no convert-back",
+  "project.make-repeating":
+    "making a project repeat is an identity replacement (UIC4-b): the original project uuid is " +
+    "destroyed and a new template project is born — there is no un-repeat that restores the original",
+  "project.create-repeating":
+    "the composite creates a project then promotes it (identity replacement, UIC4-b): the " +
+    "created uuid is destroyed by the promote and a new repeating template is born — delete the " +
+    "resulting repeating project in the app",
   "heading.convert-to-project":
     "converting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",

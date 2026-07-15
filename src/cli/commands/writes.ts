@@ -933,6 +933,66 @@ export function registerWriteCommands(program: Command): void {
     );
   }
 
+  addDriveGuiFlag(
+    addWriteFlags(
+      project
+        .command("make-repeating <uuid>")
+        .description(
+          "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
+            "series — the original disappears and a fresh recurring project takes its place (its " +
+            "area is kept; cannot be undone). An Anytime project with no area is moved to Someday " +
+            "first (a cleanup-free intermediate step, shown in --dry-run). Supported rule: a " +
+            "frequency and an interval only.",
+        )
+        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    await runWrite(opts, (c) =>
+      c.write.makeRepeatingProject(
+        uuid,
+        { frequency: opts["frequency"] as RepeatFrequency, interval: Number(opts["interval"]) },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addDriveGuiFlag(
+    addWriteFlags(
+      project
+        .command("create-repeating <title>")
+        .description(
+          "Create a project and turn it into a repeating series in ONE call. Two operations: the " +
+            "project is created first and PERSISTS even if the make-repeating step refuses; then it " +
+            "is promoted (which drives the GUI). Give --area to place it, or omit it to create in " +
+            "Someday. The new repeating project's uuid is printed on success.",
+        )
+        .option("--notes <text>", "notes body")
+        .option("--area <ref>", "destination area (uuid or unique name)")
+        .option("--deadline <date>", "YYYY-MM-DD")
+        .option("--todo <title>", "initial child to-do (repeatable)", collect, [])
+        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    ),
+  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const todos = opts["todo"] as string[];
+    const area = containerRef(opts["area"] as string | undefined);
+    await runWrite(opts, (c) =>
+      c.write.createRepeatingProject(
+        {
+          title,
+          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+          ...(area !== undefined && { area }),
+          ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
+          ...(todos.length > 0 && { todos }),
+          frequency: opts["frequency"] as RepeatFrequency,
+          interval: Number(opts["interval"]),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
   addWriteFlags(
     project
       .command("add <title>")

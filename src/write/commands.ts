@@ -25,6 +25,7 @@ import type {
 } from "./operations.ts";
 import {
   childTagTitles,
+  classifyProjectRepeat,
   computeReorderPre,
   emptyPreState,
   loadTarget,
@@ -45,6 +46,7 @@ import {
   convertToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
+  projectMakeRepeatingRecipe,
   projectPauseRepeatRecipe,
   projectRescheduleRepeatRecipe,
   projectResumeRepeatRecipe,
@@ -1628,7 +1630,7 @@ function uiDrive(recipe: UiRecipe): CompiledInvocation {
   return { vector: "ui", kind: "ui-drive", payload: rendered, redactedPayload: rendered, recipe };
 }
 
-function assertRepeatRule(params: { frequency: RepeatFrequency; interval: number }): void {
+export function assertRepeatRule(params: { frequency: RepeatFrequency; interval: number }): void {
   const units: RepeatFrequency[] = ["daily", "weekly", "monthly", "yearly"];
   if (!units.includes(params.frequency)) {
     throw new RangeError(`invalid frequency "${params.frequency}" — expected ${units.join(" | ")}`);
@@ -1814,6 +1816,77 @@ const projectResumeRepeat: CommandSpec<"project.resume-repeat"> = {
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
     return uiDrive(projectResumeRepeatRecipe(params.uuid));
+  },
+};
+
+// project.make-repeating: the pure-AX row-selection op (UIC4). The command
+// spec drives the area / someday cases; the area-less-anytime coercion is done
+// by the runMakeRepeatingProject orchestrator BEFORE this spec sees the target,
+// so by drive time the taxonomy is always area or someday. A DIRECT dispatch on
+// an anytime project is refused by H-PROJECT-REPEAT (with the orchestrator as
+// the remediation).
+const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
+  op: "project.make-repeating",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-PROJECT-REPEAT", "H-UI-DRIVE"],
+  preRead(db, params) {
+    assertRepeatRule(params);
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    pre.projectRepeat = classifyProjectRepeat(db, pre.target);
+    return pre;
+  },
+  expectedDelta(pre, _params, ctx) {
+    // Identity REPLACEMENT (UIC4-b): the original project uuid dies; a NEW
+    // template project (with a recurrence rule) is born alongside a spawned
+    // instance. Pick the TEMPLATE by asserting it IS one; area is preserved.
+    const target = pre.target;
+    const title = target !== null && target.type !== "heading" ? target.title : "";
+    return {
+      mode: "create",
+      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      assert: [{ field: "repeating.isTemplate", equals: true }],
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const tax = pre.projectRepeat;
+    if (tax === null || tax.kind === "refuse" || tax.kind === "anytime") {
+      // Unreachable in practice: the guards block refuse/anytime before compile.
+      throw new Error(
+        "project.make-repeating: no selectable-row taxonomy resolved (guard bypassed?)",
+      );
+    }
+    return uiDrive(
+      projectMakeRepeatingRecipe(
+        tax.containerReveal,
+        params.uuid,
+        tax.title,
+        params.frequency,
+        params.interval,
+      ),
+    );
+  },
+};
+
+// project.create-repeating is delivered by the runCreateRepeatingProject
+// orchestrator (project.add THEN project.make-repeating); it has no single
+// atomic surface and is never dispatched directly through the pipeline.
+const CREATE_REPEATING_ORCHESTRATED =
+  "project.create-repeating is delivered by the runCreateRepeatingProject orchestrator (create " +
+  "the project, then promote it to a repeating series); it has no atomic surface and is never " +
+  "dispatched directly through the pipeline";
+
+const projectCreateRepeating: CommandSpec<"project.create-repeating"> = {
+  op: "project.create-repeating",
+  hazards: [],
+  preRead() {
+    return emptyPreState();
+  },
+  expectedDelta() {
+    throw new Error(CREATE_REPEATING_ORCHESTRATED);
+  },
+  compile() {
+    throw new Error(CREATE_REPEATING_ORCHESTRATED);
   },
 };
 
@@ -2039,4 +2112,6 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,
   "area.reorder-sidebar": areaReorderSidebar,
+  "project.make-repeating": projectMakeRepeating,
+  "project.create-repeating": projectCreateRepeating,
 };

@@ -54,7 +54,9 @@ import type {
   OperationParamsMap,
   ProjectAddParams,
   ProjectCompleteParams,
+  ProjectCreateRepeatingParams,
   ProjectUpdateParams,
+  RepeatFrequency,
   ReorderParams,
   TagAddParams,
   TagUpdateParams,
@@ -83,6 +85,10 @@ import {
 } from "./write/heading.ts";
 import { runClearReminder } from "./write/clear-reminder.ts";
 import { runEditChecklist } from "./write/edit-checklist.ts";
+import {
+  runCreateRepeatingProject,
+  runMakeRepeatingProject,
+} from "./write/make-repeating-project.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
@@ -291,6 +297,31 @@ export interface ThingsClient {
     /** Duplicate a project INCLUDING its children; the copy's uuid is on the result. */
     duplicateProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Turn an existing project into a repeating series. Drives the local Things
+     * app through the Accessibility API (two-key gated: `ui.enabled` config +
+     * `dangerouslyDriveGui`). This REPLACES the project with a new repeating
+     * template (its area is kept, its schedule is normalized to Someday); the
+     * original's identity is gone and it cannot be undone. The new template's
+     * uuid is on the result. An area-less Anytime project is moved to Someday
+     * first — a cleanup-free intermediate step surfaced in the plan.
+     */
+    makeRepeatingProject(
+      uuid: string,
+      rule: { frequency: RepeatFrequency; interval: number },
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Create a project and, in the same call, turn it into a repeating series.
+     * TWO operations: the project is created first (and persists even if the
+     * make-repeating step refuses); then it is promoted (which drives the GUI —
+     * two-key gated, same as makeRepeatingProject). Give an `area` to place it,
+     * or omit it to create in Someday. The new template's uuid is on the result.
+     */
+    createRepeatingProject(
+      params: ProjectCreateRepeatingParams,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     /** Replace a project's full tag set (an empty list clears all tags). */
     setProjectTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     /** Merge: current project tags + new ones, then replace. */
@@ -469,6 +500,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreProject: (uuid, o) => run("project.restore", { uuid }, o),
       duplicateProject: (uuid, o) => run("project.duplicate", { uuid }, o),
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
+      makeRepeatingProject: (uuid, rule, o) =>
+        runMakeRepeatingProject(writeDeps, { uuid, ...rule }, o ?? {}),
+      createRepeatingProject: (params, o) => runCreateRepeatingProject(writeDeps, params, o ?? {}),
       setProjectTags: (uuid, tags, o) => run("project.set-tags", { uuid, tags }, o),
       addProjectTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);

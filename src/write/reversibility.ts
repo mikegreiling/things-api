@@ -219,6 +219,14 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "converting a to-do to a project is an identity REPLACEMENT (UI2-d): the to-do uuid is destroyed and a new project uuid is born (notes preserved); the app offers no convert-back",
   },
+  "project.make-repeating": {
+    class: "irreversible",
+    note: "making a project repeat is an identity REPLACEMENT (UIC4-b): the original project uuid is destroyed and a new template project is born (area preserved, start normalized to someday) — there is no un-repeat that restores the original",
+  },
+  "project.create-repeating": {
+    class: "irreversible",
+    note: "the composite CREATES a project then promotes it (identity replacement, UIC4-b): the created uuid is destroyed by the promote and a new repeating template is born — no automated inverse captures it; delete the resulting repeating project in the app",
+  },
   "heading.convert-to-project": {
     class: "irreversible",
     note: "converting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",

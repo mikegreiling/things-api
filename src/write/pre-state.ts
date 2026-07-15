@@ -89,7 +89,50 @@ export interface PreState {
    * capture list so undo can restore the exact previous position.
    */
   areaOrder: string[] | null;
+  /** project.make-repeating: the row-selection taxonomy (UIC4-f). */
+  projectRepeat: ProjectRepeatTaxonomy | null;
 }
+
+/**
+ * Row-selection taxonomy for `project.make-repeating` (UIC4-f). A project is
+ * made repeating by selecting it as a content-table ROW (settable
+ * AXSelectedRows), reachable in its AREA view or the SOMEDAY view but NOT the
+ * Anytime view (an area-less anytime project renders as a header there). The
+ * classifier resolves which view reveals a selectable row, or refuses.
+ */
+export type ProjectRepeatRefusal =
+  | "not-a-project"
+  | "trashed"
+  | "logged"
+  | "already-repeating"
+  | "ambiguous-row"
+  | "unexpected-start";
+
+export type ProjectRepeatTaxonomy =
+  | {
+      /** Selectable row in the project's AREA view — reveal the area, then select the row. */
+      kind: "area";
+      /** The area uuid revealed via things:///show?id= to render the row. */
+      containerReveal: string;
+      title: string;
+    }
+  | {
+      /** Area-less someday project — a selectable row in the SOMEDAY view. */
+      kind: "someday";
+      /** Literal "someday" (things:///show?id=someday). */
+      containerReveal: "someday";
+      title: string;
+    }
+  | {
+      /**
+       * Area-less ANYTIME project — no selectable row in the Anytime view
+       * (renders as a header, UIC4-d). Reachable only after a cleanup-free
+       * coercion to Someday; the orchestrator does that leg, never the drive.
+       */
+      kind: "anytime";
+      title: string;
+    }
+  | { kind: "refuse"; refusal: ProjectRepeatRefusal; detail: string };
 
 export function emptyPreState(): PreState {
   return {
@@ -111,6 +154,105 @@ export function emptyPreState(): PreState {
     sameTitleUuids: [],
     reorder: null,
     areaOrder: null,
+    projectRepeat: null,
+  };
+}
+
+/**
+ * Count non-trashed projects with the given title that share the target's
+ * row-selection container, EXCLUDING the target itself. A non-zero count is a
+ * row-selection ambiguity: the AREA/SOMEDAY row exposes no title text or uuid
+ * to disambiguate (UIC4-b), so two same-titled projects cannot be told apart —
+ * the drive refuses fail-closed rather than guess which row to select.
+ */
+function sameTitleRowCount(
+  db: DatabaseSync,
+  title: string,
+  excludeUuid: string,
+  container: { areaUuid: string } | { somedayAreaLess: true },
+): number {
+  const containerWhere =
+    "areaUuid" in container ? "area = ?" : "area IS NULL AND start = 2 AND startDate IS NULL";
+  const binds: (string | number)[] =
+    "areaUuid" in container ? [title, excludeUuid, container.areaUuid] : [title, excludeUuid];
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM TMTask
+       WHERE type = 1 AND trashed = 0 AND title = ? COLLATE NOCASE AND uuid != ? AND ${containerWhere}`,
+    )
+    .get(...binds) as { n: number };
+  return row.n;
+}
+
+/**
+ * Classify a project for `project.make-repeating`'s pure-AX row-selection
+ * recipe (UIC4-f), or refuse. Reads DB truth (area / start / template / status)
+ * — the orchestrator uses it to decide the Someday coercion; the command spec
+ * uses it (post-coercion) to build the reveal + row-select recipe.
+ */
+export function classifyProjectRepeat(
+  db: DatabaseSync,
+  target: AnyTask | null,
+): ProjectRepeatTaxonomy {
+  if (target === null || target.type !== "project") {
+    return { kind: "refuse", refusal: "not-a-project", detail: "target is not a project" };
+  }
+  if (target.trashed) {
+    return { kind: "refuse", refusal: "trashed", detail: "the project is in the Trash" };
+  }
+  if (target.status !== "open" || target.logged) {
+    return {
+      kind: "refuse",
+      refusal: "logged",
+      detail: `the project is ${target.logged ? "logged" : target.status} — only an open project can be made repeating`,
+    };
+  }
+  if (target.repeating.isTemplate) {
+    return {
+      kind: "refuse",
+      refusal: "already-repeating",
+      detail: "the project is already a repeating template",
+    };
+  }
+  const title = target.title;
+  if (target.area !== null) {
+    const areaUuid = target.area.uuid;
+    if (sameTitleRowCount(db, title, target.uuid, { areaUuid }) > 0) {
+      return {
+        kind: "refuse",
+        refusal: "ambiguous-row",
+        detail: `another project titled "${title}" shares this area — its selectable row cannot be disambiguated`,
+      };
+    }
+    return { kind: "area", containerReveal: areaUuid, title };
+  }
+  // Area-less: someday renders a selectable row; anytime needs coercion first.
+  if (target.start === "someday") {
+    if (sameTitleRowCount(db, title, target.uuid, { somedayAreaLess: true }) > 0) {
+      return {
+        kind: "refuse",
+        refusal: "ambiguous-row",
+        detail: `another area-less Someday project titled "${title}" exists — its row cannot be disambiguated`,
+      };
+    }
+    return { kind: "someday", containerReveal: "someday", title };
+  }
+  if (target.start === "active") {
+    // Post-coercion the project joins the Someday cohort; refuse if that would
+    // collide with an existing same-titled area-less Someday project.
+    if (sameTitleRowCount(db, title, target.uuid, { somedayAreaLess: true }) > 0) {
+      return {
+        kind: "refuse",
+        refusal: "ambiguous-row",
+        detail: `an area-less Someday project titled "${title}" already exists — coercing this one there would make its row ambiguous`,
+      };
+    }
+    return { kind: "anytime", title };
+  }
+  return {
+    kind: "refuse",
+    refusal: "unexpected-start",
+    detail: `the project has an unexpected schedule state (${target.start}) with no area — cannot resolve a selectable row`,
   };
 }
 
