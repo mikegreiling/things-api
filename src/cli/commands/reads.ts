@@ -8,6 +8,8 @@
 import { Option, type Command } from "commander";
 import { execFileSync } from "node:child_process";
 
+import { runAreaShow, type AreaShowActionOpts } from "./area.ts";
+import { runProjectShow, type ProjectShowActionOpts } from "./project.ts";
 import type { ListItem, TodayView } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
@@ -749,89 +751,119 @@ export function registerReadCommands(program: Command): void {
     });
 
   program
-    .command("projects")
+    .command("projects [id]")
     .description(
-      "Active projects in sidebar order: loose projects first, then grouped under " +
-        "their area (optionally scoped to --area <ref>). Someday and future-scheduled " +
-        "projects are hidden — --show-later appends them after each group's active " +
-        "block (state carried by the (~) mark and ‹date› chip)",
+      "List active projects in sidebar order, or — given an id — show that one " +
+        "project (exactly like `things project show <id>`). List: loose projects " +
+        "first, then grouped under their area (optionally scoped to --area <ref>). " +
+        "Someday and future-scheduled projects are hidden — --show-later appends them " +
+        "after each group's active block (state carried by the (~) mark and ‹date› " +
+        "chip). --show-logged applies only when showing one project.",
     )
     .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--show-later", "include someday/future-scheduled projects after each active block")
+    .option("--show-logged [n]", "showing one project: include logged items (bare = all)")
     .option("--all", "include someday/future-scheduled projects (same as --show-later)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts & { area?: string; showLater?: boolean; all?: boolean }) => {
-      // --all lifts the sole default restriction here — the hidden later block
-      // — so it is exactly --show-later (the charter: --all removes every
-      // default restriction on the view's own content).
-      const showLater = opts.showLater === true || opts.all === true;
-      let hints: LaterHints | undefined;
-      withClient(
-        opts,
-        "projects",
-        (c) => {
-          const scope = opts.area !== undefined ? { areaUuid: opts.area } : {};
-          const visible = c.read.projects({
-            ...scope,
-            ...(showLater && { later: true }),
-          });
-          if (opts.area === undefined) {
-            // Sidebar scaffold: every VISIBLE area renders (project-less
-            // ones say so), in sidebar order; the loose block leads. One
-            // extra projects query buys the hidden-later counts.
-            const full = showLater ? visible : c.read.projects({ later: true });
-            const shown = new Set(visible.map((i) => i.uuid));
-            const groups: LaterHints["groups"] = [
-              { area: null, hidden: 0 },
-              ...c.read
-                .areas()
-                .filter((a) => a.visible)
-                .map((a) => ({ area: { uuid: a.uuid, title: a.title }, hidden: 0 })),
-            ];
-            const at = new Map<string | null, number>(
-              groups.map((g, i) => [g.area?.uuid ?? null, i]),
-            );
-            for (const item of full) {
-              if (shown.has(item.uuid)) continue;
-              const g = groups[at.get(item.area?.uuid ?? null) ?? 0];
-              if (g !== undefined) g.hidden += 1;
+    .action(
+      (
+        id: string | undefined,
+        opts: GlobalReadOpts &
+          ProjectShowActionOpts & { area?: string; showLater?: boolean; all?: boolean },
+      ) => {
+        // Given an id, this IS `things project show <id>` — delegate to the same
+        // code path so the output is identical (a true synonym).
+        if (id !== undefined) {
+          runProjectShow(id, opts);
+          return;
+        }
+        // --all lifts the sole default restriction here — the hidden later block
+        // — so it is exactly --show-later (the charter: --all removes every
+        // default restriction on the view's own content).
+        const showLater = opts.showLater === true || opts.all === true;
+        let hints: LaterHints | undefined;
+        withClient(
+          opts,
+          "projects",
+          (c) => {
+            const scope = opts.area !== undefined ? { areaUuid: opts.area } : {};
+            const visible = c.read.projects({
+              ...scope,
+              ...(showLater && { later: true }),
+            });
+            if (opts.area === undefined) {
+              // Sidebar scaffold: every VISIBLE area renders (project-less
+              // ones say so), in sidebar order; the loose block leads. One
+              // extra projects query buys the hidden-later counts.
+              const full = showLater ? visible : c.read.projects({ later: true });
+              const shown = new Set(visible.map((i) => i.uuid));
+              const groups: LaterHints["groups"] = [
+                { area: null, hidden: 0 },
+                ...c.read
+                  .areas()
+                  .filter((a) => a.visible)
+                  .map((a) => ({ area: { uuid: a.uuid, title: a.title }, hidden: 0 })),
+              ];
+              const at = new Map<string | null, number>(
+                groups.map((g, i) => [g.area?.uuid ?? null, i]),
+              );
+              for (const item of full) {
+                if (shown.has(item.uuid)) continue;
+                const g = groups[at.get(item.area?.uuid ?? null) ?? 0];
+                if (g !== undefined) g.hidden += 1;
+              }
+              hints = { groups };
+            } else if (!showLater) {
+              // --area scoped: only the bottom hint needs a count.
+              const full = c.read.projects({ ...scope, later: true });
+              hints = { groups: [{ area: null, hidden: full.length - visible.length }] };
             }
-            hints = { groups };
-          } else if (!showLater) {
-            // --area scoped: only the bottom hint needs a count.
-            const full = c.read.projects({ ...scope, later: true });
-            hints = { groups: [{ area: null, hidden: full.length - visible.length }] };
-          }
-          return visible;
-        },
-        // Scoped to one area the list is flat (the scope names the group);
-        // unscoped it mirrors the sidebar with ⬡ area headers.
-        (items) => {
-          if (opts.area === undefined) return renderProjectsSidebar(items, hints);
-          const lines = renderList(items);
-          const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
-          if (hidden > 0) {
-            // Hidden-section placeholder: the reveal command echoes the user's
-            // own scope (--area) plus the flag that surfaces the later block.
-            const reveal = invocation("projects", [
-              opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
-              "--show-later",
-            ]);
-            lines.push("", disclosureHint(hidden, "later project", [{ command: reveal }]));
-          }
-          return lines;
-        },
-      );
-    });
+            return visible;
+          },
+          // Scoped to one area the list is flat (the scope names the group);
+          // unscoped it mirrors the sidebar with ⬡ area headers.
+          (items) => {
+            if (opts.area === undefined) return renderProjectsSidebar(items, hints);
+            const lines = renderList(items);
+            const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
+            if (hidden > 0) {
+              // Hidden-section placeholder: the reveal command echoes the user's
+              // own scope (--area) plus the flag that surfaces the later block.
+              const reveal = invocation("projects", [
+                opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
+                "--show-later",
+              ]);
+              lines.push("", disclosureHint(hidden, "later project", [{ command: reveal }]));
+            }
+            return lines;
+          },
+        );
+      },
+    );
 
   program
-    .command("areas")
-    .description("All areas with their direct tags")
+    .command("areas [id]")
+    .description(
+      "List all areas with their direct tags, or — given an id — show that one area " +
+        "(exactly like `things area show <id>`: its projects and direct to-dos). " +
+        "--show-later / --show-logged / --area-limit / --project-limit apply only when " +
+        "showing one area.",
+    )
     .option("--all", "show every area (no default restriction applies)")
+    .option("--show-later", "showing one area: include its Upcoming and Someday sections")
+    .option("--show-logged [n]", "showing one area: include the n most recent logged items")
+    .option("--project-limit <n>", "showing one area: maximum project rows to show")
+    .option("--area-limit <n>", "showing one area: maximum direct to-dos to show")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((opts: GlobalReadOpts) => {
+    .action((id: string | undefined, opts: GlobalReadOpts & AreaShowActionOpts) => {
+      // Given an id, this IS `things area show <id>` — delegate to the same code
+      // path so the output is identical (a true synonym).
+      if (id !== undefined) {
+        runAreaShow(id, opts);
+        return;
+      }
       withClient(
         opts,
         "areas",

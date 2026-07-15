@@ -147,9 +147,10 @@ export function renderTopLevelHelp(program: Command, width: number): string {
     return `  ${name}${args}`;
   };
   let col = 0;
-  for (const g of HELP_GROUPS) for (const name of g.commands) {
-    col = Math.max(col, headOf(name).length);
-  }
+  for (const g of HELP_GROUPS)
+    for (const name of g.commands) {
+      col = Math.max(col, headOf(name).length);
+    }
   col += 2;
 
   for (const g of HELP_GROUPS) {
@@ -350,9 +351,7 @@ export function registerHelp(program: Command): void {
       // Otherwise resolve a command path and defer to its own --help.
       let cmd: Command | undefined = program;
       for (const token of tokens) {
-        cmd = cmd.commands.find(
-          (c) => c.name() === token || c.aliases().includes(token),
-        );
+        cmd = cmd.commands.find((c) => c.name() === token || c.aliases().includes(token));
         if (cmd === undefined) break;
       }
       if (cmd !== undefined && cmd !== program) {
