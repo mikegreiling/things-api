@@ -1,6 +1,6 @@
 # AXDRAG1 — hardening sidebar-AREA drag-reorder (and scoping TAG reorder)
 
-**Status: PARTIAL — in progress.** Builds on [NATIVE1](native1-spike.md) (PR #142), which proved a single two-row area flip via synthesized HID-tap mouse events from JXA. AXDRAG1 hardens that into an *arbitrary rank placement* recipe, characterizes the `TMArea."index"` rewrite scheme, adds a scroll-then-drag recipe for off-viewport targets, probes mid-drag auto-scroll, catalogs drag hazards (accidental nesting / Escape-abort), and scopes TAG reorder + reversibility.
+**Status: COMPLETE (2026-07-15).** All six probes AXDRAG1-a…f executed and DB-verified. Builds on [NATIVE1](native1-spike.md) (PR #142), which proved a single two-row area flip via synthesized HID-tap mouse events from JXA. AXDRAG1 hardens that into an *arbitrary rank placement* recipe, characterizes the `TMArea."index"` rewrite scheme, adds a scroll-then-drag recipe for off-viewport targets, probes mid-drag auto-scroll, catalogs drag hazards (accidental nesting / Escape-abort), and scopes TAG reorder + reversibility.
 
 Things **3.22.11** / macOS **15.7.7** / DB **v26**, ONE disposable clone `axdrag1-lab` of `things-lab-golden-v1` (airgapped, clock-pinned 2026-07-05, SIP enabled), Accessibility granted via the AXVM1 rung-b VNC toggle, everything driven over SSH. Probe ids `AXDRAG1-a`…`AXDRAG1-f`. The reusable JXA driver (`axdrag.js`, verbatim at the end) is the deliverable — it is invoked `osascript -l JavaScript /tmp/axdrag.js <cmd> [args…]`.
 
@@ -121,3 +121,248 @@ Captured the full ordered area list `O0`, applied Move A (Area-07 ↓ below LAB-
 | Above/below the list (dead zone) | no-op | drop at y=102 above row 0 changed nothing |
 
 The **same neighbour-renumber quirk as areas** applies (the reorder that moved Pending also rewrote neighbour `lab-tag-1` 0 → −19). **Hazard for a future `tag.reorder`:** a slightly-off drop that lands on a row centre **silently NESTS the tag instead of reordering it** — so the op must target inter-row boundaries precisely and DB-verify `parent` is unchanged after each move. Nested-tag mechanics: drag-onto-centre re-parents; the tree collapses the child under the new parent (chevron appears). Feasibility confirmed; full recipe/hardening is a follow-up build, not this probe.
+
+## The reusable JXA driver (`axdrag.js`, verbatim — the deliverable)
+
+Invoke `osascript -l JavaScript /tmp/axdrag.js <cmd> [args…]`. Deploy via `lab_ssh "$IP" 'cat > /tmp/axdrag.js' < axdrag.js`. Commands: `rows`, `winfo`, `scrollinfo`, `tags-rows`, `dragname <sub> <tx> <ty> [steps] [settle]`, `escdragname`, `drag <sx> <sy> <tx> <ty> [steps] [settle]`, `scroll <clicks> [dyPerClick]`, `autoscroll <sub> <hx> <hy> [holdMs]`. All ObjC-bridge incantations (NSString attrs via `$()`, `ObjC.castRefToObject`, `CFCopyDescription` frame regex, HID-tap `CGEventPost`) are NATIVE1's, verbatim.
+
+```javascript
+#!/usr/bin/osascript -l JavaScript
+// AXDRAG1 reusable driver — NATIVE1 ObjC-bridge incantations verbatim.
+// Usage: osascript -l JavaScript axdrag.js <cmd> [args...]
+//   rows                       -> JSON array of sidebar rows {i,d,x,y,w,h}
+//   scrollinfo                 -> JSON scroll-area/bar geometry + AXValue
+//   drag sx sy tx ty [steps] [settleMs] -> synth drag, prints DONE
+//   scroll clicks [dyPerClick] -> synth scroll-wheel over sidebar center (neg=down content)
+//   tags-rows                  -> JSON rows of the Tags window table
+//   esc-drag sx sy tx ty [steps] -> begin drag, then press Escape mid-drag, release
+ObjC.import('AppKit')
+ObjC.import('ApplicationServices')
+ObjC.import('CoreGraphics')
+
+function pidOf(name) { return Application('System Events').processes.byName(name).unixId() }
+function sleep(ms) { $.NSThread.sleepForTimeInterval(ms/1000) }
+function attr(el, name) {
+  var out = Ref()
+  if ($.AXUIElementCopyAttributeValue(el, $(name), out) !== 0) return null
+  return ObjC.castRefToObject(out[0])
+}
+function sv(el, name) { var v = attr(el, name); return v ? v.js : '' }
+function nv(el, name) { // numeric AXValue-ish -> via description regex fallback
+  var v = attr(el, name); if (v === null) return null
+  try { var d = ObjC.castRefToObject($.CFCopyDescription(v)).js; return d } catch(e) { return null }
+}
+function role(el) { return sv(el, 'AXRole') }
+function subrole(el) { return sv(el, 'AXSubrole') }
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  if (!p || !z) return null
+  var pd = ObjC.castRefToObject($.CFCopyDescription(p)).js
+  var zd = ObjC.castRefToObject($.CFCopyDescription(z)).js
+  var pm = pd.match(/x:([-0-9.]+) y:([-0-9.]+)/), zm = zd.match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return (pm && zm) ? { x: +pm[1], y: +pm[2], w: +zm[1], h: +zm[2] } : null
+}
+function kids(el) {
+  var c = attr(el, 'AXChildren'); if (!c) return []
+  var a = []; for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i)); return a
+}
+function appEl() { return $.AXUIElementCreateApplication(pidOf('Things3')) }
+function stdWindow() {
+  var ws = kids(appEl())
+  for (var i = 0; i < ws.length; i++) { if (subrole(ws[i]) === 'AXStandardWindow') return ws[i] }
+  return ws.length ? ws[0] : null
+}
+// find all descendants matching a role, up to a depth
+function findAll(el, wantRole, depth, acc) {
+  acc = acc || []; if (depth < 0) return acc
+  var ch = kids(el)
+  for (var i = 0; i < ch.length; i++) {
+    if (role(ch[i]) === wantRole) acc.push(ch[i])
+    findAll(ch[i], wantRole, depth - 1, acc)
+  }
+  return acc
+}
+function sidebarTable() {
+  var w = stdWindow(); if (!w) return null
+  var tables = findAll(w, 'AXTable', 12, [])
+  // sidebar table is the narrow one (width ~240); main list ~697
+  var best = null
+  for (var i = 0; i < tables.length; i++) {
+    var f = frame(tables[i]); if (!f) continue
+    if (f.w < 400) { if (!best || f.w < best.w) { best = { el: tables[i], f: f } } }
+  }
+  return best ? best.el : (tables.length ? tables[0] : null)
+}
+function allText(el, acc, depth) {
+  acc = acc || []; depth = depth==null?6:depth; if (depth<0) return acc
+  var v = sv(el, 'AXValue'); if (v) acc.push(v)
+  var d = sv(el, 'AXDescription'); if (d) acc.push(d)
+  var ttl = sv(el, 'AXTitle'); if (ttl) acc.push(ttl)
+  var ch = kids(el)
+  for (var i=0;i<ch.length;i++) allText(ch[i], acc, depth-1)
+  return acc
+}
+function sidebarRows() {
+  var t = sidebarTable(); if (!t) return []
+  var out = []
+  var ch = kids(t)
+  for (var i = 0; i < ch.length; i++) {
+    var r = role(ch[i])
+    if (r === 'AXRow' || r === 'AXTableRow') {
+      var f = frame(ch[i])
+      var txt = allText(ch[i], [], 6)
+      out.push({ i: out.length, d: sv(ch[i], 'AXDescription'), t: txt.join('|'), sel: sv(ch[i],'AXSelected'), r: r, x: f?f.x:null, y: f?f.y:null, w: f?f.w:null, h: f?f.h:null })
+    }
+  }
+  return out
+}
+function winfo() {
+  var w = stdWindow(); var wf = w?frame(w):null
+  var areas = w?findAll(w,'AXScrollArea',12,[]):[]
+  var sb = null
+  for (var i=0;i<areas.length;i++){ var f=frame(areas[i]); if(f&&f.w<400){sb={frame:f}; break} }
+  return { window: wf, sidebarArea: sb }
+}
+
+// ---- mouse synthesis (HID tap; NATIVE1) ----
+var MOVED = 5, DOWN = 1, UP = 2, DRAG = 6
+function mev(type, x, y, clickState) {
+  var e = $.CGEventCreateMouseEvent($(), type, $.CGPointMake(x, y), 0)
+  if (clickState) $.CGEventSetIntegerValueField(e, 1, clickState)
+  return e
+}
+function postHID(ev) { $.CGEventPost($.kCGHIDEventTap, ev) }
+function doDrag(sx, sy, tx, ty, steps, settleMs) {
+  steps = steps || 25; settleMs = settleMs || 400
+  postHID(mev(MOVED, sx, sy, 0)); sleep(30)
+  postHID(mev(DOWN, sx, sy, 1)); sleep(120)
+  postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30)          // wiggle -> begin drag
+  for (var i = 1; i <= steps; i++) {
+    postHID(mev(DRAG, sx + (tx-sx)*i/steps, sy + (ty-sy)*i/steps, 1)); sleep(25)
+  }
+  postHID(mev(DRAG, tx, ty, 1)); sleep(settleMs)
+  postHID(mev(UP, tx, ty, 1))
+}
+function doEscDrag(sx, sy, tx, ty, steps) {
+  steps = steps || 25
+  postHID(mev(MOVED, sx, sy, 0)); sleep(30)
+  postHID(mev(DOWN, sx, sy, 1)); sleep(120)
+  postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30)
+  for (var i = 1; i <= steps; i++) {
+    postHID(mev(DRAG, sx + (tx-sx)*i/steps, sy + (ty-sy)*i/steps, 1)); sleep(25)
+  }
+  sleep(200)
+  // press Escape (key code 53) via keyboard event to abort the drag
+  var kd = $.CGEventCreateKeyboardEvent($(), 53, true)
+  var ku = $.CGEventCreateKeyboardEvent($(), 53, false)
+  postHID(kd); sleep(20); postHID(ku); sleep(200)
+  postHID(mev(UP, tx, ty, 1))
+}
+function doScroll(clicks, dyPerClick) {
+  // move pointer over sidebar center, then post line-unit scroll events
+  var t = sidebarTable(); var f = t ? frame(t) : null
+  if (f) { postHID(mev(MOVED, f.x + f.w/2, f.y + f.h/2, 0)); sleep(50) }
+  dyPerClick = dyPerClick || 3
+  var n = Math.abs(clicks), dir = clicks < 0 ? -1 : 1
+  for (var i = 0; i < n; i++) {
+    var ev = $.CGEventCreateScrollWheelEvent($(), $.kCGScrollEventUnitLine, 1, dir * dyPerClick)
+    postHID(ev); sleep(60)
+  }
+}
+function scrollInfo() {
+  var w = stdWindow(); if (!w) return {}
+  var areas = findAll(w, 'AXScrollArea', 12, [])
+  var res = []
+  for (var i = 0; i < areas.length; i++) {
+    var f = frame(areas[i])
+    if (!f || f.w >= 400) continue // sidebar scroll area only
+    var bars = findAll(areas[i], 'AXScrollBar', 4, [])
+    var barInfo = []
+    for (var b = 0; b < bars.length; b++) {
+      barInfo.push({ orient: sv(bars[b], 'AXOrientation'), value: nv(bars[b], 'AXValue'), frame: frame(bars[b]) })
+    }
+    res.push({ area: f, bars: barInfo })
+  }
+  return res
+}
+function tagsRows() {
+  // Tags window: separate window titled "Tags"
+  var ws = kids(appEl())
+  for (var i = 0; i < ws.length; i++) {
+    var title = sv(ws[i], 'AXTitle')
+    if (title && title.indexOf('Tag') >= 0) {
+      var tables = findAll(ws[i], 'AXTable', 12, []).concat(findAll(ws[i], 'AXOutline', 12, []))
+      var out = []
+      for (var t = 0; t < tables.length; t++) {
+        var ch = kids(tables[t])
+        for (var j = 0; j < ch.length; j++) {
+          var r = role(ch[j])
+          if (r === 'AXRow' || r === 'AXTableRow') {
+            var f = frame(ch[j])
+            out.push({ table: t, txt: allText(ch[j],[],6).join('|'),
+              dl: sv(ch[j],'AXDisclosureLevel'), dc: sv(ch[j],'AXDisclosing'), da: sv(ch[j],'AXDisclosedByRow'),
+              x:f?f.x:null,y:f?f.y:null,w:f?f.w:null,h:f?f.h:null })
+          }
+        }
+      }
+      return { window: title, rows: out }
+    }
+  }
+  return { window: null, rows: [] }
+}
+
+function rowByName(sub) {
+  var rs = sidebarRows()
+  for (var i=0;i<rs.length;i++){ if (rs[i].t && rs[i].t.indexOf(sub) === 0) return rs[i] }
+  for (var i=0;i<rs.length;i++){ if (rs[i].t && rs[i].t.indexOf(sub) >= 0) return rs[i] }
+  return null
+}
+function scrollFrac() {
+  var info = scrollInfo()
+  if (!info.length || !info[0].bars.length) return null
+  var d = info[0].bars[0].value
+  if (!d) return null
+  var m = d.match(/value = ([+\-0-9.]+)/)
+  return m ? +m[1] : null
+}
+function autoScrollTest(srcSub, hx, hy, holdMs) {
+  var r = rowByName(srcSub); if (!r) return 'SRC_NOT_FOUND'
+  var sx = r.x + 170, sy = r.y + r.h/2
+  postHID(mev(MOVED, sx, sy, 0)); sleep(30)
+  postHID(mev(DOWN, sx, sy, 1)); sleep(120)
+  postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30)
+  // move to hover point in ~15 steps
+  for (var i = 1; i <= 15; i++) { postHID(mev(DRAG, sx + (hx-sx)*i/15, sy + (hy-sy)*i/15, 1)); sleep(20) }
+  var v0 = scrollFrac()
+  var iters = Math.max(1, Math.round((holdMs||1500)/100))
+  for (var j = 0; j < iters; j++) { postHID(mev(DRAG, hx, hy, 1)); sleep(100) }
+  var v1 = scrollFrac()
+  postHID(mev(UP, hx, hy, 1))
+  return JSON.stringify({ src: srcSub, hover:{x:hx,y:hy}, v0:v0, v1:v1, moved: (v0!=null&&v1!=null)?(v1-v0):null })
+}
+function run(argv) {
+  var cmd = argv[0]
+  if (cmd === 'autoscroll') { return autoScrollTest(argv[1], +argv[2], +argv[3], argv[4]?+argv[4]:1500) }
+  if (cmd === 'dragname') {
+    // dragname <srcSub> <tx> <ty> [steps] [settle]  -> resolves src center fresh, drags to (tx,ty)
+    var r = rowByName(argv[1]); if (!r) return 'SRC_NOT_FOUND'
+    var sx = r.x + 170, sy = r.y + r.h/2   // x+170 into the label area (NATIVE1 double-click x)
+    doDrag(sx, sy, +argv[2], +argv[3], argv[4]?+argv[4]:0, argv[5]?+argv[5]:0)
+    return JSON.stringify({src:argv[1], from:{x:sx,y:sy}, to:{x:+argv[2],y:+argv[3]}})
+  }
+  if (cmd === 'escdragname') {
+    var r = rowByName(argv[1]); if (!r) return 'SRC_NOT_FOUND'
+    var sx = r.x + 170, sy = r.y + r.h/2
+    doEscDrag(sx, sy, +argv[2], +argv[3], argv[4]?+argv[4]:0)
+    return JSON.stringify({src:argv[1], from:{x:sx,y:sy}, to:{x:+argv[2],y:+argv[3]}})
+  }
+  if (cmd === 'rows') return JSON.stringify(sidebarRows())
+  if (cmd === 'winfo') return JSON.stringify(winfo())
+  if (cmd === 'scrollinfo') return JSON.stringify(scrollInfo())
+  if (cmd === 'tags-rows') return JSON.stringify(tagsRows())
+  if (cmd === 'drag') { doDrag(+argv[1], +argv[2], +argv[3], +argv[4], argv[5]?+argv[5]:0, argv[6]?+argv[6]:0); return 'DONE' }
+  if (cmd === 'esc-drag') { doEscDrag(+argv[1], +argv[2], +argv[3], +argv[4], argv[5]?+argv[5]:0); return 'DONE' }
+  if (cmd === 'scroll') { doScroll(+argv[1], argv[2]?+argv[2]:0); return 'DONE' }
+  return 'UNKNOWN_CMD'
+}
+```
