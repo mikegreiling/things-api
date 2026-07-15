@@ -34,6 +34,7 @@ import { certificationOf } from "./ui-certification.ts";
 import type {
   CompiledInvocation,
   ExecuteResult,
+  UiPrimitive,
   UiRecipe,
   UiStep,
   VectorMatrix,
@@ -52,14 +53,25 @@ const WAIT_POLL_MS = 300;
  */
 const SETTLE_AFTER_REVEAL_MS = 1500;
 
+/**
+ * Command-level primitives. Extends the recipe `UiPrimitive` set with the two
+ * INTERNAL sub-steps a `click-element` recipe step decomposes into: read the
+ * target's on-screen frame from the live AX tree (`resolve-frame`), then post a
+ * synthetic HID click at its center (`click-point`). Splitting them keeps each
+ * subprocess call behind the injectable `run` seam (unit-testable without a GUI).
+ */
+export type UiCommandPrimitive = UiPrimitive | "resolve-frame" | "click-point";
+
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
-  primitive: UiStep["primitive"];
+  primitive: UiCommandPrimitive;
   label: string;
   /** osascript source (AX primitives); absent for reveal. */
   script?: string;
   /** reveal only: the things:/// URL opened to select the target. */
   url?: string;
+  /** `script` language for the osascript hop; defaults to AppleScript. */
+  lang?: "applescript" | "javascript";
 }
 
 export interface UiRunResult {
@@ -127,16 +139,70 @@ export function axAbortScript(): string {
   return `tell application "System Events" to key code 53`; // Escape
 }
 
+/**
+ * resolve-frame: read the element's on-screen frame (top-left origin, points)
+ * from the live AX tree and print "x y w h". Used by `click-element` to target
+ * the frame CENTER — the position comes from AX (`position`/`size`), never a
+ * guessed pixel, so a missing element errors (fail-closed) instead of clicking
+ * a stale coordinate. Points map 1:1 to CGEvent coordinates (NATIVE1-b).
+ */
+export function axFrameScript(path: string): string {
+  return `${SE}
+  set _p to position of (${path})
+  set _s to size of (${path})
+  return ((item 1 of _p) as text) & " " & ((item 2 of _p) as text) & " " & ((item 1 of _s) as text) & " " & ((item 2 of _s) as text)
+end tell`;
+}
+
+/**
+ * click-point: synthesize a single left mouse click at (x, y) via the global
+ * HID event tap (the NATIVE1 JXA ObjC-bridge path — `CGEventPostToPid` is inert
+ * for Things' hit-testing; only `CGEventPost(kCGHIDEventTap)` lands). The HID
+ * tap posts to the FOREGROUND surface, so the recipe must have activated Things
+ * first. Event types are the stable CGEventType values (5 = mouse-moved,
+ * 1 = left-down, 2 = left-up).
+ */
+export function jxaClickScript(x: number, y: number): string {
+  const xi = Math.round(x);
+  const yi = Math.round(y);
+  return `ObjC.import('Foundation');
+ObjC.import('CoreGraphics');
+function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000); }
+function mev(t){ return $.CGEventCreateMouseEvent($(), t, $.CGPointMake(${xi}, ${yi}), 0); }
+$.CGEventPost($.kCGHIDEventTap, mev(5)); sleep(20);
+$.CGEventPost($.kCGHIDEventTap, mev(1)); sleep(15);
+$.CGEventPost($.kCGHIDEventTap, mev(2));`;
+}
+
+/** The command that posts an AX-resolved mouse click (one stable JXA shape). */
+function clickPointCommand(x: number, y: number, label: string): UiCommand {
+  return { primitive: "click-point", label, lang: "javascript", script: jxaClickScript(x, y) };
+}
+
+/** Parse a resolve-frame "x y w h" line into the frame's center point. */
+export function parseFrameCenter(stdout: string): { x: number; y: number } | null {
+  const nums = stdout.trim().split(/\s+/).map(Number);
+  if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) return null;
+  const [x, y, w, h] = nums as [number, number, number, number];
+  return { x: x + w / 2, y: y + h / 2 };
+}
+
 function revealUrl(uuid: string): string {
   return `things:///show?id=${encodeURIComponent(uuid)}`;
 }
 
 function defaultRun(command: UiCommand, timeoutMs: number): Promise<UiRunResult> {
   return new Promise((resolve) => {
-    const [bin, args] =
-      command.primitive === "reveal"
-        ? (["open", [command.url ?? ""]] as const)
-        : (["osascript", ["-e", command.script ?? ""]] as const);
+    let bin: string;
+    let args: string[];
+    if (command.primitive === "reveal") {
+      [bin, args] = ["open", [command.url ?? ""]];
+    } else if (command.lang === "javascript") {
+      // JXA (ObjC bridge) for the mouse-synthesis primitive; one stable shape.
+      [bin, args] = ["osascript", ["-l", "JavaScript", "-e", command.script ?? ""]];
+    } else {
+      [bin, args] = ["osascript", ["-e", command.script ?? ""]];
+    }
     execFile(bin, [...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
       const timedOut = err !== null && (err as { killed?: boolean }).killed === true;
       resolve({
@@ -157,7 +223,8 @@ function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
     if (
       step.primitive !== "press" &&
       step.primitive !== "set-value" &&
-      step.primitive !== "resolve"
+      step.primitive !== "resolve" &&
+      step.primitive !== "click-element"
     ) {
       continue;
     }
@@ -198,7 +265,69 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
     case "key":
       return { primitive: "key", label: step.label, script: axKeyScript(step.keys ?? "") };
+    case "click-element":
+      // Phase 1 of the click: read the target's frame. driveClickElement runs
+      // this, then posts the click at the resolved center and asserts the outcome.
+      return {
+        primitive: "resolve-frame",
+        label: step.label,
+        lang: "applescript",
+        script: axFrameScript(step.path ?? ""),
+      };
   }
+}
+
+/**
+ * Execute a `click-element` step: resolve the target's AX frame, synthesize a
+ * mouse click at its center, then verify the declared post-click outcome. Fails
+ * closed at every stage — a missing frame aborts BEFORE any click (no guessed
+ * pixel is ever clicked); a missing post-click element dismisses whatever opened
+ * (Escape) and aborts.
+ */
+async function driveClickElement(
+  step: UiStep,
+  run: UiRunner,
+): Promise<{ ok: boolean; why?: string; needsAbort?: boolean }> {
+  const frameRes = await run(commandForStep(step, ""), STEP_TIMEOUT_MS);
+  const center = frameRes.ok ? parseFrameCenter(frameRes.stdout) : null;
+  if (center === null) {
+    return {
+      ok: false,
+      why:
+        "its on-screen position did not resolve — a Things update may have moved the control, " +
+        "or the app is not in the expected state; no click was sent",
+    };
+  }
+  const clickRes = await run(clickPointCommand(center.x, center.y, step.label), STEP_TIMEOUT_MS);
+  if (!clickRes.ok) {
+    return {
+      ok: false,
+      why:
+        clickRes.timedOut === true
+          ? "the click timed out"
+          : clickRes.stderr.trim() || "the click failed",
+      needsAbort: true,
+    };
+  }
+  if (step.assertPath !== undefined) {
+    const ok = await waitForElement(
+      {
+        primitive: "wait",
+        label: step.assertLabel ?? step.label,
+        script: axResolveScript(step.assertPath),
+      },
+      step.assertTimeoutMs ?? STEP_TIMEOUT_MS,
+      run,
+    );
+    if (!ok) {
+      return {
+        ok: false,
+        why: `${step.assertLabel ?? "the expected element"} did not appear after the click`,
+        needsAbort: true,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
@@ -269,6 +398,19 @@ async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
       done.push(step.label);
       continue;
     }
+    if (step.primitive === "click-element") {
+      // A mouse click at an AX-resolved frame center (the NATIVE1 primitive),
+      // used only where AXPress is inert (Things' custom `…`/repeat-bar popover).
+      // oxlint-disable-next-line no-await-in-loop -- the click depends on the UI state the previous step produced
+      const outcome = await driveClickElement(step, run);
+      if (!outcome.ok) {
+        // oxlint-disable-next-line no-await-in-loop -- dismiss whatever the click opened before reporting
+        if (outcome.needsAbort === true) await abort();
+        return partial(step.label, outcome.why ?? "the click failed");
+      }
+      done.push(step.label);
+      continue;
+    }
     // oxlint-disable-next-line no-await-in-loop -- each recipe step depends on the UI state the previous step produced; they cannot be parallelized
     const res = await run(command, STEP_TIMEOUT_MS);
     if (!res.ok) {
@@ -315,8 +457,10 @@ function enabledMatrix(): VectorMatrix {
       ...(cert !== undefined && { evidence: cert.evidence }),
       notes:
         `drives the Things app through the Accessibility API (${cert?.status ?? "uncertified"}` +
-        " — recipe element paths pending on-device confirmation); element presses do not steal " +
-        "focus and work under a locked session (AXVM1)",
+        " — recipe element paths pending on-device confirmation); menu-path element presses do not " +
+        "steal focus and work under a locked session (AXVM1), while ops that open Things' custom " +
+        "repeat menus additionally move the pointer, bring the app to the foreground, and need an " +
+        "unlocked session with the display awake (NATIVE1)",
     };
   }
   return matrix;

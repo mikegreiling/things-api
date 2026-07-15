@@ -121,57 +121,11 @@ export function convertToProjectRecipe(
   };
 }
 
-export function stopRepeatRecipe(targetUuid: string): UiRecipe {
-  // Stop is reachable ONLY from the open-card repeat-bar popover (UI2-i) — not
-  // the Items/context menus. Open the card, click the "Repeat every …" bar,
-  // then Stop, then confirm the "Stop To-Do from Repeating" sheet.
-  //
-  // UIC1 BLOCKER (uncertified, and cannot be certified as written): opening the
-  // card requires a genuine mouse DOUBLE-CLICK on the list row. Things list rows
-  // are sparse AXCells that expose no AXPress/AXOpen action, and neither AXPress
-  // on the cell, Return, nor Get Info opens the card (an `entire contents` scan
-  // finds no repeat bar). The AX-only vector cannot synthesize a double-click, so
-  // this recipe fails-closed at the card-open step. Certifying stop-repeat needs
-  // either a native-AXUIElement double-click or a (banned) coordinate click; see
-  // docs/lab/uic1-certification.md. Window addressing corrected to the main
-  // standard window for when a viable card-open primitive lands.
-  return {
-    op: "todo.stop-repeat",
-    targetUuid,
-    steps: [
-      ...preamble(targetUuid),
-      {
-        primitive: "press",
-        label: "open the to-do card (UIC1: no AX card-open path — see recipe note)",
-        path: `UI element 1 of (first row of table 1 of scroll area 2 of ${MAIN_WINDOW} whose selected is true)`,
-        dynamic: true,
-        addressing: "title",
-      },
-      waitFor("the card's repeat bar", `button "Repeat" of group 1 of ${MAIN_WINDOW}`),
-      menuPress(
-        "click the repeat bar to open the popover",
-        `button "Repeat" of group 1 of ${MAIN_WINDOW}`,
-      ),
-      waitFor("the repeat popover", `pop over 1 of ${MAIN_WINDOW}`),
-      {
-        primitive: "press",
-        label: "popover ▸ Stop",
-        path: `menu item "Stop" of pop over 1 of ${MAIN_WINDOW}`,
-        dynamic: true,
-        addressing: "title",
-      },
-      waitFor("the confirmation sheet", `sheet 1 of ${MAIN_WINDOW}`),
-      {
-        // Alert primary button — stable AXIdentifier "action-button-1" (UIC1).
-        primitive: "press",
-        label: 'confirm — press "Stop"',
-        path: `(first button of sheet 1 of ${MAIN_WINDOW} whose value of attribute "AXIdentifier" is "action-button-1")`,
-        dynamic: true,
-        addressing: "axidentifier",
-      },
-    ],
-  };
-}
+// The to-do stop-repeat recipe was REMOVED (roadmap build item 4): it never
+// certified (its Stop popover lives only on the open card, reachable only by a
+// mouse double-click — UIC1/UIC2-d) and no project.stop-repeat is built either
+// (the project Stop then selecting the demoted project crashes Things — CRASH1
+// / oddities §7 C5). See docs/design/ax-initiative.md and docs/design/ui-vector.md.
 
 // --------------------------------------------------------------- tier 2
 
@@ -241,6 +195,136 @@ export function rescheduleRepeatRecipe(
         `menu item "Reschedule…" of menu 1 of menu item "Repeat" of ${ITEMS_MENU}`,
         REPEAT_SUBMENU_ANCHOR,
       ),
+      ...repeatDialogEntry(frequency, interval),
+    ],
+  };
+}
+
+// --------------------------------------------------- repeating-PROJECT ops
+//
+// A repeating project has no Items ▸ Repeat submenu (a shown project is not a
+// selected to-do — UIC2). Instead its view carries an always-visible REPEAT BAR
+// (`text area 2` of the header cell); clicking it opens a custom popover
+// [Change… · Pause↔Resume · Stop · Show Latest]. The bar is AX-resolvable and
+// the popover items are AX-READABLE but INERT to AXPress (UIC2), so they are
+// actuated with a synthetic MOUSE click at their AX-resolved frame center
+// (the NATIVE1 primitive) — never a guessed pixel. The Repeat dialog the
+// Change… item opens is a sheet, byte-identical to the to-do dialog, and is
+// driven with pure AX (reusing repeatDialogEntry). NO project.stop-repeat is
+// built: the project Stop then selecting the demoted project crashes Things
+// (CRASH1 / oddities §7 C5).
+//
+// PROVISIONAL element paths (pending UIC3 certification): the header cell, the
+// repeat bar, the popover, and the popover items are best-guess structural
+// paths derived from the UIC2 AX inventory; the certification pass confirms or
+// corrects them exactly as the to-do recipes were corrected in UIC1.
+
+/** The header cell of the project view (row 1 of the content table). */
+const PROJECT_HEADER_CELL = `UI element 1 of row 1 of table 1 of scroll area 1 of ${MAIN_WINDOW}`;
+/** The always-visible repeat bar of a repeating project (UIC2/UIC3: text area 2). */
+const PROJECT_REPEAT_BAR = `text area 2 of ${PROJECT_HEADER_CELL}`;
+/**
+ * The popover opened by clicking the repeat bar. Confirmed by UIC3 discovery: it
+ * is a SEPARATE AXUnknown top-level window (≈215×220), NOT a `pop over` of the
+ * standard window — the same custom-window shape UIC2 found for the `…` menu.
+ * Two AXUnknown windows exist while it is open (the popover + a hidden 40×40
+ * utility window), so it is addressed by subrole AND by not being that 40×40
+ * utility window; its items live in the window's scroll area.
+ */
+const PROJECT_REPEAT_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+const PROJECT_REPEAT_POPOVER_ITEMS = `scroll area 1 of ${PROJECT_REPEAT_POPOVER}`;
+
+/** A project view + foreground preamble — the mouse segment needs Things frontmost. */
+function projectPreamble(targetUuid: string): UiStep[] {
+  return [
+    {
+      primitive: "reveal",
+      label: "reveal the project in Things (things:///show?id=)",
+      value: targetUuid,
+    },
+    {
+      // NOT a fallback here: the repeat-bar/popover clicks are synthesized mouse
+      // input, which lands only on the foreground app (NATIVE1-e).
+      primitive: "activate",
+      label: "bring Things to the foreground (the pointer must reach its repeat bar)",
+    },
+  ];
+}
+
+/** Click the always-visible repeat bar to open the [Change…/Pause/Stop/…] popover. */
+function openProjectRepeatPopover(): UiStep {
+  return {
+    primitive: "click-element",
+    label: "open the project's repeat menu (click the repeat bar)",
+    path: PROJECT_REPEAT_BAR,
+    assertPath: PROJECT_REPEAT_POPOVER,
+    assertLabel: "the repeat menu",
+    assertTimeoutMs: 5000,
+    addressing: "title",
+  };
+}
+
+/** Click a popover item by its AX description (frame-resolved, AXPress is inert). */
+function popoverItemClick(
+  label: string,
+  description: string,
+  assert?: { path: string; label: string },
+): UiStep {
+  return {
+    primitive: "click-element",
+    label,
+    path: `(first UI element of ${PROJECT_REPEAT_POPOVER_ITEMS} whose description is "${description}")`,
+    // The popover only exists after openProjectRepeatPopover ran, so this is not
+    // canary-resolvable up front; its frame is resolved (fail-closed) at run time.
+    dynamic: true,
+    ...(assert !== undefined && {
+      assertPath: assert.path,
+      assertLabel: assert.label,
+      assertTimeoutMs: 5000,
+    }),
+    addressing: "title",
+  };
+}
+
+export function projectPauseRepeatRecipe(targetUuid: string): UiRecipe {
+  return {
+    op: "project.pause-repeat",
+    targetUuid,
+    steps: [
+      ...projectPreamble(targetUuid),
+      openProjectRepeatPopover(),
+      popoverItemClick("repeat menu ▸ Pause", "Pause"),
+    ],
+  };
+}
+
+export function projectResumeRepeatRecipe(targetUuid: string): UiRecipe {
+  return {
+    op: "project.resume-repeat",
+    targetUuid,
+    steps: [
+      ...projectPreamble(targetUuid),
+      openProjectRepeatPopover(),
+      popoverItemClick("repeat menu ▸ Resume", "Resume"),
+    ],
+  };
+}
+
+export function projectRescheduleRepeatRecipe(
+  targetUuid: string,
+  frequency: RepeatFrequency,
+  interval: number,
+): UiRecipe {
+  return {
+    op: "project.reschedule-repeat",
+    targetUuid,
+    steps: [
+      ...projectPreamble(targetUuid),
+      openProjectRepeatPopover(),
+      popoverItemClick("repeat menu ▸ Change…", "Change…", {
+        path: `sheet 1 of ${MAIN_WINDOW}`,
+        label: "the Repeat dialog",
+      }),
       ...repeatDialogEntry(frequency, interval),
     ],
   };

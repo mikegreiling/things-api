@@ -219,16 +219,16 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "converting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",
   },
-  "todo.stop-repeat": {
-    class: "irreversible",
-    note: "stopping a repeat is a TERMINAL identity replacement (UI2-i): the template uuid is destroyed and replaced by a new plain to-do with the rule cleared — there is no Resume (that is Pause's inverse); make it repeat again from scratch",
-  },
   "todo.reschedule-repeat": {
     class: "irreversible",
     note: "the rule mutates in place (identity preserved, UI2-b) but the minimal GUI vocabulary (frequency + interval) cannot faithfully restore an arbitrary prior rule (a weekday/monthly-offset rule would be lost) — reschedule again by hand",
   },
+  "project.reschedule-repeat": {
+    class: "irreversible",
+    note: "the project's rule mutates in place (identity preserved, UIC2-a) but the minimal GUI vocabulary (frequency + interval) cannot faithfully restore an arbitrary prior rule — reschedule again by hand",
+  },
 
-  // ---- ui-vector reversible pair ------------------------------------------
+  // ---- ui-vector reversible pairs -----------------------------------------
   "todo.pause-repeat": {
     class: "reversible",
     note: "inverse resumes the repeat (UI2-c): pause sets instance-creation paused, keeping the template and rule; resume clears it",
@@ -236,6 +236,14 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   "todo.resume-repeat": {
     class: "reversible",
     note: "inverse pauses the repeat (UI2-c): the reversible cessation toggle — resume clears the paused flag, pause re-sets it",
+  },
+  "project.pause-repeat": {
+    class: "reversible",
+    note: "inverse resumes the project's repeat (UIC2-a): pause sets instance-creation paused, keeping the template and rule; resume clears it",
+  },
+  "project.resume-repeat": {
+    class: "reversible",
+    note: "inverse pauses the project's repeat (UIC2-a): resume clears the paused flag, pause re-sets it",
   },
 };
 

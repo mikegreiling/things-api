@@ -1494,13 +1494,68 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "todo.stop-repeat": {
+  "project.pause-repeat": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo RESUMES a paused repeating project (GUI-driven inverse)", async () => {
+        const uuid = seedProject(fixture.db, {
+          title: "ProjRepeater",
+          recurrenceRule: true,
+          instanceCreationPaused: true,
+        });
+        writeAudit([
+          auditRecord({ op: "project.pause-repeat", uuid, vector: "ui", disruption: 3 }),
+        ]);
+        const ui = uiVector(["project.pause-repeat", "project.resume-repeat"], (op, id) => {
+          set(id, "rt1_instanceCreationPaused = ?", [op === "project.resume-repeat" ? 0 : 1]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.resume-repeat");
+        expect(items[0]?.outcome).toBe("ok");
+        expect(
+          (
+            fixture.db
+              .prepare("SELECT rt1_instanceCreationPaused AS p FROM TMTask WHERE uuid=?")
+              .get(uuid) as { p: number }
+          ).p,
+        ).toBe(0);
+      });
+    },
+  },
+  "project.resume-repeat": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo PAUSES a resumed repeating project (GUI-driven inverse)", async () => {
+        const uuid = seedProject(fixture.db, {
+          title: "ProjRepeater",
+          recurrenceRule: true,
+          instanceCreationPaused: false,
+        });
+        writeAudit([
+          auditRecord({ op: "project.resume-repeat", uuid, vector: "ui", disruption: 3 }),
+        ]);
+        const ui = uiVector(["project.pause-repeat", "project.resume-repeat"], (op, id) => {
+          set(id, "rt1_instanceCreationPaused = ?", [op === "project.resume-repeat" ? 0 : 1]);
+        });
+        const items = await runUndo(deps([ui.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.pause-repeat");
+        expect(items[0]?.outcome).toBe("ok");
+        expect(
+          (
+            fixture.db
+              .prepare("SELECT rt1_instanceCreationPaused AS p FROM TMTask WHERE uuid=?")
+              .get(uuid) as { p: number }
+          ).p,
+        ).toBe(1);
+      });
+    },
+  },
+  "project.reschedule-repeat": {
     class: "irreversible",
     register() {
-      it("planUndo reports it irreversible (terminal — no Resume; new plain to-do)", () => {
-        const plan = planUndo(auditRecord({ op: "todo.stop-repeat", uuid: "T-1" }), NOW);
+      it("planUndo reports it irreversible (minimal vocabulary cannot restore the prior rule)", () => {
+        const plan = planUndo(auditRecord({ op: "project.reschedule-repeat", uuid: "P-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
-        expect(plan.reason).toContain("terminal");
       });
     },
   },

@@ -1292,13 +1292,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "set_repeat_state",
     {
       description:
-        "Pause, resume, or stop a repeating to-do. 'pause' stops it spawning new occurrences " +
-        "but keeps its rule (reversible with 'resume'). 'stop' REPLACES it with a single plain " +
-        "to-do — the recurring series is removed for good (any occurrence already created stays " +
-        "as its own item); this is terminal and cannot be undone.",
+        "Pause or resume a repeating to-do. 'pause' stops it spawning new occurrences but keeps " +
+        "its rule; 'resume' starts it again. The two are inverses of each other.",
       inputSchema: {
         uuid: z.string().describe("The repeating to-do"),
-        state: z.enum(["pause", "resume", "stop"]),
+        state: z.enum(["pause", "resume"]),
         ...driveGuiShape,
         ...dryRunShape,
       },
@@ -1306,12 +1304,57 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const op =
-          args.state === "pause"
-            ? "todo.pause-repeat"
-            : args.state === "resume"
-              ? "todo.resume-repeat"
-              : "todo.stop-repeat";
+        const op = args.state === "pause" ? "todo.pause-repeat" : "todo.resume-repeat";
+        return mutationResult(
+          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
+        );
+      }),
+  );
+
+  server.registerTool(
+    "reschedule_project_repeat",
+    {
+      description:
+        "Change a repeating project's frequency and interval, keeping the same project. Only a " +
+        "frequency and an interval are supported; other repeat details (weekday choices, end " +
+        "bounds) are left as they are and cannot be changed here.",
+      inputSchema: {
+        uuid: z.string().describe("The repeating project to reschedule"),
+        ...repeatRuleShape,
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.run(
+            "project.reschedule-repeat",
+            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "set_project_repeat_state",
+    {
+      description:
+        "Pause or resume a repeating project. 'pause' stops it spawning new occurrences but keeps " +
+        "its rule; 'resume' starts it again. The two are inverses of each other.",
+      inputSchema: {
+        uuid: z.string().describe("The repeating project"),
+        state: z.enum(["pause", "resume"]),
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const op = args.state === "pause" ? "project.pause-repeat" : "project.resume-repeat";
         return mutationResult(
           await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
         );

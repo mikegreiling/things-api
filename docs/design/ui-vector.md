@@ -29,6 +29,9 @@ The vector is built from a small set of **primitives**, each a single stable `os
 | `wait-for-element` | Poll for an async element (sheet/popover) with a timeout | loop `resolve-element` until present or deadline |
 | `reveal` | Select the target so the menus/card address it | `things:///show?id=<uuid>` (URL scheme, NOT AX) |
 | `activate-app` | Fallback: bring Things frontmost so the menu bar is Things' | `open -a Things3` / `tell app "Things3" to activate` |
+| `click-element` | Synthesize a MOUSE click at an AX-resolved element's frame CENTER — for Things' custom `…`/repeat-bar popover, whose items are AX-readable but inert to `AXPress` (UIC2). Frame from `position`/`size`, never a guessed pixel; a post-click assertion verifies the declared outcome and, on mismatch, sends Escape and aborts | read frame via System Events → HID click via the NATIVE1 JXA/`CGEventPost(kCGHIDEventTap)` bridge |
+
+The `click-element` primitive is the **mouse-synthesis hybrid** (added for the repeating-PROJECT ops, UIC3). It is still fail-closed — the frame is resolved from the live AX tree (a miss refuses before any click), static mouse targets are canaried exactly like AX press targets, and each click carries a post-click assertion that Escape-aborts on mismatch. Its one extra cost vs. the pure-AX menu path: the HID tap posts to the **foreground** surface (NATIVE1-e), so a recipe using it activates Things and needs an unlocked session with the display awake. Only the popover navigation uses it; the Repeat **dialog sheet** it opens stays pure-AX (backgroundable).
 
 Two seam notes for the code author:
 
@@ -104,15 +107,16 @@ VNC input hits the lock screen on a locked session (LOCK1-f, [headless-research.
 
 ## The ops — tiers and the minimal rule vocabulary
 
-Seven ops, all `vector = "ui"`, all shipped **UNCERTIFIED**.
+Eight built ops (plus `heading.convert-to-project`, uncertified), all `vector = "ui"`. `todo.stop-repeat` was **dropped** (never worked — Stop is card-only, UIC2-d), and `project.make-repeating` is **not built** (no doctrine-clean opener — UIC3-a).
 
-**Tier 1 — clicks only** (menu/card presses, no data entry):
+**Tier 1 — clicks only** (menu/popover presses, no data entry):
 
 | Op | CLI | Reversibility | Recipe surface | Identity / result |
 |---|---|---|---|---|
 | `todo.pause-repeat` | `things todo pause-repeat <ref>` | **reversible** (undo = resume) | Items ▸ Repeat ▸ Pause | identity preserved; sets `rt1_instanceCreationPaused`, keeps the template + rule |
 | `todo.resume-repeat` | `things todo resume-repeat <ref>` | **reversible** (undo = pause) | Items ▸ Repeat ▸ Resume | identity preserved |
-| `todo.stop-repeat` | `things todo stop-repeat <ref>` | **IRREVERSIBLE, terminal** | open-card repeat-bar popover ONLY (+ confirm sheet) | **identity replacement**: template uuid hard-deleted, replaced by a new plain to-do with the rule cleared; the already-spawned instance survives independently. Result returns the **new uuid** (DB diff) |
+| `project.pause-repeat` | `things project pause-repeat <ref>` | **reversible** (undo = resume) | repeat bar ▸ Pause (mouse-hybrid) | identity preserved; sets `rt1_instanceCreationPaused`, clears next |
+| `project.resume-repeat` | `things project resume-repeat <ref>` | **reversible** (undo = pause) | repeat bar ▸ Resume (mouse-hybrid) | identity preserved |
 | `todo.convert-to-project` | `things todo convert-to-project <ref>` | **IRREVERSIBLE** | Items ▸ Convert to Project… (+ confirm sheet) | **identity replacement**: original to-do uuid dies, new `type=1` project born with notes preserved. Result returns the **new project uuid** (DB diff) |
 | `heading.convert-to-project` | `things heading convert-to-project <ref>` | **IRREVERSIBLE** | Items ▸ Convert to Project… (+ confirm sheet) | **identity replacement**: heading uuid dies, new project promoted into the parent project's **area**, former children reparented. Result returns the **new project uuid** (DB diff) |
 
@@ -122,6 +126,9 @@ Seven ops, all `vector = "ui"`, all shipped **UNCERTIFIED**.
 |---|---|---|---|
 | `todo.make-repeating` | `things todo make-repeating <ref> --frequency <daily\|weekly\|monthly\|yearly> --interval <1-99>` | **IRREVERSIBLE** | **identity replacement**: plain to-do becomes a NEW template row + a spawned instance; original uuid dies. Result returns the **new template uuid** (DB diff) |
 | `todo.reschedule-repeat` | `things todo reschedule-repeat <ref> --frequency … --interval …` | **IRREVERSIBLE** | identity **preserved** (the rule bytes mutate in place), but classified irreversible because the minimal GUI vocabulary cannot faithfully restore an arbitrary prior recurrence rule — a prior weekday/monthly-offset rule would be lost. Reschedule again by hand to change it back |
+| `project.reschedule-repeat` | `things project reschedule-repeat <ref> --frequency … --interval …` | **IRREVERSIBLE** | identity **preserved** (rule bytes mutate in place, `fu` 256→8 weekly→monthly); irreversible for the same minimal-vocabulary reason. Repeat bar ▸ Change… (mouse-hybrid), then the Repeat sheet (pure-AX) |
+
+**Repeating-PROJECT ops (UIC3, mouse-hybrid).** `project.reschedule-repeat`/`pause-repeat`/`resume-repeat` ride the `click-element` primitive: `reveal` → activate → click the always-visible **repeat bar** (`text area 2` of the header cell) → click the **popover item** (Change…/Pause/Resume — a *separate `AXUnknown` window*, not `pop over 1`) → for reschedule, drive the Repeat sheet with pure AX. A project has no card double-click (unlike to-dos). `project.make-repeating` is **not built** (the only opener for a *plain* project is the AX-nodeless `…` button — UIC3-a), and there is **no `project.stop-repeat`** (the project Stop then selecting the demoted project crashes Things — CRASH1 / oddities §7 C5).
 
 The `reschedule-repeat` classification is worth spelling out for the reversibility matrix: it is the one op whose **identity is preserved** yet is still `irreversible`, because "undo" would mean reconstructing the exact prior rule, and the supported vocabulary (below) is a strict subset of what a rule can encode. We can set a new simple rule; we cannot promise to restore the old one.
 
@@ -134,7 +141,7 @@ The supported recurrence subset for `make-repeating` and `reschedule-repeat`:
 
 Explicitly **NOT supported in v1** (future increments): weekday pickers, ends-bounds (never / after N / on-date), reminders in the repeat dialog, and the "after completion" vs "fixed" type selection. The dialog defaults (after-completion type, no end bound, no reminder) stand for anything the vocabulary does not set. This is why `reschedule-repeat` is irreversible: an existing rule may use any of those unsupported dimensions, and we cannot round-trip them.
 
-### MCP tools (4, per-intent)
+### MCP tools (6, per-intent)
 
 Grouped by intent like the existing `set_project_status`, not one-tool-per-op:
 
@@ -142,7 +149,9 @@ Grouped by intent like the existing `set_project_status`, not one-tool-per-op:
 |---|---|---|
 | `make_repeating` | `todo.make-repeating` | `frequency`, `interval` |
 | `reschedule_repeat` | `todo.reschedule-repeat` | `frequency`, `interval` |
-| `set_repeat_state` | `todo.pause-repeat` / `resume-repeat` / `stop-repeat` | `state: pause \| resume \| stop` |
+| `set_repeat_state` | `todo.pause-repeat` / `resume-repeat` | `state: pause \| resume` |
+| `reschedule_project_repeat` | `project.reschedule-repeat` | `frequency`, `interval` |
+| `set_project_repeat_state` | `project.pause-repeat` / `resume-repeat` | `state: pause \| resume` |
 | `convert_to_project` | `todo.convert-to-project` / `heading.convert-to-project` (dispatches on whether the uuid is a to-do or a heading) | — |
 
 Every ui MCP tool takes `dangerously_drive_gui` and `dry_run`; the two rule tools additionally take `frequency` + `interval`.

@@ -36,7 +36,7 @@ export interface CertificationEntry {
 }
 
 /** The manifest profile — records the tier + Things build the suite certified. */
-export const UI_CERTIFICATION_PROFILE = "UIC1 in-VM (Things 3.22.11) — on-device pending";
+export const UI_CERTIFICATION_PROFILE = "UIC1 + UIC3 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": { status: "lab-certified", evidence: ["UI1", "UI2-a", "UIC1-a"] },
@@ -44,15 +44,9 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
-  "todo.stop-repeat": {
-    status: "uncertified",
-    evidence: ["UI2-i", "UIC1-a"],
-    blocker:
-      "the Stop popover lives only on the open to-do card, and the card opens only via a mouse " +
-      "double-click — Things list rows are sparse AX cells with no press/open action and no " +
-      "URL selection handle, so the Accessibility-only vector cannot open the card (UIC1). Needs " +
-      "a native-AXUIElement double-click or a compiled helper to certify.",
-  },
+  "project.reschedule-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
+  "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
+  "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "heading.convert-to-project": {
     status: "uncertified",
     evidence: ["UI2-d", "UIC1-a"],
