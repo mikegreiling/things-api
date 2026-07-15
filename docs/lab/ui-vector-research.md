@@ -65,6 +65,7 @@ No `src/` changes this campaign. The following capability-matrix cells now carry
 - Convert to project (to-do AND heading) — UI-only, VNC-feasible, identity replacement, irreversible.
 
 ## Cross-links
+- **In-VM certification of the shipped ops (UIC1, 2026-07-14):** [uic1-certification.md](uic1-certification.md) — 5/7 lab-certified against Things 3.22.11 (pause/resume/make-repeating/reschedule/`todo.convert-to-project`); `stop-repeat` and `heading.convert-to-project` FAILED (no AX/URL handle to select a card/heading row). Includes the full AX addressing catalog + exhaustive Repeat-dialog field map.
 - UI1 feasibility + repeat-rule encoding: [s-campaign-results.md](s-campaign-results.md) "UI-vector campaign (UI1)".
 - Locked-session / headless constraints: [headless-research.md](headless-research.md) (LOCK1).
 - Someday reorder anchor-stack (o-suite O15/O16 consistency lock): [o-suite-results.md](o-suite-results.md), [suite-audit.md](../reference/suite-audit.md).

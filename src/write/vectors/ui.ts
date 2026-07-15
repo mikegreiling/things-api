@@ -44,6 +44,13 @@ import type {
 const STEP_TIMEOUT_MS = 15_000;
 /** Poll interval while waiting for a dynamic element (sheet/popover). */
 const WAIT_POLL_MS = 300;
+/**
+ * Settle after the reveal/activate preamble so the menu bar repopulates for the
+ * newly-selected target before the canary reads it (UIC1: the Items ▸ Repeat
+ * submenu appears only once a repeating item is selected, and the update is not
+ * instantaneous).
+ */
+const SETTLE_AFTER_REVEAL_MS = 1500;
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -82,6 +89,21 @@ export function axPressScript(path: string): string {
 /** set-field-value: type a value into a text/pop-up field. */
 export function axSetValueScript(path: string, value: string): string {
   return `${SE} to set value of (${path}) to "${escapeAppleScript(value)}"`;
+}
+/**
+ * select-popup: choose an item in a pop-up button by NAME. Setting `value` on a
+ * Things pop-up button is a silent no-op (UIC1 / UI2-i) — the control must be
+ * opened and the menu item clicked, with a settle between so the menu renders
+ * before the click lands (a press before render falls through to the control
+ * beneath). One stable command shape per primitive.
+ */
+export function axSelectPopupScript(path: string, value: string): string {
+  return `${SE}
+  set pu to (${path})
+  click pu
+  delay 0.6
+  click menu item "${escapeAppleScript(value)}" of menu 1 of pu
+end tell`;
 }
 /** activate: foreground Things (the fallback preamble step). */
 export function axActivateScript(): string {
@@ -166,6 +188,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         label: step.label,
         script: axSetValueScript(step.path ?? "", step.value ?? ""),
       };
+    case "select-popup":
+      return {
+        primitive: "select-popup",
+        label: step.label,
+        script: axSelectPopupScript(step.path ?? "", step.value ?? ""),
+      };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };
     case "key":
@@ -174,9 +202,43 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
 }
 
 async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
-  // 1. Recipe canary: resolve every statically-reachable element up front.
-  //    A miss refuses the whole drive before anything is pressed. (This is
-  //    also the localization check: the English menu titles must resolve.)
+  const done: string[] = [];
+  const abort = (): Promise<UiRunResult> =>
+    run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
+  const partial = (failed: string, why: string): ExecuteResult =>
+    refusal(
+      `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}. ` +
+        "The open sheet/popover was dismissed (Escape).",
+    );
+
+  // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
+  //    menu is context-dependent — its Repeat submenu (and the plain "Repeat…"
+  //    item) only materialize once a matching item is SELECTED (UIC1). Resolving
+  //    those menu paths in the canary is only meaningful after the reveal has
+  //    selected the target, so the preamble must run first.
+  let idx = 0;
+  while (
+    idx < recipe.steps.length &&
+    (recipe.steps[idx]?.primitive === "reveal" || recipe.steps[idx]?.primitive === "activate")
+  ) {
+    const step = recipe.steps[idx] as UiStep;
+    // oxlint-disable-next-line no-await-in-loop -- the preamble steps are strictly sequential (select, then foreground) and each must land before the next
+    const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
+    if (!res.ok) {
+      return partial(
+        step.label,
+        res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
+      );
+    }
+    done.push(step.label);
+    idx += 1;
+  }
+  // Let the selection settle so the menu bar repopulates before the canary reads it.
+  if (idx > 0) await new Promise((r) => setTimeout(r, SETTLE_AFTER_REVEAL_MS));
+
+  // 1. Recipe canary: resolve every statically-reachable element (now that the
+  //    target is selected). A miss refuses the whole drive before anything is
+  //    pressed. (This is also the localization check: English titles must resolve.)
   for (const { path, label } of canaryPaths(recipe)) {
     // oxlint-disable-next-line no-await-in-loop -- the canary resolves elements one at a time; a single miss aborts before anything is pressed, so parallelizing would waste work and blur which element failed
     const res = await run(
@@ -192,17 +254,9 @@ async function drive(recipe: UiRecipe, run: UiRunner): Promise<ExecuteResult> {
     }
   }
 
-  // 2. Execute the steps in order; a dynamic element is waited-for.
-  const done: string[] = [];
-  const abort = (): Promise<UiRunResult> =>
-    run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
-  const partial = (failed: string, why: string): ExecuteResult =>
-    refusal(
-      `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}. ` +
-        "The open sheet/popover was dismissed (Escape).",
-    );
-
-  for (const step of recipe.steps) {
+  // 2. Execute the remaining steps in order; a dynamic element is waited-for.
+  for (let i = idx; i < recipe.steps.length; i += 1) {
+    const step = recipe.steps[i] as UiStep;
     const command = commandForStep(step, recipe.targetUuid);
     if (step.primitive === "wait") {
       // oxlint-disable-next-line no-await-in-loop -- steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs

@@ -37,14 +37,17 @@ function syncHealthLines(sh: DiagnoseReport["syncHealth"]): string[] {
 
 /** The `── ui vector ──` section: config + app + Accessibility + certification. */
 function uiVectorLines(ui: DiagnoseReport["ui"]): string[] {
+  const total = ui.certification.length;
   const certified = ui.certification.filter((c) => c.status === "certified").length;
+  const lab = ui.certification.filter((c) => c.status === "lab-certified").length;
   return [
     "── ui vector (Accessibility GUI) ──",
     `enabled:       ${ui.enabled ? "yes" : "no"} — ${ui.reason}`,
     `app running:   ${ui.appRunning ? "yes" : "no"}`,
     `accessibility: ${ui.accessibility.status} — ${ui.accessibility.detail}`,
-    `certification: ${certified}/${ui.certification.length} certified (${ui.certificationProfile}) — ` +
-      "recipes ship uncertified until confirmed on device (docs/lab/ui-certification-runbook.md)",
+    `certification: ${certified} on-device + ${lab} lab-verified of ${total} (${ui.certificationProfile}) — ` +
+      "lab-verified recipes ran end-to-end in a disposable VM; on-device confirmation is the " +
+      "final step (docs/lab/ui-certification-runbook.md)",
   ];
 }
 

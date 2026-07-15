@@ -47,6 +47,7 @@ export type UiPrimitive =
   | "resolve"
   | "press"
   | "set-value"
+  | "select-popup"
   | "wait"
   | "key";
 

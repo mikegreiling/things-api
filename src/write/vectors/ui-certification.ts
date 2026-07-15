@@ -1,42 +1,66 @@
 /**
  * Per-op certification manifest for the Accessibility GUI ("ui") vector.
  *
- * Every op ships UNCERTIFIED. The Accessibility API is unprobeable in the
- * disposable VM lab (SIP blocks it in the golden) and the developer's
- * workstation is a PRODUCTION Things library, so the element paths in the
- * recipes are derived from the KNOWN menu structure (UI1 / UI2 / UI2-i lab
- * verdicts) but have not been exercised end-to-end on real hardware. A
- * one-time real-hardware sitting (docs/lab/ui-certification-runbook.md) flips
- * these to "certified" once each recipe's element paths are confirmed with the
- * Accessibility Inspector and each op is run against a scratch database.
+ * Certification has two tiers (see docs/design/ui-vector.md):
+ *   - `lab-certified` — the op was run end-to-end through the real shipped
+ *     pipeline inside a disposable Tart VM (Accessibility granted via the AXVM1
+ *     user-path toggle), and the exact DB deltas the lab verdicts specify were
+ *     observed. This certifies the recipe against the Things build in the golden.
+ *   - `certified` — additionally confirmed on the target deployment hardware
+ *     against a scratch database (docs/lab/ui-certification-runbook.md §5).
+ *   - `uncertified` — recipe wired from the known menu structure but either not
+ *     yet exercised, or FAILED lab certification (see `blocker`).
  *
- * This is DATA, not logic — it is the single source of truth surfaced by
- * `things capabilities`, the doctor ui-vector section, and the per-op warning
- * a successful uncertified drive carries. Kept as a typed module (not JSON) so
+ * UIC1 (2026-07-14, Things 3.22.11 / macOS 15.7.7 / DB v26) ran the in-VM suite:
+ * five ops passed and are `lab-certified`; two FAILED and stay `uncertified`
+ * with the blocker recorded, because both need to select a specific Things list
+ * row and the app exposes no AX/URL handle to do so (a to-do card opens only on
+ * a mouse double-click; a heading/project is not selectable via things:///show).
+ *
+ * This is DATA, not logic — the single source of truth surfaced by
+ * `things capabilities`, the doctor ui-vector section, and the per-op warning a
+ * successful non-`certified` drive carries. Kept as a typed module (not JSON) so
  * it type-checks and survives the `tsc` build without a JSON-copy step.
  */
 import type { OperationKind } from "../operations.ts";
 import { UI_DRIVE_OPS } from "../operations.ts";
 
-export type CertificationStatus = "uncertified" | "certified";
+export type CertificationStatus = "uncertified" | "lab-certified" | "certified";
 
 export interface CertificationEntry {
   status: CertificationStatus;
-  /** Lab verdict ids the recipe's structure is derived from. */
+  /** Lab verdict ids the recipe's structure and certification are derived from. */
   evidence: string[];
+  /** Why an op is uncertified after a certification attempt (a failed run). */
+  blocker?: string;
 }
 
-/** The manifest profile — "provisional" until a real-hardware sitting lands. */
-export const UI_CERTIFICATION_PROFILE = "provisional";
+/** The manifest profile — records the tier + Things build the suite certified. */
+export const UI_CERTIFICATION_PROFILE = "UIC1 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
-  "todo.make-repeating": { status: "uncertified", evidence: ["UI1", "UI2-a"] },
-  "todo.reschedule-repeat": { status: "uncertified", evidence: ["UI2-b"] },
-  "todo.pause-repeat": { status: "uncertified", evidence: ["UI2-c"] },
-  "todo.resume-repeat": { status: "uncertified", evidence: ["UI2-c"] },
-  "todo.stop-repeat": { status: "uncertified", evidence: ["UI2-i"] },
-  "todo.convert-to-project": { status: "uncertified", evidence: ["UI2-d"] },
-  "heading.convert-to-project": { status: "uncertified", evidence: ["UI2-d"] },
+  "todo.make-repeating": { status: "lab-certified", evidence: ["UI1", "UI2-a", "UIC1-a"] },
+  "todo.reschedule-repeat": { status: "lab-certified", evidence: ["UI2-b", "UIC1-a"] },
+  "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
+  "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
+  "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
+  "todo.stop-repeat": {
+    status: "uncertified",
+    evidence: ["UI2-i", "UIC1-a"],
+    blocker:
+      "the Stop popover lives only on the open to-do card, and the card opens only via a mouse " +
+      "double-click — Things list rows are sparse AX cells with no press/open action and no " +
+      "URL selection handle, so the Accessibility-only vector cannot open the card (UIC1). Needs " +
+      "a native-AXUIElement double-click or a compiled helper to certify.",
+  },
+  "heading.convert-to-project": {
+    status: "uncertified",
+    evidence: ["UI2-d", "UIC1-a"],
+    blocker:
+      "a heading is not selectable via things:///show (the reveal URL selects to-dos only; a " +
+      "heading id leaves the selection empty and Convert to Project… disabled), and heading rows " +
+      "expose no AX selection handle, so the drive no-ops (UIC1). Needs a row-selection path.",
+  },
 };
 
 /** Certification entry for a ui-vector op (undefined for non-ui ops). */
