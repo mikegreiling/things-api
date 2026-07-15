@@ -103,3 +103,21 @@ So no drop can convert an area into a child or move a project into an area *via 
 Captured the full ordered area list `O0`, applied Move A (Area-07 ↓ below LAB-AREA-B → `LAB-AREA-B, Area-07, …`), then the inverse Move B (Area-07 ↑ above LAB-AREA-B). Result: the ordered UUID/name sequence returned **byte-identical to `O0`** (diff empty). But the underlying `TMArea."index"` *values* were **not** restored (Area-07 −1155 → −2171, LAB-AREA-B −639 → −1815) — each drag extrapolates fresh sparse values.
 
 **Undo classification for the op:** reversible, but the undo cannot be "re-write the moved area's old index" — both because writes are UI-only (no direct SQLite) *and* because the AXDRAG1-a neighbour-renumber quirk means the moved area's index may not have changed at all. The correct pattern is the existing **reorder-undo pattern: capture the full ordered list of area UUIDs pre-op, and to undo, drag to reproduce that exact sequence** (order is the invariant that faithfully round-trips; index values are disposable). This matches the pre-rank-capture reorder-undo already used elsewhere.
+
+## AXDRAG1-e — TAG reorder scoping (feasibility + addressing)
+
+**Verdict: TAG reorder is FEASIBLE via the same HID-drag primitive, with a critical extra dimension — the Tags window overloads drag for BOTH reorder and re-parent, distinguished by drop geometry.**
+
+- **Window open** — `Window ▸ Tags` via an **AX menu-item press** (`click menu item "Tags" of menu 1 of menu bar item "Window"`), the backgrounded-capable pure-AX path. Opens a separate window, `AXTitle="Tags"`, **subrole `AXDialog`** (dark sheet: tag rows + right-hand checkboxes; "New Tag"/"Delete" footer). HID drags actuate in it normally (Things frontmost).
+- **Addressing — WEAKER than the sidebar.** Tag rows are `AXRow`s in an `AXTable`, **h=22, contiguous (no spacer rows)**, frame-addressable. But the **tag name is NOT exposed to AX** — descendant text is only the placeholder `"Dialog Tag Template"` (and `"Dialog Chevron Template"` on rows that are parents, i.e. have children). So a row cannot be matched by name via AX; identify rows by **position** (correlate to `TMTag` order) or by the **chevron marker** for parent tags. Collapsed children are absent from the row list (they appear only when the parent is expanded).
+- **DB columns:** `TMTag."index"` (order, same sparse/negative scheme as areas — lower sorts higher) and `TMTag.parent` (nesting; NULL = top-level).
+
+### Drop geometry: reorder vs re-parent (the load-bearing tag finding)
+
+| Drop point | Effect | Evidence |
+|---|---|---|
+| **On a row's CENTRE** | **NESTS** (re-parent) | dropped `lab-tag-2` on `lab-tag-1`'s centre → `lab-tag-2.parent` NULL → `9sGML65o…` (lab-tag-1's uuid); no index reorder |
+| **On the BOUNDARY between two rows** | **REORDERS** (index only) | dropped `Pending` on the Errand/Home row boundary → `Pending."index"` 0 → **−327** (slotted between Errand −498 and Home −180), `parent` stayed NULL |
+| Above/below the list (dead zone) | no-op | drop at y=102 above row 0 changed nothing |
+
+The **same neighbour-renumber quirk as areas** applies (the reorder that moved Pending also rewrote neighbour `lab-tag-1` 0 → −19). **Hazard for a future `tag.reorder`:** a slightly-off drop that lands on a row centre **silently NESTS the tag instead of reordering it** — so the op must target inter-row boundaries precisely and DB-verify `parent` is unchanged after each move. Nested-tag mechanics: drag-onto-centre re-parents; the tree collapses the child under the new parent (chevron appears). Feasibility confirmed; full recipe/hardening is a follow-up build, not this probe.
