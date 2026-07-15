@@ -71,3 +71,14 @@ With the bottom scrolled into view, dragged `Area-14` **below** the (previously 
 ### Simultaneous-visibility caveat (feeds AXDRAG1-c)
 
 At the VM window height the full area list (17 areas + built-ins + loose projects) does **not** fit one viewport. When scrolled to the bottom to expose `Area-01`, the top of the list (where "to-first" would drop) is scrolled off. So **source and a far target are not always simultaneously visible** — a plain pre-scroll+drag cannot cover an arbitrary far move in one gesture; it needs either a taller window or mid-drag auto-scroll (next probe).
+
+## AXDRAG1-c — mid-drag auto-scroll
+
+**Verdict: Things auto-scrolls mid-drag, bidirectionally, exactly like a native drag.** Holding a drag with the pointer parked near the sidebar's top or bottom edge scrolls the list continuously toward that edge (driver `autoscroll` samples the scrollbar `AXValue` before/after a timed hold):
+
+- **Bottom edge** (hover y=668, viewport bottom 673), 2.5s hold: scrollbar `AXValue` 0.036 → **1.0** (list ran fully to the bottom; former top rows pushed to negative y).
+- **Top edge** (hover y=72, viewport top 63), 2.0s hold: `AXValue` 0.942 → **0.0** (ran fully to the top).
+
+So auto-scroll is **reliable** and needs no scroll-wheel synthesis during the gesture — just keep the drag alive (periodic `kCGEventLeftMouseDragged` at the edge point) and hover.
+
+**But it is continuous / time-based, not positional** — while the pointer sits in the edge zone the list keeps scrolling to the end of its range; there is no built-in "scroll exactly one row" from a hover. For a *deterministic* op that must land at a specific rank, the controllable path is **AXDRAG1-b's pre-scroll** (compute from `AXValue`, bring the target row into the visible band, then a same-viewport drag). Auto-scroll's role is to cover the **simultaneous-visibility gap**: because the full list exceeds the viewport (AXDRAG1-b caveat), a far move (e.g. bottom row → to-first) cannot be done in one static gesture. Recommended op recipe for far moves: **pre-scroll the destination into view and drag from a re-resolved source**, or use edge auto-scroll to traverse and release when the destination neighbour enters the visible band (re-resolve + micro-adjust). Auto-scroll alone (drop-while-still-scrolling) is too imprecise to trust for the final landing.
