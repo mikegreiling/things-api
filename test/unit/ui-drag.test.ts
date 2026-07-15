@@ -6,7 +6,7 @@
  * resolution against the LIVE (source-lifted) layout, and the sparse-index
  * rewrite on drop.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
 import {
@@ -147,6 +147,8 @@ interface SimOptions {
   corruptDigestAfterDrag?: boolean;
   /** Make snapshots fail (fail-closed test). */
   failSnapshots?: boolean;
+  /** Make the scroll-while-held gesture Escape-abort (rung-3 fall-through). */
+  failHeldDrag?: boolean;
 }
 
 interface Sim {
@@ -229,6 +231,33 @@ function makeSim(options: SimOptions): Sim {
       if (m !== null) applyDrag(Number(m[2]), Number(m[4]));
       return Promise.resolve({ ok: true, stdout: "DONE", stderr: "" });
     }
+    if (command.primitive === "sidebar-held-drag") {
+      if (options.failHeldDrag === true) {
+        return Promise.resolve({ ok: true, stdout: JSON.stringify({ aborted: true }), stderr: "" });
+      }
+      const meta = command.meta as { sy: number; anchorTitle: string | null };
+      const si = order.findIndex(
+        (_, i) => meta.sy >= staticTop(i) && meta.sy <= staticTop(i) + ROW_H,
+      );
+      if (si < 0) {
+        return Promise.resolve({ ok: true, stdout: JSON.stringify({ aborted: true }), stderr: "" });
+      }
+      const source = order[si] as string;
+      const remaining = order.filter((_, i) => i !== si);
+      const k = meta.anchorTitle === null ? remaining.length : remaining.indexOf(meta.anchorTitle);
+      if (k < 0) {
+        return Promise.resolve({ ok: true, stdout: JSON.stringify({ aborted: true }), stderr: "" });
+      }
+      remaining.splice(k, 0, source);
+      order = remaining;
+      drags += 1;
+      if (options.corruptDigestAfterDrag === true && drags === 1) digest = "D-CORRUPT";
+      return Promise.resolve({
+        ok: true,
+        stdout: JSON.stringify({ dropped: true, ticks: 7 }),
+        stderr: "",
+      });
+    }
     return Promise.resolve({ ok: true, stdout: "", stderr: "" });
   };
 
@@ -302,7 +331,38 @@ describe("ladder — rung 1 (shared viewport)", () => {
   });
 });
 
+describe("ladder — rung 2 (scroll-while-held, AXDRAG2-a GO)", () => {
+  it("moves a far target with one held-scroll gesture and DB-asserts the result", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300 });
+    const res = await drive(sim, "A1", { kind: "last" });
+    expect(res.ok).toBe(true);
+    expect(res.detail).toContain("scroll-while-held");
+    expect(sim.order().at(-1)).toBe("A1");
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
+    expect(sim.log.filter((x) => x === "sidebar-drag")).toHaveLength(0);
+  });
+
+  it("falls through to the multi-hop floor when the held gesture aborts cleanly", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300, failHeldDrag: true });
+    const res = await drive(sim, "A1", { kind: "last" });
+    expect(res.ok).toBe(true);
+    expect(res.detail).toMatch(/hop/);
+    expect(sim.order().at(-1)).toBe("A1");
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
+    expect(sim.log.filter((x) => x === "sidebar-drag").length).toBeGreaterThan(1);
+  });
+});
+
 describe("ladder — rung 3 (multi-hop fallback)", () => {
+  beforeEach(() => {
+    process.env["THINGS_UI_DRAG_LADDER"] = "no-held-scroll";
+  });
+  afterEach(() => {
+    delete process.env["THINGS_UI_DRAG_LADDER"];
+  });
+
   it("hops one viewport at a time, asserting the DB between hops, and converges", async () => {
     const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
     const sim = makeSim({ titles, viewportH: 300 });

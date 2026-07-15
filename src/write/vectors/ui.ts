@@ -69,7 +69,8 @@ export type UiCommandPrimitive =
   | "click-point"
   | "sidebar-snapshot"
   | "sidebar-scroll"
-  | "sidebar-drag";
+  | "sidebar-drag"
+  | "sidebar-held-drag";
 
 /** A single primitive dispatch — one stable shape per primitive. */
 export interface UiCommand {
@@ -81,6 +82,8 @@ export interface UiCommand {
   url?: string;
   /** `script` language for the osascript hop; defaults to AppleScript. */
   lang?: "applescript" | "javascript";
+  /** Structured command parameters (test-inspectable; never dispatched). */
+  meta?: Record<string, unknown>;
 }
 
 export interface UiRunResult {

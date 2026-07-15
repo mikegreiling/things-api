@@ -254,6 +254,113 @@ function dragCommand(sx: number, sy: number, tx: number, ty: number): UiCommand 
   };
 }
 
+/**
+ * Rung 2 — scroll-while-held (AXDRAG2-a: wheel events DO scroll the list while
+ * a drag is held, and AX frames re-resolve fresh mid-drag). One atomic
+ * gesture: grab the source, post wheel events until the anchor row's LIVE
+ * frame enters the visible band (direction re-derived every tick from the
+ * live frame), then move to the live-computed boundary and drop. No static
+ * corrections are needed — the mid-drag layout already reflects the lifted
+ * source. If the anchor never arrives within the tick budget, the script
+ * Escape-aborts (AXDRAG1-d: byte-identical index vector) and reports it.
+ */
+export function jxaSidebarHeldScrollDragScript(
+  sx: number,
+  sy: number,
+  anchorTitle: string | null, // null = drop below the last row (to-last)
+  maxTicks: number,
+): string {
+  const [a, b] = [sx, sy].map(Math.round) as [number, number];
+  const anchor = JSON.stringify(anchorTitle);
+  return `${JXA_PRELUDE}
+function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
+  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
+  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
+function liveRows(){ var t=sidebarTable(); if(!t) return []; var out=[]; var ch=kids(t);
+  for(var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
+    if(role==='AXRow'||role==='AXTableRow'){ var f=frame(ch[r]);
+      if(f) out.push({text:allText(ch[r],[],6).join('|'), f:f}) } }
+  out.sort(function(p,q){ return p.f.y-q.f.y }); return out }
+function matches(text, title){ var segs=text.split('|');
+  for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.') return true } return false }
+function viewportRect(){ var w=stdWindow(); if(!w) return null; var sas=findAll(w,'AXScrollArea',12,[]);
+  for(var i=0;i<sas.length;i++){ var f=frame(sas[i]); if(f && f.w<400) return f } return null }
+var sx=${a}, sy=${b}, anchorTitle=${anchor}, maxTicks=${Math.trunc(maxTicks)};
+var vp = viewportRect();
+if (vp === null) { JSON.stringify({aborted:true, why:'no sidebar viewport'}) } else {
+var bandTop = vp.y + 6, bandBot = vp.y + vp.h - 6;
+postHID(mev(MOVED, sx, sy, 0)); sleep(30);
+postHID(mev(DOWN, sx, sy, 1)); sleep(120);
+postHID(mev(DRAG, sx, sy - 3, 1)); sleep(30);
+postHID(mev(DRAG, sx, sy, 1)); sleep(100);
+function boundaryNow(){
+  var rows = liveRows(); if (rows.length === 0) return null;
+  if (anchorTitle === null) {
+    var last = rows[rows.length - 1];
+    var y = last.text === '' ? last.f.y + last.f.h/2 : last.f.y + last.f.h + last.f.h/4;
+    return { y: y, ready: (y >= bandTop && y <= bandBot) ? 1 : 0, dir: y > bandBot ? -3 : 3 };
+  }
+  var anchor = null, above = null;
+  for (var i = 0; i < rows.length; i++) {
+    if (matches(rows[i].text, anchorTitle)) { anchor = rows[i]; above = i > 0 ? rows[i-1] : null; break }
+  }
+  if (anchor === null) return null;
+  var y;
+  if (above === null) y = anchor.f.y + anchor.f.h/4;
+  else if (above.text === '') y = above.f.y + above.f.h/2;
+  else y = (above.f.y + above.f.h + anchor.f.y) / 2;
+  return { y: y, ready: (y >= bandTop && y <= bandBot) ? 1 : 0, dir: y > bandBot ? -3 : 3 };
+}
+var b0 = boundaryNow(), ticks = 0, result = null;
+if (b0 === null) {
+  var kd=$.CGEventCreateKeyboardEvent($(),53,true), ku=$.CGEventCreateKeyboardEvent($(),53,false);
+  postHID(kd); sleep(20); postHID(ku); sleep(150); postHID(mev(UP, sx, sy, 1));
+  result = {aborted:true, why:'anchor row did not resolve mid-drag'};
+} else {
+  while (b0 !== null && b0.ready === 0 && ticks < maxTicks) {
+    var ev = $.CGEventCreateScrollWheelEvent($(), $.kCGScrollEventUnitLine, 1, b0.dir);
+    postHID(ev); sleep(60);
+    postHID(mev(DRAG, sx, sy, 1)); sleep(90);
+    b0 = boundaryNow(); ticks++;
+  }
+  if (b0 === null || b0.ready === 0) {
+    var kd2=$.CGEventCreateKeyboardEvent($(),53,true), ku2=$.CGEventCreateKeyboardEvent($(),53,false);
+    postHID(kd2); sleep(20); postHID(ku2); sleep(150); postHID(mev(UP, sx, sy, 1));
+    result = {aborted:true, why:'anchor never entered the band', ticks:ticks};
+  } else {
+    sleep(150); b0 = boundaryNow();
+    if (b0 === null || b0.ready === 0) {
+      var kd3=$.CGEventCreateKeyboardEvent($(),53,true), ku3=$.CGEventCreateKeyboardEvent($(),53,false);
+      postHID(kd3); sleep(20); postHID(ku3); sleep(150); postHID(mev(UP, sx, sy, 1));
+      result = {aborted:true, why:'boundary moved out of band before the drop', ticks:ticks};
+    } else {
+      var ty = b0.y;
+      for (var s = 1; s <= 15; s++) { postHID(mev(DRAG, sx, sy + (ty-sy)*s/15, 1)); sleep(25) }
+      postHID(mev(DRAG, sx, ty, 1)); sleep(400);
+      postHID(mev(UP, sx, ty, 1));
+      result = {dropped:true, ticks:ticks, dropY:ty};
+    }
+  }
+}
+JSON.stringify(result)
+}`;
+}
+
+function heldScrollDragCommand(
+  sx: number,
+  sy: number,
+  anchorTitle: string | null,
+  maxTicks: number,
+): UiCommand {
+  return {
+    primitive: "sidebar-held-drag",
+    label: "held-scroll drag toward the destination",
+    lang: "javascript",
+    script: jxaSidebarHeldScrollDragScript(sx, sy, anchorTitle, maxTicks),
+    meta: { sx, sy, anchorTitle, maxTicks },
+  };
+}
+
 // ---------------------------------------------------------- pure geometry
 // NO hardcoded pixel geometry: aimed coordinates derive from resolved frames
 // of the current snapshot (amendment 2026-07-15). The only fixed numbers are
@@ -638,6 +745,46 @@ async function performDrag(ctx: DriveCtx, drop: PlannedDrop): Promise<boolean> {
   return res.ok && res.stdout.includes("DONE");
 }
 
+/**
+ * The rung-2 anchor: every placement reduces to "drop above this area row"
+ * (title) or "drop below the last row" (null). `undefined` = unresolvable.
+ */
+export function rung2AnchorTitle(
+  rows: SidebarRowInfo[],
+  areaTitles: readonly string[],
+  sourceTitle: string,
+  placement: SidebarPlacement,
+): string | null | undefined {
+  const others = areaRowsInOrder(rows, areaTitles).filter((a) => a.title !== sourceTitle);
+  if (others.length === 0) return undefined;
+  switch (placement.kind) {
+    case "first":
+      return (others[0] as { title: string }).title;
+    case "last":
+      return null;
+    case "before":
+      return others.some((a) => a.title === placement.title) ? placement.title : undefined;
+    case "after": {
+      const i = others.findIndex((a) => a.title === placement.title);
+      if (i < 0) return undefined;
+      const next = others[i + 1];
+      return next === undefined ? null : next.title;
+    }
+  }
+}
+
+function parseHeldDragResult(res: UiRunResult): { dropped: boolean; ticks?: number } {
+  if (!res.ok) return { dropped: false };
+  try {
+    const parsed = JSON.parse(res.stdout.trim()) as { dropped?: boolean; ticks?: number };
+    return parsed.dropped === true
+      ? { dropped: true, ...(typeof parsed.ticks === "number" && { ticks: parsed.ticks }) }
+      : { dropped: false };
+  } catch {
+    return { dropped: false };
+  }
+}
+
 function invariantsHold(pre: AreaSidebarState, now: AreaSidebarState): boolean {
   return now.areas.length === pre.areas.length && now.assignmentsDigest === pre.assignmentsDigest;
 }
@@ -709,6 +856,10 @@ export async function driveSidebarAreaReorder(
   let hops = 0;
   let remaining: number | null = preTies ? null : distanceIn(pre);
   let retried = false;
+  // Rung 2 is attempted at most ONCE per move; a clean scroll-while-held
+  // abort falls through to the multi-hop floor. The env knob is a LAB seam
+  // (rung-3 certification needs far moves to skip rung 2) — not consumer API.
+  let heldScrollTried = process.env["THINGS_UI_DRAG_LADDER"] === "no-held-scroll";
   // Absolute backstop: ceil(areas / visible-slots) + 2, refined from the first
   // snapshot's viewport height (each hop covers roughly one viewport).
   let hopCap = Math.min(MAX_HOPS_CEILING, pre.areas.length + 2);
@@ -792,6 +943,75 @@ export async function driveSidebarAreaReorder(
         }
       }
       // fall through to a hop if simultaneous visibility could not be arranged
+    }
+
+    // Rung 2: scroll-while-held (AXDRAG2-a GO) — one atomic gesture that
+    // scrolls the list under the held item and drops at the LIVE-resolved
+    // boundary. A clean abort (Escape, no drop) falls through to rung 3.
+    if (!heldScrollTried) {
+      heldScrollTried = true;
+      // The source must be grabbable first.
+      // oxlint-disable-next-line no-await-in-loop -- the pre-grab scroll must land before the gesture
+      const grabbable = await scrollUntil(
+        ctx,
+        (s) => {
+          if (s.viewport === null) return null;
+          const src = findAreaRow(s.rows, spec.targetTitle);
+          if (src === null) return null;
+          const g = grabPoint(src);
+          if (inBand(g.y, s.viewport)) return null;
+          return s.viewport.y + s.viewport.h / 2 - g.y;
+        },
+        (s) => {
+          if (s.viewport === null) return false;
+          const src = findAreaRow(s.rows, spec.targetTitle);
+          return src !== null && inBand(grabPoint(src).y, s.viewport);
+        },
+      );
+      if (grabbable !== null && grabbable.viewport !== null) {
+        const src = findAreaRow(grabbable.rows, spec.targetTitle);
+        const anchor = rung2AnchorTitle(
+          grabbable.rows,
+          areaTitles,
+          spec.targetTitle,
+          spec.placement,
+        );
+        if (src !== null && anchor !== undefined) {
+          const g = grabPoint(src);
+          const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement);
+          const travel = "error" in plan2 ? viewport.h * 4 : Math.abs(plan2.dropY - g.y);
+          const maxTicks = Math.min(400, Math.max(20, Math.ceil(travel / 15)));
+          // oxlint-disable-next-line no-await-in-loop -- the held gesture must complete before its DB assert
+          const res = await runCmd(ctx, heldScrollDragCommand(g.x, g.y, anchor, maxTicks));
+          const parsed = parseHeldDragResult(res);
+          if (parsed.dropped) {
+            // oxlint-disable-next-line no-await-in-loop -- the final assert gates success
+            const finalState = await pollState(
+              ctx,
+              (s) =>
+                invariantsHold(pre, s) && placementSatisfied(s, spec.targetUuid, spec.placement),
+            );
+            if (finalState !== null) {
+              return {
+                ok: true,
+                detail:
+                  `moved with one scroll-while-held drag (${parsed.ticks ?? "?"} wheel ticks` +
+                  `${hops > 0 ? `, after ${hops} hop(s)` : ""})`,
+              };
+            }
+            return refuseOrRecover(
+              ctx,
+              pre,
+              spec,
+              hops,
+              "the scroll-while-held drop landed but the database did not show the requested " +
+                "order (and the area count / area assignments were re-checked)",
+            );
+          }
+          // Clean abort (Escape, nothing dropped) → the multi-hop floor.
+        }
+      }
+      continue;
     }
 
     // Rung 3: hop one viewport toward the target.
