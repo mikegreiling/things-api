@@ -607,16 +607,24 @@ describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
     expect(item?.tags.map((t) => t.title)).toEqual(["recurring", "home", "housekeeping"]);
   });
 
-  it("breaks equal-index ties by title (deterministic)", () => {
+  it("breaks equal-index ties by UUID, not title (TAGORD1 oracle)", () => {
     fx = buildFixtureDb();
-    const zeta = seedTag(fx.db, "zeta", null, 5);
-    const alpha = seedTag(fx.db, "alpha", null, 5);
+    // Never-dragged tags ubiquitously tie at index 0; the app breaks that tie by
+    // the tag's UUID (ascending), NOT alphabetically — proven in a VM across the
+    // Tags window, a to-do's pill row, and the filter-bar chips
+    // (docs/lab/taglab-probes.md). Seed "zeta" first so its (sequential) uuid
+    // sorts BEFORE "alpha": title order would put alpha first, uuid order (and
+    // the real GUI) puts zeta first — a discriminating case.
+    const zeta = seedTag(fx.db, "zeta", null, 0);
+    const alpha = seedTag(fx.db, "alpha", null, 0);
+    expect(zeta < alpha).toBe(true); // uuid order != title order for this pair
     const todo = seedTodo(fx.db, { title: "tied", startDate: "2026-07-02" });
-    tagTask(fx.db, todo, zeta);
+    // Assigned in the opposite order to prove the sort is by tag, not assignment.
     tagTask(fx.db, todo, alpha);
+    tagTask(fx.db, todo, zeta);
 
     const item = todayView(fx.db, NOW).today.find((i) => i.title === "tied");
-    expect(item?.tags.map((t) => t.title)).toEqual(["alpha", "zeta"]);
+    expect(item?.tags.map((t) => t.title)).toEqual(["zeta", "alpha"]);
   });
 
   it("orders area pill tags canonically too", () => {
