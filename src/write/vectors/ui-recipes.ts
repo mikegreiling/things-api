@@ -221,10 +221,18 @@ export function rescheduleRepeatRecipe(
 
 /** The header cell of the project view (row 1 of the content table). */
 const PROJECT_HEADER_CELL = `UI element 1 of row 1 of table 1 of scroll area 1 of ${MAIN_WINDOW}`;
-/** The always-visible repeat bar of a repeating project (UIC2: text area 2). */
+/** The always-visible repeat bar of a repeating project (UIC2/UIC3: text area 2). */
 const PROJECT_REPEAT_BAR = `text area 2 of ${PROJECT_HEADER_CELL}`;
-/** The popover opened by clicking the repeat bar. */
-const PROJECT_REPEAT_POPOVER = `pop over 1 of ${MAIN_WINDOW}`;
+/**
+ * The popover opened by clicking the repeat bar. Confirmed by UIC3 discovery: it
+ * is a SEPARATE AXUnknown top-level window (≈215×220), NOT a `pop over` of the
+ * standard window — the same custom-window shape UIC2 found for the `…` menu.
+ * Two AXUnknown windows exist while it is open (the popover + a hidden 40×40
+ * utility window), so it is addressed by subrole AND by not being that 40×40
+ * utility window; its items live in the window's scroll area.
+ */
+const PROJECT_REPEAT_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+const PROJECT_REPEAT_POPOVER_ITEMS = `scroll area 1 of ${PROJECT_REPEAT_POPOVER}`;
 
 /** A project view + foreground preamble — the mouse segment needs Things frontmost. */
 function projectPreamble(targetUuid: string): UiStep[] {
@@ -265,7 +273,7 @@ function popoverItemClick(
   return {
     primitive: "click-element",
     label,
-    path: `(first UI element of ${PROJECT_REPEAT_POPOVER} whose description is "${description}")`,
+    path: `(first UI element of ${PROJECT_REPEAT_POPOVER_ITEMS} whose description is "${description}")`,
     // The popover only exists after openProjectRepeatPopover ran, so this is not
     // canary-resolvable up front; its frame is resolved (fail-closed) at run time.
     dynamic: true,
