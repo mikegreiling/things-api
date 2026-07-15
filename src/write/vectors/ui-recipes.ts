@@ -194,26 +194,28 @@ export function makeRepeatingRecipe(
 // it to Someday first, so the recipe only ever handles the area / someday cases.
 //
 // Dialog-form wrinkle (UIC4-a): backgrounded, the Repeat editor DETACHES to a
-// top-level `AXUnknown` window instead of an attached `AXSheet`, and its
-// controls sit at different depths. The recipe addresses each control by BOTH
-// shapes (`pathCandidates`); the driver dispatches against whichever resolves.
+// top-level `AXUnknown` window instead of an attached `AXSheet`. The controls
+// sit at the SAME container depth in both forms (UIC5-e) — only the outer
+// window role differs — so the recipe addresses each control by BOTH shapes
+// (`pathCandidates`) and the driver dispatches against whichever resolves.
 
-/** The content list's table (row 0 = header, rows = projects/to-dos). Provisional (pending UIC5). */
+/** The content list's table (row 0 = area/Someday header, then projects/to-dos). Confirmed UIC5. */
 const PROJECT_CONTENT_TABLE = `table 1 of scroll area 1 of ${MAIN_WINDOW}`;
 /** The Repeat editor when Things is frontmost — an attached sheet (interval nested in group 1, UIC1). */
 const REPEAT_SHEET = `sheet 1 of ${MAIN_WINDOW}`;
-/** The Repeat editor when Things is backgrounded — a detached AXUnknown window (controls are direct children, UIC4-a). */
+/** The Repeat editor when Things is backgrounded — a detached AXUnknown window (UIC4-a). Its
+ *  controls sit at the SAME depth as the sheet's (frequency a direct child, interval in group 1) — UIC5-e. */
 const REPEAT_DETACHED = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
 
-/** Frequency pop-up in either dialog form (sheet | detached window). */
+/** Frequency pop-up in either dialog form (sheet | detached window) — a direct child of the dialog. */
 const DIALOG_FREQUENCY = [
   `pop up button 1 of ${REPEAT_SHEET}`,
   `pop up button 1 of ${REPEAT_DETACHED}`,
 ];
-/** Interval field in either form — nested in group 1 on the sheet, a direct child on the detached window. */
+/** Interval field in either form — nested in group 1 (UIC5-e: the detached window nests it identically to the sheet). */
 const DIALOG_INTERVAL = [
   `text field 1 of group 1 of ${REPEAT_SHEET}`,
-  `text field 1 of ${REPEAT_DETACHED}`,
+  `text field 1 of group 1 of ${REPEAT_DETACHED}`,
 ];
 /** OK button in either form. */
 const DIALOG_OK = [`button "OK" of ${REPEAT_SHEET}`, `button "OK" of ${REPEAT_DETACHED}`];
