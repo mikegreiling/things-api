@@ -24,3 +24,30 @@ Things **3.22.11** / macOS **15.7.7** / DB **v26**, ONE disposable clone `axdrag
 ### Baseline DB ordering
 
 All 17 areas start at **`TMArea."index" = 0`** (unmaterialized — Things writes `index` only on a UI drag, per NATIVE1 / the O13 note). The sidebar's displayed area order under an all-zero index is a stable tiebreaker (observed: Area-05, 02, 15, 07, 09, 04, 08, 13, 06, 03, 10, 11, 12, 14, 01 — not creation order). The first drag materializes indices.
+
+## AXDRAG1-a — precision placement + drop geometry + index-rewrite scheme
+
+**Verdict: arbitrary rank placement WORKS in both directions** (adjacent, multi-slot, to-first all confirmed via DB `TMArea."index"` sort). Source frames re-resolved by descendant-static-text (driver `dragname`; click point `row.x+170, row.y+row.h/2`, NATIVE1's label x). Three moves, each DB-verified:
+
+| # | Move | Aimed drop | Result (visual order) | Index delta |
+|---|---|---|---|---|
+| 1 | Area-05 (1st NN) ↓ below Area-15 | (164, 620) | landed after Area-07 | **first drag materialized ALL 17 indices** |
+| 2 | Area-07 → to-first (above LAB-AREA-B) | (164, 354), upward | Area-07 now rank 0 | only Area-07 changed: −44 → **−1155** |
+| 3 | Area-15 ↓ past Area-05 | (164, 618), downward | Area-05, Area-15, Area-09 | only **Area-05** changed: −22 → −107 (the *neighbor*, not the dragged row) |
+
+### Drop-point geometry (the load-bearing finding)
+
+The sidebar table interleaves **h=24 entity rows with h=16 spacer rows → 40px per area "slot"** (area centers 40px apart). Drop placement is decided against the **live, mid-drag layout**, and **lifting the source collapses its slot**:
+
+- **Upward drags: aim at STATIC (pre-drag) coordinates.** Targets above the source do not move when the source is lifted. NATIVE1's upward flip and Move 2's to-first both landed using raw pre-drag frames. To insert *before* a reference row, aim ~6px above its top (e.g. y=354 to precede a row at y=360).
+- **Downward drags: subtract ONE slot-height (40px) from the static target.** Everything below the source's original position shifts **up by 40px** the instant the source is picked up, so a target computed from the static dump overshoots by one slot. Move 1 aimed at y=620 (≈12px above Area-07's *static* top 632) and landed *after* Area-07 — because live Area-07 had shifted to ~592 and y=620 fell in its bottom half.
+- **Before-vs-after within a row is decided by which half the pointer lands in** (top half → insert before that row, bottom half → after), evaluated against the live layout.
+- Practical op recipe: dump rows, pick the destination neighbor, and for a downward move use `neighborStaticY − 40`; for an upward move use `neighborStaticY`. Re-dump and re-verify after each move (indices/positions change).
+
+### Index-rewrite characterization (`TMArea."index"`)
+
+- **Lower index sorts higher; DB order by `"index"` == sidebar visual order** (reconfirmed at 17 areas — NATIVE1 saw it at 2).
+- **First materializing drag renumbers the WHOLE list** into a sparse, *irregular* ranking (observed: −639, −401, −166, −76, −44, −22, −9, −4, −3, −2, −1, 0, 456, 1032, 1372, 1725, 2143 — not evenly spaced). Before any drag all areas sit at `index=0`.
+- **Every subsequent drag reassigns exactly ONE row's index** to a value that slots it into place — an intermediate value strictly between the new neighbors (Move 3: −107 into the (−166, −76) gap — *between* them but **not** the exact midpoint −121), or an extrapolation beyond the current min/max for to-first/to-last (Move 2: −1155, below the −639 minimum).
+- **Quirk — Things may renumber the NEIGHBOR instead of the dragged row** (Move 3: dragged Area-15 kept −76; its neighbor Area-05 was rewritten −22 → −107 to sit above it). Things picks whichever single reassignment realizes the requested order. **Consequence for undo (feeds AXDRAG1-f): you cannot restore by rewriting only the moved area's index — capture the full `TMArea."index"` vector pre-drag.**
+- The sparse gaps mean many future single-value insertions before a full renumber is forced.
