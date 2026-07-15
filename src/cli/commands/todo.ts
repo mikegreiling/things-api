@@ -10,6 +10,7 @@ import { templateStatus } from "../../model/recurrence.ts";
 import { blue, bold, dim, green, red } from "../style.ts";
 import {
   deadlineDetail,
+  inheritedChips,
   loggedDate,
   projectCircle,
   shortDate,
@@ -90,8 +91,10 @@ export function renderDetail(item: AnyTask | null): string[] {
     meta("heading", item.heading?.title);
   }
   if (item.tags.length > 0) meta("tags", tagList(item.tags));
+  // Inherited tags render dim with provenance chips (`#home ‹area Home›`), and
+  // ONLY when present — a zero-inherited card is byte-identical to no line.
   if (item.inheritedTags !== undefined && item.inheritedTags.length > 0)
-    meta("inherited", tagList(item.inheritedTags));
+    meta("inherited", inheritedChips(item.inheritedTags));
   if (item.repeating.isTemplate) {
     const st = templateStatus(item.repeating, todayIso);
     const state = item.repeating.nextOccurrence != null && st === "waiting" ? "scheduled" : st;

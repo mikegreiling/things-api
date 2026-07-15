@@ -19,7 +19,9 @@ import {
   upcomingView,
 } from "../../src/read/views.ts";
 import { projectView } from "../../src/read/project-view.ts";
+import { byUuid } from "../../src/read/detail.ts";
 import { renderProjectView } from "../../src/cli/commands/project.ts";
+import { renderDetail } from "../../src/cli/commands/todo.ts";
 import {
   formatItem,
   renderLegend,
@@ -50,6 +52,7 @@ import {
   seedProject,
   seedTag,
   seedTodo,
+  tagArea,
   tagTask,
 } from "../fixtures/seed.ts";
 
@@ -649,6 +652,65 @@ describe("PLOG1 — stranded open children of a resolved project", () => {
     const dv = projectView(fixture.db, done, NOW);
     expect(dv.openChildrenWhileResolved).toBe(0);
     expect(renderProjectView(dv, {}).join("\n")).not.toMatch(HINT);
+  });
+});
+
+describe("inherited-tags display (todo show / project show)", () => {
+  it("todo show: renders an `inherited:` line with per-tag provenance chips", () => {
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Home");
+    const project = seedProject(fixture.db, { title: "Renovation", area });
+    // Distinct indexes so the canonical order is deterministic: #important
+    // (project) before #home (area).
+    const important = seedTag(fixture.db, "important", null, -10);
+    const home = seedTag(fixture.db, "home", null, 0);
+    tagTask(fixture.db, project, important);
+    tagArea(fixture.db, area, home);
+    const todo = seedTodo(fixture.db, { title: "Paint hallway", project });
+
+    const item = byUuid(fixture.db, todo);
+    const lines = renderDetail(item).join("\n");
+    expect(lines).toContain("inherited: #important ‹project Renovation› #home ‹area Home›");
+    // The item's OWN (direct) tags line is separate; here it has none.
+    expect(lines).not.toContain("tags:");
+  });
+
+  it("project show: renders the area-inherited line with an `‹area …›` chip", () => {
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Home");
+    const home = seedTag(fixture.db, "home");
+    tagArea(fixture.db, area, home);
+    const project = seedProject(fixture.db, { title: "Renovation", area });
+
+    const view = projectView(fixture.db, project, NOW);
+    const lines = renderProjectView(view, {}).join("\n");
+    expect(lines).toContain("inherited: #home ‹area Home›");
+  });
+
+  it("omits the `inherited:` line entirely when there are none — no empty placeholder", () => {
+    // A project/to-do whose ancestor carries NO tags must render with NO
+    // `inherited:` line at all (Mike's ruling: no empty placeholder — match the
+    // when/deadline convention of hiding absent fields), byte-identical to the
+    // pre-feature output.
+    fixture = buildFixtureDb();
+    const area = seedArea(fixture.db, "Untagged Area");
+    const project = seedProject(fixture.db, { title: "P", area });
+    const todo = seedTodo(fixture.db, { title: "t", project });
+
+    const todoLines = renderDetail(byUuid(fixture.db, todo)).join("\n");
+    const projLines = renderProjectView(projectView(fixture.db, project, NOW), {}).join("\n");
+    expect(todoLines).not.toContain("inherited:");
+    expect(projLines).not.toContain("inherited:");
+  });
+
+  it("JSON/entity shape: inheritedTags is ALWAYS present (empty array) on a detail read", () => {
+    fixture = buildFixtureDb();
+    const project = seedProject(fixture.db, { title: "P" });
+    const todo = seedTodo(fixture.db, { title: "t", project });
+    const item = byUuid(fixture.db, todo) as { inheritedTags?: unknown[] };
+    expect(item.inheritedTags).toEqual([]);
+    // Round-trips JSON without losing the key.
+    expect(JSON.parse(JSON.stringify(item))).toHaveProperty("inheritedTags", []);
   });
 });
 

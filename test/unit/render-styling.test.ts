@@ -21,6 +21,7 @@ const DIM = "[2m";
 const UNDERLINE = "[4m";
 const STRIKE = "[9m";
 const BLUE = "[34m";
+const GREEN = "[32m";
 
 let savedNoColor: string | undefined;
 let savedForceColor: string | undefined;
@@ -105,6 +106,16 @@ describe("glyph styling (color on)", () => {
     const styled = projectTitleAccent("Website");
     expect(styled).toContain(BOLD);
     expect(styled).not.toContain(BLUE);
+  });
+
+  it("inherited chips render DIM (secondary metadata), never GREEN like the item's own tags", async () => {
+    const { inheritedChips } = await glyphs();
+    const styled = inheritedChips([
+      { tag: { uuid: "t1", title: "home" }, source: { type: "area", uuid: "a1", title: "Home" } },
+    ]);
+    expect(styled).toContain(DIM);
+    expect(styled).not.toContain(GREEN);
+    expect(styled).toContain("#home ‹area Home›");
   });
 
   it("delta 2: a repeating project template circle is BLUE (still a project)", async () => {

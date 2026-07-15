@@ -10,6 +10,7 @@ import { bold, dim, green, underline } from "../style.ts";
 import {
   countChip,
   deadlineDetail,
+  inheritedChips,
   loggedDate,
   projectCircle,
   thingsLink,
@@ -106,10 +107,10 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     lines.push(`  ${dim("logged:")} ${loggedDate(p.stopped, todayIso)} ${dim(`(${p.status})`)}`);
   if (p.tags.length > 0)
     lines.push(`  ${dim("tags:")} ${green(`#${p.tags.map((t) => t.title).join(" #")}`)}`);
+  // Inherited (from the area) renders dim with provenance chips, only when
+  // present — a zero-inherited card is byte-identical to no line.
   if (p.inheritedTags !== undefined && p.inheritedTags.length > 0)
-    lines.push(
-      `  ${dim("inherited:")} ${green(`#${p.inheritedTags.map((t) => t.title).join(" #")}`)}`,
-    );
+    lines.push(`  ${dim("inherited:")} ${inheritedChips(p.inheritedTags)}`);
   if (p.repeating.isTemplate)
     lines.push(`  ${dim("repeating:")} TEMPLATE (invisible in list views)`);
   if (p.repeating.isInstance)
