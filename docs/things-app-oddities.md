@@ -305,6 +305,17 @@ Recorded while establishing the pure-AX `project.make-repeating` path ([lab/uic4
 - **Repeating project templates refuse quiet-vector schedule edits.** `things:///update-project?id=<template>&when=anytime|someday` is a **silent no-op** on a repeating template's `start` bucket (the URL is accepted, nothing changes), and AppleScript `move (to do id "<template>") to list "Anytime"` returns **error 301 ("Cannot move to-do")**. Re-homing a repeating template's schedule requires the in-app UI (When…/repeat editor). (A plain project accepts both.)
 - **`make-repeating` normalizes `start` to the repeating bucket, discarding the prior anytime/someday state.** The new template and its spawned instance are written `start`=2 **regardless of the project's prior `start`** (an anytime project and a someday project both end at `start`=2; even the app-made seed is `start`=2). The instance carries a `startDate` (→ Upcoming); the template's is NULL. **Area IS preserved through the identity replacement; `start` is NOT** — so a temporary Someday-coercion (to make an area-less anytime project row-selectable) leaves no residue. Arguably expected behaviour, noted because it means "someday survives conversion" is a non-question — the bucket is always replaced.
 
+## 9. Sidebar AX mirror drops or blanks row elements after drag/scroll churn — until relaunch (AXDRAG2, 2026-07-15, Things 3.22.11)
+
+With a long sidebar (25 areas ≈ 2.3 viewports), the sidebar `AXTable`'s accessibility mirror goes **incoherent** after in-session churn — synthesized drags plus scrolling, with a held-drag scroll of ≳1.5 viewport heights the strongest single trigger, and window resizes a contributing one:
+
+- A row element **stops exposing its static text** (name) while keeping a frame — or **disappears from the AX tree entirely** (the adjacent rows' frames close the gap, so even the virtual layout contradicts the app).
+- Which row is affected varies run to run; the two adjacent project-section rows (a repeating-project row + "Later Projects") also blank intermittently.
+- The app itself is FINE throughout: the rendered sidebar, the AppleScript oracle (`get name of areas`), and `TMArea."index"` all stay correct and mutually consistent — only the AX mirror lies.
+- **Idle does not heal it; scrolling the row on-screen does not heal it; navigating between lists does not heal it. Relaunching Things is the only observed cure.**
+
+Automation consequence: any AX-driving of the sidebar must treat "row not found by name" as a first-class outcome (the `area.reorder-sidebar` driver refuses fail-closed and names a relaunch as the remediation), and long scroll-while-held gestures should be avoided outright (the op's held-scroll rung ships disabled because of this). Evidence: [lab/axdrag2-reorder-certification.md](lab/axdrag2-reorder-certification.md).
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

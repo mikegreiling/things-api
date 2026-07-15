@@ -149,6 +149,8 @@ interface SimOptions {
   failSnapshots?: boolean;
   /** Make the scroll-while-held gesture Escape-abort (rung-3 fall-through). */
   failHeldDrag?: boolean;
+  /** Make the held gesture land ONE SLOT SHORT (benign off-slot landing). */
+  heldDragOffByOne?: boolean;
 }
 
 interface Sim {
@@ -244,10 +246,11 @@ function makeSim(options: SimOptions): Sim {
       }
       const source = order[si] as string;
       const remaining = order.filter((_, i) => i !== si);
-      const k = meta.anchorTitle === null ? remaining.length : remaining.indexOf(meta.anchorTitle);
+      let k = meta.anchorTitle === null ? remaining.length : remaining.indexOf(meta.anchorTitle);
       if (k < 0) {
         return Promise.resolve({ ok: true, stdout: JSON.stringify({ aborted: true }), stderr: "" });
       }
+      if (options.heldDragOffByOne === true) k = Math.max(0, k - 1);
       remaining.splice(k, 0, source);
       order = remaining;
       drags += 1;
@@ -331,38 +334,62 @@ describe("ladder — rung 1 (shared viewport)", () => {
   });
 });
 
-describe("ladder — rung 2 (scroll-while-held, AXDRAG2-a GO)", () => {
-  it("moves a far target with one held-scroll gesture and DB-asserts the result", async () => {
-    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
-    const sim = makeSim({ titles, viewportH: 300 });
-    const res = await drive(sim, "A1", { kind: "last" });
-    expect(res.ok).toBe(true);
-    expect(res.detail).toContain("scroll-while-held");
-    expect(sim.order().at(-1)).toBe("A1");
-    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
-    expect(sim.log.filter((x) => x === "sidebar-drag")).toHaveLength(0);
-  });
-
-  it("falls through to the multi-hop floor when the held gesture aborts cleanly", async () => {
-    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
-    const sim = makeSim({ titles, viewportH: 300, failHeldDrag: true });
-    const res = await drive(sim, "A1", { kind: "last" });
-    expect(res.ok).toBe(true);
-    expect(res.detail).toMatch(/hop/);
-    expect(sim.order().at(-1)).toBe("A1");
-    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
-    expect(sim.log.filter((x) => x === "sidebar-drag").length).toBeGreaterThan(1);
-  });
-});
-
-describe("ladder — rung 3 (multi-hop fallback)", () => {
+describe("ladder — rung 2 (scroll-while-held — built, opt-in via lab knob)", () => {
   beforeEach(() => {
-    process.env["THINGS_UI_DRAG_LADDER"] = "no-held-scroll";
+    process.env["THINGS_UI_DRAG_LADDER"] = "held-scroll";
   });
   afterEach(() => {
     delete process.env["THINGS_UI_DRAG_LADDER"];
   });
 
+  it("moves a mid-distance target with one held-scroll gesture and DB-asserts the result", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300 });
+    // Travel ≈ 11 slots (440px) — beyond rung 1 (300px viewport) but inside
+    // the 1.5-viewport held-scroll cap (450px).
+    const res = await drive(sim, "A1", before("A13"));
+    expect(res.ok).toBe(true);
+    expect(res.detail).toContain("scroll-while-held");
+    const order = sim.order();
+    expect(order.indexOf("A1")).toBe(order.indexOf("A13") - 1);
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
+    expect(sim.log.filter((x) => x === "sidebar-drag")).toHaveLength(0);
+  });
+
+  it("skips the held gesture entirely for far travels (the AX-ghost travel cap)", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300 });
+    const res = await drive(sim, "A1", { kind: "last" });
+    expect(res.ok).toBe(true);
+    expect(res.detail).toMatch(/hop/);
+    expect(sim.order().at(-1)).toBe("A1");
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(0);
+  });
+
+  it("finishes via the lower rungs when the held drop lands one slot off (benign)", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300, heldDragOffByOne: true });
+    const res = await drive(sim, "A1", before("A13"));
+    expect(res.ok).toBe(true);
+    const order = sim.order();
+    expect(order.indexOf("A1")).toBe(order.indexOf("A13") - 1);
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
+    expect(sim.log.filter((x) => x === "sidebar-drag").length).toBeGreaterThan(0);
+  });
+
+  it("falls through to the multi-hop floor when the held gesture aborts cleanly", async () => {
+    const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
+    const sim = makeSim({ titles, viewportH: 300, failHeldDrag: true });
+    const res = await drive(sim, "A1", before("A13"));
+    expect(res.ok).toBe(true);
+    const order = sim.order();
+    expect(order.indexOf("A1")).toBe(order.indexOf("A13") - 1);
+    expect(sim.log.filter((x) => x === "sidebar-held-drag")).toHaveLength(1);
+    expect(sim.log.filter((x) => x === "sidebar-drag").length).toBeGreaterThan(0);
+  });
+});
+
+describe("ladder — rung 3 (multi-hop fallback — the default floor)", () => {
   it("hops one viewport at a time, asserting the DB between hops, and converges", async () => {
     const titles = Array.from({ length: 30 }, (_, i) => `A${i + 1}`);
     const sim = makeSim({ titles, viewportH: 300 });

@@ -307,21 +307,25 @@ if [ "$CMD" = "cert" ]; then
   note "order: $(area_order)"
 
   note "-- c3 undo round-trip of c2 --"
-  TXN=$(python3 -c "import json;print(json.load(open('$OUT/c2.json'))['data'].get('undoToken',''))" 2>/dev/null || true)
+  TXN=$(grep -o '"undoToken":"[^"]*"' "$OUT/c2.json" | head -1 | cut -d'"' -f4)
   note "undo token: $TXN"
   if [ -n "$TXN" ]; then
     G undo --txn "$TXN" --dangerously-drive-gui --json 2>&1 | tee "$OUT/c3-undo.json" | head -c 600; echo
   fi
   note "order after undo: $(area_order)"
 
-  note "-- c4 multi-hop: shrink window, Area-01 --last (off-viewport target) --"
+  note "-- c4 rung-3 multi-hop (ladder pinned no-held-scroll): shrink window, Area-01 --last --"
   lab_ssh "$IP" '/usr/bin/osascript -e '\''tell application "System Events" to tell process "Things3" to set size of (first window whose subrole is "AXStandardWindow") to {935, 420}'\''' </dev/null
   sleep 2
-  G area reorder-sidebar Area-01 --last --dangerously-drive-gui --json 2>&1 | tee "$OUT/c4.json" | head -c 800; echo
+  lab_ssh "$IP" "THINGS_UI_DRAG_LADDER=no-held-scroll ~/things-lab/bin/node ~/things-lab/things-api/dist/cli/main.js area reorder-sidebar Area-01 --last --dangerously-drive-gui --json" </dev/null 2>&1 | tee "$OUT/c4.json" | head -c 800; echo
   note "order: $(area_order)"
 
-  note "-- c5 multi-hop UP: Area-22 --first (still small window) --"
-  G area reorder-sidebar Area-22 --first --dangerously-drive-gui --json 2>&1 | tee "$OUT/c5.json" | head -c 800; echo
+  note "-- c4b rung-2 scroll-while-held: Area-23 --last (far target, small window) --"
+  G area reorder-sidebar Area-23 --last --dangerously-drive-gui --json 2>&1 | tee "$OUT/c4b.json" | head -c 800; echo
+  note "order: $(area_order)"
+
+  note "-- c5 rung-3 multi-hop UP (pinned): Area-22 --first (still small window) --"
+  lab_ssh "$IP" "THINGS_UI_DRAG_LADDER=no-held-scroll ~/things-lab/bin/node ~/things-lab/things-api/dist/cli/main.js area reorder-sidebar Area-22 --first --dangerously-drive-gui --json" </dev/null 2>&1 | tee "$OUT/c5.json" | head -c 800; echo
   note "order: $(area_order)"
   lab_ssh "$IP" '/usr/bin/osascript -e '\''tell application "System Events" to tell process "Things3" to set size of (first window whose subrole is "AXStandardWindow") to {935, 684}'\''' </dev/null
 

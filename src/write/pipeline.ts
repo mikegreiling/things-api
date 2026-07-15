@@ -562,6 +562,11 @@ export async function runMutation<K extends OperationKind>(
         warnings.push(
           "this change was applied by driving the local Things app through the Accessibility API",
         );
+        // Surface the drive's own step summary (e.g. how a sidebar move was
+        // performed: one drag / scroll-while-held / N hops) — behavior detail
+        // the caller can log, and the lab's certification evidence.
+        const driveSummary = executeResult.stdout.trim();
+        if (driveSummary !== "") warnings.push(driveSummary);
         const cert = certificationOf(op);
         if (cert !== undefined && cert.status !== "certified") {
           warnings.push(

@@ -328,14 +328,28 @@ if (b0 === null) {
     postHID(kd2); sleep(20); postHID(ku2); sleep(150); postHID(mev(UP, sx, sy, 1));
     result = {aborted:true, why:'anchor never entered the band', ticks:ticks};
   } else {
-    sleep(150); b0 = boundaryNow();
-    if (b0 === null || b0.ready === 0) {
+    // Post-wheel SETTLE: the list can drift a few px after the last tick
+    // (AXDRAG2-a saw ~8px). Wait until the live boundary is stable across
+    // two consecutive reads before aiming.
+    var stable = 0, lastY = null, w = 0;
+    for (w = 0; w < 12 && stable < 2; w++) {
+      postHID(mev(DRAG, sx, sy, 1)); sleep(140);
+      var bs = boundaryNow(); if (bs === null) break;
+      if (lastY !== null && Math.abs(bs.y - lastY) < 1) stable++;
+      else stable = 0;
+      lastY = bs.y; b0 = bs;
+    }
+    if (b0 === null || b0.ready === 0 || stable < 2) {
       var kd3=$.CGEventCreateKeyboardEvent($(),53,true), ku3=$.CGEventCreateKeyboardEvent($(),53,false);
       postHID(kd3); sleep(20); postHID(ku3); sleep(150); postHID(mev(UP, sx, sy, 1));
-      result = {aborted:true, why:'boundary moved out of band before the drop', ticks:ticks};
+      result = {aborted:true, why:'boundary never stabilized in the band before the drop', ticks:ticks};
     } else {
       var ty = b0.y;
       for (var s = 1; s <= 15; s++) { postHID(mev(DRAG, sx, sy + (ty-sy)*s/15, 1)); sleep(25) }
+      // Final re-resolve at the destination: aim the LAST event at the
+      // freshest boundary in case anything shifted during the approach.
+      var bf = boundaryNow();
+      if (bf !== null && bf.ready === 1) ty = bf.y;
       postHID(mev(DRAG, sx, ty, 1)); sleep(400);
       postHID(mev(UP, sx, ty, 1));
       result = {dropped:true, ticks:ticks, dropY:ty};
@@ -723,7 +737,10 @@ function planDrop(
   const source = findAreaRow(snap.rows, spec.targetTitle);
   if (source === null) {
     return {
-      error: `the sidebar row for "${spec.targetTitle}" did not resolve uniquely by its visible name`,
+      error:
+        `the sidebar row for "${spec.targetTitle}" did not resolve uniquely by its visible ` +
+        "name — after many drags in one app session a sidebar row can stop exposing its " +
+        "name until Things is relaunched (AXDRAG2); quit and reopen Things, then retry",
     };
   }
   const ordered = areaRowsInOrder(snap.rows, areaTitles);
@@ -856,10 +873,23 @@ export async function driveSidebarAreaReorder(
   let hops = 0;
   let remaining: number | null = preTies ? null : distanceIn(pre);
   let retried = false;
-  // Rung 2 is attempted at most ONCE per move; a clean scroll-while-held
-  // abort falls through to the multi-hop floor. The env knob is a LAB seam
-  // (rung-3 certification needs far moves to skip rung 2) — not consumer API.
-  let heldScrollTried = process.env["THINGS_UI_DRAG_LADDER"] === "no-held-scroll";
+  // Rung 2 (scroll-while-held) is BUILT and probe-certified (AXDRAG2-a) but
+  // ships DISABLED: production certification exposed an app-side instability
+  // — after drag+scroll churn the sidebar's AX mirror can drop or blank row
+  // elements until Things is relaunched (AXDRAG2-c / oddities), and held
+  // travel beyond ~1.5 viewports is the strongest trigger. The certified
+  // ladder is rung 1 + the multi-hop floor; THINGS_UI_DRAG_LADDER=held-scroll
+  // re-enables rung 2 for lab work. Attempted at most ONCE per move; a clean
+  // abort falls through to the floor.
+  let heldScrollTried = process.env["THINGS_UI_DRAG_LADDER"] !== "held-scroll";
+  // Transient-render tolerance: the first unresolved snapshot gets one
+  // settle-and-retry before the drive refuses (the app may still be
+  // materializing sidebar rows right after launch/navigation).
+  let resolveRetried = false;
+  // A benign off-slot landing (invariants intact) lets the ladder CONTINUE
+  // from wherever the drop ended — one retry of the final placement, then an
+  // honest positional abort. Only invariant damage recovers-and-refuses.
+  let finalRetried = false;
   // Absolute backstop: ceil(areas / visible-slots) + 2, refined from the first
   // snapshot's viewport height (each hop covers roughly one viewport).
   let hopCap = Math.min(MAX_HOPS_CEILING, pre.areas.length + 2);
@@ -885,8 +915,15 @@ export async function driveSidebarAreaReorder(
     }
     const finalPlan = planDrop(snap, spec, areaTitles, spec.placement);
     if ("error" in finalPlan) {
+      if (!resolveRetried) {
+        resolveRetried = true;
+        // oxlint-disable-next-line no-await-in-loop -- one settle pause before re-reading the tree
+        await ctx.sleep(2000);
+        continue;
+      }
       return refuseOrRecover(ctx, pre, spec, hops, finalPlan.error);
     }
+    resolveRetried = false;
     const grab = grabPoint(finalPlan.source);
 
     // Rung 1: both the grab point and the drop boundary visible (or scrollable
@@ -923,13 +960,27 @@ export async function driveSidebarAreaReorder(
                 invariantsHold(pre, s) && placementSatisfied(s, spec.targetUuid, spec.placement),
             );
             if (finalState === null) {
-              return refuseOrRecover(
+              const latest = ctx.state();
+              if (!invariantsHold(pre, latest)) {
+                return refuseOrRecover(
+                  ctx,
+                  pre,
+                  spec,
+                  hops,
+                  "the drop changed the area count or an area assignment (it should never)",
+                );
+              }
+              // Benign off-slot landing: let the ladder re-aim once from the
+              // new position before giving up.
+              if (!finalRetried) {
+                finalRetried = true;
+                continue;
+              }
+              return abortPartial(
                 ctx,
-                pre,
                 spec,
                 hops,
-                "the drop landed but the database did not show the requested order (and the " +
-                  "area count / area assignments were re-checked)",
+                "the drop kept landing off the requested slot (retried once)",
               );
             }
             return {
@@ -980,6 +1031,11 @@ export async function driveSidebarAreaReorder(
           const g = grabPoint(src);
           const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement);
           const travel = "error" in plan2 ? viewport.h * 4 : Math.abs(plan2.dropY - g.y);
+          // TRAVEL CAP (AXDRAG2-c): held-scroll is proven up to ~1.5 viewport
+          // heights; beyond that the app's AX mirror can lose row names for
+          // the rest of the session (oddities: sidebar ghost rows), so far
+          // moves go straight to the multi-hop floor.
+          if (travel > viewport.h * 1.5) continue;
           const maxTicks = Math.min(400, Math.max(20, Math.ceil(travel / 15)));
           // oxlint-disable-next-line no-await-in-loop -- the held gesture must complete before its DB assert
           const res = await runCmd(ctx, heldScrollDragCommand(g.x, g.y, anchor, maxTicks));
@@ -999,14 +1055,19 @@ export async function driveSidebarAreaReorder(
                   `${hops > 0 ? `, after ${hops} hop(s)` : ""})`,
               };
             }
-            return refuseOrRecover(
-              ctx,
-              pre,
-              spec,
-              hops,
-              "the scroll-while-held drop landed but the database did not show the requested " +
-                "order (and the area count / area assignments were re-checked)",
-            );
+            const latest = ctx.state();
+            if (!invariantsHold(pre, latest)) {
+              return refuseOrRecover(
+                ctx,
+                pre,
+                spec,
+                hops,
+                "the scroll-while-held drop changed the area count or an area assignment " +
+                  "(it should never)",
+              );
+            }
+            // Benign off-slot landing: rungs 1/3 finish the move from here.
+            continue;
           }
           // Clean abort (Escape, nothing dropped) → the multi-hop floor.
         }
