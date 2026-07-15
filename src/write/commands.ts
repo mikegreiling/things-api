@@ -41,6 +41,7 @@ import {
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
+  areaReorderSidebarRecipe,
   convertToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
@@ -50,6 +51,7 @@ import {
   rescheduleRepeatRecipe,
   resumeRepeatRecipe,
 } from "./vectors/ui-recipes.ts";
+import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
 import type { DeltaSpec, FieldAssertion } from "./verify/delta.ts";
 
@@ -1867,6 +1869,111 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
   },
 };
 
+// -------------------------------------------------- sidebar AREA reorder
+
+/** The compile-time placement for area.reorder-sidebar (resolved refs). */
+function sidebarPlacementOf(
+  params: { before?: string; after?: string; position?: "first" | "last" },
+  pre: PreState,
+): SidebarPlacement {
+  const ref = pre.destArea?.resolved;
+  if (params.before !== undefined && ref != null) {
+    return { kind: "before", uuid: ref.uuid, title: ref.title };
+  }
+  if (params.after !== undefined && ref != null) {
+    return { kind: "after", uuid: ref.uuid, title: ref.title };
+  }
+  return { kind: params.position === "first" ? "first" : "last" };
+}
+
+const areaReorderSidebar: CommandSpec<"area.reorder-sidebar"> = {
+  op: "area.reorder-sidebar",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"],
+  preRead(db, params) {
+    const destinations = [params.before, params.after, params.position].filter(
+      (d) => d !== undefined,
+    );
+    if (destinations.length !== 1) {
+      throw new RangeError(
+        "pass exactly one destination: before, after, or position (first | last)",
+      );
+    }
+    if (
+      params.position !== undefined &&
+      params.position !== "first" &&
+      params.position !== "last"
+    ) {
+      throw new RangeError(`invalid position "${params.position}" — expected first | last`);
+    }
+    const pre = emptyPreState();
+    pre.entityTarget = resolveArea(db, { uuid: params.target, title: params.target });
+    const ref = params.before ?? params.after;
+    if (ref !== undefined) pre.destArea = resolveArea(db, { uuid: ref, title: ref });
+    const target = pre.entityTarget.resolved;
+    const dest = pre.destArea?.resolved;
+    if (target != null && dest != null && target.uuid === dest.uuid) {
+      throw new RangeError("the destination area is the area being moved");
+    }
+    // The sidebar drag addresses rows by their VISIBLE NAME — a duplicated
+    // area title makes the row ambiguous, so refuse up front.
+    for (const area of [target, dest]) {
+      if (area == null) continue;
+      const dup = db
+        .prepare("SELECT COUNT(*) AS n FROM TMArea WHERE title = ? COLLATE NOCASE")
+        .get(area.title) as { n: number };
+      if (dup.n > 1) {
+        throw new RangeError(
+          `area title "${area.title}" is shared by ${dup.n} areas — the sidebar move addresses ` +
+            "areas by their visible name; rename one first",
+        );
+      }
+    }
+    pre.areaOrder = (
+      db.prepare(`SELECT uuid FROM TMArea ORDER BY "index", uuid`).all() as unknown as {
+        uuid: string;
+      }[]
+    ).map((r) => r.uuid);
+    return pre;
+  },
+  expectedDelta(pre, params) {
+    const target = pre.entityTarget?.resolved?.uuid ?? "";
+    const order = (pre.areaOrder ?? []).filter((u) => u !== target);
+    const refUuid = pre.destArea?.resolved?.uuid;
+    // Assert the implicated RELATIVE pair (index VALUES are never asserted —
+    // a drag may renumber a neighbor, AXDRAG1-a); capture the FULL pre-order
+    // for undo.
+    let sequence: string[];
+    if (params.before !== undefined && refUuid !== undefined) {
+      sequence = [target, refUuid];
+    } else if (params.after !== undefined && refUuid !== undefined) {
+      sequence = [refUuid, target];
+    } else if (params.position === "first") {
+      const first = order[0];
+      sequence = first === undefined ? [target] : [target, first];
+    } else {
+      const last = order.at(-1);
+      sequence = last === undefined ? [target] : [last, target];
+    }
+    return {
+      mode: "ordering",
+      key: "area-index",
+      sequence,
+      capture: pre.areaOrder ?? sequence,
+      subject: target,
+    };
+  },
+  compile(params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const target = pre.entityTarget?.resolved;
+    return uiDrive(
+      areaReorderSidebarRecipe(
+        { uuid: target?.uuid ?? "", title: target?.title ?? "" },
+        sidebarPlacementOf(params, pre),
+      ),
+    );
+  },
+};
+
 const trashEmpty: CommandSpec<"trash.empty"> = {
   op: "trash.empty",
   hazards: ["H-PERMANENT-DELETE"],
@@ -1931,4 +2038,5 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.reschedule-repeat": projectRescheduleRepeat,
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,
+  "area.reorder-sidebar": areaReorderSidebar,
 };

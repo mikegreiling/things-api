@@ -83,6 +83,12 @@ export interface PreState {
   sameTitleUuids: string[];
   /** Scope membership + wire list for the reorder operation. */
   reorder: ReorderPre | null;
+  /**
+   * area.reorder-sidebar: the FULL area uuid list ordered by TMArea."index"
+   * (the sidebar order once materialized) — feeds the ordering delta's
+   * capture list so undo can restore the exact previous position.
+   */
+  areaOrder: string[] | null;
 }
 
 export function emptyPreState(): PreState {
@@ -104,6 +110,7 @@ export function emptyPreState(): PreState {
     existingEntityUuids: [],
     sameTitleUuids: [],
     reorder: null,
+    areaOrder: null,
   };
 }
 

@@ -52,6 +52,7 @@ export const OPERATION_KINDS = [
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
+  "area.reorder-sidebar",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -73,6 +74,7 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
+  "area.reorder-sidebar",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -387,6 +389,22 @@ export interface ReorderParams {
 export type EmptyParams = Record<string, never>;
 
 /**
+ * Move an area to a new position in the sidebar. Sidebar area order has no
+ * headless spelling at all (P6/O13) — this is delivered by the ui vector's
+ * drag driver. Exactly ONE of before / after / position is required.
+ */
+export interface AreaReorderSidebarParams {
+  /** The area to move: uuid or unique case-insensitive title. */
+  target: string;
+  /** Place it immediately ABOVE this area (uuid or unique title). */
+  before?: string;
+  /** Place it immediately BELOW this area (uuid or unique title). */
+  after?: string;
+  /** Move it to the first or last area slot. Exclusive with before/after. */
+  position?: "first" | "last";
+}
+
+/**
  * Set (make-repeating) or edit (reschedule-repeat) a to-do's or project's
  * recurrence rule through the GUI's Repeat dialog. The v1 vocabulary is minimal:
  * frequency + interval only. Weekday pickers, ends-bounds, and reminders in
@@ -446,6 +464,7 @@ export interface OperationParamsMap {
   "project.reschedule-repeat": RepeatRuleParams;
   "project.pause-repeat": UuidParams;
   "project.resume-repeat": UuidParams;
+  "area.reorder-sidebar": AreaReorderSidebarParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

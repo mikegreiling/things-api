@@ -1362,6 +1362,51 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "move_area_in_sidebar",
+    {
+      description:
+        "Move an area to a new position in the Things sidebar. Give the area plus exactly one " +
+        "destination: before/after another area, or position first/last. The move is made by " +
+        "driving the Things window with the pointer — the app comes to the front and the " +
+        "sidebar may scroll while the area is dragged; the area's projects and to-dos are " +
+        "untouched. Area references are a uuid or a unique name.",
+      inputSchema: {
+        target: z.string().describe("The area to move (uuid or unique name)"),
+        before: z
+          .string()
+          .optional()
+          .describe("Place it immediately above this area (uuid or unique name)"),
+        after: z
+          .string()
+          .optional()
+          .describe("Place it immediately below this area (uuid or unique name)"),
+        position: z
+          .enum(["first", "last"])
+          .optional()
+          .describe("Move it to the top or bottom of the area list"),
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.run(
+            "area.reorder-sidebar",
+            {
+              target: args.target,
+              ...(args.before !== undefined && { before: args.before }),
+              ...(args.after !== undefined && { after: args.after }),
+              ...(args.position !== undefined && { position: args.position }),
+            },
+            writeOptions(args),
+          ),
+        ),
+      ),
+  );
+
+  server.registerTool(
     "convert_to_project",
     {
       description:

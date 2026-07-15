@@ -19,6 +19,7 @@
  * dialogs / popovers with the Accessibility API.
  */
 import type { RepeatFrequency } from "../operations.ts";
+import type { SidebarPlacement } from "./ui-drag.ts";
 import type { UiRecipe, UiStep } from "./types.ts";
 
 const ITEMS_MENU = `menu "Items" of menu bar 1`;
@@ -326,6 +327,47 @@ export function projectRescheduleRepeatRecipe(
         label: "the Repeat dialog",
       }),
       ...repeatDialogEntry(frequency, interval),
+    ],
+  };
+}
+
+// ------------------------------------------------- sidebar AREA reorder
+
+/**
+ * Move an area to a new sidebar position (AXDRAG1/AXDRAG2). The single
+ * drag-reorder step is a COMPOSITE the driver expands into snapshot → scroll →
+ * drag → database-assert cycles (src/write/vectors/ui-drag.ts); there is no
+ * static element path to canary — the drag driver fails closed on its own
+ * frame resolution before any synthesis. Foreground-bound (HID drag).
+ */
+export function areaReorderSidebarRecipe(
+  target: { uuid: string; title: string },
+  placement: SidebarPlacement,
+): UiRecipe {
+  const destination =
+    placement.kind === "before"
+      ? `above "${placement.title}"`
+      : placement.kind === "after"
+        ? `below "${placement.title}"`
+        : placement.kind === "first"
+          ? "to the top of the area list"
+          : "to the bottom of the area list";
+  return {
+    op: "area.reorder-sidebar",
+    targetUuid: target.uuid,
+    steps: [
+      {
+        // NOT a fallback: the drag is synthesized mouse input, which lands
+        // only on the foreground app (NATIVE1-e).
+        primitive: "activate",
+        label: "bring Things to the foreground (the pointer must reach the sidebar)",
+      },
+      {
+        primitive: "drag-reorder",
+        label: `drag the area "${target.title}" ${destination}`,
+        dynamic: true,
+        drag: { targetUuid: target.uuid, targetTitle: target.title, placement },
+      },
     ],
   };
 }

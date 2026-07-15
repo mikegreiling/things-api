@@ -52,9 +52,26 @@ export type DeltaSpec =
   | { mode: "trash-emptied" }
   /**
    * Ordering: the given uuids must read back in strictly ascending rank on
-   * the named key (todayIndex for Today/Evening scopes, index elsewhere).
+   * the named key (todayIndex for Today/Evening scopes, index elsewhere;
+   * area-index reads TMArea."index" — sidebar area order).
    */
-  | { mode: "ordering"; key: "index" | "todayIndex"; sequence: string[] }
+  | {
+      mode: "ordering";
+      key: "index" | "todayIndex" | "area-index";
+      sequence: string[];
+      /**
+       * Uuids whose pre-op ranks are captured for the audit trail beyond the
+       * asserted sequence (area.reorder-sidebar records the FULL sidebar
+       * order so undo can restore the exact previous position). Defaults to
+       * `sequence`.
+       */
+      capture?: string[];
+      /**
+       * The uuid the reorder MOVED (recorded as the audit record's subject —
+       * ordering asserts have no single uuid otherwise).
+       */
+      subject?: string;
+    }
   /** Area/tag property updates (TMArea/TMTag rows aren't tasks). */
   | { mode: "entity-updated"; entity: "area" | "tag"; uuid: string; assert: FieldAssertion[] };
 
@@ -79,7 +96,7 @@ export interface VerifyReader {
   tagExists(uuid: string): boolean;
   areasByTitle(title: string): { uuid: string }[];
   tagsByTitle(title: string): { uuid: string; parent: string | null }[];
-  rankOf(uuid: string, key: "index" | "todayIndex"): number | null;
+  rankOf(uuid: string, key: "index" | "todayIndex" | "area-index"): number | null;
   trashedCount(): number;
   findCreated(probe: CreateProbe): AnyTask[];
   modDateOf(uuid: string): number | null;
@@ -110,8 +127,9 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
         .all(title) as { uuid: string; parent: string | null }[];
     },
     rankOf(uuid, key) {
+      const table = key === "area-index" ? "TMArea" : "TMTask";
       const column = key === "todayIndex" ? "todayIndex" : `"index"`;
-      const row = db.prepare(`SELECT ${column} AS rank FROM TMTask WHERE uuid = ?`).get(uuid) as
+      const row = db.prepare(`SELECT ${column} AS rank FROM ${table} WHERE uuid = ?`).get(uuid) as
         | { rank: number | null }
         | undefined;
       return row?.rank ?? null;
