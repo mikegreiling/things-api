@@ -16,6 +16,12 @@
  * with the blocker recorded, because both need to select a specific Things list
  * row and the app exposes no AX/URL handle to do so (a to-do card opens only on
  * a mouse double-click; a heading/project is not selectable via things:///show).
+ * UIC5 (2026-07-15) then certified `project.make-repeating` (and the
+ * `project.create-repeating` composite that rides it) `lab-certified` — the
+ * pure-AX row-selection path, corrected at the sitting (the row `select` action,
+ * not the silent-no-op table `AXSelectedRows` set; the detached editor's interval
+ * field nests in group 1 exactly like the sheet). `heading.convert-to-project`
+ * stays uncertified (still no row-selection handle for a heading).
  *
  * This is DATA, not logic — the single source of truth surfaced by
  * `things capabilities`, the doctor ui-vector section, and the per-op warning a
@@ -37,7 +43,7 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": { status: "lab-certified", evidence: ["UI1", "UI2-a", "UIC1-a"] },
@@ -53,12 +59,8 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     evidence: ["NATIVE1-d", "AXDRAG1-a", "AXDRAG1-b", "AXDRAG1-f", "AXDRAG2-c"],
   },
   "project.make-repeating": {
-    status: "uncertified",
-    evidence: ["UIC4-a", "UIC4-b", "UIC4-f"],
-    blocker:
-      "recipe wired from the UIC4 pure-AX row-selection verdict (settable AXSelectedRows + " +
-      "dual-form Repeat editor) but not yet exercised end-to-end through the shipped pipeline — " +
-      "certification is the UIC5 in-VM pass",
+    status: "lab-certified",
+    evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a"],
   },
   "heading.convert-to-project": {
     status: "uncertified",

@@ -131,13 +131,21 @@ end tell`;
 }
 /**
  * select-row: select a PROJECT row by title, purely via AX (UIC4-a). Walks the
- * content table's rows, sets each as the sole `AXSelectedRows` selection, and
- * reads back Things' `name of selected to dos`; the first row whose readback
- * equals the target title is LEFT selected and the script returns "OK". Non-
- * selectable rows (the area/Someday header, spacer) throw on the set and are
- * skipped. Returns "NOMATCH" if no row selects to the title — the readback is
- * the selection-landed verification, so a match guarantees the intended row is
+ * content table's rows, issues the row `select` action on each (which REPLACES
+ * the table selection — single-select, UIC5), and reads back Things' `name of
+ * selected to dos`; the first row whose readback equals the target title is LEFT
+ * selected and the script returns "OK". Non-selectable rows (the area/Someday
+ * header, the blank spacer) select nothing (readback count 0) and are skipped.
+ * Returns "NOMATCH" if no row selects to the title — the readback is the
+ * selection-landed verification, so a match guarantees the intended row is
  * selected. One stable command shape per primitive.
+ *
+ * UIC5 correction: the shipped form set the TABLE's `AXSelectedRows` attribute
+ * to a one-row list, which is a SILENT NO-OP on Things' content table via System
+ * Events (no error, selection never lands). The row `select` action is the
+ * working pure-System-Events route and stays background-capable with no focus
+ * steal (UIC5-e). (UIC4-a proved settability with the ObjC-bridge NSArray set —
+ * a different API than the System Events attribute set the driver shells out to.)
  */
 export function axSelectRowScript(tablePath: string, title: string): string {
   const t = escapeAppleScript(title);
@@ -146,7 +154,7 @@ export function axSelectRowScript(tablePath: string, title: string): string {
   set n to (count rows of theTable)
   repeat with i from 1 to n
     try
-      set value of attribute "AXSelectedRows" of theTable to {row i of theTable}
+      select (row i of theTable)
       tell application "Things3" to set selNames to (name of selected to dos)
       if (count of selNames) is 1 and ((item 1 of selNames) as text) is "${t}" then
         return "OK"

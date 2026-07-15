@@ -261,7 +261,7 @@ const selectRowRecipe = (): UiRecipe =>
 describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
   const recipe = selectRowRecipe;
 
-  it("emits an AXSelectedRows set + title readback, and drives to completion on OK", async () => {
+  it("emits a row select + title readback, and drives to completion on OK", async () => {
     const { run, commands } = mockRunner((c) => {
       if (c.primitive === "resolve") return ok("true"); // canary + candidate probes
       if (c.primitive === "select-row") return ok("OK");
@@ -271,7 +271,8 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
     const res = await createUiVector(config(), run).execute(invocation(recipe()));
     expect(res.exitCode).toBe(0);
     const sel = commands.find((c) => c.primitive === "select-row");
-    expect(sel?.script).toContain("AXSelectedRows");
+    // UIC5: the row `select` action, not the (silent no-op) table AXSelectedRows set.
+    expect(sel?.script).toContain("select (row i of theTable)");
     expect(sel?.script).toContain("name of selected to dos");
     expect(sel?.script).toContain("My Project");
   });
