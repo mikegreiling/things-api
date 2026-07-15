@@ -6,11 +6,81 @@
  * stays cheap while contract drift fails loudly. A companion suite enforces
  * the consumer-voice rules of docs/design/surface-copy.md.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { Command } from "commander";
 
 import { buildProgram } from "../../src/cli/main.ts";
+import {
+  HELP_GROUPS,
+  INDEX,
+  renderTopic,
+  renderTopLevelHelp,
+  TOPIC_NAMES,
+} from "../../src/cli/help.ts";
+import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
+import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
+import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
+
+/** Run the CLI in-process through the real resolver, capturing stdout + exit. */
+function runCli(argv: string[]): { stdout: string; stderr: string; exitCode: number } {
+  const out: string[] = [];
+  const err: string[] = [];
+  const originalOut = process.stdout.write.bind(process.stdout);
+  const originalErr = process.stderr.write.bind(process.stderr);
+  const originalExit = process.exitCode;
+  const originalProcessExit = process.exit;
+  process.stdout.write = ((c: string | Uint8Array) => {
+    out.push(typeof c === "string" ? c : new TextDecoder().decode(c));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((c: string | Uint8Array) => {
+    err.push(typeof c === "string" ? c : new TextDecoder().decode(c));
+    return true;
+  }) as typeof process.stderr.write;
+  // Some error paths (an unknown subcommand of a group) reach process.exit
+  // directly rather than commander's exitOverride throw — capture both.
+  let procExit: number | null = null;
+  process.exit = ((code?: number) => {
+    procExit = Number(code ?? 0);
+    throw Object.assign(new Error("exit-signal"), { exitSignal: true });
+  }) as typeof process.exit;
+  try {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrownExit: number | null = null;
+    try {
+      program.parse(resolveInvocation(program, argv).argv, { from: "user" });
+    } catch (e) {
+      if ((e as { exitSignal?: boolean }).exitSignal !== true) {
+        // A commander error/help exit throws a CommanderError carrying exitCode.
+        const ec = (e as { exitCode?: unknown }).exitCode;
+        if (typeof ec === "number") thrownExit = ec;
+      }
+    }
+    const exitCode =
+      procExit ?? thrownExit ?? (process.exitCode !== undefined ? Number(process.exitCode) : 0);
+    return { stdout: out.join(""), stderr: err.join(""), exitCode };
+  } finally {
+    process.stdout.write = originalOut;
+    process.stderr.write = originalErr;
+    process.exit = originalProcessExit;
+    process.exitCode = originalExit;
+  }
+}
+
+let fx: FixtureDb | null = null;
+afterEach(() => {
+  fx?.close();
+  fx = null;
+});
+
+/** Normalize an envelope for equality: zero the wall-clock elapsedMs. */
+function stableEnvelope(stdout: string): string {
+  const o = JSON.parse(stdout) as { meta?: { elapsedMs?: number } };
+  if (o.meta !== undefined) o.meta.elapsedMs = 0;
+  return JSON.stringify(o);
+}
 
 function helpFor(...path: string[]): string {
   const program = buildProgram();
@@ -44,28 +114,192 @@ function allHelp(cmd: Command, path: string[]): [string, string][] {
   return [...own, ...cmd.commands.flatMap((c) => allHelp(c, [...path, c.name()]))];
 }
 
-describe("root help", () => {
-  it("carries the agent notes: --json, stable exit codes, no prompts", () => {
+describe("top-level index (the signpost)", () => {
+  it("fits the line budget: <= 65 output lines at width 100", () => {
     const program = buildProgram();
-    // AGENT NOTES lives in addHelpText(after); commander exposes it on render.
-    let rendered = "";
-    program.configureOutput({ writeOut: (s) => void (rendered += s) });
-    program.exitOverride();
-    try {
-      program.parse(["node", "things", "--help"]);
-    } catch {
-      // exitOverride throws after help renders — expected
+    const lines = renderTopLevelHelp(program, 100).split("\n");
+    expect(lines.length).toBeLessThanOrEqual(65);
+  });
+
+  it("stays within budget across common widths (no wrap blowout)", () => {
+    const program = buildProgram();
+    for (const width of [70, 80, 100, 120]) {
+      const n = renderTopLevelHelp(program, width).split("\n").length;
+      expect(n, `width ${width}`).toBeLessThanOrEqual(65);
     }
-    // The epilog reflows to the terminal width at render time, so assertions
-    // are wrap-agnostic: collapse whitespace before matching (line breaks may
-    // land anywhere).
-    const flat = rendered.replace(/\s+/g, " ");
-    expect(flat).toContain("AGENT NOTES");
-    expect(flat).toContain(
+  });
+
+  it("is a signpost, not a wall: AGENT NOTES and per-command paragraphs are gone", () => {
+    const program = buildProgram();
+    const flat = renderTopLevelHelp(program, 100).replace(/\s+/g, " ");
+    // The former epilog and long descriptions moved to `things help <topic>`
+    // and per-command --help respectively.
+    expect(flat).not.toContain("AGENT NOTES");
+    expect(flat).not.toContain("versioned envelope on stdout, logs on stderr");
+    // It DOES point onward.
+    expect(flat).toContain("things <command> --help");
+    expect(flat).toContain("things help");
+    for (const g of HELP_GROUPS) expect(flat).toContain(g.title);
+  });
+
+  it("indexes every registered top-level command exactly once", () => {
+    const program = buildProgram();
+    const registered = program.commands.map((c) => c.name()).filter((n) => n !== "help");
+    const grouped = HELP_GROUPS.flatMap((g) => g.commands);
+    // Exactly once across all groups.
+    for (const name of grouped) {
+      expect(
+        grouped.filter((n) => n === name),
+        name,
+      ).toHaveLength(1);
+    }
+    // Every registered command is grouped and has index copy…
+    for (const name of registered) {
+      expect(grouped, `"${name}" must be grouped`).toContain(name);
+      expect(INDEX[name], `"${name}" needs index copy`).toBeDefined();
+    }
+    // …and nothing is grouped or described that is not a real command.
+    for (const name of grouped) {
+      expect(registered, `"${name}" grouped but not registered`).toContain(name);
+    }
+    expect(Object.keys(INDEX).toSorted()).toEqual([...registered].toSorted());
+  });
+
+  it("index descriptors are one behavioral line each, <= 58 chars", () => {
+    for (const [name, entry] of Object.entries(INDEX)) {
+      expect(entry.desc.includes("\n"), `${name} desc is one line`).toBe(false);
+      expect(entry.desc.length, `${name} desc <= 58`).toBeLessThanOrEqual(58);
+    }
+  });
+
+  it("global options are condensed to one line each", () => {
+    const program = buildProgram();
+    const lines = renderTopLevelHelp(program, 100).split("\n");
+    const start = lines.findIndex((l) => l.startsWith("Global options"));
+    expect(start).toBeGreaterThan(-1);
+    // Every option line until the following blank is a single option row.
+    const optionLines: string[] = [];
+    for (let i = start + 1; i < lines.length && lines[i] !== ""; i++) {
+      optionLines.push(lines[i] as string);
+    }
+    expect(optionLines.length).toBeGreaterThanOrEqual(2);
+    for (const l of optionLines) {
+      expect(l.trimStart().startsWith("-"), `option row: ${l}`).toBe(true);
+      // One physical line, one option — its descriptor never spilled onto a
+      // second line (the row still fits at width 100).
+      expect(l.length).toBeLessThanOrEqual(100);
+    }
+    const joined = optionLines.join(" ");
+    expect(joined).toContain("--json");
+    expect(joined).toContain("--db");
+  });
+
+  it("the wired --help path renders the index (not commander's default)", () => {
+    const { stdout } = runCli(["--help"]);
+    const flat = stdout.replace(/\s+/g, " ");
+    expect(flat).toContain("Views");
+    expect(flat).toContain("Browse & search");
+    expect(flat).not.toContain("AGENT NOTES");
+  });
+});
+
+describe("help topics", () => {
+  it("every topic renders and stays <= 40 lines (at width 100)", () => {
+    for (const name of TOPIC_NAMES) {
+      const body = renderTopic(name, 100);
+      expect(body, name).not.toBeNull();
+      expect((body as string).split("\n").length, name).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it("agent topic carries the former AGENT NOTES contract lines", () => {
+    const body = (renderTopic("agent", 100) as string).replace(/\s+/g, " ");
+    expect(body).toContain(
       "0 ok, 2 usage, 3 verify-failed, 4 blocked, 5 drift-blocked, 6 unsupported, 7 environment",
     );
-    expect(flat).toContain("No command ever prompts interactively");
-    expect(flat).toContain("things legend");
+    expect(body).toContain("No command ever prompts interactively");
+    expect(body).toContain("things legend");
+    expect(body).toContain("--dry-run");
+  });
+
+  it("filters/ids/output/writes topics carry their load-bearing lines", () => {
+    const filters = (renderTopic("filters", 100) as string).replace(/\s+/g, " ");
+    expect(filters).toContain("--tag");
+    expect(filters).toContain("--untagged");
+    expect(filters).toContain("--limit");
+    expect(filters).toContain("--since");
+    expect(filters).toContain("--all");
+    const ids = (renderTopic("ids", 100) as string).replace(/\s+/g, " ");
+    expect(ids).toContain("PREFIX");
+    expect(ids).toContain("share link");
+    expect(ids.toLowerCase()).toContain("command names always win");
+    const output = (renderTopic("output", 100) as string).replace(/\s+/g, " ");
+    expect(output).toContain("--json");
+    expect(output).toContain("THINGS_WIDTH");
+    const writes = (renderTopic("writes", 100) as string).replace(/\s+/g, " ");
+    expect(writes).toContain("--dry-run");
+    expect(writes).toContain("--dangerously-permanent");
+    expect(writes).toContain("things undo");
+    expect(writes).toContain("things capabilities");
+  });
+
+  it("unknown topic returns null (renderer) and the command lists topics", () => {
+    expect(renderTopic("bogus", 100)).toBeNull();
+    const { stderr, exitCode } = runCli(["help", "bogus"]);
+    expect(exitCode).toBe(2);
+    for (const name of TOPIC_NAMES) expect(stderr).toContain(name);
+  });
+
+  it("`things help <command>` still defers to that command's own --help", () => {
+    const { stdout } = runCli(["help", "todo", "add"]);
+    expect(stdout).toContain("Create a to-do");
+  });
+});
+
+describe("plural list views accept an id (true synonym of show)", () => {
+  it("`things areas <id>` == `things area show <id>` (byte-identical --json)", () => {
+    fx = buildFixtureDb();
+    const areaId = seedArea(fx.db, "Hobbies");
+    seedTodo(fx.db, { title: "loose in area", area: areaId });
+    const plural = runCli(["areas", areaId, "--db", fx.path, "--json"]);
+    const singular = runCli(["area", "show", areaId, "--db", fx.path, "--json"]);
+    expect(plural.exitCode).toBe(0);
+    expect(stableEnvelope(plural.stdout)).toEqual(stableEnvelope(singular.stdout));
+    // Bare plural still lists.
+    const list = runCli(["areas", "--db", fx.path, "--json"]);
+    expect(JSON.parse(list.stdout).kind).toBe("areas");
+  });
+
+  it("`things projects <id>` == `things project show <id>` (byte-identical --json)", () => {
+    fx = buildFixtureDb();
+    const areaId = seedArea(fx.db, "Hobbies");
+    const projId = seedProject(fx.db, { title: "Astro City", area: areaId });
+    seedTodo(fx.db, { title: "sand it", project: projId });
+    const plural = runCli(["projects", projId, "--db", fx.path, "--json"]);
+    const singular = runCli(["project", "show", projId, "--db", fx.path, "--json"]);
+    expect(plural.exitCode).toBe(0);
+    expect(stableEnvelope(plural.stdout)).toEqual(stableEnvelope(singular.stdout));
+    const list = runCli(["projects", "--db", fx.path, "--json"]);
+    expect(JSON.parse(list.stdout).kind).toBe("projects");
+  });
+});
+
+describe("error ergonomics", () => {
+  it("excess arguments name the command and its usage line", () => {
+    const { stderr, exitCode } = runCli(["tags", "X", "Y"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("things tags");
+    expect(stderr).toContain("usage: things tags");
+    expect(stderr).toContain('"X"');
+  });
+
+  it("unknown subcommand of a group suggests a similar command", () => {
+    // `config` is not an implied-show namespace, so a bad subcommand reaches
+    // commander's unknown-command path with suggestions enabled.
+    const { stderr, exitCode } = runCli(["config", "sett", "actor", "mike"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr.toLowerCase()).toContain("unknown command");
+    expect(stderr).toContain("set");
   });
 });
 
@@ -397,6 +631,20 @@ describe("surface copy contract (docs/design/surface-copy.md)", () => {
   it("no --help string leaks internals", () => {
     const program = buildProgram();
     for (const [name, text] of allHelp(program as unknown as Command, [])) {
+      for (const pattern of BANNED) {
+        const match = text.match(pattern);
+        expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
+      }
+    }
+  });
+
+  it("no help TOPIC or the top-level index leaks internals", () => {
+    const program = buildProgram();
+    const surfaces: [string, string][] = [
+      ["index", renderTopLevelHelp(program, 100)],
+      ...TOPIC_NAMES.map((t): [string, string] => [`topic:${t}`, renderTopic(t, 100) ?? ""]),
+    ];
+    for (const [name, text] of surfaces) {
       for (const pattern of BANNED) {
         const match = text.match(pattern);
         expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();

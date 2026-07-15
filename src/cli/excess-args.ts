@@ -12,12 +12,15 @@
  */
 import type { Command } from "commander";
 
-/** Commander internals this module reaches into (version-pinned in package.json). */
+/**
+ * Commander internals this module reaches into (version-pinned in
+ * package.json). The underscore-prefixed slots are addressed by string key so
+ * they never appear as dangling-underscore identifiers.
+ */
 interface CommanderInternals {
-  _allowExcessArguments: boolean;
   registeredArguments: readonly unknown[];
-  _excessArguments?: (receivedArgs: string[]) => void;
   error: (message: string, opts?: { code?: string }) => never;
+  [key: string]: unknown;
 }
 
 /** Full invocation path for a command: `things area show` (root name excluded). */
@@ -45,8 +48,8 @@ function looksLikeRef(token: string): boolean {
 
 function improve(cmd: Command): void {
   const internals = cmd as unknown as CommanderInternals;
-  internals._excessArguments = function (receivedArgs: string[]): void {
-    if (internals._allowExcessArguments) return;
+  internals["_excessArguments"] = function (receivedArgs: string[]): void {
+    if (internals["_allowExcessArguments"] === true) return;
     const expected = internals.registeredArguments.length;
     const extra = receivedArgs.slice(expected);
     const path = commandPath(cmd);
