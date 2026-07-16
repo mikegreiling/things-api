@@ -36,6 +36,8 @@ import { localToday } from "../model/dates.ts";
 import { getField } from "./verify/delta.ts";
 import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
 import { isUiDriveOp, type OperationKind, type ReorderParams } from "./operations.ts";
+import type { RepeatRule } from "../model/recurrence.ts";
+import { ruleToInverseParams } from "./repeat-rule.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 
@@ -212,12 +214,11 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "heading.convert-to-project":
     "converting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",
-  "todo.reschedule-repeat":
-    "the rule mutated in place (UI2-b) but the minimal GUI vocabulary cannot faithfully restore " +
-    "an arbitrary prior recurrence rule — reschedule again by hand",
-  "project.reschedule-repeat":
-    "the project's rule mutated in place (UIC2-a) but the minimal GUI vocabulary cannot " +
-    "faithfully restore an arbitrary prior recurrence rule — reschedule again by hand",
+  // NB: todo.reschedule-repeat / project.reschedule-repeat are NOT here — with
+  // the full rule vocabulary they are CONDITIONAL (planUndo re-drives reschedule
+  // with the CAPTURED prior rule when it is decodable and expressible; only a
+  // rule the Repeat dialog itself cannot produce falls to the irreversible
+  // branch). See the reschedule cases below and reversibility.ts.
   // NB: todo.clear-dated-reminder is NOT here — it IS reversible. The URL
   // scheme re-SETS a dated reminder (update?id=X&when=<date>@<time>, R17/R18),
   // so its inverse re-attaches the captured reminder to the item's current
@@ -228,6 +229,23 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
 
 function preField(record: AuditRecord, field: string): unknown {
   return record.pre === null ? undefined : record.pre[field];
+}
+
+const RULE_UNITS = new Set(["daily", "weekly", "monthly", "yearly"]);
+
+/**
+ * The decoded PRIOR recurrence rule captured by a reschedule pre-read
+ * (`repeating.rule`), or null when it was not captured / not a decodable rule.
+ * The value survived JSON in the audit trail, so it is shape-checked rather than
+ * re-decoded.
+ */
+function decodedRuleOf(record: AuditRecord): RepeatRule | null {
+  const raw = preField(record, "repeating.rule");
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r["unit"] !== "string" || !RULE_UNITS.has(r["unit"])) return null;
+  if (typeof r["interval"] !== "number" || !Array.isArray(r["offsets"])) return null;
+  return raw as RepeatRule;
 }
 
 /**
@@ -1232,6 +1250,45 @@ export function planUndo(
         target,
         kind: "invertible",
         steps: [{ op: "project.pause-repeat", params: { uuid } }],
+        notes,
+      };
+    }
+
+    // Reschedule: identity preserved (UI2-b / UIC2-a), the rule mutated in
+    // place. The captured-rule inverse re-drives reschedule with the PRIOR rule
+    // (recorded pre-op as the decoded rule + deadline flag). Reversible when the
+    // prior rule was captured, decodable, AND expressible in the Repeat dialog's
+    // vocabulary; irreversible for a rule the dialog itself cannot produce.
+    case "todo.reschedule-repeat":
+    case "project.reschedule-repeat": {
+      if (uuid === null) return irreversible("no target uuid recorded");
+      const priorRule = decodedRuleOf(record);
+      if (priorRule === null) {
+        return irreversible(
+          "the prior recurrence rule was not captured (or could not be decoded) — reschedule again by hand",
+        );
+      }
+      const inverse = ruleToInverseParams(
+        priorRule,
+        preField(record, "repeating.deadlined") === true,
+      );
+      if (inverse === null) {
+        return irreversible(
+          "the prior rule is outside the Repeat dialog's vocabulary (a rule with two end bounds, or a " +
+            "multi-anchor month/year rule) — reschedule again by hand",
+        );
+      }
+      if (inverse.reminder === undefined) {
+        // The reminder time is not part of the recurrence rule, so a reminder
+        // the reschedule may have set/changed is not restored by the inverse.
+        notes.push(
+          "the recurrence structure is restored; a reminder time on the spawned instances is not part of the captured rule and is not restored",
+        );
+      }
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: record.op, params: { uuid, ...inverse } }],
         notes,
       };
     }

@@ -43,15 +43,21 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
-  "todo.make-repeating": { status: "lab-certified", evidence: ["UI1", "UI2-a", "UIC1-a"] },
-  "todo.reschedule-repeat": { status: "lab-certified", evidence: ["UI2-b", "UIC1-a"] },
+  "todo.make-repeating": {
+    status: "lab-certified",
+    evidence: ["UI1", "UI2-a", "UIC1-a", "UIC6-a"],
+  },
+  "todo.reschedule-repeat": { status: "lab-certified", evidence: ["UI2-b", "UIC1-a", "UIC6-k"] },
   "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
-  "project.reschedule-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
+  "project.reschedule-repeat": {
+    status: "lab-certified",
+    evidence: ["UIC2-a", "UIC3-b", "UIC6-k"],
+  },
   "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "area.reorder-sidebar": {
@@ -60,7 +66,7 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   },
   "project.make-repeating": {
     status: "lab-certified",
-    evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a"],
+    evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i"],
   },
   "heading.convert-to-project": {
     status: "uncertified",

@@ -232,12 +232,12 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     note: "converting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",
   },
   "todo.reschedule-repeat": {
-    class: "irreversible",
-    note: "the rule mutates in place (identity preserved, UI2-b) but the minimal GUI vocabulary (frequency + interval) cannot faithfully restore an arbitrary prior rule (a weekday/monthly-offset rule would be lost) — reschedule again by hand",
+    class: "conditional",
+    note: "the rule mutates in place (identity preserved, UI2-b); the FULL rule vocabulary re-drives reschedule with the captured prior rule (weekday set, monthly/yearly anchor, ends bound, deadline/start-offset all restored) — invertible whenever the prior rule was captured, decodable, and within the Repeat dialog's vocabulary; irreversible for a rule the dialog itself cannot produce (two end bounds, a multi-anchor month/year rule, or an after-completion rule with a calendar day). A per-instance reminder time is not part of the captured rule and is not restored",
   },
   "project.reschedule-repeat": {
-    class: "irreversible",
-    note: "the project's rule mutates in place (identity preserved, UIC2-a) but the minimal GUI vocabulary (frequency + interval) cannot faithfully restore an arbitrary prior rule — reschedule again by hand",
+    class: "conditional",
+    note: "the project's rule mutates in place (identity preserved, UIC2-a); re-drives reschedule with the captured prior rule (same faithfulness boundary as todo.reschedule-repeat) — invertible when the prior rule was captured, decodable, and dialog-expressible; irreversible otherwise. A per-instance reminder time is not restored",
   },
 
   // ---- ui-vector reversible pairs -----------------------------------------

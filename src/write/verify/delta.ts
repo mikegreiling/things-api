@@ -28,7 +28,18 @@ export interface CreateProbe {
 }
 
 export type DeltaSpec =
-  | { mode: "update"; uuid: string; assert: FieldAssertion[] }
+  | {
+      mode: "update";
+      uuid: string;
+      assert: FieldAssertion[];
+      /**
+       * Extra fields whose PRE-values are recorded in the audit trail but are
+       * NOT asserted post-op — for an inverse that must reconstruct richer prior
+       * state than the assertion captures (reschedule-repeat records the whole
+       * decoded prior rule so undo can re-drive it faithfully).
+       */
+      capture?: { field: string }[];
+    }
   | { mode: "create"; probe: CreateProbe; assert: FieldAssertion[] }
   | {
       mode: "state";

@@ -56,7 +56,7 @@ import type {
   ProjectCompleteParams,
   ProjectCreateRepeatingParams,
   ProjectUpdateParams,
-  RepeatFrequency,
+  RepeatRuleParams,
   ReorderParams,
   TagAddParams,
   TagUpdateParams,
@@ -308,7 +308,7 @@ export interface ThingsClient {
      */
     makeRepeatingProject(
       uuid: string,
-      rule: { frequency: RepeatFrequency; interval: number },
+      rule: Omit<RepeatRuleParams, "uuid">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**

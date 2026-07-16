@@ -40,7 +40,15 @@ import {
   WHEN_VALUES,
 } from "../surface-copy.ts";
 import { capabilitiesTable } from "../write/capabilities.ts";
-import { OPERATION_KINDS, type OperationKind } from "../write/operations.ts";
+import {
+  OPERATION_KINDS,
+  type MonthlyAnchor,
+  type OperationKind,
+  type RepeatFrequency,
+  type RepeatRuleParams,
+  type Weekday,
+  type YearlyAnchor,
+} from "../write/operations.ts";
 import type { MutationResult, WriteOptions } from "../write/pipeline.ts";
 import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../write/reorder.ts";
 import type { BatchOp } from "../write/batch.ts";
@@ -1228,9 +1236,97 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           "set ui-enabled true`. Intended for a dedicated always-on Mac.",
       ),
   };
-  const repeatRuleShape = {
+  const WEEKDAY_ENUM = z.enum([
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ]);
+  // The base rule (also used by create_repeating_project, which stays minimal —
+  // its own `deadline` is the project's due DATE, not the repeat's Add-deadlines).
+  const baseRepeatShape = {
     frequency: z.enum(["daily", "weekly", "monthly", "yearly"]).describe("How often it repeats"),
     interval: z.number().int().min(1).max(99).describe("Every N units (1–99)"),
+  };
+  const repeatRuleShape = {
+    ...baseRepeatShape,
+    afterCompletion: z
+      .boolean()
+      .optional()
+      .describe(
+        "Repeat N units AFTER each occurrence is completed, instead of on a fixed schedule",
+      ),
+    weekdays: z.array(WEEKDAY_ENUM).optional().describe("Weekly only: the weekdays it repeats on"),
+    monthlyDay: z
+      .union([z.number().int(), z.literal("last")])
+      .optional()
+      .describe('Monthly/yearly only: a day of the month (1–31, or "last")'),
+    monthlyWeekday: WEEKDAY_ENUM.optional().describe(
+      "Monthly/yearly only: a weekday for an nth-weekday rule (with monthlyOrdinal)",
+    ),
+    monthlyOrdinal: z
+      .union([z.number().int(), z.literal("last")])
+      .optional()
+      .describe('Monthly/yearly only: which weekday (1–5, or "last") with monthlyWeekday'),
+    yearlyMonth: z
+      .number()
+      .int()
+      .min(1)
+      .max(12)
+      .optional()
+      .describe("Yearly only: the month (1–12)"),
+    endsAfter: z.number().int().optional().describe("Stop after N occurrences"),
+    endsOn: z.string().optional().describe("YYYY-MM-DD — stop after this date"),
+    reminder: z.string().optional().describe("HH:mm — a reminder time on each occurrence"),
+    deadline: z.boolean().optional().describe("Give each occurrence a deadline"),
+    startDaysEarlier: z
+      .number()
+      .int()
+      .optional()
+      .describe("With deadline: start each occurrence N days before its deadline"),
+  };
+
+  /** Map the flat repeat-rule args to the extended fields (present keys only). */
+  type RepeatArgs = {
+    afterCompletion?: boolean | undefined;
+    weekdays?: Weekday[] | undefined;
+    monthlyDay?: number | "last" | undefined;
+    monthlyWeekday?: Weekday | undefined;
+    monthlyOrdinal?: number | "last" | undefined;
+    yearlyMonth?: number | undefined;
+    endsAfter?: number | undefined;
+    endsOn?: string | undefined;
+    reminder?: string | undefined;
+    deadline?: boolean | undefined;
+    startDaysEarlier?: number | undefined;
+  };
+  // oxlint-disable-next-line consistent-function-scoping -- kept beside repeatRuleShape it mirrors
+  const repeatExtras = (
+    a: RepeatArgs,
+    frequency: RepeatFrequency,
+  ): Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> => {
+    const fields: Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> = {};
+    if (a.afterCompletion === true) fields.afterCompletion = true;
+    if (a.weekdays !== undefined) fields.weekdays = a.weekdays;
+    const anchor: MonthlyAnchor | undefined =
+      a.monthlyDay !== undefined
+        ? { day: a.monthlyDay }
+        : a.monthlyWeekday !== undefined || a.monthlyOrdinal !== undefined
+          ? ({ weekday: a.monthlyWeekday, ordinal: a.monthlyOrdinal } as MonthlyAnchor)
+          : undefined;
+    if (frequency === "monthly" && anchor !== undefined) fields.monthly = anchor;
+    if (frequency === "yearly" && (a.yearlyMonth !== undefined || anchor !== undefined)) {
+      fields.yearly = { month: a.yearlyMonth, ...anchor } as YearlyAnchor;
+    }
+    if (a.endsAfter !== undefined) fields.ends = { kind: "after", count: a.endsAfter };
+    else if (a.endsOn !== undefined) fields.ends = { kind: "on-date", date: a.endsOn };
+    if (a.reminder !== undefined) fields.reminder = a.reminder;
+    if (a.deadline === true) fields.deadline = true;
+    if (a.startDaysEarlier !== undefined) fields.startDaysEarlier = a.startDaysEarlier;
+    return fields;
   };
 
   server.registerTool(
@@ -1239,8 +1335,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new recurring " +
         "series — the original disappears and a fresh repeating item takes its place, so it " +
-        "cannot be undone. Only a frequency and an interval are supported. Returns the new " +
-        "item's uuid.",
+        "cannot be undone. Set the frequency and interval, and optionally the weekday set, " +
+        "monthly/yearly day, end bound, reminders, or deadline. Returns the new item's uuid.",
       inputSchema: {
         uuid: z.string().describe("The to-do to make repeating"),
         ...repeatRuleShape,
@@ -1254,7 +1350,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mutationResult(
           await getClient().write.run(
             "todo.make-repeating",
-            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            {
+              uuid: args.uuid,
+              frequency: args.frequency,
+              interval: args.interval,
+              ...repeatExtras(args, args.frequency),
+            },
             writeOptions(args),
           ),
         ),
@@ -1265,9 +1366,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reschedule_repeat",
     {
       description:
-        "Change a repeating to-do's frequency and interval, keeping the same item. Only a " +
-        "frequency and an interval are supported; other repeat details (weekday choices, end " +
-        "bounds) are left as they are and cannot be changed here.",
+        "Change a repeating to-do's rule in place, keeping the same item. Set the frequency and " +
+        "interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, or " +
+        "deadline. This can be undone — it restores the previous rule.",
       inputSchema: {
         uuid: z.string().describe("The repeating to-do to reschedule"),
         ...repeatRuleShape,
@@ -1281,7 +1382,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mutationResult(
           await getClient().write.run(
             "todo.reschedule-repeat",
-            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            {
+              uuid: args.uuid,
+              frequency: args.frequency,
+              interval: args.interval,
+              ...repeatExtras(args, args.frequency),
+            },
             writeOptions(args),
           ),
         ),
@@ -1315,9 +1421,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reschedule_project_repeat",
     {
       description:
-        "Change a repeating project's frequency and interval, keeping the same project. Only a " +
-        "frequency and an interval are supported; other repeat details (weekday choices, end " +
-        "bounds) are left as they are and cannot be changed here.",
+        "Change a repeating project's rule in place, keeping the same project. Set the frequency " +
+        "and interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, " +
+        "or deadline. This can be undone — it restores the previous rule.",
       inputSchema: {
         uuid: z.string().describe("The repeating project to reschedule"),
         ...repeatRuleShape,
@@ -1331,7 +1437,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mutationResult(
           await getClient().write.run(
             "project.reschedule-repeat",
-            { uuid: args.uuid, frequency: args.frequency, interval: args.interval },
+            {
+              uuid: args.uuid,
+              frequency: args.frequency,
+              interval: args.interval,
+              ...repeatExtras(args, args.frequency),
+            },
             writeOptions(args),
           ),
         ),
@@ -1413,8 +1524,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Turn an existing project into a repeating one. This REPLACES the project with a new " +
         "recurring series — the original disappears and a fresh repeating project takes its place " +
         "(its area is kept), so it cannot be undone. An area-less project scheduled for Anytime is " +
-        "moved to Someday first (a cleanup-free intermediate step, shown by dry_run). Only a " +
-        "frequency and an interval are supported. Returns the new project's uuid.",
+        "moved to Someday first (a cleanup-free intermediate step, shown by dry_run). Set the " +
+        "frequency and interval, and optionally the weekday set, monthly/yearly day, end bound, " +
+        "reminders, or deadline. Returns the new project's uuid.",
       inputSchema: {
         uuid: z.string().describe("The project to make repeating"),
         ...repeatRuleShape,
@@ -1428,7 +1540,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mutationResult(
           await getClient().write.makeRepeatingProject(
             args.uuid,
-            { frequency: args.frequency, interval: args.interval },
+            {
+              frequency: args.frequency,
+              interval: args.interval,
+              ...repeatExtras(args, args.frequency),
+            },
             writeOptions(args),
           ),
         ),
@@ -1449,7 +1565,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
         deadline: z.string().optional().describe(DATE_FORMAT),
         todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
-        ...repeatRuleShape,
+        ...baseRepeatShape,
         ...driveGuiShape,
         ...dryRunShape,
       },

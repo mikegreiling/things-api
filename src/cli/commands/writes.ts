@@ -19,6 +19,7 @@ import type {
   ReorderScope,
   ReorderStrategy,
 } from "../../write/operations.ts";
+import { addRepeatRuleFlags, repeatRuleFlagsFromOpts } from "./repeat-flags.ts";
 import type { WriteOptions } from "../../write/pipeline.ts";
 import { capabilitiesTable } from "../../write/capabilities.ts";
 import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
@@ -728,32 +729,37 @@ export function registerWriteCommands(program: Command): void {
       "todo.make-repeating",
       "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new repeating " +
         "series — the original disappears and a fresh recurring item takes its place " +
-        "(cannot be undone). Supported rule: a frequency and an interval only.",
+        "(cannot be undone). Set the frequency and interval, and optionally the weekday set, " +
+        "monthly/yearly day, end bound, reminders, or deadline.",
     ],
     [
       "reschedule-repeat",
       "todo.reschedule-repeat",
-      "Change an existing repeating to-do's frequency/interval in place (the item keeps its " +
-        "identity). Supported rule: a frequency and an interval only; other rule details (weekday " +
-        "pickers, end bounds) are left as they are and cannot be changed here.",
+      "Change an existing repeating to-do's rule in place (the item keeps its identity). Set the " +
+        "frequency and interval, and optionally the weekday set, monthly/yearly day, end bound, " +
+        "reminders, or deadline. `things undo` restores the previous rule.",
     ],
   ] as const) {
     addDriveGuiFlag(
-      addWriteFlags(
-        todo
-          .command(`${verb} <uuid>`)
-          .description(desc)
-          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      addRepeatRuleFlags(
+        addWriteFlags(
+          todo
+            .command(`${verb} <uuid>`)
+            .description(desc)
+            .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+            .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+        ),
       ),
     ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      const frequency = opts["frequency"] as RepeatFrequency;
       await runWrite(opts, (c) =>
         c.write.run(
           op,
           {
             uuid,
-            frequency: opts["frequency"] as RepeatFrequency,
+            frequency,
             interval: Number(opts["interval"]),
+            ...repeatRuleFlagsFromOpts(opts, frequency),
           },
           writeOptionsFrom(opts),
         ),
@@ -888,25 +894,29 @@ export function registerWriteCommands(program: Command): void {
 
   // --- ui vector: repeating-project transforms (two-key gated) -------------
   addDriveGuiFlag(
-    addWriteFlags(
-      project
-        .command("reschedule-repeat <uuid>")
-        .description(
-          "Change an existing repeating project's frequency/interval in place (the project keeps " +
-            "its identity). Supported rule: a frequency and an interval only; other rule details " +
-            "(weekday pickers, end bounds) are left as they are and cannot be changed here.",
-        )
-        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    addRepeatRuleFlags(
+      addWriteFlags(
+        project
+          .command("reschedule-repeat <uuid>")
+          .description(
+            "Change an existing repeating project's rule in place (the project keeps its identity). " +
+              "Set the frequency and interval, and optionally the weekday set, monthly/yearly day, " +
+              "end bound, reminders, or deadline. `things undo` restores the previous rule.",
+          )
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const frequency = opts["frequency"] as RepeatFrequency;
     await runWrite(opts, (c) =>
       c.write.run(
         "project.reschedule-repeat",
         {
           uuid,
-          frequency: opts["frequency"] as RepeatFrequency,
+          frequency,
           interval: Number(opts["interval"]),
+          ...repeatRuleFlagsFromOpts(opts, frequency),
         },
         writeOptionsFrom(opts),
       ),
@@ -934,24 +944,32 @@ export function registerWriteCommands(program: Command): void {
   }
 
   addDriveGuiFlag(
-    addWriteFlags(
-      project
-        .command("make-repeating <uuid>")
-        .description(
-          "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
-            "series — the original disappears and a fresh recurring project takes its place (its " +
-            "area is kept; cannot be undone). An Anytime project with no area is moved to Someday " +
-            "first (a cleanup-free intermediate step, shown in --dry-run). Supported rule: a " +
-            "frequency and an interval only.",
-        )
-        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    addRepeatRuleFlags(
+      addWriteFlags(
+        project
+          .command("make-repeating <uuid>")
+          .description(
+            "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
+              "series — the original disappears and a fresh recurring project takes its place (its " +
+              "area is kept; cannot be undone). An Anytime project with no area is moved to Someday " +
+              "first (a cleanup-free intermediate step, shown in --dry-run). Set the frequency and " +
+              "interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, " +
+              "or deadline.",
+          )
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const frequency = opts["frequency"] as RepeatFrequency;
     await runWrite(opts, (c) =>
       c.write.makeRepeatingProject(
         uuid,
-        { frequency: opts["frequency"] as RepeatFrequency, interval: Number(opts["interval"]) },
+        {
+          frequency,
+          interval: Number(opts["interval"]),
+          ...repeatRuleFlagsFromOpts(opts, frequency),
+        },
         writeOptionsFrom(opts),
       ),
     );

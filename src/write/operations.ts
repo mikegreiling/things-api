@@ -411,17 +411,97 @@ export interface AreaReorderSidebarParams {
   position?: "first" | "last";
 }
 
+/** Weekday name (weekly day-of-week set; monthly/yearly nth-weekday anchor). */
+export type Weekday =
+  | "sunday"
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday";
+
+export const WEEKDAYS: readonly Weekday[] = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+
+/** The ordinal a monthly/yearly nth-weekday anchor selects (1st..5th, or last). */
+export type WeekdayOrdinal = 1 | 2 | 3 | 4 | 5 | "last";
+
+/**
+ * A monthly (or yearly) day anchor — the mutually-exclusive forms the Repeat
+ * dialog's month row offers (UIC1 field map). Exactly one shape:
+ *  - `{ day }`     — a day-of-month (1..31, or "last" = the month's last day);
+ *  - `{ weekday, ordinal }` — the nth (or last) weekday of the month.
+ */
+export type MonthlyAnchor =
+  | { day: number | "last" }
+  | { weekday: Weekday; ordinal: WeekdayOrdinal };
+
+/** A yearly anchor: a month (1..12) plus the monthly-style day anchor. */
+export type YearlyAnchor = { month: number } & MonthlyAnchor;
+
+/**
+ * The Repeat dialog's "Ends" bound (single-choice pop-up, UIC1). Omit for the
+ * dialog default (`never`). `on-date` is the date picker; `after` the count
+ * field (the ORIGINAL number of occurrences, not the remaining tally).
+ */
+export type RepeatEnds =
+  | { kind: "never" }
+  | { kind: "on-date"; date: IsoDate }
+  | { kind: "after"; count: number };
+
 /**
  * Set (make-repeating) or edit (reschedule-repeat) a to-do's or project's
- * recurrence rule through the GUI's Repeat dialog. The v1 vocabulary is minimal:
- * frequency + interval only. Weekday pickers, ends-bounds, and reminders in
- * the repeat dialog are future increments (docs/design/ui-vector.md).
+ * recurrence rule through the GUI's Repeat dialog. The BASE vocabulary is
+ * `frequency` + `interval`; every other field is OPTIONAL and defaults to the
+ * dialog's own default, so a `{ uuid, frequency, interval }` call is unchanged.
+ *
+ * The optional fields cover the full UIC1 dialog field map. Combinations are
+ * validated (assertRepeatRule): a per-frequency field on the wrong frequency is
+ * refused, and the modal month anchor is a discriminated shape (day-of-month OR
+ * nth-weekday, never a contradictory bag).
  */
 export interface RepeatRuleParams {
   uuid: string;
+  /** The recurrence unit (also the "after completion" cadence when afterCompletion). */
   frequency: RepeatFrequency;
   /** "every N units", 1–99. */
   interval: number;
+  /**
+   * After-COMPLETION cadence instead of a fixed schedule (rule type tp=1): the
+   * next occurrence is N units after the prior instance RESOLVES. Mutually
+   * exclusive with the calendar anchors (weekdays/monthly/yearly) — an
+   * after-completion rule has no calendar day.
+   */
+  afterCompletion?: boolean;
+  /**
+   * WEEKLY only: the set of weekdays the rule fires on (dialog day-of-week
+   * toggles + "+"). Omit for the single anchor weekday the dialog defaults to.
+   */
+  weekdays?: Weekday[];
+  /** MONTHLY only: the day-of-month or nth-weekday anchor (dialog month row). */
+  monthly?: MonthlyAnchor;
+  /** YEARLY only: the month + day anchor (dialog year row). */
+  yearly?: YearlyAnchor;
+  /** The "Ends" bound (dialog default: never). */
+  ends?: RepeatEnds;
+  /** "Add reminders" time-of-day (`HH:mm`, 24h) on the spawned instances. */
+  reminder?: ReminderTime;
+  /** "Add deadlines": the template deadlines its instances. */
+  deadline?: boolean;
+  /**
+   * With deadline: start the instance N days BEFORE its deadline (the dialog's
+   * "start N days earlier" field, revealed by "Add deadlines"). Integer ≥ 0;
+   * implies `deadline` (a start offset only exists on a deadlined template).
+   */
+  startDaysEarlier?: number;
 }
 
 /**

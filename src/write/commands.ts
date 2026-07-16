@@ -20,7 +20,7 @@ import type {
   ContainerRef,
   OperationKind,
   OperationParamsMap,
-  RepeatFrequency,
+  RepeatRuleParams,
   WhenValue,
 } from "./operations.ts";
 import {
@@ -40,6 +40,7 @@ import {
   type PreState,
 } from "./pre-state.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
+import { assertRepeatRule } from "./repeat-rule.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
   areaReorderSidebarRecipe,
@@ -52,6 +53,7 @@ import {
   projectResumeRepeatRecipe,
   rescheduleRepeatRecipe,
   resumeRepeatRecipe,
+  type RepeatRuleExtras,
 } from "./vectors/ui-recipes.ts";
 import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
@@ -1630,14 +1632,28 @@ function uiDrive(recipe: UiRecipe): CompiledInvocation {
   return { vector: "ui", kind: "ui-drive", payload: rendered, redactedPayload: rendered, recipe };
 }
 
-export function assertRepeatRule(params: { frequency: RepeatFrequency; interval: number }): void {
-  const units: RepeatFrequency[] = ["daily", "weekly", "monthly", "yearly"];
-  if (!units.includes(params.frequency)) {
-    throw new RangeError(`invalid frequency "${params.frequency}" — expected ${units.join(" | ")}`);
-  }
-  if (!Number.isInteger(params.interval) || params.interval < 1 || params.interval > 99) {
-    throw new RangeError(`invalid interval ${params.interval} — expected an integer 1–99`);
-  }
+// Re-exported so make-repeating-project.ts and existing callers keep importing
+// the validator from commands.ts; the implementation + the full combination
+// matrix live in repeat-rule.ts.
+export { assertRepeatRule };
+
+/**
+ * The extended-vocabulary fields of a rule as a recipe `extras` bag, including
+ * ONLY the keys that are present (exactOptionalPropertyTypes: never set an
+ * optional field to undefined). A bare `{ uuid, frequency, interval }` yields
+ * `{}`, so the recipe drives exactly the certified two-control path.
+ */
+function ruleExtras(params: RepeatRuleParams): RepeatRuleExtras {
+  return {
+    ...(params.afterCompletion !== undefined && { afterCompletion: params.afterCompletion }),
+    ...(params.weekdays !== undefined && { weekdays: params.weekdays }),
+    ...(params.monthly !== undefined && { monthly: params.monthly }),
+    ...(params.yearly !== undefined && { yearly: params.yearly }),
+    ...(params.ends !== undefined && { ends: params.ends }),
+    ...(params.reminder !== undefined && { reminder: params.reminder }),
+    ...(params.deadline !== undefined && { deadline: params.deadline }),
+    ...(params.startDaysEarlier !== undefined && { startDaysEarlier: params.startDaysEarlier }),
+  };
 }
 
 /** ui ops all guard existence/type + the H-UI-DRIVE acknowledgement. */
@@ -1667,7 +1683,9 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
   },
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(makeRepeatingRecipe(params.uuid, params.frequency, params.interval));
+    return uiDrive(
+      makeRepeatingRecipe(params.uuid, params.frequency, params.interval, ruleExtras(params)),
+    );
   },
 };
 
@@ -1682,7 +1700,8 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
-    // place. Assert the decoded rule's frequency + interval.
+    // place. Assert the decoded rule's frequency + interval; ALSO capture the
+    // whole prior rule (+ deadline flag) so the undo can re-drive it faithfully.
     return {
       mode: "update",
       uuid: params.uuid,
@@ -1690,11 +1709,14 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
+      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(rescheduleRepeatRecipe(params.uuid, params.frequency, params.interval));
+    return uiDrive(
+      rescheduleRepeatRecipe(params.uuid, params.frequency, params.interval, ruleExtras(params)),
+    );
   },
 };
 
@@ -1759,7 +1781,8 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
     return pre;
   },
   expectedDelta(_pre, params) {
-    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place.
+    // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
+    // capture the prior rule (+ deadline flag) for the faithful undo.
     return {
       mode: "update",
       uuid: params.uuid,
@@ -1767,11 +1790,19 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
+      capture: [{ field: "repeating.rule" }, { field: "repeating.deadlined" }],
     };
   },
   compile(params, vector) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(projectRescheduleRepeatRecipe(params.uuid, params.frequency, params.interval));
+    return uiDrive(
+      projectRescheduleRepeatRecipe(
+        params.uuid,
+        params.frequency,
+        params.interval,
+        ruleExtras(params),
+      ),
+    );
   },
 };
 
@@ -1863,6 +1894,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
         tax.title,
         params.frequency,
         params.interval,
+        ruleExtras(params),
       ),
     );
   },
