@@ -67,6 +67,20 @@ describe("H-UNKNOWN-DESTINATION (heading.create project resolution)", () => {
   });
 });
 
+describe("H-UNKNOWN-DESTINATION missing-target copy", () => {
+  it("names an unresolved to-do target with the shared uuid-miss wording", () => {
+    const block = check("todo.update", { uuid: "ghost-uuid-000", title: "x" });
+    expect(block?.hazard).toBe("H-UNKNOWN-DESTINATION");
+    expect(block?.detail).toContain('no to-do matching uuid or partial-uuid "ghost-uuid-000"');
+  });
+
+  it("uses the project entity noun for a project op", () => {
+    const block = check("project.update", { uuid: "ghost-uuid-000", title: "x" });
+    expect(block?.hazard).toBe("H-UNKNOWN-DESTINATION");
+    expect(block?.detail).toContain('no project matching uuid or partial-uuid "ghost-uuid-000"');
+  });
+});
+
 describe("H-NO-REMINDER (todo.clear-dated-reminder)", () => {
   it("blocks a to-do with no reminder set", () => {
     const uuid = seedTodo(fixture.db, { title: "no reminder", startDate: "2026-07-20" });

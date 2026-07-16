@@ -3,6 +3,7 @@
  * the failure mode is real. Guards run against the pre-read; a blocked
  * result means the app was never touched.
  */
+import { noUuidMatch } from "../read/queries.ts";
 import { isUiDriveOp, type Acknowledgements, type OperationKind } from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 import { formatTagCandidates } from "./tag-refs.ts";
@@ -161,7 +162,14 @@ const GUARDS: Record<HazardId, GuardFn> = {
       op !== "todo.add" &&
       op !== "project.add" &&
       pre.target === null;
-    if (needsTarget) problems.push(`no record with uuid ${String(params["uuid"])}`);
+    if (needsTarget) {
+      const entity = op.startsWith("heading.")
+        ? "heading"
+        : op.startsWith("project.")
+          ? "project"
+          : "to-do";
+      problems.push(noUuidMatch(entity, String(params["uuid"])));
+    }
     if (pre.target !== null) {
       // todo.* ops must target actual to-dos. A HEADING uuid is the critical
       // case: URL writes silently no-op on type=2 rows (P10b/c), and an
