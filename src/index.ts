@@ -53,6 +53,27 @@ export type {
   ChangedItem,
 } from "./read/views.ts";
 
+// The per-view read-filter contract: the declarative applicability table plus
+// the shared tag-conflict predicates both surfaces enforce. See
+// docs/design/architecture.md (Consumer boundary).
+export {
+  FILTER_CONTRACT,
+  hasTagPresence,
+  tagFlagConflict,
+  tagFilterFields,
+  validateViewArgs,
+} from "./read/filter-contract.ts";
+export type {
+  BoundModel,
+  FilterArgs,
+  FilterVocab,
+  TagPresence,
+  TagSemantics,
+  ViewFilterSpec,
+  ViewName,
+  ViewValidation,
+} from "./read/filter-contract.ts";
+
 export type {
   Acknowledgements,
   AreaAddParams,

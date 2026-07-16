@@ -15,7 +15,13 @@
  */
 import type { Command } from "commander";
 
-import type { ViewFilter } from "../read/views.ts";
+import {
+  hasTagPresence as hasTagPresenceShared,
+  tagFilterFields as tagFilterFieldsShared,
+  tagFlagConflict as tagFlagConflictShared,
+  type TagPresence,
+  type ViewFilter,
+} from "../index.ts";
 import { shellQuote, usageError } from "./read-driver.ts";
 
 /** Commander repeatable-collect: accumulate each `--tag` value. */
@@ -43,8 +49,12 @@ export const CONTAINER_TAG_HINT =
   "inherited from this container (every child inherits them). --exact-tag still\n" +
   "drops hierarchy descendants.";
 
-/** The parsed shape of the three tag-filter flags on any tag-accepting view. */
-export interface TagFlags {
+/**
+ * The parsed shape of the three tag-filter flags on any tag-accepting view.
+ * A structural subtype of the shared {@link TagPresence}, so the CLI's parsed
+ * commander options feed the shared predicates without adaptation.
+ */
+export interface TagFlags extends TagPresence {
   tag?: string[];
   exactTag?: boolean;
   untagged?: boolean;
@@ -59,18 +69,17 @@ export function addTagFilterOptions(cmd: Command): Command {
 }
 
 /** True when any tag-PRESENCE flag was passed (a positive filter, not a negation). */
-export function hasTagPresence(opts: TagFlags): boolean {
-  return (opts.tag?.length ?? 0) > 0 || opts.exactTag === true;
-}
+export const hasTagPresence = hasTagPresenceShared;
 
 /**
  * Shared usage guard for the tag-filter flags. The negation (`--untagged`)
  * inverts a tag presence, so it does not combine with a tag-presence flag.
  * Emits the usage error (the view's conflict style) and returns true when it
- * fires.
+ * fires. The predicate is the shared {@link tagFlagConflictShared}; only the
+ * CLI-voiced copy and the `--json`-aware emit stay here.
  */
 export function tagFlagConflict(opts: TagFlags & { json?: boolean }): boolean {
-  if (opts.untagged === true && hasTagPresence(opts)) {
+  if (tagFlagConflictShared(opts)) {
     usageError(opts, "--untagged does not combine with --tag/--exact-tag");
     return true;
   }
@@ -79,11 +88,7 @@ export function tagFlagConflict(opts: TagFlags & { json?: boolean }): boolean {
 
 /** The ViewFilter tag fields built from the parsed flags (empty keys omitted). */
 export function tagFilterFields(opts: TagFlags): ViewFilter {
-  return {
-    ...(opts.tag !== undefined && opts.tag.length > 0 && { tags: opts.tag }),
-    ...(opts.exactTag === true && { exactTag: true }),
-    ...(opts.untagged === true && { untagged: true }),
-  };
+  return tagFilterFieldsShared(opts);
 }
 
 /** The invocation-echo fragments for the tag flags (one `--tag <ref>` per ref). */
