@@ -310,3 +310,26 @@ describe("H-HEADING-CHILDREN", () => {
     expect(check("project.delete", { uuid: area })?.hazard).toBe("H-UNKNOWN-DESTINATION");
   });
 });
+
+describe("H-BACKDATE-OPEN", () => {
+  it("blocks rewriting completionDate on an OPEN to-do (with the exact remediation)", () => {
+    const uuid = seedTodo(fixture.db, { title: "still open", status: "open" });
+    const block = check("todo.backdate", { uuid, completionDate: "2024-01-01" });
+    expect(block?.hazard).toBe("H-BACKDATE-OPEN");
+    expect(block?.detail).toContain("completionDate can only be rewritten");
+    expect(block?.detail).toContain("open");
+    expect(block?.remediation).toBe("complete it first (todo.complete), then backdate");
+  });
+
+  it("passes completionDate backdate on a completed or a canceled to-do", () => {
+    const completed = seedTodo(fixture.db, { title: "done", status: "completed" });
+    const canceled = seedTodo(fixture.db, { title: "gone", status: "canceled" });
+    expect(check("todo.backdate", { uuid: completed, completionDate: "2024-01-01" })).toBeNull();
+    expect(check("todo.backdate", { uuid: canceled, completionDate: "2024-01-01" })).toBeNull();
+  });
+
+  it("does not fire when only creationDate is backdated (no completionDate rewrite)", () => {
+    const uuid = seedTodo(fixture.db, { title: "still open", status: "open" });
+    expect(check("todo.backdate", { uuid, creationDate: "2024-01-01" })).toBeNull();
+  });
+});
