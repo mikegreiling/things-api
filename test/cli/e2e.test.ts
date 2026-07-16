@@ -363,7 +363,7 @@ describe('cli --untagged (GUI "No Tag")', () => {
   });
 });
 
-describe("cli --direct-tag / --direct-untagged / multi-tag AND", () => {
+describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", () => {
   it("--tag is repeatable and ANDs (foo AND bar; a foo-only item excluded)", () => {
     fx = buildFixtureDb();
     const foo = seedTag(fx.db, "foo");
@@ -379,7 +379,7 @@ describe("cli --direct-tag / --direct-untagged / multi-tag AND", () => {
     expect(titles).toEqual(["both"]);
   });
 
-  it("--direct-tag excludes container-inherited; --direct-untagged keeps inherited-only", () => {
+  it("flat --tag is inheritance-inclusive; --untagged is the whole-relation negation", () => {
     fx = buildFixtureDb();
     const focus = seedTag(fx.db, "focus");
     const work = seedArea(fx.db, "Work");
@@ -388,32 +388,46 @@ describe("cli --direct-tag / --direct-untagged / multi-tag AND", () => {
     tagTask(fx.db, direct, focus);
     seedTodo(fx.db, { title: "inherited", area: work, startDate: "2026-07-02" });
     seedTodo(fx.db, { title: "bare", startDate: "2026-07-02" });
-    const dt = runCli(["today", "--direct-tag", "focus", "--json", "--db", fx.path]);
-    expect(JSON.parse(dt.stdout).data.today.map((i: { title: string }) => i.title)).toEqual([
-      "direct",
-    ]);
-    const du = runCli(["today", "--direct-untagged", "--json", "--db", fx.path]);
+    // Flat --tag focus matches direct AND area-inherited rows.
+    const tagged = runCli(["today", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(du.stdout)
+      JSON.parse(tagged.stdout)
         .data.today.map((i: { title: string }) => i.title)
         .toSorted(),
-    ).toEqual(["bare", "inherited"]);
+    ).toEqual(["direct", "inherited"]);
+    // Flat --untagged drops the inherited-only row; only the truly bare survives.
+    const untagged = runCli(["today", "--untagged", "--json", "--db", fx.path]);
+    expect(JSON.parse(untagged.stdout).data.today.map((i: { title: string }) => i.title)).toEqual([
+      "bare",
+    ]);
   });
 
-  it("the negations refuse the tag-presence flags and each other (exit 2)", () => {
+  it("the removed --direct-tag / --direct-untagged flags error as unknown options", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "x", startDate: "2026-07-02" });
+    for (const [argv, flag] of [
+      [["today", "--direct-tag", "focus"], "--direct-tag"],
+      [["today", "--direct-untagged"], "--direct-untagged"],
+      [["project", "show", "x", "--direct-tag", "focus"], "--direct-tag"],
+      [["area", "show", "x", "--direct-untagged"], "--direct-untagged"],
+    ] as const) {
+      const res = runCliErr([...argv, "--db", fx!.path]);
+      expect(res.stderr, flag).toContain(`unknown option '${flag}'`);
+    }
+  });
+
+  it("--untagged refuses the tag-presence flags (exit 2)", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "x", startDate: "2026-07-02" });
     for (const argv of [
-      ["today", "--untagged", "--direct-tag", "focus"],
-      ["today", "--direct-untagged", "--tag", "focus"],
-      ["today", "--direct-untagged", "--exact-tag"],
-      ["today", "--untagged", "--direct-untagged"],
+      ["today", "--untagged", "--tag", "focus"],
+      ["today", "--untagged", "--exact-tag"],
     ]) {
       expect(runCli([...argv, "--db", fx!.path]).exitCode).toBe(2);
     }
   });
 
-  it("the echo hint reconstructs repeated + direct tag flags", () => {
+  it("the echo hint reconstructs repeated tag flags", () => {
     fx = buildFixtureDb();
     for (let i = 0; i < 60; i++) {
       const uuid = seedTodo(fx.db, { title: `cap ${i}`, start: "inbox", index: i });
@@ -433,40 +447,34 @@ describe("cli --direct-tag / --direct-untagged / multi-tag AND", () => {
   });
 });
 
-describe("cli tag filters in container views (§9a wiring)", () => {
-  it("project show --tag is inheritance-inclusive; --direct-tag narrows to own tags", () => {
+describe("cli tag filters in container views (§9a wiring — direct-on-row)", () => {
+  it("project show --tag matches direct-on-child, ignoring the project's inherited tag", () => {
     fx = buildFixtureDb();
     const focus = seedTag(fx.db, "focus");
     const project = seedProject(fx.db, { title: "P" });
-    tagTask(fx.db, project, focus);
+    tagTask(fx.db, project, focus); // every child inherits focus
     const tagged = seedTodo(fx.db, { title: "child-focus", project });
     tagTask(fx.db, tagged, focus);
     seedTodo(fx.db, { title: "child-bare", project });
-    const inclusive = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
-    expect(
-      JSON.parse(inclusive.stdout)
-        .data.active.map((i: { title: string }) => i.title)
-        .toSorted(),
-    ).toEqual(["child-bare", "child-focus"]);
-    const direct = runCli([
-      "project",
-      "show",
-      "P",
-      "--direct-tag",
-      "focus",
-      "--json",
-      "--db",
-      fx.path,
-    ]);
+    // Container --tag focus is NOT vacuous: it narrows to the child carrying
+    // focus directly (the project's own focus is inherited by all, suppressed).
+    const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
     expect(JSON.parse(direct.stdout).data.active.map((i: { title: string }) => i.title)).toEqual([
       "child-focus",
     ]);
+    // --untagged (direct-only) keeps the child with no direct tag, even though
+    // it inherits focus from the project.
+    const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
+    expect(JSON.parse(untagged.stdout).data.active.map((i: { title: string }) => i.title)).toEqual([
+      "child-bare",
+    ]);
   });
 
-  it("area show --direct-tag filters both row kinds; no recursion into projects", () => {
+  it("area show --tag filters both row kinds by direct tag; no recursion into projects", () => {
     fx = buildFixtureDb();
     const focus = seedTag(fx.db, "focus");
     const area = seedArea(fx.db, "Home");
+    tagArea(fx.db, area, focus); // area-tagged → every row inherits focus
     const loose = seedTodo(fx.db, { title: "loose-focus", area, index: 1 });
     tagTask(fx.db, loose, focus);
     seedTodo(fx.db, { title: "loose-bare", area, index: 2 });
@@ -475,16 +483,7 @@ describe("cli tag filters in container views (§9a wiring)", () => {
     const projBare = seedProject(fx.db, { title: "proj-bare", area, index: 4 });
     const buried = seedTodo(fx.db, { title: "buried-focus", project: projBare });
     tagTask(fx.db, buried, focus);
-    const json = runCli([
-      "area",
-      "show",
-      "Home",
-      "--direct-tag",
-      "focus",
-      "--json",
-      "--db",
-      fx.path,
-    ]);
+    const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
     const data = JSON.parse(json.stdout).data;
     expect(data.active.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
     expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
@@ -492,17 +491,29 @@ describe("cli tag filters in container views (§9a wiring)", () => {
     expect(all).not.toContain("buried-focus");
   });
 
-  it("things projects --tag filters the project list; --limit stays rejected on area show", () => {
+  it("things projects --tag is FLAT/inheritance-inclusive; area show --tag suppresses area inheritance", () => {
     fx = buildFixtureDb();
     const focus = seedTag(fx.db, "focus");
     const area = seedArea(fx.db, "Zone", 1);
-    const hit = seedProject(fx.db, { title: "proj-focus", area, index: 1 });
-    tagTask(fx.db, hit, focus);
-    seedProject(fx.db, { title: "proj-bare", area, index: 2 });
-    const json = runCli(["projects", "--tag", "focus", "--json", "--db", fx.path]);
-    expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.map((p: { title: string }) => p.title);
-    expect(titles).toEqual(["proj-focus"]);
+    tagArea(fx.db, area, focus); // area-tagged → its projects inherit focus
+    const direct = seedProject(fx.db, { title: "proj-direct", area, index: 1 });
+    tagTask(fx.db, direct, focus);
+    seedProject(fx.db, { title: "proj-inherited", area, index: 2 }); // inherits focus from area
+    // The projects LIST is flat: --tag focus matches the directly-tagged project
+    // AND the one inheriting focus from its area.
+    const list = runCli(["projects", "--tag", "focus", "--json", "--db", fx.path]);
+    expect(list.exitCode).toBe(0);
+    expect(
+      JSON.parse(list.stdout)
+        .data.map((p: { title: string }) => p.title)
+        .toSorted(),
+    ).toEqual(["proj-direct", "proj-inherited"]);
+    // area show --tag focus suppresses the SAME area's inheritance → only the
+    // directly-tagged project survives (the deliberate single-container behavior).
+    const areaShow = runCli(["area", "show", "Zone", "--tag", "focus", "--json", "--db", fx.path]);
+    expect(
+      JSON.parse(areaShow.stdout).data.projects.map((p: { title: string }) => p.title),
+    ).toEqual(["proj-direct"]);
     // A content scope never grants a strict --limit on the container views.
     expect(
       runCli(["area", "show", "Zone", "--tag", "focus", "--limit", "5", "--db", fx.path]).exitCode,

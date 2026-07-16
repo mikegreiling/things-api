@@ -40,12 +40,15 @@ export function tagScopeBinds(uuids: string[]): string[] {
 /**
  * The DIRECT-ONLY projection of {@link tagScopeSql}: its FIRST clause alone —
  * the item's own `TMTaskTag` assignments — WITHOUT the five container-
- * inheritance hops (project/area/heading). This is the SQL behind
- * `--direct-tag`: it keeps tag-hierarchy descendant expansion (the uuid SET is
- * still the tag plus its descendants, OR-matched) but drops container
- * inheritance, so an item matches only when it is DIRECTLY tagged. Takes the
- * uuid set once, so callers bind `uuids` exactly one time (not `× 6`). KEEP THE
- * DIRECT CLAUSE IN LOCKSTEP WITH tagScopeSql's first clause.
+ * inheritance hops (project/area/heading). This is the SQL behind the CONTAINER
+ * `--tag` (the `project show` / `area show` / `projects` list views): every
+ * child inherits its container's tags, so the inheritance-inclusive relation is
+ * vacuous there — matching a DIRECT assignment is the useful, GUI-faithful
+ * behavior. It keeps tag-hierarchy descendant expansion (the uuid SET is still
+ * the tag plus its descendants, OR-matched) but drops container inheritance, so
+ * an item matches only when it is DIRECTLY tagged. Takes the uuid set once, so
+ * callers bind `uuids` exactly one time (not `× 6`). KEEP THE DIRECT CLAUSE IN
+ * LOCKSTEP WITH tagScopeSql's first clause.
  */
 export function directTagScopeSql(uuidCount: number): string {
   const set = `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
@@ -76,12 +79,15 @@ export function untaggedScopeSql(): string {
 }
 
 /**
- * The DIRECT-ONLY counterpart of {@link untaggedScopeSql} — the SQL behind
- * `--direct-untagged` (the GUI's in-context "No Tag"). It negates only the
- * item's OWN direct assignments (the first of the six membership clauses),
- * leaving container inheritance untouched: an item qualifies when it carries no
- * DIRECT tag, even if it inherits one from its project/area/heading. Takes no
- * binds. KEEP THE DIRECT CLAUSE IN LOCKSTEP WITH {@link directTagScopeSql}.
+ * The DIRECT-ONLY counterpart of {@link untaggedScopeSql} — the SQL behind the
+ * CONTAINER `--untagged` (the GUI's in-context "No Tag" inside a project/area
+ * card). It negates only the item's OWN direct assignments (the first of the six
+ * membership clauses), leaving container inheritance untouched: an item
+ * qualifies when it carries no DIRECT tag, even if it inherits one from its
+ * project/area/heading. Every child inherits the container's tags, so the
+ * whole-relation `untaggedScopeSql` would exclude every row there — direct-only
+ * is the useful negation. Takes no binds. KEEP THE DIRECT CLAUSE IN LOCKSTEP
+ * WITH {@link directTagScopeSql}.
  */
 export function directUntaggedScopeSql(): string {
   return `NOT EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid)`;
@@ -407,11 +413,30 @@ export function resolveAreaUuid(
   return resolveUuidOrThrow(db, "TMArea", "1=1", ref, "area", "things areas", options);
 }
 
+/**
+ * A row's EFFECTIVE area: its own `area` link, else the area of its project,
+ * else the area of its heading's project. To-dos nested in a project (or under a
+ * heading) carry `area = NULL` in the DB — the area lives on the container — so
+ * this resolves the nearest area walking the SAME chain the tag-inheritance SQL
+ * uses (t.area → t.project's area → t.heading's project's area). Projects carry
+ * their area directly (project/heading are NULL), so COALESCE returns `t.area`
+ * unchanged for them — areas are not inherited. Surfaced as the entity's `area`
+ * Ref (mappers.ts); whether it is direct vs effective stays derivable from
+ * whether `project`/`heading` is set. Emitted as the extra `effectiveArea`
+ * column so the raw `t.area` (which tag inheritance and the write layer read)
+ * stays available.
+ */
+export const EFFECTIVE_AREA = `COALESCE(
+  t.area,
+  (SELECT p.area FROM TMTask p WHERE p.uuid = t.project),
+  (SELECT hp.area FROM TMTask h JOIN TMTask hp ON hp.uuid = h.project WHERE h.uuid = t.heading)
+)`;
+
 export function fetchTaskRows(db: DatabaseSync, where: string, params: unknown[] = []): TaskRow[] {
   const sql = `SELECT ${selectList("TMTask")
     .split(", ")
     .map((c) => `t.${c}`)
-    .join(", ")} FROM TMTask t WHERE ${where}`;
+    .join(", ")}, ${EFFECTIVE_AREA} AS effectiveArea FROM TMTask t WHERE ${where}`;
   return db.prepare(sql).all(...(params as never[])) as unknown as TaskRow[];
 }
 

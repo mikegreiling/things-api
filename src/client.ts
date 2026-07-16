@@ -145,9 +145,10 @@ export interface ThingsClient {
     /**
      * Composite project view. Targets by uuid, unique name, or uuid prefix.
      * `overdue: true` keeps only child to-dos whose own deadline is overdue
-     * (open, before today); the tag filters (`tags`/`directTags`/`untagged`/
-     * `directUntagged`) keep only the child to-dos matching by their own tags.
-     * Any content scope collapses headings left with no surviving child.
+     * (open, before today); the tag filters (`tags`/`untagged`) keep only the
+     * child to-dos carrying the tag DIRECTLY (the container semantics — tags
+     * inherited from this project are ignored). Any content scope collapses
+     * headings left with no surviving child.
      */
     projectView(ref: string, options?: ViewFilter): ProjectView;
     /**

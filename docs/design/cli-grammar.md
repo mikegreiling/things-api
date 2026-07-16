@@ -152,7 +152,7 @@ The optional flags on a read view fall into four classes:
 
 - **Volume caps** — `--limit`, `--area-limit`, `--project-limit`. How many rows/blocks to show.
 - **Range bounds** — `--since`, `--until`. The time window the view covers.
-- **Content scopes** — the tag filters (`--tag`, `--direct-tag`, `--exact-tag`, `--untagged`, `--direct-untagged` — see [The tag filters](#the-tag-filters-mike-approved) below), `--overdue` (open items past their deadline — see below), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
+- **Content scopes** — the tag filters (`--tag`, `--exact-tag`, `--untagged` — see [The tag filters](#the-tag-filters-mike-approved) below), `--overdue` (open items past their deadline — see below), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
 - **Visibility toggles** — `--show-later`, `--logged`, `--trashed`, `--evening`. Whether an otherwise-hidden class is folded in.
 
 `--all` is its own thing: it removes restrictions (see the `--all` doctrine above) and conflicts with an explicit cap/bound exactly as before.
@@ -177,31 +177,33 @@ Rationale: defaults exist to keep the bare invocation small; once the user state
 
 ### The tag filters (Mike-approved)
 
-Five flags scope a view by tag. They rest on **two orthogonal axes** in how a tag reaches an item:
+Three flags scope a view by tag — `--tag`, `--exact-tag`, `--untagged`. They rest on **two orthogonal axes** in how a tag reaches an item:
 
 - **(A) Container inheritance** — an item inherits the tags of its project, its area, and (through the heading → project → area chain) its heading's container. GUI-verified (oddities **§9a**, TAGINH2): the app's tag filter treats an item as carrying its containers' tags.
 - **(B) Tag-hierarchy descendant expansion** — filtering a PARENT tag also matches items tagged with a DESCENDANT of that tag (documented app behavior; the UI's filter works downward through the tag tree).
 
-The five flags are exactly the meaningful points on those axes:
+Descendant expansion (B) is uniform: on by default, dropped by `--exact-tag`. Container inheritance (A) is **view-dependent** — the one axis §9a settles (below):
 
 | Flag | Container inheritance (A) | Descendant expansion (B) | Matches |
 |---|---|---|---|
-| `--tag X` | yes | yes | X directly, X inherited from a container, or a descendant of X (any of those) |
-| `--direct-tag X` | **no** | yes | X (or a descendant of X) assigned **directly** to the item — a container-inherited X does not count |
-| `--tag X --exact-tag` | yes | **no** | X directly or inherited, but not a descendant of X |
-| `--direct-tag X --exact-tag` | no | no | exactly X, assigned directly |
-| `--untagged` | — | — | the item carries **no** tag by any hop (direct or inherited) — the GUI's "No Tag" |
-| `--direct-untagged` | — | — | the item carries no **direct** tag (an inherited tag is allowed) — the GUI's in-context "No Tag" |
+| `--tag X` (flat view) | yes | yes | X directly, X inherited from a container, or a descendant of X |
+| `--tag X` (container view) | **no** | yes | X (or a descendant) carried **directly** on the row — an inherited X does not count |
+| `--tag X --exact-tag` | per view | **no** | X (flat: directly/inherited · container: directly), never a descendant |
+| `--untagged` (flat view) | — | — | the item carries **no** tag by any hop, direct or inherited — the GUI's "No Tag" |
+| `--untagged` (container view) | — | — | the row carries no **direct** tag (an inherited tag is allowed) — the GUI's in-context "No Tag" |
 
-`--direct-tag` differs from `--tag` on exactly ONE axis: it drops container inheritance (A) and keeps descendant expansion (B). `--exact-tag` is the orthogonal modifier that drops (B), and it applies to both `--tag` and `--direct-tag`.
+**Flat vs container `--tag`.** The single difference is axis A, chosen by the host view:
 
-**Multi-tag AND.** `--tag` and `--direct-tag` are **repeatable**, and repeats AND together: `--tag foo --tag bar` keeps items matching foo AND bar (each ref independently resolved and expanded per its own axes; the per-ref predicates are AND-combined, while each ref's own descendant set stays OR-matched internally). `--tag` and `--direct-tag` may also compose (`--tag urgent --direct-tag home` = inherited-or-direct urgent AND directly home). Each ref resolves through the tag-ref resolver by name/path (never by uuid — tag uuids are internal); an unknown ref fails closed, per ref.
+- **FLAT views** — `today`, `inbox`, `anytime`, `someday`, `upcoming`, `search`, `logbook`, **and the `things projects` LIST** — keep container inheritance ON: `--tag X` matches an item that carries X directly OR inherits it from a container. The projects list is flat because projects sit in different areas with heterogeneous inheritance — there is no universally-inherited tag, and inherited tags are opaque in the list (area headers don't show what they confer), so filtering by an inherited tag is useful (`things projects` is just `anytime` restricted to project rows).
+- **SINGLE-CONTAINER views** — `project show` and `area show` (plus their `things <id>` / `things projects <ref>` / `things areas <ref>` sugar) — drop container inheritance: `--tag X` matches a displayed row that carries X **directly** (project show → its child to-dos; area show → its loose to-dos AND its child projects), with NO recursion into a matched container's contents. Rationale: every child inherits the ONE container's tags, so an inheritance-inclusive `--tag` would be vacuous (a tag the project carries would match every child). Matching direct-on-the-row is the useful, GUI-faithful behavior. `--exact-tag` still drops axis B here; `--untagged` means "no direct tag on the row".
 
-**Mutual exclusivity.** `--untagged` and `--direct-untagged` are booleans (no multiplicity). Each is exclusive with every tag-presence flag (`--tag`/`--direct-tag`/`--exact-tag`) and with the other negation — you cannot ask for untagged AND a tag. `--tag` and `--direct-tag` compose (they are different predicates). Incoherent combinations are refused fail-closed with a clear usage error.
+**Multi-tag AND.** `--tag` is **repeatable**, and repeats AND together: `--tag foo --tag bar` keeps items matching foo AND bar (each ref independently resolved and descendant-expanded; the per-ref predicates are AND-combined, while each ref's own descendant set stays OR-matched internally). Each ref resolves through the tag-ref resolver by name/path (never by uuid — tag uuids are internal); an unknown ref fails closed, per ref.
 
-**Where they apply.** Universal: every flat list view that already accepted `--tag` (today, inbox, anytime, someday, upcoming, logbook, search) accepts all five. The **containers** — `project show`, `area show`, and the `things projects` LIST (plus their `things <id>` / `things projects <ref>` / `things areas <ref>` sugar) — accept them too, filtering the displayed rows by **each row's own tags** (project show → its child to-dos; area show → its loose to-dos AND its child projects; `things projects` → the project rows), with NO recursion into a matched container's contents (same level-uniform rule as `--overdue`). As a content scope the tag filters never lift a `--limit`/section cap. The bare `things areas` LIST rejects them (an area is shown with its own direct tags; use `things areas <ref>` for that area's rows, or `things projects --tag`).
+**Mutual exclusivity.** `--untagged` is a boolean, exclusive with the tag-presence flags (`--tag`/`--exact-tag`) — you cannot ask for untagged AND a tag. Incoherent combinations are refused fail-closed with a clear usage error.
 
-**§9a resolved.** The earlier open question — whether a container `--tag` should mean own-tag-only, inherited-inclusive, or be refused — is settled by offering BOTH: `--tag` is inheritance-inclusive (so filtering a project's children by a tag the PROJECT carries matches every child — the tag is inherited by all of them, a deliberate, documented consequence), and `--direct-tag` is the direct-only tool for "children with their OWN X tag". The MCP tools mirror this: `tag`/`direct_tag` are arrays, plus `exact_tag`/`untagged`/`direct_untagged`, on `read_view`/`search`/`get_project`/`get_area`/`list_collections` (projects only) with the same guards.
+**Where they apply.** The flat list views and the two single-container views above. The bare `things areas` LIST rejects the tag filters (an area is shown with its own direct tags; use `things areas <ref>` for that area's rows, or `things projects --tag`).
+
+**§9a resolved (revised 2026-07-16).** The earlier open question — whether a container `--tag` should mean own-tag-only, inherited-inclusive, or be refused — is settled by making axis A **view-dependent**: inheritance-inclusive in the flat views (including the `things projects` list), and direct-on-the-row in the two single-container views (`project show` / `area show`), where the container's universally-inherited tags would make an inclusive filter vacuous. There is a single `--tag` flag (no separate `--direct-tag`); the earlier `--direct-tag`/`--direct-untagged` flags from #164 are **removed**. The MCP tools mirror this: `tag`/`exact_tag`/`untagged` on `read_view`/`search`/`get_project`/`get_area`/`list_collections` (projects only), with `get_project`/`get_area` applying the single-container (direct) semantics and the rest flat.
 
 ### The `--overdue` content scope (Mike-approved)
 
@@ -211,7 +213,7 @@ The five flags are exactly the meaningful points on those axes:
 
 **Where it applies.** `--overdue` is offered on the current-work views where `--tag` applies and the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search`; and on the container/list views `things projects`, `project show`, and `area show` (and their `things <id>` sugar). On `search` it lists open items, so it is refused together with the status-widening `--logged`/`--trashed`/`--all` (the same fail-closed style as `--untagged` with `--tag`).
 
-**Container/list semantics (OWN-DEADLINE UNIFORM).** In the container/list views `--overdue` keeps each listed ENTITY iff its OWN deadline is overdue — there is NO recursion into container contents. Deadlines are not inherited, so `--overdue` needs no own-vs-inherited distinction; the tag filters (which DO distinguish, via `--tag` vs `--direct-tag`) live on the same containers (see [The tag filters](#the-tag-filters-mike-approved)):
+**Container/list semantics (OWN-DEADLINE UNIFORM).** In the container/list views `--overdue` keeps each listed ENTITY iff its OWN deadline is overdue — there is NO recursion into container contents. Deadlines are not inherited, so `--overdue` needs no own-vs-inherited distinction; the tag filters (which DO distinguish A, via the flat-vs-single-container split) live on the same views (see [The tag filters](#the-tag-filters-mike-approved)):
 - **`things projects`** (project LIST) — keeps projects whose own deadline is overdue. Projects are `TMTask type=1` carrying their own `deadline` column, so the same `OVERDUE` predicate applies to project rows verbatim.
 - **`project show`** (and `things <project-id>`) — filters the project's child TO-DOS to those whose own deadline is overdue. Headings left with no surviving child collapse (no empty sections); the project header itself always renders.
 - **`area show`** (and `things <area-id>`) — filters the displayed rows by each row's OWN deadline: the area's loose to-dos by theirs AND its child projects by the project's own deadline. There is NO descent into project contents — an overdue to-do *inside* a non-overdue project does not surface here (that is `project show --overdue`). Sections with no surviving rows collapse to the view's existing empty state.

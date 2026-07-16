@@ -8,7 +8,7 @@
  * Every glyph lives here so a cross-terminal rendering audit
  * (docs/roadmap.md) can retune the language in one file.
  */
-import type { InheritedTag, Project, Todo } from "../model/entities.ts";
+import type { Project, TagRef, Todo } from "../model/entities.ts";
 import { blue, bold, brightBlue, dim, green, red, strike, underline, yellow } from "./style.ts";
 
 const MONTHS = [
@@ -124,18 +124,15 @@ export function countChip(item: Project): string {
 
 /**
  * The `inherited:` line VALUE for the detail/card surfaces (`todo show`,
- * `project show`): each inherited tag with a provenance chip naming the
- * ancestor it comes from — `#important ‹project Renovation› #home ‹area Home›`.
- * Whole value renders DIM (secondary metadata — distinct from the opened
- * item's OWN tags, which render green): inherited tags are context, not the
- * item's own assignments. Sources are only project/area (headings can't be
- * tagged). The array is already in canonical tag order (inheritedTagsFor).
- * Never rendered on list rows, and callers omit the line entirely when empty.
+ * `project show`): the inherited tag NAMES plainly — `#important #home`. The
+ * whole value renders DIM (secondary metadata — distinct from the opened item's
+ * OWN tags, which render green): inherited tags are context, not the item's own
+ * assignments. No container provenance chip. The array is already in canonical
+ * tag order (inheritedTagsFor). Never rendered on list rows, and callers omit
+ * the line entirely when empty.
  */
-export function inheritedChips(inherited: InheritedTag[]): string {
-  return dim(
-    inherited.map((i) => `#${i.tag.title} ‹${i.source.type} ${i.source.title}›`).join(" "),
-  );
+export function inheritedChips(inherited: TagRef[]): string {
+  return dim(`#${inherited.map((t) => t.title).join(" #")}`);
 }
 
 /** Area marker (the GUI's green cube icon; a hexagon is a cube's silhouette). */

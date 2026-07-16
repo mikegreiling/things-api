@@ -37,6 +37,13 @@ export interface TaskRow {
   index: number | null;
   todayIndex: number | null;
   area: string | null;
+  /**
+   * The row's EFFECTIVE area (queries.ts EFFECTIVE_AREA): its own `area`, else
+   * its project's, else its heading's project's. Equals `area` for projects and
+   * for area-direct to-dos; resolves the container's area for nested to-dos
+   * (whose own `area` is NULL). Surfaced as the entity's `area` Ref.
+   */
+  effectiveArea: string | null;
   project: string | null;
   heading: string | null;
   untrashedLeafActionsCount: number | null;
@@ -133,7 +140,11 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
         ? null
         : decodePackedDate(row.deadline),
     reminder: decodeReminderTime(row.reminderTime),
-    area: refs(row.area),
+    // The EFFECTIVE area: a to-do nested in a project (own `area` NULL) reports
+    // its container's area, restoring useful area info omit-empty (#163) would
+    // otherwise hide. Projects and area-direct to-dos are unaffected (effective
+    // == direct). Direct-vs-inherited stays derivable from project/heading.
+    area: refs(row.effectiveArea),
     // Surface tags by NAME only — tag uuids are an internal detail (TAGW1-c).
     tags: tags.map((t) => ({ title: t.title })),
     repeating: mapRepeating(row),

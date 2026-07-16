@@ -656,7 +656,7 @@ describe("PLOG1 — stranded open children of a resolved project", () => {
 });
 
 describe("inherited-tags display (todo show / project show)", () => {
-  it("todo show: renders an `inherited:` line with per-tag provenance chips", () => {
+  it("todo show: renders an `inherited:` line with plain tag names (no provenance chip)", () => {
     fixture = buildFixtureDb();
     const area = seedArea(fixture.db, "Home");
     const project = seedProject(fixture.db, { title: "Renovation", area });
@@ -670,12 +670,15 @@ describe("inherited-tags display (todo show / project show)", () => {
 
     const item = byUuid(fixture.db, todo);
     const lines = renderDetail(item).join("\n");
-    expect(lines).toContain("inherited: #important ‹project Renovation› #home ‹area Home›");
+    expect(lines).toContain("inherited: #important #home");
+    // No container provenance chip.
+    expect(lines).not.toContain("‹area");
+    expect(lines).not.toContain("‹project");
     // The item's OWN (direct) tags line is separate; here it has none.
     expect(lines).not.toContain("tags:");
   });
 
-  it("project show: renders the area-inherited line with an `‹area …›` chip", () => {
+  it("project show: renders the area-inherited line as a plain name (no `‹area …›` chip)", () => {
     fixture = buildFixtureDb();
     const area = seedArea(fixture.db, "Home");
     const home = seedTag(fixture.db, "home");
@@ -684,7 +687,8 @@ describe("inherited-tags display (todo show / project show)", () => {
 
     const view = projectView(fixture.db, project, NOW);
     const lines = renderProjectView(view, {}).join("\n");
-    expect(lines).toContain("inherited: #home ‹area Home›");
+    expect(lines).toContain("inherited: #home");
+    expect(lines).not.toContain("‹area");
   });
 
   it("omits the `inherited:` line entirely when there are none — no empty placeholder", () => {

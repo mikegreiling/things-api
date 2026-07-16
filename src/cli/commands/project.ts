@@ -22,6 +22,7 @@ import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } fro
 import { DidYouMeanError } from "../did-you-mean.ts";
 import {
   addTagFilterOptions,
+  CONTAINER_TAG_HINT,
   tagFilterFields,
   tagFlagConflict,
   tagInvocationParts,
@@ -114,7 +115,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     lines.push(`  ${dim("logged:")} ${loggedDate(p.stopped, todayIso)} ${dim(`(${p.status})`)}`);
   if (p.tags.length > 0)
     lines.push(`  ${dim("tags:")} ${green(`#${p.tags.map((t) => t.title).join(" #")}`)}`);
-  // Inherited (from the area) renders dim with provenance chips, only when
+  // Inherited (from the area) renders dim as plain tag names, only when
   // present — a zero-inherited card is byte-identical to no line.
   if (p.inheritedTags !== undefined && p.inheritedTags.length > 0)
     lines.push(`  ${dim("inherited:")} ${inheritedChips(p.inheritedTags)}`);
@@ -243,7 +244,7 @@ export function registerProjectCommands(program: Command): void {
   const projectShow = project
     .command("show <ref>")
     .description(
-      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. Filter the child to-dos with --tag / --direct-tag / --untagged / --direct-untagged (by each to-do's own tags). Target by uuid or unique name.",
+      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. --tag / --untagged filter the child to-dos by a tag carried directly on the to-do — tags inherited from this project are ignored (every child inherits them). Target by uuid or unique name.",
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
@@ -254,9 +255,9 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
-  addTagFilterOptions(projectShow).action((ref: string, rawOpts: ProjectShowActionOpts) =>
-    runProjectShow(ref, rawOpts),
-  );
+  addTagFilterOptions(projectShow)
+    .addHelpText("after", CONTAINER_TAG_HINT)
+    .action((ref: string, rawOpts: ProjectShowActionOpts) => runProjectShow(ref, rawOpts));
   project
     .command("open <ref>")
     .description(

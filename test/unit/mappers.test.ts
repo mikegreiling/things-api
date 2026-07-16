@@ -33,6 +33,9 @@ function row(overrides: Partial<TaskRow> = {}): TaskRow {
     index: -1731,
     todayIndex: 6000626,
     area: "area-1",
+    // The entity's `area` Ref maps from effectiveArea (queries.ts EFFECTIVE_AREA);
+    // for a direct-area to-do it equals `area`.
+    effectiveArea: "area-1",
     project: null,
     heading: null,
     untrashedLeafActionsCount: null,

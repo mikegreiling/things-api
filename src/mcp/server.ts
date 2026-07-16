@@ -184,10 +184,13 @@ const NON_DESTRUCTIVE = { destructiveHint: false } as const;
 const DESTRUCTIVE = { destructiveHint: true } as const;
 
 /**
- * The five tag-filter inputs shared by every tag-accepting tool. `tag` and
- * `direct_tag` are ARRAYS — repeat a tag to AND several together. `--tag`
- * honors container inheritance; `direct_tag` matches only a directly-assigned
- * tag (both keep hierarchy-descendant expansion, which `exact_tag` disables).
+ * The three tag-filter inputs shared by every tag-accepting tool. `tag` is an
+ * ARRAY — repeat a tag to AND several together (both keep hierarchy-descendant
+ * expansion, which `exact_tag` disables). In FLAT views (read_view, search, and
+ * the projects list of list_collections) `tag` honors container inheritance; in
+ * the SINGLE-CONTAINER tools (get_project, get_area) it matches a tag carried
+ * DIRECTLY on the item — that container's own inherited tags are ignored (every
+ * child inherits them, so an inheritance-inclusive match would be vacuous).
  */
 const tagOnlyShape = {
   tag: z
@@ -195,14 +198,8 @@ const tagOnlyShape = {
     .optional()
     .describe(
       `Filter by tag (${REF_FORMAT}); repeat to AND several tags. Matches a direct, ` +
-        "container-inherited, or descendant tag",
-    ),
-  direct_tag: z
-    .array(z.string())
-    .optional()
-    .describe(
-      `Filter by a tag assigned DIRECTLY to the item (${REF_FORMAT}); repeat to AND several. ` +
-        "Excludes container-inherited tags; still matches hierarchy descendants",
+        "container-inherited, or descendant tag (in a container tool the container's own " +
+        "inherited tags are ignored — the tag must be on the item itself)",
     ),
   exact_tag: z
     .boolean()
@@ -212,15 +209,8 @@ const tagOnlyShape = {
     .boolean()
     .optional()
     .describe(
-      "Only items with no tag (direct or inherited); not combinable with " +
-        "tag/direct_tag/exact_tag/direct_untagged",
-    ),
-  direct_untagged: z
-    .boolean()
-    .optional()
-    .describe(
-      "Only items with no DIRECT tag (an inherited tag is allowed); not combinable with " +
-        "the tag-presence flags or untagged",
+      "Only items with no tag (direct or inherited); not combinable with tag/exact_tag " +
+        "(in a container tool: no tag on the item itself, ignoring inherited tags)",
     ),
 };
 
@@ -232,36 +222,26 @@ const tagFilterShape = {
     .describe("Only open items past their deadline (due today is not overdue)"),
 };
 
-/** The parsed shape of the five tag-filter inputs on any tag-accepting tool. */
+/** The parsed shape of the three tag-filter inputs on any tag-accepting tool. */
 interface TagArgs {
   tag?: string[] | undefined;
-  direct_tag?: string[] | undefined;
   exact_tag?: boolean | undefined;
   untagged?: boolean | undefined;
-  direct_untagged?: boolean | undefined;
 }
 
 /** True when any tag-PRESENCE input was passed (a positive filter, not a negation). */
 function hasTagPresence(args: TagArgs): boolean {
-  return (
-    (args.tag?.length ?? 0) > 0 || (args.direct_tag?.length ?? 0) > 0 || args.exact_tag === true
-  );
+  return (args.tag?.length ?? 0) > 0 || args.exact_tag === true;
 }
 
 /**
- * The tag-filter mutual-exclusivity guard: the negations invert a presence, so
- * they combine neither with a tag-presence input nor with each other. Returns
- * the usage message when incoherent, else null.
+ * The tag-filter mutual-exclusivity guard: the `untagged` negation inverts a
+ * presence, so it does not combine with a tag-presence input. Returns the usage
+ * message when incoherent, else null.
  */
 function tagFlagConflict(args: TagArgs): string | null {
-  if (args.untagged === true && args.direct_untagged === true) {
-    return "pass at most one of untagged / direct_untagged";
-  }
   if (args.untagged === true && hasTagPresence(args)) {
-    return "untagged does not combine with tag/direct_tag/exact_tag";
-  }
-  if (args.direct_untagged === true && hasTagPresence(args)) {
-    return "direct_untagged does not combine with tag/direct_tag/exact_tag";
+    return "untagged does not combine with tag/exact_tag";
   }
   return null;
 }
@@ -270,11 +250,8 @@ function tagFlagConflict(args: TagArgs): string | null {
 function tagFilterFromArgs(args: TagArgs): Record<string, unknown> {
   return {
     ...(args.tag !== undefined && args.tag.length > 0 && { tags: args.tag }),
-    ...(args.direct_tag !== undefined &&
-      args.direct_tag.length > 0 && { directTags: args.direct_tag }),
     ...(args.exact_tag === true && { exactTag: true }),
     ...(args.untagged === true && { untagged: true }),
-    ...(args.direct_untagged === true && { directUntagged: true }),
   };
 }
 
@@ -847,10 +824,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.overdue === true && args.kind !== "projects") {
           return usage(`overdue applies only to projects, not ${args.kind}`);
         }
-        if (
-          args.kind !== "projects" &&
-          (hasTagPresence(args) || args.untagged === true || args.direct_untagged === true)
-        ) {
+        if (args.kind !== "projects" && (hasTagPresence(args) || args.untagged === true)) {
           return usage(`the tag filters apply only to projects, not ${args.kind}`);
         }
         const tagConflict = tagFlagConflict(args);

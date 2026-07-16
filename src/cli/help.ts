@@ -219,11 +219,8 @@ const STATIC_TOPICS: Readonly<Record<string, string>> = {
 Content scope (which items qualify):
   --tag <ref>        items with this tag: direct, container-inherited, or on a
                      descendant tag. Repeatable — several --tag AND together
-  --direct-tag <ref> items DIRECTLY tagged (repeatable, AND): like --tag but
-                     WITHOUT container inheritance (still matches descendants)
-  --exact-tag        with --tag/--direct-tag: the named tag only, no descendants
+  --exact-tag        with --tag: the named tag only, no descendants
   --untagged         only items with no tag at all (the app's "No Tag" filter)
-  --direct-untagged  only items with no DIRECT tag (an inherited tag is allowed)
   --overdue          only open items past their deadline, due today excluded
                      (today, inbox, anytime, someday, search; and the
                      containers projects, project show, area show — by each
@@ -232,10 +229,12 @@ Content scope (which items qualify):
   --project <ref>    restrict to one project (logbook, search)
   --type <kind>      search only: todo | project
 
-Two axes live in --tag: CONTAINER inheritance (an item inherits its project /
-area / heading tags) and DESCENDANT expansion (a parent tag matches child-tag
-items). --direct-tag drops only inheritance; --exact-tag drops only expansion.
-The tag filters also scope the containers (project show / area show / projects).
+--tag has two axes: CONTAINER inheritance (an item inherits its project/area/
+heading tags) and DESCENDANT expansion (a parent tag matches child-tag items).
+--exact-tag drops expansion. Inheritance is view-dependent: FLAT views (incl. the
+projects LIST) are inheritance-inclusive; project show / area show match a tag
+DIRECTLY on the row (a tag inherited from that one container is vacuous there).
+--untagged mirrors it: whole-relation when flat, direct-only in a container.
 
 Volume caps (how many rows):
   --limit <n>        maximum rows before truncating (flat views; default 50)

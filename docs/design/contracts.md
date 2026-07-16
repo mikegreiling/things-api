@@ -68,7 +68,9 @@ Omitted when empty, per entity:
 | tag (taxonomy listing) | `title` | `shortcut` (null), `parent` (null — a root tag has no `parent` key) |
 | checklist item | `title`, `status` | — (no optional fields) |
 
-`inheritedTags` is present ONLY on the detail reads (`todo show` / `project show` / `get_item` / `get_project`) and now follows the same rule — **absent when empty, present (with provenance) when non-empty.** This reverses the earlier "always an empty array on detail reads" ruling (intended): a machine consumer keys on presence, and `item.inheritedTags ?? []` is the correct read.
+`inheritedTags` is present ONLY on the detail reads (`todo show` / `project show` / `get_item` / `get_project`) and follows omit-empty — **absent when empty, present when non-empty.** It is a **plain array of tag names** (`TagRef` — `{ title }`), parallel to `tags`; the container-provenance `source` object it once carried was **removed 2026-07-16** (there is no `‹project X›`/`‹area Y›` chip). A machine consumer keys on presence, and `item.inheritedTags ?? []` is the correct read.
+
+The `area` field reports the **EFFECTIVE** area (revised 2026-07-16): a to-do's own `area`, else its project's area, else its heading's project's area — so a to-do nested in a project-in-an-area now emits `area: <that area>` instead of being absent (a project's `area` is its own; areas are not inherited). Whether the area is direct vs inherited stays derivable from whether `project`/`heading` is set. This is a **behavior change** to the `area` field's meaning (previously the raw `t.area` column only).
 
 `repeating` is always present (it carries the `isTemplate` / `isInstance` booleans); inside it, `templateUuid` (null), `nextOccurrence`, `paused`, `deadlined`, and `rule` follow omit-empty.
 

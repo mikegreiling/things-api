@@ -27,6 +27,7 @@ import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 import {
   addTagFilterOptions,
+  CONTAINER_TAG_HINT,
   tagFilterFields,
   tagFlagConflict,
   tagInvocationParts,
@@ -286,9 +287,10 @@ export function registerAreaCommands(program: Command): void {
     .description(
       "Composite area view mirroring the native UI: active projects first, then the " +
         "area's direct to-dos. --show-later adds the Upcoming (date-ordered) and " +
-        "Someday sections; --show-logged adds the full logbook. Filter the rows with " +
-        "--tag / --direct-tag / --untagged / --direct-untagged (by each row's own tags; " +
-        "no descent into project contents). Target by uuid or unique name.",
+        "Someday sections; --show-logged adds the full logbook. --tag / --untagged filter " +
+        "the rows by a tag carried directly on the row — tags inherited from this area are " +
+        "ignored (every row inherits them); no descent into project contents. Target by " +
+        "uuid or unique name.",
     )
     .option("--show-later", "include Upcoming and Someday sections")
     .option(
@@ -302,9 +304,9 @@ export function registerAreaCommands(program: Command): void {
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
-  addTagFilterOptions(areaShow).action((ref: string, opts: AreaShowActionOpts) =>
-    runAreaShow(ref, opts),
-  );
+  addTagFilterOptions(areaShow)
+    .addHelpText("after", CONTAINER_TAG_HINT)
+    .action((ref: string, opts: AreaShowActionOpts) => runAreaShow(ref, opts));
   area
     .command("open <ref>")
     .description(

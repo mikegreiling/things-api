@@ -128,48 +128,35 @@ export interface ViewFilter {
    */
   tag?: string;
   /**
-   * Tag refs (uuid or unique title): direct OR inherited membership (UI
+   * Tag refs (uuid or unique title). In FLAT views (today/inbox/anytime/
+   * someday/upcoming/search/logbook) this is direct OR inherited membership (UI
    * semantics), INCLUDING items tagged with a hierarchy descendant of each
    * given tag (documented app behavior — the UI's tag filter matches
-   * child-tagged items; not lab-oracled). Multiple refs AND together — an item
-   * must match EVERY ref (each independently expanded to its descendant set,
-   * OR-matched within, AND-combined across).
+   * child-tagged items; not lab-oracled). In CONTAINER views (`project show`,
+   * `area show`, the `projects` list) the same ref instead matches rows carrying
+   * the tag DIRECTLY (still with descendant expansion) — the view's own
+   * container-inheritance hop is suppressed, since every child inherits the
+   * container's tags and an inheritance-inclusive filter there is vacuous. The
+   * host view selects the behavior via {@link tagFilter}'s `container` option.
+   * Multiple refs AND together — an item must match EVERY ref (each
+   * independently expanded to its descendant set, OR-matched within,
+   * AND-combined across).
    */
   tags?: string[];
   /**
-   * Convenience shorthand for a single-element {@link directTags}.
-   */
-  directTag?: string;
-  /**
-   * Direct-only tag refs: like {@link tags} MINUS container inheritance. An
-   * item matches only when it is DIRECTLY tagged with the ref (or a hierarchy
-   * descendant of it — descendant expansion is retained); a tag inherited from
-   * its project/area/heading does NOT satisfy a direct-tag ref. Multiple refs
-   * AND together, and compose (AND) with {@link tags}.
-   */
-  directTags?: string[];
-  /**
-   * Match each given tag ref ONLY — no hierarchy descendants. Applies to both
-   * {@link tags} and {@link directTags}. Useful when a parent tag has its own
-   * direct assignments distinct from its children's.
+   * Match each given tag ref ONLY — no hierarchy descendants. Useful when a
+   * parent tag has its own direct assignments distinct from its children's.
    */
   exactTag?: boolean;
   /**
-   * Only items with NO tag — neither a direct tag nor one inherited through
-   * the project/area/heading chain (the GUI's "No Tag"). The exact inversion
-   * of `tag`: an item is untagged iff no possible `tag` value could ever
-   * match it, so this negates the WHOLE direct+inherited membership relation,
-   * not merely the row's own direct assignments. Mutually exclusive with
-   * `tag`/`directTag`/`exactTag`/`directUntagged` (the surfaces reject it).
+   * Only items with NO tag (the GUI's "No Tag"). In FLAT views this negates the
+   * WHOLE direct+inherited membership relation — an item is untagged iff no
+   * possible `tag` value could ever match it. In CONTAINER views it instead
+   * means "no DIRECT tag" (the container's own inherited tags are suppressed,
+   * matching the container `tag` semantics). Mutually exclusive with
+   * `tag`/`exactTag` (the surfaces reject the combination).
    */
   untagged?: boolean;
-  /**
-   * Only items with NO DIRECT tag — they may still inherit a tag from their
-   * project/area/heading (the GUI's in-context "No Tag"). The direct-only
-   * counterpart of `untagged`; mutually exclusive with the tag-presence flags
-   * and with `untagged`.
-   */
-  directUntagged?: boolean;
   /**
    * Only OPEN items whose deadline is strictly BEFORE today (due-today is NOT
    * overdue — it mirrors the app's Today badge, where an equal-to-today
@@ -185,40 +172,46 @@ export interface ViewFilter {
 
 /**
  * Compose the tag scope for a filter into an AND-chained SQL fragment plus its
- * binds. Every clause AND-combines: the negations (`untagged`/`directUntagged`)
- * and each `--tag`/`--direct-tag` ref (each ref independently resolved and
- * descendant-expanded per its own axes). The mutually-exclusive combinations
- * (untagged with a tag-presence flag, or with each other) are refused at the
- * CLI/MCP surfaces; here they would simply AND to an empty result. Splices in
- * before {@link overdueFilter} so the tag binds precede the overdue bind.
+ * binds. Every clause AND-combines: the `untagged` negation and each `--tag`
+ * ref (each ref independently resolved and descendant-expanded per `exactTag`).
+ * The mutually-exclusive combination (`untagged` with a tag-presence flag) is
+ * refused at the CLI/MCP surfaces; here it would simply AND to an empty result.
+ * Splices in before {@link overdueFilter} so the tag binds precede the overdue
+ * bind.
+ *
+ * `options.container` selects the CONTAINER semantics (`project show` /
+ * `area show` / the `projects` list): the view's own inheritance hop is dropped,
+ * so `--tag` matches a DIRECT assignment (still descendant-expanded) and
+ * `--untagged` means "no direct tag". Every child inherits its container's tags,
+ * so an inheritance-inclusive filter there is vacuous — direct-on-the-row is the
+ * useful, GUI-faithful behavior. FLAT views omit the option and keep the
+ * inheritance-inclusive relation.
  */
 export function tagFilter(
   db: DatabaseSync,
   filter: ViewFilter | undefined,
+  options?: { container?: boolean },
 ): { sql: string; binds: string[] } {
+  const container = options?.container === true;
   const clauses: string[] = [];
   const binds: string[] = [];
-  if (filter?.untagged === true) clauses.push(untaggedScopeSql());
-  if (filter?.directUntagged === true) clauses.push(directUntaggedScopeSql());
+  if (filter?.untagged === true)
+    clauses.push(container ? directUntaggedScopeSql() : untaggedScopeSql());
   const exact = filter?.exactTag === true;
   const tagRefs = [...(filter?.tags ?? []), ...(filter?.tag !== undefined ? [filter.tag] : [])];
-  const directRefs = [
-    ...(filter?.directTags ?? []),
-    ...(filter?.directTag !== undefined ? [filter.directTag] : []),
-  ];
   const expand = (ref: string): string[] => {
     const target = resolveTagUuid(db, ref);
     return exact ? [target] : tagWithDescendants(db, target);
   };
   for (const ref of tagRefs) {
     const uuids = expand(ref);
-    clauses.push(tagScopeSql(uuids.length));
-    binds.push(...tagScopeBinds(uuids));
-  }
-  for (const ref of directRefs) {
-    const uuids = expand(ref);
-    clauses.push(directTagScopeSql(uuids.length));
-    binds.push(...uuids);
+    if (container) {
+      clauses.push(directTagScopeSql(uuids.length));
+      binds.push(...uuids);
+    } else {
+      clauses.push(tagScopeSql(uuids.length));
+      binds.push(...tagScopeBinds(uuids));
+    }
   }
   if (clauses.length === 0) return { sql: "", binds: [] };
   return { sql: ` AND ${clauses.join(" AND ")}`, binds };
@@ -744,10 +737,13 @@ export function projectsView(
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
   const packedToday = encodePackedDate(localToday(options?.now));
-  // Tag scope (§9a): each project ROW is filtered by its OWN tags — `--tag`
-  // honors area→project inheritance (a project inherits its area's tags),
-  // `--direct-tag` only the project's own assignments. Its binds sit in the
-  // WHERE, after the overdue bind and before the ORDER BY's active-first binds.
+  // Tag scope (§9a): the projects LIST is a FLAT view (like `anytime` restricted
+  // to project rows), NOT a single-container view — projects sit in different
+  // areas with heterogeneous inheritance, there is no universally-inherited tag
+  // set, and inherited tags are opaque here (area headers don't show what they
+  // confer), so filtering by an inherited tag is useful. `--tag`/`--untagged`
+  // are INHERITANCE-INCLUSIVE (a project inherits its area's tags). Its binds sit
+  // in the WHERE, after the overdue bind and before the active-first binds.
   const tf = tagFilter(db, options);
   // OWN-DEADLINE UNIFORM: `--overdue` keeps only projects whose OWN deadline is
   // overdue (open, strictly before today) — projects carry a `deadline` column
