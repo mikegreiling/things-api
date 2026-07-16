@@ -1274,8 +1274,8 @@ export function planUndo(
       );
       if (inverse === null) {
         return irreversible(
-          "the prior rule is outside the Repeat dialog's vocabulary (a rule with two end bounds, a " +
-            "multi-anchor month/year rule, or an after-completion rule with a calendar day) — reschedule again by hand",
+          "the prior rule is outside the Repeat dialog's vocabulary (a rule with two end bounds, or a " +
+            "multi-anchor month/year rule) — reschedule again by hand",
         );
       }
       if (inverse.reminder === undefined) {

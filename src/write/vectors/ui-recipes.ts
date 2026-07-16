@@ -163,9 +163,12 @@ export function convertToProjectRecipe(
 // addressed by BOTH shapes (`pathCandidates`) and the driver dispatches against
 // whichever resolves. The frequency pop-up + interval field + OK button were
 // LAB-CERTIFIED (UIC1/UIC5); the full-vocabulary controls below (weekday set,
-// monthly/yearly anchors, Ends bound, reminders/deadlines) are built against the
-// UIC1 field map and are PROVISIONAL-pending-UIC6 — their structural indices are
-// corrected at the certification sitting exactly as the base controls were.
+// monthly/yearly anchors, Ends bound, reminders/deadlines) are now LAB-CERTIFIED
+// too (UIC6, 2026-07-15) — the sitting corrected their structural indices
+// wholesale (the field-map best-guess was wrong; see docs/lab/uic6-rule-vocabulary.md).
+// The reminder-time control is undrivable (its AXDateTimeArea ignores AX writes),
+// so `--reminder` is refused upstream in assertRepeatRule; its recipe step is
+// retained but unreachable.
 
 /** The content list's table (row 0 = area/Someday header, then projects/to-dos). Confirmed UIC5. */
 const PROJECT_CONTENT_TABLE = `table 1 of scroll area 1 of ${MAIN_WINDOW}`;
@@ -191,36 +194,45 @@ const DIALOG_INTERVAL = dualForm("text field 1 of group 1");
 /** OK button. */
 const DIALOG_OK = dualForm(`button "OK"`);
 
-// --- PROVISIONAL-pending-UIC6 controls (UIC1 field map) ------------------
-// These indices are best-guess structural paths from the field-map layout; the
-// certification sitting confirms/corrects them (the `_NS:` ids regenerate per
-// layout, so addressing stays structural + title-pinned, never `_NS`).
-/** After-completion cadence unit pop-up (revealed when frequency = "after completion"). */
-const DIALOG_AC_UNIT = dualForm("pop up button 2 of group 1");
-/** Weekly day-of-week pop-up (the anchor day / first of a multi-day set). */
-const DIALOG_WEEKDAY = dualForm("pop up button 1 of group 1");
-/** Weekly "+" button that adds another weekday row to the set. */
-const DIALOG_ADD_WEEKDAY = dualForm(`button "+" of group 1`);
-/** Monthly/yearly MODE pop-up (`day` · Sunday…Saturday). Monthly: the first group pop-up. */
-const DIALOG_MONTH_MODE = dualForm("pop up button 1 of group 1");
-/** Monthly/yearly ORDINAL pop-up (`last` · 1st…31st / 1st…5th). */
-const DIALOG_MONTH_ORDINAL = dualForm("pop up button 2 of group 1");
-/** Yearly MONTH pop-up (the first pop-up on the year row; mode/ordinal follow). */
-const DIALOG_YEAR_MONTH = dualForm("pop up button 1 of group 1");
-const DIALOG_YEAR_MODE = dualForm("pop up button 2 of group 1");
-const DIALOG_YEAR_ORDINAL = dualForm("pop up button 3 of group 1");
-/** "Ends" bound pop-up (`never` · `after` · `on date`). */
-const DIALOG_ENDS = dualForm(`pop up button "Ends" of group 1`);
-/** "Ends after [n]" count field. */
-const DIALOG_ENDS_COUNT = dualForm("text field 2 of group 1");
-/** "Ends on [date]" date picker. */
-const DIALOG_ENDS_DATE = dualForm("date field 1 of group 1");
-/** "Add reminders" checkbox + its time field. */
+// --- UIC6-CERTIFIED controls (corrected from the field-map best-guess) ---
+// The dialog's rule controls (except the reminder/end-date pickers) all live in
+// the cadence AXGroup (`group 1`); UIC6 sat the live tree and fixed the
+// provisional structural indices. The invariant that made them addressable:
+// the "Ends" pop-up is ALWAYS `pop up button 1 of group 1`, so the per-frequency
+// pop-ups follow it (weekday=2; monthly mode=2/ordinal=3; yearly month=2/mode=3/
+// ordinal=4). Titles/`_NS:` ids are never used (both drift). See
+// docs/lab/uic6-rule-vocabulary.md for the per-control evidence.
+/** After-completion cadence unit pop-up — the ONLY group pop-up in that mode. */
+const DIALOG_AC_UNIT = dualForm("pop up button 1 of group 1");
+/** Weekly day-of-week pop-up — pop up button 2 (Ends is pop up button 1). */
+const DIALOG_WEEKDAY = dualForm("pop up button 2 of group 1");
+/** Weekly "+" button that adds a weekday row (title-less AXButton — button 1 of the group). */
+const DIALOG_ADD_WEEKDAY = dualForm("button 1 of group 1");
+/** Monthly MODE pop-up (`day` · Sunday…Saturday) — pop up button 2. */
+const DIALOG_MONTH_MODE = dualForm("pop up button 2 of group 1");
+/** Monthly ORDINAL pop-up (`last` · 1st…31st) — pop up button 3. */
+const DIALOG_MONTH_ORDINAL = dualForm("pop up button 3 of group 1");
+/** Yearly MONTH pop-up — pop up button 2 (Ends 1, then month/mode/ordinal). */
+const DIALOG_YEAR_MONTH = dualForm("pop up button 2 of group 1");
+const DIALOG_YEAR_MODE = dualForm("pop up button 3 of group 1");
+const DIALOG_YEAR_ORDINAL = dualForm("pop up button 4 of group 1");
+/** "Ends" bound pop-up (`never` · `after` · `on date`) — always pop up button 1 of the group. */
+const DIALOG_ENDS = dualForm("pop up button 1 of group 1");
+/** "Ends after [n]" count field — becomes text field 1 of the group once shown (interval was set earlier while it was the sole field). */
+const DIALOG_ENDS_COUNT = dualForm("text field 1 of group 1");
+/** "Add reminders" checkbox (sheet-level, title-pinned). The time is an AXDateTimeArea driven by set-datetime. */
 const DIALOG_ADD_REMINDERS = dualForm(`checkbox "Add reminders"`);
-const DIALOG_REMINDER_TIME = dualForm("text field 3 of group 1");
-/** "Add deadlines" checkbox + the "start N days earlier" offset field it reveals. */
+/** "Add deadlines" checkbox + the "start N days earlier" field it reveals as a DIRECT sheet child (text field 1 of the shell). */
 const DIALOG_ADD_DEADLINES = dualForm(`checkbox "Add deadlines"`);
-const DIALOG_START_EARLIER = dualForm("text field 4 of group 1");
+const DIALOG_START_EARLIER = dualForm("text field 1");
+
+/** After-completion unit pop-up options are singular (`day`/`week`/…), not the frequency word. */
+const FREQ_TO_AC_UNIT: Record<RepeatFrequency, string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
 
 /** English display titles for the weekday / ordinal / month pop-ups (title-pinned, locale fail-closed). */
 const WEEKDAY_TITLE: Record<Weekday, string> = {
@@ -281,6 +293,15 @@ function setField(label: string, pathCandidates: string[], value: string): UiSte
 function pressControl(label: string, pathCandidates: string[]): UiStep {
   return { primitive: "press", label, pathCandidates, dynamic: true, addressing: "title" };
 }
+/**
+ * Set the dialog's date/time picker (reminder time / end-date bound). The
+ * control is an `AXDateTimeArea` located by role within the front dialog (UIC6),
+ * so it carries no element path — the driver's set-datetime primitive finds it.
+ * `spec` is `time:HH:mm` or `date:YYYY-MM-DD`.
+ */
+function setDateTime(label: string, spec: string): UiStep {
+  return { primitive: "set-datetime", label, value: spec, dynamic: true, addressing: "title" };
+}
 
 /** Steps that drive the day anchor of a monthly rule into the mode + ordinal pop-ups. */
 function monthlyAnchorSteps(anchor: MonthlyAnchor, mode: string[], ordinal: string[]): UiStep[] {
@@ -340,7 +361,11 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     // a secondary unit pop-up ("after completion, every N <unit>").
     steps.push(selectPopup("frequency = after completion", DIALOG_FREQUENCY, "after completion"));
     steps.push(
-      selectPopup(`after-completion unit = ${rule.frequency}`, DIALOG_AC_UNIT, rule.frequency),
+      selectPopup(
+        `after-completion unit = ${rule.frequency}`,
+        DIALOG_AC_UNIT,
+        FREQ_TO_AC_UNIT[rule.frequency],
+      ),
     );
   } else {
     steps.push(selectPopup(`frequency = ${rule.frequency}`, DIALOG_FREQUENCY, rule.frequency));
@@ -382,13 +407,13 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
       );
     } else {
       steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
-      steps.push(setField(`ends on = ${rule.ends.date}`, DIALOG_ENDS_DATE, rule.ends.date));
+      steps.push(setDateTime(`ends on = ${rule.ends.date}`, `date:${rule.ends.date}`));
     }
   }
 
   if (rule.reminder !== undefined) {
     steps.push(pressControl("check Add reminders", DIALOG_ADD_REMINDERS));
-    steps.push(setField(`reminder = ${rule.reminder}`, DIALOG_REMINDER_TIME, rule.reminder));
+    steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`));
   }
 
   if (rule.deadline === true || (rule.startDaysEarlier ?? 0) > 0) {

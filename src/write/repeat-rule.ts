@@ -181,8 +181,22 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
 
   if (params.ends !== undefined) assertEnds(params.ends);
 
-  if (params.reminder !== undefined && !/^\d{1,2}:\d{2}$/.test(params.reminder)) {
-    throw new RangeError(`invalid reminder ${JSON.stringify(params.reminder)} — expected HH:mm`);
+  if (params.reminder !== undefined) {
+    if (!/^\d{1,2}:\d{2}$/.test(params.reminder)) {
+      throw new RangeError(`invalid reminder ${JSON.stringify(params.reminder)} — expected HH:mm`);
+    }
+    // UIC6-g: the Repeat dialog's reminder-time control is an AXDateTimeArea
+    // whose committed time CANNOT be set through the Accessibility surface —
+    // it ignores AXValue writes (unlike the "ends on date" picker, which
+    // honors them) and silently commits its default instead. Rather than write
+    // a WRONG reminder time, the op refuses. (Set the reminder in the app after
+    // the series exists; every other rule field IS drivable.) See
+    // docs/lab/uic6-rule-vocabulary.md and docs/things-app-oddities.md.
+    throw new RangeError(
+      "a repeat reminder time cannot be set through the GUI vector — Things' reminder picker " +
+        "ignores programmatic time entry (UIC6-g); create the series without --reminder and set the " +
+        "reminder in the app",
+    );
   }
 
   if (params.startDaysEarlier !== undefined) {
@@ -205,9 +219,11 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
 // that faithfully, the decoded prior rule (RepeatRule) + the template's
 // deadline flag must map back onto the extended vocabulary. A rule the DIALOG
 // itself cannot produce (simultaneous end-date + count; a monthly/yearly rule
-// with multiple offsets; an after-completion rule carrying calendar offsets) is
-// INEXPRESSIBLE — the mapping returns null and the undo stays irreversible for
-// that record (documented in reversibility.ts).
+// with MULTIPLE calendar anchors) is INEXPRESSIBLE — the mapping returns null
+// and the undo stays irreversible for that record (documented in
+// reversibility.ts). NB: an after-completion rule is ALWAYS expressible — the
+// UIC6 sitting found it carries a nominal unit offset (of=[{wd:0}] etc.) that
+// is not a user anchor and is ignored, so it is not an inexpressible shape.
 
 export type InverseRuleFields = Omit<RepeatRuleParams, "uuid">;
 
@@ -260,8 +276,13 @@ export function ruleToInverseParams(
     (o) => o.day !== undefined || o.weekday !== undefined || o.month !== undefined,
   );
   if (afterCompletion) {
-    // After-completion has no calendar day; any real offset is inexpressible.
-    if (meaningful.length > 0) return null;
+    // After-completion has no calendar anchor in the dialog, so the user can
+    // never set one — but Things still writes a NOMINAL offset for the unit
+    // (UIC6-e: a weekly-unit after-completion rule carries of=[{wd:0}], a
+    // monthly one of=[{dy:0}], etc.). That offset is not user-meaningful and is
+    // never round-tripped, so it is IGNORED here (an earlier assumption that
+    // after-completion rules carry no offsets was wrong — it would have made
+    // every after-completion reschedule-undo spuriously irreversible).
     fields.afterCompletion = true;
   } else if (rule.unit === "weekly") {
     const weekdays: Weekday[] = [];

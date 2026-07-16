@@ -47,6 +47,13 @@ const STEP_TIMEOUT_MS = 15_000;
 /** Poll interval while waiting for a dynamic element (sheet/popover). */
 const WAIT_POLL_MS = 300;
 /**
+ * How long `resolveStepPath` polls a candidate-addressed control before failing
+ * closed. The full-vocabulary dialog reveals a pop-up/field a beat AFTER the
+ * frequency/Ends switch that precedes it (UIC6: ~250 ms), so the effective-form
+ * resolution must poll, not snap once.
+ */
+const RESOLVE_CANDIDATE_TIMEOUT_MS = 5_000;
+/**
  * Settle after the reveal/activate preamble so the menu bar repopulates for the
  * newly-selected target before the canary reads it (UIC1: the Items ▸ Repeat
  * submenu appears only once a repeating item is selected, and the update is not
@@ -110,22 +117,50 @@ export function axResolveScript(path: string): string {
 export function axPressScript(path: string): string {
   return `${SE} to click (${path})`;
 }
-/** set-field-value: type a value into a text/pop-up field. */
+/**
+ * set-field-value: enter a value into the dialog's numeric text field (interval,
+ * ends-count, start-days-earlier). It FOCUSES the field, selects all, TYPES the
+ * value, and Tabs to commit — because `set value of <field>` writes the field's
+ * displayed text WITHOUT firing the edit, so the app's binding keeps the old
+ * number (the field shows "5" but the rule stays interval 1 — a silent no-op
+ * exactly like `set value` on a pop-up, UIC6; it went unnoticed while every base
+ * case used the default interval 1). Real keystrokes fire the change the binding
+ * needs; Tab (not Return, which would fire the default OK button) commits and
+ * moves focus. Foreground-bound (keystrokes reach the frontmost app) — the
+ * reveal/activate preamble puts Things there. One stable command shape.
+ */
 export function axSetValueScript(path: string, value: string): string {
-  return `${SE} to set value of (${path}) to "${escapeAppleScript(value)}"`;
+  return `${SE}
+  set tf to (${path})
+  set focused of tf to true
+  delay 0.15
+  keystroke "a" using command down
+  delay 0.1
+  keystroke "${escapeAppleScript(value)}"
+  delay 0.1
+  key code 48
+  delay 0.2
+end tell`;
 }
 /**
  * select-popup: choose an item in a pop-up button by NAME. Setting `value` on a
  * Things pop-up button is a silent no-op (UIC1 / UI2-i) — the control must be
- * opened and the menu item clicked, with a settle between so the menu renders
- * before the click lands (a press before render falls through to the control
- * beneath). One stable command shape per primitive.
+ * opened and the menu item clicked. The open-click is POLLED until the menu
+ * actually renders: in the full-vocabulary dialog a preceding pop-up's menu is
+ * still animating closed when the next select fires, and that first open-click
+ * is ABSORBED (the pop-up stays closed, so `menu 1` is an invalid index and the
+ * item click errors -1719, UIC6). Re-clicking only while the menu is absent
+ * (never once it is open) opens it reliably without toggling it back shut. One
+ * stable command shape per primitive.
  */
 export function axSelectPopupScript(path: string, value: string): string {
   return `${SE}
   set pu to (${path})
-  click pu
-  delay 0.6
+  repeat 20 times
+    if (exists menu 1 of pu) then exit repeat
+    click pu
+    delay 0.3
+  end repeat
   click menu item "${escapeAppleScript(value)}" of menu 1 of pu
 end tell`;
 }
@@ -227,6 +262,57 @@ function clickPointCommand(x: number, y: number, label: string): UiCommand {
   return { primitive: "click-point", label, lang: "javascript", script: jxaClickScript(x, y) };
 }
 
+/**
+ * set-datetime: set the Repeat dialog's `AXDateTimeArea` (reminder time / "ends
+ * on date" bound) via the ObjC AX bridge. Things' date/time control holds an
+ * NSDate, and System Events cannot write it (`set value … to <date>` → -10000,
+ * UIC6), so — like the mouse-synthesis primitive — this runs in JXA and calls
+ * `AXUIElementSetAttributeValue(…, AXValue, <NSDate>)` directly. The control is
+ * found by ROLE within Things' front dialog (there is exactly one during a
+ * reminder/end-date step; the matrix never sets both at once), polled briefly
+ * so it is caught right after the checkbox/pop-up that reveals it, and the
+ * script THROWS when absent so the driver fails closed. `spec` is
+ * `time:HH:mm` (keep the control's date, overwrite the time-of-day) or
+ * `date:YYYY-MM-DD` (overwrite the date at midnight). One stable JXA shape.
+ */
+export function axSetDateTimeScript(spec: string): string {
+  return `ObjC.import('Foundation'); ObjC.import('AppKit'); ObjC.import('ApplicationServices');
+function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]); }
+function rolestr(el){ var v=attr(el,'AXRole'); return v? v.js : ''; }
+function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a; }
+function find(el,role,depth){ if(depth<0) return null; if(rolestr(el)===role) return el; var ks=kids(el); for(var i=0;i<ks.length;i++){ var r=find(ks[i],role,depth-1); if(r) return r;} return null; }
+function run(){
+  var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
+  if(!apps || apps.count===0) throw new Error('Things not running');
+  var pid=apps.objectAtIndex(0).processIdentifier;
+  var app=$.AXUIElementCreateApplication(pid);
+  var dt=null;
+  for(var t=0;t<20 && !dt;t++){ dt=find(app,'AXDateTimeArea',16); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
+  if(!dt) throw new Error('no AXDateTimeArea in the Repeat dialog');
+  var spec=${JSON.stringify(spec)};
+  var cal=$.NSCalendar.currentCalendar;
+  var d;
+  if(spec.indexOf('time:')===0){
+    // Set the time-of-day on the control's own (today's) date via the purpose-
+    // built calendar API — component-bag mutation via JXA silently drops the
+    // hour, leaking the current wall-clock hour into the reminder (UIC6).
+    var cur=attr(dt,'AXValue'); if(!cur) throw new Error('date/time control has no value');
+    var hm=spec.slice(5).split(':');
+    d=cal.dateBySettingHourMinuteSecondOfDateOptions(+hm[0], +hm[1], 0, cur, 0);
+  } else if(spec.indexOf('date:')===0){
+    var ymd=spec.slice(5).split('-');
+    var comps=$.NSDateComponents.alloc.init;
+    comps.year=+ymd[0]; comps.month=+ymd[1]; comps.day=+ymd[2]; comps.hour=0; comps.minute=0; comps.second=0;
+    d=cal.dateFromComponents(comps);
+  } else { throw new Error('bad datetime spec: '+spec); }
+  if(!d) throw new Error('could not build date from '+spec);
+  var err=$.AXUIElementSetAttributeValue(dt,$('AXValue'),d);
+  if(err!==0) throw new Error('AXValue set failed err='+err);
+  $.NSThread.sleepForTimeInterval(0.2);
+  return 'OK';
+}`;
+}
+
 /** Parse a resolve-frame "x y w h" line into the frame's center point. */
 export function parseFrameCenter(stdout: string): { x: number; y: number } | null {
   const nums = stdout.trim().split(/\s+/).map(Number);
@@ -288,21 +374,32 @@ function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
 
 /**
  * Resolve a step's effective element path. A `pathCandidates` step dispatches
- * against the FIRST candidate that exists right now (the dialog-form disjunction
- * — attached sheet vs detached AXUnknown window, UIC4-a); returns null when none
- * resolve (fail-closed). A plain step returns its own `path` unchanged.
+ * against the FIRST candidate that exists (the dialog-form disjunction — attached
+ * sheet vs detached AXUnknown window, UIC4-a). The candidates are POLLED over a
+ * bounded window because the full-vocabulary controls are REVEALED by the
+ * preceding step: switching the frequency pop-up to weekly/monthly/yearly (or
+ * ticking Ends=after) re-lays-out the cadence group, and the new pop-up/field
+ * lands ~250 ms later (UIC6). A single immediate exists-check races that render
+ * and would spuriously fail closed; polling matches the `dynamic` nature these
+ * steps already declare. Returns null when none resolve within the window.
  */
 async function resolveStepPath(step: UiStep, run: UiRunner): Promise<string | null> {
   if (step.pathCandidates === undefined) return step.path ?? null;
-  for (const candidate of step.pathCandidates) {
-    // oxlint-disable-next-line no-await-in-loop -- candidates are tried in priority order; the first hit wins, so a race would blur which form matched
-    const res = await run(
-      { primitive: "resolve", label: step.label, script: axResolveScript(candidate) },
-      STEP_TIMEOUT_MS,
-    );
-    if (res.ok && res.stdout.trim() === "true") return candidate;
+  const candidates = step.pathCandidates;
+  const deadline = Date.now() + (step.timeoutMs ?? RESOLVE_CANDIDATE_TIMEOUT_MS);
+  for (;;) {
+    for (const candidate of candidates) {
+      // oxlint-disable-next-line no-await-in-loop -- candidates are tried in priority order; the first hit wins, so a race would blur which form matched
+      const res = await run(
+        { primitive: "resolve", label: step.label, script: axResolveScript(candidate) },
+        STEP_TIMEOUT_MS,
+      );
+      if (res.ok && res.stdout.trim() === "true") return candidate;
+    }
+    if (Date.now() >= deadline) return null;
+    // oxlint-disable-next-line no-await-in-loop -- the revealed control lands a beat after the mode switch; poll until it does
+    await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
   }
-  return null;
 }
 
 function refusal(detail: string): ExecuteResult {
@@ -331,6 +428,13 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "select-popup",
         label: step.label,
         script: axSelectPopupScript(step.path ?? "", step.value ?? ""),
+      };
+    case "set-datetime":
+      return {
+        primitive: "set-datetime",
+        label: step.label,
+        lang: "javascript",
+        script: axSetDateTimeScript(step.value ?? ""),
       };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };

@@ -79,7 +79,19 @@ export type UiPrimitive =
    * selection-landed verification. `path` is the content table; `value` the
    * title to match.
    */
-  | "select-row";
+  | "select-row"
+  /**
+   * Set the Repeat dialog's date/time control (the reminder time, the "ends on
+   * date" bound) — an `AXDateTimeArea` whose value is an NSDate, NOT a text
+   * field (UIC6). System Events cannot set it (`set value … to <date>` errors
+   * -10000), so the driver sets `AXValue` to an NSDate through the ObjC bridge
+   * (JXA), the same bridge the mouse-synthesis primitive rides. `value` is the
+   * spec: `time:HH:mm` (keep the control's date, set the time-of-day, for the
+   * reminder) or `date:YYYY-MM-DD` (set the calendar date, for the end bound).
+   * The control is located by role within the open dialog and fails closed if
+   * it is absent.
+   */
+  | "set-datetime";
 
 export interface UiStep {
   primitive: UiPrimitive;

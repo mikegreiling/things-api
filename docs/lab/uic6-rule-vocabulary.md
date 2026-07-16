@@ -1,5 +1,59 @@
 # UIC6 — the FULL repeat-rule vocabulary + reschedule reversibility
 
+**Verdict (2026-07-15): SITTING RAN — 12 of 13 rule dimensions LAB-CERTIFIED; the reminder-time dimension is UNDRIVABLE (a Things accessibility bug) and is now gated fail-closed.** Ran in one disposable `--vnc-experimental` clone `uic6-lab` of `things-lab-golden-v1` (airgapped, clock pinned 2026-07-05, Things 3.22.11 / macOS 15.7.7 / DB v26), Accessibility granted via the AXVM1 rung-b VNC toggle, everything else over SSH; ground truth = guest Things-DB row deltas (read-only SQLite, decoded `rt1_recurrenceRule`) + the production CLI `--json` envelope, driven through the **production CLI** (`ui.enabled` + `--dangerously-drive-gui`). The sitting corrected **many provisional control paths and three driver mechanisms** the field-map best-guess got wrong (see "Corrections", below — Build 4 predicted this), and exposed **one undo-logic bug** and **one app accessibility bug**. Branch `mg/full-repeat-vocabulary`.
+
+## Executed verdicts (2026-07-15)
+
+`fu`: 16 daily · 256 weekly · 8 monthly · 4 yearly. `tp`: 0 fixed · 1 after-completion. Offsets `of` decode: `wd` 0=Sun…6=Sat; `dy`/`mo` are 0-based in the blob (−1 = "last"); `wdo` −1 = "last". Identity-replacement cases: original uuid hard-deleted, a new template (+ spawned instance) born.
+
+| Case | Verdict | DB evidence (decoded rule) |
+|---|---|---|
+| **UIC6-a** weekly multi-day (mon,wed,fri) | **PASS** | orig gone; `fu`=256, `of`=[{wd:1},{wd:3},{wd:5}] |
+| **UIC6-b** monthly last Friday | **PASS** | `fu`=8, `of`=[{wd:5,wdo:−1}] |
+| **UIC6-c** monthly last day | **PASS** | `fu`=8, `of`=[{dy:−1}] |
+| **UIC6-d** yearly Oct 8 | **PASS** | `fu`=4, `of`=[{mo:9,dy:7}] (0-based → October, 8th) |
+| **UIC6-e** after-completion weekly ×2 | **PASS** | `tp`=1, `fu`=256, `fa`=2, `of`=[{wd:0}] ← **nominal offset present** (see design-assumption note) |
+| **UIC6-f** ends-after 5 (daily) | **PASS** | `rc`=5, `ed`=none |
+| **UIC6-g** reminder 09:00 | **FAIL → GATED** | the reminder `AXDateTimeArea` ignores AX writes and commits its DEFAULT (12:00, not 09:00); undrivable — now **refused fail-closed** (app bug, oddities §) |
+| **UIC6-h** deadline + start 3 earlier (weekly) | **PASS** | template `deadline` non-null; `ts`=−3 |
+| **UIC6-i** PROJECT weekly mon,thu | **PASS** | new template `of`=[{wd:1},{wd:4}] (editor byte-identical to to-do) |
+| **UIC6-j** PROJECT monthly last day | **PASS** | new template `of`=[{dy:−1}] |
+| **UIC6-k** reschedule round-trip undo | **PASS** | make weekly-Mon (A) → reschedule monthly-last-Fri (B, `of`=[{wd:5,wdo:−1}], identity preserved) → `undo --txn` → DB decodes back to A (`fu`=256, `of`=[{wd:1}]) |
+| **UIC6-k′** after-completion round-trip undo | **PASS** (regression for the inverse fix) | after-completion-weekly (A) → reschedule daily-fixed (B) → undo → back to A (`tp`=1, `fu`=256) — **would have been irreversible before the ruleToInverseParams fix** |
+| **UIC6-l** negative: contradictory params | **PARTIAL (findings)** | the *literal* `--frequency weekly --on-day 15` does NOT block — the CLI mapper SILENTLY DROPS a day/monthly/yearly anchor on the wrong frequency (finding). A *mapped* contradiction (`--frequency monthly --weekdays monday`) IS refused ("weekdays apply only to a weekly rule"), **zero mutation**, but at **exit 1** (validation), not exit 4 |
+| **UIC6-m** ends-on 2020-01-01 (past) | **PASS** | the "ends on date" picker (also an `AXDateTimeArea`) DID commit: `ed`=1577836800 = 2020-01-01 (a past bound → the template is born already ended). Contrast UIC6-g: the end-date picker honors AX writes, the reminder picker does not |
+| **gating** | **PASS** | no `--dangerously-drive-gui` → blocked `H-UI-DRIVE`, exit 4; `ui.enabled` unset → unsupported, exit 6; both zero-mutation |
+
+## Corrections the sitting made (the field-map best-guess was structurally wrong)
+
+The whole dialog is different from the provisional model. The DEFAULT state for a plain to-do is **after-completion** (not daily). Every rule control except the reminder/end-date pickers lives in the cadence `group 1`, and the **"Ends" pop-up is always `pop up button 1 of group 1`**, so the per-frequency pop-ups follow it. `ui-recipes.ts` control paths corrected:
+
+- after-completion unit: `pop up button 1 of group 1` (was pu 2) — options are SINGULAR (`day`/`week`/`month`/`year`), so the recipe maps frequency→singular.
+- weekly weekday: `pop up button 2 of group 1` (was pu 1); the "+" add-day button: `button 1 of group 1` (was `button "+"`, which is title-less). Multi-day: "+" inserts the new day at pu 2, so setting pu 2 after each "+" builds the set.
+- monthly mode / ordinal: `pop up button 2 / 3 of group 1` (were 1 / 2). yearly month / mode / ordinal: `pop up button 2 / 3 / 4 of group 1` (were 1 / 2 / 3).
+- Ends pop-up: `pop up button 1 of group 1` (was `pop up button "Ends"` — no such title). Ends-after count: `text field 1 of group 1` (was 2 — the count field precedes the interval in child order once shown; interval is set earlier while it is the sole field).
+- start-days-earlier: `text field 1 of the dialog shell` (was `text field 4 of group 1` — it is a DIRECT sheet child, not in the group).
+- reminder time + ends-on-date: the field-map "text field 3" / "date field 1" are wrong — both are `AXDateTimeArea` controls; a new **`set-datetime`** driver primitive (ObjC `AXUIElementSetAttributeValue`(…, AXValue, NSDate)) drives them.
+
+**Driver mechanisms corrected (`ui.ts`)** — three latent bugs, all needed even by the base vocabulary:
+1. `resolveStepPath` now POLLS candidate paths: a control revealed by the preceding pop-up (weekday/mode/ordinal/count) lands ~250 ms after the switch, so a single exists-check raced it and failed closed.
+2. `axSelectPopupScript` now re-clicks until the menu renders: the previous pop-up's menu is still closing when the next select fires, so the first open-click is ABSORBED (`menu 1` invalid index).
+3. `axSetValueScript` now FOCUSES + selects-all + TYPES + Tabs: `set value of <field>` updates the field's displayed text but does NOT fire the edit, so the app kept the old number (a non-default interval/count silently stayed 1 — a latent no-op the base vocabulary never caught because every prior case used interval 1).
+
+## Design-assumption verdicts (the two the plan flagged)
+
+1. **Does "after completion" expose a secondary unit pop-up?** — **YES.** Picking "after completion" in the type pop-up reveals a `day`/`week`/`month`/`year` unit pop-up (`pop up button 1 of group 1`) + interval + "after previous item is checked off". Confirmed and driven (UIC6-e).
+2. **Do after-completion rules carry no calendar offsets?** — **NO — they DO carry a nominal offset** (UIC6-e: after-completion-weekly writes `of`=[{wd:0}]; the unit-appropriate default). The dialog exposes no anchor in after-completion mode, so it is never user-meaningful — but the shipped `ruleToInverseParams` treated ANY offset on an after-completion rule as inexpressible and returned null, which would have made **every after-completion reschedule-undo spuriously irreversible**. **Fixed**: the after-completion inverse branch now ignores the nominal offset (unit test + the live UIC6-k′ round-trip prove it). The forward validator already refuses a *user* anchor on after-completion, so nothing regresses. Reversibility notes (`repeat-rule.ts`, `undo.ts`) updated: the only inexpressible shapes are two-end-bound and multi-anchor rules — NOT after-completion.
+
+## The undo-boundary + app-bug findings (loud, per the brief)
+
+- **Reminder time is UNDRIVABLE (Things accessibility bug).** The Repeat dialog's reminder-time `AXDateTimeArea` is `AXValueSettable=true` and accepts an `AXValue` write (read-back confirms 09:00), but Things IGNORES it on commit and writes the picker's DEFAULT (the current wall-clock time). `set value` (System Events), ObjC `AXValue` set, ObjC focus + Tab, and HID keystrokes to the sub-field all fail to change the committed `reminderTime`. The "ends on date" `AXDateTimeArea` (UIC6-m) is the SAME role yet DOES honor AX writes — so this is a per-control accessibility defect, not a general one. **Resolution shipped: `--reminder` is refused fail-closed** (`assertRepeatRule`) rather than silently writing a wrong time. Recorded in [things-app-oddities.md](../things-app-oddities.md).
+- **CLI mapper silently drops a wrong-frequency day anchor** (UIC6-l): `--on-day/--on-weekday/--on-ordinal` are only mapped when the frequency is monthly/yearly, so `--frequency weekly --on-day 15` runs a plain weekly rule instead of refusing. Minor UX gap (a wrong-frequency anchor should error, like `--weekdays` does); left as a follow-up.
+
+---
+
+## Original plan (kept as the spec; the verdicts above are the executed result)
+
 **Status (2026-07-15): CODE + DESIGN + TESTS COMPLETE; in-VM certification NOT YET RUN.** This is the final build item of the AX initiative ([ax-initiative.md](../design/ax-initiative.md) build item 2). The full rule vocabulary is built against the [UIC1 dialog field map](uic1-certification.md), wired through the production CLI, and unit-tested end to end through the injectable seams (no GUI fires). What remains is the **in-VM sitting** that discovers/corrects the provisional structural paths of the NEW controls (exactly as UIC1/UIC5 corrected the base controls) and DB-verifies the recurrence-rule JSON for the coverage matrix below. Branch `mg/full-repeat-vocabulary`.
 
 Companions: [uic1-certification.md](uic1-certification.md) (the field map this is built against), [uic5-build-certification.md](uic5-build-certification.md) (the sitting mechanics + the dual-form dialog addressing this reuses), [ui-certification-runbook.md](ui-certification-runbook.md), [axvm1-accessibility.md](axvm1-accessibility.md) (the grant recipe).

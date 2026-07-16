@@ -135,13 +135,17 @@ describe("assertRepeatRule — ends bound", () => {
 });
 
 describe("assertRepeatRule — reminders + deadline offset", () => {
-  it("accepts a reminder time and a deadline start offset", () => {
-    ok({ frequency: "daily", interval: 1, reminder: "09:30" });
+  it("accepts a deadline start offset", () => {
     ok({ frequency: "daily", interval: 1, deadline: true, startDaysEarlier: 3 });
     ok({ frequency: "daily", interval: 1, startDaysEarlier: 0 });
   });
-  it("refuses a bad reminder or a start offset without a deadline", () => {
+  it("refuses a reminder time — the GUI reminder picker is undrivable (UIC6-g)", () => {
+    // Even a well-formed HH:mm is refused: the Repeat dialog's reminder-time
+    // control ignores programmatic writes and would commit a WRONG time.
+    bad({ frequency: "daily", interval: 1, reminder: "09:30" }, /reminder time cannot be set/);
     bad({ frequency: "daily", interval: 1, reminder: "9am" }, /invalid reminder/);
+  });
+  it("refuses a start offset without a deadline", () => {
     bad({ frequency: "daily", interval: 1, startDaysEarlier: -1 }, /invalid startDaysEarlier/);
     bad(
       { frequency: "daily", interval: 1, startDaysEarlier: 2, deadline: false },
@@ -208,9 +212,15 @@ describe("ruleToInverseParams — round-trips (validates its own output)", () =>
     const inv = roundTrips(rule({ unit: "yearly", offsets: [{ month: 10, day: 8 }] }));
     expect(inv).toMatchObject({ frequency: "yearly", yearly: { month: 10, day: 8 } });
   });
-  it("after-completion", () => {
-    const inv = roundTrips(rule({ type: "after-completion", unit: "weekly", interval: 2 }));
+  it("after-completion (nominal unit offset ignored)", () => {
+    // UIC6-e: Things writes a NOMINAL offset for the unit even in after-completion
+    // mode (of=[{wd:0}] for a weekly-unit rule) — the dialog exposes no anchor
+    // there, so it round-trips as a plain after-completion rule, offset dropped.
+    const inv = roundTrips(
+      rule({ type: "after-completion", unit: "weekly", interval: 2, offsets: [{ weekday: 0 }] }),
+    );
     expect(inv).toMatchObject({ frequency: "weekly", interval: 2, afterCompletion: true });
+    expect(inv.weekdays).toBeUndefined();
   });
   it("ends after N", () => {
     expect(roundTrips(rule({ remainingCount: 5 }))).toMatchObject({
@@ -239,12 +249,14 @@ describe("ruleToInverseParams — inexpressible shapes (dialog cannot produce)",
       ruleToInverseParams(rule({ unit: "monthly", offsets: [{ day: 1 }, { day: 15 }] }), false),
     ).toBeNull();
   });
-  it("null for an after-completion rule carrying a calendar offset", () => {
-    expect(
-      ruleToInverseParams(
-        rule({ type: "after-completion", unit: "weekly", offsets: [{ weekday: 1 }] }),
-        false,
-      ),
-    ).toBeNull();
+  it("after-completion with a nominal offset is EXPRESSIBLE (offset ignored, UIC6-e)", () => {
+    // Corrected at the UIC6 sitting: after-completion rules always carry a
+    // nominal unit offset, so this must NOT be null — otherwise every
+    // after-completion reschedule-undo would wrongly report irreversible.
+    const inv = ruleToInverseParams(
+      rule({ type: "after-completion", unit: "weekly", offsets: [{ weekday: 1 }] }),
+      false,
+    );
+    expect(inv).toMatchObject({ afterCompletion: true, frequency: "weekly" });
   });
 });

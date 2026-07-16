@@ -25,6 +25,16 @@ function dialogSteps(
 }
 const labels = (steps: UiStep[]) => steps.map((s) => s.label);
 
+/** ALL dialog-entry steps (pop-ups/fields AND the role-addressed date pickers). */
+function allDialogSteps(
+  extras: RepeatRuleExtras,
+  frequency: "daily" | "weekly" | "monthly" | "yearly" = "weekly",
+) {
+  return makeRepeatingRecipe("T-1", frequency, 1, extras).steps.filter(
+    (s) => s.pathCandidates !== undefined || s.primitive === "set-datetime",
+  );
+}
+
 describe("repeat dialog recipe — dual-form addressing", () => {
   it("every dialog control is addressed in BOTH shapes (sheet [0], detached [1])", () => {
     const steps = dialogSteps({
@@ -84,11 +94,13 @@ describe("repeat dialog recipe — per-control drive", () => {
     expect(values).toContain("8th");
   });
 
-  it("after-completion: frequency = after completion + a unit pop-up", () => {
+  it("after-completion: frequency = after completion + a SINGULAR unit pop-up", () => {
     const steps = dialogSteps({ afterCompletion: true });
     const values = steps.filter((s) => s.primitive === "select-popup").map((s) => s.value);
     expect(values).toContain("after completion");
-    expect(values).toContain("weekly");
+    // the unit pop-up options are singular (day/week/month/year), not the frequency word
+    expect(values).toContain("week");
+    expect(values).not.toContain("weekly");
   });
 
   it("ends after N: an ends pop-up + a count field", () => {
@@ -97,16 +109,16 @@ describe("repeat dialog recipe — per-control drive", () => {
     expect(steps.find((s) => s.value === "7")?.primitive).toBe("set-value");
   });
 
-  it("ends on date: an ends pop-up + a date field", () => {
-    const steps = dialogSteps({ ends: { kind: "on-date", date: "2027-01-01" } });
+  it("ends on date: an ends pop-up + a set-datetime date picker (AXDateTimeArea, not a text field)", () => {
+    const steps = allDialogSteps({ ends: { kind: "on-date", date: "2027-01-01" } });
     expect(steps.find((s) => s.value === "on date")?.primitive).toBe("select-popup");
-    expect(steps.find((s) => s.value === "2027-01-01")?.primitive).toBe("set-value");
+    expect(steps.find((s) => s.value === "date:2027-01-01")?.primitive).toBe("set-datetime");
   });
 
-  it("reminders: an Add-reminders checkbox press + a time field", () => {
-    const steps = dialogSteps({ reminder: "08:15" });
+  it("reminders: an Add-reminders checkbox press + a set-datetime time picker", () => {
+    const steps = allDialogSteps({ reminder: "08:15" });
     expect(steps.find((s) => s.label === "check Add reminders")?.primitive).toBe("press");
-    expect(steps.find((s) => s.value === "08:15")?.primitive).toBe("set-value");
+    expect(steps.find((s) => s.value === "time:08:15")?.primitive).toBe("set-datetime");
   });
 
   it("deadline + start-earlier: an Add-deadlines checkbox press + an offset field", () => {
