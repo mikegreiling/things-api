@@ -15,6 +15,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
+import type { DisruptionTier } from "../config.ts";
 import { omitEmpty } from "../model/serialize.ts";
 import {
   blockedCode,
@@ -65,6 +66,14 @@ import type { BatchOp } from "../write/batch.ts";
 
 export interface McpServerOptions {
   dbPath?: string;
+  /**
+   * The disruption ceiling for EVERY write this server makes, fixed for the
+   * whole process lifetime (set once by `things mcp`'s startup flags). Caps
+   * vector selection exactly like the CLI's per-call --allow-disruptive /
+   * --allow-very-disruptive, but there is no per-request escalation over MCP.
+   * Undefined leaves the config profile's default in force.
+   */
+  maxDisruption?: DisruptionTier;
   /** Test seam: forwarded to openThings (fake vectors, pinned clock, env). */
   openOptions?: OpenOptions;
 }
@@ -407,6 +416,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   /** Translate the shared MCP write-tool args into pipeline WriteOptions. */
   const writeOptions = (args: WriteOptionArgs): WriteOptions => ({
     actor: mcpActor(),
+    ...(options.maxDisruption !== undefined && { maxDisruption: options.maxDisruption }),
     ...(args.dry_run === true && { dryRun: true }),
     ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
     ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
@@ -2325,7 +2335,20 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const results = await getClient().write.batch(args.ops as BatchOp[], {
+        // Apply the process-wide disruption ceiling to every op — batch takes it
+        // per-op, and MCP never exposes a per-op override, so this is uniform.
+        const ceiling = options.maxDisruption;
+        const ops = (args.ops as BatchOp[]).map(
+          (op): BatchOp =>
+            ceiling === undefined
+              ? op
+              : {
+                  op: op.op,
+                  params: op.params,
+                  options: { ...op.options, maxDisruption: ceiling },
+                },
+        );
+        const results = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.fail_fast === true && { failFast: true }),
           actor: mcpActor(),

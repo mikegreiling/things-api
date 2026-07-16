@@ -60,7 +60,25 @@ function fakeVector(
   return { vector, calls };
 }
 
-async function connect(vectors: WriteVector[]): Promise<void> {
+/**
+ * A validated vector whose only op sits at a raised disruption tier — the
+ * config profile's default ceiling (workstation: 1) blocks it, and only the
+ * daemon-startup flag lifts that. url-scheme so the invocation compiles.
+ */
+function tierVector(op: string, disruption: number): WriteVector {
+  return {
+    id: "url-scheme",
+    matrix: { [op]: { support: "yes", disruption, validation: "validated" } } as VectorMatrix,
+    async execute() {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+async function connect(
+  vectors: WriteVector[],
+  opts: { maxDisruption?: 0 | 1 | 2 | 3 } = {},
+): Promise<void> {
   const env = {
     ...process.env,
     THINGS_DB: fixture.path,
@@ -69,6 +87,7 @@ async function connect(vectors: WriteVector[]): Promise<void> {
   };
   const server = createThingsMcpServer({
     dbPath: fixture.path,
+    ...(opts.maxDisruption !== undefined && { maxDisruption: opts.maxDisruption }),
     openOptions: {
       env,
       vectors,
@@ -1151,6 +1170,32 @@ describe("things MCP server", () => {
       });
       expect(bad.isError).toBe(true);
       expect(JSON.stringify(bad)).toContain("txn cannot be combined");
+    });
+  });
+
+  describe("daemon-startup disruption ceiling", () => {
+    it("blocks a tier-gated op when the daemon was started without the flag", async () => {
+      const uuid = seedTodo(fixture.db, { title: "ceiling" });
+      await connect([tierVector("todo.update", 2)]);
+      const result = await client.callTool({
+        name: "update_todo",
+        arguments: { uuid, title: "renamed", dry_run: true },
+      });
+      expect(result.isError).toBe(true);
+      const error = textOf(result) as { code: string };
+      expect(error.code).toBe("blocked:disruption-tier");
+    });
+
+    it("permits the same op when the daemon was started with the ceiling raised", async () => {
+      const uuid = seedTodo(fixture.db, { title: "ceiling" });
+      await connect([tierVector("todo.update", 2)], { maxDisruption: 2 });
+      const result = await client.callTool({
+        name: "update_todo",
+        arguments: { uuid, title: "renamed", dry_run: true },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const outcome = textOf(result) as { kind: string };
+      expect(outcome.kind).toBe("dry-run");
     });
   });
 
