@@ -90,6 +90,20 @@ function textOf(result: unknown): unknown {
   return JSON.parse(content[0]?.text ?? "null");
 }
 
+/** The warnings array from whichever result block carries meta.warnings. */
+function warningsOf(result: unknown): string[] | undefined {
+  const content = (result as { content: { text: string }[] }).content;
+  for (const block of content) {
+    try {
+      const parsed = JSON.parse(block.text) as { meta?: { warnings?: string[] } };
+      if (parsed.meta?.warnings !== undefined) return parsed.meta.warnings;
+    } catch {
+      // non-JSON block: skip
+    }
+  }
+  return undefined;
+}
+
 beforeEach(() => {
   fixture = buildFixtureDb();
   stateDir = mkdtempSync(join(tmpdir(), "things-api-mcp-test-"));
@@ -1143,6 +1157,47 @@ describe("things MCP server", () => {
           expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
         }
       }
+    });
+  });
+
+  describe("schema warning (non-blocking, read meta)", () => {
+    it("a dropped depended column surfaces a warning in a read tool's meta", async () => {
+      // Drop a depended column before the server opens its connection; the read
+      // itself (areas only touch TMArea) still succeeds — reads warn, never block.
+      fixture.db.exec("ALTER TABLE TMTask DROP COLUMN startBucket;");
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "list_collections",
+        arguments: { kind: "areas" },
+      });
+      expect(result.isError).toBeFalsy();
+      const warnings = warningsOf(result);
+      expect(warnings).toBeDefined();
+      expect(warnings?.[0]).toContain("schema has changed");
+      expect(warnings?.[0]).toContain("things doctor");
+    });
+
+    it("an unrecognized databaseVersion surfaces a warning in a read tool's meta", async () => {
+      fixture.db.exec(
+        "UPDATE Meta SET value = replace(value, '26', '27') WHERE key = 'databaseVersion'",
+      );
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
+      expect(result.isError).toBeFalsy();
+      const warnings = warningsOf(result);
+      expect(warnings).toBeDefined();
+      expect(warnings?.[0]).toContain("database version");
+      expect(warnings?.[0]).toContain("things doctor");
+    });
+
+    it("a healthy schema adds no warnings block", async () => {
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "list_collections",
+        arguments: { kind: "areas" },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(warningsOf(result)).toBeUndefined();
     });
   });
 });

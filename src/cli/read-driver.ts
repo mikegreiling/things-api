@@ -24,6 +24,7 @@ import {
 import { resolveCap } from "../read/caps.ts";
 import { DEFAULT_LIST_LIMIT } from "../read/pagination.ts";
 import { omitEmpty } from "../model/serialize.ts";
+import { schemaWarnings } from "../surface-copy.ts";
 
 export interface GlobalReadOpts {
   json?: boolean;
@@ -97,6 +98,9 @@ export function runRead<T>(
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
     const fp = client.fingerprint();
+    // Reads never block on a schema change — they warn (design decision). The
+    // note reuses the same cached fingerprint the write path gates on.
+    const warnings = schemaWarnings(client.schemaStatus());
     const { data, pagination, grouped, lines: precomputed } = fn(client);
     // The canonical command a sugar invocation normalized to — known now that
     // `fn` has resolved any reference. Present only for the routing sugars
@@ -109,11 +113,12 @@ export function runRead<T>(
       ...(pagination !== undefined && { pagination }),
       ...(grouped !== undefined && { grouped }),
       ...(resolvedCommand !== null && { resolvedCommand }),
+      ...(warnings.length > 0 && { warnings }),
     };
-    if (fp.kind !== "ok") {
-      process.stderr.write(
-        `warning: schema fingerprint ${meta.fingerprint} — reads best-effort, writes disabled (run \`things doctor\`)\n`,
-      );
+    // Human output gets the note once on STDERR (never mixed into the piped
+    // stdout rows); the --json envelope carries it in meta.warnings instead.
+    if (!opts.json) {
+      for (const warning of warnings) process.stderr.write(`warning: ${warning}\n`);
     }
     if (opts.json) {
       // Omit-empty applies to the entity/data payload only (contracts.md); the
