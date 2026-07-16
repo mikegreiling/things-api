@@ -166,10 +166,18 @@ describe("H-UNKNOWN-TAG / H-UNKNOWN-DESTINATION / H-AMBIGUOUS-HEADING", () => {
   it("fails fast on unknown tags (app would silently ignore them)", () => {
     seedTag(fixture.db, "real");
     const todo = seedTodo(fixture.db, { title: "t" });
-    expect(check("todo.set-tags", { uuid: todo, tags: ["real", "ghost"] })?.hazard).toBe(
-      "H-UNKNOWN-TAG",
-    );
+    const block = check("todo.set-tags", { uuid: todo, tags: ["real", "ghost"] });
+    expect(block?.hazard).toBe("H-UNKNOWN-TAG");
+    expect(block?.remediation).toContain("--create-tags"); // the new remediation suggestion
     expect(check("todo.set-tags", { uuid: todo, tags: ["REAL"] })).toBeNull(); // case-insensitive
+  });
+
+  it("accepts a uuid or a parent/child path as a tag value (no unknown-tag block)", () => {
+    const work = seedTag(fixture.db, "Work");
+    const errands = seedTag(fixture.db, "Errands", work);
+    const todo = seedTodo(fixture.db, { title: "t" });
+    expect(check("todo.set-tags", { uuid: todo, tags: [errands] })).toBeNull(); // by uuid
+    expect(check("todo.set-tags", { uuid: todo, tags: ["Work/Errands"] })).toBeNull(); // by path
   });
 
   it("fails fast on unknown and ambiguous destinations", () => {
@@ -205,6 +213,26 @@ describe("H-UNKNOWN-TAG / H-UNKNOWN-DESTINATION / H-AMBIGUOUS-HEADING", () => {
     expect(
       check("todo.add", { title: "n", project: { title: "P" }, heading: "Same" })?.hazard,
     ).toBe("H-AMBIGUOUS-HEADING");
+  });
+});
+
+describe("H-DUPLICATE-TAG (Cloud-sync duplicate-name pathological state)", () => {
+  it("refuses fail-closed and lists the candidate uuids when a tag name is ambiguous", () => {
+    const root = seedTag(fixture.db, "Work");
+    seedTag(fixture.db, "Work", root); // a second `Work` — only Cloud sync can make this
+    const todo = seedTodo(fixture.db, { title: "t" });
+    const block = check("todo.set-tags", { uuid: todo, tags: ["Work"] });
+    expect(block?.hazard).toBe("H-DUPLICATE-TAG");
+    expect(block?.detail).toContain("more than one tag");
+    expect(block?.detail).toContain(root.slice(0, 7)); // short-uuid candidate listing
+    expect(block?.remediation).toContain("uuid");
+  });
+
+  it("clears once the ref is disambiguated by uuid", () => {
+    const root = seedTag(fixture.db, "Work");
+    const nested = seedTag(fixture.db, "Work", root);
+    const todo = seedTodo(fixture.db, { title: "t" });
+    expect(check("todo.set-tags", { uuid: todo, tags: [nested] })).toBeNull();
   });
 });
 

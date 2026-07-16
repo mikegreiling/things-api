@@ -335,6 +335,17 @@ The Things tag filter is inheritance-aware in **flat lists** (Today / Anytime / 
 
 So "does this item carry tag X (via inheritance)?" gets **opposite answers in two GUI surfaces of the same app**. Descendant (parent→child tag) expansion, by contrast, is consistent across both contexts (a parent-tag filter matches a child-tagged item everywhere). Our read model deliberately mirrors the **flat-list** semantics (the `--tag`/`untagged` filters operate over flat lists and scopes — `tagScopeSql`/`untaggedScopeSql` clauses 5/6), which is the more useful and internally-consistent of the two; the in-project-filter-bar behavior is not modeled. Evidence: [lab/taglab-probes.md](lab/taglab-probes.md) TAGINH2 §(c); screenshots under the gitignored `lab/artifacts/taginh2-lab/screens/`.
 
+### 9b. `set tag names` (AppleScript) SILENTLY CREATES unknown tags; the URL scheme silently DROPS them — divergent unknown-tag handling across write vectors (TAGW1, 2026-07-15, Things 3.22.11)
+
+Applying a tag set that names a tag which does not exist yet resolves two OPPOSITE ways depending on the write vector:
+
+- **AppleScript `set tag names of to do id … to "Existing, GhostC"`** lands BOTH tags and **creates** the missing `GhostC` in `TMTag` as a side effect (root tag, index 0). (TAGW1-b)
+- **URL scheme `add?tags=Existing,GhostA` / `update?tags=Existing,GhostB`** lands ONLY the known `Existing`; the unknown tag is **silently dropped** and never created — a partial write with no error. (TAGW1-a)
+
+So the same logical operation ("apply these tag names") either grows the tag taxonomy or quietly discards part of the input, purely as a function of which surface delivered it. The library reconciles this by refusing unknown tags up front (`H-UNKNOWN-TAG`) rather than inheriting either app default, and only creates tags on an explicit `--create-tags`, through the CLEAN `make new tag` path (never the `set tag names` side effect). Evidence: [lab/tagw1-tag-writes.md](lab/tagw1-tag-writes.md) TAGW1-a/-b.
+
+Related (TAGW1-c/-d, recorded here as taxonomy facts, not bugs): `make new tag` COALESCES to an existing same-named tag (two `make new tag {name:"DupRoot"}` calls return the same uuid and leave one row; same-name-under-two-parents collapses to one row) — so **two tags cannot share a name through any available write surface**, and a genuine duplicate-name pair is a Cloud-sync-only pathological state. A `/` is a **legal literal** in a tag title (`sl/ash` stored and matched literally via both `set tag names` and URL `tags=sl%2Fash`), so any path-qualified `parent/child` input syntax must try an exact literal title match before splitting on `/`.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

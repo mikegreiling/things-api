@@ -12,6 +12,7 @@ describe("URL compilation goldens", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-1", title: "My Project" }, matches: 1 };
     pre.destHeading = { resolved: { uuid: "HEAD-1", title: "Phase Å" }, matches: 1 };
+    pre.resolvedTagTitles = ["prio", "high"]; // preRead resolves the tag refs to titles
     const inv = COMMANDS["todo.add"].compile(
       {
         title: "Fix the café ☕ & more",
@@ -85,10 +86,12 @@ describe("URL compilation goldens", () => {
   });
 
   it("project.set-tags compiles update-project?tags= (A1)", () => {
+    const pre = emptyPreState();
+    pre.resolvedTagTitles = ["prio", "high"]; // preRead resolves the tag refs to titles
     const inv = COMMANDS["project.set-tags"].compile(
       { uuid: "P1", tags: ["prio", "high"] },
       "url-scheme",
-      emptyPreState(),
+      pre,
       { token: null },
     );
     expect(inv.payload).toBe("things:///update-project?id=P1&tags=prio%2Chigh");
@@ -168,10 +171,12 @@ describe("AppleScript compilation goldens", () => {
   });
 
   it("project.set-tags compiles the tag-names setter with an id specifier (A2)", () => {
+    const pre = emptyPreState();
+    pre.resolvedTagTitles = ["prio", "high"]; // preRead resolves the tag refs to titles
     const inv = COMMANDS["project.set-tags"].compile(
       { uuid: "P-1", tags: ["prio", "high"] },
       "applescript",
-      emptyPreState(),
+      pre,
       { token: null },
     );
     expect(inv.payload).toBe(

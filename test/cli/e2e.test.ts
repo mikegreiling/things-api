@@ -1409,6 +1409,20 @@ describe("cli --exact-tag (Phase 12c)", () => {
   });
 });
 
+describe("cli tags listing (render polish)", () => {
+  it("mirrors `things areas`: dim short-uuid column, plain name, child parent-path", () => {
+    fx = buildFixtureDb();
+    const parent = seedTag(fx.db, "work");
+    const child = seedTag(fx.db, "urgent", parent);
+    // Seeded uuids are `tag-NNNN` (8 chars) — at the UUID_DISPLAY_MIN floor the
+    // column is exactly the full id, so the plain (non-TTY, dim = no-op) skeleton
+    // is `<uuid>  <path>`. DFS order: parent precedes its child.
+    const { stdout, exitCode } = runCli(["tags", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout.trimEnd().split("\n")).toEqual([`${parent}  work`, `${child}  work/urgent`]);
+  });
+});
+
 describe("cli changes (Phase 13)", () => {
   it("lists created/modified since --since with markers", () => {
     fx = buildFixtureDb();

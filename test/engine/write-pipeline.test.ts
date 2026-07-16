@@ -200,6 +200,45 @@ describe("verified mutations", () => {
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") expect(result.uuid).toBe("AREA-9");
   });
+
+  it("entity-created: area.add asserts the created area carries the tag set", async () => {
+    const tag = seedTag(fixture.db, "Focus");
+    const { vector } = fakeVector(
+      (db) => {
+        db.prepare(
+          "INSERT INTO TMArea (uuid, title, visible, \"index\") VALUES ('AREA-T', 'Deep', 1, 0)",
+        ).run();
+        db.prepare("INSERT INTO TMAreaTag (areas, tags) VALUES ('AREA-T', ?)").run(tag);
+      },
+      FULL_MATRIX,
+      "applescript",
+    );
+    const result = await runMutation(deps(vector), "area.add", { title: "Deep", tags: ["Focus"] });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.uuid).toBe("AREA-T");
+  });
+
+  it("entity-created: area.add FAILS when the app drops the tag (silent partial write)", async () => {
+    seedTag(fixture.db, "Focus");
+    const { vector } = fakeVector(
+      (db) => {
+        // Area row appears, but WITHOUT the TMAreaTag row — the pre-close gap
+        // this build fixed: the created row must carry the asserted tag set.
+        db.prepare(
+          "INSERT INTO TMArea (uuid, title, visible, \"index\") VALUES ('AREA-U', 'Deep', 1, 0)",
+        ).run();
+      },
+      FULL_MATRIX,
+      "applescript",
+    );
+    const result = await runMutation(
+      deps(vector),
+      "area.add",
+      { title: "Deep", tags: ["Focus"] },
+      { verifyTimeoutMs: 250 },
+    );
+    expect(result.kind).toBe("verify-failed");
+  });
 });
 
 describe("verification failure classification", () => {

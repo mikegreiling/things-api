@@ -59,6 +59,12 @@ export type DeltaSpec =
       excludeUuids: string[];
       /** For tags: expected parent uuid (null = must be root). */
       parentUuid?: string | null;
+      /**
+       * For areas created WITH tags (area.add): the sorted tag titles the
+       * created row must carry. The app silently drops unknown tags, so a
+       * created area is only a success when its tag set matches exactly.
+       */
+      assertTags?: string[];
     }
   | { mode: "trash-emptied" }
   /**
@@ -338,16 +344,30 @@ export function evaluateDelta(
       const rows: { uuid: string; parent?: string | null }[] =
         spec.entity === "area" ? reader.areasByTitle(spec.title) : reader.tagsByTitle(spec.title);
       const fresh = rows.filter((r) => !spec.excludeUuids.includes(r.uuid));
+      const tagsMatch = (uuid: string): boolean => {
+        if (spec.assertTags === undefined) return true;
+        const observedTags = (reader.entityFields(spec.entity, uuid)?.["tags"] ?? []) as string[];
+        return valuesEqual(observedTags, spec.assertTags);
+      };
       const match = fresh.find((r) => {
-        if (spec.parentUuid === undefined || spec.entity === "area") return true;
-        return (r.parent ?? null) === spec.parentUuid;
+        if (spec.entity === "tag") {
+          if (spec.parentUuid === undefined) return true;
+          return (r.parent ?? null) === spec.parentUuid;
+        }
+        return tagsMatch(r.uuid);
       });
       if (match !== undefined) {
         return {
           satisfied: true,
           movement: true,
           assertedMovement: true,
-          observed: { uuid: match.uuid, title: spec.title },
+          observed: {
+            uuid: match.uuid,
+            title: spec.title,
+            ...(spec.assertTags !== undefined && {
+              tags: reader.entityFields(spec.entity, match.uuid)?.["tags"] ?? [],
+            }),
+          },
           discoveredUuid: match.uuid,
         };
       }

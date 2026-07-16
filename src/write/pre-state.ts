@@ -10,6 +10,7 @@ import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, ReorderParams } from "./operations.ts";
+import type { TagAmbiguity } from "./tag-refs.ts";
 
 export interface ResolvedContainer {
   uuid: string;
@@ -63,8 +64,16 @@ export interface PreState {
   destArea: ContainerResolution | null;
   /** Heading resolution inside the destination (or target's) project. */
   destHeading: ContainerResolution | null;
-  /** Requested tag titles absent from TMTag (case-insensitive). */
+  /** Requested tag refs that resolve to no tag (unknown tags). */
   missingTags: string[];
+  /**
+   * Resolved leaf titles for the tag SET ops (todo.add/set-tags,
+   * project.set-tags, area.add/update) — uuid/path refs already resolved to
+   * their app title, de-duplicated. What actually gets applied + asserted.
+   */
+  resolvedTagTitles: string[];
+  /** Tag refs that matched >1 tag (duplicate-name pathological state, TAGW1-c). */
+  ambiguousTags: TagAmbiguity[];
   /** tag.add parent resolution. */
   parentTag: ContainerResolution | null;
   /** area.delete / tag.delete target resolution (TMArea/TMTag). */
@@ -142,6 +151,8 @@ export function emptyPreState(): PreState {
     destArea: null,
     destHeading: null,
     missingTags: [],
+    resolvedTagTitles: [],
+    ambiguousTags: [],
     parentTag: null,
     entityTarget: null,
     childTags: [],
@@ -287,12 +298,6 @@ export function projectStatus(db: DatabaseSync, uuid: string): TaskStatus | null
     | undefined;
   if (row === undefined) return null;
   return TASK_STATUS_FROM_DB[row.status] ?? null;
-}
-
-export function missingTagTitles(db: DatabaseSync, titles: string[]): string[] {
-  return titles.filter(
-    (t) => db.prepare("SELECT 1 FROM TMTag WHERE title = ? COLLATE NOCASE").get(t) === undefined,
-  );
 }
 
 export function resolveTag(db: DatabaseSync, ref: string): ContainerResolution {

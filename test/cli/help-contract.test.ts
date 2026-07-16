@@ -403,7 +403,8 @@ describe("write-command help states the contract", () => {
   it("area/tag update: setters exist with behavior-scoped caveats", () => {
     const areaHelp = helpFor("area", "update");
     expect(areaHelp).toContain("--title");
-    expect(areaHelp).toContain("must name existing");
+    expect(areaHelp).toContain("must exist unless --create-tags");
+    expect(areaHelp).toContain("--create-tags");
     const tagHelp = helpFor("tag", "update");
     expect(tagHelp).toContain("--parent");
     expect(tagHelp).toContain("--unnest");

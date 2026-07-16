@@ -193,6 +193,21 @@ const dryRunShape = {
   dry_run: z.boolean().optional().describe("Preview the planned change without applying anything"),
 };
 
+/** How a tag value may be expressed on any tag-accepting tool. */
+const TAG_REF_FORMAT =
+  "each a tag name, a uuid, or a parent/child path; must exist unless create_tags is set";
+
+/** create_tags param, shared by every tag-accepting write tool. */
+const createTagsShape = {
+  create_tags: z
+    .boolean()
+    .optional()
+    .describe(
+      "Create any named tag that does not exist yet (nesting parent/child) before applying, " +
+        "instead of stopping on an unknown tag",
+    ),
+};
+
 const containerRef = (ref: string): { uuid: string; title: string } => ({ uuid: ref, title: ref });
 
 /** Cap on project titles inlined into the server instructions. */
@@ -270,6 +285,7 @@ const writeOptions = (args: {
   dangerously_permanent?: boolean | undefined;
   acknowledge_tag_subtree?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
+  create_tags?: boolean | undefined;
 }): WriteOptions => ({
   actor: "mcp",
   ...(args.dry_run === true && { dryRun: true }),
@@ -279,6 +295,7 @@ const writeOptions = (args: {
   ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
   ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
   ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
+  ...(args.create_tags === true && { createTags: true }),
 });
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
@@ -674,7 +691,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Create a to-do and return its uuid. Optionally schedule it, set a reminder or " +
         "deadline, tag it, give it a checklist, and place it in a project or area " +
-        "(optionally under an existing heading). Tags must name existing tags. A reminder " +
+        "(optionally under an existing heading). A reminder " +
         "requires when = today, evening, or a date. Adding into a completed or canceled " +
         "project reopens that project — pass acknowledge_project_reopen to confirm.",
       inputSchema: {
@@ -683,7 +700,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         when: whenSchema,
         reminder: z.string().optional().describe(REMINDER_FORMAT),
         deadline: z.string().optional().describe(DATE_FORMAT),
-        tags: z.array(z.string()).optional().describe("Existing tag names"),
+        tags: z.array(z.string()).optional().describe(`Tags — ${TAG_REF_FORMAT}`),
         checklist_items: z.array(z.string()).optional(),
         project: z.string().optional().describe(`Destination project (${REF_FORMAT})`),
         area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
@@ -692,6 +709,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("Confirm adding into a completed/canceled project (this reopens it)"),
+        ...createTagsShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -865,11 +883,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Replace or extend a to-do's or project's tags. mode 'replace' (default) sets exactly " +
         "the given list — an empty list removes all tags; mode 'add' merges with the current " +
-        "tags. Tags must name existing tags (create them first with add_tag).",
+        "tags. Tags must exist unless create_tags is set (or create them first with add_tag).",
       inputSchema: {
         uuid: z.string(),
-        tags: z.array(z.string()).describe("Existing tag names"),
+        tags: z.array(z.string()).describe(`Tags — ${TAG_REF_FORMAT}`),
         mode: z.enum(["replace", "add"]).optional().describe("Default: replace"),
+        ...createTagsShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1837,10 +1856,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   server.registerTool(
     "add_area",
     {
-      description: "Create an area. Tags, when given, must name existing tags.",
+      description: "Create an area, optionally tagged. Tags must exist unless create_tags is set.",
       inputSchema: {
         title: z.string(),
-        tags: z.array(z.string()).optional().describe("Existing tag names"),
+        tags: z.array(z.string()).optional().describe(`Tags — ${TAG_REF_FORMAT}`),
+        ...createTagsShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1860,11 +1880,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "update_area",
     {
       description:
-        "Rename an area and/or replace its tags (the full set; tags must name existing tags).",
+        "Rename an area and/or replace its tags (the full set). Tags must exist unless " +
+        "create_tags is set.",
       inputSchema: {
         target: z.string().describe(`Area to update (${REF_FORMAT})`),
         title: z.string().optional().describe("New name"),
-        tags: z.array(z.string()).optional().describe("Existing tag names (full replacement)"),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe(`Tags (full replacement) — ${TAG_REF_FORMAT}`),
+        ...createTagsShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
