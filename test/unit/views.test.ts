@@ -4,6 +4,8 @@ import { areaView } from "../../src/read/area-view.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import { areaTags, inheritedTagsFor, tagsView } from "../../src/read/tags.ts";
 import { fetchTaskByUuid } from "../../src/read/queries.ts";
+import { byUuid } from "../../src/read/detail.ts";
+import { getField } from "../../src/write/verify/delta.ts";
 import {
   anytimeView,
   type SidebarSection,
@@ -570,7 +572,7 @@ describe("projectView", () => {
 });
 
 describe("inherited tags", () => {
-  it("collects area + project tags through the heading chain, excluding direct tags", () => {
+  it("collects area + project tags through the heading chain, excluding direct tags, with provenance", () => {
     fx = buildFixtureDb();
     const area = seedArea(fx.db, "Area");
     const areaTag = seedTag(fx.db, "area-tag");
@@ -586,7 +588,79 @@ describe("inherited tags", () => {
     const row = fetchTaskByUuid(fx.db, todo);
     expect(row).not.toBeNull();
     const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
-    expect(inherited.map((t) => t.title).toSorted()).toEqual(["area-tag", "proj-tag"]);
+    // Direct tag excluded; each inherited tag carries its ancestor provenance
+    // (a heading is never a source — headings can't be tagged; the heading's
+    // PROJECT is). Sources are the project (nearer) and the area (farther).
+    expect(
+      inherited.map((i) => `${i.tag.title}:${i.source.type}:${i.source.title}`).toSorted(),
+    ).toEqual(["area-tag:area:Area", "proj-tag:project:P"]);
+    expect(inherited.map((i) => i.source.uuid).toSorted()).toEqual([area, project].toSorted());
+  });
+
+  it("returns inherited tags in canonical (index, uuid) order across the project+area union", () => {
+    fx = buildFixtureDb();
+    // Interleave project- and area-sourced tags by index so a naive
+    // project-then-area concatenation would NOT be canonically ordered.
+    const area = seedArea(fx.db, "A");
+    const project = seedProject(fx.db, { title: "P", area });
+    const aTag = seedTag(fx.db, "a-first", null, -100); // area, lowest index → first
+    const pTag = seedTag(fx.db, "p-middle", null, -50); // project, middle
+    const aTag2 = seedTag(fx.db, "a-last", null, 0); // area, highest index → last
+    tagArea(fx.db, area, aTag);
+    tagArea(fx.db, area, aTag2);
+    tagTask(fx.db, project, pTag);
+    const todo = seedTodo(fx.db, { title: "t", project });
+
+    const row = fetchTaskByUuid(fx.db, todo);
+    const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
+    expect(inherited.map((i) => i.tag.title)).toEqual(["a-first", "p-middle", "a-last"]);
+  });
+
+  it("nearest ancestor wins provenance when a tag sits on both project and area", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Home");
+    const project = seedProject(fx.db, { title: "Reno", area });
+    const shared = seedTag(fx.db, "important");
+    tagArea(fx.db, area, shared);
+    tagTask(fx.db, project, shared);
+    const todo = seedTodo(fx.db, { title: "t", project });
+
+    const row = fetchTaskByUuid(fx.db, todo);
+    const inherited = inheritedTagsFor(fx.db, row as NonNullable<typeof row>);
+    expect(inherited).toHaveLength(1);
+    expect(inherited[0]?.source).toEqual({ type: "project", uuid: project, title: "Reno" });
+  });
+
+  it("a bare item (no ancestor tags) inherits an EMPTY array — stable JSON shape", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "A");
+    const project = seedProject(fx.db, { title: "P", area });
+    const todo = seedTodo(fx.db, { title: "t", project });
+    const row = fetchTaskByUuid(fx.db, todo);
+    expect(inheritedTagsFor(fx.db, row as NonNullable<typeof row>)).toEqual([]);
+  });
+
+  it("round-trip safety: the tag-edit read (getField 'tags') sees DIRECT tags only, never inherited", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Area");
+    const areaTag = seedTag(fx.db, "area-tag");
+    tagArea(fx.db, area, areaTag);
+    const project = seedProject(fx.db, { title: "P", area });
+    const projTag = seedTag(fx.db, "proj-tag");
+    tagTask(fx.db, project, projTag);
+    const todo = seedTodo(fx.db, { title: "child", project });
+    const directTag = seedTag(fx.db, "direct");
+    tagTask(fx.db, todo, directTag);
+
+    const entity = byUuid(fx.db, todo);
+    expect(entity).not.toBeNull();
+    // The detail read surfaces inherited tags — but the direct-tag field the
+    // set-tags inverse captures must exclude them, or undo would clobber the
+    // ancestors' assignments onto the item.
+    expect(
+      (entity as NonNullable<typeof entity> & { inheritedTags: unknown[] }).inheritedTags,
+    ).toHaveLength(2);
+    expect(getField(entity as NonNullable<typeof entity>, "tags")).toEqual(["direct"]);
   });
 });
 
@@ -684,8 +758,8 @@ describe("tag-filtered list views (Phase 10)", () => {
 
   it("resolves by uuid too, and unfiltered views are unchanged", () => {
     const { tag } = seedTagChain();
-    const byUuid = todayView(fx.db, NOW, { tag });
-    expect(byUuid.today.map((i) => i.title)).toContain("direct");
+    const viaUuid = todayView(fx.db, NOW, { tag });
+    expect(viaUuid.today.map((i) => i.title)).toContain("direct");
     expect(todayView(fx.db, NOW).today.map((i) => i.title)).toContain("unrelated");
   });
 

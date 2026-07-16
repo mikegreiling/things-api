@@ -317,6 +317,15 @@ With a long sidebar (25 areas ≈ 2.3 viewports), the sidebar `AXTable`'s access
 
 Automation consequence: any AX-driving of the sidebar must treat "row not found by name" as a first-class outcome (the `area.reorder-sidebar` driver refuses fail-closed and names a relaunch as the remediation), and long scroll-while-held gestures should be avoided outright (the op's held-scroll rung ships disabled because of this). Evidence: [lab/axdrag2-reorder-certification.md](lab/axdrag2-reorder-certification.md).
 
+### 9a. A project's in-place filter bar IGNORES tag inheritance, contradicting every flat list (TAGINH2, 2026-07-15, Things 3.22.11)
+
+The Things tag filter is inheritance-aware in **flat lists** (Today / Anytime / area scopes): a child to-do matches a filter for a tag carried by its **project** or **area**, and the "No Tag" chip **excludes** such a child (it is treated as tagged). But the SAME filter, applied in a **project's OWN view filter bar**, does NOT inherit — it matches only DIRECT tags:
+
+- In `Today`, filtering by the project's tag `T2ProjTag` (or the area's `T2AreaTag`) **shows** the untagged, heading-nested child `ZZ-HEADED-CHILD`; "No Tag" **hides** it. (`b-today-01-projtag.png` / `b-today-02-areatag.png` / `b-today-04-notag.png`)
+- In that project's own view, filtering by `T2ProjTag` or `T2AreaTag` returns an **empty** list (neither child), and the in-project "No Tag" filter **includes** `ZZ-HEADED-CHILD` — the exact opposite. (`b1-projtag.png` / `b2-areatag.png` / `b3-03-notag-filtered.png`)
+
+So "does this item carry tag X (via inheritance)?" gets **opposite answers in two GUI surfaces of the same app**. Descendant (parent→child tag) expansion, by contrast, is consistent across both contexts (a parent-tag filter matches a child-tagged item everywhere). Our read model deliberately mirrors the **flat-list** semantics (the `--tag`/`untagged` filters operate over flat lists and scopes — `tagScopeSql`/`untaggedScopeSql` clauses 5/6), which is the more useful and internally-consistent of the two; the in-project-filter-bar behavior is not modeled. Evidence: [lab/taglab-probes.md](lab/taglab-probes.md) TAGINH2 §(c); screenshots under the gitignored `lab/artifacts/taginh2-lab/screens/`.
+
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.

@@ -10,7 +10,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { q, selectList } from "../db/schema.ts";
-import type { Area, Ref, Tag } from "../model/entities.ts";
+import type { Area, InheritedTag, Ref, Tag } from "../model/entities.ts";
 import type { TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskByUuid } from "./queries.ts";
 
@@ -102,11 +102,26 @@ export function areaTags(db: DatabaseSync, areaUuid: string): Ref[] {
   return rows.map((r) => ({ uuid: r.uuid, title: r.title ?? "" }));
 }
 
-/** Tags inherited from ancestors (heading's project, project, area) — direct tags excluded. */
-export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): Ref[] {
-  const collected = new Map<string, Ref>();
-  const addAll = (refs: Ref[]) => {
-    for (const ref of refs) collected.set(ref.uuid, ref);
+/**
+ * Tags inherited from ancestors (the heading's project, the project, the area),
+ * each carrying its provenance {@link InheritedTag}. The item's OWN direct tags
+ * are excluded (they render on the `tags:` line, not here).
+ *
+ * PROVENANCE: sources are ONLY `project`/`area` — a heading cannot be tagged
+ * (TAGINH1, VM-verified), so it is never a source even for a heading-nested
+ * to-do (its project link lives on the heading; the tag still comes from the
+ * project). NEAREST ancestor wins when a tag sits on both the project and its
+ * area: the project (nearer) is collected first and not overwritten.
+ *
+ * ORDER: the merged inherited set is returned in the app's CANONICAL tag order
+ * — `TMTag."index"`, uuid tiebreak (TAGORD1) — the SAME comparator the direct
+ * pill row uses (fetchTagsForTasks), applied across the project+area union.
+ */
+export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): InheritedTag[] {
+  const collected = new Map<string, InheritedTag>();
+  const addAll = (refs: Ref[], source: InheritedTag["source"]) => {
+    for (const ref of refs)
+      if (!collected.has(ref.uuid)) collected.set(ref.uuid, { tag: ref, source });
   };
 
   let projectUuid = row.project;
@@ -118,14 +133,39 @@ export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): Ref[] {
   if (projectUuid) {
     const project = fetchTaskByUuid(db, projectUuid);
     if (project) {
-      addAll(fetchTagsForTasks(db, [project.uuid]).get(project.uuid) ?? []);
+      addAll(fetchTagsForTasks(db, [project.uuid]).get(project.uuid) ?? [], {
+        type: "project",
+        uuid: project.uuid,
+        title: project.title ?? "",
+      });
       areaUuid = areaUuid ?? project.area;
     }
   }
-  if (areaUuid) addAll(areaTags(db, areaUuid));
+  if (areaUuid) {
+    const areaRow = db.prepare("SELECT title FROM TMArea WHERE uuid = ?").get(areaUuid) as
+      | { title: string | null }
+      | undefined;
+    addAll(areaTags(db, areaUuid), { type: "area", uuid: areaUuid, title: areaRow?.title ?? "" });
+  }
 
   const direct = new Set(
     (fetchTagsForTasks(db, [row.uuid]).get(row.uuid) ?? []).map((t) => t.uuid),
   );
-  return [...collected.values()].filter((t) => !direct.has(t.uuid));
+  const result = [...collected.values()].filter((i) => !direct.has(i.tag.uuid));
+  if (result.length > 1) {
+    // Re-rank the project+area union in one canonical `index, uuid` pass so the
+    // merged inherited chips match the GUI's tag order (the per-source lists
+    // arrive already ordered, but their concatenation is not globally sorted).
+    const rank = new Map<string, number>();
+    const uuids = result.map((i) => i.tag.uuid);
+    const rows = db
+      .prepare(
+        `SELECT uuid FROM TMTag WHERE uuid IN (${uuids.map(() => "?").join(", ")})
+         ORDER BY ${q("index")}, uuid`,
+      )
+      .all(...uuids) as { uuid: string }[];
+    rows.forEach((r, i) => rank.set(r.uuid, i));
+    result.sort((a, b) => (rank.get(a.tag.uuid) ?? 0) - (rank.get(b.tag.uuid) ?? 0));
+  }
+  return result;
 }
