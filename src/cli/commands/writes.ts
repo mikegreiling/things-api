@@ -27,7 +27,15 @@ import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
 import type { UndoItemResult } from "../../write/undo.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
 
-import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
+import {
+  aggregateExitCode,
+  blockedCode,
+  errorEnvelope,
+  ExitCode,
+  okEnvelope,
+  verifyFailedCode,
+  type EnvelopeMeta,
+} from "../../contracts.ts";
 import { ReferenceResolutionError } from "../../read/queries.ts";
 import { usageError } from "../read-driver.ts";
 
@@ -277,7 +285,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
           `${JSON.stringify(
             errorEnvelope(
               {
-                code: `verify-failed:${result.reason}`,
+                code: verifyFailedCode(result),
                 message: result.detail,
                 ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
                 ...(result.hint !== undefined && { remediation: result.hint }),
@@ -305,7 +313,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
           `${JSON.stringify(
             errorEnvelope(
               {
-                code: `blocked:${result.hazard ?? result.reason}`,
+                code: blockedCode(result),
                 message: result.detail,
                 ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
                 remediation: result.remediation,
@@ -1566,8 +1574,8 @@ export function registerWriteCommands(program: Command): void {
         "options carry the confirmation flags (acknowledgeChecklistReset, " +
         "acknowledgeProjectReopen, dangerouslyPermanent, acknowledgeTagSubtree). " +
         "--dry-run plans everything without executing; --fail-fast skips the rest after " +
-        "the first failure. Exit: 0 all ok · 3 any verify-failed/invalid · 4 any blocked " +
-        "· 5 any drift-blocked.",
+        "the first failure. Exit (worst failure wins): 0 all ok · 3 any verify-failed/invalid " +
+        "· 4 any blocked · 5 any drift-blocked · 6 any unsupported.",
     )
     .option("--dry-run", "plan every op; execute nothing")
     .option("--fail-fast", "skip remaining ops after the first failure")
@@ -1629,17 +1637,9 @@ export function registerWriteCommands(program: Command): void {
           },
         };
         process.stdout.write(`${JSON.stringify(summary)}\n`);
-        const kinds = new Set(failed.map((r) => r.outcome.kind));
-        const reasons = new Set(
-          failed.map((r) => (r.outcome.kind === "blocked" ? r.outcome.reason : "")),
-        );
-        process.exitCode = reasons.has("drift")
-          ? ExitCode.DriftBlocked
-          : kinds.has("blocked")
-            ? ExitCode.Blocked
-            : failed.length > 0
-              ? ExitCode.VerifyFailed
-              : ExitCode.Ok;
+        // Worst failure decides the exit code, by the stable precedence
+        // drift > blocked > unsupported > verify-failed (see aggregateExitCode).
+        process.exitCode = aggregateExitCode(failed.map((r) => r.outcome));
       } finally {
         client?.close();
       }

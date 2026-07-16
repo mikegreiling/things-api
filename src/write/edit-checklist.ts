@@ -22,6 +22,7 @@
  * carries only a `completed` boolean) — matching the prior granular behavior.
  */
 import type { AuditRecord } from "../audit/schema.ts";
+import { blockedCode, verifyFailedCode } from "../contracts.ts";
 import type { Todo } from "../model/entities.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { applyChecklistEdit, checklistTarget, type ChecklistEdit } from "./checklist.ts";
@@ -128,7 +129,7 @@ export async function runEditChecklist(
       uuid,
       startedAt,
       requested: { action: edit.action },
-      result: "blocked:H-UNKNOWN-DESTINATION",
+      result: blockedCode({ hazard: "H-UNKNOWN-DESTINATION", reason: "hazard" }),
     });
     return {
       kind: "blocked",
@@ -186,8 +187,7 @@ export async function runEditChecklist(
       uuid,
       startedAt,
       requested: capture.requested,
-      result:
-        leg.kind === "blocked" ? `blocked:${leg.hazard ?? leg.reason}` : "verify-failed:mismatch",
+      result: leg.kind === "blocked" ? blockedCode(leg) : verifyFailedCode({ reason: "mismatch" }),
     });
     return { ...leg, op: "todo.edit-checklist-item" };
   }

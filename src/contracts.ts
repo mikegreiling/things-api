@@ -159,3 +159,48 @@ export function okEnvelope<T>(kind: string, data: T, meta: EnvelopeMeta): OkEnve
 export function errorEnvelope(error: ErrorEnvelope["error"], meta: EnvelopeMeta): ErrorEnvelope {
   return { apiVersion: API_VERSION, ok: false, kind: "error", error, meta };
 }
+
+/**
+ * Canonical machine-readable error CODE for a refused ("blocked") mutation: the
+ * specific hazard id when one is named, else the block reason. Every surface —
+ * the CLI `--json` envelope, the MCP tool error, and the audit trail — builds
+ * the `blocked:*` string HERE so the format lives in exactly one place. The
+ * input is a structural subset of the blocked mutation outcome (`hazard`,
+ * `reason`), kept as plain strings so the core never depends on the write layer.
+ */
+export function blockedCode(outcome: { hazard?: string; reason: string }): `blocked:${string}` {
+  return `blocked:${outcome.hazard ?? outcome.reason}`;
+}
+
+/**
+ * Canonical error CODE for a mutation that executed but failed read-after-write
+ * verification (`verify-failed:<reason>`). Companion to {@link blockedCode}; see
+ * it for why this lives in the core and takes a plain-string shape.
+ */
+export function verifyFailedCode<R extends string>(outcome: { reason: R }): `verify-failed:${R}` {
+  return `verify-failed:${outcome.reason}`;
+}
+
+/**
+ * Aggregate exit code for a multi-op run (`things batch`): the single WORST
+ * failure decides, by the documented precedence
+ *
+ *   drift-blocked > blocked > unsupported > verify-failed
+ *
+ * mirroring the per-outcome mapping the single-op path applies (drift→5,
+ * blocked→4, unsupported→6, everything else that failed→3). `failures` is the
+ * failed ops' outcomes: each carries its `kind`, plus the block `reason` so a
+ * drift block can be told apart from a policy block. An empty list is success.
+ */
+export function aggregateExitCode(
+  failures: readonly { kind: string; reason?: string }[],
+): ExitCode {
+  if (failures.length === 0) return ExitCode.Ok;
+  const kinds = new Set(failures.map((f) => f.kind));
+  if (failures.some((f) => f.kind === "blocked" && f.reason === "drift")) {
+    return ExitCode.DriftBlocked;
+  }
+  if (kinds.has("blocked")) return ExitCode.Blocked;
+  if (kinds.has("unsupported")) return ExitCode.Unsupported;
+  return ExitCode.VerifyFailed;
+}
