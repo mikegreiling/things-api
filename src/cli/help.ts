@@ -217,9 +217,13 @@ const STATIC_TOPICS: Readonly<Record<string, string>> = {
   filters: `FILTERS & BOUNDS — the optional flags a read view accepts
 
 Content scope (which items qualify):
-  --tag <ref>        items with this tag: direct, inherited, or on a descendant tag
-  --exact-tag        with --tag: the named tag only, no hierarchy descendants
+  --tag <ref>        items with this tag: direct, container-inherited, or on a
+                     descendant tag. Repeatable — several --tag AND together
+  --direct-tag <ref> items DIRECTLY tagged (repeatable, AND): like --tag but
+                     WITHOUT container inheritance (still matches descendants)
+  --exact-tag        with --tag/--direct-tag: the named tag only, no descendants
   --untagged         only items with no tag at all (the app's "No Tag" filter)
+  --direct-untagged  only items with no DIRECT tag (an inherited tag is allowed)
   --overdue          only open items past their deadline, due today excluded
                      (today, inbox, anytime, someday, search; and the
                      containers projects, project show, area show — by each
@@ -227,6 +231,11 @@ Content scope (which items qualify):
   --area <ref>       restrict to one area (logbook, search)
   --project <ref>    restrict to one project (logbook, search)
   --type <kind>      search only: todo | project
+
+Two axes live in --tag: CONTAINER inheritance (an item inherits its project /
+area / heading tags) and DESCENDANT expansion (a parent tag matches child-tag
+items). --direct-tag drops only inheritance; --exact-tag drops only expansion.
+The tag filters also scope the containers (project show / area show / projects).
 
 Volume caps (how many rows):
   --limit <n>        maximum rows before truncating (flat views; default 50)

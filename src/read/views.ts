@@ -87,6 +87,8 @@ import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { projectOccurrences } from "../model/occurrences.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
 import {
+  directTagScopeSql,
+  directUntaggedScopeSql,
   fetchTagsForTasks,
   fetchTaskRows,
   makeHeadingProjectResolver,
@@ -120,15 +122,36 @@ export type ListItem = Todo | Project;
 /** Optional list-view filters. */
 export interface ViewFilter {
   /**
-   * Tag (uuid or unique title): direct OR inherited membership (UI
-   * semantics), INCLUDING items tagged with a hierarchy descendant of the
-   * given tag (documented app behavior — the UI's tag filter matches
-   * child-tagged items; not lab-oracled).
+   * Convenience shorthand for a single-element {@link tags} — a lone
+   * inheritance-inclusive tag ref. Production surfaces (CLI `--tag`, MCP
+   * `tag`) always pass the array form; this exists for internal/test callers.
    */
   tag?: string;
   /**
-   * Match the given tag ONLY — no hierarchy descendants. Useful when a
-   * parent tag has its own direct assignments distinct from its children's.
+   * Tag refs (uuid or unique title): direct OR inherited membership (UI
+   * semantics), INCLUDING items tagged with a hierarchy descendant of each
+   * given tag (documented app behavior — the UI's tag filter matches
+   * child-tagged items; not lab-oracled). Multiple refs AND together — an item
+   * must match EVERY ref (each independently expanded to its descendant set,
+   * OR-matched within, AND-combined across).
+   */
+  tags?: string[];
+  /**
+   * Convenience shorthand for a single-element {@link directTags}.
+   */
+  directTag?: string;
+  /**
+   * Direct-only tag refs: like {@link tags} MINUS container inheritance. An
+   * item matches only when it is DIRECTLY tagged with the ref (or a hierarchy
+   * descendant of it — descendant expansion is retained); a tag inherited from
+   * its project/area/heading does NOT satisfy a direct-tag ref. Multiple refs
+   * AND together, and compose (AND) with {@link tags}.
+   */
+  directTags?: string[];
+  /**
+   * Match each given tag ref ONLY — no hierarchy descendants. Applies to both
+   * {@link tags} and {@link directTags}. Useful when a parent tag has its own
+   * direct assignments distinct from its children's.
    */
   exactTag?: boolean;
   /**
@@ -137,9 +160,16 @@ export interface ViewFilter {
    * of `tag`: an item is untagged iff no possible `tag` value could ever
    * match it, so this negates the WHOLE direct+inherited membership relation,
    * not merely the row's own direct assignments. Mutually exclusive with
-   * `tag`/`exactTag` (the CLI/MCP surfaces reject the combination).
+   * `tag`/`directTag`/`exactTag`/`directUntagged` (the surfaces reject it).
    */
   untagged?: boolean;
+  /**
+   * Only items with NO DIRECT tag — they may still inherit a tag from their
+   * project/area/heading (the GUI's in-context "No Tag"). The direct-only
+   * counterpart of `untagged`; mutually exclusive with the tag-presence flags
+   * and with `untagged`.
+   */
+  directUntagged?: boolean;
   /**
    * Only OPEN items whose deadline is strictly BEFORE today (due-today is NOT
    * overdue — it mirrors the app's Today badge, where an equal-to-today
@@ -153,15 +183,45 @@ export interface ViewFilter {
   overdue?: boolean;
 }
 
-function tagFilter(
+/**
+ * Compose the tag scope for a filter into an AND-chained SQL fragment plus its
+ * binds. Every clause AND-combines: the negations (`untagged`/`directUntagged`)
+ * and each `--tag`/`--direct-tag` ref (each ref independently resolved and
+ * descendant-expanded per its own axes). The mutually-exclusive combinations
+ * (untagged with a tag-presence flag, or with each other) are refused at the
+ * CLI/MCP surfaces; here they would simply AND to an empty result. Splices in
+ * before {@link overdueFilter} so the tag binds precede the overdue bind.
+ */
+export function tagFilter(
   db: DatabaseSync,
   filter: ViewFilter | undefined,
 ): { sql: string; binds: string[] } {
-  if (filter?.untagged === true) return { sql: ` AND ${untaggedScopeSql()}`, binds: [] };
-  if (filter?.tag === undefined) return { sql: "", binds: [] };
-  const target = resolveTagUuid(db, filter.tag);
-  const uuids = filter.exactTag === true ? [target] : tagWithDescendants(db, target);
-  return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
+  const clauses: string[] = [];
+  const binds: string[] = [];
+  if (filter?.untagged === true) clauses.push(untaggedScopeSql());
+  if (filter?.directUntagged === true) clauses.push(directUntaggedScopeSql());
+  const exact = filter?.exactTag === true;
+  const tagRefs = [...(filter?.tags ?? []), ...(filter?.tag !== undefined ? [filter.tag] : [])];
+  const directRefs = [
+    ...(filter?.directTags ?? []),
+    ...(filter?.directTag !== undefined ? [filter.directTag] : []),
+  ];
+  const expand = (ref: string): string[] => {
+    const target = resolveTagUuid(db, ref);
+    return exact ? [target] : tagWithDescendants(db, target);
+  };
+  for (const ref of tagRefs) {
+    const uuids = expand(ref);
+    clauses.push(tagScopeSql(uuids.length));
+    binds.push(...tagScopeBinds(uuids));
+  }
+  for (const ref of directRefs) {
+    const uuids = expand(ref);
+    clauses.push(directTagScopeSql(uuids.length));
+    binds.push(...uuids);
+  }
+  if (clauses.length === 0) return { sql: "", binds: [] };
+  return { sql: ` AND ${clauses.join(" AND ")}`, binds };
 }
 
 /**
@@ -678,12 +738,17 @@ export function trashView(db: DatabaseSync, options?: { limit?: number | null })
 
 export function projectsView(
   db: DatabaseSync,
-  options?: { areaUuid?: string; later?: boolean; overdue?: boolean; now?: Date },
+  options?: { areaUuid?: string; later?: boolean; overdue?: boolean; now?: Date } & ViewFilter,
 ): Project[] {
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
   const packedToday = encodePackedDate(localToday(options?.now));
+  // Tag scope (§9a): each project ROW is filtered by its OWN tags — `--tag`
+  // honors area→project inheritance (a project inherits its area's tags),
+  // `--direct-tag` only the project's own assignments. Its binds sit in the
+  // WHERE, after the overdue bind and before the ORDER BY's active-first binds.
+  const tf = tagFilter(db, options);
   // OWN-DEADLINE UNIFORM: `--overdue` keeps only projects whose OWN deadline is
   // overdue (open, strictly before today) — projects carry a `deadline` column
   // exactly like to-dos, so the shared OVERDUE predicate applies to project
@@ -706,14 +771,15 @@ export function projectsView(
   // above the areas — then each area by ITS sidebar rank (TMArea."index"),
   // projects within an area by their drag order.
   const where = area
-    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}${overdueSql}
+    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}${overdueSql}${tf.sql}
        ORDER BY ${activeFirst}t."index" ASC`
-    : `${OPEN} AND t.type = 1${laterSql}${overdueSql} ORDER BY (t.area IS NOT NULL) ASC,
+    : `${OPEN} AND t.type = 1${laterSql}${overdueSql}${tf.sql} ORDER BY (t.area IS NOT NULL) ASC,
        (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, ${activeFirst}t."index" ASC`;
   const rows = fetchTaskRows(db, where, [
     ...(area ? [area] : []),
     ...laterBinds,
     ...overdueBinds,
+    ...tf.binds,
     ...activeFirstBinds,
   ]);
   const items = materialize(db, rows) as Project[];

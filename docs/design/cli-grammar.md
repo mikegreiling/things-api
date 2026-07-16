@@ -152,7 +152,7 @@ The optional flags on a read view fall into four classes:
 
 - **Volume caps** — `--limit`, `--area-limit`, `--project-limit`. How many rows/blocks to show.
 - **Range bounds** — `--since`, `--until`. The time window the view covers.
-- **Content scopes** — `--tag`, `--untagged` (its inversion — the GUI's "No Tag", mutually exclusive with `--tag`/`--exact-tag`), `--overdue` (open items past their deadline — see below), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
+- **Content scopes** — the tag filters (`--tag`, `--direct-tag`, `--exact-tag`, `--untagged`, `--direct-untagged` — see [The tag filters](#the-tag-filters-mike-approved) below), `--overdue` (open items past their deadline — see below), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
 - **Visibility toggles** — `--show-later`, `--logged`, `--trashed`, `--evening`. Whether an otherwise-hidden class is folded in.
 
 `--all` is its own thing: it removes restrictions (see the `--all` doctrine above) and conflicts with an explicit cap/bound exactly as before.
@@ -175,6 +175,34 @@ Worked examples on `upcoming` (default window `--until 1m`, default cap `--limit
 
 Rationale: defaults exist to keep the bare invocation small; once the user states any explicit bound they have taken over output sizing, so a stale second default must not silently re-clamp the result.
 
+### The tag filters (Mike-approved)
+
+Five flags scope a view by tag. They rest on **two orthogonal axes** in how a tag reaches an item:
+
+- **(A) Container inheritance** — an item inherits the tags of its project, its area, and (through the heading → project → area chain) its heading's container. GUI-verified (oddities **§9a**, TAGINH2): the app's tag filter treats an item as carrying its containers' tags.
+- **(B) Tag-hierarchy descendant expansion** — filtering a PARENT tag also matches items tagged with a DESCENDANT of that tag (documented app behavior; the UI's filter works downward through the tag tree).
+
+The five flags are exactly the meaningful points on those axes:
+
+| Flag | Container inheritance (A) | Descendant expansion (B) | Matches |
+|---|---|---|---|
+| `--tag X` | yes | yes | X directly, X inherited from a container, or a descendant of X (any of those) |
+| `--direct-tag X` | **no** | yes | X (or a descendant of X) assigned **directly** to the item — a container-inherited X does not count |
+| `--tag X --exact-tag` | yes | **no** | X directly or inherited, but not a descendant of X |
+| `--direct-tag X --exact-tag` | no | no | exactly X, assigned directly |
+| `--untagged` | — | — | the item carries **no** tag by any hop (direct or inherited) — the GUI's "No Tag" |
+| `--direct-untagged` | — | — | the item carries no **direct** tag (an inherited tag is allowed) — the GUI's in-context "No Tag" |
+
+`--direct-tag` differs from `--tag` on exactly ONE axis: it drops container inheritance (A) and keeps descendant expansion (B). `--exact-tag` is the orthogonal modifier that drops (B), and it applies to both `--tag` and `--direct-tag`.
+
+**Multi-tag AND.** `--tag` and `--direct-tag` are **repeatable**, and repeats AND together: `--tag foo --tag bar` keeps items matching foo AND bar (each ref independently resolved and expanded per its own axes; the per-ref predicates are AND-combined, while each ref's own descendant set stays OR-matched internally). `--tag` and `--direct-tag` may also compose (`--tag urgent --direct-tag home` = inherited-or-direct urgent AND directly home). Each ref resolves through the tag-ref resolver by name/path (never by uuid — tag uuids are internal); an unknown ref fails closed, per ref.
+
+**Mutual exclusivity.** `--untagged` and `--direct-untagged` are booleans (no multiplicity). Each is exclusive with every tag-presence flag (`--tag`/`--direct-tag`/`--exact-tag`) and with the other negation — you cannot ask for untagged AND a tag. `--tag` and `--direct-tag` compose (they are different predicates). Incoherent combinations are refused fail-closed with a clear usage error.
+
+**Where they apply.** Universal: every flat list view that already accepted `--tag` (today, inbox, anytime, someday, upcoming, logbook, search) accepts all five. The **containers** — `project show`, `area show`, and the `things projects` LIST (plus their `things <id>` / `things projects <ref>` / `things areas <ref>` sugar) — accept them too, filtering the displayed rows by **each row's own tags** (project show → its child to-dos; area show → its loose to-dos AND its child projects; `things projects` → the project rows), with NO recursion into a matched container's contents (same level-uniform rule as `--overdue`). As a content scope the tag filters never lift a `--limit`/section cap. The bare `things areas` LIST rejects them (an area is shown with its own direct tags; use `things areas <ref>` for that area's rows, or `things projects --tag`).
+
+**§9a resolved.** The earlier open question — whether a container `--tag` should mean own-tag-only, inherited-inclusive, or be refused — is settled by offering BOTH: `--tag` is inheritance-inclusive (so filtering a project's children by a tag the PROJECT carries matches every child — the tag is inherited by all of them, a deliberate, documented consequence), and `--direct-tag` is the direct-only tool for "children with their OWN X tag". The MCP tools mirror this: `tag`/`direct_tag` are arrays, plus `exact_tag`/`untagged`/`direct_untagged`, on `read_view`/`search`/`get_project`/`get_area`/`list_collections` (projects only) with the same guards.
+
 ### The `--overdue` content scope (Mike-approved)
 
 `--overdue` restricts a view to OPEN items whose `deadline` is strictly BEFORE today. It is a **content scope**, so it obeys the doctrine above: it never lifts a `--limit`/`--since`/`--until` default and composes as an intersection (`AND`) with `--tag`/`--untagged` and every other scope.
@@ -183,7 +211,7 @@ Rationale: defaults exist to keep the bare invocation small; once the user state
 
 **Where it applies.** `--overdue` is offered on the current-work views where `--tag` applies and the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search`; and on the container/list views `things projects`, `project show`, and `area show` (and their `things <id>` sugar). On `search` it lists open items, so it is refused together with the status-widening `--logged`/`--trashed`/`--all` (the same fail-closed style as `--untagged` with `--tag`).
 
-**Container/list semantics (OWN-DEADLINE UNIFORM).** In the container/list views `--overdue` keeps each listed ENTITY iff its OWN deadline is overdue — there is NO recursion into container contents. Deadlines are not inherited, so this scope is safe here even though the container views do not yet accept `--tag` (see the parked `--tag`-in-containers item below):
+**Container/list semantics (OWN-DEADLINE UNIFORM).** In the container/list views `--overdue` keeps each listed ENTITY iff its OWN deadline is overdue — there is NO recursion into container contents. Deadlines are not inherited, so `--overdue` needs no own-vs-inherited distinction; the tag filters (which DO distinguish, via `--tag` vs `--direct-tag`) live on the same containers (see [The tag filters](#the-tag-filters-mike-approved)):
 - **`things projects`** (project LIST) — keeps projects whose own deadline is overdue. Projects are `TMTask type=1` carrying their own `deadline` column, so the same `OVERDUE` predicate applies to project rows verbatim.
 - **`project show`** (and `things <project-id>`) — filters the project's child TO-DOS to those whose own deadline is overdue. Headings left with no surviving child collapse (no empty sections); the project header itself always renders.
 - **`area show`** (and `things <area-id>`) — filters the displayed rows by each row's OWN deadline: the area's loose to-dos by theirs AND its child projects by the project's own deadline. There is NO descent into project contents — an overdue to-do *inside* a non-overdue project does not surface here (that is `project show --overdue`). Sections with no surviving rows collapse to the view's existing empty state.
