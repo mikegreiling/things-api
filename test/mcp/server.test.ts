@@ -104,6 +104,29 @@ async function connect(
   };
 }
 
+/** Collect every property name at any depth of a JSON-schema object (arg names). */
+function schemaArgNames(schema: unknown): string[] {
+  const names: string[] = [];
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    const props = obj["properties"];
+    if (props !== undefined && typeof props === "object" && props !== null) {
+      for (const [key, child] of Object.entries(props as Record<string, unknown>)) {
+        names.push(key);
+        walk(child);
+      }
+    }
+    walk(obj["items"]);
+    for (const composite of ["anyOf", "oneOf", "allOf"]) {
+      const arr = obj[composite];
+      if (Array.isArray(arr)) for (const el of arr) walk(el);
+    }
+  };
+  walk(schema);
+  return names;
+}
+
 function textOf(result: unknown): unknown {
   const content = (result as { content: { type: string; text: string }[] }).content;
   return JSON.parse(content[0]?.text ?? "null");
@@ -1226,6 +1249,43 @@ describe("things MCP server", () => {
           expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
         }
       }
+    });
+  });
+
+  describe("tool-argument casing", () => {
+    // The MCP surface convention is snake_case for every tool argument (CLI
+    // flags stay kebab-case; internal WriteOptions/BatchOp stay camelCase).
+    it("every tool argument is snake_case (no camelCase leaks)", async () => {
+      await connect([fakeVector(null).vector]);
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        for (const name of schemaArgNames(tool.inputSchema)) {
+          expect(name, `${tool.name}.${name} is not snake_case`).not.toMatch(/[a-z0-9][A-Z]/);
+        }
+      }
+    });
+
+    it("batch maps snake_case per-op acknowledgements into the engine option names", async () => {
+      // trash.empty is refused without the permanent-delete acknowledgement; the
+      // snake_case per-op option must reach the engine and lift that refusal.
+      // (trash.empty compiles only for the applescript vector.)
+      await connect([fakeVector(null, { id: "applescript", ops: ["trash.empty"] }).vector]);
+      const blocked = await client.callTool({
+        name: "batch",
+        arguments: { ops: [{ op: "trash.empty", params: {} }], dry_run: true },
+      });
+      const blockedResults = textOf(blocked) as { outcome: { kind: string } }[];
+      expect(blockedResults[0]?.outcome.kind).toBe("blocked");
+
+      const allowed = await client.callTool({
+        name: "batch",
+        arguments: {
+          ops: [{ op: "trash.empty", params: {}, options: { dangerously_permanent: true } }],
+          dry_run: true,
+        },
+      });
+      const allowedResults = textOf(allowed) as { outcome: { kind: string } }[];
+      expect(allowedResults[0]?.outcome.kind).toBe("dry-run");
     });
   });
 

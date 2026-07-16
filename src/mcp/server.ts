@@ -1498,36 +1498,36 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   };
   const repeatRuleShape = {
     ...baseRepeatShape,
-    afterCompletion: z
+    after_completion: z
       .boolean()
       .optional()
       .describe(
         "Repeat N units AFTER each occurrence is completed, instead of on a fixed schedule",
       ),
     weekdays: z.array(WEEKDAY_ENUM).optional().describe("Weekly only: the weekdays it repeats on"),
-    monthlyDay: z
+    monthly_day: z
       .union([z.number().int(), z.literal("last")])
       .optional()
       .describe('Monthly/yearly only: a day of the month (1–31, or "last")'),
-    monthlyWeekday: WEEKDAY_ENUM.optional().describe(
-      "Monthly/yearly only: a weekday for an nth-weekday rule (with monthlyOrdinal)",
+    monthly_weekday: WEEKDAY_ENUM.optional().describe(
+      "Monthly/yearly only: a weekday for an nth-weekday rule (with monthly_ordinal)",
     ),
-    monthlyOrdinal: z
+    monthly_ordinal: z
       .union([z.number().int(), z.literal("last")])
       .optional()
-      .describe('Monthly/yearly only: which weekday (1–5, or "last") with monthlyWeekday'),
-    yearlyMonth: z
+      .describe('Monthly/yearly only: which weekday (1–5, or "last") with monthly_weekday'),
+    yearly_month: z
       .number()
       .int()
       .min(1)
       .max(12)
       .optional()
       .describe("Yearly only: the month (1–12)"),
-    endsAfter: z.number().int().optional().describe("Stop after N occurrences"),
-    endsOn: z.string().optional().describe("YYYY-MM-DD — stop after this date"),
+    ends_after: z.number().int().optional().describe("Stop after N occurrences"),
+    ends_on: z.string().optional().describe("YYYY-MM-DD — stop after this date"),
     reminder: z.string().optional().describe("HH:mm — a reminder time on each occurrence"),
     deadline: z.boolean().optional().describe("Give each occurrence a deadline"),
-    startDaysEarlier: z
+    start_days_earlier: z
       .number()
       .int()
       .optional()
@@ -1536,17 +1536,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   /** Map the flat repeat-rule args to the extended fields (present keys only). */
   type RepeatArgs = {
-    afterCompletion?: boolean | undefined;
+    after_completion?: boolean | undefined;
     weekdays?: Weekday[] | undefined;
-    monthlyDay?: number | "last" | undefined;
-    monthlyWeekday?: Weekday | undefined;
-    monthlyOrdinal?: number | "last" | undefined;
-    yearlyMonth?: number | undefined;
-    endsAfter?: number | undefined;
-    endsOn?: string | undefined;
+    monthly_day?: number | "last" | undefined;
+    monthly_weekday?: Weekday | undefined;
+    monthly_ordinal?: number | "last" | undefined;
+    yearly_month?: number | undefined;
+    ends_after?: number | undefined;
+    ends_on?: string | undefined;
     reminder?: string | undefined;
     deadline?: boolean | undefined;
-    startDaysEarlier?: number | undefined;
+    start_days_earlier?: number | undefined;
   };
   // oxlint-disable-next-line consistent-function-scoping -- kept beside repeatRuleShape it mirrors
   const repeatExtras = (
@@ -1554,23 +1554,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     frequency: RepeatFrequency,
   ): Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> => {
     const fields: Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> = {};
-    if (a.afterCompletion === true) fields.afterCompletion = true;
+    if (a.after_completion === true) fields.afterCompletion = true;
     if (a.weekdays !== undefined) fields.weekdays = a.weekdays;
     const anchor: MonthlyAnchor | undefined =
-      a.monthlyDay !== undefined
-        ? { day: a.monthlyDay }
-        : a.monthlyWeekday !== undefined || a.monthlyOrdinal !== undefined
-          ? ({ weekday: a.monthlyWeekday, ordinal: a.monthlyOrdinal } as MonthlyAnchor)
+      a.monthly_day !== undefined
+        ? { day: a.monthly_day }
+        : a.monthly_weekday !== undefined || a.monthly_ordinal !== undefined
+          ? ({ weekday: a.monthly_weekday, ordinal: a.monthly_ordinal } as MonthlyAnchor)
           : undefined;
     if (frequency === "monthly" && anchor !== undefined) fields.monthly = anchor;
-    if (frequency === "yearly" && (a.yearlyMonth !== undefined || anchor !== undefined)) {
-      fields.yearly = { month: a.yearlyMonth, ...anchor } as YearlyAnchor;
+    if (frequency === "yearly" && (a.yearly_month !== undefined || anchor !== undefined)) {
+      fields.yearly = { month: a.yearly_month, ...anchor } as YearlyAnchor;
     }
-    if (a.endsAfter !== undefined) fields.ends = { kind: "after", count: a.endsAfter };
-    else if (a.endsOn !== undefined) fields.ends = { kind: "on-date", date: a.endsOn };
+    if (a.ends_after !== undefined) fields.ends = { kind: "after", count: a.ends_after };
+    else if (a.ends_on !== undefined) fields.ends = { kind: "on-date", date: a.ends_on };
     if (a.reminder !== undefined) fields.reminder = a.reminder;
     if (a.deadline === true) fields.deadline = true;
-    if (a.startDaysEarlier !== undefined) fields.startDaysEarlier = a.startDaysEarlier;
+    if (a.start_days_earlier !== undefined) fields.startDaysEarlier = a.start_days_earlier;
     return fields;
   };
 
@@ -2319,10 +2319,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               params: z.record(z.string(), z.unknown()),
               options: z
                 .object({
-                  acknowledgeChecklistReset: z.boolean().optional(),
-                  acknowledgeProjectReopen: z.boolean().optional(),
-                  dangerouslyPermanent: z.boolean().optional(),
-                  acknowledgeTagSubtree: z.boolean().optional(),
+                  acknowledge_checklist_reset: z.boolean().optional(),
+                  acknowledge_project_reopen: z.boolean().optional(),
+                  dangerously_permanent: z.boolean().optional(),
+                  acknowledge_tag_subtree: z.boolean().optional(),
                 })
                 .optional(),
             }),
@@ -2335,19 +2335,25 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        // Apply the process-wide disruption ceiling to every op — batch takes it
-        // per-op, and MCP never exposes a per-op override, so this is uniform.
+        // Map each op's snake_case acknowledgements into the batch engine's
+        // option names, and apply the process-wide disruption ceiling — batch
+        // takes it per-op, and MCP exposes no per-op override, so it is uniform.
         const ceiling = options.maxDisruption;
-        const ops = (args.ops as BatchOp[]).map(
-          (op): BatchOp =>
-            ceiling === undefined
-              ? op
-              : {
-                  op: op.op,
-                  params: op.params,
-                  options: { ...op.options, maxDisruption: ceiling },
-                },
-        );
+        const ops: BatchOp[] = args.ops.map((op) => {
+          const o = op.options;
+          const opts: NonNullable<BatchOp["options"]> = {
+            ...(o?.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
+            ...(o?.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
+            ...(o?.dangerously_permanent === true && { dangerouslyPermanent: true }),
+            ...(o?.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+            ...(ceiling !== undefined && { maxDisruption: ceiling }),
+          };
+          return {
+            op: op.op as OperationKind,
+            params: op.params,
+            ...(Object.keys(opts).length > 0 && { options: opts }),
+          };
+        });
         const results = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.fail_fast === true && { failFast: true }),
