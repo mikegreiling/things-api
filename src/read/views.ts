@@ -678,12 +678,18 @@ export function trashView(db: DatabaseSync, options?: { limit?: number | null })
 
 export function projectsView(
   db: DatabaseSync,
-  options?: { areaUuid?: string; later?: boolean; now?: Date },
+  options?: { areaUuid?: string; later?: boolean; overdue?: boolean; now?: Date },
 ): Project[] {
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
   const packedToday = encodePackedDate(localToday(options?.now));
+  // OWN-DEADLINE UNIFORM: `--overdue` keeps only projects whose OWN deadline is
+  // overdue (open, strictly before today) — projects carry a `deadline` column
+  // exactly like to-dos, so the shared OVERDUE predicate applies to project
+  // rows verbatim. A content scope: it narrows the list, never lifts a limit.
+  const overdueSql = options?.overdue === true ? ` AND ${OVERDUE}` : "";
+  const overdueBinds = options?.overdue === true ? [packedToday] : [];
   // Sidebar default: LATER (someday + future-scheduled) projects are hidden —
   // active means ANYTIME_SELF (a scheduled project whose date has arrived
   // counts active, exactly the Anytime membership test). With later=true they
@@ -700,13 +706,14 @@ export function projectsView(
   // above the areas — then each area by ITS sidebar rank (TMArea."index"),
   // projects within an area by their drag order.
   const where = area
-    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}
+    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}${overdueSql}
        ORDER BY ${activeFirst}t."index" ASC`
-    : `${OPEN} AND t.type = 1${laterSql} ORDER BY (t.area IS NOT NULL) ASC,
+    : `${OPEN} AND t.type = 1${laterSql}${overdueSql} ORDER BY (t.area IS NOT NULL) ASC,
        (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, ${activeFirst}t."index" ASC`;
   const rows = fetchTaskRows(db, where, [
     ...(area ? [area] : []),
     ...laterBinds,
+    ...overdueBinds,
     ...activeFirstBinds,
   ]);
   const items = materialize(db, rows) as Project[];

@@ -512,6 +512,24 @@ describe("write-command help states the contract", () => {
     }
   });
 
+  it("container views expose --overdue (own-deadline scope) with the due-today carve-out", () => {
+    // project show / area show / the plural lists / the loose show all carry
+    // --overdue as an own-deadline content scope; each states the carve-out.
+    const surfaces: string[][] = [
+      ["project", "show"],
+      ["area", "show"],
+      ["projects"],
+      ["areas"],
+      ["show"],
+    ];
+    for (const path of surfaces) {
+      const help = helpFor(...path);
+      const label = path.join(" ");
+      expect(help, label).toContain("--overdue");
+      expect(help, label).toContain("due today is not overdue");
+    }
+  });
+
   it("list views + search expose --exact-tag alongside --tag", () => {
     for (const name of ["today", "inbox", "search", "logbook"]) {
       const help = helpFor(name);

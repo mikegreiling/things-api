@@ -14,6 +14,7 @@ import type { Heading, IsoDateGroup, Project, Todo } from "../model/entities.ts"
 import { mapHeading, mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskByUuid, fetchTaskRows, makeRefResolver } from "./queries.ts";
 import { logBoundary, markLogged } from "./log-boundary.ts";
+import { OVERDUE } from "./predicates.ts";
 import { inheritedTagsFor } from "./tags.ts";
 
 export interface ProjectView {
@@ -50,7 +51,12 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
-export function projectView(db: DatabaseSync, uuid: string, now?: Date): ProjectView {
+export function projectView(
+  db: DatabaseSync,
+  uuid: string,
+  now?: Date,
+  overdue = false,
+): ProjectView {
   const projectRow = fetchTaskByUuid(db, uuid);
   if (!projectRow || projectRow.type !== 1) throw new ProjectNotFoundError(uuid);
 
@@ -72,13 +78,20 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
   );
   const headings = headingRows.map((h) => mapHeading(h, refs));
 
+  // OWN-DEADLINE UNIFORM: `--overdue` narrows the child TO-DOS to those whose
+  // OWN deadline is overdue (open, strictly before today) via the shared
+  // OVERDUE predicate — NO recursion into anything, and the project header
+  // itself always renders. Headings that keep no surviving child collapse
+  // (below). Its single packed-today bind trails the two uuid binds.
+  const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
+  const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
   const childRows = fetchTaskRows(
     db,
     `t.type = 0 AND (t.project = ? OR t.heading IN (
        SELECT uuid FROM TMTask WHERE type = 2 AND project = ?
-     ))
+     ))${overdueSql}
      ORDER BY t."index" ASC`,
-    [uuid, uuid],
+    [uuid, uuid, ...overdueBinds],
   );
   const childTags = tagsOf(childRows);
   const boundary = logBoundary(db, now);
@@ -160,13 +173,17 @@ export function projectView(db: DatabaseSync, uuid: string, now?: Date): Project
     else scheduled.push({ date, items: [todo] });
   }
 
+  // Under `--overdue`, a heading whose children were all filtered out collapses
+  // rather than rendering an empty section; a heading with a surviving overdue
+  // child is kept. Without the scope every heading renders (its own empty state).
+  const headingGroups = headings
+    .map((heading) => ({ heading, items: byHeading.get(heading.uuid) ?? [] }))
+    .filter((g) => !overdue || g.items.length > 0);
+
   return {
     project,
     active,
-    headings: headings.map((heading) => ({
-      heading,
-      items: byHeading.get(heading.uuid) ?? [],
-    })),
+    headings: headingGroups,
     later: { scheduled, repeating, someday },
     logged,
     trashed,

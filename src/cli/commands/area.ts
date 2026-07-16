@@ -199,6 +199,8 @@ export type AreaShowActionOpts = AreaShowOpts & {
   areaLimit?: string;
   projectLimit?: string;
   all?: boolean;
+  /** Content scope: keep only rows (loose to-dos + child projects) with an overdue own deadline. */
+  overdue?: boolean;
 };
 
 /**
@@ -230,15 +232,20 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
     opts.json === true,
   );
   if (!projectCap.ok) return;
+  const overdue = opts.overdue === true;
   const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
-  const hintBase = invocation("area show", [shellQuote(ref), ...showToggleFlags(opts)]);
+  const hintBase = invocation("area show", [
+    shellQuote(ref),
+    ...showToggleFlags(opts),
+    overdue && "--overdue",
+  ]);
   runRead<AreaView>(
     opts,
     "area-view",
     (c) => {
       let view: AreaView;
       try {
-        view = c.read.areaView(ref);
+        view = c.read.areaView(ref, { overdue });
       } catch (err) {
         // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
         if (err instanceof RangeError && !err.message.includes("ambiguous")) {
@@ -278,6 +285,7 @@ export function registerAreaCommands(program: Command): void {
     )
     .option("--project-limit <n>", `maximum project rows to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
+    .option("--overdue", "only rows whose own deadline is past (due today is not overdue)")
     .option("--all", GROUPED_ALL_DESC)
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")

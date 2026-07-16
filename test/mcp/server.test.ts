@@ -18,7 +18,14 @@ import { createThingsMcpServer } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
 import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedProject, seedTag, seedTodo, tagTask } from "../fixtures/seed.ts";
+import {
+  seedArea,
+  seedHeading,
+  seedProject,
+  seedTag,
+  seedTodo,
+  tagTask,
+} from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -717,6 +724,92 @@ describe("things MCP server", () => {
       arguments: { ref: "Busy", area_limit: 5, all: true },
     });
     expect(conflict.isError).toBe(true);
+  });
+
+  it("get_project overdue filters children and collapses empty headings", async () => {
+    // NOW is 2026-07-05, so 07-04 is overdue and 07-05 is due-today.
+    const proj = seedProject(fixture.db, { title: "MCP Launch" });
+    const hHit = seedHeading(fixture.db, { title: "Phase 1", project: proj, index: 1 });
+    seedHeading(fixture.db, { title: "Phase 2", project: proj, index: 2 });
+    seedTodo(fixture.db, {
+      title: "loose-overdue",
+      project: proj,
+      deadline: "2026-07-04",
+      index: 1,
+    });
+    seedTodo(fixture.db, { title: "loose-due", project: proj, deadline: "2026-07-05", index: 2 });
+    seedTodo(fixture.db, {
+      title: "p1-overdue",
+      heading: hHit,
+      project: null,
+      deadline: "2026-07-01",
+    });
+    await connect([fakeVector(null).vector]);
+    const view = textOf(
+      await client.callTool({
+        name: "get_project",
+        arguments: { uuid: proj, overdue: true },
+      }),
+    ) as {
+      project: { title: string };
+      active: { title: string }[];
+      headings: { heading: { title: string }; items: { title: string }[] }[];
+    };
+    expect(view.project.title).toBe("MCP Launch");
+    expect(view.active.map((i) => i.title)).toEqual(["loose-overdue"]);
+    expect(view.headings).toHaveLength(1);
+    expect(view.headings[0]?.heading.title).toBe("Phase 1");
+  });
+
+  it("get_area overdue filters loose to-dos AND child projects; no recursion", async () => {
+    const area = seedArea(fixture.db, "MCP Home");
+    seedTodo(fixture.db, { title: "todo-overdue", area, deadline: "2026-07-04", index: 1 });
+    seedTodo(fixture.db, { title: "todo-due", area, deadline: "2026-07-05", index: 2 });
+    const projOverdue = seedProject(fixture.db, {
+      title: "proj-overdue",
+      area,
+      deadline: "2026-07-01",
+      index: 3,
+    });
+    const projClean = seedProject(fixture.db, { title: "proj-clean", area, index: 4 });
+    seedTodo(fixture.db, { title: "buried-overdue", project: projClean, deadline: "2026-06-01" });
+    seedTodo(fixture.db, { title: "buried-clean", project: projOverdue });
+    await connect([fakeVector(null).vector]);
+    const view = textOf(
+      await client.callTool({
+        name: "get_area",
+        arguments: { ref: "MCP Home", overdue: true },
+      }),
+    ) as { active: { title: string }[]; projects: { title: string }[] };
+    expect(view.active.map((i) => i.title)).toEqual(["todo-overdue"]);
+    expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
+  });
+
+  it("list_collections overdue narrows projects; rejects it on areas/tags", async () => {
+    const area = seedArea(fixture.db, "MCP Zone");
+    seedProject(fixture.db, { title: "proj-overdue", area, deadline: "2026-07-04", index: 1 });
+    seedProject(fixture.db, { title: "proj-due", area, deadline: "2026-07-05", index: 2 });
+    seedProject(fixture.db, { title: "proj-none", area, index: 3 });
+    await connect([fakeVector(null).vector]);
+    const projects = textOf(
+      await client.callTool({
+        name: "list_collections",
+        arguments: { kind: "projects", overdue: true },
+      }),
+    ) as { title: string }[];
+    expect(projects.map((p) => p.title)).toEqual(["proj-overdue"]);
+    // areas/tags carry no deadline — overdue is rejected fail-closed.
+    const rejections = await Promise.all(
+      ["areas", "tags"].map((kind) =>
+        client
+          .callTool({ name: "list_collections", arguments: { kind, overdue: true } })
+          .then((rej) => [kind, rej] as const),
+      ),
+    );
+    for (const [kind, rej] of rejections) {
+      expect(rej.isError, kind).toBe(true);
+      expect(textOf(rej)).toMatchObject({ code: "usage" });
+    }
   });
 
   it("undo with an empty audit trail returns an empty item list", async () => {

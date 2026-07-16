@@ -183,6 +183,8 @@ export type ProjectShowActionOpts = ProjectShowOpts & {
   json?: boolean;
   db?: string;
   all?: boolean;
+  /** Content scope: keep only child to-dos whose own deadline is overdue. */
+  overdue?: boolean;
 };
 
 /**
@@ -193,17 +195,22 @@ export type ProjectShowActionOpts = ProjectShowOpts & {
 export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): void {
   // --all lifts the view's own default restriction (the hidden later rows).
   // Logged is a SEPARATE content class and stays behind --show-logged.
+  const overdue = rawOpts.overdue === true;
   const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
     ...rawOpts,
     showLater: rawOpts.showLater === true || rawOpts.all === true,
-    hintBase: invocation("project show", [shellQuote(ref), ...showToggleFlags(rawOpts)]),
+    hintBase: invocation("project show", [
+      shellQuote(ref),
+      ...showToggleFlags(rawOpts),
+      overdue && "--overdue",
+    ]),
   };
   runRead(
     opts,
     "project-view",
     (c) => {
       try {
-        return { data: c.read.projectView(ref) };
+        return { data: c.read.projectView(ref, { overdue }) };
       } catch (err) {
         // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
         if (err instanceof RangeError && !err.message.includes("ambiguous")) {
@@ -229,6 +236,7 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
+    .option("--overdue", "only child to-dos past their deadline (due today is not overdue)")
     .option(
       "--all",
       "reveal the later rows (same as --show-later; logged stays behind --show-logged)",

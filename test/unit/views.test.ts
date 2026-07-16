@@ -14,6 +14,7 @@ import {
   isTodayMember,
   liteTitleSearch,
   logbookView,
+  projectsView,
   searchView,
   somedayView,
   todayView,
@@ -969,6 +970,132 @@ describe("overdue filter (open items past their deadline)", () => {
     expect(flat(anytimeView(fx.db, tomorrow, { overdue: true })).map((i) => i.title)).toEqual([
       "due-0702",
     ]);
+  });
+});
+
+describe("overdue filter in container views (OWN-DEADLINE UNIFORM)", () => {
+  // NOW is local 2026-07-02; overdue = OPEN, deadline strictly < today.
+
+  describe("projectsView (project LIST)", () => {
+    it("keeps own-overdue projects; drops non-overdue, no-deadline, completed", () => {
+      fx = buildFixtureDb();
+      const area = seedArea(fx.db, "Zone", 1);
+      seedProject(fx.db, { title: "proj-overdue", area, deadline: "2026-07-01", index: 1 });
+      seedProject(fx.db, { title: "proj-due-today", area, deadline: "2026-07-02", index: 2 });
+      seedProject(fx.db, { title: "proj-future", area, deadline: "2026-07-09", index: 3 });
+      seedProject(fx.db, { title: "proj-none", area, index: 4 });
+      // Completed + past deadline: OVERDUE re-asserts status = 0, so it drops.
+      seedProject(fx.db, {
+        title: "proj-done",
+        area,
+        deadline: "2026-06-30",
+        status: "completed",
+        stopDate: 10,
+        index: 5,
+      });
+      expect(projectsView(fx.db, { overdue: true, now: NOW }).map((p) => p.title)).toEqual([
+        "proj-overdue",
+      ]);
+      // Unfiltered, the same world carries every OPEN project (overdue narrows).
+      expect(projectsView(fx.db, { now: NOW }).map((p) => p.title)).toEqual(
+        expect.arrayContaining(["proj-overdue", "proj-due-today", "proj-future", "proj-none"]),
+      );
+    });
+
+    it("keys the boundary on the injected clock — due-today becomes overdue tomorrow", () => {
+      fx = buildFixtureDb();
+      seedProject(fx.db, { title: "due-0702", deadline: "2026-07-02" });
+      expect(projectsView(fx.db, { overdue: true, now: NOW }).map((p) => p.title)).toEqual([]);
+      const tomorrow = new Date(2026, 6, 3, 12, 0);
+      expect(projectsView(fx.db, { overdue: true, now: tomorrow }).map((p) => p.title)).toEqual([
+        "due-0702",
+      ]);
+    });
+  });
+
+  describe("projectView (project show)", () => {
+    it("filters children to own-overdue, collapses empty headings, keeps a surviving heading", () => {
+      fx = buildFixtureDb();
+      const project = seedProject(fx.db, { title: "Launch" });
+      const hHit = seedHeading(fx.db, { title: "Phase 1", project, index: 1 });
+      const hMiss = seedHeading(fx.db, { title: "Phase 2", project, index: 2 });
+      // Loose children (no heading): one overdue, one due-today, one no-deadline.
+      seedTodo(fx.db, { title: "loose-overdue", project, deadline: "2026-07-01", index: 1 });
+      seedTodo(fx.db, { title: "loose-due", project, deadline: "2026-07-02", index: 2 });
+      seedTodo(fx.db, { title: "loose-none", project, index: 3 });
+      // Headed children (DB invariant: project = NULL when headed).
+      seedTodo(fx.db, {
+        title: "p1-overdue",
+        heading: hHit,
+        project: null,
+        deadline: "2026-06-25",
+      });
+      seedTodo(fx.db, { title: "p2-none", heading: hMiss, project: null });
+
+      const view = projectView(fx.db, project, NOW, true);
+      // Project header still renders regardless of the filter.
+      expect(view.project.title).toBe("Launch");
+      expect(view.active.map((i) => i.title)).toEqual(["loose-overdue"]);
+      // Phase 2 collapses (no surviving child); Phase 1 kept with its overdue child.
+      expect(view.headings).toHaveLength(1);
+      expect(view.headings[0]?.heading.title).toBe("Phase 1");
+      expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["p1-overdue"]);
+    });
+
+    it("without the flag every heading renders (its own empty state)", () => {
+      fx = buildFixtureDb();
+      const project = seedProject(fx.db, { title: "Launch" });
+      seedHeading(fx.db, { title: "Empty Phase", project });
+      const view = projectView(fx.db, project, NOW, false);
+      expect(view.headings.map((g) => g.heading.title)).toEqual(["Empty Phase"]);
+    });
+  });
+
+  describe("areaView (area show)", () => {
+    it("filters loose to-dos AND child projects by own deadline; no recursion into projects", () => {
+      fx = buildFixtureDb();
+      const area = seedArea(fx.db, "Home");
+      // Direct to-dos: one overdue, one due-today, one no-deadline.
+      seedTodo(fx.db, { title: "todo-overdue", area, deadline: "2026-07-01", index: 1 });
+      seedTodo(fx.db, { title: "todo-due", area, deadline: "2026-07-02", index: 2 });
+      seedTodo(fx.db, { title: "todo-none", area, index: 3 });
+      // Child projects: overdue own deadline vs no deadline.
+      const projOverdue = seedProject(fx.db, {
+        title: "proj-overdue",
+        area,
+        deadline: "2026-06-20",
+        index: 4,
+      });
+      const projClean = seedProject(fx.db, { title: "proj-clean", area, index: 5 });
+      // NO RECURSION: an overdue to-do INSIDE a non-overdue project must NOT
+      // surface in area show --overdue (that is project show --overdue's job).
+      seedTodo(fx.db, {
+        title: "buried-overdue",
+        project: projClean,
+        deadline: "2026-06-01",
+      });
+      // A clean child inside the overdue project — the project still qualifies
+      // on its OWN deadline, and its children are never inspected here.
+      seedTodo(fx.db, { title: "buried-clean", project: projOverdue });
+
+      const view = areaView(fx.db, "Home", NOW, true);
+      expect(view.active.map((i) => i.title)).toEqual(["todo-overdue"]);
+      expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
+      // The buried overdue to-do never appears at the area level.
+      const surfaced = [...view.active, ...view.projects].map((i) => i.title);
+      expect(surfaced).not.toContain("buried-overdue");
+      expect(surfaced).not.toContain("proj-clean");
+    });
+
+    it("collapses to a clean empty state when nothing is overdue", () => {
+      fx = buildFixtureDb();
+      const area = seedArea(fx.db, "Home");
+      seedTodo(fx.db, { title: "todo-none", area });
+      seedProject(fx.db, { title: "proj-none", area });
+      const view = areaView(fx.db, "Home", NOW, true);
+      expect(view.active).toEqual([]);
+      expect(view.projects).toEqual([]);
+    });
   });
 });
 

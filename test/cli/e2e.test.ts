@@ -1805,3 +1805,99 @@ describe("overdue filter (cli)", () => {
     expect(JSON.parse(ok.stdout).data.map((i: { title: string }) => i.title)).toEqual(["widget"]);
   });
 });
+
+describe("overdue in container views (cli)", () => {
+  it("projects --overdue keeps only projects whose own deadline is past", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Zone", 1);
+    seedProject(fx.db, { title: "proj-overdue", area, deadline: isoFromToday(-1), index: 1 });
+    seedProject(fx.db, { title: "proj-due", area, deadline: isoFromToday(0), index: 2 });
+    seedProject(fx.db, { title: "proj-future", area, deadline: isoFromToday(5), index: 3 });
+    seedProject(fx.db, { title: "proj-none", area, index: 4 });
+    const env = JSON.parse(runCli(["projects", "--overdue", "--json", "--db", fx.path]).stdout);
+    // due-today is NOT overdue (strict <); no-deadline and future drop too.
+    expect(env.data.map((p: { title: string }) => p.title)).toEqual(["proj-overdue"]);
+  });
+
+  it("project show --overdue filters children and collapses empty headings", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Launch", index: 1 });
+    const hHit = seedHeading(fx.db, { title: "Phase 1", project: proj, index: 1 });
+    seedHeading(fx.db, { title: "Phase 2", project: proj, index: 2 });
+    seedTodo(fx.db, {
+      title: "loose-overdue",
+      project: proj,
+      deadline: isoFromToday(-1),
+      index: 1,
+    });
+    seedTodo(fx.db, { title: "loose-due", project: proj, deadline: isoFromToday(0), index: 2 });
+    seedTodo(fx.db, {
+      title: "p1-overdue",
+      heading: hHit,
+      project: null,
+      deadline: isoFromToday(-2),
+    });
+    const env = JSON.parse(
+      runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
+    );
+    expect(env.data.project.title).toBe("Launch");
+    expect(env.data.active.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
+    // Phase 2 collapsed (no surviving child); Phase 1 kept.
+    expect(env.data.headings).toHaveLength(1);
+    expect(env.data.headings[0].heading.title).toBe("Phase 1");
+    // The TTY render omits the collapsed heading entirely.
+    const tty = runCli(["project", "show", "Launch", "--overdue", "--db", fx.path]).stdout;
+    expect(tty).toContain("Phase 1");
+    expect(tty).not.toContain("Phase 2");
+  });
+
+  it("area show --overdue filters loose to-dos AND projects; no recursion into project contents", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Home");
+    seedTodo(fx.db, { title: "todo-overdue", area, deadline: isoFromToday(-1), index: 1 });
+    seedTodo(fx.db, { title: "todo-due", area, deadline: isoFromToday(0), index: 2 });
+    const projOverdue = seedProject(fx.db, {
+      title: "proj-overdue",
+      area,
+      deadline: isoFromToday(-3),
+      index: 3,
+    });
+    const projClean = seedProject(fx.db, { title: "proj-clean", area, index: 4 });
+    // Buried overdue to-do inside the non-overdue project must NOT surface.
+    seedTodo(fx.db, { title: "buried-overdue", project: projClean, deadline: isoFromToday(-5) });
+    seedTodo(fx.db, { title: "buried-clean", project: projOverdue });
+    const env = JSON.parse(
+      runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
+    );
+    expect(env.data.active.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
+    expect(env.data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
+    const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
+    expect(tty).not.toContain("buried-overdue");
+    expect(tty).not.toContain("proj-clean");
+  });
+
+  it("areas LIST rejects --overdue (areas have no deadline)", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Home");
+    expect(runCli(["areas", "--overdue", "--db", fx.path]).exitCode).toBe(2);
+    // But `areas <ref> --overdue` IS area show and is accepted.
+    seedTodo(fx.db, { title: "od", area: seedArea(fx.db, "Work"), deadline: isoFromToday(-1) });
+    expect(runCli(["areas", "Work", "--overdue", "--db", fx.path]).exitCode).toBe(0);
+  });
+
+  it("--overdue never lifts the container no-strict-limit doctrine", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Home");
+    seedTodo(fx.db, { title: "od", area, deadline: isoFromToday(-1) });
+    // area show forbids a strict --limit whether or not --overdue is present.
+    expect(
+      runCli(["area", "show", "Home", "--overdue", "--limit", "5", "--db", fx.path]).exitCode,
+    ).toBe(2);
+    // project show has no --limit at all — unknown option even with --overdue.
+    const proj = seedProject(fx.db, { title: "P" });
+    seedTodo(fx.db, { title: "c", project: proj, deadline: isoFromToday(-1) });
+    expect(() =>
+      runCli(["project", "show", "P", "--overdue", "--limit", "5", "--db", fx!.path]),
+    ).toThrow();
+  });
+});
