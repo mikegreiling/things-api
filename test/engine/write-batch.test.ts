@@ -102,8 +102,12 @@ describe("runBatch", () => {
     expect(results[3]?.outcome.kind === "invalid" && results[3].outcome.detail).toMatch(
       /exclusive/,
     );
-    // ok + blocked both audited (invalid ops never reach the pipeline)
-    expect(auditRecords.map((r) => r.result)).toEqual(["ok", "blocked:H-PERMANENT-DELETE"]);
+    // ok + blocked both audited (invalid ops never reach the pipeline); the ok
+    // op also records its pre-execute intent, excluded here.
+    expect(auditRecords.filter((r) => r.result !== "intent").map((r) => r.result)).toEqual([
+      "ok",
+      "blocked:H-PERMANENT-DELETE",
+    ]);
   });
 
   it("failFast skips everything after the first failure", async () => {

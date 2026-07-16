@@ -120,6 +120,14 @@ export function registerDoctor(program: Command): void {
             `repeats:     ${report.recurrence.templates} template(s), ${
               report.recurrence.undecodable
             } undecodable${report.recurrence.undecodable > 0 ? ` — ${report.recurrence.detail}` : ""}`,
+            ...(report.audit.orphanedIntents > 0
+              ? [
+                  `changes:     ${report.audit.orphanedIntents} change(s) were started but their ` +
+                    `result was not recorded (newest ${report.audit.newestOrphanIntent}) — a ` +
+                    `change may have been applied in Things without being saved to the local ` +
+                    `history; review your recent changes in Things`,
+                ]
+              : []),
             ...syncHealthLines(report.syncHealth),
             ...uiVectorLines(report.ui),
           ];

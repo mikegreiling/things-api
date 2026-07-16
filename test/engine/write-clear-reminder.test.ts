@@ -182,7 +182,7 @@ describe("runClearReminder — vector selection + URL bounce", () => {
     }
     expect(calls).toHaveLength(2);
     // Two legs (excluded from undo) + one summary (the single undoable unit).
-    const legs = auditRecords.filter((r) => r.txn?.role === "leg");
+    const legs = auditRecords.filter((r) => r.txn?.role === "leg" && r.result !== "intent");
     const summary = auditRecords.find((r) => r.txn?.role === "summary");
     expect(legs.map((r) => r.op)).toEqual(["todo.update", "todo.update"]);
     expect(summary?.op).toBe("todo.clear-dated-reminder");

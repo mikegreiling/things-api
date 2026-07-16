@@ -1,7 +1,10 @@
 /**
  * The mutation pipeline: fingerprint gate → lock → pre-read → guards →
  * vector planning → ensure-running → execute → verified read-after-write →
- * audit. Every mutation attempt is audited, including blocked decisions.
+ * audit. Every mutation attempt is audited, including blocked decisions. A
+ * write that reaches the app records TWICE: an `intent` marker right before
+ * execute (so a crash mid-write leaves evidence — M3) and the final outcome
+ * after verify.
  */
 import { execFile, execFileSync } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
@@ -502,6 +505,30 @@ export async function runMutation<K extends OperationKind>(
         : [];
 
     const preCapture = capturePre(delta, deps, pre);
+
+    // M3 durability: record the INTENT to mutate BEFORE the app is touched.
+    // The guards have passed and the invocation is compiled, so this carries
+    // op/uuid/actor/redacted invocation/startedAt (+ the captured pre-state).
+    // If the process dies between vector.execute and the final record below,
+    // this intent has no matching final sibling (same ts+op+actor+host) — the
+    // ONLY evidence the mutation may have landed. `things doctor` surfaces such
+    // orphans; the final record written after verify supersedes this one.
+    // (dry-run returned above, so nothing is recorded for a dry-run — preserved.)
+    const intentUuid =
+      delta.mode === "update" || delta.mode === "state"
+        ? delta.uuid
+        : delta.mode === "ordering"
+          ? (delta.subject ?? null)
+          : null;
+    audit({
+      result: "intent",
+      vector: vector.id,
+      disruption: effectiveTier,
+      invocation: invocation.redactedPayload,
+      pre: flattenPreFields(preCapture.fields),
+      uuid: intentUuid,
+    });
+
     const executeResult = await vector.execute(invocation);
     if (executeResult.exitCode !== 0 || executeResult.timedOut === true) {
       audit({

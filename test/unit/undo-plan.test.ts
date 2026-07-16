@@ -10,7 +10,12 @@ import { describe, expect, it } from "vitest";
 
 import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { AnyTask } from "../../src/model/entities.ts";
-import { planUndo, readAuditRecords, selectUndoTargets } from "../../src/write/undo.ts";
+import {
+  planUndo,
+  readAuditRecords,
+  scanAuditIntegrity,
+  selectUndoTargets,
+} from "../../src/write/undo.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 
@@ -112,6 +117,25 @@ describe("selectUndoTargets", () => {
     expect(selectUndoTargets([a, b], { txn: "m-does-not-exist" })).toEqual([]);
   });
 
+  it("skips INTENT records everywhere: last/by scoping AND --txn (M3)", () => {
+    // An intent whose final never landed (crashed write) must never be an undo
+    // target — not by last, not by actor scoping, not by its would-be token.
+    const intent = record({
+      ts: "2026-07-05T09:30:00Z",
+      op: "todo.add",
+      uuid: "CRASH",
+      actor: "mike",
+      result: "intent",
+    });
+    const ok = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "DONE", actor: "mike" });
+    const all = [ok, intent];
+    // last/by never surface the intent…
+    expect(selectUndoTargets(all, { last: 5 }).map((t) => t.uuid)).toEqual(["DONE"]);
+    expect(selectUndoTargets(all, { by: "mike", last: 5 }).map((t) => t.uuid)).toEqual(["DONE"]);
+    // …and the token the intent WOULD hash to selects nothing.
+    expect(selectUndoTargets(all, { txn: undoToken(intent) })).toEqual([]);
+  });
+
   it("--txn matches a compound summary by its txn id", () => {
     const summary = record({
       ts: "2026-07-05T09:00:00Z",
@@ -136,6 +160,51 @@ describe("undoToken", () => {
     expect(undoToken(base)).not.toBe(undoToken({ ...base, uuid: "B" }));
     expect(undoToken(base)).not.toBe(undoToken({ ...base, actor: "mcp" }));
     expect(undoToken(base)).not.toBe(undoToken({ ...base, ts: "2026-07-05T09:00:01Z" }));
+  });
+});
+
+describe("scanAuditIntegrity — crashed-write detection (M3)", () => {
+  it("flags an intent with no matching final; pairs on ts+op+actor+host, not uuid", () => {
+    const records = [
+      // A completed write: intent + final share ts/op/actor/host — NOT orphaned.
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.update", uuid: "A", result: "intent" }),
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.update", uuid: "A", result: "ok" }),
+      // A create: intent has null uuid, final discovered "NEW" — still pairs
+      // (uuid is excluded from the pairing key), so NOT orphaned.
+      record({ ts: "2026-07-05T09:05:00Z", op: "todo.add", uuid: null, result: "intent" }),
+      record({ ts: "2026-07-05T09:05:00Z", op: "todo.add", uuid: "NEW", result: "ok" }),
+      // A crashed write: intent with no final at its key — ORPHANED.
+      record({ ts: "2026-07-05T09:10:00Z", op: "todo.complete", uuid: "C", result: "intent" }),
+    ];
+    const integrity = scanAuditIntegrity(records);
+    expect(integrity.orphanedIntents).toBe(1);
+    expect(integrity.newestOrphanIntent).toBe("2026-07-05T09:10:00Z");
+  });
+
+  it("reports zero when every intent has a recorded outcome (incl. verify-failed)", () => {
+    const records = [
+      record({ ts: "2026-07-05T09:00:00Z", op: "todo.update", result: "intent" }),
+      record({
+        ts: "2026-07-05T09:00:00Z",
+        op: "todo.update",
+        result: "verify-failed:silent-noop",
+      }),
+    ];
+    expect(scanAuditIntegrity(records)).toEqual({
+      orphanedIntents: 0,
+      newestOrphanIntent: null,
+    });
+  });
+
+  it("newest wins across multiple orphans", () => {
+    const records = [
+      record({ ts: "2026-07-05T08:00:00Z", op: "todo.add", result: "intent" }),
+      record({ ts: "2026-07-05T11:00:00Z", op: "todo.delete", result: "intent" }),
+      record({ ts: "2026-07-05T10:00:00Z", op: "todo.move", result: "intent" }),
+    ];
+    const integrity = scanAuditIntegrity(records);
+    expect(integrity.orphanedIntents).toBe(3);
+    expect(integrity.newestOrphanIntent).toBe("2026-07-05T11:00:00Z");
   });
 });
 

@@ -4,6 +4,15 @@
  *
  * Every mutation ATTEMPT is recorded: successes, verification failures, and
  * blocked decisions (with invocation null — the app was never touched).
+ *
+ * A successful mutation writes TWO records: an `intent` marker immediately
+ * before the app is touched (M3 durability — so a crash between the app-side
+ * mutation and the final record leaves evidence the change may have landed),
+ * then the final `ok`/`verify-failed:*` record after read-after-write. The two
+ * share ts+op+actor+host (both derive from the same startedAt); an intent with
+ * no later final sibling is the signature of a crashed write. Intent records
+ * are NEVER undo targets — every undo reader filters `result === "ok"`, which
+ * an intent (result `"intent"`) is not, so it is excluded uniformly.
  */
 import { createHash } from "node:crypto";
 
@@ -39,6 +48,7 @@ export interface AuditRecord {
   /** Post-verify observation (best-effort on failure). */
   observed: Record<string, unknown> | null;
   result:
+    | "intent"
     | "ok"
     | "verify-failed:timeout"
     | "verify-failed:mismatch"
