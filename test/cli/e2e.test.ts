@@ -1101,6 +1101,26 @@ describe("cli normalized-form echo + meta.resolvedCommand", () => {
     // --json never carries the echo line.
     expect(runCli(["Hobbies", "--json", "--db", path]).stdout).not.toContain("≡");
   });
+
+  it("the plural collection synonyms echo their canonical singular show on a TTY", () => {
+    fx = buildFixtureDb();
+    const areaId = seedArea(fx.db, "Hobbies");
+    const projId = seedProject(fx.db, { title: "Astro City", index: 1 });
+    const path = fx.path;
+    // `things areas <ref>` echoes `≡ things area show <ref>` (singular is canonical).
+    expect(runTty(["areas", areaId, "--db", path])).toContain(`≡ things area show ${areaId}`);
+    // The explicit `show` verb is forgiven — same echo.
+    expect(runTty(["areas", "show", areaId, "--db", path])).toContain(
+      `≡ things area show ${areaId}`,
+    );
+    // `things projects <ref>` echoes `≡ things project show <ref>`.
+    expect(runTty(["projects", projId, "--db", path])).toContain(`≡ things project show ${projId}`);
+    expect(runTty(["projects", "show", projId, "--db", path])).toContain(
+      `≡ things project show ${projId}`,
+    );
+    // The bare plural list form echoes nothing.
+    expect(runTty(["areas", "--db", path])).not.toContain("≡ things");
+  });
 });
 
 describe("cli open — plural keywords are not openable", () => {

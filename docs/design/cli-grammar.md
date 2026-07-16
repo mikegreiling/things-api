@@ -34,9 +34,9 @@ Inside a TYPE namespace whose `show` verb takes a reference — `area`, `project
 
 Because the `<type>` is fixed by the namespace, the type CONSTRAINS resolution: `things area <project-uuid>` produces a loud type-mismatch (`area not found: …`, exit 2) rather than silently falling back to a project — exactly like the typed `things area show <project-uuid>`. The canonical `things <type> show <subject>` rides the normalized-echo and `meta.resolvedCommand` like every other sugar.
 
-### Plural collection views accept an id (`things areas <id>` / `things projects <id>`)
+### Plural collection views accept a ref (`things areas <ref>` / `things projects <ref>`)
 
-The plural collection commands `areas` and `projects` are *list* views, but each also accepts an optional trailing reference: `things areas Hobbies` shows that one area and `things projects "Astro City"` shows that one project — byte-identical to `things area show <id>` / `things project show <id>`, delegating to the same action (a true synonym, not a reimplementation). The bare `things areas` / `things projects` still list. This is handled in the command action (the resolver treats `areas`/`projects` as ordinary registered commands), so — unlike the sugar forms above — it does NOT emit a normalized-echo or `meta.resolvedCommand`; the singular `area show` / `project show` remains the canonical spelling. The show-only flags (`--show-later`, `--show-logged`, `--area-limit`, `--project-limit`) are accepted on the plural form and apply only when an id is present. `tags` has no singular show view, so it stays list-only (a stray argument is an excess-argument usage error).
+The plural collection commands `areas` and `projects` are *list* views, but each also accepts an optional trailing reference: `things areas Hobbies` shows that one area and `things projects "Astro City"` shows that one project — byte-identical (in the rendered body) to `things area show <ref>` / `things project show <ref>`, delegating to the same action (a true synonym, not a reimplementation). The bare `things areas` / `things projects` still list. Like the sugar forms above it emits the normalized-echo (`≡ things project show <ref>`) and `meta.resolvedCommand`: the singular `area show` / `project show` is the canonical spelling, so the plural announces the normalization to it. This one is set in the resolver (a dedicated `projects`/`areas` branch), not filled in by the action, because the canonical is knowable from the argv alone — the plural + ref maps straight to the singular show, no database resolution needed. An explicit `show` verb is forgiven too (`things projects show <ref>` → `things project show <ref>`), dropped in the resolver so the plural command still sees a single ref positional. The show-only flags (`--show-later`, `--show-logged`, `--area-limit`, `--project-limit`) are accepted on the plural form and apply only when a ref is present. `tags` has no singular show view, so it stays list-only (a stray argument is an excess-argument usage error).
 
 ## Precedence chain (single, documented)
 
@@ -101,10 +101,11 @@ When — and only when — an invocation arrives via a sugar form, the TTY rende
 ≡ things area show "Website redesign"
 ```
 
-The subject is rendered with the same shell-safe quoting as the truncation footers (`shellQuote`): a plain word is left bare (`≡ things area show Hobbies`), a name with spaces or shell metacharacters is quoted. It fires for the four routing sugars:
+The subject is rendered with the same shell-safe quoting as the truncation footers (`shellQuote`): a plain word is left bare (`≡ things area show Hobbies`), a name with spaces or shell metacharacters is quoted. It fires for the routing sugars:
 
 - **bare noun** — `things Hobbies` → `≡ things area show Hobbies`
 - **namespace implied-show** — `things area Hobbies` → `≡ things area show Hobbies`
+- **plural collection synonym** — `things areas Hobbies` / `things areas show Hobbies` → `≡ things area show Hobbies`
 - **keyword-in-show** — `things show anytime` → `≡ things anytime`
 - **section sugar** — `things evening` / `things show evening` → `≡ things today --evening`
 - **uuid routing** — `things <uuid>` / `things show <uuid>` → `≡ things todo show <uuid>`

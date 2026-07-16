@@ -185,7 +185,7 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   return lines;
 }
 
-/** Options accepted by the area-show code path (shared by `area show` and `areas <id>`). */
+/** Options accepted by the area-show code path (shared by `area show` and `areas <ref>`). */
 export type AreaShowActionOpts = AreaShowOpts & {
   json?: boolean;
   db?: string;
@@ -197,7 +197,7 @@ export type AreaShowActionOpts = AreaShowOpts & {
 
 /**
  * The `area show <ref>` action body, factored out so the pluralized
- * `things areas <id>` can delegate to the identical code path (a true synonym,
+ * `things areas <ref>` can delegate to the identical code path (a true synonym,
  * not a reimplementation). Both echo the canonical `things area show …` hint.
  */
 export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {

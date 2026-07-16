@@ -1292,7 +1292,7 @@ export function registerWriteCommands(program: Command): void {
   });
   addWriteFlags(
     area
-      .command("update <target>")
+      .command("update <ref>")
       .description(
         "Rename an area and/or replace its tags (the full set; tags must name existing " +
           "tags). Target by uuid or unique name.",
@@ -1324,7 +1324,7 @@ export function registerWriteCommands(program: Command): void {
   addDriveGuiFlag(
     addWriteFlags(
       area
-        .command("reorder-sidebar <target>")
+        .command("reorder-sidebar <ref>")
         .description(
           "Move an area to a new position in the sidebar (target by uuid or unique name). " +
             "Pass exactly one destination: --before/--after another area, or --first/--last. " +
@@ -1366,7 +1366,7 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     area
-      .command("delete <target>")
+      .command("delete <ref>")
       .description(
         "Delete an area PERMANENTLY — areas do not go to the Trash, so this cannot be " +
           "undone; requires --dangerously-permanent. The area's to-dos move to the Trash; " +
@@ -1402,7 +1402,7 @@ export function registerWriteCommands(program: Command): void {
   });
   addWriteFlags(
     tag
-      .command("update <target>")
+      .command("update <ref>")
       .description(
         "Rename a tag (existing assignments follow the rename), nest it under an existing " +
           "tag, UN-NEST it to the root (--unnest; exclusive with --parent), and set or clear " +
@@ -1454,7 +1454,7 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     tag
-      .command("delete <target>")
+      .command("delete <ref>")
       .description(
         "Delete a tag PERMANENTLY — tags do not go to the Trash, so this cannot be " +
           "undone; requires --dangerously-permanent. The tag is removed from every item, " +

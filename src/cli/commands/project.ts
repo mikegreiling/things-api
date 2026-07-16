@@ -178,7 +178,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   return lines;
 }
 
-/** Options accepted by the project-show code path (shared by `project show` and `projects <id>`). */
+/** Options accepted by the project-show code path (shared by `project show` and `projects <ref>`). */
 export type ProjectShowActionOpts = ProjectShowOpts & {
   json?: boolean;
   db?: string;
@@ -187,7 +187,7 @@ export type ProjectShowActionOpts = ProjectShowOpts & {
 
 /**
  * The `project show <ref>` action body, factored out so the pluralized
- * `things projects <id>` can delegate to the identical code path (a true
+ * `things projects <ref>` can delegate to the identical code path (a true
  * synonym). Both echo the canonical `things project show …` hint.
  */
 export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): void {
