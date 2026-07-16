@@ -6,7 +6,6 @@ import type { Command } from "commander";
 
 import type { Project, Todo } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
-import { ExitCode } from "../../contracts.ts";
 import { localToday } from "../../model/dates.ts";
 import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
@@ -14,7 +13,14 @@ import { Option } from "commander";
 
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
 import { openInThings } from "./reads.ts";
-import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
+import {
+  invocation,
+  parseCap,
+  runRead,
+  shellQuote,
+  usageError,
+  withClient,
+} from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
@@ -202,19 +208,26 @@ export type AreaShowActionOpts = AreaShowOpts & {
  */
 export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
   if (opts.limit !== undefined) {
-    process.stderr.write(
-      "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
+    usageError(
+      opts,
+      "--limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all",
     );
-    process.exitCode = ExitCode.Usage;
     return;
   }
-  const areaCap = parseCap("--area-limit", opts.areaLimit, AREA_PREVIEW_LIMIT, opts.all === true);
+  const areaCap = parseCap(
+    "--area-limit",
+    opts.areaLimit,
+    AREA_PREVIEW_LIMIT,
+    opts.all === true,
+    opts.json === true,
+  );
   if (!areaCap.ok) return;
   const projectCap = parseCap(
     "--project-limit",
     opts.projectLimit,
     AREA_PREVIEW_LIMIT,
     opts.all === true,
+    opts.json === true,
   );
   if (!projectCap.ok) return;
   const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };

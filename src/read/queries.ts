@@ -116,6 +116,38 @@ export function noUuidMatch(entity: string, ref: string): string {
   return `no ${entity} matching uuid or partial-uuid "${ref}"`;
 }
 
+/** A disambiguation candidate for a reference-resolution failure. */
+export interface RefCandidate {
+  uuid: string;
+  title: string;
+  /** Optional context that distinguishes same-named candidates (area for a project, parent path for a tag). */
+  context?: string;
+}
+
+/**
+ * A reference (uuid / partial-uuid / name) that did not resolve to exactly one
+ * entity. Extends RangeError so every existing `instanceof RangeError` handler
+ * keeps treating it as a usage-class failure — but the surfaces that know about
+ * it (CLI --json envelope, MCP tool result) additionally lift the structured
+ * `candidates` onto `error.details.candidates` so an agent can self-correct
+ * without re-parsing the prose message. `code` mirrors the envelope error code.
+ */
+export class ReferenceResolutionError extends RangeError {
+  readonly code: "not-found" | "ambiguous";
+  readonly ref: string;
+  readonly candidates: RefCandidate[];
+  constructor(
+    message: string,
+    opts: { code: "not-found" | "ambiguous"; ref: string; candidates?: RefCandidate[] },
+  ) {
+    super(message);
+    this.name = "ReferenceResolutionError";
+    this.code = opts.code;
+    this.ref = opts.ref;
+    this.candidates = opts.candidates ?? [];
+  }
+}
+
 export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity = "to-do"): string {
   const ref = stripThingsUri(refRaw);
   const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
@@ -132,11 +164,15 @@ export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity =
     .prepare("SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ? LIMIT 6")
     .all(ref, upper) as { uuid: string; title: string | null }[];
   if (rows.length === 0) {
-    throw new RangeError(noUuidMatch(entity, ref));
+    throw new ReferenceResolutionError(noUuidMatch(entity, ref), { code: "not-found", ref });
   }
   if (rows.length > 1) {
     const list = rows.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
-    throw new RangeError(`partial-uuid "${ref}" is ambiguous — matches: ${list}`);
+    throw new ReferenceResolutionError(`partial-uuid "${ref}" is ambiguous — matches: ${list}`, {
+      code: "ambiguous",
+      ref,
+      candidates: rows.map((r) => ({ uuid: r.uuid, title: r.title ?? "" })),
+    });
   }
   return rows[0]?.uuid ?? ref;
 }
@@ -236,10 +272,19 @@ function resolveUuidOrThrow(
 ): string {
   const r = resolveNamedRef(db, table, extraWhere, [], ref, options);
   if (r.resolved !== null) return r.resolved.uuid;
-  throw new RangeError(
-    r.matches === 0
-      ? `no ${kind} matching "${ref}" — ${acceptedForms(options?.prefixTier !== false)} (list ${kind}s with \`${listCmd}\`)`
-      : `"${ref}" matches ${r.matches} ${kind}s — use the exact name or a uuid`,
+  if (r.matches === 0) {
+    throw new ReferenceResolutionError(
+      `no ${kind} matching "${ref}" — ${acceptedForms(options?.prefixTier !== false)} (list ${kind}s with \`${listCmd}\`)`,
+      { code: "not-found", ref },
+    );
+  }
+  throw new ReferenceResolutionError(
+    `"${ref}" matches ${r.matches} ${kind}s — use the exact name or a uuid`,
+    {
+      code: "ambiguous",
+      ref,
+      candidates: (r.candidates ?? []).map((c) => ({ uuid: c.uuid, title: c.title })),
+    },
   );
 }
 
@@ -270,31 +315,36 @@ export function resolveProjectWriteTarget(db: DatabaseSync, refRaw: string): str
   const r = resolveNamedRef(db, "TMTask", "type = 1", [], ref, { prefixTier: false });
   if (r.resolved !== null) return r.resolved.uuid;
   if (r.matches === 0) {
-    throw new RangeError(
+    throw new ReferenceResolutionError(
       `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)`,
+      { code: "not-found", ref },
     );
   }
-  const rows = describeProjectCandidates(db, r.candidates ?? []);
-  throw new RangeError(
-    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${rows}`,
+  const candidates = describeProjectCandidates(db, r.candidates ?? []);
+  const lines = candidates
+    .map(
+      (c) =>
+        `  ${c.uuid.slice(0, 8)} — ${c.title}${c.context !== undefined ? ` (in ${c.context})` : ""}`,
+    )
+    .join("\n");
+  throw new ReferenceResolutionError(
+    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${lines}`,
+    { code: "ambiguous", ref, candidates },
   );
 }
 
-/** Short-uuid + area-context candidate lines for an ambiguous project name. */
+/** Short-uuid + area-context candidates for an ambiguous project name. */
 function describeProjectCandidates(
   db: DatabaseSync,
   candidates: { uuid: string; title: string }[],
-): string {
+): RefCandidate[] {
   const areaStmt = db.prepare(
     "SELECT a.title AS title FROM TMTask p LEFT JOIN TMArea a ON a.uuid = p.area WHERE p.uuid = ?",
   );
-  return candidates
-    .map((c) => {
-      const area = (areaStmt.get(c.uuid) as { title: string | null } | undefined)?.title ?? null;
-      const context = area !== null ? ` (in ${area})` : "";
-      return `  ${c.uuid.slice(0, 8)} — ${c.title}${context}`;
-    })
-    .join("\n");
+  return candidates.map((c) => {
+    const area = (areaStmt.get(c.uuid) as { title: string | null } | undefined)?.title ?? null;
+    return { uuid: c.uuid, title: c.title, ...(area !== null && { context: area }) };
+  });
 }
 
 export function resolveTagUuid(db: DatabaseSync, ref: string): string {

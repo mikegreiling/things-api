@@ -111,7 +111,7 @@ describe("glyph styling (color on)", () => {
   it("inherited chips render DIM (secondary metadata), never GREEN like the item's own tags", async () => {
     const { inheritedChips } = await glyphs();
     const styled = inheritedChips([
-      { tag: { uuid: "t1", title: "home" }, source: { type: "area", uuid: "a1", title: "Home" } },
+      { tag: { title: "home" }, source: { type: "area", uuid: "a1", title: "Home" } },
     ]);
     expect(styled).toContain(DIM);
     expect(styled).not.toContain(GREEN);

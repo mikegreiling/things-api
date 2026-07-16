@@ -98,6 +98,30 @@ function runCli(argv: string[]): { stdout: string; exitCode: number } {
   }
 }
 
+/**
+ * Async variant for WRITE commands (their actions await): capture stdout across
+ * the awaited parseAsync. Used only for reference-resolution errors, which throw
+ * BEFORE the mutation lock/audit stage, so they touch no state.
+ */
+async function runCliAsync(argv: string[]): Promise<{ stdout: string; exitCode: number }> {
+  const chunks: string[] = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  const originalExitCode = process.exitCode;
+  try {
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(resolveInvocation(program, argv).argv, { from: "user" });
+    return { stdout: chunks.join(""), exitCode: Number(process.exitCode ?? 0) };
+  } finally {
+    process.stdout.write = originalWrite;
+    process.exitCode = originalExitCode;
+  }
+}
+
 describe("cli end-to-end (fixture db)", () => {
   it("things today --json emits the versioned envelope with split sections", () => {
     fx = buildFixtureDb();
@@ -1409,17 +1433,97 @@ describe("cli --exact-tag (Phase 12c)", () => {
   });
 });
 
-describe("cli tags listing (render polish)", () => {
-  it("mirrors `things areas`: dim short-uuid column, plain name, child parent-path", () => {
+describe("cli tags listing (indented tree)", () => {
+  it("renders an indented tree — leaf names only, 2 spaces per depth, no uuid, DFS order", () => {
     fx = buildFixtureDb();
-    const parent = seedTag(fx.db, "work");
-    const child = seedTag(fx.db, "urgent", parent);
-    // Seeded uuids are `tag-NNNN` (8 chars) — at the UUID_DISPLAY_MIN floor the
-    // column is exactly the full id, so the plain (non-TTY, dim = no-op) skeleton
-    // is `<uuid>  <path>`. DFS order: parent precedes its child.
+    // A 3-deep chain plus a sibling root, to exercise depth and DFS ordering.
+    const root = seedTag(fx.db, "old labels");
+    const mid = seedTag(fx.db, "areas", root);
+    seedTag(fx.db, "mental", mid);
+    seedTag(fx.db, "recurring"); // sibling root, later index
     const { stdout, exitCode } = runCli(["tags", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    expect(stdout.trimEnd().split("\n")).toEqual([`${parent}  work`, `${child}  work/urgent`]);
+    const lines = stdout.trimEnd().split("\n");
+    // Root at column 0; child indented 2; grandchild indented 4 — each LEAF name
+    // present WITHOUT any ancestor prefix; DFS order preserved; a plain root last.
+    expect(lines).toEqual(["old labels", "  areas", "    mental", "recurring"]);
+    // No uuid anywhere in the human output.
+    expect(stdout).not.toContain("tag-");
+  });
+
+  it("--json carries the parent NAME per tag (null for roots), no uuid", () => {
+    fx = buildFixtureDb();
+    const root = seedTag(fx.db, "old labels");
+    seedTag(fx.db, "areas", root);
+    const { stdout, exitCode } = runCli(["tags", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const data = JSON.parse(stdout).data as { title: string; parent: string | null }[];
+    expect(data.find((t) => t.title === "old labels")?.parent).toBeNull();
+    expect(data.find((t) => t.title === "areas")?.parent).toBe("old labels");
+    // Zero surfaced tag-uuid sites: no object carries a uuid key.
+    expect(data.every((t) => !("uuid" in t))).toBe(true);
+    expect(stdout).not.toContain("tag-");
+  });
+});
+
+describe("--json error-path universality", () => {
+  it("ambiguous project write target → JSON envelope, code=ambiguous, machine candidates", async () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "Dup" });
+    seedProject(fx.db, { title: "Dup" });
+    const { stdout, exitCode } = await runCliAsync([
+      "project",
+      "update",
+      "Dup",
+      "--title",
+      "x",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.code).toBe("ambiguous");
+    expect(env.error.details.candidates).toHaveLength(2);
+    expect(env.error.details.candidates[0]).toHaveProperty("uuid");
+    expect(env.error.details.candidates[0]).toHaveProperty("title", "Dup");
+  });
+
+  it("not-found project write target → JSON envelope, code=not-found", async () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = await runCliAsync([
+      "project",
+      "update",
+      "ghost",
+      "--title",
+      "x",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout);
+    expect(env.error.code).toBe("not-found");
+    expect(env.error.details.candidates).toEqual([]);
+  });
+
+  it("flag-combination usage error honors --json (envelope on stdout, not prose on stderr)", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["project", "move", "whatever", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout);
+    expect(env.error.code).toBe("usage");
+    expect(env.error.message).toContain("--area");
+  });
+
+  it("bad --limit honors --json (usage envelope)", () => {
+    fx = buildFixtureDb();
+    const { stdout, exitCode } = runCli(["inbox", "--limit", "0", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(2);
+    const env = JSON.parse(stdout);
+    expect(env.error.code).toBe("usage");
+    expect(env.error.message).toContain("--limit");
   });
 });
 

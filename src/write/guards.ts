@@ -6,7 +6,6 @@
 import { noUuidMatch } from "../read/queries.ts";
 import { isUiDriveOp, type Acknowledgements, type OperationKind } from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
-import { formatTagCandidates } from "./tag-refs.ts";
 
 export const HAZARD_IDS = [
   "H-REPEAT-SCHEDULE",
@@ -14,7 +13,6 @@ export const HAZARD_IDS = [
   "H-CHECKLIST-REPLACE",
   "H-REOPEN-RESOLVED-PROJECT",
   "H-UNKNOWN-TAG",
-  "H-DUPLICATE-TAG",
   "H-UNKNOWN-DESTINATION",
   "H-AMBIGUOUS-HEADING",
   "H-PERMANENT-DELETE",
@@ -125,21 +123,6 @@ const GUARDS: Record<HazardId, GuardFn> = {
       remediation:
         "create the missing tag(s) first — pass --create-tags to create them in place, " +
         "or run `things tag add` — or fix the spelling",
-    };
-  },
-  "H-DUPLICATE-TAG": ({ pre }) => {
-    const first = pre.ambiguousTags[0];
-    if (first === undefined) return null;
-    const lines = pre.ambiguousTags.map(
-      (a) => `"${a.ref}" matches ${a.candidates.length}: ${formatTagCandidates(a.candidates)}`,
-    );
-    return {
-      hazard: "H-DUPLICATE-TAG",
-      detail:
-        `tag reference resolves to more than one tag (two tags share a name — a state only ` +
-        `Things Cloud sync can produce): ${lines.join("; ")}`,
-      remediation:
-        "name the tag by its uuid (shown in brackets) or a parent/child path to pick one",
     };
   },
   "H-UNKNOWN-DESTINATION": ({ op, params, pre }) => {

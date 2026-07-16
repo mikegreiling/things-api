@@ -29,7 +29,7 @@ import {
   type GroupedLimits,
 } from "../read/pagination.ts";
 import { resolveCap } from "../read/caps.ts";
-import { noUuidMatch } from "../read/queries.ts";
+import { noUuidMatch, ReferenceResolutionError } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
@@ -122,6 +122,8 @@ function errorResult(error: {
   message: string;
   likelyCause?: string;
   remediation?: string;
+  /** Machine-readable disambiguation context, mirroring the CLI envelope's error.details. */
+  details?: { candidates?: unknown[]; suggestions?: string[] };
 }): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(error) }], isError: true };
 }
@@ -200,7 +202,7 @@ const dryRunShape = {
 
 /** How a tag value may be expressed on any tag-accepting tool. */
 const TAG_REF_FORMAT =
-  "each a tag name, a uuid, or a parent/child path; must exist unless create_tags is set";
+  "each a tag name or a parent/child path; must exist unless create_tags is set";
 
 /** create_tags param, shared by every tag-accepting write tool. */
 const createTagsShape = {
@@ -219,8 +221,8 @@ const containerRef = (ref: string): { uuid: string; title: string } => ({ uuid: 
 const INSTRUCTIONS_MAX_PROJECTS = 100;
 
 /** A tag's display label: nested tags show `parent > child`. */
-const tagLabel = (t: { title: string; parent: { title: string } | null }): string =>
-  t.parent === null ? t.title : `${t.parent.title} > ${t.title}`;
+const tagLabel = (t: { title: string; parent: string | null }): string =>
+  t.parent === null ? t.title : `${t.parent} > ${t.title}`;
 
 /**
  * Live-inventory preamble: conventions plus the user's actual areas, tags,
@@ -325,6 +327,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     try {
       return await fn();
     } catch (err) {
+      // An unresolved reference (ambiguous or not-found uuid/partial-uuid/name)
+      // carries machine-readable candidates so a consumer can disambiguate as
+      // data, not by re-parsing the prose message.
+      if (err instanceof ReferenceResolutionError) {
+        return errorResult({
+          code: err.code,
+          message: err.message,
+          details: { candidates: err.candidates },
+        });
+      }
       const message = err instanceof Error ? err.message : String(err);
       const code = err instanceof RangeError ? "usage" : "environment";
       return errorResult({ code, message });
