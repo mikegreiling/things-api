@@ -29,6 +29,7 @@ import {
   type GroupedLimits,
 } from "../read/pagination.ts";
 import { resolveCap } from "../read/caps.ts";
+import { noUuidMatch } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
@@ -603,7 +604,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       guard(() => {
         const item = getClient().read.byUuid(args.uuid);
         return item === null
-          ? errorResult({ code: "not-found", message: `no record with uuid ${args.uuid}` })
+          ? errorResult({ code: "not-found", message: noUuidMatch("item", args.uuid) })
           : jsonResult(item);
       }),
   );
@@ -1444,7 +1445,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "and interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, " +
         "or deadline. This can be undone — it restores the previous rule.",
       inputSchema: {
-        uuid: z.string().describe("The repeating project to reschedule"),
+        uuid: z.string().describe(`The repeating project to reschedule (${REF_FORMAT})`),
         ...repeatRuleShape,
         ...driveGuiShape,
         ...dryRunShape,
@@ -1475,7 +1476,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Pause or resume a repeating project. 'pause' stops it spawning new occurrences but keeps " +
         "its rule; 'resume' starts it again. The two are inverses of each other.",
       inputSchema: {
-        uuid: z.string().describe("The repeating project"),
+        uuid: z.string().describe(`The repeating project (${REF_FORMAT})`),
         state: z.enum(["pause", "resume"]),
         ...driveGuiShape,
         ...dryRunShape,
@@ -1547,7 +1548,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "frequency and interval, and optionally the weekday set, monthly/yearly day, end bound, " +
         "reminders, or deadline. Returns the new project's uuid.",
       inputSchema: {
-        uuid: z.string().describe("The project to make repeating"),
+        uuid: z.string().describe(`The project to make repeating (${REF_FORMAT})`),
         ...repeatRuleShape,
         ...driveGuiShape,
         ...dryRunShape,
@@ -1703,7 +1704,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "clear_reminder works while the project is scheduled for today or this evening; a " +
         "reminder on a future date can only be changed, not cleared.",
       inputSchema: {
-        uuid: z.string(),
+        uuid: z.string().describe(`The project to update (${REF_FORMAT})`),
         title: z.string().optional(),
         notes: z.string().optional().describe("Replaces the whole notes body"),
         append_notes: z.string().optional(),
@@ -1762,7 +1763,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "canceled project; its children stay completed/canceled unless restore_children " +
         "also reopens the ones that were resolved together with the project.",
       inputSchema: {
-        uuid: z.string().describe("Project uuid"),
+        uuid: z.string().describe(`The project (${REF_FORMAT})`),
         status: z.enum(["completed", "canceled", "open"]),
         children: z
           .enum(["require-resolved", "auto-complete", "auto-cancel"])
@@ -1826,7 +1827,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Move a project into an area, or detach it from its current area. Pass exactly " +
         "one of area / detach. The project's status and schedule are unaffected.",
       inputSchema: {
-        uuid: z.string().describe("Project uuid"),
+        uuid: z.string().describe(`The project to move (${REF_FORMAT})`),
         area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
         detach: z.boolean().optional().describe("Remove the current area assignment"),
         ...dryRunShape,

@@ -382,6 +382,9 @@ describe("things MCP server", () => {
     const result = await client.callTool({ name: "get_item", arguments: { uuid: "nope" } });
     expect(result.isError).toBe(true);
     expect((textOf(result) as { code: string }).code).toBe("not-found");
+    expect((textOf(result) as { message: string }).message).toContain(
+      'no item matching uuid or partial-uuid "nope"',
+    );
   });
 
   it("add_todo executes and returns the created uuid", async () => {
@@ -646,6 +649,32 @@ describe("things MCP server", () => {
     expect(byName.get("delete_tag")?.annotations?.destructiveHint).toBe(true);
     expect(byName.get("delete_area")?.annotations?.destructiveHint).toBe(true);
     expect(byName.get("add_todo")?.annotations?.destructiveHint).toBe(false);
+  });
+
+  it("project write tools accept a project name; to-do write tools stay uuid-only", async () => {
+    await connect([fakeVector(null).vector]);
+    const { tools } = await client.listTools();
+    const uuidDesc = (name: string): string => {
+      const schema = tools.find((t) => t.name === name)?.inputSchema as {
+        properties?: Record<string, { description?: string }>;
+      };
+      return schema?.properties?.["uuid"]?.description ?? "";
+    };
+    // Project write targets resolve a unique NAME through the shared pipeline (#157).
+    for (const name of [
+      "update_project",
+      "set_project_status",
+      "move_project",
+      "make_project_repeating",
+      "reschedule_project_repeat",
+      "set_project_repeat_state",
+    ]) {
+      expect(uuidDesc(name), name).toContain("uuid or unique name");
+    }
+    // To-do write targets are identity-addressed — the target must never claim name acceptance.
+    for (const name of ["update_todo", "set_todo_status", "move_todo", "backdate_todo"]) {
+      expect(uuidDesc(name), name).not.toContain("unique name");
+    }
   });
 
   describe("server instructions", () => {

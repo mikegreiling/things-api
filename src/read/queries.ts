@@ -107,6 +107,15 @@ export function stripThingsUri(ref: string): string {
   return s;
 }
 
+/**
+ * The single source for uuid-miss not-found copy. Reused by the read-side
+ * resolvers, the write guards, and the MCP item lookups so a uuid/partial-uuid
+ * that matches nothing reads identically wherever the miss is reported.
+ */
+export function noUuidMatch(entity: string, ref: string): string {
+  return `no ${entity} matching uuid or partial-uuid "${ref}"`;
+}
+
 export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity = "to-do"): string {
   const ref = stripThingsUri(refRaw);
   const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
@@ -115,7 +124,7 @@ export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity =
   if (exact !== undefined) return exact.uuid;
   if (ref.length < 6) {
     throw new RangeError(
-      `no ${entity} matching uuid or partial-uuid "${ref}" (a partial-uuid needs at least 6 characters)`,
+      `${noUuidMatch(entity, ref)} (a partial-uuid needs at least 6 characters)`,
     );
   }
   const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
@@ -123,7 +132,7 @@ export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity =
     .prepare("SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ? LIMIT 6")
     .all(ref, upper) as { uuid: string; title: string | null }[];
   if (rows.length === 0) {
-    throw new RangeError(`no ${entity} matching uuid or partial-uuid "${ref}"`);
+    throw new RangeError(noUuidMatch(entity, ref));
   }
   if (rows.length > 1) {
     const list = rows.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
