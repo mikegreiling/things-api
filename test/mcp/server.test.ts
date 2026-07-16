@@ -20,6 +20,7 @@ import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vector
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
+  seedChecklistItem,
   seedHeading,
   seedProject,
   seedTag,
@@ -1327,6 +1328,127 @@ describe("things MCP server", () => {
       });
       expect(result.isError).toBeFalsy();
       expect(warningsOf(result)).toBeUndefined();
+    });
+  });
+
+  // Each element of a batch result is { index, op, outcome: { kind } }; a
+  // failure that is not the last op leaves the rest "skipped" under fail_fast.
+  describe("batch — op cast + per-op option mapping", () => {
+    it("runs several ops in order, each independently (dry-run)", async () => {
+      await connect([fakeVector(null).vector]);
+      const results = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              { op: "todo.add", params: { title: "A" } },
+              { op: "todo.add", params: { title: "B" } },
+            ],
+            dry_run: true,
+          },
+        }),
+      ) as { index: number; op: string; outcome: { kind: string } }[];
+      expect(results.map((r) => r.op)).toEqual(["todo.add", "todo.add"]);
+      expect(results.map((r) => r.outcome.kind)).toEqual(["dry-run", "dry-run"]);
+    });
+
+    it("fail_fast skips every op after the first failure", async () => {
+      // trash.empty without the permanent-delete ack blocks (a pre-vector
+      // hazard); with fail_fast the trailing add is never attempted.
+      await connect([
+        fakeVector(null, { id: "applescript", ops: ["trash.empty", "todo.add"] }).vector,
+      ]);
+      const results = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              { op: "trash.empty", params: {} },
+              { op: "todo.add", params: { title: "never" } },
+            ],
+            fail_fast: true,
+            dry_run: true,
+          },
+        }),
+      ) as { outcome: { kind: string } }[];
+      expect(results[0]?.outcome.kind).toBe("blocked");
+      expect(results[1]?.outcome.kind).toBe("skipped");
+    });
+
+    it("maps a second snake_case per-op acknowledgement (checklist reset) into the engine", async () => {
+      // todo.replace-checklist over an existing checklist is refused without the
+      // acknowledgement; the snake_case per-op option must reach the engine.
+      const uuid = seedTodo(fixture.db, { title: "listy" });
+      seedChecklistItem(fixture.db, uuid, "existing");
+      await connect([fakeVector(null, { ops: ["todo.replace-checklist"] }).vector]);
+      const blocked = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [{ op: "todo.replace-checklist", params: { uuid, items: ["new"] } }],
+            dry_run: true,
+          },
+        }),
+      ) as { outcome: { kind: string } }[];
+      expect(blocked[0]?.outcome.kind).toBe("blocked");
+
+      const allowed = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              {
+                op: "todo.replace-checklist",
+                params: { uuid, items: ["new"] },
+                options: { acknowledge_checklist_reset: true },
+              },
+            ],
+            dry_run: true,
+          },
+        }),
+      ) as { outcome: { kind: string } }[];
+      expect(allowed[0]?.outcome.kind).toBe("dry-run");
+    });
+  });
+
+  describe("reorder — scope-specific validation", () => {
+    it("plans a Today bounce reorder without mutating (dry-run)", async () => {
+      const a = seedTodo(fixture.db, { title: "T-a", startDate: "2026-07-05", todayIndex: 0 });
+      const b = seedTodo(fixture.db, { title: "T-b", startDate: "2026-07-05", todayIndex: 1 });
+      await connect([fakeVector(null).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "reorder",
+          arguments: { scope: "today", uuids: [b, a], dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("reorder");
+    });
+
+    it("refuses a native strategy on the bounce-only evening scope", async () => {
+      const ev = seedTodo(fixture.db, { title: "E-a", startDate: "2026-07-05", evening: true });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "reorder",
+        arguments: { scope: "evening", uuids: [ev], strategy: "native" },
+      });
+      expect(result.isError).toBe(true);
+      const err = textOf(result) as { code: string; remediation: string };
+      expect(err.code).toBe("blocked:H-REORDER-SCOPE");
+      expect(err.remediation.length).toBeGreaterThan(0);
+    });
+
+    it("rejects a container on a scope that takes none (Today)", async () => {
+      const a = seedTodo(fixture.db, { title: "T-c", startDate: "2026-07-05" });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "reorder",
+        arguments: { scope: "today", uuids: [a], container: "somewhere" },
+      });
+      expect(result.isError).toBe(true);
+      expect((textOf(result) as { code: string }).code).toBe("blocked:H-REORDER-SCOPE");
+      expect((textOf(result) as { message: string }).message).toContain("container is only valid");
     });
   });
 });
