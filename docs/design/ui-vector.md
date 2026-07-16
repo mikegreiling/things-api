@@ -132,16 +132,23 @@ VNC input hits the lock screen on a locked session (LOCK1-f, [headless-research.
 
 **Repeating-PROJECT ops.** `project.reschedule-repeat`/`pause-repeat`/`resume-repeat` (UIC3, mouse-hybrid) ride the `click-element` primitive: `reveal` → activate → click the always-visible **repeat bar** (`text area 2` of the header cell) → click the **popover item** (Change…/Pause/Resume — a *separate `AXUnknown` window*, not `pop over 1`) → for reschedule, drive the Repeat sheet with pure AX. A project has no card double-click (unlike to-dos). **`project.make-repeating` IS built and LAB-CERTIFIED** (UIC5, 2026-07-15): UIC4 corrected UIC3-a's "no opener" finding — a project **does** render as a selectable content row whose `AXSelectedRows` is settable, so `select-row → Items ▸ Repeat…` drives the same dialog **pure-AX and background-capable** (the AX-nodeless `…` button is not needed). Its `project.create-repeating` composite is likewise certified. There is still **no `project.stop-repeat`** (the project Stop then selecting the demoted project crashes Things — CRASH1 / oddities §7 C5).
 
-The `reschedule-repeat` classification is worth spelling out for the reversibility matrix: it is the one op whose **identity is preserved** yet is still `irreversible`, because "undo" would mean reconstructing the exact prior rule, and the supported vocabulary (below) is a strict subset of what a rule can encode. We can set a new simple rule; we cannot promise to restore the old one.
+The `reschedule-repeat` classification is worth spelling out for the reversibility matrix: identity is **preserved** (the rule mutates in place, UIC2-a), and with the full vocabulary shipped the undo story is *conditional* — the inverse re-drives reschedule with the captured prior rule, so it is invertible exactly when that prior rule was captured, decodable, and dialog-expressible, and irreversible otherwise (`src/write/reversibility.ts`). One dimension is never restored: a per-instance reminder time (REM1 — the dialog's reminder time-of-day control refuses programmatic writes, fail-closed).
 
-### Minimal rule vocabulary (v1)
+### Rule vocabulary (full dialog, UIC6)
 
-The supported recurrence subset for `make-repeating` and `reschedule-repeat`:
+> **Historical note:** v1 shipped frequency+interval only; UIC6 (2026-07-15) extended `make-repeating` / `reschedule-repeat` (and the project variants) to the full Repeat-dialog vocabulary. The validator and the decode-rule → inverse-params mapping share one source: `src/write/repeat-rule.ts`.
 
-- **frequency** ∈ `{daily, weekly, monthly, yearly}`
-- **interval** ∈ `1..99`
+The supported vocabulary:
 
-Explicitly **NOT supported in v1** (future increments): weekday pickers, ends-bounds (never / after N / on-date), reminders in the repeat dialog, and the "after completion" vs "fixed" type selection. The dialog defaults (after-completion type, no end bound, no reminder) stand for anything the vocabulary does not set. This is why `reschedule-repeat` is irreversible: an existing rule may use any of those unsupported dimensions, and we cannot round-trip them.
+- **frequency** ∈ `{daily, weekly, monthly, yearly}` · **interval** ∈ `1..99`
+- **type**: fixed vs after-completion
+- **weekly**: weekday sets (any combination of the seven-day picker)
+- **monthly**: a discriminated anchor — day-of-month OR nth-weekday (incl. ordinals and `last`); a bag holding both is refused rather than silently resolved
+- **yearly**: month + day/nth-weekday anchor
+- **ends**: never / after N occurrences / on a date
+- **deadline offset**: the "start N days earlier" deadline checkbox
+
+Explicitly **NOT settable** (permanently, until Cultured Code ships an API): the reminder time-of-day inside the repeat dialog — the `AXDateTimeArea` control ignores committed programmatic writes and both workarounds are proven dead (REM1); the dialog's no-reminder default stands.
 
 ### MCP tools (6, per-intent)
 
