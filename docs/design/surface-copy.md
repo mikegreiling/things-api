@@ -4,6 +4,14 @@ This contract governs every consumer-facing description string: MCP tool descrip
 
 **We present ourselves as an interface to Things.** A description says what the call does to the user's data, what its side effects are, and what comes back. If a call cannot do what it says, the caller receives an error that explains why and, where possible, what to pass instead. That contract is implied everywhere and stated nowhere.
 
+## Scope — this governs DESCRIPTIONS, not runtime results (Mike's ruling, 2026-07-16)
+
+The policy and its regression tests govern **descriptions**: `--help` text, help topics, MCP tool descriptions and server instructions, and exported JSDoc — the copy a consumer reads to decide what to call, *before* running anything. That is the "front of the API" the banned vocabulary of rule 2 protects.
+
+**Runtime RESULT and DIAGNOSTIC output is out of scope and MAY name the delivery mechanism and tier as operational fact.** After a call runs, the human-readable success line deliberately reports how the work was done — e.g. `ok todo.update <uuid> (vector=applescript, tier=0, verified)` (`src/cli/commands/writes.ts`) — and `doctor` prints a `── ui vector (Accessibility GUI) ──` section (`src/cli/commands/doctor.ts`). These are reporting *what happened on this run*, not advertising *what a call is for*, so `vector`, tier numbers, and `verified` are appropriate there and are NOT banned. The banned-vocabulary contract tests scan only the description surfaces (`test/mcp/server.test.ts`, `test/cli/help-contract.test.ts`), never result/diagnostic emitters, and must stay that way.
+
+The **JSON envelope** carries `vector`, `tier`, and verification as **structured data fields regardless** — a machine consumer always gets them; they are simply not surfaced in the prose descriptions a human reads to choose a call.
+
 ## Rules
 
 1. **State behavior, never mechanism.** "Tags must name existing tags" — not which layer enforces it, not what the app would have done without us, not the word "guard".
