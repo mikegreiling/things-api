@@ -151,6 +151,7 @@ export function readAuditRecords(dir: string): AuditRecord[] {
     return [];
   }
   const records: AuditRecord[] = [];
+  let torn = 0;
   for (const file of files) {
     let raw: string;
     try {
@@ -164,9 +165,18 @@ export function readAuditRecords(dir: string): AuditRecord[] {
         const parsed = JSON.parse(line) as AuditRecord;
         if (parsed.v === 1 && typeof parsed.op === "string") records.push(parsed);
       } catch {
-        // tolerate a torn/corrupt line — audit files are append-only
+        // tolerate a torn/corrupt line — append-only files can hold a partial
+        // trailing write — but make it VISIBLE rather than silently dropping it.
+        torn += 1;
       }
     }
+  }
+  // One note per read (M5): silent line-dropping could hide a lost record.
+  if (torn > 0) {
+    process.stderr.write(
+      `things: skipped ${torn} unreadable line(s) in the local change history (${dir}) — ` +
+        "a change record may be incomplete; recent history is otherwise intact\n",
+    );
   }
   return records.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }
@@ -184,11 +194,58 @@ export interface UndoSelector {
  * Which audit records are undoable at all: only SUCCESSFUL mutations, never an
  * inverse mutation (actor `undo:…` — no undo-the-undo), and never a compound
  * leg (its summary record is the single undoable unit for the whole sequence).
+ *
+ * `result === "ok"` also excludes INTENT records (result `"intent"`, the
+ * pre-execute marker — M3): an intent is not a completed mutation, so it is
+ * never an undo target. This is the single choke point every selector flows
+ * through (selectUndoTargets, its `--txn` and `by` branches), so intent records
+ * are skipped there uniformly. The two OTHER audit readers that scan by result
+ * — runUndo's already-undone check and planUndo's compound-leg lookup — also
+ * filter `result === "ok"`, so they skip intent records too.
  */
 function undoableRecords(records: AuditRecord[]): AuditRecord[] {
   return records.filter(
     (r) => r.result === "ok" && !r.actor.startsWith("undo:") && r.txn?.role !== "leg",
   );
+}
+
+// ------------------------------------------------------- audit integrity scan
+
+export interface AuditIntegrity {
+  /** Intent records with no later matching final record — a write MAY have landed unrecorded. */
+  orphanedIntents: number;
+  /** Newest orphaned intent's timestamp (ISO), or null when there are none. */
+  newestOrphanIntent: string | null;
+}
+
+/** Pairing key for an intent and its final record (both derive from startedAt). */
+function intentKey(r: AuditRecord): string {
+  // uuid is DELIBERATELY excluded: a create discovers its uuid only in the
+  // final record, so the intent (uuid null) and final (uuid set) must still pair.
+  return JSON.stringify([r.ts, r.op, r.actor, r.host]);
+}
+
+/**
+ * Detect crashed writes: INTENT records left without a matching final record.
+ * A mutation writes an intent immediately before touching the app and a final
+ * record after read-after-write; the two share ts+op+actor+host. An intent
+ * with no non-intent sibling on that key means the process died mid-write — the
+ * app may have applied the change, but no result was recorded, so the change is
+ * invisible to undo. Surfaced by `things doctor` so the user can reconcile.
+ */
+export function scanAuditIntegrity(records: AuditRecord[]): AuditIntegrity {
+  const finalKeys = new Set<string>();
+  for (const r of records) {
+    if (r.result !== "intent") finalKeys.add(intentKey(r));
+  }
+  let orphanedIntents = 0;
+  let newestOrphanIntent: string | null = null;
+  for (const r of records) {
+    if (r.result !== "intent" || finalKeys.has(intentKey(r))) continue;
+    orphanedIntents += 1;
+    if (newestOrphanIntent === null || r.ts > newestOrphanIntent) newestOrphanIntent = r.ts;
+  }
+  return { orphanedIntents, newestOrphanIntent };
 }
 
 /**

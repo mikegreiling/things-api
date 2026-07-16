@@ -355,7 +355,9 @@ describe("bounce reorder (verified when= round-trips)", () => {
     const summary = auditRecords.filter((r) => r.op === "reorder");
     expect(summary).toHaveLength(1);
     expect(summary[0]?.result).toBe("ok");
-    expect(auditRecords.filter((r) => r.op === "todo.update")).toHaveLength(4);
+    expect(
+      auditRecords.filter((r) => r.op === "todo.update" && r.result !== "intent"),
+    ).toHaveLength(4);
   });
 
   it("today scope falls back to bounce when experimental is off", async () => {

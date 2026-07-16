@@ -116,3 +116,35 @@ describe("createAuditWriter — monthly file naming + JSONL append", () => {
     expect(augRecords.map((r) => r.uuid)).toEqual(["c"]);
   });
 });
+
+describe("createAuditWriter — durable, tear-resistant appends (M5)", () => {
+  it("the fsync/O_APPEND path writes parseable one-line-per-record JSONL", () => {
+    const writer = createAuditWriter({ dir, secrets: [], enabled: true });
+    // Several appends to the SAME monthly file, each a complete O_APPEND write.
+    writer.append(makeRecord({ ts: "2026-07-10T09:00:00.000Z", uuid: "a", result: "intent" }));
+    writer.append(makeRecord({ ts: "2026-07-10T09:00:00.000Z", uuid: "a", result: "ok" }));
+    writer.append(makeRecord({ ts: "2026-07-11T09:00:00.000Z", uuid: "b" }));
+
+    const raw = readFileSync(join(dir, "2026-07.jsonl"), "utf8");
+    // Exactly one newline-terminated line per record, each independently valid.
+    const lines = raw.split("\n");
+    expect(lines.at(-1)).toBe(""); // trailing newline
+    const records = lines.slice(0, -1).map((l) => JSON.parse(l) as AuditRecord);
+    expect(records.map((r) => `${r.uuid}:${r.result}`)).toEqual(["a:intent", "a:ok", "b:ok"]);
+  });
+
+  it("round-trips a huge record (>1MB) as a single intact line", () => {
+    const writer = createAuditWriter({ dir, secrets: [], enabled: true });
+    const big = "x".repeat(1_500_000); // 1.5 MB, well over PIPE_BUF
+    writer.append(makeRecord({ uuid: "big", requested: { blob: big } }));
+
+    const raw = readFileSync(join(dir, "2026-07.jsonl"), "utf8");
+    // One record, one trailing newline — no split/torn buffer.
+    const lines = raw.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe("");
+    const parsed = JSON.parse(lines[0] as string) as AuditRecord;
+    expect(parsed.uuid).toBe("big");
+    expect((parsed.requested["blob"] as string).length).toBe(big.length);
+  });
+});

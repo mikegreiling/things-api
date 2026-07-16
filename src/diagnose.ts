@@ -6,6 +6,8 @@
 import { existsSync } from "node:fs";
 
 import { loadConfig } from "./config.ts";
+import { auditDir } from "./paths.ts";
+import { readAuditRecords, scanAuditIntegrity } from "./write/undo.ts";
 import { decodeRecurrenceRule } from "./model/recurrence.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, ThingsDbOpenError } from "./db/connection.ts";
@@ -163,6 +165,17 @@ export interface DiagnoseReport {
     detail: string;
   };
   /**
+   * Local-history integrity: writes that were STARTED but whose result was
+   * never recorded (M3). Each mutation records its intent before touching the
+   * app and its outcome after; an intent with no recorded outcome means the
+   * process died mid-write, so a change may have been applied without being
+   * saved to the local history. A non-zero count is advisory, not a failure.
+   */
+  audit: {
+    orphanedIntents: number;
+    newestOrphanIntent: string | null;
+  };
+  /**
    * Freshness + sync-liveness proxies for long-running headless operation
    * (docs/lab/headless-research.md SYNC1 + SYNC2): app-running, WAL write
    * activity, last local edit, last foreground, and — only when a Things Cloud
@@ -193,6 +206,8 @@ export interface DiagnoseOptions {
   availability?: AvailabilityDeps;
   /** Test seams for the sync-health section (clock, process check, WAL/plist readers). */
   syncHealth?: SyncHealthDeps;
+  /** Directory holding the audit JSONL files; defaults to the state dir. Test seam. */
+  auditDir?: string;
 }
 
 export interface DiagnoseResult {
@@ -344,6 +359,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
       },
       recurrence: scanRecurrenceRules(conn.db),
       syncHealth: computeSyncHealth(conn.db, located.path, options.syncHealth),
+      audit: scanAuditIntegrity(readAuditRecords(options.auditDir ?? auditDir())),
     };
     return {
       report,

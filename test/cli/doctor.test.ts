@@ -1,10 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { buildProgram } from "../../src/cli/main.ts";
 import { runDoctor } from "../../src/cli/commands/doctor.ts";
 import { diagnose } from "../../src/diagnose.ts";
+import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { EnvironmentTracker, EnvironmentTuple } from "../../src/write/environment.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { bplistScalarDouble, seedSyncronyMetadata, seedTodo } from "../fixtures/seed.ts";
+
+/** Minimal audit record for the integrity-scan fixtures. */
+function auditLine(over: Partial<AuditRecord>): string {
+  const rec: AuditRecord = {
+    v: 1,
+    ts: "2026-07-16T12:00:00.000Z",
+    actor: "mike",
+    host: "test-host",
+    op: "todo.update",
+    uuid: "U-1",
+    vector: "url-scheme",
+    disruption: 0,
+    invocation: null,
+    requested: {},
+    pre: null,
+    observed: null,
+    result: "ok",
+    verify: null,
+    durationMs: 1,
+    env: { pkg: "0.0.0", dbVersion: 26, fingerprint: "ok" },
+    ...over,
+  };
+  return JSON.stringify(rec);
+}
 
 let fixture: FixtureDb | null = null;
 afterEach(() => {
@@ -166,6 +195,40 @@ describe("doctor environment & automation sections", () => {
     expect(report?.syncHealth.cloud.ageSeconds).toBe(30);
   });
 
+  it("counts orphaned intent records (a change may have landed unrecorded — M3)", () => {
+    fixture = buildFixtureDb();
+    const auditDir = mkdtempSync(join(tmpdir(), "things-api-doctor-audit-"));
+    try {
+      writeFileSync(
+        join(auditDir, "2026-07.jsonl"),
+        [
+          // A completed write: intent + final pair → not orphaned.
+          auditLine({ ts: "2026-07-16T09:00:00.000Z", op: "todo.update", result: "intent" }),
+          auditLine({ ts: "2026-07-16T09:00:00.000Z", op: "todo.update", result: "ok" }),
+          // A crashed write: intent with no final → orphaned.
+          auditLine({ ts: "2026-07-16T10:30:00.000Z", op: "todo.complete", result: "intent" }),
+        ].join("\n"),
+      );
+      const { report } = diagnose(fixture.path, {
+        environment: fixedTracker(null, TUPLE_A),
+        auditDir,
+      });
+      expect(report?.audit.orphanedIntents).toBe(1);
+      expect(report?.audit.newestOrphanIntent).toBe("2026-07-16T10:30:00.000Z");
+    } finally {
+      rmSync(auditDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports zero orphans against an empty/absent audit trail", () => {
+    fixture = buildFixtureDb();
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, TUPLE_A),
+      auditDir: "/nonexistent/audit",
+    });
+    expect(report?.audit).toEqual({ orphanedIntents: 0, newestOrphanIntent: null });
+  });
+
   it("reports the on-disk URL-scheme state and proxy-shortcut presence", () => {
     fixture = buildFixtureDb();
     const { report } = diagnose(fixture.path, {
@@ -180,5 +243,71 @@ describe("doctor environment & automation sections", () => {
     expect(report?.availability.urlScheme.detail).toContain("Enable Things URLs");
     expect(report?.availability.shortcuts.present).toEqual(["things-proxy-find-items"]);
     expect(report?.availability.shortcuts.missing).toHaveLength(5);
+  });
+});
+
+describe("doctor CLI — orphaned-intent advisory line", () => {
+  let stateDir: string;
+  let stdout: string[];
+  const envBackup: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    fixture = buildFixtureDb();
+    stateDir = mkdtempSync(join(tmpdir(), "things-api-doctor-cli-"));
+    for (const key of ["THINGS_DB", "THINGS_API_STATE_DIR", "THINGS_API_CONFIG_DIR"]) {
+      envBackup[key] = process.env[key];
+    }
+    process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = stateDir;
+    process.env["THINGS_API_CONFIG_DIR"] = join(stateDir, "config");
+    stdout = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+    process.exitCode = undefined;
+  });
+
+  async function runDoctorCli(): Promise<string> {
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(["node", "things", "doctor"]);
+    return stdout.join("");
+  }
+
+  it("prints the one-line advisory (count + newest) when an intent has no recorded result", async () => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(
+      join(stateDir, "audit", "2026-07.jsonl"),
+      `${auditLine({ ts: "2026-07-16T10:30:00.000Z", op: "todo.complete", result: "intent" })}\n`,
+    );
+    const out = await runDoctorCli();
+    expect(out).toContain("1 change(s) were started but their result was not recorded");
+    expect(out).toContain("2026-07-16T10:30:00.000Z");
+    expect(out).toContain("review your recent changes in Things");
+  });
+
+  it("omits the advisory entirely when the trail is clean", async () => {
+    mkdirSync(join(stateDir, "audit"), { recursive: true });
+    writeFileSync(
+      join(stateDir, "audit", "2026-07.jsonl"),
+      [
+        auditLine({ ts: "2026-07-16T09:00:00.000Z", op: "todo.update", result: "intent" }),
+        auditLine({ ts: "2026-07-16T09:00:00.000Z", op: "todo.update", result: "ok" }),
+      ].join("\n"),
+    );
+    const out = await runDoctorCli();
+    expect(out).not.toContain("were started but their result was not recorded");
   });
 });

@@ -126,14 +126,25 @@ describe("verified mutations", () => {
       expect(result.uuid).toBe(uuid);
       expect(result.observed).toEqual({ title: "New" });
     }
-    expect(auditRecords).toHaveLength(1);
+    // M3: a successful write records an INTENT before execute, then the final
+    // ok — the pair shares ts/op/actor/host (both derive from startedAt).
+    expect(auditRecords).toHaveLength(2);
     expect(auditRecords[0]).toMatchObject({
+      op: "todo.update",
+      result: "intent",
+      actor: "test-actor",
+      uuid,
+      pre: { title: "Old" },
+      observed: null,
+    });
+    expect(auditRecords[1]).toMatchObject({
       op: "todo.update",
       result: "ok",
       actor: "test-actor",
       pre: { title: "Old" },
       observed: { title: "New" },
     });
+    expect(auditRecords[0]?.ts).toBe(auditRecords[1]?.ts);
   });
 
   it("ok result carries an undoToken matching the audit record (additive)", async () => {
@@ -161,7 +172,10 @@ describe("verified mutations", () => {
     const result = await runMutation(deps(vector), "todo.add", { title: "Fresh" });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") expect(result.uuid).toBe("NEW-1");
-    expect(auditRecords[0]?.uuid).toBe("NEW-1");
+    // The final record carries the discovered uuid; the preceding intent has
+    // uuid null (a create discovers its uuid only at verify).
+    expect(auditRecords.find((r) => r.result === "ok")?.uuid).toBe("NEW-1");
+    expect(auditRecords[0]).toMatchObject({ result: "intent", uuid: null });
   });
 
   it("project.complete verifies the child cascade (T08 semantics)", async () => {
@@ -253,7 +267,9 @@ describe("verification failure classification", () => {
     );
     expect(result.kind).toBe("verify-failed");
     if (result.kind === "verify-failed") expect(result.reason).toBe("silent-noop");
-    expect(auditRecords[0]?.result).toBe("verify-failed:silent-noop");
+    // Intent precedes the failed outcome; the pair keeps the crash-signature
+    // invariant (a verify-failed is NOT an orphan — it has a recorded result).
+    expect(auditRecords.map((r) => r.result)).toEqual(["intent", "verify-failed:silent-noop"]);
   });
 
   it("timeout: tripwire moved but asserted fields did not", async () => {
@@ -314,7 +330,11 @@ describe("blocked / unsupported paths", () => {
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") expect(result.hazard).toBe("H-PERMANENT-DELETE");
     expect(calls).toHaveLength(0);
+    // A guard block audits ONCE (the blocked record) — no intent is written,
+    // since the app is never touched (M3: intent precedes execute only).
+    expect(auditRecords).toHaveLength(1);
     expect(auditRecords[0]?.result).toBe("blocked:H-PERMANENT-DELETE");
+    expect(auditRecords.some((r) => r.result === "intent")).toBe(false);
   });
 
   it("drift block: writes refuse before anything else", async () => {
