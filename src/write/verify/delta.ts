@@ -78,8 +78,8 @@ export type DeltaSpec =
       sequence: string[];
       /**
        * Uuids whose pre-op ranks are captured for the audit trail beyond the
-       * asserted sequence (area.reorder-sidebar records the FULL sidebar
-       * order so undo can restore the exact previous position). Defaults to
+       * asserted sequence (area.reorder records the FULL area order so undo
+       * can restore the exact previous position). Defaults to
        * `sequence`.
        */
       capture?: string[];

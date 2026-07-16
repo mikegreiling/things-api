@@ -61,7 +61,7 @@ export async function runHeadingArchive(
   const legOptions: WriteOptions = { ...options, txn: { id: txnId, role: "leg" } };
   for (const child of openChildren(deps, params.uuid)) {
     if (options.dryRun === true) break; // the atomic dry-run plan carries the summary
-    // oxlint-disable-next-line no-await-in-loop -- reparent legs must land one at a time (mutation lock + create-probe verification must never race); a failure here must stop before the heading archive leg runs
+    // reparent legs must land one at a time (mutation lock + create-probe verification must never race); a failure here must stop before the heading archive leg runs
     const result = await runMutation(
       deps,
       "todo.move",
@@ -124,7 +124,7 @@ export async function runHeadingUnarchive(
   const children: HeadingUnarchiveResult["children"] = [];
   if (heading.kind === "ok") {
     for (const child of candidates) {
-      // oxlint-disable-next-line no-await-in-loop -- child reopens must land one at a time (mutation lock + create-probe verification must never race); an early failure also needs to stop the remaining legs
+      // child reopens must land one at a time (mutation lock + create-probe verification must never race); an early failure also needs to stop the remaining legs
       const result = await runMutation(
         deps,
         "todo.reopen",

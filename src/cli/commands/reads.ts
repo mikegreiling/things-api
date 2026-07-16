@@ -286,7 +286,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("anytime")
     .description(
-      "All active items in the UI's sidebar-mirroring order (area-less first, then per " +
+      "All active items in canonical order (area-less first, then per " +
         "area: direct to-dos, then each project with its members). Today members are " +
         "starred (★). Children of someday/future-scheduled projects are excluded — the " +
         "project row represents them. Every group and project row is always shown; " +
@@ -372,7 +372,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("someday")
     .description(
-      "Someday items (incubated, undated) in sidebar order — inside each group the " +
+      "Someday items (incubated, undated) in canonical order — inside each group the " +
         "someday projects list first, then the to-dos; project children are represented " +
         "by their project row. --show-active-project-items [n] appends a trailing section " +
         "of someday to-dos inside active projects, grouped under their project (the UI's " +
@@ -730,7 +730,7 @@ export function registerReadCommands(program: Command): void {
   const projects = program
     .command("projects [ref]")
     .description(
-      "List active projects in sidebar order, or — given a ref — show that one " +
+      "List active projects in canonical order, or — given a ref — show that one " +
         "project (exactly like `things project show <ref>`). List: loose projects " +
         "first, then grouped under their area (optionally scoped to --area <ref>). " +
         "Someday and future-scheduled projects are hidden — --show-later appends them " +

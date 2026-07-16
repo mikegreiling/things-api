@@ -116,7 +116,7 @@ const EXPECTED_TOOLS = [
   "convert_to_project",
   "reschedule_project_repeat",
   "set_project_repeat_state",
-  "move_area_in_sidebar",
+  "reorder_area",
   "make_project_repeating",
   "create_repeating_project",
   // reads
@@ -577,7 +577,7 @@ describe("things MCP server", () => {
       { view: "inbox", show_active_project_items: true },
       { view: "inbox", active_project_items: true },
     ]) {
-      // oxlint-disable-next-line no-await-in-loop -- each call shares one MCP client/transport; concurrent calls would race on it
+      // each call shares one MCP client/transport; concurrent calls would race on it
       const bad = await client.callTool({ name: "read_view", arguments: args });
       expect(bad.isError, JSON.stringify(args)).toBe(true);
       expect((textOf(bad) as { code: string }).code).toBe("usage");
@@ -674,7 +674,7 @@ describe("things MCP server", () => {
       ["canceled", "todo.cancel"],
     ] as const) {
       const outcome = textOf(
-        // oxlint-disable-next-line no-await-in-loop -- each call shares one MCP client/transport; concurrent calls would race on it
+        // each call shares one MCP client/transport; concurrent calls would race on it
         await client.callTool({
           name: "set_todo_status",
           arguments: { uuid, status, dry_run: true },
@@ -692,7 +692,7 @@ describe("things MCP server", () => {
       { uuid: "X", to_inbox: true, detach: true },
       { uuid: "X", project: "P", detach: true },
     ]) {
-      // oxlint-disable-next-line no-await-in-loop -- each call shares one MCP client/transport; concurrent calls would race on it
+      // each call shares one MCP client/transport; concurrent calls would race on it
       const result = await client.callTool({ name: "move_todo", arguments: args });
       expect(result.isError).toBe(true);
       expect((textOf(result) as { code: string }).code).toBe("usage");
@@ -732,7 +732,7 @@ describe("things MCP server", () => {
       [proj, "project.delete"],
     ] as const) {
       const outcome = textOf(
-        // oxlint-disable-next-line no-await-in-loop -- each call shares one MCP client/transport; concurrent calls would race on it
+        // each call shares one MCP client/transport; concurrent calls would race on it
         await client.callTool({ name: "delete_item", arguments: { uuid, dry_run: true } }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");

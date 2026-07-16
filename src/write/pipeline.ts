@@ -175,11 +175,11 @@ async function defaultEnsureRunning(alreadyRunning: boolean): Promise<boolean> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (defaultIsAppRunning()) {
-      // oxlint-disable-next-line no-await-in-loop -- the post-launch settle wait must happen once, right after the process is first detected, before returning
+      // the post-launch settle wait must happen once, right after the process is first detected, before returning
       await new Promise((r) => setTimeout(r, 2000)); // post-launch settle
       return true;
     }
-    // oxlint-disable-next-line no-await-in-loop -- launch-detection retries are inherently sequential polling of the same process state
+    // launch-detection retries are inherently sequential polling of the same process state
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
@@ -217,7 +217,7 @@ function capturePre(
   if (spec.mode === "ordering") {
     const preRanks: Record<string, unknown> = {};
     // `capture` may list MORE uuids than the asserted sequence (the full
-    // sidebar order for area.reorder-sidebar) so undo can restore the exact
+    // area order for area.reorder) so undo can restore the exact
     // previous position from the audit record.
     for (const uuid of spec.capture ?? spec.sequence) {
       preRanks[uuid] = reader.rankOf(uuid, spec.key);

@@ -1995,7 +1995,7 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
 
 // -------------------------------------------------- sidebar AREA reorder
 
-/** The compile-time placement for area.reorder-sidebar (resolved refs). */
+/** The compile-time placement for area.reorder (resolved refs). */
 function sidebarPlacementOf(
   params: { before?: string; after?: string; position?: "first" | "last" },
   pre: PreState,
@@ -2010,8 +2010,8 @@ function sidebarPlacementOf(
   return { kind: params.position === "first" ? "first" : "last" };
 }
 
-const areaReorderSidebar: CommandSpec<"area.reorder-sidebar"> = {
-  op: "area.reorder-sidebar",
+const areaReorderSidebar: CommandSpec<"area.reorder"> = {
+  op: "area.reorder",
   hazards: ["H-UNKNOWN-DESTINATION", "H-UI-DRIVE"],
   preRead(db, params) {
     const destinations = [params.before, params.after, params.position].filter(
@@ -2162,7 +2162,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.reschedule-repeat": projectRescheduleRepeat,
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,
-  "area.reorder-sidebar": areaReorderSidebar,
+  "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
   "project.create-repeating": projectCreateRepeating,
 };

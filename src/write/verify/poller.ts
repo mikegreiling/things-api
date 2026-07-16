@@ -53,7 +53,7 @@ export async function pollUntilVerified(
       const kind = last.assertedMovement ? "mismatch" : last.movement ? "timeout" : "silent-noop";
       return { kind, attempts, elapsedMs: elapsed, observed: last.observed };
     }
-    // oxlint-disable-next-line no-await-in-loop -- poll retries are inherently sequential: each attempt must observe the DB state left by the previous wait, never overlap
+    // poll retries are inherently sequential: each attempt must observe the DB state left by the previous wait, never overlap
     await sleep(elapsed < 2000 ? 100 : 300);
   }
 }

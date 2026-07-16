@@ -115,13 +115,13 @@ export async function runBatch(
         // the runtime validators (loud on bad shapes), same as single ops.
         outcome =
           entry.op === "reorder"
-            ? // oxlint-disable-next-line no-await-in-loop -- batch ops run sequentially by design: the mutation lock serializes them and create-probe verification must never race
+            ? // batch ops run sequentially by design: the mutation lock serializes them and create-probe verification must never race
               await runReorder(
                 deps,
                 entry.params as unknown as OperationParamsMap["reorder"],
                 writeOptions,
               )
-            : // oxlint-disable-next-line no-await-in-loop -- same sequencing requirement as the reorder branch above
+            : // same sequencing requirement as the reorder branch above
               await runMutation(
                 deps,
                 entry.op as Exclude<OperationKind, "reorder">,

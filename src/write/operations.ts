@@ -52,7 +52,7 @@ export const OPERATION_KINDS = [
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
-  "area.reorder-sidebar",
+  "area.reorder",
   "project.make-repeating",
   "project.create-repeating",
 ] as const;
@@ -76,7 +76,7 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
-  "area.reorder-sidebar",
+  "area.reorder",
   // Pure-AX (UIC4): the project is selected as a content-table ROW via a
   // settable AXSelectedRows, then Items ▸ Repeat… drives the same dialog. The
   // area-less-anytime taxonomy needs a Someday coercion first, orchestrated by
@@ -396,11 +396,11 @@ export interface ReorderParams {
 export type EmptyParams = Record<string, never>;
 
 /**
- * Move an area to a new position in the sidebar. Sidebar area order has no
- * headless spelling at all (P6/O13) — this is delivered by the ui vector's
+ * Move an area to a new position in the canonical area order. Area order has
+ * no headless spelling at all (P6/O13) — this is delivered by the ui vector's
  * drag driver. Exactly ONE of before / after / position is required.
  */
-export interface AreaReorderSidebarParams {
+export interface AreaReorderParams {
   /** The area to move: uuid or unique case-insensitive title. */
   target: string;
   /** Place it immediately ABOVE this area (uuid or unique title). */
@@ -570,7 +570,7 @@ export interface OperationParamsMap {
   "project.reschedule-repeat": RepeatRuleParams;
   "project.pause-repeat": UuidParams;
   "project.resume-repeat": UuidParams;
-  "area.reorder-sidebar": AreaReorderSidebarParams;
+  "area.reorder": AreaReorderParams;
   "project.make-repeating": RepeatRuleParams;
   "project.create-repeating": ProjectCreateRepeatingParams;
 }

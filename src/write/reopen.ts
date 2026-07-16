@@ -84,7 +84,7 @@ export async function runProjectReopen(
         });
         continue;
       }
-      // oxlint-disable-next-line no-await-in-loop -- child reopens must land one at a time (mutation lock + create-probe verification must never race); an early failure also needs to stop the remaining legs
+      // child reopens must land one at a time (mutation lock + create-probe verification must never race); an early failure also needs to stop the remaining legs
       const result = await runMutation(deps, "todo.reopen", { uuid: child.uuid }, writeOptions);
       children.push({ uuid: child.uuid, title: child.title, result });
       if (result.kind !== "ok") break; // stop compounding on a failed leg

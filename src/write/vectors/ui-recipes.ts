@@ -698,7 +698,7 @@ export function areaReorderSidebarRecipe(
           ? "to the top of the area list"
           : "to the bottom of the area list";
   return {
-    op: "area.reorder-sidebar",
+    op: "area.reorder",
     targetUuid: target.uuid,
     steps: [
       {

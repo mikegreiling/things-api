@@ -75,7 +75,7 @@ export async function acquireMutationLock(
             `waited ${waitMs}ms for ${path}`,
         );
       }
-      // oxlint-disable-next-line no-await-in-loop -- lock-acquisition retries are inherently sequential polling against the same lockfile
+      // lock-acquisition retries are inherently sequential polling against the same lockfile
       await sleep(150);
     }
   }

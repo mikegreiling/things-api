@@ -446,7 +446,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     if (writeOptions?.createTags === true && writeOptions.dryRun !== true && Array.isArray(tags)) {
       const legOptions: WriteOptions = { ...writeOptions, createTags: false };
       for (const step of planTagCreation(conn.db, tags as string[])) {
-        // oxlint-disable-next-line no-await-in-loop -- parents must land before children (mkdir-p ordering)
+        // parents must land before children (mkdir-p ordering)
         const legResult = await runMutation(
           writeDeps,
           "tag.add",

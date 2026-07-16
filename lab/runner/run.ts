@@ -241,7 +241,7 @@ async function waitForGuest(ip: string, command: string, timeoutSeconds: number)
   while (Date.now() < deadline) {
     const r = ssh(ip, command, { allowFailure: true });
     if (r.exitCode === 0) return;
-    // oxlint-disable-next-line no-await-in-loop -- polling loop: each retry must wait for the prior guest-condition check before re-checking
+    // polling loop: each retry must wait for the prior guest-condition check before re-checking
     await sleep(2000);
   }
   throw new Error(`guest condition never became true (${timeoutSeconds}s): ${command}`);
