@@ -24,6 +24,7 @@ import {
   seedProject,
   seedTag,
   seedTodo,
+  tagArea,
   tagTask,
 } from "../fixtures/seed.ts";
 
@@ -479,6 +480,43 @@ describe("things MCP server", () => {
     expect((textOf(result) as { message: string }).message).toContain(
       'no item matching uuid or partial-uuid "nope"',
     );
+  });
+
+  it("get_item applies omit-empty: a bare item omits empty optional fields", async () => {
+    const uuid = seedTodo(fixture.db, { title: "bare mcp item" });
+    await connect([fakeVector(null).vector]);
+    const item = textOf(await client.callTool({ name: "get_item", arguments: { uuid } })) as Record<
+      string,
+      unknown
+    >;
+    // Identity always present.
+    expect(item["uuid"]).toBe(uuid);
+    expect(item["type"]).toBe("to-do");
+    expect(item["title"]).toBe("bare mcp item");
+    // Empty optional fields are absent (absent = unset), mirroring the CLI.
+    for (const gone of ["deadline", "startDate", "reminder", "area", "project", "tags"]) {
+      expect(gone in item).toBe(false);
+    }
+    // The reversal: an empty inherited-tag set is absent, not [].
+    expect("inheritedTags" in item).toBe(false);
+    // Meaningful false/0 survive.
+    expect(item["logged"]).toBe(false);
+    expect(item["checklistItemsCount"]).toBe(0);
+  });
+
+  it("get_item keeps inheritedTags when non-empty (reversal guard)", async () => {
+    const area = seedArea(fixture.db, "InhArea");
+    const areaTag = seedTag(fixture.db, "inh-area-tag");
+    tagArea(fixture.db, area, areaTag);
+    const project = seedProject(fixture.db, { title: "InhProj", area });
+    const uuid = seedTodo(fixture.db, { title: "inh child", project });
+    await connect([fakeVector(null).vector]);
+    const item = textOf(await client.callTool({ name: "get_item", arguments: { uuid } })) as Record<
+      string,
+      unknown
+    >;
+    expect("inheritedTags" in item).toBe(true);
+    expect(item["inheritedTags"]).toHaveLength(1);
   });
 
   it("add_todo executes and returns the created uuid", async () => {

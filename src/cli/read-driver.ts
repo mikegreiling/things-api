@@ -23,6 +23,7 @@ import {
 } from "../contracts.ts";
 import { resolveCap } from "../read/caps.ts";
 import { DEFAULT_LIST_LIMIT } from "../read/pagination.ts";
+import { omitEmpty } from "../model/serialize.ts";
 
 export interface GlobalReadOpts {
   json?: boolean;
@@ -115,7 +116,10 @@ export function runRead<T>(
       );
     }
     if (opts.json) {
-      process.stdout.write(`${JSON.stringify(okEnvelope(kind, data, meta))}\n`);
+      // Omit-empty applies to the entity/data payload only (contracts.md); the
+      // envelope meta/pagination is untouched, and the human render below keeps
+      // the full, unpruned `data`.
+      process.stdout.write(`${JSON.stringify(okEnvelope(kind, omitEmpty(data), meta))}\n`);
     } else {
       const lines = precomputed ?? render(data);
       if (pagination !== undefined && hintBase !== undefined) {

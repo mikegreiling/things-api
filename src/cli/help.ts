@@ -284,6 +284,10 @@ the echo rides piped output or --json, so \`things inbox | grep\` stays clean.
             A failure becomes an error envelope (still exit-coded). Logs, warnings,
             and errors go to stderr, so stdout stays one clean JSON line. Full uuids
             always appear here. --json is byte-stable — it is never width-fitted.
+            Optional entity fields are omitted when empty: a to-do with no deadline
+            has no deadline key, one with no tags has no tags key, and so on. Read a
+            missing key as unset/empty/default — absent and empty are the same. The
+            identity keys (uuid, type, and the title) are always present.
 
 Width: human tables fit the terminal on a TTY. Set THINGS_WIDTH=<cols> to force a
 column width, or THINGS_WIDTH=0 to disable fitting. Piped output is never fitted,
