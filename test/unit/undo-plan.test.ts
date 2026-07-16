@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { AnyTask } from "../../src/model/entities.ts";
@@ -209,7 +209,16 @@ describe("scanAuditIntegrity — crashed-write detection (M3)", () => {
 });
 
 describe("readAuditRecords", () => {
-  it("parses monthly files, tolerates torn lines, sorts by ts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses monthly files, tolerates torn lines, sorts by ts — WITH a note (M5)", () => {
+    const stderr: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr.push(String(chunk));
+      return true;
+    });
     const dir = mkdtempSync(join(tmpdir(), "things-api-undo-test-"));
     try {
       writeFileSync(
@@ -222,6 +231,29 @@ describe("readAuditRecords", () => {
       );
       const records = readAuditRecords(dir);
       expect(records.map((r) => r.op)).toEqual(["a", "b"]);
+      // The dropped torn line is now VISIBLE — exactly one note, once per read.
+      const note = stderr.join("");
+      expect(note).toContain("skipped 1 unreadable line(s)");
+      expect(stderr).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits NO note for a clean trail", () => {
+    const stderr: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "things-api-undo-clean-"));
+    try {
+      writeFileSync(
+        join(dir, "2026-07.jsonl"),
+        `${JSON.stringify(record({ ts: "2026-07-05T10:00:00Z", op: "b" }))}\n`,
+      );
+      expect(readAuditRecords(dir).map((r) => r.op)).toEqual(["b"]);
+      expect(stderr).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

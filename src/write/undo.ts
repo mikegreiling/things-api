@@ -151,6 +151,7 @@ export function readAuditRecords(dir: string): AuditRecord[] {
     return [];
   }
   const records: AuditRecord[] = [];
+  let torn = 0;
   for (const file of files) {
     let raw: string;
     try {
@@ -164,9 +165,18 @@ export function readAuditRecords(dir: string): AuditRecord[] {
         const parsed = JSON.parse(line) as AuditRecord;
         if (parsed.v === 1 && typeof parsed.op === "string") records.push(parsed);
       } catch {
-        // tolerate a torn/corrupt line — audit files are append-only
+        // tolerate a torn/corrupt line — append-only files can hold a partial
+        // trailing write — but make it VISIBLE rather than silently dropping it.
+        torn += 1;
       }
     }
+  }
+  // One note per read (M5): silent line-dropping could hide a lost record.
+  if (torn > 0) {
+    process.stderr.write(
+      `things: skipped ${torn} unreadable line(s) in the local change history (${dir}) — ` +
+        "a change record may be incomplete; recent history is otherwise intact\n",
+    );
   }
   return records.toSorted((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }
