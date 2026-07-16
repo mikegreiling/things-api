@@ -65,7 +65,7 @@ The guest e2e smoke (lab/scripts/e2e-write-smoke.sh) has NO reorder steps. Add s
 ## §D. AppleScript project-schedule vector — DECIDED 2026-07-09: document-only
 P14-A3 found `schedule to do id <PROJECT>` SUCCEEDS via AppleScript (projects inherit the `to do` class). Decision: **do not wire it** — URL `update-project?when=` is validated, shipped, and sufficient; a second vector for the same op adds compile/matrix surface with zero new capability. The capability-matrix's project-update row carries the P14-A3 note as the durable record; §F's novel-paths list will include it.
 
-## §E½. UI-scripting ("ui") write vector — NEW candidate (Mike, 2026-07-09)
+## §E½. UI-scripting ("ui") write vector — SHIPPED (ratified Mike 2026-07-09, built + lab-certified 2026-07-14→15)
 
 For Mike's dedicated-Mac ("mini in a closet") hosted scenario: System Events AX automation can drive everything stamped "conclusively UI-only" — repeating to-do/project creation and rule edits (dead on ALL four programmatic surfaces), sidebar/area ordering (P6), to-do↔project convert, and a heading-create fallback. Requirements: Accessibility TCC grant (one-time), auto-login unlocked GUI session; **AX element press does NOT require Things frontmost and steals no focus (AXVM1) → far below the VNC path's tier 3+**, opt-in, dedicated-machine-only vector. Fragile across app updates — but the VM lab is the regression harness that certifies AX paths per Things version.
 
