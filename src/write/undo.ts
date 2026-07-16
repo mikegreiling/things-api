@@ -22,10 +22,21 @@
  *  - Inverse mutations are audited under an `undo:`-prefixed actor and are
  *    themselves EXCLUDED from later undo target selection (no undo-the-undo).
  *  - PRECONDITION guard: before executing each inverse step, runUndo confirms
- *    the fields the step would OVERWRITE still hold their recorded after-state
- *    (`observed`). A field an out-of-band edit already moved is NOT clobbered —
- *    the step is refused (blocked) and unwinding stops. This is in addition to
- *    the pipeline's own verified read-after-write.
+ *    the state the step would OVERWRITE still holds its recorded after-state
+ *    (`observed`). Two axes are checked, both against the SAME recorded
+ *    `observed` after-values: CONTENT fields (title/notes/deadline/reminder/
+ *    tags, keyed 1:1 to the inverse step's params) and the STRUCTURAL axes each
+ *    step names in its `guardFields` — status, container (project/area/
+ *    heading), schedule (start/startDate/todaySection), and trashed state. A
+ *    field an out-of-band edit already moved is NOT clobbered — the step is
+ *    refused (blocked, naming what moved) and unwinding stops.
+ *    `--acknowledge-out-of-band-changes` (MCP `acknowledge_out_of_band_changes`)
+ *    bypasses this whole class uniformly (content + structural) — a single
+ *    "the world moved, overwrite anyway". Axes with no captured after-state are
+ *    left unguarded (see the NOT-GUARDED note on `checkStepPrecondition`); the
+ *    checklist item-level refusal is a SEPARATE plan-time mechanism (it cannot
+ *    compute a faithful forced inverse), so the flag does not bypass it. This is
+ *    in addition to the pipeline's own verified read-after-write.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -56,6 +67,18 @@ export interface UndoStep {
      * is item-level, not a CLOBBER_FIELD.
      */
     blocked?: { detail: string; remediation: string };
+    /**
+     * STRUCTURAL axes this step overwrites (getField paths into the decoded
+     * target: `status`, `trashed`, `project`/`project.uuid`, `area`/`area.uuid`,
+     * `heading.uuid`, `start`/`startDate`/`todaySection`). Before executing,
+     * `checkStepPrecondition` verifies the target's CURRENT value on each still
+     * equals the recorded `observed` after-value — an out-of-band move/status/
+     * schedule change already there blocks rather than being clobbered. Set only
+     * for the PRIMARY-target step and only for axes whose after-state `observed`
+     * captured (fields absent from `observed` are skipped). Content fields stay
+     * on the separate CLOBBER_FIELDS path; the two are checked together.
+     */
+    guardFields?: string[];
   };
 }
 
@@ -100,6 +123,15 @@ export interface UndoOptions {
   dryRun?: boolean;
   /** Required for inverses that delete areas/tags permanently. */
   dangerouslyPermanent?: boolean;
+  /**
+   * Proceed even when the target changed OUTSIDE things-api since the recorded
+   * change — bypasses the precondition guard uniformly (both the content-field
+   * and the structural axis checks), overwriting whatever an out-of-band edit
+   * left. Does NOT bypass the checklist item-level refusal (a separate plan-time
+   * mechanism with no faithful forced inverse). "The world moved, overwrite
+   * anyway."
+   */
+  acknowledgeOutOfBandChanges?: boolean;
   verifyTimeoutMs?: number;
   /** Author RECORDED for the inverse mutation (as `undo:<actor>`); see `by`. */
   actor?: string;
@@ -589,7 +621,7 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "todo.reopen", params: { uuid } }],
+        steps: [{ op: "todo.reopen", params: { uuid }, options: { guardFields: ["status"] } }],
         notes,
       };
     }
@@ -602,7 +634,13 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: was === "completed" ? "todo.complete" : "todo.cancel", params: { uuid } }],
+        steps: [
+          {
+            op: was === "completed" ? "todo.complete" : "todo.cancel",
+            params: { uuid },
+            options: { guardFields: ["status"] },
+          },
+        ],
         notes,
       };
     }
@@ -616,7 +654,7 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "todo.restore", params: { uuid } }],
+        steps: [{ op: "todo.restore", params: { uuid }, options: { guardFields: ["trashed"] } }],
         notes,
       };
     }
@@ -625,7 +663,7 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "todo.delete", params: { uuid } }],
+        steps: [{ op: "todo.delete", params: { uuid }, options: { guardFields: ["trashed"] } }],
         notes,
       };
     }
@@ -636,7 +674,7 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "project.restore", params: { uuid } }],
+        steps: [{ op: "project.restore", params: { uuid }, options: { guardFields: ["trashed"] } }],
         notes,
       };
     }
@@ -647,7 +685,9 @@ export function planUndo(
     case "project.complete":
     case "project.cancel": {
       if (uuid === null) return irreversible("no target uuid recorded");
-      const steps: UndoStep[] = [{ op: "project.reopen", params: { uuid } }];
+      const steps: UndoStep[] = [
+        { op: "project.reopen", params: { uuid }, options: { guardFields: ["status"] } },
+      ];
       const pre = record.pre ?? {};
       if (!("status" in pre)) {
         for (const [childUuid, fields] of Object.entries(pre)) {
@@ -682,8 +722,16 @@ export function planUndo(
         kind: "invertible",
         steps: [
           was === "completed"
-            ? { op: "project.complete", params: { uuid, children: "require-resolved" } }
-            : { op: "project.cancel", params: { uuid, children: "require-resolved" } },
+            ? {
+                op: "project.complete",
+                params: { uuid, children: "require-resolved" },
+                options: { guardFields: ["status"] },
+              }
+            : {
+                op: "project.cancel",
+                params: { uuid, children: "require-resolved" },
+                options: { guardFields: ["status"] },
+              },
         ],
         notes,
       };
@@ -694,7 +742,7 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "project.delete", params: { uuid } }],
+        steps: [{ op: "project.delete", params: { uuid }, options: { guardFields: ["trashed"] } }],
         notes,
       };
     }
@@ -711,17 +759,29 @@ export function planUndo(
       if (deadline !== undefined) params["deadline"] = deadline;
       const requestedWhen =
         (record.requested["when"] ?? record.requested["reminder"]) !== undefined;
+      // Schedule axes the restore overwrites — guarded against the recorded
+      // after-state so an out-of-band re-schedule blocks rather than clobbers.
+      const scheduleGuard = ["start", "startDate", "todaySection"];
+      let scheduleMerged = false;
       if (requestedWhen) {
         const schedule = scheduleSteps(uuid, record, todayIso);
         notes.push(...schedule.notes);
         const scheduleStep = schedule.steps[0];
         if (scheduleStep !== undefined && scheduleStep.op === "todo.update") {
           Object.assign(params, scheduleStep.params);
+          scheduleMerged = true;
         } else if (scheduleStep !== undefined) {
-          steps.push(scheduleStep); // inbox restore is a separate move op
+          // inbox restore is a separate move op — carry the schedule guard on it
+          steps.push({ ...scheduleStep, options: { guardFields: scheduleGuard } });
         }
       }
-      if (Object.keys(params).length > 1) steps.unshift({ op: "todo.update", params });
+      if (Object.keys(params).length > 1) {
+        steps.unshift({
+          op: "todo.update",
+          params,
+          ...(scheduleMerged && { options: { guardFields: scheduleGuard } }),
+        });
+      }
       if (steps.length === 0) {
         return irreversible("no pre-values were captured for the changed fields");
       }
@@ -740,11 +800,15 @@ export function planUndo(
       // when/reminder restore reuses the schedule reconstructor (emitting a
       // project.update); projects never live in the Inbox so that branch is
       // unreachable here.
+      let projectScheduleMerged = false;
       if ((record.requested["when"] ?? record.requested["reminder"]) !== undefined) {
         const schedule = scheduleSteps(uuid, record, todayIso, "project.update");
         notes.push(...schedule.notes);
         const scheduleStep = schedule.steps[0];
-        if (scheduleStep !== undefined) Object.assign(params, scheduleStep.params);
+        if (scheduleStep !== undefined) {
+          Object.assign(params, scheduleStep.params);
+          projectScheduleMerged = true;
+        }
       }
       if (Object.keys(params).length === 1) {
         return irreversible("no pre-values were captured for the changed fields");
@@ -752,7 +816,15 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "project.update", params }],
+        steps: [
+          {
+            op: "project.update",
+            params,
+            ...(projectScheduleMerged && {
+              options: { guardFields: ["start", "startDate", "todaySection"] },
+            }),
+          },
+        ],
         notes,
       };
     }
@@ -788,11 +860,19 @@ export function planUndo(
             "heading placement cannot be restored — the to-do returns to the project root",
           );
         }
+        // The detach removed the container; guard that it is STILL detached
+        // (current project/area both null) so a re-attach out of band blocks.
         if (typeof oldProj === "string") {
           return {
             target,
             kind: "invertible",
-            steps: [{ op: "todo.move", params: { uuid, project: { uuid: oldProj } } }],
+            steps: [
+              {
+                op: "todo.move",
+                params: { uuid, project: { uuid: oldProj } },
+                options: { guardFields: ["project", "area"] },
+              },
+            ],
             notes,
           };
         }
@@ -800,7 +880,13 @@ export function planUndo(
           return {
             target,
             kind: "invertible",
-            steps: [{ op: "todo.move", params: { uuid, area: { uuid: oldArea } } }],
+            steps: [
+              {
+                op: "todo.move",
+                params: { uuid, area: { uuid: oldArea } },
+                options: { guardFields: ["project", "area"] },
+              },
+            ],
             notes,
           };
         }
@@ -815,6 +901,11 @@ export function planUndo(
         );
         if (schedule.steps.length === 0) {
           return irreversible("pre-op scheduling state was not captured — cannot leave the Inbox");
+        }
+        // The op left the item in the Inbox (start="inbox"); guard that placement
+        // so an out-of-band re-schedule blocks the leave-Inbox restore.
+        for (const s of schedule.steps) {
+          s.options = { ...s.options, guardFields: ["start", "startDate"] };
         }
         return { target, kind: "invertible", steps: schedule.steps, notes };
       }
@@ -838,7 +929,13 @@ export function planUndo(
         return {
           target,
           kind: "invertible",
-          steps: [{ op: "todo.move", params: { uuid, project: { uuid: oldProject } } }],
+          steps: [
+            {
+              op: "todo.move",
+              params: { uuid, project: { uuid: oldProject } },
+              options: { guardFields: ["project.uuid", "heading.uuid"] },
+            },
+          ],
           notes,
         };
       }
@@ -846,7 +943,13 @@ export function planUndo(
         return {
           target,
           kind: "invertible",
-          steps: [{ op: "todo.move", params: { uuid, area: { uuid: oldArea } } }],
+          steps: [
+            {
+              op: "todo.move",
+              params: { uuid, area: { uuid: oldArea } },
+              options: { guardFields: ["area.uuid"] },
+            },
+          ],
           notes,
         };
       }
@@ -867,10 +970,17 @@ export function planUndo(
             ? (areaRef as { uuid?: unknown }).uuid
             : undefined;
         if (typeof oldArea === "string") {
+          // The op detached (area now null); guard it is still area-less.
           return {
             target,
             kind: "invertible",
-            steps: [{ op: "project.move", params: { uuid, area: { uuid: oldArea } } }],
+            steps: [
+              {
+                op: "project.move",
+                params: { uuid, area: { uuid: oldArea } },
+                options: { guardFields: ["area"] },
+              },
+            ],
             notes,
           };
         }
@@ -881,7 +991,13 @@ export function planUndo(
         return {
           target,
           kind: "invertible",
-          steps: [{ op: "project.move", params: { uuid, area: { uuid: areaPre } } }],
+          steps: [
+            {
+              op: "project.move",
+              params: { uuid, area: { uuid: areaPre } },
+              options: { guardFields: ["area.uuid"] },
+            },
+          ],
           notes,
         };
       }
@@ -890,7 +1006,13 @@ export function planUndo(
         return {
           target,
           kind: "invertible",
-          steps: [{ op: "project.move", params: { uuid, detach: true } }],
+          steps: [
+            {
+              op: "project.move",
+              params: { uuid, detach: true },
+              options: { guardFields: ["area.uuid"] },
+            },
+          ],
           notes,
         };
       }
@@ -1107,7 +1229,9 @@ export function planUndo(
 
     case "heading.archive": {
       if (uuid === null) return irreversible("no target uuid recorded");
-      const steps: UndoStep[] = [{ op: "heading.unarchive", params: { uuid } }];
+      const steps: UndoStep[] = [
+        { op: "heading.unarchive", params: { uuid }, options: { guardFields: ["status"] } },
+      ];
       // Reopen exactly the children the cascade resolved (nested pre map —
       // the project.complete pattern). Reparented children live in leg
       // records; replay their inverses too when this summary heads a txn.
@@ -1164,7 +1288,13 @@ export function planUndo(
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "heading.archive", params: { uuid, children: "complete" } }],
+        steps: [
+          {
+            op: "heading.archive",
+            params: { uuid, children: "complete" },
+            options: { guardFields: ["status"] },
+          },
+        ],
         notes,
       };
     }
@@ -1303,6 +1433,45 @@ export function planUndo(
 /** Content fields an inverse can silently CLOBBER; keyed to observed 1:1. */
 const CLOBBER_FIELDS = ["title", "notes", "deadline", "reminder", "tags"] as const;
 
+/**
+ * Human labels for the guarded axes, used in the block detail. Both the raw
+ * content fields and the structural getField paths a step may name in
+ * `guardFields` are mapped here; anything unmapped falls back to the raw path.
+ */
+const AXIS_LABEL: Record<string, string> = {
+  title: "title",
+  notes: "notes",
+  deadline: "deadline",
+  reminder: "reminder",
+  tags: "tags",
+  status: "status",
+  trashed: "trashed state",
+  project: "project",
+  "project.uuid": "project",
+  area: "area",
+  "area.uuid": "area",
+  "heading.uuid": "heading",
+  start: "schedule",
+  startDate: "schedule",
+  todaySection: "schedule",
+};
+
+/**
+ * NOT GUARDED (no captured after-state to compare against, so left unguarded —
+ * these axes rely on the inverse's own verified read-after-write instead):
+ *  - REPEAT rule / paused state (reschedule-repeat, pause/resume-repeat): the
+ *    repeat axis is out of this guard's scope.
+ *  - todo.backdate timestamps (creation/completion date).
+ *  - reorder / area.reorder RANKS: the inverse is a 3-way restore that already
+ *    leaves non-targeted members in place; a rank precondition is not modeled.
+ *  - area.update / tag.update fields: those steps address by `target`, not
+ *    `uuid`, so this guard returns early for them (entity ops are unguarded, as
+ *    before this change).
+ *  - CASCADE CHILDREN of a project/heading resolve (the extra todo.reopen steps
+ *    carry no guardFields): the recorded `observed` after-values are the PARENT
+ *    target's, not each child's, so a per-child compare cannot be made from
+ *    them; the parent's status axis IS guarded.
+ */
 function fieldsEqual(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b);
   return a === b || (a === undefined && b === null) || (a === null && b === undefined);
@@ -1312,14 +1481,39 @@ function formatValue(value: unknown): string {
   return value === null || value === undefined ? "none" : JSON.stringify(value);
 }
 
+/** The blocked result for an axis an out-of-band change already moved. */
+function clobberBlock(
+  op: OperationKind,
+  field: string,
+  after: unknown,
+  cur: unknown,
+): MutationResult {
+  const label = AXIS_LABEL[field] ?? field;
+  return {
+    kind: "blocked",
+    op,
+    reason: "environment",
+    detail:
+      `${label} changed since the recorded mutation (expected ${formatValue(after)}, found ` +
+      `${formatValue(cur)}) — refusing to overwrite a change made outside things-api`,
+    remediation:
+      "review the item's current state and redo the change by hand if it's still wanted; or " +
+      "re-run undo with --acknowledge-out-of-band-changes to overwrite the change made since",
+  };
+}
+
 /**
- * Refuse an inverse step that would overwrite a field an out-of-band edit has
- * already moved. For every CLOBBER_FIELD the step writes AND that the audit
- * `observed` (after-state) recorded, the target's CURRENT value must still
- * equal that after-value; a divergence means the world moved underneath us, so
- * we block rather than clobber. Fields absent from `observed` are skipped (we
- * cannot confirm them but must not break ops whose observed legitimately omits
- * them). Returns a blocked result on divergence, else null.
+ * Refuse an inverse step that would overwrite state an out-of-band change has
+ * already moved. Two axes are checked against the SAME recorded `observed`
+ * after-state:
+ *  - CONTENT (CLOBBER_FIELDS): every content field the step WRITES (present in
+ *    its params) whose after-value `observed` recorded.
+ *  - STRUCTURAL (`step.options.guardFields`): the container / status / schedule
+ *    / trashed getField paths the step overwrites, set by planUndo on the
+ *    primary-target step. Paths absent from `observed` are skipped.
+ * For each, the target's CURRENT value must still equal the recorded after-value;
+ * a divergence means the world moved underneath us, so we block rather than
+ * clobber. Returns a blocked result on the first divergence, else null.
  */
 function checkStepPrecondition(
   deps: WriteDeps,
@@ -1334,22 +1528,43 @@ function checkStepPrecondition(
   for (const field of CLOBBER_FIELDS) {
     if (!(field in step.params) || !(field in observed)) continue;
     const cur = getField(current, field) ?? null;
-    const after = observed[field];
-    if (!fieldsEqual(cur, after)) {
-      return {
-        kind: "blocked",
-        op: step.op,
-        reason: "environment",
-        detail:
-          `${field} changed since the recorded mutation (expected ${formatValue(after)}, found ` +
-          `${formatValue(cur)}) — refusing to avoid clobbering an out-of-band edit`,
-        remediation:
-          "review the item's current state; redo the change by hand if it's still wanted, or " +
-          "re-run undo once the field is back to its post-change value",
-      };
-    }
+    if (!fieldsEqual(cur, observed[field]))
+      return clobberBlock(step.op, field, observed[field], cur);
+  }
+  for (const field of step.options?.guardFields ?? []) {
+    if (!(field in observed)) continue; // no captured after-state for this axis
+    const cur = getField(current, field) ?? null;
+    if (!fieldsEqual(cur, observed[field]))
+      return clobberBlock(step.op, field, observed[field], cur);
   }
   return null;
+}
+
+/**
+ * The block that would refuse a step before execution, or null. Two sources:
+ * the plan-time checklist refusal (item-level, never bypassed — there is no
+ * faithful forced inverse) and the runtime precondition guard (content +
+ * structural), which `acknowledgeOutOfBandChanges` suppresses uniformly. Shared
+ * by the executor and the dry-run preview so both report the same outcome.
+ */
+function stepWouldBlock(
+  deps: WriteDeps,
+  step: UndoStep,
+  observed: Record<string, unknown> | null,
+  acknowledgeOutOfBandChanges: boolean,
+): MutationResult | null {
+  const planBlock = step.options?.blocked;
+  if (planBlock !== undefined) {
+    return {
+      kind: "blocked",
+      op: step.op,
+      reason: "environment",
+      detail: planBlock.detail,
+      remediation: planBlock.remediation,
+    };
+  }
+  if (acknowledgeOutOfBandChanges) return null;
+  return checkStepPrecondition(deps, step, observed);
 }
 
 // ----------------------------------------------------------------- executor
@@ -1399,29 +1614,38 @@ export async function runUndo(
     if (plan.kind === "irreversible") {
       item = { plan, results: [], outcome: "irreversible" };
     } else if (options.dryRun === true) {
-      item = { plan, results: [], outcome: "dry-run" };
+      // Preview the would-block outcome so --dry-run surfaces a refusal (an
+      // out-of-band move/status/schedule change, or the checklist item-level
+      // conflict) before any change is attempted — respecting the ack flag.
+      const preview: (MutationResult | ReorderResult)[] = [];
+      for (const step of plan.steps) {
+        const block = stepWouldBlock(
+          deps,
+          step,
+          record.observed,
+          options.acknowledgeOutOfBandChanges === true,
+        );
+        if (block !== null) {
+          preview.push(block);
+          break;
+        }
+      }
+      item = { plan, results: preview, outcome: "dry-run" };
     } else {
       const results: (MutationResult | ReorderResult)[] = [];
       let failed = false;
       for (const step of plan.steps) {
-        // Plan-time precondition (checklist undos): the inverse was resolved
-        // against the current list and found a conflict — refuse, don't clobber.
-        const planBlock = step.options?.blocked;
-        if (planBlock !== undefined) {
-          results.push({
-            kind: "blocked",
-            op: step.op,
-            reason: "environment",
-            detail: planBlock.detail,
-            remediation: planBlock.remediation,
-          });
-          failed = true;
-          break;
-        }
-        // Precondition guard: never clobber a field an out-of-band edit moved.
-        const precondition = checkStepPrecondition(deps, step, record.observed);
-        if (precondition !== null) {
-          results.push(precondition);
+        // Refuse rather than clobber: the plan-time checklist conflict, or the
+        // runtime precondition guard (content + structural) unless the caller
+        // acknowledged out-of-band changes.
+        const block = stepWouldBlock(
+          deps,
+          step,
+          record.observed,
+          options.acknowledgeOutOfBandChanges === true,
+        );
+        if (block !== null) {
+          results.push(block);
           failed = true;
           break;
         }
