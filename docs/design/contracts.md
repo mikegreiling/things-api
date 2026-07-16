@@ -44,6 +44,38 @@ Every command supports `--json`. Envelope JSON goes to **stdout**; all human/log
 - `error.code` mirrors the exit-code family (`verify-failed`, `blocked`, `drift-blocked`, `unsupported`, `environment`, `usage`, `unexpected`) plus finer-grained sub-codes where useful (e.g. `verify-failed/silent-noop`, `blocked:H-UNKNOWN-TAG`), and the reference-resolution codes `not-found` / `ambiguous`.
 - `error.details` is the additive machine-readable failure context: `candidates` (disambiguation entities) and/or `suggestions` (concrete commands to run). Present wherever a failure is self-correctable.
 
+## Omit-empty (entity payloads)
+
+**Contract:** in the `data` of every read (`--json` reads AND the MCP read tools), an entity omits any optional field whose value is empty — `null`, an empty string `""`, or an empty array `[]`. **A consumer MUST read an absent key as unset / empty / default, and MUST NOT distinguish absent from empty.** This is the whole point: `deadline` absent and `deadline: null` mean the identical thing; a consumer that branches on which one it got is wrong. Guard every access (`item.tags ?? []`, `item.deadline == null`).
+
+Motivation: token economy and one canonical shape (no `null`/`[]` noise). Applies to the *entity/data* payload only. It is a **breaking change** for any consumer that previously tested for an empty-array or `null` presence.
+
+Kept even when "empty" (absence would be lossy, so these are always present on the entity that has them):
+
+- **Identity keys** — always present: `uuid`, `type`, and the name (`title`). An untitled to-do still carries `title: ""`.
+- **Booleans** — a real `false` is meaningful, never omitted: `logged`, `trashed`, `repeating.isTemplate`, `repeating.isInstance`, `repeating.paused`, `repeating.deadlined`, an area's `visible`.
+- **Numeric counts** — a `0` is meaningful, never omitted: `checklistItemsCount`, `openChecklistItemsCount`, `untrashedLeafActionsCount`, `openUntrashedLeafActionsCount`, `openChildrenWhileResolved`, the `badge` counts.
+- **Structural scaffolding** — the view shape that *carries* entities is not itself an entity and is never pruned, so its lists/markers survive empty: the `today` / `evening` split (a fixed two-section shape), the `project`/`area` card sections (`active`, `headings`, `later.{scheduled,repeating,someday}`, `logged`, `trashed`, `projects`), and a sidebar section's `area: null` — the load-bearing "top-level / loose block" marker. Only the entities *inside* the scaffolding are pruned. (This is why omit-empty is scoped to recognized entity shapes, not a blanket deep prune: a to-do's `area: null` means "no area" and is dropped, but a section's `area: null` is a discriminant and is kept — same key, opposite meaning.)
+
+Omitted when empty, per entity:
+
+| Entity | Always present (identity + meaningful false/0) | Omitted when empty |
+|---|---|---|
+| to-do (`type: "to-do"`) | `uuid`, `type`, `title`, `status`, `start`, `logged`, `trashed`, `repeating`, `checklistItemsCount`, `openChecklistItemsCount`, `created`, `modified` | `notes` (`""`), `startDate`, `todaySection`, `deadline`, `reminder`, `area`, `project`, `heading`, `headingProject`, `stopped`, `tags` (`[]`), `inheritedTags` (`[]`), `checklist` (`[]`) |
+| project (`type: "project"`) | `uuid`, `type`, `title`, `status`, `start`, `logged`, `trashed`, `repeating`, `untrashedLeafActionsCount`, `openUntrashedLeafActionsCount`, `created`, `modified` | `notes`, `startDate`, `todaySection`, `deadline`, `reminder`, `area`, `stopped`, `tags`, `inheritedTags` |
+| heading (`type: "heading"`) | `uuid`, `type`, `title`, `status` | `project` (null) |
+| area | `uuid`, `title`, `visible` | `tags` (`[]`) |
+| tag (taxonomy listing) | `title` | `shortcut` (null), `parent` (null — a root tag has no `parent` key) |
+| checklist item | `title`, `status` | — (no optional fields) |
+
+`inheritedTags` is present ONLY on the detail reads (`todo show` / `project show` / `get_item` / `get_project`) and now follows the same rule — **absent when empty, present (with provenance) when non-empty.** This reverses the earlier "always an empty array on detail reads" ruling (intended): a machine consumer keys on presence, and `item.inheritedTags ?? []` is the correct read.
+
+`repeating` is always present (it carries the `isTemplate` / `isInstance` booleans); inside it, `templateUuid` (null), `nextOccurrence`, `paused`, `deadlined`, and `rule` follow omit-empty.
+
+Not covered by this contract (own shapes, unchanged): the **error envelope** (`error.code` / `error.details.candidates` / `error.details.suggestions` — a candidate entity is NOT pruned), **mutation results / plans** (`kind: "mutation-result"`, dry-run plans), and the non-entity diagnostic payloads (`doctor`, `capabilities`, `config`, `legend`, `setup`). The envelope `meta` (including `pagination.limit: null`, which means "unbounded") is never pruned.
+
+Source of truth in code: [`src/model/serialize.ts`](../../src/model/serialize.ts) (`omitEmpty`), applied at the two emit boundaries — [`src/cli/read-driver.ts`](../../src/cli/read-driver.ts) (`runRead`) and [`src/mcp/server.ts`](../../src/mcp/server.ts) (`readResult` / the paginated + grouped read results). Covered by `test/unit/serialize.test.ts` and the read-shape assertions in `test/cli/e2e.test.ts` / `test/mcp/server.test.ts`.
+
 ## Error-path universality (every refusal honors `--json`)
 
 **Contract:** *every* error and refusal exit — not just mutation outcomes — respects `--json`. Under `--json` the `{ok:false, error}` envelope goes to **stdout** and nothing prose goes to stderr; without it, the `error:` prose line goes to **stderr**. Flag/argument usage errors route through one shared emitter (`usageError`, `src/cli/read-driver.ts`) so this holds uniformly; there is a single envelope shape (`error.details.candidates` / `error.details.suggestions`) — never a second one.

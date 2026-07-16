@@ -15,6 +15,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
+import { omitEmpty } from "../model/serialize.ts";
 import { PKG_VERSION, type GroupedPagination, type Pagination } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
 import {
@@ -35,6 +36,7 @@ import {
   AREA_LIMIT_DESC,
   DATE_FORMAT,
   LIMIT_DESC,
+  OMIT_EMPTY_NOTE,
   PROJECT_LIMIT_DESC,
   REF_FORMAT,
   REMINDER_FORMAT,
@@ -70,6 +72,16 @@ function jsonResult(data: unknown): ToolResult {
 }
 
 /**
+ * A read result: like {@link jsonResult}, but the entity payload passes through
+ * the omit-empty transform (docs/design/contracts.md) so an empty optional
+ * field is absent, not null/[]. Mutation results keep their own shape and use
+ * jsonResult directly.
+ */
+function readResult(data: unknown): ToolResult {
+  return jsonResult(omitEmpty(data));
+}
+
+/**
  * A read result carrying truncation metadata: the data (already limited) in
  * the first content block, and a second block with the {@link Pagination}
  * numbers plus a one-line note the agent can read when rows were dropped.
@@ -80,7 +92,7 @@ function paginatedResult(data: unknown, pagination: Pagination): ToolResult {
     : undefined;
   return {
     content: [
-      { type: "text", text: JSON.stringify(data) },
+      { type: "text", text: JSON.stringify(omitEmpty(data)) },
       { type: "text", text: JSON.stringify({ pagination, ...(note !== undefined && { note }) }) },
     ],
   };
@@ -97,7 +109,7 @@ function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
     : undefined;
   return {
     content: [
-      { type: "text", text: JSON.stringify(data) },
+      { type: "text", text: JSON.stringify(omitEmpty(data)) },
       { type: "text", text: JSON.stringify({ grouped, ...(note !== undefined && { note }) }) },
     ],
   };
@@ -248,6 +260,7 @@ function buildInstructions(getClient: () => ThingsClient): string {
     "- Every write tool accepts dry_run: true to preview the change without applying it. " +
       "Operations with cascading or permanent effects require the explicit confirmation " +
       "parameter named in their description; refused calls return an error saying what to pass.",
+    `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];
   try {
     const c = getClient();
@@ -370,7 +383,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "anytime/someday always return every group and cap per block instead — " +
         `area_limit (default ${AREA_PREVIEW_LIMIT}) per area block, and on anytime ` +
         `project_limit (default ${PROJECT_PREVIEW_LIMIT}) per project block. ` +
-        "all: true lifts every cap; the result's second block reports the counts.",
+        "all: true lifts every cap; the result's second block reports the counts. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
@@ -542,7 +556,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Find items by title/notes substring. Returns open, untrashed items by default; " +
         "include more with logged/trashed/all. Scope with project/area/tag — scope " +
-        "references must name existing items.",
+        "references must name existing items. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         query: z.string(),
         ...tagFilterShape,
@@ -602,7 +617,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "List items created or modified since a moment — including trashed, logged, and " +
         "repeating items (inspect each item's fields to tell them apart). Edits to tags, " +
-        "areas, and checklist items do not mark the containing item as modified.",
+        "areas, and checklist items do not mark the containing item as modified. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         since: z.string().describe("ISO date-time, e.g. 2026-07-06T08:00:00"),
         ...limitShape,
@@ -631,7 +647,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Full detail for one item by uuid: notes, schedule, reminder, deadline, tags " +
         "(direct and inherited), checklist with per-item state, repeat schedule, and its " +
-        "project/area/heading.",
+        "project/area/heading. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: { uuid: z.string() },
       annotations: READ_ONLY,
     },
@@ -640,7 +657,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const item = getClient().read.byUuid(args.uuid);
         return item === null
           ? errorResult({ code: "not-found", message: noUuidMatch("item", args.uuid) })
-          : jsonResult(item);
+          : readResult(item);
       }),
   );
 
@@ -648,7 +665,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_project",
     {
       description:
-        "One project's full contents: metadata plus its to-dos grouped under their headings.",
+        "One project's full contents: metadata plus its to-dos grouped under their headings. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         uuid: z.string().describe("Project uuid or unique name"),
         overdue: z
@@ -662,7 +680,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() =>
-        jsonResult(getClient().read.projectView(args.uuid, { overdue: args.overdue === true })),
+        readResult(getClient().read.projectView(args.uuid, { overdue: args.overdue === true })),
       ),
   );
 
@@ -674,7 +692,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "projects in sidebar order, later (scheduled/repeating/someday), and logged items. " +
         `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
-        "second result block reports the counts.",
+        "second result block reports the counts. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         ref: z.string().describe("Area uuid or unique name"),
         area_limit: z
@@ -720,7 +739,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "List every project, area, or tag (tags include their parent-tag nesting). Use to " +
-        "refresh the inventory summarized in the server instructions.",
+        "refresh the inventory summarized in the server instructions. " +
+        OMIT_EMPTY_NOTE,
       inputSchema: {
         kind: z.enum(["projects", "areas", "tags"]),
         overdue: z
@@ -740,7 +760,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.overdue === true && args.kind !== "projects") {
           return usage(`overdue applies only to projects, not ${args.kind}`);
         }
-        return jsonResult(
+        return readResult(
           args.kind === "projects"
             ? c.read.projects({ overdue: args.overdue === true })
             : args.kind === "areas"

@@ -49,3 +49,12 @@ export const PROJECT_LIMIT_DESC = `items shown per project block before truncati
 
 /** `--all`/`all` description for the grouped views (lift every per-block cap). */
 export const GROUPED_ALL_DESC = "show every item in every group (no per-block caps)";
+
+/**
+ * The omit-empty result note appended to every read tool description: optional
+ * fields are dropped from the JSON when empty, so a consumer reads an absent
+ * key as unset/empty and never as a distinct state. The full contract lives in
+ * docs/design/contracts.md.
+ */
+export const OMIT_EMPTY_NOTE =
+  "Optional fields are omitted from the result when empty; a missing field means unset, empty, or default (read it the same as a null or empty value).";

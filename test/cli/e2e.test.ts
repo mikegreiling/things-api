@@ -211,7 +211,8 @@ describe("cli end-to-end (fixture db)", () => {
     expect(exitCode).toBe(0);
     const envelope = JSON.parse(stdout);
     expect(envelope.data.repeating.isTemplate).toBe(true);
-    expect(envelope.data.checklist).toEqual([]);
+    // Omit-empty (contracts.md): an empty checklist is absent, not [].
+    expect("checklist" in envelope.data).toBe(false);
   });
 
   it("things snapshot --json counts every row class", () => {
@@ -1457,8 +1458,12 @@ describe("cli tags listing (indented tree)", () => {
     seedTag(fx.db, "areas", root);
     const { stdout, exitCode } = runCli(["tags", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    const data = JSON.parse(stdout).data as { title: string; parent: string | null }[];
-    expect(data.find((t) => t.title === "old labels")?.parent).toBeNull();
+    const data = JSON.parse(stdout).data as { title: string; parent?: string | null }[];
+    // Omit-empty (contracts.md): a root tag has NO parent key (absent = root);
+    // a nested tag carries its parent NAME.
+    const rootTag = data.find((t) => t.title === "old labels");
+    expect(rootTag).toBeDefined();
+    expect("parent" in (rootTag ?? {})).toBe(false);
     expect(data.find((t) => t.title === "areas")?.parent).toBe("old labels");
     // Zero surfaced tag-uuid sites: no object carries a uuid key.
     expect(data.every((t) => !("uuid" in t))).toBe(true);
