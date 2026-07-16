@@ -28,13 +28,16 @@ import { diagnose } from "../diagnose.ts";
 import {
   FILTER_CONTRACT,
   hasTagPresence,
+  MCP_WHEN_LABELS,
+  ReferenceResolutionError,
+  splitWhenSugar,
   tagFilterFields,
   tagFlagConflict,
   validateViewArgs,
   type TagPresence,
   type ViewName,
 } from "../index.ts";
-import { noUuidMatch, ReferenceResolutionError } from "../read/queries.ts";
+import { noUuidMatch } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
@@ -951,14 +954,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
-      guard(async () =>
-        mutationResult(
+      guard(async () => {
+        const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
+        if (sugar.kind === "error") return usage(sugar.message);
+        const when = sugar.kind === "split" ? sugar.when : args.when;
+        const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
+        return mutationResult(
           await getClient().write.addTodo(
             {
               title: args.title,
               ...(args.notes !== undefined && { notes: args.notes }),
-              ...(args.when !== undefined && { when: args.when as never }),
-              ...(args.reminder !== undefined && { reminder: args.reminder }),
+              ...(when !== undefined && { when: when as never }),
+              ...(reminder !== undefined && { reminder }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.tags !== undefined && { tags: args.tags }),
               ...(args.checklist_items !== undefined && { checklistItems: args.checklist_items }),
@@ -968,8 +975,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             },
             writeOptions(args),
           ),
-        ),
-      ),
+        );
+      }),
   );
 
   server.registerTool(
@@ -1012,6 +1019,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.deadline !== undefined && args.clear_deadline === true) {
           return usage("pass at most one of deadline / clear_deadline");
         }
+        const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
+        if (sugar.kind === "error") return usage(sugar.message);
+        const when = sugar.kind === "split" ? sugar.when : args.when;
+        const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
         return mutationResult(
           await getClient().write.updateTodo(
             args.uuid,
@@ -1020,8 +1031,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.notes !== undefined && { notes: args.notes }),
               ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
               ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-              ...(args.when !== undefined && { when: args.when as never }),
-              ...(args.reminder !== undefined && { reminder: args.reminder }),
+              ...(when !== undefined && { when: when as never }),
+              ...(reminder !== undefined && { reminder }),
               ...(args.clear_reminder === true && { reminder: null }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.clear_deadline === true && { deadline: null }),

@@ -36,7 +36,7 @@ import {
   verifyFailedCode,
   type EnvelopeMeta,
 } from "../../contracts.ts";
-import { ReferenceResolutionError } from "../../read/queries.ts";
+import { ReferenceResolutionError, splitWhenSugar } from "../../index.ts";
 import { usageError } from "../read-driver.ts";
 
 interface WriteFlagOpts {
@@ -125,22 +125,17 @@ function collect(value: string, previous: string[]): string[] {
 
 /**
  * URL-style `--when DATE@TIME` sugar: splits into when + reminder for the
- * ops that take both (an explicit --reminder alongside the suffix errors).
+ * ops that take both (an explicit --reminder alongside the suffix errors). The
+ * `@` split and its usage copy are the shared {@link splitWhenSugar} core; this
+ * only mutates the parsed opts on a successful split.
  */
 function applyWhenSugar(opts: Record<string, unknown>): string | null {
-  const when = opts["when"];
-  if (typeof when !== "string" || !when.includes("@")) return null;
-  const at = when.indexOf("@");
-  const date = when.slice(0, at);
-  const time = when.slice(at + 1);
-  if (date === "" || time === "" || time.includes("@")) {
-    return `invalid --when "${when}" — expected today | evening | anytime | someday | YYYY-MM-DD (set a reminder with --reminder HH:mm)`;
+  const r = splitWhenSugar(opts["when"], opts["reminder"] !== undefined);
+  if (r.kind === "error") return r.message;
+  if (r.kind === "split") {
+    opts["when"] = r.when;
+    opts["reminder"] = r.reminder;
   }
-  if (opts["reminder"] !== undefined) {
-    return `--when "${when}" carries an @time suffix and --reminder was also given — use one`;
-  }
-  opts["when"] = date;
-  opts["reminder"] = time;
   return null;
 }
 

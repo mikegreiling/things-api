@@ -12,7 +12,7 @@ import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
 import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
-import { ReferenceResolutionError } from "../read/queries.ts";
+import { ReferenceResolutionError } from "../index.ts";
 import {
   errorEnvelope,
   ExitCode,

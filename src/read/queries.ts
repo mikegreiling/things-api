@@ -215,6 +215,11 @@ export interface RefCandidate {
  * it (CLI --json envelope, MCP tool result) additionally lift the structured
  * `candidates` onto `error.details.candidates` so an agent can self-correct
  * without re-parsing the prose message. `code` mirrors the envelope error code.
+ *
+ * PUBLIC API — exported from src/index.ts. This is the one error the consumer
+ * surfaces catch to render structured disambiguation; its `code`
+ * ("not-found" | "ambiguous") and `candidates` ({@link RefCandidate}[]) are the
+ * documented machine shape (docs/design/architecture.md, Consumer boundary).
  */
 export class ReferenceResolutionError extends RangeError {
   readonly code: "not-found" | "ambiguous";

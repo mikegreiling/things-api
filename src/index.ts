@@ -133,6 +133,17 @@ export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
 export type { ProjectView } from "./read/project-view.ts";
 export type { AreaView } from "./read/area-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
+
+// Reference resolution: the stable public error a uuid/partial-uuid/name raises
+// when it resolves to zero or several entities, carrying the machine shape the
+// CLI --json envelope and MCP tool errors surface (code + candidates).
+export { ReferenceResolutionError } from "./read/queries.ts";
+export type { RefCandidate } from "./read/queries.ts";
+
+// The shared `<when>@<time>` scheduling sugar parser (CLI + MCP).
+export { splitWhenSugar, CLI_WHEN_LABELS, MCP_WHEN_LABELS } from "./model/when-sugar.ts";
+export type { WhenSugar, WhenSugarLabels } from "./model/when-sugar.ts";
+
 export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
