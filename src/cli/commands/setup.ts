@@ -11,8 +11,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 
-import { readShortcutProxies, type ShortcutsState } from "../../write/availability.ts";
-import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
+import {
+  ExitCode,
+  okEnvelope,
+  shortcutProxies,
+  type EnvelopeMeta,
+  type ShortcutsState,
+} from "../../index.ts";
 
 /** Package root — one level above src/ AND dist/, so both layouts resolve. */
 const SHORTCUTS_DIR = fileURLToPath(new URL("../../../shortcuts", import.meta.url));
@@ -68,7 +73,7 @@ export function registerSetup(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((opts: { check?: boolean; json?: boolean }) => {
       const started = Date.now();
-      const state = readShortcutProxies();
+      const state = shortcutProxies();
       const opened: string[] = [];
       let exitCode: number = ExitCode.Ok;
       let detail = state.detail;

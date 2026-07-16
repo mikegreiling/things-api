@@ -14,58 +14,57 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
-import type { DisruptionTier } from "../config.ts";
-import { omitEmpty } from "../model/serialize.ts";
-import {
-  blockedCode,
-  PKG_VERSION,
-  verifyFailedCode,
-  type GroupedTruncation,
-  type Truncation,
-} from "../contracts.ts";
-import { diagnose } from "../diagnose.ts";
-import {
-  FILTER_CONTRACT,
-  hasTagPresence,
-  MCP_WHEN_LABELS,
-  ReferenceResolutionError,
-  splitWhenSugar,
-  tagFilterFields,
-  tagFlagConflict,
-  validateViewArgs,
-  type TagPresence,
-  type ViewName,
-} from "../index.ts";
-import { noUuidMatch } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
+  blockedCode,
+  BOUNCE_MAX_ITEMS,
+  capabilitiesTable,
   DATE_FORMAT,
   DEFAULT_LIST_LIMIT,
+  diagnose,
+  FILTER_CONTRACT,
+  hasTagPresence,
   LIMIT_DESC,
+  MCP_WHEN_LABELS,
+  noUuidMatch,
+  omitEmpty,
   OMIT_EMPTY_NOTE,
+  OPERATION_KINDS,
+  openThings,
+  PKG_VERSION,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
   REF_FORMAT,
+  ReferenceResolutionError,
   REMINDER_FORMAT,
   schemaWarnings,
+  splitWhenSugar,
+  tagFilterFields,
+  tagFlagConflict,
+  validateViewArgs,
+  verifyFailedCode,
   WHEN_VALUES,
-} from "../surface-copy.ts";
-import { capabilitiesTable } from "../write/capabilities.ts";
-import {
-  OPERATION_KINDS,
+  type BatchOp,
+  type ChecklistEdit,
+  type DisruptionTier,
+  type GroupedTruncation,
   type MonthlyAnchor,
+  type MutationResult,
+  type OpenOptions,
   type OperationKind,
   type RepeatFrequency,
   type RepeatRuleParams,
+  type ReorderResult,
+  type TagPresence,
+  type ThingsClient,
+  type Truncation,
+  type ViewName,
   type Weekday,
+  type WriteOptions,
   type YearlyAnchor,
-} from "../write/operations.ts";
-import type { MutationResult, WriteOptions } from "../write/pipeline.ts";
-import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../write/reorder.ts";
-import type { BatchOp } from "../write/batch.ts";
+} from "../index.ts";
 
 export interface McpServerOptions {
   dbPath?: string;

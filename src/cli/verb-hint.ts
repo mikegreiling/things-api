@@ -19,8 +19,7 @@
  */
 import type { Command } from "commander";
 
-import { openThings } from "../client.ts";
-import { errorEnvelope, ExitCode, type EnvelopeMeta } from "../contracts.ts";
+import { errorEnvelope, ExitCode, openThings, type EnvelopeMeta } from "../index.ts";
 import { indexPastLeadingFlags, subcommandsOf, WRITE_GROUP_ORDER } from "./resolve-invocation.ts";
 import { shellQuote } from "./shell-quote.ts";
 

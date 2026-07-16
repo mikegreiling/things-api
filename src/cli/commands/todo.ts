@@ -4,9 +4,7 @@
  */
 import type { Command } from "commander";
 
-import type { AnyTask } from "../../model/entities.ts";
-import { localToday } from "../../model/dates.ts";
-import { templateStatus } from "../../model/recurrence.ts";
+import { localToday, templateStatus, type AnyTask } from "../../index.ts";
 import { blue, bold, dim, green, red } from "../style.ts";
 import {
   deadlineDetail,

@@ -10,8 +10,6 @@ import { execFileSync } from "node:child_process";
 
 import { runAreaShow, type AreaShowActionOpts } from "./area.ts";
 import { runProjectShow, type ProjectShowActionOpts } from "./project.ts";
-import type { ListItem, TodayView, ViewFilter } from "../../read/views.ts";
-import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
 import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
@@ -57,20 +55,27 @@ import {
   type TagFlags,
 } from "../tag-filters.ts";
 import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
-import { FILTER_CONTRACT, validateViewArgs } from "../../index.ts";
-import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
-import type { GroupedLimits } from "../../read/sections.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
+  ExitCode,
+  FILTER_CONTRACT,
   GROUPED_ALL_DESC,
   LIMIT_DESC,
+  localToday,
+  okEnvelope,
   PERIOD_SINCE,
   PERIOD_UNTIL,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
-} from "../../surface-copy.ts";
+  validateViewArgs,
+  type EnvelopeMeta,
+  type GroupedLimits,
+  type ListItem,
+  type TodayView,
+  type ViewFilter,
+} from "../../index.ts";
 
 /**
  * Foreground the Things app on a resource via its share URI. A GUI action

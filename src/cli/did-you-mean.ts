@@ -7,7 +7,7 @@
  * suggestion, and — under `--json` — stamps the candidates onto
  * `error.details.candidates` so an agent can self-correct.
  */
-import type { LiteCandidate, LiteSearchResult, ListItem } from "../read/views.ts";
+import type { LiteCandidate, LiteSearchResult, ListItem } from "../index.ts";
 import { dim } from "./style.ts";
 import { areaMark } from "./glyphs.ts";
 import { formatItem, uuidDisplayWidth } from "./render.ts";

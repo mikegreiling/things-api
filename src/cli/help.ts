@@ -15,8 +15,7 @@
  */
 import type { Command } from "commander";
 
-import { PKG_VERSION } from "../contracts.ts";
-import { ExitCode } from "../contracts.ts";
+import { ExitCode, PKG_VERSION } from "../index.ts";
 
 /** One command's index line: its argument sketch and its ≤58-char descriptor. */
 interface IndexEntry {

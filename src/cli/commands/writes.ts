@@ -9,34 +9,37 @@ import type { Command } from "commander";
 
 import { readFileSync } from "node:fs";
 
-import { openThings, type ThingsClient } from "../../client.ts";
-import { saveConfigKey, type DisruptionTier } from "../../config.ts";
-import { ThingsDbNotFoundError } from "../../db/locate.ts";
-import { ThingsDbOpenError } from "../../db/connection.ts";
-import type {
-  OperationKind,
-  RepeatFrequency,
-  ReorderScope,
-  ReorderStrategy,
-} from "../../write/operations.ts";
 import { addRepeatRuleFlags, repeatRuleFlagsFromOpts } from "./repeat-flags.ts";
-import type { WriteOptions } from "../../write/pipeline.ts";
-import { capabilitiesTable } from "../../write/capabilities.ts";
-import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
-import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
-import type { UndoItemResult } from "../../write/undo.ts";
-import type { VectorId } from "../../write/vectors/types.ts";
-
 import {
   aggregateExitCode,
   blockedCode,
+  BOUNCE_MAX_ITEMS,
+  capabilitiesTable,
   errorEnvelope,
   ExitCode,
   okEnvelope,
+  openThings,
+  outcomeFailed,
+  ReferenceResolutionError,
+  saveConfigKey,
+  splitWhenSugar,
+  ThingsDbNotFoundError,
+  ThingsDbOpenError,
   verifyFailedCode,
+  type BatchItemResult,
+  type BatchOp,
+  type DisruptionTier,
   type EnvelopeMeta,
-} from "../../contracts.ts";
-import { ReferenceResolutionError, splitWhenSugar } from "../../index.ts";
+  type OperationKind,
+  type ReorderResult,
+  type ReorderScope,
+  type ReorderStrategy,
+  type RepeatFrequency,
+  type ThingsClient,
+  type UndoItemResult,
+  type VectorId,
+  type WriteOptions,
+} from "../../index.ts";
 import { usageError } from "../read-driver.ts";
 
 interface WriteFlagOpts {

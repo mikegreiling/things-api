@@ -23,7 +23,7 @@ import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
 import { runVerbHint } from "./verb-hint.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
-import { ExitCode, PKG_VERSION } from "../contracts.ts";
+import { ExitCode, PKG_VERSION } from "../index.ts";
 
 export function buildProgram(): Command {
   const program = new Command();

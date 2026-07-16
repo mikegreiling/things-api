@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 
-import type { DisruptionTier } from "../../config.ts";
+import type { DisruptionTier } from "../../index.ts";
 
 export function registerMcp(program: Command): void {
   program

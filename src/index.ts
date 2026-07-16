@@ -40,8 +40,6 @@ export type { FailureHint, LikelyCause } from "./write/failure-hints.ts";
 export { capabilitiesTable } from "./write/capabilities.ts";
 export type { CapabilityEntry } from "./write/capabilities.ts";
 export { saveConfigKey } from "./config.ts";
-export { createThingsMcpServer } from "./mcp/server.ts";
-export type { McpServerOptions } from "./mcp/server.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
 export type { BatchItemResult, BatchOp, BatchOptions } from "./write/batch.ts";
 export type { ReorderResult } from "./write/reorder.ts";
@@ -148,5 +146,61 @@ export { ThingsDbNotFoundError } from "./db/locate.ts";
 export { ThingsDbOpenError } from "./db/connection.ts";
 export type { Baseline, FingerprintStatus, SchemaObservation } from "./db/fingerprint.ts";
 
-export { API_VERSION, ExitCode, PKG_VERSION } from "./contracts.ts";
+export {
+  aggregateExitCode,
+  API_VERSION,
+  blockedCode,
+  errorEnvelope,
+  ExitCode,
+  okEnvelope,
+  PKG_VERSION,
+  verifyFailedCode,
+} from "./contracts.ts";
 export type { Envelope, EnvelopeMeta, ErrorEnvelope, OkEnvelope } from "./contracts.ts";
+
+// ---------------------------------------------------------------------------
+// Consumer-surface support: everything below is exported so the CLI and MCP
+// server can consume it through this one entry point (the air-gap boundary,
+// docs/design/architecture.md). None of it reaches back into surface code.
+// ---------------------------------------------------------------------------
+
+// Consumer-facing shared copy (parameter vocabulary + read-path advisory).
+export * from "./surface-copy.ts";
+
+// Pure model/read helpers the presentation layers reuse.
+export { omitEmpty } from "./model/serialize.ts";
+export { localToday } from "./model/dates.ts";
+export { templateStatus } from "./model/recurrence.ts";
+export { isTodayMember } from "./read/views.ts";
+export type { LiteCandidate, LiteSearchResult } from "./read/views.ts";
+export { partitionSomedaySection, splitSectionBlocks } from "./read/sections.ts";
+export type { GroupedLimits } from "./read/sections.ts";
+export { noUuidMatch, stripThingsUri } from "./read/queries.ts";
+export type { Snapshot } from "./read/snapshot.ts";
+export type { ShowTarget } from "./read/show-target.ts";
+export type { ChecklistEdit } from "./client.ts";
+export type { TagRef } from "./model/entities.ts";
+
+// Write-path values/types the surfaces render or gate on.
+export { outcomeFailed } from "./write/batch.ts";
+export { BOUNCE_MAX_ITEMS } from "./write/reorder.ts";
+export type {
+  MonthlyAnchor,
+  RepeatFrequency,
+  RepeatRuleParams,
+  Weekday,
+  WeekdayOrdinal,
+  YearlyAnchor,
+} from "./write/operations.ts";
+
+// Shortcut-proxy availability: a proper library accessor (setup consumes it
+// without opening a database). See shortcutProxies in diagnose.ts.
+export { shortcutProxies } from "./diagnose.ts";
+export type { ShortcutsState } from "./write/availability.ts";
+
+// The MCP server is itself a CONSUMER of this barrel (it imports from
+// ../index.ts), so its re-export MUST come last: evaluated after every symbol
+// above is bound, the index↔mcp import cycle resolves without a temporal
+// dead-zone on the eval-time schema constants (surface-copy) it references.
+export { createThingsMcpServer } from "./mcp/server.ts";
+export type { McpServerOptions } from "./mcp/server.ts";

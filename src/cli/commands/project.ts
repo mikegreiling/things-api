@@ -3,9 +3,7 @@
  */
 import type { Command } from "commander";
 
-import type { Todo } from "../../model/entities.ts";
-import type { ProjectView } from "../../read/project-view.ts";
-import { localToday } from "../../model/dates.ts";
+import { localToday, type ProjectView, type Todo } from "../../index.ts";
 import { bold, dim, green, underline } from "../style.ts";
 import {
   countChip,
