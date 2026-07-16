@@ -422,7 +422,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Read a Things list as the app presents it: today (split into Today and This " +
         "Evening), inbox, anytime, upcoming, someday, logbook, or trash. For upcoming, " +
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
-        "anytime/someday return sidebar-ordered sections (area + items; null area = the " +
+        "anytime/someday return sections in canonical order (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
         "from anytime — the project row represents them; someday lists each group's " +
         "project rows before its to-dos. Flat views (today/inbox/upcoming/logbook/trash) " +
@@ -744,7 +744,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One area's contents: metadata plus its direct to-dos (active first), its " +
-        "projects in sidebar order, later (scheduled/repeating/someday), and logged items. " +
+        "projects in canonical order, later (scheduled/repeating/someday), and logged items. " +
         `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
@@ -1650,10 +1650,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
-    "move_area_in_sidebar",
+    "reorder_area",
     {
       description:
-        "Move an area to a new position in the Things sidebar. Give the area plus exactly one " +
+        "Move an area to a new position in the area order. Give the area plus exactly one " +
         "destination: before/after another area, or position first/last. The move is made by " +
         "driving the Things window with the pointer — the app comes to the front and the " +
         "sidebar may scroll while the area is dragged; the area's projects and to-dos are " +
@@ -1681,7 +1681,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       guard(async () =>
         mutationResult(
           await getClient().write.run(
-            "area.reorder-sidebar",
+            "area.reorder",
             {
               target: args.target,
               ...(args.before !== undefined && { before: args.before }),
@@ -2283,7 +2283,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
         "area-less someday projects — one kind per call), a " +
         "project's to-dos, a project's headings (scope=headings — children move with " +
-        "their heading), an area, or the top-level sidebar projects (scope=projects — " +
+        "their heading), an area, or the top-level projects (scope=projects — " +
         "each project takes a brief someday/anytime round-trip) — the given uuids move " +
         "to the TOP in the given order; unlisted items keep their relative order below. " +
         "Today/inbox/someday/project/headings/area ordering must first be enabled once " +

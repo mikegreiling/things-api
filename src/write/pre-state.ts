@@ -90,8 +90,8 @@ export interface PreState {
   /** Scope membership + wire list for the reorder operation. */
   reorder: ReorderPre | null;
   /**
-   * area.reorder-sidebar: the FULL area uuid list ordered by TMArea."index"
-   * (the sidebar order once materialized) — feeds the ordering delta's
+   * area.reorder: the FULL area uuid list ordered by TMArea."index"
+   * (the canonical area order once materialized) — feeds the ordering delta's
    * capture list so undo can restore the exact previous position.
    */
   areaOrder: string[] | null;

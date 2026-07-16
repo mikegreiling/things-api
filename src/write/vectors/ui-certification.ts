@@ -60,7 +60,7 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   },
   "project.pause-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
   "project.resume-repeat": { status: "lab-certified", evidence: ["UIC2-a", "UIC3-b"] },
-  "area.reorder-sidebar": {
+  "area.reorder": {
     status: "lab-certified",
     evidence: ["NATIVE1-d", "AXDRAG1-a", "AXDRAG1-b", "AXDRAG1-f", "AXDRAG2-c"],
   },

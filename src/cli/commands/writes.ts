@@ -1384,9 +1384,9 @@ export function registerWriteCommands(program: Command): void {
   addDriveGuiFlag(
     addWriteFlags(
       area
-        .command("reorder-sidebar <ref>")
+        .command("reorder <ref>")
         .description(
-          "Move an area to a new position in the sidebar (target by uuid or unique name). " +
+          "Move an area to a new position in the area order (target by uuid or unique name). " +
             "Pass exactly one destination: --before/--after another area, or --first/--last. " +
             "This drives the Things window with the pointer — the app comes to the front and " +
             "the sidebar may scroll while the area is moved; the area's projects and to-dos " +
@@ -1410,7 +1410,7 @@ export function registerWriteCommands(program: Command): void {
     }
     await runWrite(opts, (c) =>
       c.write.run(
-        "area.reorder-sidebar",
+        "area.reorder",
         {
           target,
           ...(opts["before"] !== undefined && { before: opts["before"] as string }),

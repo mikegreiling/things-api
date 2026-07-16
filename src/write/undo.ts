@@ -1059,19 +1059,19 @@ export function planUndo(
       return { target, kind: "invertible", steps: [{ op: "reorder", params }], notes };
     }
 
-    case "area.reorder-sidebar": {
+    case "area.reorder": {
       if (uuid === null) return irreversible("no target area uuid recorded");
       const pre = record.pre;
-      if (pre === null) return irreversible("the pre-move sidebar order was not captured");
+      if (pre === null) return irreversible("the pre-move area order was not captured");
       const ranked = Object.entries(pre).filter(([, rank]) => typeof rank === "number") as [
         string,
         number,
       ][];
-      if (ranked.length === 0) return irreversible("the pre-move sidebar order was not captured");
+      if (ranked.length === 0) return irreversible("the pre-move area order was not captured");
       const ranks = ranked.map(([, r]) => r);
       if (new Set(ranks).size !== ranks.length) {
         return irreversible(
-          "the sidebar order before this move was not fully determined (areas were still " +
+          "the area order before this move was not fully determined (areas were still " +
             "unranked), so the previous position cannot be reconstructed",
         );
       }
@@ -1082,13 +1082,13 @@ export function planUndo(
       const params: Record<string, unknown> =
         pred === undefined ? { target: uuid, position: "first" } : { target: uuid, after: pred };
       notes.push(
-        "the area returns to its previous sidebar position by driving the app again " +
+        "the area returns to its previous position by driving the app again " +
           "(relative order restores; the app may assign fresh rank numbers)",
       );
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "area.reorder-sidebar", params }],
+        steps: [{ op: "area.reorder", params }],
         notes,
       };
     }

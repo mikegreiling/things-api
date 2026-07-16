@@ -1658,13 +1658,13 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "area.reorder-sidebar": {
+  "area.reorder": {
     class: "conditional",
     register() {
       it("invertible branch: the inverse re-places the area after its old predecessor", () => {
         const plan = planUndo(
           auditRecord({
-            op: "area.reorder-sidebar",
+            op: "area.reorder",
             uuid: "AR-2",
             requested: { target: "AR-2", position: "last" },
             pre: { "AR-1": -100, "AR-2": -50, "AR-3": 0 },
@@ -1673,14 +1673,14 @@ const CASES: Record<OperationKind, CaseDef> = {
         );
         expect(plan.kind).toBe("invertible");
         expect(plan.steps[0]).toEqual({
-          op: "area.reorder-sidebar",
+          op: "area.reorder",
           params: { target: "AR-2", after: "AR-1" },
         });
       });
       it("invertible branch: a previously-first area inverts to position first", () => {
         const plan = planUndo(
           auditRecord({
-            op: "area.reorder-sidebar",
+            op: "area.reorder",
             uuid: "AR-1",
             requested: { target: "AR-1", after: "AR-3" },
             pre: { "AR-1": -100, "AR-2": -50, "AR-3": 0 },
@@ -1689,14 +1689,14 @@ const CASES: Record<OperationKind, CaseDef> = {
         );
         expect(plan.kind).toBe("invertible");
         expect(plan.steps[0]).toEqual({
-          op: "area.reorder-sidebar",
+          op: "area.reorder",
           params: { target: "AR-1", position: "first" },
         });
       });
       it("irreversible branch: tied pre-move ranks (the sidebar was never materialized)", () => {
         const plan = planUndo(
           auditRecord({
-            op: "area.reorder-sidebar",
+            op: "area.reorder",
             uuid: "AR-2",
             requested: { target: "AR-2", position: "last" },
             pre: { "AR-1": 0, "AR-2": 0, "AR-3": 0 },

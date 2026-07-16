@@ -217,7 +217,7 @@ function capturePre(
   if (spec.mode === "ordering") {
     const preRanks: Record<string, unknown> = {};
     // `capture` may list MORE uuids than the asserted sequence (the full
-    // sidebar order for area.reorder-sidebar) so undo can restore the exact
+    // area order for area.reorder) so undo can restore the exact
     // previous position from the audit record.
     for (const uuid of spec.capture ?? spec.sequence) {
       preRanks[uuid] = reader.rankOf(uuid, spec.key);
