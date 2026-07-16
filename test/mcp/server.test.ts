@@ -1523,4 +1523,227 @@ describe("things MCP server", () => {
       expect(outcome.heading.op).toBe("heading.unarchive");
     });
   });
+
+  // The GUI-driven ops are two-key gated: without the drive acknowledgement they
+  // block (H-UI-DRIVE, a pre-vector hazard, so the default vector suffices); with
+  // it + a fake ui vector, dry_run compiles a plan without ever executing.
+  describe("repeat / ui-vector cluster", () => {
+    const uiVector = (op: string) => fakeVector(null, { id: "ui", ops: [op] }).vector;
+
+    it("make_repeating blocks without the drive ack, and plans with it (dry-run)", async () => {
+      const uuid = seedTodo(fixture.db, { title: "recur me" });
+      await connect([fakeVector(null).vector]);
+      const blocked = await client.callTool({
+        name: "make_repeating",
+        arguments: { uuid, frequency: "daily", interval: 1 },
+      });
+      expect(blocked.isError).toBe(true);
+      const err = textOf(blocked) as { code: string; remediation: string };
+      expect(err.code).toBe("blocked:H-UI-DRIVE");
+      expect(err.remediation.length).toBeGreaterThan(0);
+
+      await close();
+      await connect([uiVector("todo.make-repeating")]);
+      const uuid2 = seedTodo(fixture.db, { title: "recur me 2" });
+      const outcome = textOf(
+        await client.callTool({
+          name: "make_repeating",
+          arguments: {
+            uuid: uuid2,
+            frequency: "daily",
+            interval: 1,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.make-repeating");
+    });
+
+    it("reschedule_repeat blocks without the ack, and plans with it (dry-run)", async () => {
+      const uuid = seedTodo(fixture.db, { title: "rule", recurrenceRule: true });
+      await connect([uiVector("todo.reschedule-repeat")]);
+      const blocked = await client.callTool({
+        name: "reschedule_repeat",
+        arguments: { uuid, frequency: "weekly", interval: 2 },
+      });
+      expect(blocked.isError).toBe(true);
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "reschedule_repeat",
+          arguments: {
+            uuid,
+            frequency: "weekly",
+            interval: 2,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.reschedule-repeat");
+    });
+
+    it("set_repeat_state routes pause/resume and gates the drive", async () => {
+      const uuid = seedTodo(fixture.db, { title: "paused?", recurrenceRule: true });
+      await connect([uiVector("todo.pause-repeat")]);
+      const blocked = await client.callTool({
+        name: "set_repeat_state",
+        arguments: { uuid, state: "pause" },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "set_repeat_state",
+          arguments: { uuid, state: "pause", dangerously_drive_gui: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.pause-repeat");
+    });
+
+    it("convert_to_project dispatches on type and gates the drive", async () => {
+      const uuid = seedTodo(fixture.db, { title: "promote me" });
+      await connect([uiVector("todo.convert-to-project")]);
+      const blocked = await client.callTool({
+        name: "convert_to_project",
+        arguments: { uuid },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "convert_to_project",
+          arguments: { uuid, dangerously_drive_gui: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.convert-to-project");
+    });
+
+    it("reschedule_project_repeat blocks without the ack, and plans with it (dry-run)", async () => {
+      const uuid = seedProject(fixture.db, { title: "Recurring Proj", recurrenceRule: true });
+      await connect([uiVector("project.reschedule-repeat")]);
+      const blocked = await client.callTool({
+        name: "reschedule_project_repeat",
+        arguments: { uuid, frequency: "monthly", interval: 1 },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "reschedule_project_repeat",
+          arguments: {
+            uuid,
+            frequency: "monthly",
+            interval: 1,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.reschedule-repeat");
+    });
+
+    it("set_project_repeat_state routes pause/resume and gates the drive", async () => {
+      const uuid = seedProject(fixture.db, { title: "Proj paused?", recurrenceRule: true });
+      await connect([uiVector("project.resume-repeat")]);
+      const blocked = await client.callTool({
+        name: "set_project_repeat_state",
+        arguments: { uuid, state: "resume" },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "set_project_repeat_state",
+          arguments: { uuid, state: "resume", dangerously_drive_gui: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.resume-repeat");
+    });
+
+    it("reorder_area gates the drive, plans with it, and demands exactly one destination", async () => {
+      const target = seedArea(fixture.db, "Move Me", 0);
+      seedArea(fixture.db, "Anchor", 1);
+      await connect([uiVector("area.reorder")]);
+      const blocked = await client.callTool({
+        name: "reorder_area",
+        arguments: { target, position: "last" },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "reorder_area",
+          arguments: { target, position: "last", dangerously_drive_gui: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("area.reorder");
+
+      const twoDest = await client.callTool({
+        name: "reorder_area",
+        arguments: { target, before: "a", after: "b", dangerously_drive_gui: true },
+      });
+      expect(twoDest.isError).toBe(true);
+      expect((textOf(twoDest) as { code: string }).code).toBe("usage");
+    });
+
+    it("make_project_repeating blocks without the ack, and plans with it (dry-run)", async () => {
+      const area = seedArea(fixture.db, "Repeat Area");
+      const uuid = seedProject(fixture.db, { title: "Promote Proj", area });
+      await connect([fakeVector(null).vector]);
+      const blocked = await client.callTool({
+        name: "make_project_repeating",
+        arguments: { uuid, frequency: "weekly", interval: 1 },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "make_project_repeating",
+          arguments: {
+            uuid,
+            frequency: "weekly",
+            interval: 1,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.make-repeating");
+    });
+
+    it("create_repeating_project blocks without the ack (before creating), and plans with it", async () => {
+      await connect([fakeVector(null).vector]);
+      const blocked = await client.callTool({
+        name: "create_repeating_project",
+        arguments: { title: "Weekly review", frequency: "weekly", interval: 1 },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "create_repeating_project",
+          arguments: {
+            title: "Weekly review",
+            frequency: "weekly",
+            interval: 1,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.create-repeating");
+    });
+  });
 });
