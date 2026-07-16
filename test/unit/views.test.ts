@@ -328,6 +328,39 @@ describe("list views", () => {
   });
 });
 
+describe("injected clock threads through logged/logbook membership", () => {
+  // logInterval 1 (daily) makes the sweep boundary local MIDNIGHT of the
+  // injected `now`, so a fixed stopDate can be straddled by two pinned clocks —
+  // no dependence on real wall time.
+  const STOP = new Date(2026, 6, 10, 12, 0).getTime() / 1000; // 2026-07-10 noon
+  const BEFORE = new Date(2026, 6, 2, 12, 0); // pinned 07-02: boundary 07-02 00:00 < STOP
+  const AFTER = new Date(2026, 6, 12, 12, 0); // pinned 07-12: boundary 07-12 00:00 > STOP
+
+  it("logbook membership honors the pinned clock (stopDate straddling the boundary)", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 1 });
+    seedTodo(fx.db, { title: "mid-window win", status: "completed", stopDate: STOP });
+    // Pinned BEFORE the sweep reaches it: unswept, so absent from the Logbook.
+    expect(logbookView(fx.db, BEFORE).map((i) => i.title)).toEqual([]);
+    // Pinned AFTER the boundary advances past its stopDate: it appears.
+    expect(logbookView(fx.db, AFTER).map((i) => i.title)).toEqual(["mid-window win"]);
+  });
+
+  it("search's logged flag honors the pinned clock (same materialize boundary)", () => {
+    fx = buildFixtureDb();
+    seedSettings(fx.db, { logInterval: 1 });
+    seedTodo(fx.db, { title: "widget win", status: "completed", stopDate: STOP });
+    // The closed row appears in a --logged search under either clock; only the
+    // `logged` flag (completion vs. swept-into-Logbook) tracks the boundary.
+    expect(
+      searchView(fx.db, "widget", { logged: true }, BEFORE).map((i) => [i.title, i.logged]),
+    ).toEqual([["widget win", false]]);
+    expect(
+      searchView(fx.db, "widget", { logged: true }, AFTER).map((i) => [i.title, i.logged]),
+    ).toEqual([["widget win", true]]);
+  });
+});
+
 describe("upcomingView deadline-forecast cohort (UPC1)", () => {
   it("forecasts future-deadline anytime/someday to-dos and someday projects under the DEADLINE date, excludes Inbox", () => {
     fx = buildFixtureDb();
@@ -788,7 +821,9 @@ describe("tag-filtered list views (Phase 10)", () => {
       "unrelated",
     );
     expect(somedayView(fx.db, NOW, { tag: "focus" })).toEqual([]);
-    expect(logbookView(fx.db, { tag: "focus" }).map((i) => i.title)).not.toContain("done-tagged");
+    expect(logbookView(fx.db, undefined, { tag: "focus" }).map((i) => i.title)).not.toContain(
+      "done-tagged",
+    );
   });
 });
 
@@ -1790,7 +1825,7 @@ describe("changesView (Phase 13)", () => {
       modificationDate: SINCE + 40,
     });
 
-    const changes = changesView(fx.db, { since: new Date(SINCE * 1000) });
+    const changes = changesView(fx.db, undefined, { since: new Date(SINCE * 1000) });
     expect(changes.map((c) => [c.title, c.changeKind])).toEqual([
       ["template-edited", "modified"],
       ["trashed-after", "modified"],
@@ -1799,7 +1834,9 @@ describe("changesView (Phase 13)", () => {
     ]);
     expect(changes.find((c) => c.title === "trashed-after")?.trashed).toBe(true);
     expect(changes.find((c) => c.title === "template-edited")?.repeating.isTemplate).toBe(true);
-    expect(changesView(fx.db, { since: new Date(SINCE * 1000), limit: 2 })).toHaveLength(2);
+    expect(changesView(fx.db, undefined, { since: new Date(SINCE * 1000), limit: 2 })).toHaveLength(
+      2,
+    );
   });
 });
 
