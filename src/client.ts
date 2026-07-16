@@ -139,19 +139,24 @@ export interface ThingsClient {
      * are excluded by default — `later: true` appends them after the active
      * block of their group (loose block / area), never intermingled.
      */
-    projects(options?: { areaUuid?: string; later?: boolean; overdue?: boolean }): Project[];
+    projects(
+      options?: { areaUuid?: string; later?: boolean; overdue?: boolean } & ViewFilter,
+    ): Project[];
     /**
      * Composite project view. Targets by uuid, unique name, or uuid prefix.
      * `overdue: true` keeps only child to-dos whose own deadline is overdue
-     * (open, before today) and collapses headings left with no such child.
+     * (open, before today); the tag filters (`tags`/`directTags`/`untagged`/
+     * `directUntagged`) keep only the child to-dos matching by their own tags.
+     * Any content scope collapses headings left with no surviving child.
      */
-    projectView(ref: string, options?: { overdue?: boolean }): ProjectView;
+    projectView(ref: string, options?: ViewFilter): ProjectView;
     /**
      * Composite area view: direct to-dos, projects in sidebar order, later,
      * logged. `overdue: true` keeps only the loose to-dos AND child projects
-     * whose OWN deadline is overdue — no descent into project contents.
+     * whose OWN deadline is overdue; the tag filters keep only the rows
+     * matching by their own tags — no descent into project contents.
      */
-    areaView(ref: string, options?: { overdue?: boolean }): AreaView;
+    areaView(ref: string, options?: ViewFilter): AreaView;
     areas(): Area[];
     tags(): Tag[];
     search(query: string, options?: SearchOptions): SearchResultItem[];
@@ -471,13 +476,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       // rides the same clock as every other view — never a hardcoded date.
       projects: (o) => projectsView(conn.db, { ...o, now: now() }),
       projectView: (ref, o) =>
-        projectView(
-          conn.db,
-          resolveProjectUuid(conn.db, ref, { trashed: true }),
-          now(),
-          o?.overdue === true,
-        ),
-      areaView: (ref, o) => areaView(conn.db, ref, now(), o?.overdue === true),
+        projectView(conn.db, resolveProjectUuid(conn.db, ref, { trashed: true }), now(), o ?? {}),
+      areaView: (ref, o) => areaView(conn.db, ref, now(), o ?? {}),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o, now()),

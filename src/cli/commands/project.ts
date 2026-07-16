@@ -20,6 +20,13 @@ import { openInThings } from "./reads.ts";
 import { invocation, runRead, shellQuote, withClient } from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
+import {
+  addTagFilterOptions,
+  tagFilterFields,
+  tagFlagConflict,
+  tagInvocationParts,
+  type TagFlags,
+} from "../tag-filters.ts";
 
 export interface ProjectShowOpts {
   showLater?: boolean;
@@ -179,13 +186,14 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
 }
 
 /** Options accepted by the project-show code path (shared by `project show` and `projects <ref>`). */
-export type ProjectShowActionOpts = ProjectShowOpts & {
-  json?: boolean;
-  db?: string;
-  all?: boolean;
-  /** Content scope: keep only child to-dos whose own deadline is overdue. */
-  overdue?: boolean;
-};
+export type ProjectShowActionOpts = ProjectShowOpts &
+  TagFlags & {
+    json?: boolean;
+    db?: string;
+    all?: boolean;
+    /** Content scope: keep only child to-dos whose own deadline is overdue. */
+    overdue?: boolean;
+  };
 
 /**
  * The `project show <ref>` action body, factored out so the pluralized
@@ -193,9 +201,11 @@ export type ProjectShowActionOpts = ProjectShowOpts & {
  * synonym). Both echo the canonical `things project show …` hint.
  */
 export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): void {
+  if (tagFlagConflict(rawOpts)) return;
   // --all lifts the view's own default restriction (the hidden later rows).
   // Logged is a SEPARATE content class and stays behind --show-logged.
   const overdue = rawOpts.overdue === true;
+  const tagFilter = tagFilterFields(rawOpts);
   const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
     ...rawOpts,
     showLater: rawOpts.showLater === true || rawOpts.all === true,
@@ -203,6 +213,7 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
       shellQuote(ref),
       ...showToggleFlags(rawOpts),
       overdue && "--overdue",
+      ...tagInvocationParts(rawOpts),
     ]),
   };
   runRead(
@@ -210,7 +221,7 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
     "project-view",
     (c) => {
       try {
-        return { data: c.read.projectView(ref, { overdue }) };
+        return { data: c.read.projectView(ref, { overdue, ...tagFilter }) };
       } catch (err) {
         // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
         if (err instanceof RangeError && !err.message.includes("ambiguous")) {
@@ -229,10 +240,10 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
 
 export function registerProjectCommands(program: Command): void {
   const project = program.command("project").description("Project-scoped operations");
-  project
+  const projectShow = project
     .command("show <ref>")
     .description(
-      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. Target by uuid or unique name.",
+      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. Filter the child to-dos with --tag / --direct-tag / --untagged / --direct-untagged (by each to-do's own tags). Target by uuid or unique name.",
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
@@ -242,8 +253,10 @@ export function registerProjectCommands(program: Command): void {
       "reveal the later rows (same as --show-later; logged stays behind --show-logged)",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
-    .option("--db <path>", "explicit database path")
-    .action((ref: string, rawOpts: ProjectShowActionOpts) => runProjectShow(ref, rawOpts));
+    .option("--db <path>", "explicit database path");
+  addTagFilterOptions(projectShow).action((ref: string, rawOpts: ProjectShowActionOpts) =>
+    runProjectShow(ref, rawOpts),
+  );
   project
     .command("open <ref>")
     .description(

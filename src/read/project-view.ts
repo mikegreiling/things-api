@@ -16,6 +16,7 @@ import { fetchTagsForTasks, fetchTaskByUuid, fetchTaskRows, makeRefResolver } fr
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import { OVERDUE } from "./predicates.ts";
 import { inheritedTagsFor } from "./tags.ts";
+import { tagFilter, type ViewFilter } from "./views.ts";
 
 export interface ProjectView {
   project: Project;
@@ -55,8 +56,9 @@ export function projectView(
   db: DatabaseSync,
   uuid: string,
   now?: Date,
-  overdue = false,
+  filter: ViewFilter = {},
 ): ProjectView {
+  const overdue = filter.overdue === true;
   const projectRow = fetchTaskByUuid(db, uuid);
   if (!projectRow || projectRow.type !== 1) throw new ProjectNotFoundError(uuid);
 
@@ -85,13 +87,20 @@ export function projectView(
   // (below). Its single packed-today bind trails the two uuid binds.
   const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
   const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
+  // Tag scope (§9a): the child to-dos are filtered by each row's OWN tags —
+  // `--tag` inheritance-inclusive (a child inherits the project/area/heading
+  // tags, so filtering by a tag the PROJECT carries matches every child),
+  // `--direct-tag` the child's own assignments only. No recursion; the header
+  // always renders. The tag binds trail the two uuid binds and lead the overdue
+  // bind, matching their left-to-right order in the SQL.
+  const tf = tagFilter(db, filter);
   const childRows = fetchTaskRows(
     db,
     `t.type = 0 AND (t.project = ? OR t.heading IN (
        SELECT uuid FROM TMTask WHERE type = 2 AND project = ?
-     ))${overdueSql}
+     ))${tf.sql}${overdueSql}
      ORDER BY t."index" ASC`,
-    [uuid, uuid, ...overdueBinds],
+    [uuid, uuid, ...tf.binds, ...overdueBinds],
   );
   const childTags = tagsOf(childRows);
   const boundary = logBoundary(db, now);
@@ -173,12 +182,14 @@ export function projectView(
     else scheduled.push({ date, items: [todo] });
   }
 
-  // Under `--overdue`, a heading whose children were all filtered out collapses
-  // rather than rendering an empty section; a heading with a surviving overdue
-  // child is kept. Without the scope every heading renders (its own empty state).
+  // Under any content scope (`--overdue` or a tag filter), a heading whose
+  // children were all filtered out collapses rather than rendering an empty
+  // section; a heading with a surviving child is kept. With no scope active
+  // every heading renders (its own empty state).
+  const contentScoped = overdue || tf.sql !== "";
   const headingGroups = headings
     .map((heading) => ({ heading, items: byHeading.get(heading.uuid) ?? [] }))
-    .filter((g) => !overdue || g.items.length > 0);
+    .filter((g) => !contentScoped || g.items.length > 0);
 
   return {
     project,

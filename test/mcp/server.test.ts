@@ -214,7 +214,7 @@ describe("things MCP server", () => {
     expect(view.today.map((i) => i.title)).toEqual(["MCP bare"]);
     const conflict = await client.callTool({
       name: "read_view",
-      arguments: { view: "today", untagged: true, tag: "focus" },
+      arguments: { view: "today", untagged: true, tag: ["focus"] },
     });
     expect(conflict.isError).toBe(true);
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
@@ -282,6 +282,101 @@ describe("things MCP server", () => {
     });
     expect(conflict.isError).toBe(true);
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
+  });
+
+  it("read_view tag is an array that ANDs; direct_tag / direct_untagged narrow", async () => {
+    const foo = seedTag(fixture.db, "foo");
+    const bar = seedTag(fixture.db, "bar");
+    const work = seedArea(fixture.db, "Work");
+    tagArea(fixture.db, work, foo);
+    const both = seedTodo(fixture.db, { title: "MCP both", area: work, startDate: "2026-07-05" });
+    tagTask(fixture.db, both, bar); // inherits foo (area) + direct bar
+    const directFoo = seedTodo(fixture.db, {
+      title: "MCP direct-foo",
+      startDate: "2026-07-05",
+    });
+    tagTask(fixture.db, directFoo, foo);
+    seedTodo(fixture.db, { title: "MCP inherited-only", area: work, startDate: "2026-07-05" });
+    await connect([fakeVector(null).vector]);
+    // AND: foo (inherited or direct) AND bar (direct) → only "MCP both".
+    const anded = textOf(
+      await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", tag: ["foo", "bar"] },
+      }),
+    ) as { today: { title: string }[] };
+    expect(anded.today.map((i) => i.title)).toEqual(["MCP both"]);
+    // direct_tag foo: only the directly-foo-tagged row (inherited-only excluded).
+    const direct = textOf(
+      await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", direct_tag: ["foo"] },
+      }),
+    ) as { today: { title: string }[] };
+    expect(direct.today.map((i) => i.title)).toEqual(["MCP direct-foo"]);
+    // direct_untagged: the inherited-only row survives (no DIRECT tag).
+    const du = textOf(
+      await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", direct_untagged: true },
+      }),
+    ) as { today: { title: string }[] };
+    expect(du.today.map((i) => i.title)).toContain("MCP inherited-only");
+    expect(du.today.map((i) => i.title)).not.toContain("MCP direct-foo");
+    // untagged + direct_untagged is refused.
+    const conflict = await client.callTool({
+      name: "read_view",
+      arguments: { view: "today", untagged: true, direct_untagged: true },
+    });
+    expect(conflict.isError).toBe(true);
+    expect(textOf(conflict)).toMatchObject({ code: "usage" });
+  });
+
+  it("get_project / get_area / list_collections carry the tag filters with guards", async () => {
+    const focus = seedTag(fixture.db, "focus");
+    const area = seedArea(fixture.db, "Home");
+    const project = seedProject(fixture.db, { title: "P", area });
+    const childHit = seedTodo(fixture.db, { title: "child-focus", project });
+    tagTask(fixture.db, childHit, focus);
+    seedTodo(fixture.db, { title: "child-bare", project });
+    // A directly-focus-tagged project + a bare one, both in Home.
+    tagTask(fixture.db, project, focus);
+    seedProject(fixture.db, { title: "PBare", area });
+    const looseHit = seedTodo(fixture.db, { title: "loose-focus", area });
+    tagTask(fixture.db, looseHit, focus);
+    await connect([fakeVector(null).vector]);
+    // get_project direct_tag → only the child with its own focus tag.
+    const proj = textOf(
+      await client.callTool({
+        name: "get_project",
+        arguments: { uuid: "P", direct_tag: ["focus"] },
+      }),
+    ) as { active: { title: string }[] };
+    expect(proj.active.map((i) => i.title)).toEqual(["child-focus"]);
+    // get_area direct_tag → loose to-dos + child projects by own tag.
+    const areaRes = textOf(
+      await client.callTool({
+        name: "get_area",
+        arguments: { ref: "Home", direct_tag: ["focus"] },
+      }),
+    ) as { active: { title: string }[]; projects: { title: string }[] };
+    expect(areaRes.active.map((i) => i.title)).toEqual(["loose-focus"]);
+    expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
+    // list_collections projects direct_tag → only the directly-tagged project.
+    const list = textOf(
+      await client.callTool({
+        name: "list_collections",
+        arguments: { kind: "projects", direct_tag: ["focus"] },
+      }),
+    ) as { title: string }[];
+    expect(list.map((p) => p.title)).toEqual(["P"]);
+    // areas kind rejects the tag filters.
+    const rejected = await client.callTool({
+      name: "list_collections",
+      arguments: { kind: "areas", tag: ["focus"] },
+    });
+    expect(rejected.isError).toBe(true);
+    expect(textOf(rejected)).toMatchObject({ code: "usage" });
   });
 
   it("read_view overdue narrows to open, past-deadline members; rejects forward/closed views", async () => {

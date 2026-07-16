@@ -33,6 +33,13 @@ import {
   withClient,
 } from "../read-driver.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
+import {
+  addTagFilterOptions,
+  tagFilterFields,
+  tagFlagConflict,
+  tagInvocationParts,
+  type TagFlags,
+} from "../tag-filters.ts";
 
 /**
  * The canonical typed command a loose/bare reference resolved to, for the
@@ -45,14 +52,24 @@ import { DidYouMeanError } from "../did-you-mean.ts";
 function typedShowCommand(t: ShowTarget, ref: string, opts: ProjectShowFlags): string {
   const cmd = t.kind === "area" ? "area show" : t.kind === "project" ? "project show" : "todo show";
   const echoRef = t.viaHeading === true ? t.uuid : stripThingsUri(ref);
-  // The loose router's --show-later/--show-logged/--overdue flags only apply to
-  // the area/project cards — never echo them onto `todo show`, which lacks them.
+  // The loose router's --show-later/--show-logged/--overdue/tag flags only apply
+  // to the area/project cards — never echo them onto `todo show`, which lacks them.
   const flags =
-    t.kind === "to-do" ? [] : [...showToggleFlags(opts), opts.overdue === true && "--overdue"];
+    t.kind === "to-do"
+      ? []
+      : [
+          ...showToggleFlags(opts),
+          opts.overdue === true && "--overdue",
+          ...tagInvocationParts(opts),
+        ];
   return invocation(cmd, [shellQuote(echoRef), ...flags]);
 }
 
-type ProjectShowFlags = { showLater?: boolean; showLogged?: boolean | string; overdue?: boolean };
+type ProjectShowFlags = {
+  showLater?: boolean;
+  showLogged?: boolean | string;
+  overdue?: boolean;
+} & TagFlags;
 
 /**
  * The routing sugars whose canonical form is worth echoing: a verb-omitted
@@ -74,7 +91,7 @@ type ShowPayload =
   | { type: "to-do"; detail: AnyTask | null };
 
 export function registerShowCommands(program: Command): void {
-  program
+  const show = program
     .command("show <ref>")
     .description(
       "Render whatever the reference points at: a to-do, a project (a heading reference " +
@@ -102,22 +119,25 @@ export function registerShowCommands(program: Command): void {
       "--overdue",
       "projects/areas: only items whose own deadline is past (due today is not overdue)",
     )
-    .addOption(new Option("--limit <n>").hideHelp())
+    .addOption(new Option("--limit <n>").hideHelp());
+  addTagFilterOptions(show)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
       (
         ref: string,
-        opts: AreaShowOpts & {
-          json?: boolean;
-          db?: string;
-          limit?: string;
-          areaLimit?: string;
-          projectLimit?: string;
-          all?: boolean;
-          overdue?: boolean;
-        },
+        opts: AreaShowOpts &
+          TagFlags & {
+            json?: boolean;
+            db?: string;
+            limit?: string;
+            areaLimit?: string;
+            projectLimit?: string;
+            all?: boolean;
+            overdue?: boolean;
+          },
       ) => {
+        if (tagFlagConflict(opts)) return;
         if (opts.limit !== undefined) {
           usageError(
             opts,
@@ -174,8 +194,9 @@ export function registerShowCommands(program: Command): void {
             // Projects and to-do cards are uncapped: headings are true
             // containers, so no strict total limit applies.
             const overdue = opts.overdue === true;
+            const tagFilter = tagFilterFields(opts);
             if (t.kind === "project") {
-              const view = c.read.projectView(t.uuid, { overdue });
+              const view = c.read.projectView(t.uuid, { overdue, ...tagFilter });
               // --all reveals the project card's hidden later rows (charter),
               // matching `things project show … --all`.
               const projectOpts = {
@@ -189,7 +210,7 @@ export function registerShowCommands(program: Command): void {
               };
             }
             if (t.kind === "area") {
-              const view = c.read.areaView(t.uuid, { overdue });
+              const view = c.read.areaView(t.uuid, { overdue, ...tagFilter });
               const { data, grouped } = capAreaSections(view, limits);
               return {
                 data: { type: "area", view: data },

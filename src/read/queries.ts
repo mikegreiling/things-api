@@ -38,6 +38,21 @@ export function tagScopeBinds(uuids: string[]): string[] {
 }
 
 /**
+ * The DIRECT-ONLY projection of {@link tagScopeSql}: its FIRST clause alone —
+ * the item's own `TMTaskTag` assignments — WITHOUT the five container-
+ * inheritance hops (project/area/heading). This is the SQL behind
+ * `--direct-tag`: it keeps tag-hierarchy descendant expansion (the uuid SET is
+ * still the tag plus its descendants, OR-matched) but drops container
+ * inheritance, so an item matches only when it is DIRECTLY tagged. Takes the
+ * uuid set once, so callers bind `uuids` exactly one time (not `× 6`). KEEP THE
+ * DIRECT CLAUSE IN LOCKSTEP WITH tagScopeSql's first clause.
+ */
+export function directTagScopeSql(uuidCount: number): string {
+  const set = `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
+  return `EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid AND tt.tags IN ${set})`;
+}
+
+/**
  * The negation of tag membership — the SQL behind the `untagged` filter (the
  * GUI's "No Tag"). It mirrors tagScopeSql's SAME six direct+inherited
  * relations (heading → project → area, T18/U18/A13) but with the tag-set
@@ -58,6 +73,18 @@ export function untaggedScopeSql(): string {
   OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
              JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading)
 )`;
+}
+
+/**
+ * The DIRECT-ONLY counterpart of {@link untaggedScopeSql} — the SQL behind
+ * `--direct-untagged` (the GUI's in-context "No Tag"). It negates only the
+ * item's OWN direct assignments (the first of the six membership clauses),
+ * leaving container inheritance untouched: an item qualifies when it carries no
+ * DIRECT tag, even if it inherits one from its project/area/heading. Takes no
+ * binds. KEEP THE DIRECT CLAUSE IN LOCKSTEP WITH {@link directTagScopeSql}.
+ */
+export function directUntaggedScopeSql(): string {
+  return `NOT EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid)`;
 }
 
 /**

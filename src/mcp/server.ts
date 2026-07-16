@@ -183,29 +183,99 @@ const READ_ONLY = { readOnlyHint: true } as const;
 const NON_DESTRUCTIVE = { destructiveHint: false } as const;
 const DESTRUCTIVE = { destructiveHint: true } as const;
 
-const tagFilterShape = {
+/**
+ * The five tag-filter inputs shared by every tag-accepting tool. `tag` and
+ * `direct_tag` are ARRAYS — repeat a tag to AND several together. `--tag`
+ * honors container inheritance; `direct_tag` matches only a directly-assigned
+ * tag (both keep hierarchy-descendant expansion, which `exact_tag` disables).
+ */
+const tagOnlyShape = {
   tag: z
-    .string()
+    .array(z.string())
     .optional()
-    .describe(`Filter by tag (${REF_FORMAT}); includes items carrying any nested child tag`),
-  exact_tag: z.boolean().optional().describe("Match only the named tag, not its nested children"),
+    .describe(
+      `Filter by tag (${REF_FORMAT}); repeat to AND several tags. Matches a direct, ` +
+        "container-inherited, or descendant tag",
+    ),
+  direct_tag: z
+    .array(z.string())
+    .optional()
+    .describe(
+      `Filter by a tag assigned DIRECTLY to the item (${REF_FORMAT}); repeat to AND several. ` +
+        "Excludes container-inherited tags; still matches hierarchy descendants",
+    ),
+  exact_tag: z
+    .boolean()
+    .optional()
+    .describe("Match only the named tag(s), not their nested children"),
   untagged: z
     .boolean()
     .optional()
-    .describe("Only items with no tag (direct or inherited); not combinable with tag/exact_tag"),
+    .describe(
+      "Only items with no tag (direct or inherited); not combinable with " +
+        "tag/direct_tag/exact_tag/direct_untagged",
+    ),
+  direct_untagged: z
+    .boolean()
+    .optional()
+    .describe(
+      "Only items with no DIRECT tag (an inherited tag is allowed); not combinable with " +
+        "the tag-presence flags or untagged",
+    ),
+};
+
+const tagFilterShape = {
+  ...tagOnlyShape,
   overdue: z
     .boolean()
     .optional()
     .describe("Only open items past their deadline (due today is not overdue)"),
 };
 
-/** untagged inverts tag, so pairing them is contradictory (surface guard). */
-function untaggedConflict(args: {
-  untagged?: boolean | undefined;
-  tag?: string | undefined;
+/** The parsed shape of the five tag-filter inputs on any tag-accepting tool. */
+interface TagArgs {
+  tag?: string[] | undefined;
+  direct_tag?: string[] | undefined;
   exact_tag?: boolean | undefined;
-}): boolean {
-  return args.untagged === true && (args.tag !== undefined || args.exact_tag === true);
+  untagged?: boolean | undefined;
+  direct_untagged?: boolean | undefined;
+}
+
+/** True when any tag-PRESENCE input was passed (a positive filter, not a negation). */
+function hasTagPresence(args: TagArgs): boolean {
+  return (
+    (args.tag?.length ?? 0) > 0 || (args.direct_tag?.length ?? 0) > 0 || args.exact_tag === true
+  );
+}
+
+/**
+ * The tag-filter mutual-exclusivity guard: the negations invert a presence, so
+ * they combine neither with a tag-presence input nor with each other. Returns
+ * the usage message when incoherent, else null.
+ */
+function tagFlagConflict(args: TagArgs): string | null {
+  if (args.untagged === true && args.direct_untagged === true) {
+    return "pass at most one of untagged / direct_untagged";
+  }
+  if (args.untagged === true && hasTagPresence(args)) {
+    return "untagged does not combine with tag/direct_tag/exact_tag";
+  }
+  if (args.direct_untagged === true && hasTagPresence(args)) {
+    return "direct_untagged does not combine with tag/direct_tag/exact_tag";
+  }
+  return null;
+}
+
+/** Map the tag-filter inputs into the ViewFilter tag fields (empty keys omitted). */
+function tagFilterFromArgs(args: TagArgs): Record<string, unknown> {
+  return {
+    ...(args.tag !== undefined && args.tag.length > 0 && { tags: args.tag }),
+    ...(args.direct_tag !== undefined &&
+      args.direct_tag.length > 0 && { directTags: args.direct_tag }),
+    ...(args.exact_tag === true && { exactTag: true }),
+    ...(args.untagged === true && { untagged: true }),
+    ...(args.direct_untagged === true && { directUntagged: true }),
+  };
 }
 
 const dryRunShape = {
@@ -436,7 +506,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
-        if (untaggedConflict(args)) return usage("pass untagged, or tag/exact_tag — not both");
+        const tagConflict = tagFlagConflict(args);
+        if (tagConflict !== null) return usage(tagConflict);
         // show_active_project_items is the preferred name; active_project_items
         // stays accepted as a compatibility alias.
         const showActiveProjectItems = args.show_active_project_items ?? args.active_project_items;
@@ -482,9 +553,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const c = getClient();
         const filter = {
-          ...(args.tag !== undefined && { tag: args.tag }),
-          ...(args.exact_tag === true && { exactTag: true }),
-          ...(args.untagged === true && { untagged: true }),
+          ...tagFilterFromArgs(args),
           ...(args.overdue === true && { overdue: true }),
         };
         switch (args.view) {
@@ -582,7 +651,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
-        if (untaggedConflict(args)) return usage("pass untagged, or tag/exact_tag — not both");
+        const tagConflict = tagFlagConflict(args);
+        if (tagConflict !== null) return usage(tagConflict);
         if (
           args.overdue === true &&
           (args.logged === true || args.trashed === true || args.all === true)
@@ -594,9 +664,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const { data, pagination } = paginateList(
           getClient().read.search(args.query, {
             limit: null,
-            ...(args.tag !== undefined && { tag: args.tag }),
-            ...(args.exact_tag === true && { exactTag: true }),
-            ...(args.untagged === true && { untagged: true }),
+            ...tagFilterFromArgs(args),
             ...(args.overdue === true && { overdue: true }),
             ...(args.project !== undefined && { project: args.project }),
             ...(args.area !== undefined && { area: args.area }),
@@ -666,9 +734,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One project's full contents: metadata plus its to-dos grouped under their headings. " +
+        "The tag filters keep only the child to-dos matching by their own tags (a heading left " +
+        "with none is dropped). " +
         OMIT_EMPTY_NOTE,
       inputSchema: {
         uuid: z.string().describe("Project uuid or unique name"),
+        ...tagOnlyShape,
         overdue: z
           .boolean()
           .optional()
@@ -679,9 +750,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() =>
-        readResult(getClient().read.projectView(args.uuid, { overdue: args.overdue === true })),
-      ),
+      guard(() => {
+        const tagConflict = tagFlagConflict(args);
+        if (tagConflict !== null) return usage(tagConflict);
+        return readResult(
+          getClient().read.projectView(args.uuid, {
+            overdue: args.overdue === true,
+            ...tagFilterFromArgs(args),
+          }),
+        );
+      }),
   );
 
   server.registerTool(
@@ -696,6 +774,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         OMIT_EMPTY_NOTE,
       inputSchema: {
         ref: z.string().describe("Area uuid or unique name"),
+        ...tagOnlyShape,
         area_limit: z
           .number()
           .int()
@@ -720,6 +799,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(() => {
+        const tagConflict = tagFlagConflict(args);
+        if (tagConflict !== null) return usage(tagConflict);
         const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
         const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
         if (areaLimit === "conflict" || projectLimit === "conflict") {
@@ -727,7 +808,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
         const { data, grouped } = capAreaSections(
-          getClient().read.areaView(args.ref, { overdue: args.overdue === true }),
+          getClient().read.areaView(args.ref, {
+            overdue: args.overdue === true,
+            ...tagFilterFromArgs(args),
+          }),
           limits,
         );
         return groupedResult(data, grouped);
@@ -739,10 +823,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "List every project, area, or tag (tags include their parent-tag nesting). Use to " +
-        "refresh the inventory summarized in the server instructions. " +
+        "refresh the inventory summarized in the server instructions. The tag filters scope " +
+        "the projects list by each project's own tags (areas/tags reject them). " +
         OMIT_EMPTY_NOTE,
       inputSchema: {
         kind: z.enum(["projects", "areas", "tags"]),
+        ...tagOnlyShape,
         overdue: z
           .boolean()
           .optional()
@@ -755,14 +841,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     async (args) =>
       guard(() => {
         const c = getClient();
-        // areas/tags are not dated entities — overdue is vacuous, rejected
+        // areas/tags are not dated entities and have no per-row tag list to
+        // filter — overdue and the tag filters are vacuous there, rejected
         // fail-closed (the same style read_view uses for the wrong views).
         if (args.overdue === true && args.kind !== "projects") {
           return usage(`overdue applies only to projects, not ${args.kind}`);
         }
+        if (
+          args.kind !== "projects" &&
+          (hasTagPresence(args) || args.untagged === true || args.direct_untagged === true)
+        ) {
+          return usage(`the tag filters apply only to projects, not ${args.kind}`);
+        }
+        const tagConflict = tagFlagConflict(args);
+        if (tagConflict !== null) return usage(tagConflict);
         return readResult(
           args.kind === "projects"
-            ? c.read.projects({ overdue: args.overdue === true })
+            ? c.read.projects({ overdue: args.overdue === true, ...tagFilterFromArgs(args) })
             : args.kind === "areas"
               ? c.read.areas()
               : c.read.tags(),

@@ -1032,7 +1032,7 @@ describe("overdue filter in container views (OWN-DEADLINE UNIFORM)", () => {
       });
       seedTodo(fx.db, { title: "p2-none", heading: hMiss, project: null });
 
-      const view = projectView(fx.db, project, NOW, true);
+      const view = projectView(fx.db, project, NOW, { overdue: true });
       // Project header still renders regardless of the filter.
       expect(view.project.title).toBe("Launch");
       expect(view.active.map((i) => i.title)).toEqual(["loose-overdue"]);
@@ -1046,7 +1046,7 @@ describe("overdue filter in container views (OWN-DEADLINE UNIFORM)", () => {
       fx = buildFixtureDb();
       const project = seedProject(fx.db, { title: "Launch" });
       seedHeading(fx.db, { title: "Empty Phase", project });
-      const view = projectView(fx.db, project, NOW, false);
+      const view = projectView(fx.db, project, NOW, {});
       expect(view.headings.map((g) => g.heading.title)).toEqual(["Empty Phase"]);
     });
   });
@@ -1078,7 +1078,7 @@ describe("overdue filter in container views (OWN-DEADLINE UNIFORM)", () => {
       // on its OWN deadline, and its children are never inspected here.
       seedTodo(fx.db, { title: "buried-clean", project: projOverdue });
 
-      const view = areaView(fx.db, "Home", NOW, true);
+      const view = areaView(fx.db, "Home", NOW, { overdue: true });
       expect(view.active.map((i) => i.title)).toEqual(["todo-overdue"]);
       expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
       // The buried overdue to-do never appears at the area level.
@@ -1092,7 +1092,7 @@ describe("overdue filter in container views (OWN-DEADLINE UNIFORM)", () => {
       const area = seedArea(fx.db, "Home");
       seedTodo(fx.db, { title: "todo-none", area });
       seedProject(fx.db, { title: "proj-none", area });
-      const view = areaView(fx.db, "Home", NOW, true);
+      const view = areaView(fx.db, "Home", NOW, { overdue: true });
       expect(view.active).toEqual([]);
       expect(view.projects).toEqual([]);
     });
@@ -1318,6 +1318,207 @@ describe("exact-tag filtering (Phase 12c)", () => {
     expect(
       searchView(fx.db, "via", { tag: "errands", exactTag: true }).map((i) => i.title),
     ).toEqual(["via-area"]);
+  });
+});
+
+describe("direct-tag filtering (container inheritance dropped)", () => {
+  // A world where a tag reaches items by BOTH direct assignment and every
+  // container-inheritance hop, so --direct-tag can be proven to keep the direct
+  // ones and drop the inherited ones.
+  function seedDirectWorld() {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const work = seedArea(fx.db, "Work");
+    tagArea(fx.db, work, focus);
+    const proj = seedProject(fx.db, { title: "P", area: work, startDate: "2026-07-02" });
+    const heading = seedHeading(fx.db, { title: "H", project: proj });
+    const D = "2026-07-02";
+    const direct = seedTodo(fx.db, { title: "direct", startDate: D });
+    tagTask(fx.db, direct, focus);
+    seedTodo(fx.db, { title: "via-project", project: proj, startDate: D });
+    seedTodo(fx.db, { title: "via-area", area: work, startDate: D });
+    seedTodo(fx.db, { title: "via-heading", heading, startDate: D });
+    seedTodo(fx.db, { title: "unrelated", startDate: D });
+    return { focus };
+  }
+
+  it("--direct-tag keeps only directly-tagged items; --tag still matches inherited (regression)", () => {
+    seedDirectWorld();
+    // direct-tag: only the item's OWN assignment counts (P is area-tagged, so it
+    // matches --tag but NOT --direct-tag).
+    expect(todayView(fx.db, NOW, { directTags: ["focus"] }).today.map((i) => i.title)).toEqual([
+      "direct",
+    ]);
+    // --tag (regression): direct + every container-inherited hop, incl. project P.
+    expect(
+      todayView(fx.db, NOW, { tags: ["focus"] })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["P", "direct", "via-area", "via-heading", "via-project"]);
+  });
+
+  it("--direct-tag keeps hierarchy-descendant expansion (a descendant DIRECT tag matches)", () => {
+    fx = buildFixtureDb();
+    const parent = seedTag(fx.db, "errands");
+    const child = seedTag(fx.db, "groceries", parent);
+    const area = seedArea(fx.db, "Home");
+    tagArea(fx.db, area, parent); // inherited parent — must NOT match --direct-tag
+    const directChild = seedTodo(fx.db, { title: "direct-child", startDate: "2026-07-02" });
+    tagTask(fx.db, directChild, child);
+    seedTodo(fx.db, { title: "inherited-parent", area, startDate: "2026-07-02" });
+    // direct-tag Parent matches an item DIRECTLY tagged with the child (B kept),
+    // but not the item that only inherits the parent from its area (A dropped).
+    expect(todayView(fx.db, NOW, { directTags: ["errands"] }).today.map((i) => i.title)).toEqual([
+      "direct-child",
+    ]);
+    // exactTag disables descendant expansion for direct-tag too.
+    expect(
+      todayView(fx.db, NOW, { directTags: ["errands"], exactTag: true }).today.map((i) => i.title),
+    ).toEqual([]);
+  });
+
+  it("--direct-untagged keeps inherited-but-not-direct items; --untagged excludes them", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const work = seedArea(fx.db, "Work");
+    tagArea(fx.db, work, focus);
+    const D = "2026-07-02";
+    const direct = seedTodo(fx.db, { title: "has-direct", area: work, startDate: D });
+    tagTask(fx.db, direct, focus);
+    seedTodo(fx.db, { title: "inherited-only", area: work, startDate: D }); // inherits focus, no direct
+    seedTodo(fx.db, { title: "bare", startDate: D });
+    // direct-untagged: no DIRECT tag — an inherited tag is allowed.
+    expect(
+      todayView(fx.db, NOW, { directUntagged: true })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["bare", "inherited-only"]);
+    // untagged: no tag at all, direct OR inherited — the inherited-only row drops.
+    expect(todayView(fx.db, NOW, { untagged: true }).today.map((i) => i.title)).toEqual(["bare"]);
+  });
+});
+
+describe("multi-tag AND (repeatable, intersection)", () => {
+  it("--tag foo --tag bar keeps only items carrying BOTH; a foo-only item is excluded", () => {
+    fx = buildFixtureDb();
+    const foo = seedTag(fx.db, "foo");
+    const bar = seedTag(fx.db, "bar");
+    const D = "2026-07-02";
+    const both = seedTodo(fx.db, { title: "both", startDate: D });
+    tagTask(fx.db, both, foo);
+    tagTask(fx.db, both, bar);
+    const fooOnly = seedTodo(fx.db, { title: "foo-only", startDate: D });
+    tagTask(fx.db, fooOnly, foo);
+    const barOnly = seedTodo(fx.db, { title: "bar-only", startDate: D });
+    tagTask(fx.db, barOnly, bar);
+    expect(todayView(fx.db, NOW, { tags: ["foo", "bar"] }).today.map((i) => i.title)).toEqual([
+      "both",
+    ]);
+    // A single ref is unchanged (the foo set is both + foo-only).
+    expect(
+      todayView(fx.db, NOW, { tags: ["foo"] })
+        .today.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["both", "foo-only"]);
+  });
+
+  it("--tag AND --direct-tag compose (inherited-or-direct AND directly)", () => {
+    fx = buildFixtureDb();
+    const urgent = seedTag(fx.db, "urgent");
+    const home = seedTag(fx.db, "home");
+    const area = seedArea(fx.db, "Area");
+    tagArea(fx.db, area, urgent); // urgent inherited by area members
+    const D = "2026-07-02";
+    // Inherits urgent (from area) AND is directly tagged home → matches.
+    const hit = seedTodo(fx.db, { title: "hit", area, startDate: D });
+    tagTask(fx.db, hit, home);
+    // Inherits urgent but home is only INHERITED (not direct) → excluded by --direct-tag home.
+    const area2 = seedArea(fx.db, "Area2");
+    tagArea(fx.db, area2, urgent);
+    tagArea(fx.db, area2, home);
+    seedTodo(fx.db, { title: "miss", area: area2, startDate: D });
+    expect(
+      todayView(fx.db, NOW, { tags: ["urgent"], directTags: ["home"] }).today.map((i) => i.title),
+    ).toEqual(["hit"]);
+  });
+});
+
+describe("tag filters in container views (§9a — inheritance-inclusive vs direct-only)", () => {
+  it("projectView --tag is vacuous when the PROJECT carries the tag; --direct-tag narrows to own", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const project = seedProject(fx.db, { title: "P" });
+    tagTask(fx.db, project, focus); // project itself tagged → every child inherits it
+    const tagged = seedTodo(fx.db, { title: "child-tagged", project });
+    tagTask(fx.db, tagged, focus);
+    seedTodo(fx.db, { title: "child-bare", project });
+    // --tag: inheritance-inclusive → both children match (the tag is inherited).
+    expect(
+      projectView(fx.db, project, NOW, { tags: ["focus"] })
+        .active.map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["child-bare", "child-tagged"]);
+    // --direct-tag: only the child with its OWN focus tag.
+    expect(
+      projectView(fx.db, project, NOW, { directTags: ["focus"] }).active.map((i) => i.title),
+    ).toEqual(["child-tagged"]);
+  });
+
+  it("projectView tag filter collapses headings with no surviving child", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const project = seedProject(fx.db, { title: "Launch" });
+    const hHit = seedHeading(fx.db, { title: "Phase 1", project, index: 1 });
+    const hMiss = seedHeading(fx.db, { title: "Phase 2", project, index: 2 });
+    const hit = seedTodo(fx.db, { title: "p1-focus", heading: hHit, project: null });
+    tagTask(fx.db, hit, focus);
+    seedTodo(fx.db, { title: "p2-bare", heading: hMiss, project: null });
+    const view = projectView(fx.db, project, NOW, { directTags: ["focus"] });
+    expect(view.headings).toHaveLength(1);
+    expect(view.headings[0]?.heading.title).toBe("Phase 1");
+    expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["p1-focus"]);
+  });
+
+  it("areaView filters loose to-dos AND child projects by own tags; no recursion into projects", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const area = seedArea(fx.db, "Home");
+    const looseHit = seedTodo(fx.db, { title: "loose-focus", area, index: 1 });
+    tagTask(fx.db, looseHit, focus);
+    seedTodo(fx.db, { title: "loose-bare", area, index: 2 });
+    const projHit = seedProject(fx.db, { title: "proj-focus", area, index: 3 });
+    tagTask(fx.db, projHit, focus);
+    const projBare = seedProject(fx.db, { title: "proj-bare", area, index: 4 });
+    // A focus-tagged to-do buried inside the NON-matching project must not surface.
+    const buried = seedTodo(fx.db, { title: "buried-focus", project: projBare });
+    tagTask(fx.db, buried, focus);
+    const view = areaView(fx.db, "Home", NOW, { directTags: ["focus"] });
+    expect(view.active.map((i) => i.title)).toEqual(["loose-focus"]);
+    expect(view.projects.map((i) => i.title)).toEqual(["proj-focus"]);
+    const surfaced = [...view.active, ...view.projects].map((i) => i.title);
+    expect(surfaced).not.toContain("buried-focus");
+  });
+
+  it("projectsView (project LIST) filters project rows by own tags; --direct-tag drops area-inherited", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const area = seedArea(fx.db, "Zone", 1);
+    tagArea(fx.db, area, focus); // area-tagged → its projects inherit focus
+    const direct = seedProject(fx.db, { title: "proj-direct", area, index: 1 });
+    tagTask(fx.db, direct, focus);
+    seedProject(fx.db, { title: "proj-inherited", area, index: 2 }); // inherits focus from area
+    const other = seedArea(fx.db, "Other", 2);
+    seedProject(fx.db, { title: "proj-unrelated", area: other, index: 3 });
+    // --tag: inheritance-inclusive → both area-Zone projects (direct + inherited).
+    expect(
+      projectsView(fx.db, { tags: ["focus"], now: NOW })
+        .map((p) => p.title)
+        .toSorted(),
+    ).toEqual(["proj-direct", "proj-inherited"]);
+    // --direct-tag: only the directly-tagged project.
+    expect(projectsView(fx.db, { directTags: ["focus"], now: NOW }).map((p) => p.title)).toEqual([
+      "proj-direct",
+    ]);
   });
 });
 

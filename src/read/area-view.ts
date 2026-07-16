@@ -13,6 +13,7 @@ import { fetchTagsForTasks, fetchTaskRows, makeRefResolver, resolveAreaUuid } fr
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import { OVERDUE } from "./predicates.ts";
 import { areaTags } from "./tags.ts";
+import { tagFilter, type ViewFilter } from "./views.ts";
 
 export interface AreaView {
   area: Area;
@@ -32,7 +33,13 @@ export interface AreaView {
 }
 
 /** Resolves by uuid or unique (case-insensitive) title; throws like the ref resolvers. */
-export function areaView(db: DatabaseSync, ref: string, now?: Date, overdue = false): AreaView {
+export function areaView(
+  db: DatabaseSync,
+  ref: string,
+  now?: Date,
+  filter: ViewFilter = {},
+): AreaView {
+  const overdue = filter.overdue === true;
   const uuid = resolveAreaUuid(db, ref);
   const row = db
     .prepare(`SELECT uuid, title, visible, "index" FROM TMArea WHERE uuid = ?`)
@@ -64,14 +71,20 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date, overdue = fa
   // `project show --overdue`). Sections with no surviving rows collapse.
   const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
   const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
+  // Tag scope (§9a): BOTH displayed row kinds — the child PROJECTS and the
+  // loose to-dos — are filtered by each row's OWN tags (`--tag` inheritance-
+  // inclusive, `--direct-tag` direct-only). Computed once, spliced into both
+  // queries; NO descent into project contents (a child of a matching project
+  // is never inspected here). The tag binds trail each query's own binds.
+  const tf = tagFilter(db, filter);
   // Open projects PLUS closed ones the log-move sweep has not passed — the
   // GUI keeps those checked in place (completion ≠ logged). Under --overdue the
   // OVERDUE predicate's own `status = 0` narrows this to open overdue projects.
   const projectRows = fetchTaskRows(
     db,
     `t.type = 1 AND t.area = ? AND t.trashed = 0
-     AND (t.status = 0 OR t.stopDate > ?)${overdueSql} ORDER BY t."index" ASC`,
-    [uuid, boundary.getTime() / 1000, ...overdueBinds],
+     AND (t.status = 0 OR t.stopDate > ?)${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
+    [uuid, boundary.getTime() / 1000, ...overdueBinds, ...tf.binds],
   );
   const projectTags = tagsOf(projectRows);
   const projects = markLogged(
@@ -81,8 +94,8 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date, overdue = fa
 
   const todoRows = fetchTaskRows(
     db,
-    `t.type = 0 AND t.area = ?${overdueSql} ORDER BY t."index" ASC`,
-    [uuid, ...overdueBinds],
+    `t.type = 0 AND t.area = ?${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
+    [uuid, ...overdueBinds, ...tf.binds],
   );
   const todoTags = tagsOf(todoRows);
   const todos = todoRows.map((r) => ({

@@ -25,6 +25,13 @@ import { disclosureHint, formatItem, quoteTitle, uuidDisplayWidth } from "../ren
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
+import {
+  addTagFilterOptions,
+  tagFilterFields,
+  tagFlagConflict,
+  tagInvocationParts,
+  type TagFlags,
+} from "../tag-filters.ts";
 
 export interface AreaShowOpts {
   showLater?: boolean;
@@ -192,16 +199,17 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
 }
 
 /** Options accepted by the area-show code path (shared by `area show` and `areas <ref>`). */
-export type AreaShowActionOpts = AreaShowOpts & {
-  json?: boolean;
-  db?: string;
-  limit?: string;
-  areaLimit?: string;
-  projectLimit?: string;
-  all?: boolean;
-  /** Content scope: keep only rows (loose to-dos + child projects) with an overdue own deadline. */
-  overdue?: boolean;
-};
+export type AreaShowActionOpts = AreaShowOpts &
+  TagFlags & {
+    json?: boolean;
+    db?: string;
+    limit?: string;
+    areaLimit?: string;
+    projectLimit?: string;
+    all?: boolean;
+    /** Content scope: keep only rows (loose to-dos + child projects) with an overdue own deadline. */
+    overdue?: boolean;
+  };
 
 /**
  * The `area show <ref>` action body, factored out so the pluralized
@@ -209,6 +217,7 @@ export type AreaShowActionOpts = AreaShowOpts & {
  * not a reimplementation). Both echo the canonical `things area show …` hint.
  */
 export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
+  if (tagFlagConflict(opts)) return;
   if (opts.limit !== undefined) {
     usageError(
       opts,
@@ -233,11 +242,13 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
   );
   if (!projectCap.ok) return;
   const overdue = opts.overdue === true;
+  const tagFilter = tagFilterFields(opts);
   const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
   const hintBase = invocation("area show", [
     shellQuote(ref),
     ...showToggleFlags(opts),
     overdue && "--overdue",
+    ...tagInvocationParts(opts),
   ]);
   runRead<AreaView>(
     opts,
@@ -245,7 +256,7 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
     (c) => {
       let view: AreaView;
       try {
-        view = c.read.areaView(ref, { overdue });
+        view = c.read.areaView(ref, { overdue, ...tagFilter });
       } catch (err) {
         // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
         if (err instanceof RangeError && !err.message.includes("ambiguous")) {
@@ -270,13 +281,14 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
 
 export function registerAreaCommands(program: Command): void {
   const area = program.command("area").description("Area-scoped operations");
-  area
+  const areaShow = area
     .command("show <ref>")
     .description(
       "Composite area view mirroring the native UI: active projects first, then the " +
         "area's direct to-dos. --show-later adds the Upcoming (date-ordered) and " +
-        "Someday sections; --show-logged adds the full logbook. Target by uuid or " +
-        "unique name.",
+        "Someday sections; --show-logged adds the full logbook. Filter the rows with " +
+        "--tag / --direct-tag / --untagged / --direct-untagged (by each row's own tags; " +
+        "no descent into project contents). Target by uuid or unique name.",
     )
     .option("--show-later", "include Upcoming and Someday sections")
     .option(
@@ -289,8 +301,10 @@ export function registerAreaCommands(program: Command): void {
     .option("--all", GROUPED_ALL_DESC)
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
-    .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: AreaShowActionOpts) => runAreaShow(ref, opts));
+    .option("--db <path>", "explicit database path");
+  addTagFilterOptions(areaShow).action((ref: string, opts: AreaShowActionOpts) =>
+    runAreaShow(ref, opts),
+  );
   area
     .command("open <ref>")
     .description(
