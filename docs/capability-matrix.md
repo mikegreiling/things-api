@@ -92,6 +92,10 @@ Doctrine — **DECIDED 2026-07-09 (roadmap §E / gaps §0): headings are always 
 | Set keyboard shortcut | 🚫 | ✅ (E10) | 🧪 | |
 | Clear keyboard shortcut | 🚫 | ✅ `delete keyboard shortcut of tag` (A4) | 🧪 | the P29 property-delete form generalizes to `shortcut` |
 | Delete | 🚫 | ✅ PERMANENT, subtree cascades (P16 — ack flag) | 🧪 | |
+| Two tags with the SAME name | ⛔ uncreatable | ⛔ uncreatable | ⛔ | `make new tag` COALESCES to the existing same-named tag (TAGW1-c: same uuid returned, one row; same-name-under-two-parents collapses); the URL scheme cannot create tags at all. A real duplicate-name pair is therefore a **Cloud-sync-only** pathological state — the tag-ref resolver refuses it fail-closed and lists candidates (short uuid + parent path), accepting a uuid or `parent/child` path as the disambiguator. [lab/tagw1-tag-writes.md](lab/tagw1-tag-writes.md) |
+| `/` in a tag name | ✅ literal (`tags=sl%2Fash`) | ✅ literal (`set tag names … "sl/ash"`) | 🧪 | `/` is a legal literal character in a tag title (TAGW1-d, stored + matched literally on both vectors). The `parent/child` path-qualified input syntax therefore applies **literal-over-path precedence**: an exact literal title match (incl. one containing `/`) wins; only otherwise is the ref split on `/` and resolved as a parent→child chain. [lab/tagw1-tag-writes.md](lab/tagw1-tag-writes.md) |
+
+**Tag references (any op that accepts tags — `todo.add`, `todo.set-tags`, `project.set-tags`, `area.add`, `area.update`):** a tag value may be a **title**, a **uuid** (resolved to its title before the name path), or a **path-qualified `parent/child`** name (literal-over-path precedence per TAGW1-d). Unknown tags stay fail-closed via `H-UNKNOWN-TAG`; pass **`--create-tags`** (CLI) / `createTags` (MCP) to create the missing ones first through the CLEAN `make new tag` path (mkdir-p intermediates for a path; idempotent via the TAGW1-c coalesce) and then apply.
 
 ## Ordering
 
