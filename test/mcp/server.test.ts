@@ -1746,4 +1746,286 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.create-repeating");
     });
   });
+
+  describe("area & tag CRUD", () => {
+    it("add_area plans a create (dry-run) and blocks on an unknown tag", async () => {
+      await connect([fakeVector(null, { id: "applescript", ops: ["area.add"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({ name: "add_area", arguments: { title: "Garage", dry_run: true } }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("area.add");
+
+      const blocked = await client.callTool({
+        name: "add_area",
+        arguments: { title: "Garage", tags: ["ghost"], dry_run: true },
+      });
+      expect(blocked.isError).toBe(true);
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UNKNOWN-TAG");
+    });
+
+    it("update_area plans a rename (dry-run) and requires title and/or tags", async () => {
+      const area = seedArea(fixture.db, "Old Area");
+      await connect([fakeVector(null, { id: "applescript", ops: ["area.update"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "update_area",
+          arguments: { target: area, title: "New Area", dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("area.update");
+
+      const empty = await client.callTool({
+        name: "update_area",
+        arguments: { target: area, dry_run: true },
+      });
+      expect(empty.isError).toBe(true);
+      expect((textOf(empty) as { code: string }).code).toBe("usage");
+    });
+
+    it("delete_area requires the permanent-delete ack, then plans (dry-run)", async () => {
+      const area = seedArea(fixture.db, "Doomed");
+      await connect([fakeVector(null, { id: "applescript", ops: ["area.delete"] }).vector]);
+      const blocked = await client.callTool({
+        name: "delete_area",
+        arguments: { target: area },
+      });
+      expect(blocked.isError).toBe(true);
+      const err = textOf(blocked) as { code: string; remediation: string };
+      expect(err.code).toBe("blocked:H-PERMANENT-DELETE");
+      expect(err.remediation).toContain("dangerouslyPermanent");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "delete_area",
+          arguments: { target: area, dangerously_permanent: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("area.delete");
+    });
+
+    it("add_tag plans a create (dry-run)", async () => {
+      await connect([fakeVector(null, { id: "applescript", ops: ["tag.add"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({ name: "add_tag", arguments: { title: "focus", dry_run: true } }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("tag.add");
+    });
+
+    it("update_tag plans a rename (dry-run) and refuses exclusive parent/unnest", async () => {
+      const tag = seedTag(fixture.db, "wip");
+      await connect([fakeVector(null, { id: "applescript", ops: ["tag.update"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "update_tag",
+          arguments: { target: tag, title: "in-progress", dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("tag.update");
+
+      const conflict = await client.callTool({
+        name: "update_tag",
+        arguments: { target: tag, parent: "wip", unnest: true },
+      });
+      expect(conflict.isError).toBe(true);
+      expect((textOf(conflict) as { code: string }).code).toBe("usage");
+    });
+
+    it("delete_tag guards the permanent delete and the child subtree, then plans", async () => {
+      const parent = seedTag(fixture.db, "energy");
+      seedTag(fixture.db, "low", parent);
+      const solo = seedTag(fixture.db, "solo");
+      await connect([fakeVector(null, { id: "applescript", ops: ["tag.delete"] }).vector]);
+
+      const noPerm = await client.callTool({ name: "delete_tag", arguments: { target: solo } });
+      expect((textOf(noPerm) as { code: string }).code).toBe("blocked:H-PERMANENT-DELETE");
+
+      const subtree = await client.callTool({
+        name: "delete_tag",
+        arguments: { target: parent, dangerously_permanent: true },
+      });
+      expect(subtree.isError).toBe(true);
+      expect((textOf(subtree) as { code: string }).code).toBe("blocked:H-TAG-SUBTREE-DELETE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "delete_tag",
+          arguments: { target: solo, dangerously_permanent: true, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("tag.delete");
+    });
+  });
+
+  describe("remaining item / project / discovery tools", () => {
+    it("add_project plans a create (dry-run)", async () => {
+      await connect([fakeVector(null, { ops: ["project.add"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "add_project",
+          arguments: { title: "Launch", dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.add");
+    });
+
+    it("move_project plans a move (dry-run) and demands exactly one of area / detach", async () => {
+      const area = seedArea(fixture.db, "Dest Area");
+      const project = seedProject(fixture.db, { title: "Wanderer" });
+      await connect([fakeVector(null, { ops: ["project.move"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "move_project",
+          arguments: { uuid: project, area, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("project.move");
+
+      for (const args of [{ uuid: project }, { uuid: project, area, detach: true }]) {
+        const bad = await client.callTool({ name: "move_project", arguments: args });
+        expect(bad.isError, JSON.stringify(args)).toBe(true);
+        expect((textOf(bad) as { code: string }).code).toBe("usage");
+      }
+    });
+
+    it("duplicate_item dispatches on the item's type (dry-run)", async () => {
+      const todo = seedTodo(fixture.db, { title: "copy me" });
+      const project = seedProject(fixture.db, { title: "copy proj" });
+      await connect([fakeVector(null, { ops: ["todo.duplicate", "project.duplicate"] }).vector]);
+      for (const [uuid, op] of [
+        [todo, "todo.duplicate"],
+        [project, "project.duplicate"],
+      ] as const) {
+        const outcome = textOf(
+          await client.callTool({ name: "duplicate_item", arguments: { uuid, dry_run: true } }),
+        ) as { kind: string; op: string };
+        expect(outcome.kind).toBe("dry-run");
+        expect(outcome.op).toBe(op);
+      }
+    });
+
+    it("restore_item dispatches on the trashed item's type (dry-run)", async () => {
+      const todo = seedTodo(fixture.db, { title: "trashed to-do", trashed: true });
+      const project = seedProject(fixture.db, { title: "trashed proj", trashed: true });
+      await connect([
+        fakeVector(null, { id: "applescript", ops: ["todo.restore", "project.restore"] }).vector,
+      ]);
+      for (const [uuid, op] of [
+        [todo, "todo.restore"],
+        [project, "project.restore"],
+      ] as const) {
+        const outcome = textOf(
+          await client.callTool({ name: "restore_item", arguments: { uuid, dry_run: true } }),
+        ) as { kind: string; op: string };
+        expect(outcome.kind).toBe("dry-run");
+        expect(outcome.op).toBe(op);
+      }
+    });
+
+    it("changes_since lists modified items and rejects an unparseable date", async () => {
+      seedTodo(fixture.db, { title: "recently touched" });
+      await connect([fakeVector(null).vector]);
+      const hits = textOf(
+        await client.callTool({
+          name: "changes_since",
+          arguments: { since: "2020-01-01T00:00:00" },
+        }),
+      ) as { title: string }[];
+      expect(hits.map((i) => i.title)).toContain("recently touched");
+
+      const bad = await client.callTool({
+        name: "changes_since",
+        arguments: { since: "not-a-date" },
+      });
+      expect(bad.isError).toBe(true);
+      expect((textOf(bad) as { code: string }).code).toBe("usage");
+    });
+
+    it("add_logged_todo plans a logbook create (dry-run) and rejects creation after completion", async () => {
+      await connect([fakeVector(null, { ops: ["todo.add-logged"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "add_logged_todo",
+          arguments: { title: "did it", completion_date: "2026-01-15", dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.add-logged");
+
+      const bad = await client.callTool({
+        name: "add_logged_todo",
+        arguments: {
+          title: "did it",
+          completion_date: "2026-01-15",
+          creation_date: "2026-02-15",
+        },
+      });
+      expect(bad.isError).toBe(true);
+      expect((textOf(bad) as { code: string }).code).toBe("usage");
+    });
+
+    it("backdate_todo plans a timestamp rewrite (dry-run) and needs at least one date", async () => {
+      const uuid = seedTodo(fixture.db, { title: "logged item", status: "completed" });
+      await connect([fakeVector(null, { id: "applescript", ops: ["todo.backdate"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "backdate_todo",
+          arguments: { uuid, completion_date: "2026-01-01", dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.backdate");
+
+      const empty = await client.callTool({
+        name: "backdate_todo",
+        arguments: { uuid, dry_run: true },
+      });
+      expect(empty.isError).toBe(true);
+      expect((textOf(empty) as { code: string }).code).toBe("usage");
+    });
+
+    it("clear_reminder plans a clear for a dated reminder, and blocks when there is none", async () => {
+      const withReminder = seedTodo(fixture.db, {
+        title: "ping me",
+        startDate: "2026-07-05",
+        reminder: "09:00",
+      });
+      const bare = seedTodo(fixture.db, { title: "no reminder", startDate: "2026-07-05" });
+      await connect([
+        fakeVector(null, { id: "shortcuts", ops: ["todo.clear-dated-reminder"] }).vector,
+      ]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "clear_reminder",
+          arguments: { uuid: withReminder, dry_run: true },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.clear-dated-reminder");
+
+      const blocked = await client.callTool({
+        name: "clear_reminder",
+        arguments: { uuid: bare, dry_run: true },
+      });
+      expect(blocked.isError).toBe(true);
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-NO-REMINDER");
+    });
+
+    it("doctor reports the fixture environment", async () => {
+      await connect([fakeVector(null).vector]);
+      const report = textOf(await client.callTool({ name: "doctor", arguments: {} })) as {
+        db: { databaseVersion: number };
+        fingerprint: { status: string };
+      };
+      expect(report.db.databaseVersion).toBe(26);
+      expect(typeof report.fingerprint.status).toBe("string");
+    });
+  });
 });
