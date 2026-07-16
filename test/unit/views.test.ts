@@ -4,7 +4,14 @@ import type { Ref } from "../../src/model/entities.ts";
 import { areaView } from "../../src/read/area-view.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import { areaTags, inheritedTagsFor, tagsView } from "../../src/read/tags.ts";
-import { fetchTaskByUuid } from "../../src/read/queries.ts";
+import {
+  directTagScopeSql,
+  directUntaggedScopeSql,
+  fetchTaskByUuid,
+  tagScopeBinds,
+  tagScopeSql,
+  untaggedScopeSql,
+} from "../../src/read/queries.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import { getField } from "../../src/write/verify/delta.ts";
 import {
@@ -881,6 +888,121 @@ describe('untagged filter (GUI "No Tag")', () => {
       .map((i) => i.title)
       .toSorted();
     expect(titles).toEqual(["someday bare"]);
+  });
+});
+
+describe("tag-scope derivation equivalence (all four scopes from one clause array)", () => {
+  // A fixture with one to-do matched by EACH hop of the inheritance chain plus
+  // an untagged control, so the four derived scopes can be asserted row-exact
+  // AND proven to PARTITION the universe — the invariant the old hand-
+  // synchronized quadruplication endangered.
+  function seedInheritanceWorld() {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+
+    // clause 1 — direct: the item's own tag.
+    const direct = seedTodo(fx.db, { title: "direct" });
+    tagTask(fx.db, direct, focus);
+
+    // clause 2 — via project: the item's project is directly tagged.
+    const p1 = seedProject(fx.db, { title: "P1" });
+    tagTask(fx.db, p1, focus);
+    seedTodo(fx.db, { title: "via-project", project: p1 });
+
+    // clause 3 — via area: the item's area is tagged.
+    const a1 = seedArea(fx.db, "A1");
+    tagArea(fx.db, a1, focus);
+    seedTodo(fx.db, { title: "via-area", area: a1 });
+
+    // clause 5 — via heading → project: the heading's project is directly tagged.
+    const p2 = seedProject(fx.db, { title: "P2" });
+    tagTask(fx.db, p2, focus);
+    const h1 = seedHeading(fx.db, { title: "H1", project: p2 });
+    seedTodo(fx.db, { title: "via-heading-project", heading: h1, project: null });
+
+    // clause 6 — via heading → project → area: the heading's project sits in a
+    // tagged area (the project itself carries no direct tag).
+    const a2 = seedArea(fx.db, "A2");
+    tagArea(fx.db, a2, focus);
+    const p3 = seedProject(fx.db, { title: "P3", area: a2 });
+    const h2 = seedHeading(fx.db, { title: "H2", project: p3 });
+    seedTodo(fx.db, { title: "via-heading-project-area", heading: h2, project: null });
+
+    // control — untagged by every hop.
+    seedTodo(fx.db, { title: "control" });
+
+    return { focus };
+  }
+
+  // Run a scope predicate over the seeded to-dos (type = 0 keeps the container
+  // projects/headings out of the row universe).
+  const rows = (scope: string, binds: string[] = []) =>
+    (
+      fx.db
+        .prepare(`SELECT t.title AS title FROM TMTask t WHERE t.type = 0 AND ${scope}`)
+        .all(...binds) as { title: string }[]
+    )
+      .map((r) => r.title)
+      .toSorted();
+
+  // Clause 4 (item's project's area) has no dedicated fixture row: it can only
+  // fire on a project-nested to-do whose project has an area, which the app
+  // models as an inherited-via-area case already covered by other hops. The five
+  // rows above exercise clauses 1, 2, 3, 5 and 6; the positive relation is their
+  // OR, so it matches all five.
+  const INHERITED = [
+    "direct",
+    "via-area",
+    "via-heading-project",
+    "via-heading-project-area",
+    "via-project",
+  ];
+  const ALL = [...INHERITED, "control"].toSorted();
+
+  it("--tag scope matches exactly the direct + inherited rows (whole relation)", () => {
+    const { focus } = seedInheritanceWorld();
+    const uuids = [focus];
+    expect(rows(tagScopeSql(uuids.length), tagScopeBinds(uuids))).toEqual(INHERITED);
+  });
+
+  it("untagged scope matches exactly the untagged control", () => {
+    seedInheritanceWorld();
+    expect(rows(untaggedScopeSql())).toEqual(["control"]);
+  });
+
+  it("direct scope matches exactly the directly-tagged row (clause 1 alone)", () => {
+    const { focus } = seedInheritanceWorld();
+    const uuids = [focus];
+    expect(rows(directTagScopeSql(uuids.length), uuids)).toEqual(["direct"]);
+  });
+
+  it("direct-untagged scope matches everything but the directly-tagged row", () => {
+    seedInheritanceWorld();
+    expect(rows(directUntaggedScopeSql())).toEqual([
+      "control",
+      "via-area",
+      "via-heading-project",
+      "via-heading-project-area",
+      "via-project",
+    ]);
+  });
+
+  it("--tag and --untagged PARTITION the fixture (whole relation: disjoint + total)", () => {
+    const { focus } = seedInheritanceWorld();
+    const uuids = [focus];
+    const tagged = rows(tagScopeSql(uuids.length), tagScopeBinds(uuids));
+    const untagged = rows(untaggedScopeSql());
+    expect([...tagged, ...untagged].toSorted()).toEqual(ALL); // none in neither
+    expect(tagged.filter((t) => untagged.includes(t))).toEqual([]); // none in both
+  });
+
+  it("direct and direct-untagged PARTITION the fixture (container relation)", () => {
+    const { focus } = seedInheritanceWorld();
+    const uuids = [focus];
+    const direct = rows(directTagScopeSql(uuids.length), uuids);
+    const directUntagged = rows(directUntaggedScopeSql());
+    expect([...direct, ...directUntagged].toSorted()).toEqual(ALL); // none in neither
+    expect(direct.filter((t) => directUntagged.includes(t))).toEqual([]); // none in both
   });
 });
 

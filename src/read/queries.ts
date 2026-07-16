@@ -12,34 +12,99 @@ import type { ChecklistRow, TaskRow } from "../model/mappers.ts";
 export const NOT_TEMPLATE = "(t.rt1_recurrenceRule IS NULL AND t.repeater IS NULL)";
 
 /**
- * UI-faithful tag membership for list filtering: direct tag, or inherited
- * through the ancestor chain heading → project → area (T18/U18/A13 — the
- * same chain inheritedTagsFor() walks). Takes a SET of tag uuids (the target
- * plus its hierarchy descendants) — each of the six clauses gets the full
- * set, so callers bind `uuids.length * 6` values via tagScopeBinds().
+ * One hop of the UI-faithful tag-inheritance chain. `exists(set)` emits the
+ * hop's `EXISTS (…)` predicate; passing a placeholder SET restricts the hop to
+ * those tag uuids (the positive `--tag` membership), while passing `null` drops
+ * the tag-set restriction to mean "carries ANY tag by this hop" (the `untagged`
+ * negation). Writing each hop ONCE — restricted and unrestricted from the same
+ * body — is what keeps `--tag` and `--untagged` from silently diverging on what
+ * "tagged" means; the four exports below are all DERIVED from this array, so an
+ * inheritance fix lands in one place.
  */
-export function tagScopeSql(uuidCount: number): string {
-  const set = `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
-  return `(
-  EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid AND tt.tags IN ${set})
-  OR EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project AND tt.tags IN ${set})
-  OR EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area AND at.tags IN ${set})
-  OR EXISTS (SELECT 1 FROM TMTask p JOIN TMAreaTag at ON at.areas = p.area
-             WHERE p.uuid = t.project AND at.tags IN ${set})
-  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTaskTag tt ON tt.tasks = h.project
-             WHERE h.uuid = t.heading AND tt.tags IN ${set})
-  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
-             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading AND at.tags IN ${set})
-)`;
+interface InheritanceClause {
+  readonly exists: (set: string | null) => string;
 }
 
-export function tagScopeBinds(uuids: string[]): string[] {
-  return Array.from({ length: 6 }, () => uuids).flat();
+/** ` AND col IN (…)` for the restricted form; empty for the tag-agnostic form. */
+const tagIn = (col: string, set: string | null): string =>
+  set === null ? "" : ` AND ${col} IN ${set}`;
+
+/**
+ * Clause 1 — the item's OWN direct `TMTaskTag` assignments. Named apart from the
+ * rest because it is ALSO the whole story for the CONTAINER `--tag`/`--untagged`
+ * projections (see {@link directTagScopeSql} / {@link directUntaggedScopeSql}).
+ */
+const DIRECT_TAG_CLAUSE: InheritanceClause = {
+  exists: (set) =>
+    `EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid${tagIn("tt.tags", set)})`,
+};
+
+/**
+ * The full direct+inherited membership relation, heading → project → area
+ * (T18/U18/A13 — the same chain inheritedTagsFor() walks), written ONCE. Clause 1
+ * is the direct assignment; clauses 2–6 are the five container-inheritance hops.
+ */
+const INHERITANCE_CLAUSES: readonly InheritanceClause[] = [
+  // 1. the item's own direct tags.
+  DIRECT_TAG_CLAUSE,
+  // 2. inherited from the item's PROJECT's own direct tags.
+  {
+    exists: (set) =>
+      `EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project${tagIn("tt.tags", set)})`,
+  },
+  // 3. inherited from the item's AREA's tags.
+  {
+    exists: (set) =>
+      `EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area${tagIn("at.tags", set)})`,
+  },
+  // 4. inherited from the item's PROJECT's AREA's tags.
+  {
+    exists: (set) =>
+      `EXISTS (SELECT 1 FROM TMTask p JOIN TMAreaTag at ON at.areas = p.area
+             WHERE p.uuid = t.project${tagIn("at.tags", set)})`,
+  },
+  // 5. inherited through the item's HEADING → that heading's project's direct tags.
+  {
+    exists: (set) =>
+      `EXISTS (SELECT 1 FROM TMTask h JOIN TMTaskTag tt ON tt.tasks = h.project
+             WHERE h.uuid = t.heading${tagIn("tt.tags", set)})`,
+  },
+  // 6. inherited through the item's HEADING → its project → that project's AREA's tags.
+  {
+    exists: (set) =>
+      `EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
+             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading${tagIn("at.tags", set)})`,
+  },
+];
+
+/** A `(?, ?, …)` placeholder list for a tag-uuid set of the given size. */
+const placeholderSet = (uuidCount: number): string =>
+  `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
+
+/**
+ * UI-faithful tag membership for list filtering: direct tag, or inherited
+ * through the ancestor chain heading → project → area — the OR of every
+ * {@link INHERITANCE_CLAUSES} hop. Takes a SET of tag uuids (the target plus its
+ * hierarchy descendants); each hop gets the full set, so callers bind
+ * `uuids.length * INHERITANCE_CLAUSES.length` values via {@link tagScopeBinds}.
+ */
+export function tagScopeSql(uuidCount: number): string {
+  const set = placeholderSet(uuidCount);
+  return `(\n  ${INHERITANCE_CLAUSES.map((c) => c.exists(set)).join("\n  OR ")}\n)`;
 }
 
 /**
- * The DIRECT-ONLY projection of {@link tagScopeSql}: its FIRST clause alone —
- * the item's own `TMTaskTag` assignments — WITHOUT the five container-
+ * The bind list for {@link tagScopeSql}: the uuid set repeated once per hop, in
+ * clause order. Derived from the clause count so the bind multiplicity can never
+ * drift from the number of hops the SQL actually emits.
+ */
+export function tagScopeBinds(uuids: string[]): string[] {
+  return Array.from({ length: INHERITANCE_CLAUSES.length }, () => uuids).flat();
+}
+
+/**
+ * The DIRECT-ONLY projection of {@link tagScopeSql}: {@link DIRECT_TAG_CLAUSE}
+ * alone — the item's own `TMTaskTag` assignments — WITHOUT the five container-
  * inheritance hops (project/area/heading). This is the SQL behind the CONTAINER
  * `--tag` (the `project show` / `area show` / `projects` list views): every
  * child inherits its container's tags, so the inheritance-inclusive relation is
@@ -47,50 +112,36 @@ export function tagScopeBinds(uuids: string[]): string[] {
  * behavior. It keeps tag-hierarchy descendant expansion (the uuid SET is still
  * the tag plus its descendants, OR-matched) but drops container inheritance, so
  * an item matches only when it is DIRECTLY tagged. Takes the uuid set once, so
- * callers bind `uuids` exactly one time (not `× 6`). KEEP THE DIRECT CLAUSE IN
- * LOCKSTEP WITH tagScopeSql's first clause.
+ * callers bind `uuids` exactly one time (not `× 6`).
  */
 export function directTagScopeSql(uuidCount: number): string {
-  const set = `(${Array.from({ length: uuidCount }, () => "?").join(", ")})`;
-  return `EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid AND tt.tags IN ${set})`;
+  return DIRECT_TAG_CLAUSE.exists(placeholderSet(uuidCount));
 }
 
 /**
  * The negation of tag membership — the SQL behind the `untagged` filter (the
- * GUI's "No Tag"). It mirrors tagScopeSql's SAME six direct+inherited
- * relations (heading → project → area, T18/U18/A13) but with the tag-set
- * restriction dropped: "carries ANY tag by any hop", wrapped in NOT. An item
- * is untagged iff NO possible `--tag X` could ever match it — so this negates
- * the whole membership relation, not merely the row's own direct assignments.
- * Takes no binds. KEEP THE SIX CLAUSES IN LOCKSTEP WITH tagScopeSql.
+ * GUI's "No Tag"). It negates the SAME {@link INHERITANCE_CLAUSES} relation with
+ * the tag-set restriction dropped: "carries ANY tag by any hop", wrapped in NOT.
+ * An item is untagged iff NO possible `--tag X` could ever match it — so this
+ * negates the whole membership relation, not merely the row's own direct
+ * assignments. Takes no binds.
  */
 export function untaggedScopeSql(): string {
-  return `NOT (
-  EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid)
-  OR EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.project)
-  OR EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = t.area)
-  OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = t.project
-             AND EXISTS (SELECT 1 FROM TMAreaTag at WHERE at.areas = p.area))
-  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTaskTag tt ON tt.tasks = h.project
-             WHERE h.uuid = t.heading)
-  OR EXISTS (SELECT 1 FROM TMTask h JOIN TMTask p ON p.uuid = h.project
-             JOIN TMAreaTag at ON at.areas = p.area WHERE h.uuid = t.heading)
-)`;
+  return `NOT (\n  ${INHERITANCE_CLAUSES.map((c) => c.exists(null)).join("\n  OR ")}\n)`;
 }
 
 /**
  * The DIRECT-ONLY counterpart of {@link untaggedScopeSql} — the SQL behind the
  * CONTAINER `--untagged` (the GUI's in-context "No Tag" inside a project/area
- * card). It negates only the item's OWN direct assignments (the first of the six
- * membership clauses), leaving container inheritance untouched: an item
- * qualifies when it carries no DIRECT tag, even if it inherits one from its
- * project/area/heading. Every child inherits the container's tags, so the
- * whole-relation `untaggedScopeSql` would exclude every row there — direct-only
- * is the useful negation. Takes no binds. KEEP THE DIRECT CLAUSE IN LOCKSTEP
- * WITH {@link directTagScopeSql}.
+ * card). It negates only {@link DIRECT_TAG_CLAUSE} (the item's OWN direct
+ * assignments), leaving container inheritance untouched: an item qualifies when
+ * it carries no DIRECT tag, even if it inherits one from its project/area/
+ * heading. Every child inherits the container's tags, so the whole-relation
+ * {@link untaggedScopeSql} would exclude every row there — direct-only is the
+ * useful negation. Takes no binds.
  */
 export function directUntaggedScopeSql(): string {
-  return `NOT EXISTS (SELECT 1 FROM TMTaskTag tt WHERE tt.tasks = t.uuid)`;
+  return `NOT ${DIRECT_TAG_CLAUSE.exists(null)}`;
 }
 
 /**
