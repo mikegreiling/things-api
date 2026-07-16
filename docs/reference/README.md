@@ -73,6 +73,7 @@ Recurring, autonomously-runnable encodings of the locked verdicts live in `lab/s
 | Deletes (heterogeneous!) | [lab/a-suite-results.md](../lab/a-suite-results.md) A24–A27, s-campaign P12, oddities 5i |
 | DB schema ↔ UI meaning | [atlas/schema-v26.md](../atlas/schema-v26.md) |
 | Harness mechanics / how probes run | [lab/harness.md](../lab/harness.md) |
+| The bundled `thingscli` binary (what it is — an app-settings utility, not a task API; the `firstAppLaunchDate` trial-clock + `THCDataFolderCurrentDataFolderPath` reads the lab runner relies on) | [lab/thingscli-probe.md](../lab/thingscli-probe.md) |
 | Golden image / VM lab conventions | [lab/golden-runbook.md](../lab/golden-runbook.md), [lab/drift-runbook.md](../lab/drift-runbook.md), [lab/things-update-runbook.md](../lab/things-update-runbook.md) |
 | What's parked/queued | [roadmap.md](../roadmap.md), [lab/probe-backlog.md](../lab/probe-backlog.md) |
 | Pre-lab history (March 2026 Codex research) | [research/](../research/README.md) — historical; matrix v1 superseded by capability-matrix |
