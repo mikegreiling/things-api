@@ -889,7 +889,19 @@ export function registerReadCommands(program: Command): void {
         opts,
         "tags",
         (c) => c.read.tags(),
-        (data) => data.map((t) => `${t.uuid}  ${t.parent ? `${t.parent.title}/` : ""}${t.title}`),
+        // Mirror `things areas`: a dim, shortened uuid in a fixed left column
+        // (uuidCol/uuidDisplayWidth — copy-safe prefix, right-padded so names
+        // align), then the tag name. A child tag's parent path is muted context
+        // (`parent/` dim, the render-language dim=metadata law), so the leaf name
+        // stays prominent; rows already arrive in canonical DFS order (index,
+        // uuid) from tagsView, children following their parent.
+        (data) => {
+          const w = uuidDisplayWidth(data);
+          return data.map(
+            (t) =>
+              `${dim(uuidCol(t.uuid, w))}  ${t.parent ? dim(`${t.parent.title}/`) : ""}${t.title}`,
+          );
+        },
       );
     });
 
