@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { AuditWriter } from "../audit/log.ts";
 import { undoToken, type AuditRecord } from "../audit/schema.ts";
+import { blockedCode, verifyFailedCode } from "../contracts.ts";
 import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
@@ -314,7 +315,7 @@ export async function runMutation<K extends OperationKind>(
       fp.kind === "unknown-version"
         ? `unknown database version ${fp.observation.databaseVersion ?? "?"} (newer Things?)`
         : "schema fingerprint deviates from the shipped baseline";
-    audit({ result: "blocked:drift" });
+    audit({ result: blockedCode({ reason: "drift" }) });
     return {
       kind: "blocked",
       op,
@@ -333,7 +334,7 @@ export async function runMutation<K extends OperationKind>(
     lock = await acquireMutationLock(deps.lockPath);
   } catch (err) {
     if (err instanceof MutationLockError) {
-      audit({ result: "blocked:lock" });
+      audit({ result: blockedCode({ reason: "lock" }) });
       return {
         kind: "blocked",
         op,
@@ -372,7 +373,7 @@ export async function runMutation<K extends OperationKind>(
       acks,
     });
     if (block !== null) {
-      audit({ result: `blocked:${block.hazard}` });
+      audit({ result: blockedCode({ hazard: block.hazard, reason: "hazard" }) });
       return {
         kind: "blocked",
         op,
@@ -396,7 +397,7 @@ export async function runMutation<K extends OperationKind>(
       return { kind: "unsupported", op, considered: plan.considered };
     }
     if (plan.kind === "tier-blocked") {
-      audit({ result: "blocked:disruption-tier" });
+      audit({ result: blockedCode({ reason: "disruption-tier" }) });
       return {
         kind: "blocked",
         op,
@@ -415,7 +416,7 @@ export async function runMutation<K extends OperationKind>(
     if (plan.candidate.support.experimental === true) {
       const declared = (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
       if (!declared) {
-        audit({ result: "blocked:environment" });
+        audit({ result: blockedCode({ reason: "environment" }) });
         return {
           kind: "blocked",
           op,
@@ -461,7 +462,7 @@ export async function runMutation<K extends OperationKind>(
       const proxies = (deps.shortcutProxies ?? (() => readShortcutProxies()))();
       if (!proxies.present.includes(invocation.shortcut)) {
         audit({
-          result: "blocked:environment",
+          result: blockedCode({ reason: "environment" }),
           vector: vector.id,
           disruption: effectiveTier,
           invocation: invocation.redactedPayload,
@@ -482,7 +483,7 @@ export async function runMutation<K extends OperationKind>(
     // plain opens and AppleEvents to a closed Things steal focus (A40/A41).
     const running = await (deps.ensureRunning ?? defaultEnsureRunning)(appRunning);
     if (!running) {
-      audit({ result: "blocked:environment" });
+      audit({ result: blockedCode({ reason: "environment" }) });
       return {
         kind: "blocked",
         op,
@@ -504,7 +505,7 @@ export async function runMutation<K extends OperationKind>(
     const executeResult = await vector.execute(invocation);
     if (executeResult.exitCode !== 0 || executeResult.timedOut === true) {
       audit({
-        result: "verify-failed:silent-noop",
+        result: verifyFailedCode({ reason: "silent-noop" }),
         vector: vector.id,
         disruption: effectiveTier,
         invocation: invocation.redactedPayload,
@@ -608,7 +609,7 @@ export async function runMutation<K extends OperationKind>(
       };
     }
 
-    audit({ ...auditCommon, result: `verify-failed:${outcome.kind}` });
+    audit({ ...auditCommon, result: verifyFailedCode({ reason: outcome.kind }) });
     return withHint(
       {
         kind: "verify-failed" as const,

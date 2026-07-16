@@ -308,6 +308,93 @@ describe("batch (Phase 13)", () => {
     expect(process.exitCode).toBe(4); // blocked outranks invalid
   });
 
+  it("a batch of only unsupported ops exits 6 (Unsupported), not 3", async () => {
+    // url-scheme cannot delete a to-do (matrix support "no"); forcing that
+    // vector makes the op unsupported at planning time — nothing executes.
+    const a = seedTodo(fixture.db, { title: "u1" });
+    const b = seedTodo(fixture.db, { title: "u2" });
+    const batchFile = join(stateDir, "unsupported.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({
+          op: "todo.delete",
+          params: { uuid: a },
+          options: { vector: "url-scheme" },
+        }),
+        JSON.stringify({
+          op: "todo.delete",
+          params: { uuid: b },
+          options: { vector: "url-scheme" },
+        }),
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines[0].outcome.kind).toBe("unsupported");
+    expect(lines[1].outcome.kind).toBe("unsupported");
+    expect(lines[2].summary).toEqual({ total: 2, ok: 0, failed: 2, skipped: 0 });
+    expect(process.exitCode).toBe(6);
+  });
+
+  it("mixed batch: blocked outranks unsupported (exit 4)", async () => {
+    const a = seedTodo(fixture.db, { title: "u1" });
+    const batchFile = join(stateDir, "mixed-blocked.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({
+          op: "todo.delete",
+          params: { uuid: a },
+          options: { vector: "url-scheme" },
+        }), // unsupported
+        JSON.stringify({ op: "trash.empty", params: {} }), // H-PERMANENT-DELETE -> blocked
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(new Set([lines[0].outcome.kind, lines[1].outcome.kind])).toEqual(
+      new Set(["unsupported", "blocked"]),
+    );
+    expect(process.exitCode).toBe(4);
+  });
+
+  it("mixed batch: unsupported outranks verify-failed/invalid (exit 6)", async () => {
+    const a = seedTodo(fixture.db, { title: "u1" });
+    const batchFile = join(stateDir, "mixed-unsupported.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({
+          op: "todo.delete",
+          params: { uuid: a },
+          options: { vector: "url-scheme" },
+        }), // unsupported
+        "not json {", // invalid -> feeds the verify-failed catch-all
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--dry-run"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines[0].outcome.kind).toBe("unsupported");
+    expect(lines[1].outcome.kind).toBe("invalid");
+    expect(process.exitCode).toBe(6);
+  });
+
   it("--fail-fast skips after the first failure", async () => {
     const uuid = seedTodo(fixture.db, { title: "ff" });
     const batchFile = join(stateDir, "ff.jsonl");

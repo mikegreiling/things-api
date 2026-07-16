@@ -16,7 +16,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
 import { omitEmpty } from "../model/serialize.ts";
-import { PKG_VERSION, type GroupedPagination, type Pagination } from "../contracts.ts";
+import {
+  blockedCode,
+  PKG_VERSION,
+  verifyFailedCode,
+  type GroupedPagination,
+  type Pagination,
+} from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
 import {
   AREA_PREVIEW_LIMIT,
@@ -152,14 +158,14 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
       return jsonResult(result);
     case "blocked":
       return errorResult({
-        code: `blocked:${result.hazard ?? result.reason}`,
+        code: blockedCode(result),
         message: result.detail,
         ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
         remediation: result.remediation,
       });
     case "verify-failed":
       return errorResult({
-        code: `verify-failed:${result.reason}`,
+        code: verifyFailedCode(result),
         message: result.detail,
         ...(result.likelyCause !== undefined && { likelyCause: result.likelyCause }),
         ...(result.hint !== undefined && { remediation: result.hint }),
