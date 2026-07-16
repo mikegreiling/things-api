@@ -471,8 +471,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       anytime: (f) => anytimeView(conn.db, now(), f),
       upcoming: (f) => upcomingView(conn.db, now(), f),
       someday: (f) => somedayView(conn.db, now(), f),
-      logbook: (o) => logbookView(conn.db, o),
-      trash: (o) => trashView(conn.db, o),
+      logbook: (o) => logbookView(conn.db, now(), o),
+      trash: (o) => trashView(conn.db, now(), o),
       // Thread the injected clock so `--overdue`'s (and later's) today boundary
       // rides the same clock as every other view — never a hardcoded date.
       projects: (o) => projectsView(conn.db, { ...o, now: now() }),
@@ -482,8 +482,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
       search: (query, o) => searchView(conn.db, query, o, now()),
-      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o),
-      changes: (o) => changesView(conn.db, o),
+      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o, now()),
+      changes: (o) => changesView(conn.db, now(), o),
       showTarget: (ref) => classifyShowTarget(conn.db, ref),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.

@@ -246,7 +246,11 @@ function overdueFilter(
   return { sql: ` AND ${OVERDUE}`, binds: [packedToday] };
 }
 
-function materialize(db: DatabaseSync, rows: TaskRow[], boundary = logBoundary(db)): ListItem[] {
+// `boundary` is REQUIRED (no wall-clock default): every caller threads the
+// view's injected `now` via logBoundary(db, now) so the `logged` flag it stamps
+// honors the same clock as the SQL membership filter (a pinned test clock, a
+// lab run) — nothing here silently reaches for real time.
+function materialize(db: DatabaseSync, rows: TaskRow[], boundary: Date): ListItem[] {
   const refs = makeRefResolver(db);
   const headingProject = makeHeadingProjectResolver(db);
   const tags = fetchTagsForTasks(
@@ -385,7 +389,7 @@ export function inboxView(db: DatabaseSync, now?: Date, filter?: InboxFilter): L
     `${where.join(" AND ")}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...binds, ...tf.binds, ...of.binds],
   );
-  return materialize(db, rows);
+  return materialize(db, rows, logBoundary(db, now));
 }
 
 /**
@@ -467,6 +471,7 @@ const groupKey = (i: ListItem): string => i.startDate ?? i.deadline ?? "";
 
 export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
   const packedToday = encodePackedDate(localToday(now));
+  const boundary = logBoundary(db, now);
   const until = filter?.until;
   const since = filter?.since;
   const untilBinds = until === undefined ? [] : [encodePackedDate(until)];
@@ -505,8 +510,8 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
     [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
   );
 
-  const scheduled = materialize(db, rows);
-  const forecast = materialize(db, forecastRows);
+  const scheduled = materialize(db, rows, boundary);
+  const forecast = materialize(db, forecastRows, boundary);
 
   // The merged date-ordered stream keys on COALESCE(startDate, deadline) — a
   // scheduled row groups under its when-date, a forecast row under its deadline
@@ -546,7 +551,7 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
   );
   const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
-  const occurrences = materialize(db, templateRows).flatMap((template) => {
+  const occurrences = materialize(db, templateRows, boundary).flatMap((template) => {
     const startDate = template.repeating.nextOccurrence ?? null;
     if (startDate === null) return [];
     // Whether occurrences deadline is the TEMPLATE's property, not the rule's:
@@ -614,7 +619,7 @@ export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilt
      ORDER BY t.todayIndex ASC, t."index" ASC`,
     [packedToday, ...tf.binds],
   );
-  const resting = materialize(db, restingRows).map((item) => {
+  const resting = materialize(db, restingRows, boundary).map((item) => {
     const raw = restingRows.find((r) => r.uuid === item.uuid)?.rt1_recurrenceRule;
     if (raw !== null && raw !== undefined) {
       try {
@@ -664,7 +669,7 @@ export function somedayView(
      AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds, ...of.binds],
   );
-  const sections = groupBySidebar(db, materialize(db, rows));
+  const sections = groupBySidebar(db, materialize(db, rows, logBoundary(db, now)));
   // GUI order within a Someday group (live side-by-side, 2026-07-12):
   // PROJECT rows first (their sidebar order preserved), then direct to-dos in
   // drag order. Someday children of active projects (the activeProjectItems
@@ -697,7 +702,7 @@ export interface LogbookFilter extends ViewFilter {
   until?: Date;
 }
 
-export function logbookView(db: DatabaseSync, options?: LogbookFilter): ListItem[] {
+export function logbookView(db: DatabaseSync, now?: Date, options?: LogbookFilter): ListItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 100);
   const tf = tagFilter(db, options);
   const where: string[] = [];
@@ -723,16 +728,23 @@ export function logbookView(db: DatabaseSync, options?: LogbookFilter): ListItem
   }
   const extra = where.length > 0 ? ` AND ${where.join(" AND ")}` : "";
   // Completion ≠ logged: closed items past the log-move boundary still sit
-  // checked in their original lists, exactly like the GUI's Logbook.
+  // checked in their original lists, exactly like the GUI's Logbook. The
+  // membership boundary rides the injected clock (threaded into both the SQL
+  // filter and materialize so presence and the `logged` flag agree).
+  const boundary = logBoundary(db, now);
   const rows = fetchTaskRows(
     db,
     `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC${cap === null ? "" : " LIMIT ?"}`,
-    [logBoundary(db).getTime() / 1000, ...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
+    [boundary.getTime() / 1000, ...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
   );
-  return materialize(db, rows);
+  return materialize(db, rows, boundary);
 }
 
-export function trashView(db: DatabaseSync, options?: { limit?: number | null }): ListItem[] {
+export function trashView(
+  db: DatabaseSync,
+  now?: Date,
+  options?: { limit?: number | null },
+): ListItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 200);
   const rows = fetchTaskRows(
     db,
@@ -740,7 +752,7 @@ export function trashView(db: DatabaseSync, options?: { limit?: number | null })
      ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
     cap === null ? [] : [cap],
   );
-  return materialize(db, rows);
+  return materialize(db, rows, logBoundary(db, now));
 }
 
 export function projectsView(
@@ -792,7 +804,7 @@ export function projectsView(
     ...tf.binds,
     ...activeFirstBinds,
   ]);
-  const items = materialize(db, rows) as Project[];
+  const items = materialize(db, rows, logBoundary(db, options?.now)) as Project[];
   if (options?.later !== true) return items;
   // Each group's later sub-block reads like Upcoming: SCHEDULED projects
   // first — date ascending, todayIndex within a day (the UI's drag order,
@@ -867,6 +879,7 @@ export type ChangedItem = ListItem & { changeKind: ChangeKind };
  */
 export function changesView(
   db: DatabaseSync,
+  now: Date | undefined,
   options: { since: Date; limit?: number | null },
 ): ChangedItem[] {
   const cap = options.limit === null ? null : (options.limit ?? 200);
@@ -878,7 +891,7 @@ export function changesView(
     [sinceEpoch, ...(cap === null ? [] : [cap])],
   );
   // oxlint-disable-next-line no-map-spread -- building fresh change objects, not mutating
-  return materialize(db, rows).map((item, i) => ({
+  return materialize(db, rows, logBoundary(db, now)).map((item, i) => ({
     ...item,
     changeKind:
       (rows[i]?.creationDate ?? 0) > sinceEpoch ? ("created" as const) : ("modified" as const),
@@ -916,6 +929,7 @@ export function liteTitleSearch(
   db: DatabaseSync,
   query: string,
   options?: { type?: "to-do" | "project" | "area"; limit?: number },
+  now?: Date,
 ): LiteSearchResult {
   const cap = options?.limit ?? 10;
   const type = options?.type;
@@ -937,7 +951,7 @@ export function liteTitleSearch(
       `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?${LIKE_ESCAPE}`,
       [`%${escapeLike(query)}%`],
     );
-    tasks = materialize(db, rows);
+    tasks = materialize(db, rows, logBoundary(db, now));
   }
 
   const projects = tasks.filter((t) => t.type === "project").toSorted(byStatusThenRecent);
@@ -966,6 +980,9 @@ export function searchView(
   // is contradictory with the status-widening flags (logged/trashed/all); the
   // CLI/MCP surfaces reject that combination, so here it simply intersects.
   const of = overdueFilter(options, encodePackedDate(localToday(now)));
+  // Threaded into every materialize so the `logged` flag (--logged widens to
+  // closed rows) honors the injected clock, not wall time.
+  const boundary = logBoundary(db, now);
 
   // The scope predicates (everything except the match needle), reused verbatim
   // for the needle query AND the heading-credited-project query so both honor
@@ -1010,7 +1027,7 @@ export function searchView(
   );
   const needleLower = query.toLowerCase();
   const matches = new Map<string, SearchMatch>();
-  for (const item of materialize(db, rows)) {
+  for (const item of materialize(db, rows, boundary)) {
     // Field credit: title beats notes when both carry the substring.
     const field: MatchField = item.title.toLowerCase().includes(needleLower) ? "title" : "notes";
     matches.set(item.uuid, { item, field });
@@ -1042,7 +1059,7 @@ export function searchView(
         `${scope.join(" AND ")} AND t.type = 1 AND t.uuid IN (${placeholders})${tf.sql}${of.sql}`,
         [...scopeBinds, ...wanted, ...tf.binds, ...of.binds],
       );
-      for (const item of materialize(db, projectRows)) {
+      for (const item of materialize(db, projectRows, boundary)) {
         const matchedVia = {
           kind: "heading" as const,
           title: headingTitleFor.get(item.uuid) ?? "",

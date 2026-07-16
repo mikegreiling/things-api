@@ -468,21 +468,21 @@ describe("logbook", () => {
   it("--area includes direct, project-child, and HEADING-child entries", () => {
     fixture = buildFixtureDb();
     const { area } = seedLoggedWorld(fixture);
-    const titles = logbookView(fixture.db, { area }).map((i) => i.title);
+    const titles = logbookView(fixture.db, undefined, { area }).map((i) => i.title);
     expect(titles).toEqual(["Direct area win", "Project child win", "Heading child win"]);
   });
 
   it("--project includes heading-nested children", () => {
     fixture = buildFixtureDb();
     const { project } = seedLoggedWorld(fixture);
-    const titles = logbookView(fixture.db, { project }).map((i) => i.title);
+    const titles = logbookView(fixture.db, undefined, { project }).map((i) => i.title);
     expect(titles).toEqual(["Project child win", "Heading child win"]);
   });
 
   it("--since/--until bound by logged instant", () => {
     fixture = buildFixtureDb();
     const { area } = seedLoggedWorld(fixture);
-    const titles = logbookView(fixture.db, {
+    const titles = logbookView(fixture.db, undefined, {
       area,
       since: new Date("2026-01-01T00:00:00Z"),
       until: parsePeriodEnd("2026-06"),
@@ -493,7 +493,7 @@ describe("logbook", () => {
   it("renders month headings (year appended beyond the current year) and no heading rows", () => {
     fixture = buildFixtureDb();
     const { area } = seedLoggedWorld(fixture);
-    const lines = renderLogbook(logbookView(fixture.db, { area }), NOW);
+    const lines = renderLogbook(logbookView(fixture.db, undefined, { area }), NOW);
     expect(lines[0]).toBe("── July ──");
     expect(lines).toContain("── June ──");
     expect(lines).toContain("── March 2025 ──");
