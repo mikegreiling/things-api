@@ -27,18 +27,6 @@ export interface TagRef {
   title: string;
 }
 
-/**
- * A tag inherited from an ancestor container, carrying its provenance. Sources
- * are ONLY `project` or `area` — a heading cannot be tagged (TAGINH1, verified
- * in a VM), so it is never a source. The nearest ancestor wins when a tag sits
- * on both the project and its area (project is nearer). `source` is the
- * container the tag is DIRECTLY assigned to.
- */
-export interface InheritedTag {
-  tag: TagRef;
-  source: { type: "project" | "area"; uuid: string; title: string };
-}
-
 export interface RepeatingInfo {
   /** This row is a repeating template (rt1_recurrenceRule / repeater present). Invisible in normal lists. */
   isTemplate: boolean;
@@ -90,14 +78,14 @@ interface TaskCommon {
   /** Direct tags only, by name — mirrors DB truth (inherited tags are computed; see inheritedTags). */
   tags: TagRef[];
   /**
-   * Tags inherited from an ancestor project/area, each with its provenance
-   * (native UI tag filtering includes these — T18). Populated on the
-   * detail/card reads (`todo show`, `project show`) — ALWAYS present there,
-   * an empty array when there are none, so machine consumers get a stable
-   * shape; absent (undefined) on list rows, which surface direct tags only.
-   * Never merged into {@link tags}.
+   * Tags inherited from an ancestor project/area, by NAME — a plain list
+   * parallel to {@link tags} (native UI tag filtering includes these — T18).
+   * Populated on the detail/card reads (`todo show`, `project show`) as an
+   * array (empty when there are none); the emit-time omit-empty transform (#163)
+   * drops it from JSON when empty, and it is absent (undefined) on list rows,
+   * which surface direct tags only. Never merged into {@link tags}.
    */
-  inheritedTags?: InheritedTag[];
+  inheritedTags?: TagRef[];
   repeating: RepeatingInfo;
   created: Date;
   modified: Date;

@@ -108,14 +108,14 @@ describe("glyph styling (color on)", () => {
     expect(styled).not.toContain(BLUE);
   });
 
-  it("inherited chips render DIM (secondary metadata), never GREEN like the item's own tags", async () => {
+  it("inherited chips render DIM (secondary metadata), never GREEN like the item's own tags — plain names, no provenance", async () => {
     const { inheritedChips } = await glyphs();
-    const styled = inheritedChips([
-      { tag: { title: "home" }, source: { type: "area", uuid: "a1", title: "Home" } },
-    ]);
+    const styled = inheritedChips([{ title: "home" }, { title: "important" }]);
     expect(styled).toContain(DIM);
     expect(styled).not.toContain(GREEN);
-    expect(styled).toContain("#home ‹area Home›");
+    expect(styled).toContain("#home #important");
+    // No container provenance chip (‹area …›/‹project …›) any more.
+    expect(styled).not.toContain("‹");
   });
 
   it("delta 2: a repeating project template circle is BLUE (still a project)", async () => {

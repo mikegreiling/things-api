@@ -46,8 +46,7 @@ import {
 import {
   addTagFilterOptions,
   collectRef,
-  DIRECT_TAG_DESC,
-  DIRECT_UNTAGGED_DESC,
+  CONTAINER_TAG_HINT,
   EXACT_TAG_DESC,
   hasTagPresence,
   TAG_DESC,
@@ -128,10 +127,8 @@ export function registerReadCommands(program: Command): void {
       "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--evening", "show only the This Evening section")
     .option("--limit <n>", LIMIT_DESC)
@@ -142,10 +139,8 @@ export function registerReadCommands(program: Command): void {
       (
         opts: GlobalReadOpts & {
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
           overdue?: boolean;
           evening?: boolean;
           limit?: string;
@@ -194,10 +189,8 @@ export function registerReadCommands(program: Command): void {
         "this is not strictly when it entered the Inbox).",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--since <when>", `only captures created on/after this bound: ${PERIOD_SINCE}`)
     .option("--until <when>", `only captures created on/before this bound: ${PERIOD_UNTIL}`)
@@ -209,10 +202,8 @@ export function registerReadCommands(program: Command): void {
       (
         opts: GlobalReadOpts & {
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
           overdue?: boolean;
           since?: string;
           until?: string;
@@ -303,10 +294,8 @@ export function registerReadCommands(program: Command): void {
         "--all shows everything",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option("--project-limit <n>", PROJECT_LIMIT_DESC)
@@ -318,10 +307,8 @@ export function registerReadCommands(program: Command): void {
       (
         opts: GlobalReadOpts & {
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
           overdue?: boolean;
           areaLimit?: string;
           projectLimit?: string;
@@ -393,10 +380,8 @@ export function registerReadCommands(program: Command): void {
         "--area-limit caps each group, --all shows everything",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option(
@@ -412,10 +397,8 @@ export function registerReadCommands(program: Command): void {
       (
         opts: GlobalReadOpts & {
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
           overdue?: boolean;
           areaLimit?: string;
           showActiveProjectItems?: boolean | string;
@@ -517,10 +500,8 @@ export function registerReadCommands(program: Command): void {
     .option("--all", "no date bound and no row limit — the app's full Upcoming")
     .option("--limit <n>", LIMIT_DESC)
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -532,10 +513,8 @@ export function registerReadCommands(program: Command): void {
           all?: boolean;
           limit?: string;
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
           horizon?: string;
         },
         command: Command,
@@ -661,10 +640,8 @@ export function registerReadCommands(program: Command): void {
     .option("--since <when>", `only entries logged on/after this bound: ${PERIOD_SINCE}`)
     .option("--until <when>", `only entries logged on/before this bound: ${PERIOD_UNTIL}`)
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -677,10 +654,8 @@ export function registerReadCommands(program: Command): void {
           since?: string;
           until?: string;
           tag?: string[];
-          directTag?: string[];
           exactTag?: boolean;
           untagged?: boolean;
-          directUntagged?: boolean;
         },
       ) => {
         if (tagFlagConflict(opts)) return;
@@ -760,8 +735,9 @@ export function registerReadCommands(program: Command): void {
         "first, then grouped under their area (optionally scoped to --area <ref>). " +
         "Someday and future-scheduled projects are hidden — --show-later appends them " +
         "after each group's active block (state carried by the (~) mark and ‹date› " +
-        "chip). Filter the listed projects by their own tags with --tag / --direct-tag / " +
-        "--untagged / --direct-untagged. --show-logged applies only when showing one project.",
+        "chip). Filter the listed projects by their own tags with --tag / --untagged — " +
+        "inheritance-inclusive (a project inherits its area's tags), the same as the flat " +
+        "views. --show-logged applies only when showing one project.",
     )
     .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--show-later", "include someday/future-scheduled projects after each active block")
@@ -798,9 +774,10 @@ export function registerReadCommands(program: Command): void {
       // content scope, it never lifts a limit. Threaded into the hidden-later
       // counting queries too so the counts reflect the same filter.
       const overdue = opts.overdue === true;
-      // Tag scope (§9a): each project ROW filtered by its own tags (--tag
-      // area-inheritance-inclusive, --direct-tag own-only). Threaded into the
-      // hidden-later counts too so they reflect the same filter.
+      // Tag scope (§9a): the projects LIST is a FLAT view — each project ROW is
+      // filtered by its own tags, INHERITANCE-INCLUSIVE (a project inherits its
+      // area's tags), the same as `anytime`. NOT a single-container view.
+      // Threaded into the hidden-later counts too so they reflect the same filter.
       const tagFilter = tagFilterFields(opts);
       let hints: LaterHints | undefined;
       withClient(
@@ -892,49 +869,48 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
-  addTagFilterOptions(areas).action(
-    (id: string | undefined, opts: GlobalReadOpts & AreaShowActionOpts) => {
-      // Given a ref, this IS `things area show <ref>` — delegate to the same code
-      // path so the output is identical (a true synonym); --overdue and the tag
-      // filters scope its rows there.
-      if (id !== undefined) {
-        runAreaShow(id, opts);
-        return;
-      }
-      // The areas LIST has no deadline to compare against — an area is not a
-      // dated entity — so --overdue is vacuous here and rejected fail-closed
-      // (the same exclusion style #159 used for upcoming/logbook/trash).
-      if (opts.overdue === true) {
-        usageError(
-          opts,
-          "--overdue does not apply to the areas list — areas have no deadline; use it on `things areas <ref>` (that area's rows) or `things projects --overdue`",
-        );
-        return;
-      }
-      // The tag filters scope an area's ROWS, not the area LIST — the bare list
-      // shows every area with its direct tags. Rejected fail-closed here (same
-      // style as --overdue); use `things areas <ref>` or `things projects --tag`.
-      if (hasTagPresence(opts) || opts.untagged === true || opts.directUntagged === true) {
-        usageError(
-          opts,
-          "the tag filters (--tag/--direct-tag/--untagged/--direct-untagged) do not apply to the areas list — use them on `things areas <ref>` (that area's rows) or `things projects --tag`",
-        );
-        return;
-      }
-      withClient(
+  addTagFilterOptions(areas).addHelpText("after", CONTAINER_TAG_HINT);
+  areas.action((id: string | undefined, opts: GlobalReadOpts & AreaShowActionOpts) => {
+    // Given a ref, this IS `things area show <ref>` — delegate to the same code
+    // path so the output is identical (a true synonym); --overdue and the tag
+    // filters scope its rows there.
+    if (id !== undefined) {
+      runAreaShow(id, opts);
+      return;
+    }
+    // The areas LIST has no deadline to compare against — an area is not a
+    // dated entity — so --overdue is vacuous here and rejected fail-closed
+    // (the same exclusion style #159 used for upcoming/logbook/trash).
+    if (opts.overdue === true) {
+      usageError(
         opts,
-        "areas",
-        (c) => c.read.areas(),
-        (data) => {
-          const w = uuidDisplayWidth(data);
-          return data.map(
-            (a) =>
-              `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
-          );
-        },
+        "--overdue does not apply to the areas list — areas have no deadline; use it on `things areas <ref>` (that area's rows) or `things projects --overdue`",
       );
-    },
-  );
+      return;
+    }
+    // The tag filters scope an area's ROWS, not the area LIST — the bare list
+    // shows every area with its direct tags. Rejected fail-closed here (same
+    // style as --overdue); use `things areas <ref>` or `things projects --tag`.
+    if (hasTagPresence(opts) || opts.untagged === true) {
+      usageError(
+        opts,
+        "the tag filters (--tag/--untagged) do not apply to the areas list — use them on `things areas <ref>` (that area's rows) or `things projects --tag`",
+      );
+      return;
+    }
+    withClient(
+      opts,
+      "areas",
+      (c) => c.read.areas(),
+      (data) => {
+        const w = uuidDisplayWidth(data);
+        return data.map(
+          (a) =>
+            `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
+        );
+      },
+    );
+  });
 
   program
     .command("tags")
@@ -1025,10 +1001,8 @@ export function registerReadCommands(program: Command): void {
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
     .option("--tag <ref>", TAG_DESC, collectRef, [])
-    .option("--direct-tag <ref>", DIRECT_TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
-    .option("--direct-untagged", DIRECT_UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
@@ -1049,10 +1023,8 @@ export function registerReadCommands(program: Command): void {
       }
       const tagFlags: TagFlags = {
         ...(Array.isArray(opts["tag"]) && { tag: opts["tag"] as string[] }),
-        ...(Array.isArray(opts["directTag"]) && { directTag: opts["directTag"] as string[] }),
         exactTag: opts["exactTag"] === true,
         untagged: opts["untagged"] === true,
-        directUntagged: opts["directUntagged"] === true,
       };
       if (tagFlagConflict({ ...tagFlags, json })) return;
       const overdue = opts["overdue"] === true;

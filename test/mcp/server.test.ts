@@ -284,7 +284,7 @@ describe("things MCP server", () => {
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
-  it("read_view tag is an array that ANDs; direct_tag / direct_untagged narrow", async () => {
+  it("read_view tag is an array that ANDs (flat inheritance-inclusive); no direct_tag input exists", async () => {
     const foo = seedTag(fixture.db, "foo");
     const bar = seedTag(fixture.db, "bar");
     const work = seedArea(fixture.db, "Work");
@@ -306,70 +306,87 @@ describe("things MCP server", () => {
       }),
     ) as { today: { title: string }[] };
     expect(anded.today.map((i) => i.title)).toEqual(["MCP both"]);
-    // direct_tag foo: only the directly-foo-tagged row (inherited-only excluded).
-    const direct = textOf(
+    // Flat tag foo is inheritance-inclusive: direct AND area-inherited rows.
+    const single = textOf(
+      await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", tag: ["foo"] },
+      }),
+    ) as { today: { title: string }[] };
+    expect(single.today.map((i) => i.title).toSorted()).toEqual([
+      "MCP both",
+      "MCP direct-foo",
+      "MCP inherited-only",
+    ]);
+    // The removed direct_tag input is no longer part of the schema — zod strips
+    // the unknown key, so the call behaves as an unfiltered view (every member),
+    // NOT as the old direct-only filter.
+    const removed = textOf(
       await client.callTool({
         name: "read_view",
         arguments: { view: "today", direct_tag: ["foo"] },
       }),
     ) as { today: { title: string }[] };
-    expect(direct.today.map((i) => i.title)).toEqual(["MCP direct-foo"]);
-    // direct_untagged: the inherited-only row survives (no DIRECT tag).
-    const du = textOf(
-      await client.callTool({
-        name: "read_view",
-        arguments: { view: "today", direct_untagged: true },
-      }),
-    ) as { today: { title: string }[] };
-    expect(du.today.map((i) => i.title)).toContain("MCP inherited-only");
-    expect(du.today.map((i) => i.title)).not.toContain("MCP direct-foo");
-    // untagged + direct_untagged is refused.
+    expect(removed.today.map((i) => i.title).toSorted()).toEqual([
+      "MCP both",
+      "MCP direct-foo",
+      "MCP inherited-only",
+    ]);
+    // untagged + tag is refused.
     const conflict = await client.callTool({
       name: "read_view",
-      arguments: { view: "today", untagged: true, direct_untagged: true },
+      arguments: { view: "today", untagged: true, tag: ["foo"] },
     });
     expect(conflict.isError).toBe(true);
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
-  it("get_project / get_area / list_collections carry the tag filters with guards", async () => {
+  it("get_project / get_area / list_collections carry the container tag filters (direct-on-row) with guards", async () => {
     const focus = seedTag(fixture.db, "focus");
     const area = seedArea(fixture.db, "Home");
     const project = seedProject(fixture.db, { title: "P", area });
     const childHit = seedTodo(fixture.db, { title: "child-focus", project });
     tagTask(fixture.db, childHit, focus);
     seedTodo(fixture.db, { title: "child-bare", project });
-    // A directly-focus-tagged project + a bare one, both in Home.
+    // Home is area-tagged focus (every project/row inherits it); P is ALSO
+    // directly tagged focus, PBare only inherits it from Home.
+    tagArea(fixture.db, area, focus);
     tagTask(fixture.db, project, focus);
     seedProject(fixture.db, { title: "PBare", area });
     const looseHit = seedTodo(fixture.db, { title: "loose-focus", area });
     tagTask(fixture.db, looseHit, focus);
     await connect([fakeVector(null).vector]);
-    // get_project direct_tag → only the child with its own focus tag.
+    // get_project tag → single-container semantics: only the child with its own
+    // focus tag (the project's/area's focus is inherited by every child, and
+    // suppressed).
     const proj = textOf(
       await client.callTool({
         name: "get_project",
-        arguments: { uuid: "P", direct_tag: ["focus"] },
+        arguments: { uuid: "P", tag: ["focus"] },
       }),
     ) as { active: { title: string }[] };
     expect(proj.active.map((i) => i.title)).toEqual(["child-focus"]);
-    // get_area direct_tag → loose to-dos + child projects by own tag.
+    // get_area tag → single-container semantics: loose to-dos + child projects
+    // carrying focus DIRECTLY (Home's inherited focus is suppressed, so PBare —
+    // which only inherits — is excluded).
     const areaRes = textOf(
       await client.callTool({
         name: "get_area",
-        arguments: { ref: "Home", direct_tag: ["focus"] },
+        arguments: { ref: "Home", tag: ["focus"] },
       }),
     ) as { active: { title: string }[]; projects: { title: string }[] };
     expect(areaRes.active.map((i) => i.title)).toEqual(["loose-focus"]);
     expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
-    // list_collections projects direct_tag → only the directly-tagged project.
+    // list_collections projects tag → FLAT/inheritance-inclusive: BOTH the
+    // directly-tagged P and the area-inheriting PBare (the projects list is not a
+    // single-container view — contrast get_area above).
     const list = textOf(
       await client.callTool({
         name: "list_collections",
-        arguments: { kind: "projects", direct_tag: ["focus"] },
+        arguments: { kind: "projects", tag: ["focus"] },
       }),
     ) as { title: string }[];
-    expect(list.map((p) => p.title)).toEqual(["P"]);
+    expect(list.map((p) => p.title).toSorted()).toEqual(["P", "PBare"]);
     // areas kind rejects the tag filters.
     const rejected = await client.callTool({
       name: "list_collections",

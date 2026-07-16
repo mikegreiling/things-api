@@ -29,9 +29,7 @@ function fullTodo(): Record<string, unknown> {
     project: { uuid: "proj-1", title: "Q3" },
     heading: { uuid: "head-1", title: "Phase 1" },
     tags: [{ title: "urgent" }],
-    inheritedTags: [
-      { tag: { title: "team" }, source: { type: "area", uuid: "area-1", title: "Work" } },
-    ],
+    inheritedTags: [{ title: "team" }],
     repeating: { isTemplate: false, isInstance: false, templateUuid: null },
     checklist: [{ title: "step one", status: "open" }],
     checklistItemsCount: 1,

@@ -72,11 +72,15 @@ export function areaView(
   const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
   const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
   // Tag scope (§9a): BOTH displayed row kinds — the child PROJECTS and the
-  // loose to-dos — are filtered by each row's OWN tags (`--tag` inheritance-
-  // inclusive, `--direct-tag` direct-only). Computed once, spliced into both
-  // queries; NO descent into project contents (a child of a matching project
-  // is never inspected here). The tag binds trail each query's own binds.
-  const tf = tagFilter(db, filter);
+  // loose to-dos — are filtered by a tag carried DIRECTLY on the row (the
+  // container semantics). The area's own tags are inherited by every row it
+  // holds, so an inheritance-inclusive `--tag` would be vacuous; suppressing the
+  // container hop makes `--tag` mean "rows with this tag on themselves" (still
+  // descendant-expanded) and `--untagged` "rows with no direct tag". Computed
+  // once, spliced into both queries; NO descent into project contents (a child
+  // of a matching project is never inspected here). The tag binds trail each
+  // query's own binds.
+  const tf = tagFilter(db, filter, { container: true });
   // Open projects PLUS closed ones the log-move sweep has not passed — the
   // GUI keeps those checked in place (completion ≠ logged). Under --overdue the
   // OVERDUE predicate's own `status = 0` narrows this to open overdue projects.

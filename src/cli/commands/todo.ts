@@ -91,8 +91,8 @@ export function renderDetail(item: AnyTask | null): string[] {
     meta("heading", item.heading?.title);
   }
   if (item.tags.length > 0) meta("tags", tagList(item.tags));
-  // Inherited tags render dim with provenance chips (`#home ‹area Home›`), and
-  // ONLY when present — a zero-inherited card is byte-identical to no line.
+  // Inherited tags render dim as plain names (`#home #important`), and ONLY when
+  // present — a zero-inherited card is byte-identical to no line.
   if (item.inheritedTags !== undefined && item.inheritedTags.length > 0)
     meta("inherited", inheritedChips(item.inheritedTags));
   if (item.repeating.isTemplate) {
