@@ -433,9 +433,23 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
   return groupBySidebar(db, materialize(db, rows, boundary));
 }
 
-/** The UI's star marker in Anytime: the item is also a Today member. */
+/**
+ * The UI's star marker in Anytime: the item is also a Today member. Mirrors
+ * {@link todayView}'s two membership arms so an unscheduled item pulled into
+ * Today by a due deadline stars exactly like a scheduled one:
+ *   - SCHEDULED — a When-date that has arrived (startDate <= today); or
+ *   - DEADLINE-DRIVEN — no When-date, but a due/overdue deadline (deadline <=
+ *     today) pulls it into Today (the todayView arm that lets a bare deadline
+ *     surface an item). Only reached for anytime-visible rows (start=1,
+ *     startDate NULL), so it never over-stars someday/inbox rows.
+ * KNOWN LIMITATION: todayView's deadline arm also drops a DISMISSED-nag
+ * deadline (deadlineSuppressionDate >= deadline); that column is not surfaced
+ * on the entity, so a suppressed unscheduled overdue row is over-starred here.
+ */
 export function isTodayMember(item: ListItem, now?: Date): boolean {
-  return item.startDate !== null && item.startDate <= localToday(now);
+  const today = localToday(now);
+  if (item.startDate !== null) return item.startDate <= today;
+  return item.deadline !== null && item.deadline <= today;
 }
 
 export interface UpcomingFilter extends ViewFilter {

@@ -886,6 +886,24 @@ describe("todayMark", () => {
     expect(todayMark(night, NOW)).toBe("⏾");
     expect(todayMark(future, NOW)).toBeNull();
   });
+
+  it("stars an unscheduled to-do pulled into Today by a due deadline (anytime ★)", () => {
+    fixture = buildFixtureDb();
+    // Unscheduled (start=1, no When-date) but DUE today: todayView's deadline
+    // arm pulls it into Today, so Anytime stars it exactly like a scheduled one.
+    seedTodo(fixture.db, { title: "due today", start: "active", deadline: "2026-07-05" });
+    // Control — unscheduled with a FUTURE deadline: forecast into Upcoming, not
+    // Today, so no star (proves the deadline must be DUE, not merely present).
+    seedTodo(fixture.db, { title: "due later", start: "active", deadline: "2026-07-20" });
+    const items = anytimeView(fixture.db, NOW).flatMap((s) => s.items);
+    const mark = (t: string) => {
+      const item = items.find((i) => i.title === t);
+      if (!item) throw new Error(`missing anytime item: ${t}`);
+      return todayMark(item, NOW);
+    };
+    expect(mark("due today")).toBe("★");
+    expect(mark("due later")).toBeNull();
+  });
 });
 
 describe("renderToday (things today split)", () => {
