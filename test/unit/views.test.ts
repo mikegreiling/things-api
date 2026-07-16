@@ -1294,6 +1294,43 @@ describe("searchView (Phase 12 ergonomics)", () => {
     expect(() => searchView(fx.db, "widget", { area: "nope" })).toThrow(/no area matching/);
     expect(() => searchView(fx.db, "widget", { tag: "nope" })).toThrow(/no tag matching/);
   });
+
+  it("treats LIKE wildcards in the query as literal characters", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "my task" });
+    seedTodo(fx.db, { title: "my_task" });
+    seedTodo(fx.db, { title: "myXtask" });
+    seedTodo(fx.db, { title: "50% off" });
+    seedTodo(fx.db, { title: "500 off" });
+    // `_` is a single-char wildcard unless escaped: "my_task" must match ONLY
+    // the literal underscore title, never "my task"/"myXtask".
+    expect(searchView(fx.db, "my_task").map((i) => i.title)).toEqual(["my_task"]);
+    // `%` is a multi-char wildcard unless escaped: "50%" must match "50% off"
+    // and NOT "500 off".
+    expect(searchView(fx.db, "50%").map((i) => i.title)).toEqual(["50% off"]);
+    // Control: an ordinary substring still matches every title containing it.
+    expect(
+      searchView(fx.db, "task")
+        .map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["my task", "myXtask", "my_task"]);
+  });
+
+  it("liteTitleSearch treats LIKE wildcards as literal characters", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "my task" });
+    seedTodo(fx.db, { title: "my_task" });
+    seedTodo(fx.db, { title: "myXtask" });
+    const literal = liteTitleSearch(fx.db, "my_task").candidates.map((c) =>
+      c.kind === "task" ? c.task.title : c.area.title,
+    );
+    expect(literal).toEqual(["my_task"]);
+    // Control: a plain substring still matches every title containing it.
+    const substr = liteTitleSearch(fx.db, "task")
+      .candidates.map((c) => (c.kind === "task" ? c.task.title : c.area.title))
+      .toSorted();
+    expect(substr).toEqual(["my task", "myXtask", "my_task"]);
+  });
 });
 
 describe("searchView heading doctrine + ranking (item 5)", () => {

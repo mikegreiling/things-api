@@ -119,6 +119,20 @@ import { compareSearchMatches, type MatchField, type SearchMatch } from "./searc
 
 export type ListItem = Todo | Project;
 
+/**
+ * Escape a user term for a SQL LIKE pattern so `%` and `_` match LITERALLY,
+ * not as wildcards (search "my_task" must not match "myXtask"; "50%" must not
+ * match "50"-anything). Backslash is the escape character — escape it first,
+ * then the two wildcard metacharacters. Every LIKE fed an escaped term must
+ * append `ESCAPE '\'` (see {@link LIKE_ESCAPE}).
+ */
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/** SQL clause suffix pairing an escaped LIKE pattern with its escape char. */
+const LIKE_ESCAPE = " ESCAPE '\\'";
+
 /** Optional list-view filters. */
 export interface ViewFilter {
   /**
@@ -920,8 +934,8 @@ export function liteTitleSearch(
       type === "to-do" ? "t.type = 0" : type === "project" ? "t.type = 1" : "t.type IN (0, 1)";
     const rows = fetchTaskRows(
       db,
-      `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?`,
-      [`%${query}%`],
+      `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?${LIKE_ESCAPE}`,
+      [`%${escapeLike(query)}%`],
     );
     tasks = materialize(db, rows);
   }
@@ -947,7 +961,7 @@ export function searchView(
   now?: Date,
 ): SearchResultItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 50);
-  const needle = `%${query}%`;
+  const needle = `%${escapeLike(query)}%`;
   // `--overdue` narrows to OPEN, past-deadline matches. Its open-only predicate
   // is contradictory with the status-widening flags (logged/trashed/all); the
   // CLI/MCP surfaces reject that combination, so here it simply intersects.
@@ -991,7 +1005,7 @@ export function searchView(
   // Needle matches: title OR notes. No SQL LIMIT — ranking runs before the cap.
   const rows = fetchTaskRows(
     db,
-    `${scope.join(" AND ")} AND (t.title LIKE ? OR t.notes LIKE ?)${tf.sql}${of.sql}`,
+    `${scope.join(" AND ")} AND (t.title LIKE ?${LIKE_ESCAPE} OR t.notes LIKE ?${LIKE_ESCAPE})${tf.sql}${of.sql}`,
     [...scopeBinds, needle, needle, ...tf.binds, ...of.binds],
   );
   const needleLower = query.toLowerCase();
@@ -1010,7 +1024,7 @@ export function searchView(
     const headingRows = db
       .prepare(
         `SELECT project AS projectUuid, title FROM TMTask
-         WHERE type = 2 AND project IS NOT NULL AND trashed = 0 AND title LIKE ?`,
+         WHERE type = 2 AND project IS NOT NULL AND trashed = 0 AND title LIKE ?${LIKE_ESCAPE}`,
       )
       .all(needle) as unknown as Array<{ projectUuid: string; title: string | null }>;
     const headingTitleFor = new Map<string, string>();
