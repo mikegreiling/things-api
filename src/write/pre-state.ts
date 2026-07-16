@@ -5,7 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { encodePackedDate, localToday } from "../model/dates.ts";
-import type { AnyTask, Project, TaskStatus, Todo } from "../model/entities.ts";
+import type { AnyTask, Project, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { resolveNamedRef } from "../read/queries.ts";
@@ -302,6 +302,26 @@ export function resolveTag(db: DatabaseSync, ref: string): ContainerResolution {
 
 export function loadTarget(db: DatabaseSync, uuid: string): AnyTask | null {
   return byUuid(db, uuid);
+}
+
+/**
+ * Uuids of pre-existing TMTask rows matching a create-probe's (title, type),
+ * captured in the pre-read and threaded into the probe as `excludeUuids`.
+ * Create-mode verification discovers the row the app just made by (title,
+ * type); without this exclusion the probe could bind to a DIFFERENT same-title
+ * row that merely appeared in the trailing sinceEpoch window (a concurrent add,
+ * a repeat-template spawn, a sync insert), recording the wrong discoveredUuid —
+ * and a later undo would then trash the wrong item. Matches `findCreated`'s
+ * exact `title = ? AND type = ?` filter (case-sensitive) so the captured set is
+ * precisely the pre-existing rows that discovery would otherwise consider.
+ */
+export function sameTitleTaskUuids(db: DatabaseSync, title: string, type: TaskType): string[] {
+  const dbType = type === "project" ? 1 : type === "heading" ? 2 : 0;
+  return (
+    db.prepare("SELECT uuid FROM TMTask WHERE title = ? AND type = ?").all(title, dbType) as {
+      uuid: string;
+    }[]
+  ).map((r) => r.uuid);
 }
 
 export function projectChildren(db: DatabaseSync, projectUuid: string): Todo[] {
