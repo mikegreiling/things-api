@@ -511,7 +511,7 @@ describe("things MCP server", () => {
     expect(logged).toHaveLength(2);
   });
 
-  it("read_view caps at 50 by default and reports pagination in a second block", async () => {
+  it("read_view caps at 50 by default and reports truncation in a second block", async () => {
     for (let i = 0; i < 60; i++)
       seedTodo(fixture.db, { title: `cap ${i}`, start: "inbox", index: i });
     await connect([fakeVector(null).vector]);
@@ -520,10 +520,10 @@ describe("things MCP server", () => {
     expect(data).toHaveLength(50);
     const content = (result as { content: { text: string }[] }).content;
     const meta = JSON.parse(content[1]?.text ?? "{}") as {
-      pagination: { shown: number; total: number; truncated: boolean };
+      truncation: { shown: number; total: number; truncated: boolean };
       note: string;
     };
-    expect(meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
+    expect(meta.truncation).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
     expect(meta.note).toContain("showing 50 of 60");
   });
 

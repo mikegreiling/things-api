@@ -33,7 +33,7 @@ import {
   todayMark,
   viewHeaderLines,
 } from "../../src/cli/render.ts";
-import { paginateToday } from "../../src/read/pagination.ts";
+import { truncateToday } from "../../src/read/truncation.ts";
 import { parsePeriodEnd, parsePeriodStart } from "../../src/cli/period.ts";
 import {
   areaMark,
@@ -943,7 +943,7 @@ describe("renderToday (things today split)", () => {
   it("(a) a cap cutting INSIDE evening keeps the shown rows + an honest `more` hint", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 4); // total 7
-    const { data } = paginateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
+    const { data } = truncateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
     const lines = renderToday(full, data, base);
     expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(2);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
@@ -956,7 +956,7 @@ describe("renderToday (things today split)", () => {
   it("(b) a cap consuming evening entirely shows the header + hidden-count hint, never `(empty)`", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 5, 4); // total 9
-    const { data } = paginateToday(full, 3); // 3 today, 0 evening → all 4 evening hidden
+    const { data } = truncateToday(full, 3); // 3 today, 0 evening → all 4 evening hidden
     expect(data.evening).toHaveLength(0);
     const lines = renderToday(full, data, base);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
@@ -979,7 +979,7 @@ describe("renderToday (things today split)", () => {
   it("(d) --all (no cap) shows every evening row and no hint", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 4);
-    const { data } = paginateToday(full, null);
+    const { data } = truncateToday(full, null);
     const lines = renderToday(full, data, base);
     expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(4);
     expect(lines.some((l) => l.includes("evening items —"))).toBe(false);
@@ -1007,7 +1007,7 @@ describe("renderToday (things today split)", () => {
   it("pins the truncated layout: today rows, blank, evening header, rows, pointer hint", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 4); // 3 today + 4 evening
-    const { data } = paginateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
+    const { data } = truncateToday(full, 5); // 3 today + 2 evening → 2 evening hidden
     const lines = renderToday(full, data, base);
     const evIdx = lines.findIndex((l) => l.includes("This Evening"));
     // A blank line separates the Today block from the Evening header.
@@ -1032,7 +1032,7 @@ describe("renderToday (things today split)", () => {
       });
     }
     const full = todayView(fixture.db, NOW, { eveningOnly: true });
-    const { data } = paginateToday(full, 2); // 2 evening shown, 2 hidden
+    const { data } = truncateToday(full, 2); // 2 evening shown, 2 hidden
     const eveningBase = "things today --evening";
     const lines = renderToday(full, data, eveningBase, { eveningOnly: true });
     // The pointer would be redundant here, so the hint offers the levers that

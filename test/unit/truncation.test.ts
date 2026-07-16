@@ -10,17 +10,17 @@ import {
   capAreaSections,
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
-  paginateList,
-  paginateToday,
+  truncateList,
+  truncateToday,
   partitionSomedaySection,
   previewSections,
   previewSomedaySections,
   splitSectionBlocks,
-} from "../../src/read/pagination.ts";
+} from "../../src/read/truncation.ts";
 import type { AreaView } from "../../src/read/area-view.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
-/** Minimal ListItem stand-ins — pagination only inspects type/uuid/refs. */
+/** Minimal ListItem stand-ins — truncation only inspects type/uuid/refs. */
 const items = (n: number, prefix = "u"): ListItem[] =>
   Array.from(
     { length: n },
@@ -47,23 +47,23 @@ const childOf = (uuid: string, projectUuid: string, projectTitle: string): ListI
 const todos = (n: number, prefix: string) =>
   Array.from({ length: n }, (_, i) => ({ uuid: `${prefix}${i}` })) as never[];
 
-describe("paginateList", () => {
+describe("truncateList", () => {
   it("returns everything untruncated under the limit", () => {
-    const { data, pagination } = paginateList(items(3), 50);
+    const { data, truncation } = truncateList(items(3), 50);
     expect(data).toHaveLength(3);
-    expect(pagination).toEqual({ shown: 3, total: 3, limit: 50, truncated: false });
+    expect(truncation).toEqual({ shown: 3, total: 3, limit: 50, truncated: false });
   });
 
   it("slices to the limit and reports the exact total", () => {
-    const { data, pagination } = paginateList(items(1000), 50);
+    const { data, truncation } = truncateList(items(1000), 50);
     expect(data).toHaveLength(50);
-    expect(pagination).toEqual({ shown: 50, total: 1000, limit: 50, truncated: true });
+    expect(truncation).toEqual({ shown: 50, total: 1000, limit: 50, truncated: true });
   });
 
   it("limit null returns all rows, never truncated", () => {
-    const { data, pagination } = paginateList(items(1000), null);
+    const { data, truncation } = truncateList(items(1000), null);
     expect(data).toHaveLength(1000);
-    expect(pagination).toEqual({ shown: 1000, total: 1000, limit: null, truncated: false });
+    expect(truncation).toEqual({ shown: 1000, total: 1000, limit: null, truncated: false });
   });
 
   it("the exposed defaults are 50 flat / 30 per area / 3 per project", () => {
@@ -73,7 +73,7 @@ describe("paginateList", () => {
   });
 });
 
-describe("paginateToday", () => {
+describe("truncateToday", () => {
   const view = (todayN: number, eveningN: number): TodayView => ({
     today: items(todayN),
     evening: items(eveningN, "e"),
@@ -81,20 +81,20 @@ describe("paginateToday", () => {
   });
 
   it("counts the cut across Today then This Evening in render order", () => {
-    const { data, pagination } = paginateToday(view(4, 4), 6);
+    const { data, truncation } = truncateToday(view(4, 4), 6);
     expect(data.today).toHaveLength(4);
     expect(data.evening).toHaveLength(2);
-    expect(pagination).toEqual({ shown: 6, total: 8, limit: 6, truncated: true });
+    expect(truncation).toEqual({ shown: 6, total: 8, limit: 6, truncated: true });
     // The whole-view badge summary is preserved.
     expect(data.badge).toEqual({ dueOrOverdue: 1, other: 2 });
   });
 
   it("a limit smaller than Today trims Evening to nothing", () => {
-    const { data, pagination } = paginateToday(view(10, 5), 3);
+    const { data, truncation } = truncateToday(view(10, 5), 3);
     expect(data.today).toHaveLength(3);
     expect(data.evening).toEqual([]);
-    expect(pagination.total).toBe(15);
-    expect(pagination.shown).toBe(3);
+    expect(truncation.total).toBe(15);
+    expect(truncation.shown).toBe(3);
   });
 });
 

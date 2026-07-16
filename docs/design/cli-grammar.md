@@ -247,7 +247,7 @@ When a show / bare-noun subject fails resolution at every tier (a not-found, dis
 3. **status** — active above someday; logged/trashed last (and only when a flag includes them)
 4. **tiebreak** — most-recently-modified
 
-Consequence (deliberate): a someday TITLE match outranks an active NOTES match — field trumps status. Ranking runs BEFORE the row cap, so `--limit`/pagination semantics are unchanged.
+Consequence (deliberate): a someday TITLE match outranks an active NOTES match — field trumps status. Ranking runs BEFORE the row cap, so `--limit`/truncation semantics are unchanged.
 
 **Heading doctrine.** A HEADING-title match surfaces the **parent PROJECT** row (never a bare heading row), annotated `via heading "…"` in human output and carrying additive `matchedVia: { kind: "heading", title }` in `--json`. Heading text is treated exactly as if it lived in the parent project's notes, ranked just below a real notes match. A project matched by its own title/notes never carries the redundant annotation. (Checklist-item text is NOT searched today; the checklist field rank is reserved.)
 

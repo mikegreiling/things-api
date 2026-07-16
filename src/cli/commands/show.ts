@@ -11,7 +11,7 @@ import type { AnyTask } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
 import type { ProjectView } from "../../read/project-view.ts";
 import type { ShowTarget } from "../../read/show-target.ts";
-import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
+import type { GroupedLimits } from "../../read/sections.ts";
 import { stripThingsUri } from "../../read/queries.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 import {
@@ -210,12 +210,16 @@ export function registerShowCommands(program: Command): void {
               };
             }
             if (t.kind === "area") {
-              const view = c.read.areaView(t.uuid, { overdue, ...tagFilter });
-              const { data, grouped } = capAreaSections(view, limits);
+              const bounded = c.read.areaView(t.uuid, {
+                overdue,
+                ...tagFilter,
+                areaLimit: areaCap.limit,
+                projectLimit: projectCap.limit,
+              });
               return {
-                data: { type: "area", view: data },
-                grouped,
-                lines: renderAreaView(view, { ...opts, limits, hintBase }),
+                data: { type: "area", view: bounded.view },
+                grouped: bounded.grouped,
+                lines: renderAreaView(bounded.full, { ...opts, limits, hintBase }),
               };
             }
             const detail = c.read.byUuid(t.uuid);

@@ -18,13 +18,11 @@ import {
   ExitCode,
   okEnvelope,
   type EnvelopeMeta,
-  type GroupedPagination,
-  type Pagination,
+  type GroupedTruncation,
+  type Truncation,
 } from "../contracts.ts";
-import { resolveCap } from "../read/caps.ts";
-import { DEFAULT_LIST_LIMIT } from "../read/pagination.ts";
 import { omitEmpty } from "../model/serialize.ts";
-import { schemaWarnings } from "../surface-copy.ts";
+import { DEFAULT_LIST_LIMIT, schemaWarnings } from "../surface-copy.ts";
 
 export interface GlobalReadOpts {
   json?: boolean;
@@ -60,9 +58,9 @@ export function usageError(
 export interface PagedResult<T> {
   data: T;
   /** Flat-view truncation — carried into meta and the appended hint. */
-  pagination?: Pagination;
+  truncation?: Truncation;
   /** Grouped-view (anytime/someday) per-block truncation — carried into meta. */
-  grouped?: GroupedPagination;
+  grouped?: GroupedTruncation;
   /**
    * Precomputed human lines. Grouped views render inside `fn` (where the full
    * per-block totals live) and hand the finished lines back here; when absent,
@@ -73,7 +71,7 @@ export interface PagedResult<T> {
 
 /**
  * The shared read driver: open the client, stamp the envelope meta (including
- * fingerprint + optional pagination), and either emit the `--json` envelope or
+ * fingerprint + optional truncation), and either emit the `--json` envelope or
  * render human lines. When `hintBase` is given and the result was truncated,
  * the muted "N more items" hint (reconstructing the user's own invocation) is
  * appended to the human output — never to `--json`. When `header` names a view,
@@ -101,7 +99,7 @@ export function runRead<T>(
     // Reads never block on a schema change — they warn (design decision). The
     // note reuses the same cached fingerprint the write path gates on.
     const warnings = schemaWarnings(client.schemaStatus());
-    const { data, pagination, grouped, lines: precomputed } = fn(client);
+    const { data, truncation, grouped, lines: precomputed } = fn(client);
     // The canonical command a sugar invocation normalized to — known now that
     // `fn` has resolved any reference. Present only for the routing sugars
     // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
@@ -110,7 +108,7 @@ export function runRead<T>(
       dbVersion: fp.observation.databaseVersion,
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
       elapsedMs: Date.now() - started,
-      ...(pagination !== undefined && { pagination }),
+      ...(truncation !== undefined && { truncation }),
       ...(grouped !== undefined && { grouped }),
       ...(resolvedCommand !== null && { resolvedCommand }),
       ...(warnings.length > 0 && { warnings }),
@@ -122,13 +120,13 @@ export function runRead<T>(
     }
     if (opts.json) {
       // Omit-empty applies to the entity/data payload only (contracts.md); the
-      // envelope meta/pagination is untouched, and the human render below keeps
+      // envelope meta/truncation is untouched, and the human render below keeps
       // the full, unpruned `data`.
       process.stdout.write(`${JSON.stringify(okEnvelope(kind, omitEmpty(data), meta))}\n`);
     } else {
       const lines = precomputed ?? render(data);
-      if (pagination !== undefined && hintBase !== undefined) {
-        const hint = truncationHint(hintBase, pagination);
+      if (truncation !== undefined && hintBase !== undefined) {
+        const hint = truncationHint(hintBase, truncation);
         if (hint !== null) lines.push("", hint);
       }
       // The view title preamble is a TTY-only affordance (`things inbox | grep`
@@ -244,9 +242,9 @@ export function parseLimit(opts: {
 /**
  * Resolve one cap flag (`--limit`, `--area-limit`, `--project-limit`) against
  * `--all`: positive integer required, `--all` conflicts with an explicit
- * value and otherwise lifts the cap (null). The conflict/default decision is
- * the shared {@link resolveCap}; this surface adds the string→integer
- * validation and the usage-error emission.
+ * value and otherwise lifts the cap (null). This surface owns the string→integer
+ * validation and the usage-error emission; the client re-applies the same
+ * conflict/default semantics on the resolved value it receives.
  */
 export function parseCap(
   flag: string,
@@ -256,7 +254,10 @@ export function parseCap(
   json = false,
 ): LimitResolution {
   const n = value === undefined ? undefined : Number(value);
-  const decision = resolveCap(n, all, defaultLimit);
+  // Resolve --all/value into a cap: an explicit value beside --all is a
+  // conflict; --all alone lifts the cap (null); otherwise the value or default.
+  const decision: number | null | "conflict" =
+    all && n !== undefined ? "conflict" : all ? null : (n ?? defaultLimit);
   // Conflict takes precedence over value validation (an explicit value beside
   // --all is rejected before we scrutinize the value itself).
   if (decision === "conflict") {
@@ -287,10 +288,10 @@ export function invocation(name: string, parts: Array<string | false | undefined
  * `--limit` or `--all` is one copy-paste away. Returns null when nothing was
  * dropped or the caller already asked for every row.
  */
-export function truncationHint(base: string, pagination: Pagination): string | null {
-  if (!pagination.truncated || pagination.limit === null) return null;
-  const more = pagination.total - pagination.shown;
-  const bigger = pagination.limit * 2;
+export function truncationHint(base: string, truncation: Truncation): string | null {
+  if (!truncation.truncated || truncation.limit === null) return null;
+  const more = truncation.total - truncation.shown;
+  const bigger = truncation.limit * 2;
   return dim(
     `── ${more} more item${more === 1 ? "" : "s"} — see more: \`${base} --limit ${bigger}\` · \`${base} --all\` ──`,
   );

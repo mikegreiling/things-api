@@ -74,9 +74,9 @@ The `area` field reports the **EFFECTIVE** area (revised 2026-07-16): a to-do's 
 
 `repeating` is always present (it carries the `isTemplate` / `isInstance` booleans); inside it, `templateUuid` (null), `nextOccurrence`, `paused`, `deadlined`, and `rule` follow omit-empty.
 
-Not covered by this contract (own shapes, unchanged): the **error envelope** (`error.code` / `error.details.candidates` / `error.details.suggestions` — a candidate entity is NOT pruned), **mutation results / plans** (`kind: "mutation-result"`, dry-run plans), and the non-entity diagnostic payloads (`doctor`, `capabilities`, `config`, `legend`, `setup`). The envelope `meta` (including `pagination.limit: null`, which means "unbounded") is never pruned.
+Not covered by this contract (own shapes, unchanged): the **error envelope** (`error.code` / `error.details.candidates` / `error.details.suggestions` — a candidate entity is NOT pruned), **mutation results / plans** (`kind: "mutation-result"`, dry-run plans), and the non-entity diagnostic payloads (`doctor`, `capabilities`, `config`, `legend`, `setup`). The envelope `meta` (including `truncation.limit: null`, which means "unbounded") is never pruned.
 
-Source of truth in code: [`src/model/serialize.ts`](../../src/model/serialize.ts) (`omitEmpty`), applied at the two emit boundaries — [`src/cli/read-driver.ts`](../../src/cli/read-driver.ts) (`runRead`) and [`src/mcp/server.ts`](../../src/mcp/server.ts) (`readResult` / the paginated + grouped read results). Covered by `test/unit/serialize.test.ts` and the read-shape assertions in `test/cli/e2e.test.ts` / `test/mcp/server.test.ts`.
+Source of truth in code: [`src/model/serialize.ts`](../../src/model/serialize.ts) (`omitEmpty`), applied at the two emit boundaries — [`src/cli/read-driver.ts`](../../src/cli/read-driver.ts) (`runRead`) and [`src/mcp/server.ts`](../../src/mcp/server.ts) (`readResult` / the truncated + grouped read results). Covered by `test/unit/serialize.test.ts` and the read-shape assertions in `test/cli/e2e.test.ts` / `test/mcp/server.test.ts`.
 
 ## Error-path universality (every refusal honors `--json`)
 

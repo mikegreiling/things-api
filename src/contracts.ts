@@ -51,7 +51,7 @@ export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
  * `truncated` is true exactly when `shown < total`. The dropped remainder is
  * `total - shown`.
  */
-export interface Pagination {
+export interface Truncation {
   shown: number;
   total: number;
   limit: number | null;
@@ -85,8 +85,8 @@ export interface BlockCount {
   totalTodos?: number;
 }
 
-/** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Pagination}. */
-export interface GroupedPagination {
+/** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Truncation}. */
+export interface GroupedTruncation {
   /** True when any block hid items. */
   truncated: boolean;
   blocks: BlockCount[];
@@ -100,9 +100,9 @@ export interface EnvelopeMeta {
   /** Wall-clock duration of the command in milliseconds. */
   elapsedMs: number;
   /** List-view truncation metadata; present only on limited flat read views. */
-  pagination?: Pagination;
+  truncation?: Truncation;
   /** Per-block truncation metadata; present only on grouped views (anytime/someday). */
-  grouped?: GroupedPagination;
+  grouped?: GroupedTruncation;
   /**
    * The canonical `things …` command a sugar invocation normalized to (bare
    * noun, keyword-in-show, uuid/share-link routing). Present only on routed

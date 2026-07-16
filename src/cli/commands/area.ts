@@ -11,7 +11,8 @@ import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
-import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
+import type { GroupedLimits } from "../../read/sections.ts";
+import type { BoundedAreaView } from "../../client.ts";
 import { openInThings } from "./reads.ts";
 import {
   invocation,
@@ -255,9 +256,14 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
     opts,
     "area-view",
     (c) => {
-      let view: AreaView;
+      let bounded: BoundedAreaView;
       try {
-        view = c.read.areaView(ref, { overdue, ...tagFilter });
+        bounded = c.read.areaView(ref, {
+          overdue,
+          ...tagFilter,
+          areaLimit: areaCap.limit,
+          projectLimit: projectCap.limit,
+        });
       } catch (err) {
         // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
         if (err instanceof RangeError && !err.message.includes("ambiguous")) {
@@ -269,11 +275,10 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
         }
         throw err;
       }
-      const { data, grouped } = capAreaSections(view, limits);
       return {
-        data,
-        grouped,
-        lines: renderAreaView(view, { ...opts, limits, hintBase }),
+        data: bounded.view,
+        grouped: bounded.grouped,
+        lines: renderAreaView(bounded.full, { ...opts, limits, hintBase }),
       };
     },
     () => [],

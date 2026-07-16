@@ -202,7 +202,7 @@ describe("cli end-to-end (fixture db)", () => {
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
     expect(env.data.today).toHaveLength(50);
     expect(env.data.evening).toHaveLength(0);
-    expect(env.meta.pagination).toEqual({ shown: 50, total: 75, limit: 50, truncated: true });
+    expect(env.meta.truncation).toEqual({ shown: 50, total: 75, limit: 50, truncated: true });
   });
 
   it("things todo show includes checklist and repeating flags", () => {
@@ -532,14 +532,14 @@ describe("cli list limits + truncation hint", () => {
     }
   }
 
-  it("caps flat views at 50 by default and carries exact pagination meta", () => {
+  it("caps flat views at 50 by default and carries exact truncation meta", () => {
     fx = buildFixtureDb();
     seedInbox(60);
     const { stdout, exitCode } = runCli(["inbox", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
     expect(env.data).toHaveLength(50);
-    expect(env.meta.pagination).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
+    expect(env.meta.truncation).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
   });
 
   it("human output appends a hint reconstructing the invocation (bigger limit + all)", () => {
@@ -566,7 +566,7 @@ describe("cli list limits + truncation hint", () => {
     seedInbox(60);
     const json = runCli(["inbox", "--limit", "20", "--json", "--db", fx.path]);
     expect(JSON.parse(json.stdout).data).toHaveLength(20);
-    expect(JSON.parse(json.stdout).meta.pagination).toEqual({
+    expect(JSON.parse(json.stdout).meta.truncation).toEqual({
       shown: 20,
       total: 60,
       limit: 20,
@@ -582,7 +582,7 @@ describe("cli list limits + truncation hint", () => {
     seedInbox(60);
     const json = runCli(["inbox", "--all", "--json", "--db", fx.path]);
     expect(JSON.parse(json.stdout).data).toHaveLength(60);
-    expect(JSON.parse(json.stdout).meta.pagination.truncated).toBe(false);
+    expect(JSON.parse(json.stdout).meta.truncation.truncated).toBe(false);
     const human = runCli(["inbox", "--all", "--db", fx.path]);
     expect(human.stdout).not.toContain("more items");
   });
@@ -633,12 +633,12 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     const bare = runCli(["upcoming", "--json", "--db", fx.path]).stdout;
     expect(titlesOf(bare)).toContain("near");
     expect(titlesOf(bare)).not.toContain("far"); // default 1m window excludes it
-    expect(JSON.parse(bare).meta.pagination.limit).toBe(50); // default cap present
+    expect(JSON.parse(bare).meta.truncation.limit).toBe(50); // default cap present
 
     const wide = runCli(["upcoming", "--limit", "100", "--json", "--db", fx.path]).stdout;
     expect(titlesOf(wide)).toContain("near");
     expect(titlesOf(wide)).toContain("far"); // window default lifted by explicit --limit
-    expect(JSON.parse(wide).meta.pagination.limit).toBe(100);
+    expect(JSON.parse(wide).meta.truncation.limit).toBe(100);
   });
 
   it("upcoming --until / --since drop the default row cap (limit=null)", () => {
@@ -646,11 +646,11 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
 
     const until = runCli(["upcoming", "--until", "3m", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(until).meta.pagination.limit).toBeNull();
+    expect(JSON.parse(until).meta.truncation.limit).toBeNull();
     expect(titlesOf(until)).toContain("far");
 
     const since = runCli(["upcoming", "--since", "2000", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+    expect(JSON.parse(since).meta.truncation.limit).toBeNull();
   });
 
   it("upcoming --tag is a content scope — it lifts NO default (window + cap stay)", () => {
@@ -661,7 +661,7 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     tagTask(fx.db, near, t);
     tagTask(fx.db, far, t);
     const env = runCli(["upcoming", "--tag", "work", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(env).meta.pagination.limit).toBe(50);
+    expect(JSON.parse(env).meta.truncation.limit).toBe(50);
     expect(titlesOf(env)).toContain("near");
     expect(titlesOf(env)).not.toContain("far"); // window default still applies under a scope
   });
@@ -674,16 +674,16 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
       stopDate: new Date().getTime() / 1000,
     });
     const bare = runCli(["logbook", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(bare).meta.pagination.limit).toBe(50);
+    expect(JSON.parse(bare).meta.truncation.limit).toBe(50);
     const since = runCli(["logbook", "--since", "2000", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+    expect(JSON.parse(since).meta.truncation.limit).toBeNull();
   });
 
   it("changes --since is REQUIRED, so it does NOT lift the row cap", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "recent" });
     const env = runCli(["changes", "--since", "1y", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(env).meta.pagination.limit).toBe(50);
+    expect(JSON.parse(env).meta.truncation.limit).toBe(50);
   });
 
   it("hint: bare upcoming, cap biting inside the window names the window + both levers", () => {
@@ -799,9 +799,9 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "cap", start: "inbox", creationDate: epoch(1) });
     const bare = runCli(["inbox", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(bare).meta.pagination.limit).toBe(50);
+    expect(JSON.parse(bare).meta.truncation.limit).toBe(50);
     const since = runCli(["inbox", "--since", "2000", "--json", "--db", fx.path]).stdout;
-    expect(JSON.parse(since).meta.pagination.limit).toBeNull();
+    expect(JSON.parse(since).meta.truncation.limit).toBeNull();
   });
 
   it("lift rule: an explicit --limit composes with --since (both honored)", () => {
@@ -819,7 +819,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
       "--db",
       fx.path,
     ]).stdout;
-    expect(JSON.parse(out).meta.pagination.limit).toBe(2);
+    expect(JSON.parse(out).meta.truncation.limit).toBe(2);
     expect(JSON.parse(out).data).toHaveLength(2);
   });
 
@@ -829,7 +829,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
     expect(runCli(["inbox", "--limit", "10", "--all", "--db", fx.path]).exitCode).toBe(2);
     const allSince = runCli(["inbox", "--all", "--since", "2w", "--json", "--db", fx.path]);
     expect(allSince.exitCode).toBe(0);
-    expect(JSON.parse(allSince.stdout).meta.pagination.limit).toBeNull();
+    expect(JSON.parse(allSince.stdout).meta.truncation.limit).toBeNull();
   });
 
   it("rejects an unparseable --since/--until loudly (exit 2)", () => {
@@ -1515,7 +1515,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
     expect(json.data.active).toHaveLength(60);
-    expect(json.meta.pagination).toBeUndefined();
+    expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
     expect(() =>
