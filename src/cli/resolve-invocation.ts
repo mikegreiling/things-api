@@ -249,6 +249,28 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
         };
       }
     }
+
+    // Plural collection synonym: `things projects <ref>` / `things areas <ref>`
+    // show that one project/area — a true synonym of the singular `show` verb,
+    // which the plural command delegates to. Like the namespace implied-show it
+    // echoes the canonical SINGULAR command (`≡ things project show <ref>`) and
+    // stamps meta.resolvedCommand. An explicit `show` verb is forgiven and
+    // dropped here (`things projects show <ref>`), so the plural command still
+    // sees a single ref positional. A bare `things projects` (or a flag-led one)
+    // is the list form and stays canonical — echo-free.
+    if (at === 0 && (first === "projects" || first === "areas")) {
+      const singular = first === "projects" ? "project" : "area";
+      const rest = args[1] === "show" ? args.slice(2) : args.slice(1);
+      const subject = rest[0];
+      if (subject !== undefined && !subject.startsWith("-")) {
+        return {
+          form: "namespace-show",
+          argv: [first, ...rest],
+          canonical: `things ${singular} show ${shellQuote(subject)}`,
+          ref: subject,
+        };
+      }
+    }
     return { form: "canonical", argv: args, canonical: null, ref: null };
   }
 

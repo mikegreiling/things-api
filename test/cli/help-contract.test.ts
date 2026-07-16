@@ -75,13 +75,6 @@ afterEach(() => {
   fx = null;
 });
 
-/** Normalize an envelope for equality: zero the wall-clock elapsedMs. */
-function stableEnvelope(stdout: string): string {
-  const o = JSON.parse(stdout) as { meta?: { elapsedMs?: number } };
-  if (o.meta !== undefined) o.meta.elapsedMs = 0;
-  return JSON.stringify(o);
-}
-
 function helpFor(...path: string[]): string {
   const program = buildProgram();
   let cmd = program as ReturnType<typeof buildProgram>;
@@ -256,21 +249,32 @@ describe("help topics", () => {
   });
 });
 
-describe("plural list views accept an id (true synonym of show)", () => {
-  it("`things areas <id>` == `things area show <id>` (byte-identical --json)", () => {
+describe("plural list views accept a ref (true synonym of show, with the canonical echo)", () => {
+  it("`things areas <ref>` shows one area — same body as `area show`, echoing the singular", () => {
     fx = buildFixtureDb();
     const areaId = seedArea(fx.db, "Hobbies");
     seedTodo(fx.db, { title: "loose in area", area: areaId });
     const plural = runCli(["areas", areaId, "--db", fx.path, "--json"]);
     const singular = runCli(["area", "show", areaId, "--db", fx.path, "--json"]);
     expect(plural.exitCode).toBe(0);
-    expect(stableEnvelope(plural.stdout)).toEqual(stableEnvelope(singular.stdout));
-    // Bare plural still lists.
+    // The rendered BODY is byte-identical (a true synonym, not a reimplementation).
+    expect(JSON.parse(plural.stdout).data).toEqual(JSON.parse(singular.stdout).data);
+    // The plural form echoes the canonical SINGULAR command; the singular is
+    // already canonical and echoes nothing.
+    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe(`things area show ${areaId}`);
+    expect(JSON.parse(singular.stdout).meta.resolvedCommand).toBeUndefined();
+    // An explicit `show` verb is forgiven and routes identically.
+    const verb = runCli(["areas", "show", areaId, "--db", fx.path, "--json"]);
+    expect(verb.exitCode).toBe(0);
+    expect(JSON.parse(verb.stdout).data).toEqual(JSON.parse(singular.stdout).data);
+    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe(`things area show ${areaId}`);
+    // Bare plural still lists — echo-free.
     const list = runCli(["areas", "--db", fx.path, "--json"]);
     expect(JSON.parse(list.stdout).kind).toBe("areas");
+    expect(JSON.parse(list.stdout).meta.resolvedCommand).toBeUndefined();
   });
 
-  it("`things projects <id>` == `things project show <id>` (byte-identical --json)", () => {
+  it("`things projects <ref>` shows one project — same body as `project show`, echoing the singular", () => {
     fx = buildFixtureDb();
     const areaId = seedArea(fx.db, "Hobbies");
     const projId = seedProject(fx.db, { title: "Astro City", area: areaId });
@@ -278,9 +282,16 @@ describe("plural list views accept an id (true synonym of show)", () => {
     const plural = runCli(["projects", projId, "--db", fx.path, "--json"]);
     const singular = runCli(["project", "show", projId, "--db", fx.path, "--json"]);
     expect(plural.exitCode).toBe(0);
-    expect(stableEnvelope(plural.stdout)).toEqual(stableEnvelope(singular.stdout));
+    expect(JSON.parse(plural.stdout).data).toEqual(JSON.parse(singular.stdout).data);
+    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe(`things project show ${projId}`);
+    expect(JSON.parse(singular.stdout).meta.resolvedCommand).toBeUndefined();
+    const verb = runCli(["projects", "show", projId, "--db", fx.path, "--json"]);
+    expect(verb.exitCode).toBe(0);
+    expect(JSON.parse(verb.stdout).data).toEqual(JSON.parse(singular.stdout).data);
+    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe(`things project show ${projId}`);
     const list = runCli(["projects", "--db", fx.path, "--json"]);
     expect(JSON.parse(list.stdout).kind).toBe("projects");
+    expect(JSON.parse(list.stdout).meta.resolvedCommand).toBeUndefined();
   });
 });
 

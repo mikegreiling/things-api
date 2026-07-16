@@ -20,7 +20,7 @@ import { ExitCode } from "../contracts.ts";
 
 /** One command's index line: its argument sketch and its ≤58-char descriptor. */
 interface IndexEntry {
-  /** Argument sketch shown after the name (`<ref>`, `[id]`, `<verb>`), or "". */
+  /** Argument sketch shown after the name (`<ref>`, `[ref]`, `<verb>`), or "". */
   args: string;
   /** Behavioral one-liner (≤58 chars) — what the command does, not how. */
   desc: string;
@@ -64,8 +64,8 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   show: { args: "<ref>", desc: "show a to-do, project, or area by id or name" },
   open: { args: "<ref>", desc: "reveal an item in the Things app on this Mac" },
   search: { args: "<query>", desc: "find items by words in their title or notes" },
-  projects: { args: "[id]", desc: "list projects, or show one" },
-  areas: { args: "[id]", desc: "list areas, or show one" },
+  projects: { args: "[ref]", desc: "list projects, or show one" },
+  areas: { args: "[ref]", desc: "list areas, or show one" },
   tags: { args: "", desc: "list the tag hierarchy" },
   changes: { args: "", desc: "items created or changed since a moment (--since)" },
   // Write
@@ -172,6 +172,9 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   lines.push("");
 
   lines.push("Run `things <command> --help` for the behavior and options of any command.");
+  lines.push(
+    "Most commands take a ref (uuid, prefix, share link, or name) — see `things help ids`.",
+  );
   lines.push("Guides: `things help <topic>` — agent, filters, ids, output, writes.");
   lines.push("New to Things? Start with `things help agent`.");
   return lines.join("\n");
@@ -241,13 +244,14 @@ default. (\`things changes\` requires --since, so that required bound lifts noth
 
   ids: `REFERENCES & IDS — how to point at an item
 
-Every item has a uuid. List views print a short prefix; --json always carries the
-full uuid. Anywhere a uuid or name is accepted you may pass:
+A ref is: a things:/// URL, a UUID, a unique UUID prefix, or (areas/projects) a
+case-insensitive name. Anywhere a ref is accepted you may pass any of these:
   - a full uuid
   - a unique uuid PREFIX (>= 6 characters)
   - a things:/// share link (the app's Share > Copy Link) — stripped to its id
   - a unique NAME, for projects and areas (case-, space-, and dash-insensitive)
-Ambiguous prefixes and names fail loudly and list the candidates.
+Every item has a uuid; list views print a short prefix, and --json always carries
+the full uuid. Ambiguous prefixes and names fail loudly and list the candidates.
 
 Direct addressing — the word \`show\` may be omitted:
   things <ref>          show the referenced item (when <ref> is not a command name)
@@ -257,7 +261,7 @@ Command names always win: \`things today\` is the view, never an item called
 "today". Reach a same-named item by its uuid, or by the typed form
 (\`things area show Anytime\`).
 
-To-dos route only by uuid, prefix, or share link — never by title. A bare NAME
+A to-do takes a ref by uuid, prefix, or share link — never by title. A bare NAME
 resolves against areas and projects only; on a tie, the area wins. When a name
 does not resolve, the error offers close title matches you can copy.`,
 

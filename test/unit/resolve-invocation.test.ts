@@ -236,6 +236,53 @@ describe("namespace implied-show — `things <type> <subject>`", () => {
   });
 });
 
+describe("plural collection synonym — `things projects <ref>` / `things areas <ref>`", () => {
+  it("a ref after the plural echoes the canonical SINGULAR show, argv keeps the ref", () => {
+    const r = resolve(["projects", "Astro City"]);
+    expect(r.form).toBe("namespace-show");
+    expect(r.argv).toEqual(["projects", "Astro City"]);
+    expect(r.canonical).toBe('things project show "Astro City"');
+    expect(r.ref).toBe("Astro City");
+
+    const a = resolve(["areas", "Hobbies"]);
+    expect(a.canonical).toBe("things area show Hobbies");
+    expect(a.argv).toEqual(["areas", "Hobbies"]);
+  });
+
+  it("forgives an explicit `show` verb, dropping it so one ref positional remains", () => {
+    const r = resolve(["projects", "show", "Astro City"]);
+    expect(r.form).toBe("namespace-show");
+    expect(r.argv).toEqual(["projects", "Astro City"]);
+    expect(r.canonical).toBe('things project show "Astro City"');
+
+    expect(resolve(["areas", "show", "Hobbies"]).argv).toEqual(["areas", "Hobbies"]);
+    expect(resolve(["areas", "show", "Hobbies"]).canonical).toBe("things area show Hobbies");
+  });
+
+  it("trailing flags pass through after the ref", () => {
+    expect(resolve(["projects", "Astro City", "--show-later", "--json"]).argv).toEqual([
+      "projects",
+      "Astro City",
+      "--show-later",
+      "--json",
+    ]);
+    expect(resolve(["areas", "show", "Hobbies", "--all"]).argv).toEqual([
+      "areas",
+      "Hobbies",
+      "--all",
+    ]);
+  });
+
+  it("a bare plural (list form) or a flag-led one stays canonical — echo-free", () => {
+    for (const argv of [["projects"], ["areas"], ["projects", "--json"], ["areas", "--all"]]) {
+      const r = resolve(argv);
+      expect(r.form, argv.join(" ")).toBe("canonical");
+      expect(r.argv).toEqual(argv);
+      expect(r.canonical).toBeNull();
+    }
+  });
+});
+
 describe("invocation context", () => {
   it("records the current invocation and lets the action fill in canonical", () => {
     resolve(["Hobbies"]);

@@ -751,10 +751,10 @@ export function registerReadCommands(program: Command): void {
     });
 
   program
-    .command("projects [id]")
+    .command("projects [ref]")
     .description(
-      "List active projects in sidebar order, or — given an id — show that one " +
-        "project (exactly like `things project show <id>`). List: loose projects " +
+      "List active projects in sidebar order, or — given a ref — show that one " +
+        "project (exactly like `things project show <ref>`). List: loose projects " +
         "first, then grouped under their area (optionally scoped to --area <ref>). " +
         "Someday and future-scheduled projects are hidden — --show-later appends them " +
         "after each group's active block (state carried by the (~) mark and ‹date› " +
@@ -772,7 +772,7 @@ export function registerReadCommands(program: Command): void {
         opts: GlobalReadOpts &
           ProjectShowActionOpts & { area?: string; showLater?: boolean; all?: boolean },
       ) => {
-        // Given an id, this IS `things project show <id>` — delegate to the same
+        // Given a ref, this IS `things project show <ref>` — delegate to the same
         // code path so the output is identical (a true synonym).
         if (id !== undefined) {
           runProjectShow(id, opts);
@@ -843,10 +843,10 @@ export function registerReadCommands(program: Command): void {
     );
 
   program
-    .command("areas [id]")
+    .command("areas [ref]")
     .description(
-      "List all areas with their direct tags, or — given an id — show that one area " +
-        "(exactly like `things area show <id>`: its projects and direct to-dos). " +
+      "List all areas with their direct tags, or — given a ref — show that one area " +
+        "(exactly like `things area show <ref>`: its projects and direct to-dos). " +
         "--show-later / --show-logged / --area-limit / --project-limit apply only when " +
         "showing one area.",
     )
@@ -858,7 +858,7 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((id: string | undefined, opts: GlobalReadOpts & AreaShowActionOpts) => {
-      // Given an id, this IS `things area show <id>` — delegate to the same code
+      // Given a ref, this IS `things area show <ref>` — delegate to the same code
       // path so the output is identical (a true synonym).
       if (id !== undefined) {
         runAreaShow(id, opts);
