@@ -388,7 +388,9 @@ export interface ThingsClient {
      * inverse change. Selection: `last` trailing changes (default 1), narrowed
      * to author `by` (exact actor, or `*`/undefined for all), or `txn` for one
      * exact change by its `undoToken`. Irreversible changes are reported as
-     * such, never guessed at.
+     * such, never guessed at. An inverse is refused when the item changed
+     * outside things-api since (its container, status, schedule, trashed state,
+     * or a content field moved); `acknowledgeOutOfBandChanges` overwrites anyway.
      */
     undo(options?: UndoOptions, onItem?: (item: UndoItemResult) => void): Promise<UndoItemResult[]>;
   };

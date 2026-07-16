@@ -2368,7 +2368,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "change. Some changes cannot be reversed — permanent deletions, or changes whose " +
         "prior state is unknown — and are reported as irreversible; a to-do brought back " +
         "from an undone delete returns to the Inbox without its schedule. Undoing the " +
-        "creation of an area or tag deletes it permanently — requires dangerously_permanent.",
+        "creation of an area or tag deletes it permanently — requires dangerously_permanent. " +
+        "An undo is refused when the item changed outside this interface since (its list or " +
+        "project, status, schedule, trashed state, or a field like the title moved) — pass " +
+        "acknowledge_out_of_band_changes to overwrite it anyway.",
       inputSchema: {
         last: z.number().int().min(1).optional().describe("How many to unwind (default 1)"),
         by: z
@@ -2388,6 +2391,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               "by the mutation); immune to interleaving. Not combinable with last/by.",
           ),
         dangerously_permanent: z.boolean().optional(),
+        acknowledge_out_of_band_changes: z
+          .boolean()
+          .optional()
+          .describe(
+            "Proceed even when the item changed outside this interface since (in the Things app " +
+              "or by another tool) — overwrites whatever the out-of-band change left, instead of " +
+              "refusing.",
+          ),
         ...dryRunShape,
       },
       annotations: DESTRUCTIVE,
@@ -2405,6 +2416,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ...(args.txn === undefined && { by: args.by ?? "mcp" }),
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
+          ...(args.acknowledge_out_of_band_changes === true && {
+            acknowledgeOutOfBandChanges: true,
+          }),
           actor: "mcp",
         });
         return jsonResult(items);

@@ -191,7 +191,9 @@ describe("planUndo — creations invert to deletes", () => {
 describe("planUndo — status flips", () => {
   it("todo.complete with pre open → todo.reopen", () => {
     const plan = planUndo(record({ op: "todo.complete", pre: { status: "open" } }), NOW);
-    expect(plan.steps).toEqual([{ op: "todo.reopen", params: { uuid: "U-1" } }]);
+    expect(plan.steps).toEqual([
+      { op: "todo.reopen", params: { uuid: "U-1" }, options: { guardFields: ["status"] } },
+    ]);
   });
 
   it("todo.reopen restores the exact pre status (canceled)", () => {
@@ -208,7 +210,9 @@ describe("planUndo — status flips", () => {
 describe("planUndo — delete / restore", () => {
   it("todo.delete → todo.restore with the Inbox caveat", () => {
     const plan = planUndo(record({ op: "todo.delete", pre: { trashed: false } }), NOW);
-    expect(plan.steps).toEqual([{ op: "todo.restore", params: { uuid: "U-1" } }]);
+    expect(plan.steps).toEqual([
+      { op: "todo.restore", params: { uuid: "U-1" }, options: { guardFields: ["trashed"] } },
+    ]);
     expect(plan.notes.join(" ")).toContain("Inbox");
   });
 
@@ -219,7 +223,9 @@ describe("planUndo — delete / restore", () => {
 
   it("project.delete inverts to the in-place restore (P06)", () => {
     const plan = planUndo(record({ op: "project.delete" }), NOW);
-    expect(plan.steps).toEqual([{ op: "project.restore", params: { uuid: "U-1" } }]);
+    expect(plan.steps).toEqual([
+      { op: "project.restore", params: { uuid: "U-1" }, options: { guardFields: ["trashed"] } },
+    ]);
     expect(plan.notes.join(" ")).toContain("IN PLACE");
   });
 });
@@ -248,7 +254,13 @@ describe("planUndo — field updates", () => {
       }),
       NOW,
     );
-    expect(plan.steps).toEqual([{ op: "todo.move", params: { uuid: "U-1", inbox: true } }]);
+    expect(plan.steps).toEqual([
+      {
+        op: "todo.move",
+        params: { uuid: "U-1", inbox: true },
+        options: { guardFields: ["start", "startDate", "todaySection"] },
+      },
+    ]);
   });
 
   it("re-schedule from a date restores when=<date> and the old reminder", () => {
@@ -261,7 +273,11 @@ describe("planUndo — field updates", () => {
       NOW,
     );
     expect(plan.steps).toEqual([
-      { op: "todo.update", params: { uuid: "U-1", when: "2026-07-09", reminder: "15:00" } },
+      {
+        op: "todo.update",
+        params: { uuid: "U-1", when: "2026-07-09", reminder: "15:00" },
+        options: { guardFields: ["start", "startDate", "todaySection"] },
+      },
     ]);
   });
 
@@ -275,7 +291,11 @@ describe("planUndo — field updates", () => {
       NOW,
     );
     expect(plan.steps).toEqual([
-      { op: "todo.update", params: { uuid: "U-1", when: "today", reminder: null } },
+      {
+        op: "todo.update",
+        params: { uuid: "U-1", when: "today", reminder: null },
+        options: { guardFields: ["start", "startDate", "todaySection"] },
+      },
     ]);
   });
 
@@ -314,7 +334,11 @@ describe("planUndo — moves", () => {
       NOW,
     );
     expect(plan.steps).toEqual([
-      { op: "todo.move", params: { uuid: "U-1", project: { uuid: "P-OLD" } } },
+      {
+        op: "todo.move",
+        params: { uuid: "U-1", project: { uuid: "P-OLD" } },
+        options: { guardFields: ["project.uuid", "heading.uuid"] },
+      },
     ]);
   });
 
@@ -343,11 +367,13 @@ describe("planUndo — moves", () => {
     expect(back.steps[0]).toEqual({
       op: "project.move",
       params: { uuid: "U-1", area: { uuid: "A-OLD" } },
+      options: { guardFields: ["area.uuid"] },
     });
     const gone = planUndo(record({ op: "project.move", pre: { "area.uuid": null } }), NOW);
     expect(gone.steps[0]).toEqual({
       op: "project.move",
       params: { uuid: "U-1", detach: true },
+      options: { guardFields: ["area.uuid"] },
     });
   });
 });
@@ -455,7 +481,7 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
     );
     expect(plan.kind).toBe("invertible");
     expect(plan.steps).toEqual([
-      { op: "project.reopen", params: { uuid: "P-1" } },
+      { op: "project.reopen", params: { uuid: "P-1" }, options: { guardFields: ["status"] } },
       { op: "todo.reopen", params: { uuid: "C-OPEN" } },
     ]);
   });
@@ -465,7 +491,9 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
       record({ op: "project.complete", uuid: "P-2", pre: { status: "open" } }),
       NOW,
     );
-    expect(plan.steps).toEqual([{ op: "project.reopen", params: { uuid: "P-2" } }]);
+    expect(plan.steps).toEqual([
+      { op: "project.reopen", params: { uuid: "P-2" }, options: { guardFields: ["status"] } },
+    ]);
   });
 
   it("project.cancel inverts like complete", () => {
@@ -488,6 +516,7 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
     expect(done.steps[0]).toEqual({
       op: "project.complete",
       params: { uuid: "P-4", children: "require-resolved" },
+      options: { guardFields: ["status"] },
     });
     const cxl = planUndo(
       record({ op: "project.reopen", uuid: "P-5", pre: { status: "canceled" } }),
@@ -498,7 +527,9 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
 
   it("project.restore inverts to project.delete", () => {
     const plan = planUndo(record({ op: "project.restore", uuid: "P-6" }), NOW);
-    expect(plan.steps).toEqual([{ op: "project.delete", params: { uuid: "P-6" } }]);
+    expect(plan.steps).toEqual([
+      { op: "project.delete", params: { uuid: "P-6" }, options: { guardFields: ["trashed"] } },
+    ]);
   });
 
   it("todo.move detach inverts to a move back to the captured container", () => {
@@ -516,7 +547,11 @@ describe("planUndo — project lifecycle (Phase 19)", () => {
       NOW,
     );
     expect(plan.steps).toEqual([
-      { op: "todo.move", params: { uuid: "U-1", project: { uuid: "P-OLD" } } },
+      {
+        op: "todo.move",
+        params: { uuid: "U-1", project: { uuid: "P-OLD" } },
+        options: { guardFields: ["project", "area"] },
+      },
     ]);
   });
 });
@@ -619,7 +654,11 @@ describe("transactional undo (compound operations)", () => {
     const plan = planUndo(summary, NOW, [...legs, summary]);
     expect(plan.kind).toBe("invertible");
     if (plan.kind === "invertible") {
-      expect(plan.steps[0]).toEqual({ op: "heading.unarchive", params: { uuid: "H1" } });
+      expect(plan.steps[0]).toEqual({
+        op: "heading.unarchive",
+        params: { uuid: "H1" },
+        options: { guardFields: ["status"] },
+      });
       // legs replay in reverse (C2 before C1), moving back UNDER the heading
       expect(plan.steps.slice(1)).toEqual([
         { op: "todo.move", params: { uuid: "C2", project: { uuid: "PROJ" }, heading: "Phase 1" } },

@@ -15,7 +15,7 @@ import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedTodo } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -73,10 +73,15 @@ function writeAudit(records: AuditRecord[]): void {
 }
 
 const MATRIX: VectorMatrix = Object.fromEntries(
-  ["todo.reopen", "todo.complete", "todo.restore", "todo.delete", "area.delete"].map((op) => [
-    op,
-    { support: "yes", disruption: 0, validation: "validated" },
-  ]),
+  [
+    "todo.reopen",
+    "todo.complete",
+    "todo.restore",
+    "todo.delete",
+    "todo.move",
+    "todo.update",
+    "area.delete",
+  ].map((op) => [op, { support: "yes", disruption: 0, validation: "validated" }]),
 ) as VectorMatrix;
 
 function fakeVector(effect: ((payload: string) => void) | null) {
@@ -301,5 +306,158 @@ describe("runUndo", () => {
     await expect(runUndo(deps([vector]), auditDir, { txn: token })).rejects.toThrow(
       /has already been undone/,
     );
+  });
+});
+
+// The structural precondition guard: an inverse that would OVERWRITE a
+// container / status / schedule / trashed axis an out-of-band change already
+// moved is refused, unless --acknowledge-out-of-band-changes overrides it.
+describe("runUndo — structural precondition guard", () => {
+  it("move P→Q then a manual move to R: undo of the move BLOCKS, naming the flag", async () => {
+    seedProject(fixture.db, { uuid: "P", title: "Proj P" });
+    seedProject(fixture.db, { uuid: "R", title: "Proj R" });
+    const uuid = seedTodo(fixture.db, { title: "Task", project: "R" }); // moved out of band to R
+    writeAudit([
+      auditRecord({
+        op: "todo.move",
+        uuid,
+        requested: { project: { uuid: "Q" } },
+        pre: { "project.uuid": "P" },
+        observed: { "project.uuid": "Q" },
+      }),
+    ]);
+    const { vector, calls } = fakeVector(() => {
+      throw new Error("must not touch the app — the move was clobber-guarded");
+    });
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("failed");
+    const blocked = items[0]?.results[0];
+    expect(blocked?.kind).toBe("blocked");
+    if (blocked?.kind === "blocked") {
+      expect(blocked.reason).toBe("environment");
+      expect(blocked.detail).toContain("project changed since the recorded mutation");
+      expect(blocked.remediation).toContain("--acknowledge-out-of-band-changes");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("the same move undo PROCEEDS and verifies with --acknowledge-out-of-band-changes", async () => {
+    seedProject(fixture.db, { uuid: "P", title: "Proj P" });
+    seedProject(fixture.db, { uuid: "R", title: "Proj R" });
+    const uuid = seedTodo(fixture.db, { title: "Task", project: "R" });
+    writeAudit([
+      auditRecord({
+        op: "todo.move",
+        uuid,
+        requested: { project: { uuid: "Q" } },
+        pre: { "project.uuid": "P" },
+        observed: { "project.uuid": "Q" },
+      }),
+    ]);
+    // Forced inverse re-parents the to-do back under P.
+    const { vector, calls } = fakeVector(() => touch(uuid, "project = 'P'"));
+
+    const items = await runUndo(deps([vector]), auditDir, {
+      acknowledgeOutOfBandChanges: true,
+    });
+    expect(items[0]?.outcome).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect(auditRecords[0]?.actor).toBe("undo:mike");
+    expect(auditRecords[0]?.op).toBe("todo.move");
+  });
+
+  it("complete then a manual status change: undo of the complete BLOCKS", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "canceled" }); // moved out of band
+    writeAudit([
+      auditRecord({
+        op: "todo.complete",
+        uuid,
+        pre: { status: "open" },
+        observed: { status: "completed" },
+      }),
+    ]);
+    const { vector, calls } = fakeVector(() => {
+      throw new Error("must not touch the app — the status was clobber-guarded");
+    });
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("failed");
+    const blocked = items[0]?.results[0];
+    expect(blocked?.kind).toBe("blocked");
+    if (blocked?.kind === "blocked") {
+      expect(blocked.detail).toContain("status changed since the recorded mutation");
+      expect(blocked.remediation).toContain("--acknowledge-out-of-band-changes");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("update-schedule then a manual reschedule: undo of the update BLOCKS", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "Sched",
+      start: "active",
+      startDate: "2026-08-01", // moved out of band to a different date
+    });
+    writeAudit([
+      auditRecord({
+        op: "todo.update",
+        uuid,
+        requested: { when: "someday" }, // the op scheduled it; its inverse restores the prior state
+        pre: { start: "someday", startDate: null, todaySection: null, reminder: null },
+        observed: { start: "active", startDate: "2026-07-05", todaySection: "today" },
+      }),
+    ]);
+    const { vector, calls } = fakeVector(() => {
+      throw new Error("must not touch the app — the schedule was clobber-guarded");
+    });
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("failed");
+    const blocked = items[0]?.results[0];
+    expect(blocked?.kind).toBe("blocked");
+    if (blocked?.kind === "blocked") {
+      expect(blocked.detail).toContain("schedule changed since the recorded mutation");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a CLEAN undo (nothing moved out of band) is unaffected by the guard", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "completed" }); // still at after-state
+    writeAudit([
+      auditRecord({
+        op: "todo.complete",
+        uuid,
+        pre: { status: "open" },
+        observed: { status: "completed" },
+      }),
+    ]);
+    const { vector, calls } = fakeVector(() => touch(uuid, "status = 0"));
+
+    const items = await runUndo(deps([vector]), auditDir);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(calls[0]).toContain(`set status of to do id "${uuid}" to open`);
+  });
+
+  it("--dry-run surfaces the would-block outcome without executing", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Done", status: "canceled" });
+    writeAudit([
+      auditRecord({
+        op: "todo.complete",
+        uuid,
+        pre: { status: "open" },
+        observed: { status: "completed" },
+      }),
+    ]);
+    const { vector, calls } = fakeVector(null);
+
+    const items = await runUndo(deps([vector]), auditDir, { dryRun: true });
+    expect(items[0]?.outcome).toBe("dry-run");
+    const blocked = items[0]?.results[0];
+    expect(blocked?.kind).toBe("blocked");
+    if (blocked?.kind === "blocked") {
+      expect(blocked.detail).toContain("status changed since the recorded mutation");
+    }
+    expect(calls).toHaveLength(0);
+    expect(auditRecords).toHaveLength(0);
   });
 });

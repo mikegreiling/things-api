@@ -1659,7 +1659,10 @@ export function registerWriteCommands(program: Command): void {
         "and changes whose prior state is unknown. Partial restores carry notes (e.g. a " +
         "delete-undo lands in the Inbox de-scheduled). --dry-run shows every inverse plan " +
         "without executing. Undoing a CREATED area/tag deletes it permanently — requires " +
-        "--dangerously-permanent. Unwinding stops at the first failed inverse. " +
+        "--dangerously-permanent. An undo is refused when the item changed outside things-api " +
+        "since (its list/project, status, schedule, trashed state, or a field like the title " +
+        "moved) — pass --acknowledge-out-of-band-changes to overwrite it anyway. Unwinding " +
+        "stops at the first failed inverse. " +
         "Exit: 0 all ok · 3 any failed/partial · 2 nothing matched or bad flags.",
     )
     .option("--last <n>", "how many trailing mutations to undo (default 1)")
@@ -1677,6 +1680,11 @@ export function registerWriteCommands(program: Command): void {
     )
     .option("--dry-run", "show the inverse plans; execute nothing")
     .option("--dangerously-permanent", "allow inverses that delete areas/tags permanently")
+    .option(
+      "--acknowledge-out-of-band-changes",
+      "proceed even when the item changed outside things-api since (in the Things app or by " +
+        "another tool) — overwrites whatever the out-of-band change left",
+    )
     .option("--json", "JSONL per-item results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
     .option("--verify-timeout <ms>", "how long to wait for each inverse change to take effect")
@@ -1698,6 +1706,9 @@ export function registerWriteCommands(program: Command): void {
             ...(opts["txn"] !== undefined && { txn: String(opts["txn"]) }),
             ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
             ...(opts["dangerouslyPermanent"] === true && { dangerouslyPermanent: true }),
+            ...(opts["acknowledgeOutOfBandChanges"] === true && {
+              acknowledgeOutOfBandChanges: true,
+            }),
             ...(opts.verifyTimeout !== undefined && {
               verifyTimeoutMs: Number(opts.verifyTimeout),
             }),
