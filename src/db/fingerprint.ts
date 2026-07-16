@@ -123,3 +123,29 @@ export function compareToBaseline(
   });
   return { kind: "drift", observation, expected: baseline.fingerprint, detail };
 }
+
+/**
+ * The read-path view of {@link FingerprintStatus}: the comparison outcome
+ * reduced to the discriminant a consumer surface acts on, plus the human
+ * detail lines (for drift, the missing tables/columns). Reads consult this to
+ * WARN — never to block; the write path keeps using the full FingerprintStatus.
+ */
+export interface SchemaStatus {
+  status: "ok" | "drift" | "unknown-version";
+  detail: string[];
+}
+
+/** Reduce a cached {@link FingerprintStatus} to the read-path {@link SchemaStatus}. */
+export function toSchemaStatus(fp: FingerprintStatus): SchemaStatus {
+  switch (fp.kind) {
+    case "ok":
+      return { status: "ok", detail: [] };
+    case "drift":
+      return { status: "drift", detail: fp.detail };
+    case "unknown-version":
+      return {
+        status: "unknown-version",
+        detail: [`unrecognized databaseVersion: ${fp.observation.databaseVersion ?? "unknown"}`],
+      };
+  }
+}

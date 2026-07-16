@@ -58,3 +58,29 @@ export const GROUPED_ALL_DESC = "show every item in every group (no per-block ca
  */
 export const OMIT_EMPTY_NOTE =
   "Optional fields are omitted from the result when empty; a missing field means unset, empty, or default (read it the same as a null or empty value).";
+
+/**
+ * The read-path schema advisory, surfaced on the envelope `meta.warnings` (and
+ * to STDERR in human CLI output): a one-line, actionable note when the Things
+ * database no longer matches the schema this build was validated against, so a
+ * read stays best-effort rather than silently serving possibly-incomplete data.
+ * Returns an empty array when the schema checks out — an absent warnings key
+ * means no concern. Consumer-voiced (docs/design/surface-copy.md): behavior and
+ * next step only.
+ */
+export function schemaWarnings(status: { status: "ok" | "drift" | "unknown-version" }): string[] {
+  switch (status.status) {
+    case "ok":
+      return [];
+    case "drift":
+      return [
+        "Things database schema has changed since this version was validated — " +
+          "data may be incomplete; run `things doctor`.",
+      ];
+    case "unknown-version":
+      return [
+        "This version has not been validated against your Things database version — " +
+          "data may be incomplete; run `things doctor`.",
+      ];
+  }
+}
