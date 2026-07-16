@@ -81,6 +81,24 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
   };
 }
 
+/**
+ * `--create-tags` on a tag-accepting command: create any named tag that does
+ * not exist yet (mkdir-p for `parent/child`) before applying, instead of
+ * refusing. Nesting is via the clean `make new tag` path.
+ */
+function addCreateTagsFlag(cmd: Command): Command {
+  return cmd.option(
+    "--create-tags",
+    "create any named tag that does not exist yet (nesting parent/child) before applying, " +
+      "instead of stopping on an unknown tag",
+  );
+}
+
+/** WriteOptions extra carrying createTags when the flag is set. */
+function createTagsExtra(opts: Record<string, unknown>): Partial<WriteOptions> {
+  return opts["createTags"] === true ? { createTags: true } : {};
+}
+
 /** Add the mandatory GUI-drive acknowledgement to a ui-vector command. */
 function addDriveGuiFlag(cmd: Command): Command {
   return cmd.option(
@@ -322,28 +340,34 @@ const containerRef = (value: string | undefined): { uuid?: string; title?: strin
 export function registerWriteCommands(program: Command): void {
   const todo = group(program, "todo", "To-do–scoped operations");
 
-  addWriteFlags(
-    todo
-      .command("add <title>")
-      .description(
-        "Create a to-do; its uuid is printed on success. Tags, projects, areas, and " +
-          "headings must name existing items — unknown or ambiguous references are " +
-          "rejected. Adding into a completed/canceled project reopens that project — " +
-          "requires --acknowledge-project-reopen.",
-      )
-      .option("--notes <text>", "notes body")
-      .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
-      .option(
-        "--reminder <HH:mm>",
-        "time-of-day reminder (24h); requires --when today|evening|YYYY-MM-DD",
-      )
-      .option("--deadline <date>", "YYYY-MM-DD")
-      .option("--tags <list>", "comma-separated EXISTING tag names")
-      .option("--checklist-item <text>", "checklist item (repeatable)", collect, [])
-      .option("--project <ref>", "destination project (uuid or unique name)")
-      .option("--area <ref>", "destination area (uuid or unique name)")
-      .option("--heading <name>", "existing heading in the destination project")
-      .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project"),
+  addCreateTagsFlag(
+    addWriteFlags(
+      todo
+        .command("add <title>")
+        .description(
+          "Create a to-do; its uuid is printed on success. Projects, areas, and headings " +
+            "must name existing items — unknown or ambiguous references are rejected. A tag " +
+            "may be a name, a uuid, or a parent/child path, and must exist unless " +
+            "--create-tags. Adding into a completed/canceled project reopens that project — " +
+            "requires --acknowledge-project-reopen.",
+        )
+        .option("--notes <text>", "notes body")
+        .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+        .option(
+          "--reminder <HH:mm>",
+          "time-of-day reminder (24h); requires --when today|evening|YYYY-MM-DD",
+        )
+        .option("--deadline <date>", "YYYY-MM-DD")
+        .option(
+          "--tags <list>",
+          "comma-separated tags; each a name, a uuid, or a parent/child path (must exist unless --create-tags)",
+        )
+        .option("--checklist-item <text>", "checklist item (repeatable)", collect, [])
+        .option("--project <ref>", "destination project (uuid or unique name)")
+        .option("--area <ref>", "destination area (uuid or unique name)")
+        .option("--heading <name>", "existing heading in the destination project")
+        .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project"),
+    ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const checklist = opts["checklistItem"] as string[];
     const tags = splitCsv(opts["tags"] as string | undefined);
@@ -368,6 +392,7 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["acknowledgeProjectReopen"] !== undefined && {
             acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
           }),
+          ...createTagsExtra(opts),
         }),
       ),
     );
@@ -505,16 +530,18 @@ export function registerWriteCommands(program: Command): void {
     await runWrite(opts, (c) => c.write.duplicateTodo(uuid, writeOptionsFrom(opts)));
   });
 
-  addWriteFlags(
-    todo
-      .command("tags <uuid>")
-      .description(
-        "Set or extend a to-do's tags. --set REPLACES the full tag set (an empty value " +
-          "clears all tags); --add merges with the current tags. Tags must name existing " +
-          "tags — unknown tags are rejected.",
-      )
-      .option("--set <list>", "comma-separated tag names: full replacement")
-      .option("--add <list>", "comma-separated tag names: merge with existing"),
+  addCreateTagsFlag(
+    addWriteFlags(
+      todo
+        .command("tags <uuid>")
+        .description(
+          "Set or extend a to-do's tags. --set REPLACES the full tag set (an empty value " +
+            "clears all tags); --add merges with the current tags. Each tag may be a name, a " +
+            "uuid, or a parent/child path, and must exist unless --create-tags.",
+        )
+        .option("--set <list>", "comma-separated tags: full replacement")
+        .option("--add <list>", "comma-separated tags: merge with existing"),
+    ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const set = splitCsv(opts["set"] as string | undefined);
     const add = splitCsv(opts["add"] as string | undefined);
@@ -525,8 +552,8 @@ export function registerWriteCommands(program: Command): void {
     }
     await runWrite(opts, (c) =>
       set !== undefined
-        ? c.write.setTags(uuid, set, writeOptionsFrom(opts))
-        : c.write.addTags(uuid, add ?? [], writeOptionsFrom(opts)),
+        ? c.write.setTags(uuid, set, writeOptionsFrom(opts, createTagsExtra(opts)))
+        : c.write.addTags(uuid, add ?? [], writeOptionsFrom(opts, createTagsExtra(opts))),
     );
   });
 
@@ -1095,16 +1122,18 @@ export function registerWriteCommands(program: Command): void {
       );
     });
 
-  addWriteFlags(
-    project
-      .command("tags <uuid>")
-      .description(
-        "Set or extend a project's tags. --set REPLACES the full tag set (an empty value " +
-          "clears all tags); --add merges with the current tags. Tags must name existing " +
-          "tags — unknown tags are rejected.",
-      )
-      .option("--set <list>", "comma-separated tag names: full replacement")
-      .option("--add <list>", "comma-separated tag names: merge with existing"),
+  addCreateTagsFlag(
+    addWriteFlags(
+      project
+        .command("tags <uuid>")
+        .description(
+          "Set or extend a project's tags. --set REPLACES the full tag set (an empty value " +
+            "clears all tags); --add merges with the current tags. Each tag may be a name, a " +
+            "uuid, or a parent/child path, and must exist unless --create-tags.",
+        )
+        .option("--set <list>", "comma-separated tags: full replacement")
+        .option("--add <list>", "comma-separated tags: merge with existing"),
+    ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const set = splitCsv(opts["set"] as string | undefined);
     const add = splitCsv(opts["add"] as string | undefined);
@@ -1115,8 +1144,8 @@ export function registerWriteCommands(program: Command): void {
     }
     await runWrite(opts, (c) =>
       set !== undefined
-        ? c.write.setProjectTags(uuid, set, writeOptionsFrom(opts))
-        : c.write.addProjectTags(uuid, add ?? [], writeOptionsFrom(opts)),
+        ? c.write.setProjectTags(uuid, set, writeOptionsFrom(opts, createTagsExtra(opts)))
+        : c.write.addProjectTags(uuid, add ?? [], writeOptionsFrom(opts, createTagsExtra(opts))),
     );
   });
 
@@ -1279,29 +1308,43 @@ export function registerWriteCommands(program: Command): void {
   });
 
   const area = group(program, "area", "Area-scoped operations");
-  addWriteFlags(
-    area
-      .command("add <title>")
-      .description("Create an area, optionally tagged with EXISTING tags.")
-      .option("--tags <list>", "comma-separated existing tag names"),
+  addCreateTagsFlag(
+    addWriteFlags(
+      area
+        .command("add <title>")
+        .description(
+          "Create an area, optionally tagged. Each tag may be a name, a uuid, or a " +
+            "parent/child path, and must exist unless --create-tags.",
+        )
+        .option(
+          "--tags <list>",
+          "comma-separated tags; each a name, a uuid, or a parent/child path (must exist unless --create-tags)",
+        ),
+    ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const tags = splitCsv(opts["tags"] as string | undefined);
     await runWrite(opts, (c) =>
-      c.write.addArea({ title, ...(tags !== undefined && { tags }) }, writeOptionsFrom(opts)),
+      c.write.addArea(
+        { title, ...(tags !== undefined && { tags }) },
+        writeOptionsFrom(opts, createTagsExtra(opts)),
+      ),
     );
   });
-  addWriteFlags(
-    area
-      .command("update <ref>")
-      .description(
-        "Rename an area and/or replace its tags (the full set; tags must name existing " +
-          "tags). Target by uuid or unique name.",
-      )
-      .option("--title <text>", "new name")
-      .option(
-        "--tags <list>",
-        'comma-separated EXISTING tag names (full replacement; "" clears all)',
-      ),
+  addCreateTagsFlag(
+    addWriteFlags(
+      area
+        .command("update <ref>")
+        .description(
+          "Rename an area and/or replace its tags (the full set). Each tag may be a name, a " +
+            "uuid, or a parent/child path, and must exist unless --create-tags. Target by " +
+            "uuid or unique name.",
+        )
+        .option("--title <text>", "new name")
+        .option(
+          "--tags <list>",
+          'comma-separated tags (full replacement; "" clears all); each a name, a uuid, or a parent/child path',
+        ),
+    ),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const tags = splitCsv(opts["tags"] as string | undefined);
     if (opts["title"] === undefined && tags === undefined) {
@@ -1316,7 +1359,7 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["title"] !== undefined && { title: opts["title"] as string }),
           ...(tags !== undefined && { tags }),
         },
-        writeOptionsFrom(opts),
+        writeOptionsFrom(opts, createTagsExtra(opts)),
       ),
     );
   });

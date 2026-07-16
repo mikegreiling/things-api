@@ -51,6 +51,13 @@ export interface WriteOptions extends Acknowledgements {
   verifyTimeoutMs?: number;
   /** Return the plan without executing (nothing is audited). */
   dryRun?: boolean;
+  /**
+   * Create any tag named in this op's tags that does not exist yet (through the
+   * clean `make new tag` path, mkdir-p for `parent/child`) BEFORE applying —
+   * turning what would be an H-UNKNOWN-TAG refusal into a create-then-apply.
+   * Handled by the client's tag-prep orchestrator, above `runMutation`.
+   */
+  createTags?: boolean;
   /** Audit attribution. */
   actor?: string;
   /** Compound-operation grouping (set by orchestrators, not callers). */

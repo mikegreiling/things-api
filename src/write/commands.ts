@@ -29,7 +29,6 @@ import {
   computeReorderPre,
   emptyPreState,
   loadTarget,
-  missingTagTitles,
   projectChildren,
   projectStatus,
   resolveArea,
@@ -39,6 +38,7 @@ import {
   trashedCount,
   type PreState,
 } from "./pre-state.ts";
+import { resolveTagRefs } from "./tag-refs.ts";
 import { PRIVATE_REORDER_COMMAND } from "./experimental.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
 import { escapeAppleScript } from "./vectors/applescript.ts";
@@ -195,6 +195,18 @@ function sortedTags(tags: string[]): string[] {
   return [...tags].toSorted();
 }
 
+/**
+ * Resolve tag refs (title / uuid / `parent/child` path) into pre-state: the
+ * leaf titles to apply, plus the unknown (`missingTags`) and duplicate-name
+ * (`ambiguousTags`) refs the H-UNKNOWN-TAG / H-DUPLICATE-TAG guards refuse on.
+ */
+function applyTagRefs(db: DatabaseSync, pre: PreState, tags: string[]): void {
+  const res = resolveTagRefs(db, tags);
+  pre.missingTags = res.missing;
+  pre.ambiguousTags = res.ambiguous;
+  pre.resolvedTagTitles = res.titles;
+}
+
 /** Round-trip normalization: "6:5"-style inputs → canonical "06:05". */
 function normalizeReminder(time: ReminderTime): ReminderTime {
   return decodeReminderTime(encodeReminderTime(time)) ?? time;
@@ -219,6 +231,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
   op: "todo.add",
   hazards: [
     "H-UNKNOWN-TAG",
+    "H-DUPLICATE-TAG",
     "H-UNKNOWN-DESTINATION",
     "H-AMBIGUOUS-HEADING",
     "H-REOPEN-RESOLVED-PROJECT",
@@ -236,7 +249,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
       }
     }
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
-    if (params.tags !== undefined) pre.missingTags = missingTagTitles(db, params.tags);
+    if (params.tags !== undefined) applyTagRefs(db, pre, params.tags);
     return pre;
   },
   expectedDelta(pre, params, ctx) {
@@ -247,7 +260,9 @@ const todoAdd: CommandSpec<"todo.add"> = {
       assert.push({ field: "reminder", equals: normalizeReminder(params.reminder) });
     }
     if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
-    if (params.tags !== undefined) assert.push({ field: "tags", equals: sortedTags(params.tags) });
+    if (params.tags !== undefined) {
+      assert.push({ field: "tags", equals: sortedTags(pre.resolvedTagTitles) });
+    }
     if (params.checklistItems !== undefined) {
       assert.push({ field: "checklistTitles", equals: params.checklistItems });
     }
@@ -277,7 +292,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
         when:
           params.when === undefined ? undefined : whenWithReminder(params.when, params.reminder),
         deadline: params.deadline,
-        tags: params.tags?.join(","),
+        tags: params.tags === undefined ? undefined : pre.resolvedTagTitles.join(","),
         "checklist-items": params.checklistItems?.join("\n"),
         "list-id": container?.uuid,
         heading: pre.destHeading?.resolved?.title,
@@ -518,25 +533,26 @@ const todoMove: CommandSpec<"todo.move"> = {
 
 const todoSetTags: CommandSpec<"todo.set-tags"> = {
   op: "todo.set-tags",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
-    pre.missingTags = missingTagTitles(db, params.tags);
+    applyTagRefs(db, pre, params.tags);
     return pre;
   },
-  expectedDelta(_pre, params) {
+  expectedDelta(pre, params) {
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: [{ field: "tags", equals: sortedTags(params.tags) }],
+      assert: [{ field: "tags", equals: sortedTags(pre.resolvedTagTitles) }],
     };
   },
-  compile(params, vector, _pre, ctx) {
+  compile(params, vector, pre, ctx) {
+    const applied = pre.resolvedTagTitles;
     if (vector === "url-scheme") {
-      return thingsUrl("update", { id: params.uuid, tags: params.tags.join(",") }, ctx.token);
+      return thingsUrl("update", { id: params.uuid, tags: applied.join(",") }, ctx.token);
     }
-    return osa(`set tag names of to do id ${q(params.uuid)} to ${q(params.tags.join(", "))}`);
+    return osa(`set tag names of to do id ${q(params.uuid)} to ${q(applied.join(", "))}`);
   },
 };
 
@@ -734,32 +750,29 @@ const projectUpdate: CommandSpec<"project.update"> = {
 
 const projectSetTags: CommandSpec<"project.set-tags"> = {
   op: "project.set-tags",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
-    pre.missingTags = missingTagTitles(db, params.tags);
+    applyTagRefs(db, pre, params.tags);
     return pre;
   },
-  expectedDelta(_pre, params) {
+  expectedDelta(pre, params) {
     return {
       mode: "update",
       uuid: params.uuid,
-      assert: [{ field: "tags", equals: sortedTags(params.tags) }],
+      assert: [{ field: "tags", equals: sortedTags(pre.resolvedTagTitles) }],
     };
   },
-  compile(params, vector, _pre, ctx) {
+  compile(params, vector, pre, ctx) {
     // Both vectors validated on projects (A1 URL, A2 AppleScript). Full
     // replacement semantics mirror todo.set-tags; unknown tags are guarded
     // pre-write (the app silently drops them).
+    const applied = pre.resolvedTagTitles;
     if (vector === "url-scheme") {
-      return thingsUrl(
-        "update-project",
-        { id: params.uuid, tags: params.tags.join(",") },
-        ctx.token,
-      );
+      return thingsUrl("update-project", { id: params.uuid, tags: applied.join(",") }, ctx.token);
     }
-    return osa(`set tag names of project id ${q(params.uuid)} to ${q(params.tags.join(", "))}`);
+    return osa(`set tag names of project id ${q(params.uuid)} to ${q(applied.join(", "))}`);
   },
 };
 
@@ -1008,10 +1021,10 @@ const projectDelete: CommandSpec<"project.delete"> = {
 
 const areaAdd: CommandSpec<"area.add"> = {
   op: "area.add",
-  hazards: ["H-UNKNOWN-TAG"],
+  hazards: ["H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
-    if (params.tags !== undefined) pre.missingTags = missingTagTitles(db, params.tags);
+    if (params.tags !== undefined) applyTagRefs(db, pre, params.tags);
     pre.existingEntityUuids = (
       db.prepare("SELECT uuid FROM TMArea WHERE title = ? COLLATE NOCASE").all(params.title) as {
         uuid: string;
@@ -1025,16 +1038,20 @@ const areaAdd: CommandSpec<"area.add"> = {
       entity: "area",
       title: params.title,
       excludeUuids: pre.existingEntityUuids,
+      // Assert the landed tag set on the created area — the app silently
+      // drops unknowns (guarded pre-write), so the created row must carry
+      // exactly the resolved titles (parity with the other tag-set ops).
+      ...(params.tags !== undefined && { assertTags: sortedTags(pre.resolvedTagTitles) }),
     };
   },
-  compile(params, vector) {
+  compile(params, vector, pre) {
     if (vector !== "applescript") unsupportedVector(this.op, vector);
     const make = `make new area with properties {name:${q(params.title)}}`;
     if (params.tags === undefined || params.tags.length === 0) return osa(make);
     const payload =
       `tell application "Things3"\n` +
       `  ${make}\n` +
-      `  set tag names of area ${q(params.title)} to ${q(params.tags.join(", "))}\n` +
+      `  set tag names of area ${q(params.title)} to ${q(pre.resolvedTagTitles.join(", "))}\n` +
       `end tell`;
     return { vector: "applescript", kind: "osascript", payload, redactedPayload: payload };
   },
@@ -1146,20 +1163,22 @@ const todoDuplicate: CommandSpec<"todo.duplicate"> = {
 
 const areaUpdate: CommandSpec<"area.update"> = {
   op: "area.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
   preRead(db, params) {
     if (params.title === undefined && params.tags === undefined) {
       throw new RangeError("area.update needs title and/or tags");
     }
     const pre = emptyPreState();
     pre.entityTarget = resolveArea(db, { title: params.target, uuid: params.target });
-    if (params.tags !== undefined) pre.missingTags = missingTagTitles(db, params.tags);
+    if (params.tags !== undefined) applyTagRefs(db, pre, params.tags);
     return pre;
   },
   expectedDelta(pre, params) {
     const assert: FieldAssertion[] = [];
     if (params.title !== undefined) assert.push({ field: "title", equals: params.title });
-    if (params.tags !== undefined) assert.push({ field: "tags", equals: sortedTags(params.tags) });
+    if (params.tags !== undefined) {
+      assert.push({ field: "tags", equals: sortedTags(pre.resolvedTagTitles) });
+    }
     return {
       mode: "entity-updated",
       entity: "area",
@@ -1173,7 +1192,7 @@ const areaUpdate: CommandSpec<"area.update"> = {
     const lines: string[] = [];
     if (params.title !== undefined) lines.push(`set name of area id ${id} to ${q(params.title)}`);
     if (params.tags !== undefined) {
-      lines.push(`set tag names of area id ${id} to ${q(params.tags.join(", "))}`);
+      lines.push(`set tag names of area id ${id} to ${q(pre.resolvedTagTitles.join(", "))}`);
     }
     if (lines.length === 1) return osa(lines[0] as string);
     const payload = `tell application "Things3"\n${lines.map((l) => `  ${l}`).join("\n")}\nend tell`;

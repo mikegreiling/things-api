@@ -76,6 +76,7 @@ import {
   type WriteOptions,
 } from "./write/pipeline.ts";
 import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
+import { planTagCreation } from "./write/tag-refs.ts";
 import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
 import {
   runHeadingArchive,
@@ -418,11 +419,33 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     environment: options.writeOverrides?.environment ?? createEnvironmentTracker(PKG_VERSION, env),
   };
 
-  const run = <K extends OperationKind>(
+  const run = async <K extends OperationKind>(
     op: K,
     params: OperationParamsMap[K],
     writeOptions?: WriteOptions,
-  ): Promise<MutationResult> => runMutation(writeDeps, op, params, writeOptions ?? {});
+  ): Promise<MutationResult> => {
+    // --create-tags: create any missing tag named in this op's tags (clean
+    // `make new tag` path, mkdir-p for parent/child) before applying. Skipped
+    // on a dry run (no side effects). A failed creation leg short-circuits and
+    // is returned as this op's result.
+    const tags = (params as { tags?: unknown }).tags;
+    if (writeOptions?.createTags === true && writeOptions.dryRun !== true && Array.isArray(tags)) {
+      const legOptions: WriteOptions = { ...writeOptions, createTags: false };
+      for (const step of planTagCreation(conn.db, tags as string[])) {
+        // oxlint-disable-next-line no-await-in-loop -- parents must land before children (mkdir-p ordering)
+        const legResult = await runMutation(
+          writeDeps,
+          "tag.add",
+          step.parent === undefined
+            ? { title: step.title }
+            : { title: step.title, parent: step.parent },
+          legOptions,
+        );
+        if (legResult.kind !== "ok") return legResult;
+      }
+    }
+    return runMutation(writeDeps, op, params, writeOptions ?? {});
+  };
 
   return {
     dbPath: located.path,
