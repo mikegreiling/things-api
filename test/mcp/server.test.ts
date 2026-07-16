@@ -5,7 +5,7 @@
  * tools route to the right operations, and that every description obeys the
  * consumer-voice contract (docs/design/surface-copy.md).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -665,6 +665,27 @@ describe("things MCP server", () => {
     expect(calls[0]).toContain("things:///add?title=From%20MCP");
   });
 
+  it("attributes a write to the client's derived actor (mcp:<client-name>)", async () => {
+    const { vector } = fakeVector(() => {
+      seedTodo(fixture.db, {
+        uuid: "MCP-ACTOR",
+        title: "Attributed",
+        creationDate: Math.floor(NOW.getTime() / 1000),
+      });
+    });
+    await connect([vector]);
+    const result = await client.callTool({ name: "add_todo", arguments: { title: "Attributed" } });
+    expect(result.isError ?? false).toBe(false);
+    // The in-process client connects as { name: "test-client" }; every write it
+    // makes is recorded under the sanitized handshake identity, not a bare "mcp".
+    const lines = readFileSync(join(stateDir, "audit", "2026-07.jsonl"), "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+    const records = lines.map((l) => JSON.parse(l) as AuditRecord);
+    const add = records.find((r) => r.op === "todo.add");
+    expect(add?.actor).toBe("mcp:test-client");
+  });
+
   it("add_todo dry_run plans without executing", async () => {
     const { vector, calls } = fakeVector(null);
     await connect([vector]);
@@ -1075,7 +1096,10 @@ describe("things MCP server", () => {
       writeFileSync(join(dir, "2026-07.jsonl"), full.map((r) => JSON.stringify(r)).join("\n"));
     }
 
-    it("defaults to by:'mcp' — skips a NEWER human record, reverses the mcp one", async () => {
+    it("defaults to this client's derived actor — skips a NEWER human record, reverses its own", async () => {
+      // The in-process test client connects as { name: "test-client" }, so its
+      // writes are attributed to "mcp:test-client" and the default `by` scopes
+      // undo to exactly that — never the human's edits, never a bare "mcp".
       const mcpTodo = seedTodo(fixture.db, { title: "Agent", status: "completed" });
       const humanTodo = seedTodo(fixture.db, { title: "Human" });
       seedAuditTrail([
@@ -1083,7 +1107,7 @@ describe("things MCP server", () => {
           ts: "2026-07-05T09:00:00Z",
           op: "todo.complete",
           uuid: mcpTodo,
-          actor: "mcp",
+          actor: "mcp:test-client",
           pre: { status: "open" },
         },
         { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: humanTodo, actor: "mike" },
@@ -1101,7 +1125,7 @@ describe("things MCP server", () => {
       const items = textOf(result) as { plan: { target: { uuid: string; actor: string } } }[];
       expect(items).toHaveLength(1);
       expect(items[0]?.plan.target.uuid).toBe(mcpTodo);
-      expect(items[0]?.plan.target.actor).toBe("mcp");
+      expect(items[0]?.plan.target.actor).toBe("mcp:test-client");
     });
 
     it("by:'*' reaches the human record (newest wins)", async () => {

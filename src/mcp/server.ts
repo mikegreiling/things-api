@@ -350,8 +350,27 @@ function checklistTarget(args: { item?: string | undefined; index?: number | und
   return args.index !== undefined ? { index: args.index } : { item: args.item ?? "" };
 }
 
-/** Translate the shared MCP write-tool args into pipeline WriteOptions. */
-const writeOptions = (args: {
+/**
+ * Derive the audit author for a client's writes from the MCP initialize
+ * handshake's clientInfo.name: lowercased, every run of non-alphanumerics
+ * collapsed to a single "-", leading/trailing dashes trimmed, capped at 32
+ * characters. An absent (or empty-after-sanitizing) client name falls back to
+ * the bare "mcp". The result is never caller-settable — it is the connecting
+ * client's own identity, so each client's writes are attributed to it.
+ */
+const MCP_ACTOR_PREFIX = "mcp";
+function deriveMcpActor(clientName: string | undefined): string {
+  const slug = (clientName ?? "")
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replaceAll(/-+$/g, "");
+  return slug === "" ? MCP_ACTOR_PREFIX : `${MCP_ACTOR_PREFIX}:${slug}`;
+}
+
+/** The shape of the shared MCP write-tool args mapped into WriteOptions. */
+interface WriteOptionArgs {
   dry_run?: boolean | undefined;
   verify_timeout_ms?: number | undefined;
   acknowledge_checklist_reset?: boolean | undefined;
@@ -360,17 +379,7 @@ const writeOptions = (args: {
   acknowledge_tag_subtree?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
   create_tags?: boolean | undefined;
-}): WriteOptions => ({
-  actor: "mcp",
-  ...(args.dry_run === true && { dryRun: true }),
-  ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
-  ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
-  ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
-  ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
-  ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
-  ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
-  ...(args.create_tags === true && { createTags: true }),
-});
+}
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
   // One lazily-opened client for the server's lifetime; SQLite read
@@ -388,6 +397,25 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     { name: "things-api", version: PKG_VERSION },
     { instructions: buildInstructions(getClient) },
   );
+
+  // The audit author for every write on this connection, derived once from the
+  // client's handshake identity (clientInfo.name). Read per call: clientInfo is
+  // populated when the initialize handshake completes, before any tool can run.
+  // Not caller-settable — no tool argument overrides it.
+  const mcpActor = (): string => deriveMcpActor(server.server.getClientVersion()?.name);
+
+  /** Translate the shared MCP write-tool args into pipeline WriteOptions. */
+  const writeOptions = (args: WriteOptionArgs): WriteOptions => ({
+    actor: mcpActor(),
+    ...(args.dry_run === true && { dryRun: true }),
+    ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
+    ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
+    ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
+    ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
+    ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+    ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
+    ...(args.create_tags === true && { createTags: true }),
+  });
 
   /** Run a handler, mapping environment/usage throws to tool errors. */
   const guard = async (fn: () => Promise<ToolResult> | ToolResult): Promise<ToolResult> => {
@@ -2300,7 +2328,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const results = await getClient().write.batch(args.ops as BatchOp[], {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.fail_fast === true && { failFast: true }),
-          actor: "mcp",
+          actor: mcpActor(),
         });
         return jsonResult(results);
       }),
@@ -2363,14 +2391,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Undo the last N changes, newest first (changes made directly in the Things app " +
         "cannot be undone here). By default this undoes only changes made through THIS " +
-        'interface (by="mcp") — it will not touch the user\'s own edits unless you pass ' +
-        'by="*" (all authors) or a specific author name; pass a txn token to undo one exact ' +
-        "change. Some changes cannot be reversed — permanent deletions, or changes whose " +
-        "prior state is unknown — and are reported as irreversible; a to-do brought back " +
-        "from an undone delete returns to the Inbox without its schedule. Undoing the " +
-        "creation of an area or tag deletes it permanently — requires dangerously_permanent. " +
-        "An undo is refused when the item changed outside this interface since (its list or " +
-        "project, status, schedule, trashed state, or a field like the title moved) — pass " +
+        "connection — this client's own writes; it will not touch the user's own edits, or " +
+        'another client\'s, unless you pass by="*" (all authors) or a specific author name; ' +
+        "pass a txn token to undo one exact change. Some changes cannot be reversed — " +
+        "permanent deletions, or changes whose prior state is unknown — and are reported as " +
+        "irreversible; a to-do brought back from an undone delete returns to the Inbox " +
+        "without its schedule. Undoing the creation of an area or tag deletes it " +
+        "permanently — requires dangerously_permanent. An undo is refused when the item " +
+        "changed outside this interface since (its list or project, status, schedule, " +
+        "trashed state, or a field like the title moved) — pass " +
         "acknowledge_out_of_band_changes to overwrite it anyway.",
       inputSchema: {
         last: z.number().int().min(1).optional().describe("How many to unwind (default 1)"),
@@ -2379,9 +2408,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe(
             'Whose changes to undo: an exact author name, or "*" for everyone. Defaults to ' +
-              '"mcp" (only changes made through this interface). Matches exactly — "mcp" ' +
-              'never matches an "undo:mcp" record. Selects WHICH changes to undo; the undo ' +
-              'itself is always recorded as "undo:mcp". Not combinable with txn.',
+              "this client's own writes (only changes made through this connection). Matches " +
+              "exactly. Selects WHICH changes to undo, and never a change already undone. Not " +
+              "combinable with txn.",
           ),
         txn: z
           .string()
@@ -2411,15 +2440,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const items = await getClient().write.undo({
           ...(args.last !== undefined && { last: args.last }),
           ...(args.txn !== undefined && { txn: args.txn }),
-          // Asymmetric default: agents must not clobber the user's own edits
-          // without explicitly opting in via by:"*".
-          ...(args.txn === undefined && { by: args.by ?? "mcp" }),
+          // Asymmetric default: agents must not clobber the user's own edits (or
+          // another client's) without explicitly opting in via by:"*". Scoped to
+          // this client's own handshake identity, so each session undoes its own.
+          ...(args.txn === undefined && { by: args.by ?? mcpActor() }),
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
           ...(args.acknowledge_out_of_band_changes === true && {
             acknowledgeOutOfBandChanges: true,
           }),
-          actor: "mcp",
+          actor: mcpActor(),
         });
         return jsonResult(items);
       }),
