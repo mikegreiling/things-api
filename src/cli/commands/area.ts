@@ -4,15 +4,10 @@
  */
 import type { Command } from "commander";
 
-import type { Project, Todo } from "../../model/entities.ts";
-import type { AreaView } from "../../read/area-view.ts";
-import { localToday } from "../../model/dates.ts";
 import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
-import type { GroupedLimits } from "../../read/sections.ts";
-import type { BoundedAreaView } from "../../client.ts";
 import { openInThings } from "./reads.ts";
 import {
   invocation,
@@ -25,7 +20,16 @@ import {
 import { disclosureHint, formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
-import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
+import {
+  AREA_PREVIEW_LIMIT,
+  GROUPED_ALL_DESC,
+  localToday,
+  type AreaView,
+  type BoundedAreaView,
+  type GroupedLimits,
+  type Project,
+  type Todo,
+} from "../../index.ts";
 import {
   addTagFilterOptions,
   CONTAINER_TAG_HINT,

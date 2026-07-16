@@ -8,7 +8,7 @@
  * Every glyph lives here so a cross-terminal rendering audit
  * (docs/roadmap.md) can retune the language in one file.
  */
-import type { Project, TagRef, Todo } from "../model/entities.ts";
+import type { Project, TagRef, Todo } from "../index.ts";
 import { blue, bold, brightBlue, dim, green, red, strike, underline, yellow } from "./style.ts";
 
 const MONTHS = [

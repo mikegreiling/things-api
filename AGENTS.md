@@ -20,3 +20,4 @@
 - Feature branches (`mg/<topic>`), PRs for the audit trail, self-merge after CI is fine.
 - All consumer-facing copy (CLI `--help`, MCP tool descriptions, exported JSDoc) follows [docs/design/surface-copy.md](docs/design/surface-copy.md) — behavior and side effects only; banned-vocabulary regression tests enforce it.
 - Guest e2e bundles ship node + dist + commander ONLY — heavyweight deps (MCP SDK, zod) must stay lazily imported from CLI actions.
+- **Consumer boundary (air gap):** `src/cli/**` and `src/mcp/**` are pure consumers of the library through the single entry point `src/index.ts` — never import a library internal directly (intra-surface presentation imports are fine). Enforced by `test/unit/import-boundary.test.ts`; see [docs/design/architecture.md](docs/design/architecture.md) (Consumer boundary).

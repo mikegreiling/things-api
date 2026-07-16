@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 
-import type { Snapshot } from "../../read/snapshot.ts";
+import type { Snapshot } from "../../index.ts";
 import { withClient } from "../read-driver.ts";
 
 function renderCounts(snapshot: Snapshot): string[] {

@@ -4,9 +4,15 @@
  */
 import type { Command } from "commander";
 
-import { diagnose, type DiagnoseReport, type DiagnoseResult } from "../../diagnose.ts";
-import { describeEnvironmentChanges } from "../../write/environment.ts";
-import { errorEnvelope, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
+import {
+  describeEnvironmentChanges,
+  diagnose,
+  errorEnvelope,
+  okEnvelope,
+  type DiagnoseReport,
+  type DiagnoseResult,
+  type EnvelopeMeta,
+} from "../../index.ts";
 
 // Back-compat aliases for pre-seam consumers of the CLI module.
 export type DoctorReport = DiagnoseReport;

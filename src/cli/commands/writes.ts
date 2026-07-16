@@ -9,34 +9,37 @@ import type { Command } from "commander";
 
 import { readFileSync } from "node:fs";
 
-import { openThings, type ThingsClient } from "../../client.ts";
-import { saveConfigKey, type DisruptionTier } from "../../config.ts";
-import { ThingsDbNotFoundError } from "../../db/locate.ts";
-import { ThingsDbOpenError } from "../../db/connection.ts";
-import type {
-  OperationKind,
-  RepeatFrequency,
-  ReorderScope,
-  ReorderStrategy,
-} from "../../write/operations.ts";
 import { addRepeatRuleFlags, repeatRuleFlagsFromOpts } from "./repeat-flags.ts";
-import type { WriteOptions } from "../../write/pipeline.ts";
-import { capabilitiesTable } from "../../write/capabilities.ts";
-import { outcomeFailed, type BatchItemResult, type BatchOp } from "../../write/batch.ts";
-import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../../write/reorder.ts";
-import type { UndoItemResult } from "../../write/undo.ts";
-import type { VectorId } from "../../write/vectors/types.ts";
-
 import {
   aggregateExitCode,
   blockedCode,
+  BOUNCE_MAX_ITEMS,
+  capabilitiesTable,
   errorEnvelope,
   ExitCode,
   okEnvelope,
+  openThings,
+  outcomeFailed,
+  ReferenceResolutionError,
+  saveConfigKey,
+  splitWhenSugar,
+  ThingsDbNotFoundError,
+  ThingsDbOpenError,
   verifyFailedCode,
+  type BatchItemResult,
+  type BatchOp,
+  type DisruptionTier,
   type EnvelopeMeta,
-} from "../../contracts.ts";
-import { ReferenceResolutionError } from "../../read/queries.ts";
+  type OperationKind,
+  type ReorderResult,
+  type ReorderScope,
+  type ReorderStrategy,
+  type RepeatFrequency,
+  type ThingsClient,
+  type UndoItemResult,
+  type VectorId,
+  type WriteOptions,
+} from "../../index.ts";
 import { usageError } from "../read-driver.ts";
 
 interface WriteFlagOpts {
@@ -125,22 +128,17 @@ function collect(value: string, previous: string[]): string[] {
 
 /**
  * URL-style `--when DATE@TIME` sugar: splits into when + reminder for the
- * ops that take both (an explicit --reminder alongside the suffix errors).
+ * ops that take both (an explicit --reminder alongside the suffix errors). The
+ * `@` split and its usage copy are the shared {@link splitWhenSugar} core; this
+ * only mutates the parsed opts on a successful split.
  */
 function applyWhenSugar(opts: Record<string, unknown>): string | null {
-  const when = opts["when"];
-  if (typeof when !== "string" || !when.includes("@")) return null;
-  const at = when.indexOf("@");
-  const date = when.slice(0, at);
-  const time = when.slice(at + 1);
-  if (date === "" || time === "" || time.includes("@")) {
-    return `invalid --when "${when}" — expected today | evening | anytime | someday | YYYY-MM-DD (set a reminder with --reminder HH:mm)`;
+  const r = splitWhenSugar(opts["when"], opts["reminder"] !== undefined);
+  if (r.kind === "error") return r.message;
+  if (r.kind === "split") {
+    opts["when"] = r.when;
+    opts["reminder"] = r.reminder;
   }
-  if (opts["reminder"] !== undefined) {
-    return `--when "${when}" carries an @time suffix and --reminder was also given — use one`;
-  }
-  opts["when"] = date;
-  opts["reminder"] = time;
   return null;
 }
 

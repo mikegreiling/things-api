@@ -5,24 +5,26 @@
  * cap parsing and the invocation-echo helpers every read command reuses. No
  * commander dependency — command registration lives in the command modules.
  */
-import { openThings, type ThingsClient } from "../client.ts";
-import { ThingsDbNotFoundError } from "../db/locate.ts";
-import { ThingsDbOpenError } from "../db/connection.ts";
 import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
 import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
-import { ReferenceResolutionError } from "../read/queries.ts";
 import {
+  DEFAULT_LIST_LIMIT,
   errorEnvelope,
   ExitCode,
   okEnvelope,
+  omitEmpty,
+  openThings,
+  ReferenceResolutionError,
+  schemaWarnings,
+  ThingsDbNotFoundError,
+  ThingsDbOpenError,
   type EnvelopeMeta,
   type GroupedTruncation,
+  type ThingsClient,
   type Truncation,
-} from "../contracts.ts";
-import { omitEmpty } from "../model/serialize.ts";
-import { DEFAULT_LIST_LIMIT, schemaWarnings } from "../surface-copy.ts";
+} from "../index.ts";
 
 export interface GlobalReadOpts {
   json?: boolean;

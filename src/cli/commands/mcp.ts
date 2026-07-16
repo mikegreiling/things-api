@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 
-import type { DisruptionTier } from "../../config.ts";
+import { loadMcpServer, type DisruptionTier } from "../../index.ts";
 
 export function registerMcp(program: Command): void {
   program
@@ -27,8 +27,10 @@ export function registerMcp(program: Command): void {
         // LAZY imports: the MCP SDK + zod load only when `things mcp` actually
         // runs. Every other CLI command must work in environments that ship a
         // minimal dependency set (the guest e2e bundle carries only commander).
+        // The server surface is reached through the library's lazy loader
+        // (loadMcpServer), keeping the air-gap boundary intact.
         const [{ createThingsMcpServer }, { StdioServerTransport }] = await Promise.all([
-          import("../../mcp/server.ts"),
+          loadMcpServer(),
           import("@modelcontextprotocol/sdk/server/stdio.js"),
         ]);
         // Same mapping the CLI's per-call write flags use (writeOptionsFrom):

@@ -7,13 +7,16 @@
  */
 import { type Command, Option } from "commander";
 
-import type { AnyTask } from "../../model/entities.ts";
-import type { AreaView } from "../../read/area-view.ts";
-import type { ProjectView } from "../../read/project-view.ts";
-import type { ShowTarget } from "../../read/show-target.ts";
-import type { GroupedLimits } from "../../read/sections.ts";
-import { stripThingsUri } from "../../read/queries.ts";
-import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
+import {
+  AREA_PREVIEW_LIMIT,
+  GROUPED_ALL_DESC,
+  stripThingsUri,
+  type AnyTask,
+  type AreaView,
+  type GroupedLimits,
+  type ProjectView,
+  type ShowTarget,
+} from "../../index.ts";
 import {
   getInvocation,
   OPEN_KEYWORDS,

@@ -10,8 +10,6 @@ import { execFileSync } from "node:child_process";
 
 import { runAreaShow, type AreaShowActionOpts } from "./area.ts";
 import { runProjectShow, type ProjectShowActionOpts } from "./project.ts";
-import type { ListItem, TodayView, ViewFilter } from "../../read/views.ts";
-import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
 import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
@@ -57,19 +55,27 @@ import {
   type TagFlags,
 } from "../tag-filters.ts";
 import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
-import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
-import type { GroupedLimits } from "../../read/sections.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
+  ExitCode,
+  FILTER_CONTRACT,
   GROUPED_ALL_DESC,
   LIMIT_DESC,
+  localToday,
+  okEnvelope,
   PERIOD_SINCE,
   PERIOD_UNTIL,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
-} from "../../surface-copy.ts";
+  validateViewArgs,
+  type EnvelopeMeta,
+  type GroupedLimits,
+  type ListItem,
+  type TodayView,
+  type ViewFilter,
+} from "../../index.ts";
 
 /**
  * Foreground the Things app on a resource via its share URI. A GUI action
@@ -883,8 +889,9 @@ export function registerReadCommands(program: Command): void {
     }
     // The areas LIST has no deadline to compare against — an area is not a
     // dated entity — so --overdue is vacuous here and rejected fail-closed
-    // (the same exclusion style #159 used for upcoming/logbook/trash).
-    if (opts.overdue === true) {
+    // (the same exclusion style #159 used for upcoming/logbook/trash). The
+    // decision is the contract's (areas: overdue = false).
+    if (!FILTER_CONTRACT.areas.overdue && opts.overdue === true) {
       usageError(
         opts,
         "--overdue does not apply to the areas list — areas have no deadline; use it on `things areas <ref>` (that area's rows) or `things projects --overdue`",
@@ -893,8 +900,12 @@ export function registerReadCommands(program: Command): void {
     }
     // The tag filters scope an area's ROWS, not the area LIST — the bare list
     // shows every area with its direct tags. Rejected fail-closed here (same
-    // style as --overdue); use `things areas <ref>` or `things projects --tag`.
-    if (hasTagPresence(opts) || opts.untagged === true) {
+    // style as --overdue; contract: areas tag = "rejected"). Use
+    // `things areas <ref>` or `things projects --tag`.
+    if (
+      FILTER_CONTRACT.areas.tag === "rejected" &&
+      (hasTagPresence(opts) || opts.untagged === true)
+    ) {
       usageError(
         opts,
         "the tag filters (--tag/--untagged) do not apply to the areas list — use them on `things areas <ref>` (that area's rows) or `things projects --tag`",
@@ -1032,14 +1043,29 @@ export function registerReadCommands(program: Command): void {
         exactTag: opts["exactTag"] === true,
         untagged: opts["untagged"] === true,
       };
-      if (tagFlagConflict({ ...tagFlags, json })) return;
       const overdue = opts["overdue"] === true;
       const all = opts["all"] === true;
-      // --overdue lists OPEN, past-deadline items; the status-widening flags
-      // pull in completed/canceled/trashed rows, so the combination is
-      // contradictory (like --untagged with --tag).
-      if (overdue && (opts["logged"] === true || opts["trashed"] === true || all)) {
-        usageError({ json }, "--overdue does not combine with --logged/--trashed/--all");
+      // Tag-conflict AND the --overdue/status-widening incompatibility both
+      // derive from the shared contract (search: statusWidening = true) —
+      // --overdue lists OPEN, past-deadline items, so combining it with the
+      // completed/canceled/trashed-widening flags is contradictory.
+      const validated = validateViewArgs(
+        "search",
+        {
+          ...tagFlags,
+          overdue,
+          logged: opts["logged"] === true,
+          trashed: opts["trashed"] === true,
+          all,
+        },
+        {
+          untaggedConflict: "--untagged does not combine with --tag/--exact-tag",
+          overdueRejected: "--overdue does not apply to search",
+          overdueStatusWiden: "--overdue does not combine with --logged/--trashed/--all",
+        },
+      );
+      if (!validated.ok) {
+        usageError({ json }, validated.message);
         return;
       }
       const limitOpt = opts["limit"] as string | undefined;
@@ -1065,8 +1091,7 @@ export function registerReadCommands(program: Command): void {
             limit: lim.limit,
             ...(opts["project"] !== undefined && { project: opts["project"] as string }),
             ...(opts["area"] !== undefined && { area: opts["area"] as string }),
-            ...tagFilterFields(tagFlags),
-            ...(overdue && { overdue: true }),
+            ...validated.filter,
             ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
             ...(opts["logged"] === true && { logged: true }),
             ...(opts["trashed"] === true && { trashed: true }),

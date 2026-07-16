@@ -14,46 +14,57 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
-import type { DisruptionTier } from "../config.ts";
-import { omitEmpty } from "../model/serialize.ts";
-import {
-  blockedCode,
-  PKG_VERSION,
-  verifyFailedCode,
-  type GroupedTruncation,
-  type Truncation,
-} from "../contracts.ts";
-import { diagnose } from "../diagnose.ts";
-import { noUuidMatch, ReferenceResolutionError } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
+  blockedCode,
+  BOUNCE_MAX_ITEMS,
+  capabilitiesTable,
   DATE_FORMAT,
   DEFAULT_LIST_LIMIT,
+  diagnose,
+  FILTER_CONTRACT,
+  hasTagPresence,
   LIMIT_DESC,
+  MCP_WHEN_LABELS,
+  noUuidMatch,
+  omitEmpty,
   OMIT_EMPTY_NOTE,
+  OPERATION_KINDS,
+  openThings,
+  PKG_VERSION,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
   REF_FORMAT,
+  ReferenceResolutionError,
   REMINDER_FORMAT,
   schemaWarnings,
+  splitWhenSugar,
+  tagFilterFields,
+  tagFlagConflict,
+  validateViewArgs,
+  verifyFailedCode,
   WHEN_VALUES,
-} from "../surface-copy.ts";
-import { capabilitiesTable } from "../write/capabilities.ts";
-import {
-  OPERATION_KINDS,
+  type BatchOp,
+  type ChecklistEdit,
+  type DisruptionTier,
+  type GroupedTruncation,
   type MonthlyAnchor,
+  type MutationResult,
+  type OpenOptions,
   type OperationKind,
   type RepeatFrequency,
   type RepeatRuleParams,
+  type ReorderResult,
+  type TagPresence,
+  type ThingsClient,
+  type Truncation,
+  type ViewName,
   type Weekday,
+  type WriteOptions,
   type YearlyAnchor,
-} from "../write/operations.ts";
-import type { MutationResult, WriteOptions } from "../write/pipeline.ts";
-import { BOUNCE_MAX_ITEMS, type ReorderResult } from "../write/reorder.ts";
-import type { BatchOp } from "../write/batch.ts";
+} from "../index.ts";
 
 export interface McpServerOptions {
   dbPath?: string;
@@ -253,31 +264,23 @@ interface TagArgs {
   untagged?: boolean | undefined;
 }
 
-/** True when any tag-PRESENCE input was passed (a positive filter, not a negation). */
-function hasTagPresence(args: TagArgs): boolean {
-  return (args.tag?.length ?? 0) > 0 || args.exact_tag === true;
-}
-
 /**
- * The tag-filter mutual-exclusivity guard: the `untagged` negation inverts a
- * presence, so it does not combine with a tag-presence input. Returns the usage
- * message when incoherent, else null.
+ * Map the MCP tool's snake_case tag inputs onto the shared {@link TagPresence}
+ * shape (canonical CLI-flag spelling) so the one set of contract predicates —
+ * {@link hasTagPresence}, {@link tagFlagConflict}, {@link tagFilterFields},
+ * {@link validateViewArgs} — serves both surfaces. The only difference is
+ * `exact_tag` → `exactTag`.
  */
-function tagFlagConflict(args: TagArgs): string | null {
-  if (args.untagged === true && hasTagPresence(args)) {
-    return "untagged does not combine with tag/exact_tag";
-  }
-  return null;
-}
-
-/** Map the tag-filter inputs into the ViewFilter tag fields (empty keys omitted). */
-function tagFilterFromArgs(args: TagArgs): Record<string, unknown> {
+function tagPresence(args: TagArgs): TagPresence {
   return {
-    ...(args.tag !== undefined && args.tag.length > 0 && { tags: args.tag }),
-    ...(args.exact_tag === true && { exactTag: true }),
-    ...(args.untagged === true && { untagged: true }),
+    ...(args.tag !== undefined && { tag: args.tag }),
+    ...(args.exact_tag !== undefined && { exactTag: args.exact_tag }),
+    ...(args.untagged !== undefined && { untagged: args.untagged }),
   };
 }
+
+/** The MCP-voiced usage copy for the tag-filter mutual-exclusivity conflict. */
+const MCP_UNTAGGED_CONFLICT = "untagged does not combine with tag/exact_tag";
 
 const dryRunShape = {
   dry_run: z.boolean().optional().describe("Preview the planned change without applying anything"),
@@ -559,8 +562,19 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
-        const tagConflict = tagFlagConflict(args);
-        if (tagConflict !== null) return usage(tagConflict);
+        // Tag-conflict AND overdue-applicability both derive from the shared
+        // contract: read_view honors overdue only on today/inbox/anytime/someday
+        // (the current-work views), matching FILTER_CONTRACT.
+        const validated = validateViewArgs(
+          args.view as ViewName,
+          { ...tagPresence(args), overdue: args.overdue },
+          {
+            untaggedConflict: MCP_UNTAGGED_CONFLICT,
+            overdueRejected: `overdue applies to today/inbox/anytime/someday, not ${args.view}`,
+            overdueStatusWiden: "",
+          },
+        );
+        if (!validated.ok) return usage(validated.message);
         // show_active_project_items is the preferred name; active_project_items
         // stays accepted as a compatibility alias.
         const showActiveProjectItems = args.show_active_project_items ?? args.active_project_items;
@@ -580,17 +594,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.view !== "today" && args.evening === true) {
           return usage(`evening applies only to today, not ${args.view}`);
         }
-        // --overdue is a current-work content scope: the forward-looking
-        // `upcoming` and the closed-item `logbook`/`trash` do not accept it.
-        if (
-          args.overdue === true &&
-          args.view !== "today" &&
-          args.view !== "inbox" &&
-          args.view !== "anytime" &&
-          args.view !== "someday"
-        ) {
-          return usage(`overdue applies to today/inbox/anytime/someday, not ${args.view}`);
-        }
         if (args.view === "someday" && args.project_limit !== undefined) {
           return usage(
             "project_limit does not apply to someday — pass a number as show_active_project_items " +
@@ -605,10 +608,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           return usage("pass at most one of area_limit/project_limit / all");
         }
         const c = getClient();
-        const filter = {
-          ...tagFilterFromArgs(args),
-          ...(args.overdue === true && { overdue: true }),
-        };
+        const filter = validated.filter;
         switch (args.view) {
           case "today": {
             const { view, truncation } = c.read.today({
@@ -694,20 +694,30 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
-        const tagConflict = tagFlagConflict(args);
-        if (tagConflict !== null) return usage(tagConflict);
-        if (
-          args.overdue === true &&
-          (args.logged === true || args.trashed === true || args.all === true)
-        ) {
-          return usage("overdue lists open items; it does not combine with logged/trashed/all");
-        }
+        // Tag-conflict AND the overdue/status-widening incompatibility both
+        // derive from the shared contract (search: statusWidening = true).
+        const validated = validateViewArgs(
+          "search",
+          {
+            ...tagPresence(args),
+            overdue: args.overdue,
+            logged: args.logged,
+            trashed: args.trashed,
+            all: args.all,
+          },
+          {
+            untaggedConflict: MCP_UNTAGGED_CONFLICT,
+            overdueRejected: "overdue does not apply to search",
+            overdueStatusWiden:
+              "overdue lists open items; it does not combine with logged/trashed/all",
+          },
+        );
+        if (!validated.ok) return usage(validated.message);
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
         const { items, truncation } = getClient().read.search(args.query, {
           limit,
-          ...tagFilterFromArgs(args),
-          ...(args.overdue === true && { overdue: true }),
+          ...validated.filter,
           ...(args.project !== undefined && { project: args.project }),
           ...(args.area !== undefined && { area: args.area }),
           ...(args.type !== undefined && { type: args.type }),
@@ -788,12 +798,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
-        const tagConflict = tagFlagConflict(args);
-        if (tagConflict !== null) return usage(tagConflict);
+        if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         return readResult(
           getClient().read.projectView(args.uuid, {
             overdue: args.overdue === true,
-            ...tagFilterFromArgs(args),
+            ...tagFilterFields(tagPresence(args)),
           }),
         );
       }),
@@ -836,8 +845,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
-        const tagConflict = tagFlagConflict(args);
-        if (tagConflict !== null) return usage(tagConflict);
+        if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
         const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
         if (areaLimit === "conflict" || projectLimit === "conflict") {
@@ -845,7 +853,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const { view, grouped } = getClient().read.areaView(args.ref, {
           overdue: args.overdue === true,
-          ...tagFilterFromArgs(args),
+          ...tagFilterFields(tagPresence(args)),
           areaLimit,
           projectLimit,
         });
@@ -878,18 +886,32 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const c = getClient();
         // areas/tags are not dated entities and have no per-row tag list to
         // filter — overdue and the tag filters are vacuous there, rejected
-        // fail-closed (the same style read_view uses for the wrong views).
-        if (args.overdue === true && args.kind !== "projects") {
+        // fail-closed (the same style read_view uses for the wrong views). The
+        // decision derives from the contract: only the `projects` list carries
+        // a deadline (overdue) and per-row (inheritance-inclusive) tags; the
+        // `areas` list rejects both, and `tags` has no contract row.
+        const kindSpec =
+          args.kind === "projects"
+            ? FILTER_CONTRACT.projects
+            : args.kind === "areas"
+              ? FILTER_CONTRACT.areas
+              : null;
+        if (args.overdue === true && (kindSpec === null || !kindSpec.overdue)) {
           return usage(`overdue applies only to projects, not ${args.kind}`);
         }
-        if (args.kind !== "projects" && (hasTagPresence(args) || args.untagged === true)) {
+        if (
+          (kindSpec === null || kindSpec.tag === "rejected") &&
+          (hasTagPresence(tagPresence(args)) || args.untagged === true)
+        ) {
           return usage(`the tag filters apply only to projects, not ${args.kind}`);
         }
-        const tagConflict = tagFlagConflict(args);
-        if (tagConflict !== null) return usage(tagConflict);
+        if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         return readResult(
           args.kind === "projects"
-            ? c.read.projects({ overdue: args.overdue === true, ...tagFilterFromArgs(args) })
+            ? c.read.projects({
+                overdue: args.overdue === true,
+                ...tagFilterFields(tagPresence(args)),
+              })
             : args.kind === "areas"
               ? c.read.areas()
               : c.read.tags(),
@@ -931,14 +953,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
-      guard(async () =>
-        mutationResult(
+      guard(async () => {
+        const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
+        if (sugar.kind === "error") return usage(sugar.message);
+        const when = sugar.kind === "split" ? sugar.when : args.when;
+        const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
+        return mutationResult(
           await getClient().write.addTodo(
             {
               title: args.title,
               ...(args.notes !== undefined && { notes: args.notes }),
-              ...(args.when !== undefined && { when: args.when as never }),
-              ...(args.reminder !== undefined && { reminder: args.reminder }),
+              ...(when !== undefined && { when: when as never }),
+              ...(reminder !== undefined && { reminder }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.tags !== undefined && { tags: args.tags }),
               ...(args.checklist_items !== undefined && { checklistItems: args.checklist_items }),
@@ -948,8 +974,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             },
             writeOptions(args),
           ),
-        ),
-      ),
+        );
+      }),
   );
 
   server.registerTool(
@@ -992,6 +1018,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.deadline !== undefined && args.clear_deadline === true) {
           return usage("pass at most one of deadline / clear_deadline");
         }
+        const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
+        if (sugar.kind === "error") return usage(sugar.message);
+        const when = sugar.kind === "split" ? sugar.when : args.when;
+        const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
         return mutationResult(
           await getClient().write.updateTodo(
             args.uuid,
@@ -1000,8 +1030,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.notes !== undefined && { notes: args.notes }),
               ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
               ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-              ...(args.when !== undefined && { when: args.when as never }),
-              ...(args.reminder !== undefined && { reminder: args.reminder }),
+              ...(when !== undefined && { when: when as never }),
+              ...(reminder !== undefined && { reminder }),
               ...(args.clear_reminder === true && { reminder: null }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.clear_deadline === true && { deadline: null }),

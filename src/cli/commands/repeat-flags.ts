@@ -14,7 +14,7 @@ import type {
   Weekday,
   WeekdayOrdinal,
   YearlyAnchor,
-} from "../../write/operations.ts";
+} from "../../index.ts";
 
 /** The extended fields (everything a rule carries beyond uuid/frequency/interval). */
 export type RepeatRuleFlagFields = Omit<RepeatRuleParams, "uuid" | "frequency" | "interval">;

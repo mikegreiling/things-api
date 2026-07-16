@@ -217,6 +217,16 @@ export interface DiagnoseResult {
   meta: Pick<EnvelopeMeta, "dbVersion" | "fingerprint">;
 }
 
+/**
+ * Which bundled Apple Shortcuts proxies are installed — a standalone
+ * environment accessor that needs no database (the shortcuts probe is a pure
+ * host check). The public capability behind `things setup shortcuts`; the full
+ * {@link diagnose} report carries the same state under `availability.shortcuts`.
+ */
+export function shortcutProxies(deps: AvailabilityDeps = {}): ShortcutsState {
+  return readShortcutProxies(deps);
+}
+
 export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): DiagnoseResult {
   let located: ReturnType<typeof locateThingsDb>;
   try {

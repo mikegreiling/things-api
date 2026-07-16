@@ -9,12 +9,16 @@
  */
 import {
   isTodayMember,
+  localToday,
+  partitionSomedaySection,
+  splitSectionBlocks,
+  templateStatus,
+  type GroupedLimits,
   type ListItem,
+  type Project,
   type SidebarSection,
   type TodayView,
-} from "../read/views.ts";
-import { localToday } from "../model/dates.ts";
-import { templateStatus } from "../model/recurrence.ts";
+} from "../index.ts";
 import { bold, dim, strike, underline } from "./style.ts";
 import {
   areaMark,
@@ -33,13 +37,7 @@ import {
   todayStar,
   todoBox,
 } from "./glyphs.ts";
-import {
-  partitionSomedaySection,
-  splitSectionBlocks,
-  type GroupedLimits,
-} from "../read/sections.ts";
 import { FULL_MONTHS, upcomingBucket } from "./period.ts";
-import type { Project } from "../model/entities.ts";
 import {
   fitRow,
   getFitWidth,
