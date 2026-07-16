@@ -198,9 +198,15 @@ export type {
 export { shortcutProxies } from "./diagnose.ts";
 export type { ShortcutsState } from "./write/availability.ts";
 
-// The MCP server is itself a CONSUMER of this barrel (it imports from
-// ../index.ts), so its re-export MUST come last: evaluated after every symbol
-// above is bound, the index↔mcp import cycle resolves without a temporal
-// dead-zone on the eval-time schema constants (surface-copy) it references.
-export { createThingsMcpServer } from "./mcp/server.ts";
+// The MCP server is a CONSUMER surface (like the CLI), not part of the client
+// library API — and its module eagerly imports zod + the MCP SDK. Expose it
+// through a LAZY loader so importing this barrel never drags those heavyweight
+// deps into a consumer's eager graph (the CLI guest bundle ships neither, and
+// they must stay lazily imported from the `things mcp` action). zod/the SDK
+// load only when the server is actually constructed. The `type` re-export is
+// erased at runtime, so it adds no eager dependency. See
+// docs/design/architecture.md (Consumer boundary).
 export type { McpServerOptions } from "./mcp/server.ts";
+export function loadMcpServer(): Promise<typeof import("./mcp/server.ts")> {
+  return import("./mcp/server.ts");
+}

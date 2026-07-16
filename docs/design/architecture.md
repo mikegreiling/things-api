@@ -114,6 +114,22 @@ things-api/
 
 One runtime dependency total (commander). Bin name `things` — reads naturally in agent transcripts (`things today --json`); verified no collision (no PATH binary, no brew formula, npm's `things` package ships no bin).
 
+### Consumer boundary (air gap)
+
+The CLI (`src/cli/**`) and the MCP server (`src/mcp/**`) are pure **consumers** of the library: they reach it through **one entry point, `src/index.ts`**, and never import a library internal directly. The client API is a black box to them — as if each surface were published as its own package depending on `things-api`. Nothing under `src/index.ts` ever imports back into `src/cli/**` or `src/mcp/**` (the library must never depend on a consumer).
+
+Concretely, within a surface a file may import its own siblings (presentation stays intra-surface — `cli/render.ts`, `cli/glyphs.ts`, `cli/width.ts`, `cli/style.ts`), but **every import that leaves the surface's own directory tree must resolve to exactly `src/index.ts`**. When a surface needs a value that lived in an internal module, that value is exported deliberately from the barrel (grouped and commented); when it needs a real capability (e.g. shortcut-proxy availability), the library grows a proper accessor (`shortcutProxies()` in `diagnose.ts`) rather than leaking the internal.
+
+Why:
+
+- **Drift prevention** — the two surfaces cannot silently diverge on logic that should be shared. The per-view filter contract (`read/filter-contract.ts`: `FILTER_CONTRACT`, `validateViewArgs`, the tag-conflict predicates) and the `<when>@<time>` sugar parser (`model/when-sugar.ts`) each live once and are consumed by both.
+- **Contract stress-testing** — routing everything through `index.ts` continuously exercises the public surface exactly as an external embedder would, so gaps in the exported API surface show up immediately.
+- **Future package split** — the CLI and MCP server can be extracted into their own packages with no import rewrites, because they already depend only on the published barrel.
+
+The MCP server is itself a consumer surface (not part of the client library API) and its module eagerly pulls in zod + the MCP SDK. It is therefore exposed through a **lazy loader**, `loadMcpServer()`, so importing the barrel never drags those heavyweight deps into a consumer's eager graph — they load only when `things mcp` constructs the server. This keeps the guest e2e bundle (node + dist + commander only) lean.
+
+**Enforcement:** `test/unit/import-boundary.test.ts` statically scans every file under `src/cli/**` and `src/mcp/**` and fails — naming `file:line` and the offending specifier — if any relative import that leaves the surface resolves anywhere other than `src/index.ts`.
+
 ## 2. Core TypeScript API shape
 
 ### Entities (`model/entities.ts`) — enums verified against live DB
