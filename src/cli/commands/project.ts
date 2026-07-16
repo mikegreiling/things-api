@@ -177,6 +177,48 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   return lines;
 }
 
+/** Options accepted by the project-show code path (shared by `project show` and `projects <id>`). */
+export type ProjectShowActionOpts = ProjectShowOpts & {
+  json?: boolean;
+  db?: string;
+  all?: boolean;
+};
+
+/**
+ * The `project show <ref>` action body, factored out so the pluralized
+ * `things projects <id>` can delegate to the identical code path (a true
+ * synonym). Both echo the canonical `things project show …` hint.
+ */
+export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): void {
+  // --all lifts the view's own default restriction (the hidden later rows).
+  // Logged is a SEPARATE content class and stays behind --show-logged.
+  const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
+    ...rawOpts,
+    showLater: rawOpts.showLater === true || rawOpts.all === true,
+    hintBase: invocation("project show", [shellQuote(ref), ...showToggleFlags(rawOpts)]),
+  };
+  runRead(
+    opts,
+    "project-view",
+    (c) => {
+      try {
+        return { data: c.read.projectView(ref) };
+      } catch (err) {
+        // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
+        if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+          throw new DidYouMeanError(
+            err.message,
+            ref,
+            c.read.liteTitleSearch(ref, { type: "project" }),
+          );
+        }
+        throw err;
+      }
+    },
+    (d) => renderProjectView(d, opts),
+  );
+}
+
 export function registerProjectCommands(program: Command): void {
   const project = program.command("project").description("Project-scoped operations");
   project
@@ -192,37 +234,7 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action(
-      (ref: string, rawOpts: ProjectShowOpts & { json?: boolean; db?: string; all?: boolean }) => {
-        // --all lifts the view's own default restriction (the hidden later rows).
-        // Logged is a SEPARATE content class and stays behind --show-logged.
-        const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
-          ...rawOpts,
-          showLater: rawOpts.showLater === true || rawOpts.all === true,
-          hintBase: invocation("project show", [shellQuote(ref), ...showToggleFlags(rawOpts)]),
-        };
-        runRead(
-          opts,
-          "project-view",
-          (c) => {
-            try {
-              return { data: c.read.projectView(ref) };
-            } catch (err) {
-              // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
-              if (err instanceof RangeError && !err.message.includes("ambiguous")) {
-                throw new DidYouMeanError(
-                  err.message,
-                  ref,
-                  c.read.liteTitleSearch(ref, { type: "project" }),
-                );
-              }
-              throw err;
-            }
-          },
-          (d) => renderProjectView(d, opts),
-        );
-      },
-    );
+    .action((ref: string, rawOpts: ProjectShowActionOpts) => runProjectShow(ref, rawOpts));
   project
     .command("open <ref>")
     .description(

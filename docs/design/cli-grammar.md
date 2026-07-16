@@ -34,6 +34,10 @@ Inside a TYPE namespace whose `show` verb takes a reference — `area`, `project
 
 Because the `<type>` is fixed by the namespace, the type CONSTRAINS resolution: `things area <project-uuid>` produces a loud type-mismatch (`area not found: …`, exit 2) rather than silently falling back to a project — exactly like the typed `things area show <project-uuid>`. The canonical `things <type> show <subject>` rides the normalized-echo and `meta.resolvedCommand` like every other sugar.
 
+### Plural collection views accept an id (`things areas <id>` / `things projects <id>`)
+
+The plural collection commands `areas` and `projects` are *list* views, but each also accepts an optional trailing reference: `things areas Hobbies` shows that one area and `things projects "Astro City"` shows that one project — byte-identical to `things area show <id>` / `things project show <id>`, delegating to the same action (a true synonym, not a reimplementation). The bare `things areas` / `things projects` still list. This is handled in the command action (the resolver treats `areas`/`projects` as ordinary registered commands), so — unlike the sugar forms above — it does NOT emit a normalized-echo or `meta.resolvedCommand`; the singular `area show` / `project show` remains the canonical spelling. The show-only flags (`--show-later`, `--show-logged`, `--area-limit`, `--project-limit`) are accepted on the plural form and apply only when an id is present. `tags` has no singular show view, so it stays list-only (a stray argument is an excess-argument usage error).
+
 ## Precedence chain (single, documented)
 
 Every invocation is classified by walking this chain in order; the first rule that matches wins:

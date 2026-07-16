@@ -8,6 +8,8 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
+import { registerHelp } from "./help.ts";
+import { installExcessArgsHelp } from "./excess-args.ts";
 import { registerDoctor } from "./commands/doctor.ts";
 import { registerMcp } from "./commands/mcp.ts";
 import { registerAreaCommands } from "./commands/area.ts";
@@ -22,53 +24,16 @@ import { resolveInvocation } from "./resolve-invocation.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
 import { ExitCode, PKG_VERSION } from "../contracts.ts";
 
-// Authored UNWRAPPED; wrapped to the terminal at render time (agentNotesText)
-// so the epilog reflows like commander's own sections instead of carrying
-// hard breaks from some past terminal's width.
-const AGENT_NOTE_BULLETS = [
-  "Every command supports --json: versioned envelope on stdout, logs on stderr.",
-  "Uuid parameters accept unique PREFIXES (>= 6 chars); list output shows 8+-char prefixes, --json always carries full uuids. Ambiguous prefixes fail with the candidates listed.",
-  'A Things share link (Share > Copy Link, "things:///show?id=<uuid>") is accepted anywhere a uuid or name is expected — it is stripped to the id.',
-  "The word `show` may be omitted: `things <ref>` shows the referenced item whenever <ref> is not a command name (command names always win).",
-  "Exit codes are stable: 0 ok, 2 usage, 3 verify-failed, 4 blocked, 5 drift-blocked, 6 unsupported, 7 environment.",
-  "No command ever prompts interactively; operations with cascading or permanent effects require explicit flags documented in their --help.",
-  "Discover the full operation catalog with: things capabilities --json",
-  "Symbols & colors in list output: run `things legend` (add --json for the table).",
-  "Every write supports --dry-run: preview the planned change and its expected effect without executing anything.",
-  "Failures are loud: a change that does not take effect exits 3; refused changes exit 4 with machine-readable remediation.",
-];
-
-/** Wrap one bullet to `width` with a hanging indent (`  - ` then 4 spaces). */
-export function wrapBullet(text: string, width: number): string[] {
-  const INDENT = 4;
-  const room = Math.max(20, width) - INDENT;
-  const lines: string[] = [];
-  let cur = "";
-  for (const word of text.split(" ")) {
-    const candidate = cur === "" ? word : `${cur} ${word}`;
-    if (candidate.length <= room || cur === "") cur = candidate;
-    else {
-      lines.push((lines.length === 0 ? "  - " : "    ") + cur);
-      cur = word;
-    }
-  }
-  if (cur !== "") lines.push((lines.length === 0 ? "  - " : "    ") + cur);
-  return lines;
-}
-
-/** The AGENT NOTES epilog, reflowed to the current terminal (80 when piped, like commander). */
-export function agentNotesText(): string {
-  const width = process.stdout.columns ?? 80;
-  return `\nAGENT NOTES:\n${AGENT_NOTE_BULLETS.flatMap((b) => wrapBullet(b, width)).join("\n")}\n`;
-}
-
 export function buildProgram(): Command {
   const program = new Command();
   program
     .name("things")
     .description("Programmatic interface to Things 3 (Cultured Code)")
     .version(PKG_VERSION)
-    .addHelpText("after", () => agentNotesText());
+    // Unknown-command typos are answered with "did you mean …" (default on;
+    // stated for the record — most top-level typos route through the bare-noun
+    // did-you-mean instead, this covers the subcommand groups).
+    .showSuggestionAfterError(true);
   registerDoctor(program);
   registerReadCommands(program);
   registerShowCommands(program);
@@ -79,6 +44,10 @@ export function buildProgram(): Command {
   registerSetup(program);
   registerSnapshot(program);
   registerMcp(program);
+  // The signpost index + `help [topic]` replace the multi-scroll epilog; the
+  // improved excess-argument message names the command and its usage line.
+  registerHelp(program);
+  installExcessArgsHelp(program);
   return program;
 }
 

@@ -185,6 +185,69 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   return lines;
 }
 
+/** Options accepted by the area-show code path (shared by `area show` and `areas <id>`). */
+export type AreaShowActionOpts = AreaShowOpts & {
+  json?: boolean;
+  db?: string;
+  limit?: string;
+  areaLimit?: string;
+  projectLimit?: string;
+  all?: boolean;
+};
+
+/**
+ * The `area show <ref>` action body, factored out so the pluralized
+ * `things areas <id>` can delegate to the identical code path (a true synonym,
+ * not a reimplementation). Both echo the canonical `things area show …` hint.
+ */
+export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
+  if (opts.limit !== undefined) {
+    process.stderr.write(
+      "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
+    );
+    process.exitCode = ExitCode.Usage;
+    return;
+  }
+  const areaCap = parseCap("--area-limit", opts.areaLimit, AREA_PREVIEW_LIMIT, opts.all === true);
+  if (!areaCap.ok) return;
+  const projectCap = parseCap(
+    "--project-limit",
+    opts.projectLimit,
+    AREA_PREVIEW_LIMIT,
+    opts.all === true,
+  );
+  if (!projectCap.ok) return;
+  const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
+  const hintBase = invocation("area show", [shellQuote(ref), ...showToggleFlags(opts)]);
+  runRead<AreaView>(
+    opts,
+    "area-view",
+    (c) => {
+      let view: AreaView;
+      try {
+        view = c.read.areaView(ref);
+      } catch (err) {
+        // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
+        if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+          throw new DidYouMeanError(
+            err.message,
+            ref,
+            c.read.liteTitleSearch(ref, { type: "area" }),
+          );
+        }
+        throw err;
+      }
+      const { data, grouped } = capAreaSections(view, limits);
+      return {
+        data,
+        grouped,
+        lines: renderAreaView(view, { ...opts, limits, hintBase }),
+      };
+    },
+    () => [],
+  );
+}
+
 export function registerAreaCommands(program: Command): void {
   const area = program.command("area").description("Area-scoped operations");
   area
@@ -206,70 +269,7 @@ export function registerAreaCommands(program: Command): void {
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action(
-      (
-        ref: string,
-        opts: AreaShowOpts & {
-          json?: boolean;
-          db?: string;
-          limit?: string;
-          areaLimit?: string;
-          projectLimit?: string;
-          all?: boolean;
-        },
-      ) => {
-        if (opts.limit !== undefined) {
-          process.stderr.write(
-            "error: --limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all\n",
-          );
-          process.exitCode = ExitCode.Usage;
-          return;
-        }
-        const areaCap = parseCap(
-          "--area-limit",
-          opts.areaLimit,
-          AREA_PREVIEW_LIMIT,
-          opts.all === true,
-        );
-        if (!areaCap.ok) return;
-        const projectCap = parseCap(
-          "--project-limit",
-          opts.projectLimit,
-          AREA_PREVIEW_LIMIT,
-          opts.all === true,
-        );
-        if (!projectCap.ok) return;
-        const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
-        const hintBase = invocation("area show", [shellQuote(ref), ...showToggleFlags(opts)]);
-        runRead<AreaView>(
-          opts,
-          "area-view",
-          (c) => {
-            let view: AreaView;
-            try {
-              view = c.read.areaView(ref);
-            } catch (err) {
-              // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
-              if (err instanceof RangeError && !err.message.includes("ambiguous")) {
-                throw new DidYouMeanError(
-                  err.message,
-                  ref,
-                  c.read.liteTitleSearch(ref, { type: "area" }),
-                );
-              }
-              throw err;
-            }
-            const { data, grouped } = capAreaSections(view, limits);
-            return {
-              data,
-              grouped,
-              lines: renderAreaView(view, { ...opts, limits, hintBase }),
-            };
-          },
-          () => [],
-        );
-      },
-    );
+    .action((ref: string, opts: AreaShowActionOpts) => runAreaShow(ref, opts));
   area
     .command("open <ref>")
     .description(
