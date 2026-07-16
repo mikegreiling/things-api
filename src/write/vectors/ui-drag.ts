@@ -674,7 +674,7 @@ async function scrollUntil(
   let lastClicks = 0;
   let stalls = 0;
   for (let iter = 0; iter < MAX_SCROLL_ITER; iter++) {
-    // oxlint-disable-next-line no-await-in-loop -- each scroll must observe the frames the previous scroll produced
+    // each scroll must observe the frames the previous scroll produced
     const snap = await takeSnapshot(ctx);
     if (snap === null) return null;
     const err = wanted(snap);
@@ -700,7 +700,7 @@ async function scrollUntil(
     const clicks =
       Math.max(-12, Math.min(12, Math.round(err / pxPerClick) || Math.sign(err))) * dirFactor;
     lastClicks = clicks;
-    // oxlint-disable-next-line no-await-in-loop -- strictly sequential scroll-and-remeasure loop
+    // strictly sequential scroll-and-remeasure loop
     const res = await runCmd(ctx, scrollCommand(clicks));
     if (!res.ok) return null;
   }
@@ -715,7 +715,7 @@ async function pollState(
   for (let i = 0; i < ASSERT_ATTEMPTS; i++) {
     const state = ctx.state();
     if (check(state)) return state;
-    // oxlint-disable-next-line no-await-in-loop -- polling the same DB condition is inherently sequential
+    // polling the same DB condition is inherently sequential
     await ctx.sleep(ASSERT_DELAY_MS);
   }
   return null;
@@ -895,7 +895,7 @@ export async function driveSidebarAreaReorder(
   let hopCap = Math.min(MAX_HOPS_CEILING, pre.areas.length + 2);
 
   for (let attempt = 0; attempt <= MAX_HOPS_CEILING; attempt++) {
-    // oxlint-disable-next-line no-await-in-loop -- every hop depends on the layout the previous hop produced
+    // every hop depends on the layout the previous hop produced
     const snap = await takeSnapshot(ctx);
     if (snap === null) {
       return refuseOrRecover(
@@ -917,7 +917,7 @@ export async function driveSidebarAreaReorder(
     if ("error" in finalPlan) {
       if (!resolveRetried) {
         resolveRetried = true;
-        // oxlint-disable-next-line no-await-in-loop -- one settle pause before re-reading the tree
+        // one settle pause before re-reading the tree
         await ctx.sleep(2000);
         continue;
       }
@@ -932,7 +932,7 @@ export async function driveSidebarAreaReorder(
     if (spanNeeded < viewport.h - 4 * BAND_PAD) {
       let ready: SidebarSnapshot | null = snap;
       if (!inBand(grab.y, viewport) || !inBand(finalPlan.dropY, viewport)) {
-        // oxlint-disable-next-line no-await-in-loop -- pre-scroll must land before the drag
+        // pre-scroll must land before the drag
         ready = await scrollUntil(ctx, (s) => {
           const p = planDrop(s, spec, areaTitles, spec.placement);
           if ("error" in p || s.viewport === null) return null;
@@ -948,12 +948,12 @@ export async function driveSidebarAreaReorder(
         if (!("error" in plan) && ready.viewport !== null) {
           const g = grabPoint(plan.source);
           if (inBand(g.y, ready.viewport) && inBand(plan.dropY, ready.viewport)) {
-            // oxlint-disable-next-line no-await-in-loop -- the gesture must land before the DB assert
+            // the gesture must land before the DB assert
             const landed = await performDrag(ctx, plan);
             if (!landed) {
               return refuseOrRecover(ctx, pre, spec, hops, "the drag gesture did not complete");
             }
-            // oxlint-disable-next-line no-await-in-loop -- the final assert gates success
+            // the final assert gates success
             const finalState = await pollState(
               ctx,
               (s) =>
@@ -1002,7 +1002,7 @@ export async function driveSidebarAreaReorder(
     if (!heldScrollTried) {
       heldScrollTried = true;
       // The source must be grabbable first.
-      // oxlint-disable-next-line no-await-in-loop -- the pre-grab scroll must land before the gesture
+      // the pre-grab scroll must land before the gesture
       const grabbable = await scrollUntil(
         ctx,
         (s) => {
@@ -1037,11 +1037,11 @@ export async function driveSidebarAreaReorder(
           // moves go straight to the multi-hop floor.
           if (travel > viewport.h * 1.5) continue;
           const maxTicks = Math.min(400, Math.max(20, Math.ceil(travel / 15)));
-          // oxlint-disable-next-line no-await-in-loop -- the held gesture must complete before its DB assert
+          // the held gesture must complete before its DB assert
           const res = await runCmd(ctx, heldScrollDragCommand(g.x, g.y, anchor, maxTicks));
           const parsed = parseHeldDragResult(res);
           if (parsed.dropped) {
-            // oxlint-disable-next-line no-await-in-loop -- the final assert gates success
+            // the final assert gates success
             const finalState = await pollState(
               ctx,
               (s) =>
@@ -1088,7 +1088,7 @@ export async function driveSidebarAreaReorder(
     const down = finalPlan.dropY > grab.y;
     // Bring the source into the band, parked toward the trailing edge so the
     // viewport ahead of it is maximal.
-    // oxlint-disable-next-line no-await-in-loop -- the hop's park scroll must land before its gesture
+    // the hop's park scroll must land before its gesture
     const parked = await scrollUntil(
       ctx,
       (s) => {
@@ -1151,7 +1151,7 @@ export async function driveSidebarAreaReorder(
       );
     }
     const anchorUuid = hopAnchor.uuid;
-    // oxlint-disable-next-line no-await-in-loop -- the hop gesture must land before its DB assert
+    // the hop gesture must land before its DB assert
     const landed = await performDrag(ctx, {
       source: source.row,
       dropY: hopAnchor.dropY,
@@ -1162,7 +1162,7 @@ export async function driveSidebarAreaReorder(
     }
     // DB assert after EVERY hop: the source should now sit immediately above
     // the anchor, with the count + assignments invariant.
-    // oxlint-disable-next-line no-await-in-loop -- the hop assert gates the next hop
+    // the hop assert gates the next hop
     const hopState = await pollState(
       ctx,
       (s) =>

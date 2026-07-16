@@ -1457,9 +1457,9 @@ export async function runUndo(
         };
         const result =
           step.op === "reorder"
-            ? // oxlint-disable-next-line no-await-in-loop -- undo steps must be inverted in order: each step's precondition check depends on the DB state left by the prior step
+            ? // undo steps must be inverted in order: each step's precondition check depends on the DB state left by the prior step
               await runReorder(deps, step.params as unknown as ReorderParams, writeOptions)
-            : // oxlint-disable-next-line no-await-in-loop -- same sequencing requirement as the reorder branch above
+            : // same sequencing requirement as the reorder branch above
               await runMutation(
                 deps,
                 step.op as Exclude<OperationKind, "reorder">,

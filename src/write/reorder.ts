@@ -257,7 +257,7 @@ async function runBounce(
       };
     }
 
-    // oxlint-disable-next-line no-await-in-loop -- bounce legs must land in strict reverse order for the front-insert trick (O07/O08) to produce the requested top-first sequence
+    // bounce legs must land in strict reverse order for the front-insert trick (O07/O08) to produce the requested top-first sequence
     const leg1 = await runMutation(deps, legOp, { uuid, when: away }, legOptions(options, txnId));
     if (leg1.kind !== "ok") {
       auditSummary(
@@ -277,7 +277,7 @@ async function runBounce(
         cause: leg1,
       };
     }
-    // oxlint-disable-next-line no-await-in-loop -- leg 2 must follow leg 1's committed state for the same item before the next item's bounce begins
+    // leg 2 must follow leg 1's committed state for the same item before the next item's bounce begins
     const leg2 = await runMutation(deps, legOp, { uuid, when: back }, legOptions(options, txnId));
     if (leg2.kind !== "ok") {
       auditSummary(
@@ -303,7 +303,7 @@ async function runBounce(
 
     // Placed-prefix invariant: everything bounced so far must read back in
     // requested relative order — anything else means a concurrent reshuffle.
-    // oxlint-disable-next-line no-await-in-loop -- the placed-prefix must be verified after each item before bouncing the next, so a concurrent reshuffle is caught immediately rather than compounded
+    // the placed-prefix must be verified after each item before bouncing the next, so a concurrent reshuffle is caught immediately rather than compounded
     const prefixCheck = await pollUntilVerified(
       () =>
         evaluateDelta(

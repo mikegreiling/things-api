@@ -51,7 +51,7 @@ export async function waitForSsh(vm: string, timeoutSeconds = 300): Promise<stri
       const probe = ssh(ip, "true", { allowFailure: true });
       if (probe.exitCode === 0) return ip;
     }
-    // oxlint-disable-next-line no-await-in-loop -- polling loop: each retry must wait for the prior SSH probe before re-checking
+    // polling loop: each retry must wait for the prior SSH probe before re-checking
     await sleep(3000);
   }
   throw new Error(`timed out waiting for SSH on ${vm} (${timeoutSeconds}s)`);

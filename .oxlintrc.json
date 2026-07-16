@@ -9,6 +9,9 @@
     "suspicious": "warn",
     "perf": "warn"
   },
+  "rules": {
+    "no-await-in-loop": "off"
+  },
   "env": {
     "builtin": true
   },

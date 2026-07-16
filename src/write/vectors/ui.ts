@@ -389,7 +389,7 @@ async function resolveStepPath(step: UiStep, run: UiRunner): Promise<string | nu
   const deadline = Date.now() + (step.timeoutMs ?? RESOLVE_CANDIDATE_TIMEOUT_MS);
   for (;;) {
     for (const candidate of candidates) {
-      // oxlint-disable-next-line no-await-in-loop -- candidates are tried in priority order; the first hit wins, so a race would blur which form matched
+      // candidates are tried in priority order; the first hit wins, so a race would blur which form matched
       const res = await run(
         { primitive: "resolve", label: step.label, script: axResolveScript(candidate) },
         STEP_TIMEOUT_MS,
@@ -397,7 +397,7 @@ async function resolveStepPath(step: UiStep, run: UiRunner): Promise<string | nu
       if (res.ok && res.stdout.trim() === "true") return candidate;
     }
     if (Date.now() >= deadline) return null;
-    // oxlint-disable-next-line no-await-in-loop -- the revealed control lands a beat after the mode switch; poll until it does
+    // the revealed control lands a beat after the mode switch; poll until it does
     await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
   }
 }
@@ -542,7 +542,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     (recipe.steps[idx]?.primitive === "reveal" || recipe.steps[idx]?.primitive === "activate")
   ) {
     const step = recipe.steps[idx] as UiStep;
-    // oxlint-disable-next-line no-await-in-loop -- the preamble steps are strictly sequential (select, then foreground) and each must land before the next
+    // the preamble steps are strictly sequential (select, then foreground) and each must land before the next
     const res = await run(commandForStep(step, recipe.targetUuid), STEP_TIMEOUT_MS);
     if (!res.ok) {
       return partial(
@@ -560,7 +560,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
   //    target is selected). A miss refuses the whole drive before anything is
   //    pressed. (This is also the localization check: English titles must resolve.)
   for (const { path, label } of canaryPaths(recipe)) {
-    // oxlint-disable-next-line no-await-in-loop -- the canary resolves elements one at a time; a single miss aborts before anything is pressed, so parallelizing would waste work and blur which element failed
+    // the canary resolves elements one at a time; a single miss aborts before anything is pressed, so parallelizing would waste work and blur which element failed
     const res = await run(
       { primitive: "resolve", label, script: axResolveScript(path) },
       STEP_TIMEOUT_MS,
@@ -580,7 +580,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     if (step.primitive === "wait") {
       // A candidate-addressed wait polls for ANY of its shapes to appear (the
       // dialog opening as an attached sheet OR a detached AXUnknown window).
-      // oxlint-disable-next-line no-await-in-loop -- steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs
+      // steps are strictly sequential: this wait must resolve before the step that acts on the awaited element runs
       const ok = await waitForAnyElement(
         step.pathCandidates ?? [step.path ?? ""],
         step.label,
@@ -588,7 +588,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
         run,
       );
       if (!ok) {
-        // oxlint-disable-next-line no-await-in-loop -- the abort keystroke must land before returning the partial-state report
+        // the abort keystroke must land before returning the partial-state report
         await abort();
         return partial(step.label, "the expected element never appeared within the timeout");
       }
@@ -600,7 +600,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // DB-assert ladder (ui-drag.ts); every gesture anchors on frames it
       // resolves live, and a failed assert triggers a verified recovery drag.
       if (step.drag === undefined) return partial(step.label, "no drag spec compiled", false);
-      // oxlint-disable-next-line no-await-in-loop -- the drag ladder depends on the UI state the preamble produced
+      // the drag ladder depends on the UI state the preamble produced
       const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
       if (!outcome.ok) return partial(step.label, outcome.detail, false);
       done.push(`${step.label} (${outcome.detail})`);
@@ -609,10 +609,10 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     // Resolve a candidate-addressed step's effective element before dispatch
     // (the sheet-vs-detached-window disjunction). A miss fails closed.
     if (step.pathCandidates !== undefined) {
-      // oxlint-disable-next-line no-await-in-loop -- the effective form must be resolved before this step can act on it
+      // the effective form must be resolved before this step can act on it
       const effective = await resolveStepPath(step, run);
       if (effective === null) {
-        // oxlint-disable-next-line no-await-in-loop -- dismiss whatever opened before reporting
+        // dismiss whatever opened before reporting
         await abort();
         return partial(
           step.label,
@@ -626,10 +626,10 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     if (step.primitive === "select-row") {
       // Pure-AX row selection with readback verification (UIC4-a): "OK" only
       // when a row selected to the target title.
-      // oxlint-disable-next-line no-await-in-loop -- the selection must land before the menu that acts on it is pressed
+      // the selection must land before the menu that acts on it is pressed
       const res = await run(command, STEP_TIMEOUT_MS);
       if (!res.ok || res.stdout.trim() !== "OK") {
-        // oxlint-disable-next-line no-await-in-loop -- clear any transient state before reporting
+        // clear any transient state before reporting
         await abort();
         return partial(
           step.label,
@@ -647,20 +647,20 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     if (step.primitive === "click-element") {
       // A mouse click at an AX-resolved frame center (the NATIVE1 primitive),
       // used only where AXPress is inert (Things' custom `…`/repeat-bar popover).
-      // oxlint-disable-next-line no-await-in-loop -- the click depends on the UI state the previous step produced
+      // the click depends on the UI state the previous step produced
       const outcome = await driveClickElement(step, run);
       if (!outcome.ok) {
-        // oxlint-disable-next-line no-await-in-loop -- dismiss whatever the click opened before reporting
+        // dismiss whatever the click opened before reporting
         if (outcome.needsAbort === true) await abort();
         return partial(step.label, outcome.why ?? "the click failed");
       }
       done.push(step.label);
       continue;
     }
-    // oxlint-disable-next-line no-await-in-loop -- each recipe step depends on the UI state the previous step produced; they cannot be parallelized
+    // each recipe step depends on the UI state the previous step produced; they cannot be parallelized
     const res = await run(command, STEP_TIMEOUT_MS);
     if (!res.ok) {
-      // oxlint-disable-next-line no-await-in-loop -- dismiss the half-open sheet/popover before reporting partial state
+      // dismiss the half-open sheet/popover before reporting partial state
       if (step.primitive !== "reveal" && step.primitive !== "activate") await abort();
       return partial(
         step.label,
@@ -679,11 +679,11 @@ async function waitForElement(
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    // oxlint-disable-next-line no-await-in-loop -- polling the same element until it appears is inherently sequential
+    // polling the same element until it appears is inherently sequential
     const res = await run(command, STEP_TIMEOUT_MS);
     if (res.ok && res.stdout.trim() === "true") return true;
     if (Date.now() >= deadline) return false;
-    // oxlint-disable-next-line no-await-in-loop -- inter-poll delay between sequential existence checks
+    // inter-poll delay between sequential existence checks
     await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
   }
 }
@@ -700,7 +700,7 @@ async function waitForAnyElement(
     for (const path of paths) {
       // Emitted as the `wait` primitive (not `resolve`) so the command stream a
       // caller observes is unchanged from the single-path waitForElement.
-      // oxlint-disable-next-line no-await-in-loop -- candidates checked in priority order; the first present shape ends the wait
+      // candidates checked in priority order; the first present shape ends the wait
       const res = await run(
         { primitive: "wait", label, script: axResolveScript(path) },
         STEP_TIMEOUT_MS,
@@ -708,7 +708,7 @@ async function waitForAnyElement(
       if (res.ok && res.stdout.trim() === "true") return true;
     }
     if (Date.now() >= deadline) return false;
-    // oxlint-disable-next-line no-await-in-loop -- inter-poll delay between sequential existence checks
+    // inter-poll delay between sequential existence checks
     await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
   }
 }
