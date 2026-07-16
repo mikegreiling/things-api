@@ -35,6 +35,7 @@ import {
   resolveHeading,
   resolveProject,
   resolveTag,
+  sameTitleTaskUuids,
   trashedCount,
   type PreState,
 } from "./pre-state.ts";
@@ -226,6 +227,18 @@ function containerGiven(ref: ContainerRef | undefined): boolean {
   return ref !== undefined && (ref.uuid !== undefined || ref.title !== undefined);
 }
 
+/**
+ * The create-probe title for the duplicate / identity-replacement ops, whose
+ * new row inherits the pre-read target's title. Non-heading targets only (the
+ * heading-convert op uses the raw title, headings included); "" when the target
+ * did not resolve. Shared by the pre-read same-title capture and the delta so
+ * the excluded set and the probe title cannot drift apart.
+ */
+function nonHeadingTitle(pre: PreState): string {
+  const target = pre.target;
+  return target !== null && target.type !== "heading" ? target.title : "";
+}
+
 // ----------------------------------------------------------------- commands
 
 const todoAdd: CommandSpec<"todo.add"> = {
@@ -250,6 +263,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
     }
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
     if (params.tags !== undefined) applyTagRefs(db, pre, params.tags);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "to-do");
     return pre;
   },
   expectedDelta(pre, params, ctx) {
@@ -277,7 +291,12 @@ const todoAdd: CommandSpec<"todo.add"> = {
     if (area !== undefined && area !== null) assert.push({ field: "area.uuid", equals: area.uuid });
     return {
       mode: "create",
-      probe: { title: params.title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: params.title,
+        type: "to-do",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert,
     };
   },
@@ -667,6 +686,7 @@ const projectAdd: CommandSpec<"project.add"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "project");
     return pre;
   },
   expectedDelta(pre, params, ctx) {
@@ -678,7 +698,12 @@ const projectAdd: CommandSpec<"project.add"> = {
     if (area !== undefined && area !== null) assert.push({ field: "area.uuid", equals: area.uuid });
     return {
       mode: "create",
-      probe: { title: params.title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: params.title,
+        type: "project",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert,
     };
   },
@@ -854,17 +879,24 @@ const projectDuplicate: CommandSpec<"project.duplicate"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
     // E17: the copy carries the title, notes AND children; discover it with
-    // the create probe (fresh creationDate, same as the to-do path E07).
+    // the create probe (fresh creationDate, same as the to-do path E07). The
+    // ORIGINAL shares the copy's title, so it is among the excluded pre-existing
+    // rows — discovery lands on the copy, never the source.
     const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
     const notes = target !== null && target.type !== "heading" ? target.notes : "";
     return {
       mode: "create",
-      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: nonHeadingTitle(pre),
+        type: "project",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [{ field: "notes", equals: notes }],
     };
   },
@@ -1140,17 +1172,23 @@ const todoDuplicate: CommandSpec<"todo.duplicate"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "to-do");
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
     // The copy carries the same title/notes with a fresh uuid + creationDate
-    // (E07) — discover it with the create probe, assert copy fidelity.
+    // (E07) — discover it with the create probe, assert copy fidelity. The
+    // ORIGINAL shares the title, so it is excluded as a pre-existing row.
     const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
     const notes = target !== null && target.type !== "heading" ? target.notes : "";
     return {
       mode: "create",
-      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: nonHeadingTitle(pre),
+        type: "to-do",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [{ field: "notes", equals: notes }],
     };
   },
@@ -1418,11 +1456,7 @@ const todoAddLogged: CommandSpec<"todo.add-logged"> = {
       throw new RangeError("creationDate must not be after completionDate");
     }
     const pre = emptyPreState();
-    pre.sameTitleUuids = (
-      db.prepare("SELECT uuid FROM TMTask WHERE title = ? AND type = 0").all(params.title) as {
-        uuid: string;
-      }[]
-    ).map((r) => r.uuid);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "to-do");
     return pre;
   },
   expectedDelta(pre, params) {
@@ -1581,15 +1615,21 @@ const headingCreate: CommandSpec<"heading.create"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     pre.destProject = resolveProject(db, params.project);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "heading");
     return pre;
   },
   expectedDelta(pre, params, ctx) {
     const project = pre.destProject?.resolved;
-    // A new type=2 row with this title under the project; disambiguate
-    // duplicate titles by newest creationDate (findCreated orders DESC).
+    // A new type=2 row with this title under the project; a pre-existing
+    // same-title heading is excluded so discovery cannot bind to it.
     return {
       mode: "create",
-      probe: { title: params.title, type: "heading", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: params.title,
+        type: "heading",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert:
         project !== undefined && project !== null
           ? [{ field: "project.uuid", equals: project.uuid }]
@@ -1685,18 +1725,23 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
     assertRepeatRule(params);
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "to-do");
     return pre;
   },
-  expectedDelta(pre, params, ctx) {
+  expectedDelta(pre, _params, ctx) {
     // Identity REPLACEMENT (UI2-a): the original to-do uuid dies; a NEW
-    // template row (type=0 with a recurrence rule) is born. Discover it with
-    // the create probe, and pick the template (not the spawned instance) by
-    // asserting it IS a template.
-    const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
+    // template row (type=0 with a recurrence rule) is born alongside a spawned
+    // instance sharing its title. Discover the template with the create probe,
+    // excluding the pre-existing same-title rows (incl. the dying original), and
+    // pick the template (not the spawned instance) by asserting it IS one.
     return {
       mode: "create",
-      probe: { title, type: "to-do", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: nonHeadingTitle(pre),
+        type: "to-do",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [{ field: "repeating.isTemplate", equals: true }],
     };
   },
@@ -1883,17 +1928,23 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
     pre.projectRepeat = classifyProjectRepeat(db, pre.target);
+    pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
     // Identity REPLACEMENT (UIC4-b): the original project uuid dies; a NEW
     // template project (with a recurrence rule) is born alongside a spawned
-    // instance. Pick the TEMPLATE by asserting it IS one; area is preserved.
-    const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
+    // instance sharing its title. Pick the TEMPLATE by asserting it IS one
+    // (area preserved), excluding the pre-existing same-title rows so discovery
+    // cannot bind to the spawned instance or the dying original.
     return {
       mode: "create",
-      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: nonHeadingTitle(pre),
+        type: "project",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [{ field: "repeating.isTemplate", equals: true }],
     };
   },
@@ -1947,17 +1998,24 @@ const todoConvertToProject: CommandSpec<"todo.convert-to-project"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
+    // The new row is a PROJECT (type=1) — exclude pre-existing same-title
+    // projects, not the source to-do (a different type the probe never sees).
+    pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
     // Identity REPLACEMENT (UI2-d): the to-do uuid dies; a NEW type=1 project
     // is born, notes preserved. Discover it (its uuid is returned).
     const target = pre.target;
-    const title = target !== null && target.type !== "heading" ? target.title : "";
     const notes = target !== null && target.type !== "heading" ? target.notes : "";
     return {
       mode: "create",
-      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title: nonHeadingTitle(pre),
+        type: "project",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [{ field: "notes", equals: notes }],
     };
   },
@@ -1973,6 +2031,11 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
+    // The new row is a PROJECT (type=1) carrying the former heading's title;
+    // exclude pre-existing same-title projects. The heading uses its raw title
+    // (headings are not covered by nonHeadingTitle).
+    const title = pre.target !== null ? pre.target.title : "";
+    pre.sameTitleUuids = sameTitleTaskUuids(db, title, "project");
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
@@ -1983,7 +2046,12 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
     const title = target !== null ? target.title : "";
     return {
       mode: "create",
-      probe: { title, type: "project", sinceEpoch: ctx.nowEpoch - 2 },
+      probe: {
+        title,
+        type: "project",
+        sinceEpoch: ctx.nowEpoch - 2,
+        excludeUuids: pre.sameTitleUuids,
+      },
       assert: [],
     };
   },
