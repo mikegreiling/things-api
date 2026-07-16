@@ -46,6 +46,7 @@ import {
   PROJECT_LIMIT_DESC,
   REF_FORMAT,
   REMINDER_FORMAT,
+  schemaWarnings,
   WHEN_VALUES,
 } from "../surface-copy.ts";
 import { capabilitiesTable } from "../write/capabilities.ts";
@@ -409,6 +410,29 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     }
   };
 
+  /**
+   * A read handler wrapper: run through {@link guard}, then — on a successful
+   * result — append a meta block carrying any non-blocking schema warning (the
+   * same note the CLI prints), so a consumer sees when the Things database no
+   * longer matches the validated schema and its data may be incomplete. No
+   * block is added when the schema checks out or the read itself errored.
+   */
+  const readGuard = async (fn: () => Promise<ToolResult> | ToolResult): Promise<ToolResult> => {
+    const result = await guard(fn);
+    if (result.isError === true) return result;
+    let warnings: string[] = [];
+    try {
+      warnings = schemaWarnings(getClient().schemaStatus());
+    } catch {
+      warnings = [];
+    }
+    if (warnings.length === 0) return result;
+    return {
+      ...result,
+      content: [...result.content, { type: "text", text: JSON.stringify({ meta: { warnings } }) }],
+    };
+  };
+
   /** Resolve a uuid to to-do/project for the type-generic item tools. */
   const itemType = (uuid: string): "to-do" | "project" => {
     const item = getClient().read.byUuid(uuid);
@@ -488,7 +512,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const tagConflict = tagFlagConflict(args);
         if (tagConflict !== null) return usage(tagConflict);
         // show_active_project_items is the preferred name; active_project_items
@@ -633,7 +657,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const tagConflict = tagFlagConflict(args);
         if (tagConflict !== null) return usage(tagConflict);
         if (
@@ -677,7 +701,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
         const since = new Date(args.since);
@@ -704,7 +728,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const item = getClient().read.byUuid(args.uuid);
         return item === null
           ? errorResult({ code: "not-found", message: noUuidMatch("item", args.uuid) })
@@ -733,7 +757,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const tagConflict = tagFlagConflict(args);
         if (tagConflict !== null) return usage(tagConflict);
         return readResult(
@@ -781,7 +805,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const tagConflict = tagFlagConflict(args);
         if (tagConflict !== null) return usage(tagConflict);
         const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
@@ -822,7 +846,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      readGuard(() => {
         const c = getClient();
         // areas/tags are not dated entities and have no per-row tag list to
         // filter — overdue and the tag filters are vacuous there, rejected

@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { BASELINES } from "../../src/db/baselines/index.ts";
 import { DB_V26 } from "../../src/db/baselines/db-v26.ts";
-import { compareToBaseline, observeSchema, readDatabaseVersion } from "../../src/db/fingerprint.ts";
+import {
+  compareToBaseline,
+  observeSchema,
+  readDatabaseVersion,
+  toSchemaStatus,
+} from "../../src/db/fingerprint.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 
 let fixture: FixtureDb | null = null;
@@ -59,5 +64,31 @@ describe("schema fingerprint", () => {
     );
     const status = compareToBaseline(observeSchema(fixture.db), BASELINES);
     expect(status.kind).toBe("unknown-version");
+  });
+});
+
+describe("toSchemaStatus (read-path verdict)", () => {
+  it("maps ok to a clean status with no detail", () => {
+    fixture = buildFixtureDb();
+    const status = toSchemaStatus(compareToBaseline(observeSchema(fixture.db), BASELINES));
+    expect(status).toEqual({ status: "ok", detail: [] });
+  });
+
+  it("carries the drift detail lines through", () => {
+    fixture = buildFixtureDb();
+    fixture.db.exec("ALTER TABLE TMTask DROP COLUMN startBucket;");
+    const status = toSchemaStatus(compareToBaseline(observeSchema(fixture.db), BASELINES));
+    expect(status.status).toBe("drift");
+    expect(status.detail).toContain("column missing: TMTask.startBucket");
+  });
+
+  it("names the unrecognized databaseVersion", () => {
+    fixture = buildFixtureDb();
+    fixture.db.exec(
+      "UPDATE Meta SET value = replace(value, '26', '27') WHERE key = 'databaseVersion'",
+    );
+    const status = toSchemaStatus(compareToBaseline(observeSchema(fixture.db), BASELINES));
+    expect(status.status).toBe("unknown-version");
+    expect(status.detail[0]).toContain("27");
   });
 });

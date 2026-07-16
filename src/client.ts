@@ -8,7 +8,13 @@ import { loadConfig, type ThingsApiConfig } from "./config.ts";
 import { PKG_VERSION } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
-import { compareToBaseline, observeSchema, type FingerprintStatus } from "./db/fingerprint.ts";
+import {
+  compareToBaseline,
+  observeSchema,
+  toSchemaStatus,
+  type FingerprintStatus,
+  type SchemaStatus,
+} from "./db/fingerprint.ts";
 import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
@@ -126,6 +132,13 @@ export interface ThingsClient {
   dbPath: string;
   config: ThingsApiConfig;
   fingerprint(): FingerprintStatus;
+  /**
+   * The read-path schema check: the cached fingerprint comparison reduced to a
+   * warn-or-not verdict (ok / drift / unknown-version) with detail. Reuses the
+   * SAME lazily-built fingerprint the write path gates on — computed at most
+   * once per client, so it costs nothing after the first read.
+   */
+  schemaStatus(): SchemaStatus;
   read: {
     today(filter?: TodayFilter): TodayView;
     inbox(filter?: InboxFilter): ListItem[];
@@ -465,6 +478,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     dbPath: located.path,
     config,
     fingerprint,
+    schemaStatus: () => toSchemaStatus(fingerprint()),
     read: {
       today: (f) => todayView(conn.db, now(), f),
       inbox: (f) => inboxView(conn.db, now(), f),

@@ -109,6 +109,13 @@ export interface EnvelopeMeta {
    * reads reached via a sugar form; absent for canonical invocations.
    */
   resolvedCommand?: string;
+  /**
+   * Non-blocking advisories about this read (ADDITIVE). Present only when there
+   * is something to flag — currently a one-line note when the Things database
+   * schema no longer matches the version this build was validated against
+   * (reads stay best-effort; run `things doctor`). Absent means none.
+   */
+  warnings?: string[];
 }
 
 export interface OkEnvelope<T> {
