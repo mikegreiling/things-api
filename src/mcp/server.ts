@@ -15,6 +15,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { openThings, type ChecklistEdit, type OpenOptions, type ThingsClient } from "../client.ts";
+import type { DisruptionTier } from "../config.ts";
 import { omitEmpty } from "../model/serialize.ts";
 import {
   blockedCode,
@@ -65,6 +66,14 @@ import type { BatchOp } from "../write/batch.ts";
 
 export interface McpServerOptions {
   dbPath?: string;
+  /**
+   * The disruption ceiling for EVERY write this server makes, fixed for the
+   * whole process lifetime (set once by `things mcp`'s startup flags). Caps
+   * vector selection exactly like the CLI's per-call --allow-disruptive /
+   * --allow-very-disruptive, but there is no per-request escalation over MCP.
+   * Undefined leaves the config profile's default in force.
+   */
+  maxDisruption?: DisruptionTier;
   /** Test seam: forwarded to openThings (fake vectors, pinned clock, env). */
   openOptions?: OpenOptions;
 }
@@ -350,8 +359,27 @@ function checklistTarget(args: { item?: string | undefined; index?: number | und
   return args.index !== undefined ? { index: args.index } : { item: args.item ?? "" };
 }
 
-/** Translate the shared MCP write-tool args into pipeline WriteOptions. */
-const writeOptions = (args: {
+/**
+ * Derive the audit author for a client's writes from the MCP initialize
+ * handshake's clientInfo.name: lowercased, every run of non-alphanumerics
+ * collapsed to a single "-", leading/trailing dashes trimmed, capped at 32
+ * characters. An absent (or empty-after-sanitizing) client name falls back to
+ * the bare "mcp". The result is never caller-settable — it is the connecting
+ * client's own identity, so each client's writes are attributed to it.
+ */
+const MCP_ACTOR_PREFIX = "mcp";
+function deriveMcpActor(clientName: string | undefined): string {
+  const slug = (clientName ?? "")
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replaceAll(/-+$/g, "");
+  return slug === "" ? MCP_ACTOR_PREFIX : `${MCP_ACTOR_PREFIX}:${slug}`;
+}
+
+/** The shape of the shared MCP write-tool args mapped into WriteOptions. */
+interface WriteOptionArgs {
   dry_run?: boolean | undefined;
   verify_timeout_ms?: number | undefined;
   acknowledge_checklist_reset?: boolean | undefined;
@@ -360,17 +388,7 @@ const writeOptions = (args: {
   acknowledge_tag_subtree?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
   create_tags?: boolean | undefined;
-}): WriteOptions => ({
-  actor: "mcp",
-  ...(args.dry_run === true && { dryRun: true }),
-  ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
-  ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
-  ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
-  ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
-  ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
-  ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
-  ...(args.create_tags === true && { createTags: true }),
-});
+}
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
   // One lazily-opened client for the server's lifetime; SQLite read
@@ -388,6 +406,26 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     { name: "things-api", version: PKG_VERSION },
     { instructions: buildInstructions(getClient) },
   );
+
+  // The audit author for every write on this connection, derived once from the
+  // client's handshake identity (clientInfo.name). Read per call: clientInfo is
+  // populated when the initialize handshake completes, before any tool can run.
+  // Not caller-settable — no tool argument overrides it.
+  const mcpActor = (): string => deriveMcpActor(server.server.getClientVersion()?.name);
+
+  /** Translate the shared MCP write-tool args into pipeline WriteOptions. */
+  const writeOptions = (args: WriteOptionArgs): WriteOptions => ({
+    actor: mcpActor(),
+    ...(options.maxDisruption !== undefined && { maxDisruption: options.maxDisruption }),
+    ...(args.dry_run === true && { dryRun: true }),
+    ...(args.verify_timeout_ms !== undefined && { verifyTimeoutMs: args.verify_timeout_ms }),
+    ...(args.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
+    ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
+    ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
+    ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+    ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
+    ...(args.create_tags === true && { createTags: true }),
+  });
 
   /** Run a handler, mapping environment/usage throws to tool errors. */
   const guard = async (fn: () => Promise<ToolResult> | ToolResult): Promise<ToolResult> => {
@@ -1460,36 +1498,36 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   };
   const repeatRuleShape = {
     ...baseRepeatShape,
-    afterCompletion: z
+    after_completion: z
       .boolean()
       .optional()
       .describe(
         "Repeat N units AFTER each occurrence is completed, instead of on a fixed schedule",
       ),
     weekdays: z.array(WEEKDAY_ENUM).optional().describe("Weekly only: the weekdays it repeats on"),
-    monthlyDay: z
+    monthly_day: z
       .union([z.number().int(), z.literal("last")])
       .optional()
       .describe('Monthly/yearly only: a day of the month (1–31, or "last")'),
-    monthlyWeekday: WEEKDAY_ENUM.optional().describe(
-      "Monthly/yearly only: a weekday for an nth-weekday rule (with monthlyOrdinal)",
+    monthly_weekday: WEEKDAY_ENUM.optional().describe(
+      "Monthly/yearly only: a weekday for an nth-weekday rule (with monthly_ordinal)",
     ),
-    monthlyOrdinal: z
+    monthly_ordinal: z
       .union([z.number().int(), z.literal("last")])
       .optional()
-      .describe('Monthly/yearly only: which weekday (1–5, or "last") with monthlyWeekday'),
-    yearlyMonth: z
+      .describe('Monthly/yearly only: which weekday (1–5, or "last") with monthly_weekday'),
+    yearly_month: z
       .number()
       .int()
       .min(1)
       .max(12)
       .optional()
       .describe("Yearly only: the month (1–12)"),
-    endsAfter: z.number().int().optional().describe("Stop after N occurrences"),
-    endsOn: z.string().optional().describe("YYYY-MM-DD — stop after this date"),
+    ends_after: z.number().int().optional().describe("Stop after N occurrences"),
+    ends_on: z.string().optional().describe("YYYY-MM-DD — stop after this date"),
     reminder: z.string().optional().describe("HH:mm — a reminder time on each occurrence"),
     deadline: z.boolean().optional().describe("Give each occurrence a deadline"),
-    startDaysEarlier: z
+    start_days_earlier: z
       .number()
       .int()
       .optional()
@@ -1498,17 +1536,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
 
   /** Map the flat repeat-rule args to the extended fields (present keys only). */
   type RepeatArgs = {
-    afterCompletion?: boolean | undefined;
+    after_completion?: boolean | undefined;
     weekdays?: Weekday[] | undefined;
-    monthlyDay?: number | "last" | undefined;
-    monthlyWeekday?: Weekday | undefined;
-    monthlyOrdinal?: number | "last" | undefined;
-    yearlyMonth?: number | undefined;
-    endsAfter?: number | undefined;
-    endsOn?: string | undefined;
+    monthly_day?: number | "last" | undefined;
+    monthly_weekday?: Weekday | undefined;
+    monthly_ordinal?: number | "last" | undefined;
+    yearly_month?: number | undefined;
+    ends_after?: number | undefined;
+    ends_on?: string | undefined;
     reminder?: string | undefined;
     deadline?: boolean | undefined;
-    startDaysEarlier?: number | undefined;
+    start_days_earlier?: number | undefined;
   };
   // oxlint-disable-next-line consistent-function-scoping -- kept beside repeatRuleShape it mirrors
   const repeatExtras = (
@@ -1516,23 +1554,23 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     frequency: RepeatFrequency,
   ): Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> => {
     const fields: Omit<RepeatRuleParams, "uuid" | "frequency" | "interval"> = {};
-    if (a.afterCompletion === true) fields.afterCompletion = true;
+    if (a.after_completion === true) fields.afterCompletion = true;
     if (a.weekdays !== undefined) fields.weekdays = a.weekdays;
     const anchor: MonthlyAnchor | undefined =
-      a.monthlyDay !== undefined
-        ? { day: a.monthlyDay }
-        : a.monthlyWeekday !== undefined || a.monthlyOrdinal !== undefined
-          ? ({ weekday: a.monthlyWeekday, ordinal: a.monthlyOrdinal } as MonthlyAnchor)
+      a.monthly_day !== undefined
+        ? { day: a.monthly_day }
+        : a.monthly_weekday !== undefined || a.monthly_ordinal !== undefined
+          ? ({ weekday: a.monthly_weekday, ordinal: a.monthly_ordinal } as MonthlyAnchor)
           : undefined;
     if (frequency === "monthly" && anchor !== undefined) fields.monthly = anchor;
-    if (frequency === "yearly" && (a.yearlyMonth !== undefined || anchor !== undefined)) {
-      fields.yearly = { month: a.yearlyMonth, ...anchor } as YearlyAnchor;
+    if (frequency === "yearly" && (a.yearly_month !== undefined || anchor !== undefined)) {
+      fields.yearly = { month: a.yearly_month, ...anchor } as YearlyAnchor;
     }
-    if (a.endsAfter !== undefined) fields.ends = { kind: "after", count: a.endsAfter };
-    else if (a.endsOn !== undefined) fields.ends = { kind: "on-date", date: a.endsOn };
+    if (a.ends_after !== undefined) fields.ends = { kind: "after", count: a.ends_after };
+    else if (a.ends_on !== undefined) fields.ends = { kind: "on-date", date: a.ends_on };
     if (a.reminder !== undefined) fields.reminder = a.reminder;
     if (a.deadline === true) fields.deadline = true;
-    if (a.startDaysEarlier !== undefined) fields.startDaysEarlier = a.startDaysEarlier;
+    if (a.start_days_earlier !== undefined) fields.startDaysEarlier = a.start_days_earlier;
     return fields;
   };
 
@@ -2281,10 +2319,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               params: z.record(z.string(), z.unknown()),
               options: z
                 .object({
-                  acknowledgeChecklistReset: z.boolean().optional(),
-                  acknowledgeProjectReopen: z.boolean().optional(),
-                  dangerouslyPermanent: z.boolean().optional(),
-                  acknowledgeTagSubtree: z.boolean().optional(),
+                  acknowledge_checklist_reset: z.boolean().optional(),
+                  acknowledge_project_reopen: z.boolean().optional(),
+                  dangerously_permanent: z.boolean().optional(),
+                  acknowledge_tag_subtree: z.boolean().optional(),
                 })
                 .optional(),
             }),
@@ -2297,10 +2335,29 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const results = await getClient().write.batch(args.ops as BatchOp[], {
+        // Map each op's snake_case acknowledgements into the batch engine's
+        // option names, and apply the process-wide disruption ceiling — batch
+        // takes it per-op, and MCP exposes no per-op override, so it is uniform.
+        const ceiling = options.maxDisruption;
+        const ops: BatchOp[] = args.ops.map((op) => {
+          const o = op.options;
+          const opts: NonNullable<BatchOp["options"]> = {
+            ...(o?.acknowledge_checklist_reset === true && { acknowledgeChecklistReset: true }),
+            ...(o?.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
+            ...(o?.dangerously_permanent === true && { dangerouslyPermanent: true }),
+            ...(o?.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+            ...(ceiling !== undefined && { maxDisruption: ceiling }),
+          };
+          return {
+            op: op.op as OperationKind,
+            params: op.params,
+            ...(Object.keys(opts).length > 0 && { options: opts }),
+          };
+        });
+        const results = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.fail_fast === true && { failFast: true }),
-          actor: "mcp",
+          actor: mcpActor(),
         });
         return jsonResult(results);
       }),
@@ -2363,14 +2420,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Undo the last N changes, newest first (changes made directly in the Things app " +
         "cannot be undone here). By default this undoes only changes made through THIS " +
-        'interface (by="mcp") — it will not touch the user\'s own edits unless you pass ' +
-        'by="*" (all authors) or a specific author name; pass a txn token to undo one exact ' +
-        "change. Some changes cannot be reversed — permanent deletions, or changes whose " +
-        "prior state is unknown — and are reported as irreversible; a to-do brought back " +
-        "from an undone delete returns to the Inbox without its schedule. Undoing the " +
-        "creation of an area or tag deletes it permanently — requires dangerously_permanent. " +
-        "An undo is refused when the item changed outside this interface since (its list or " +
-        "project, status, schedule, trashed state, or a field like the title moved) — pass " +
+        "connection — this client's own writes; it will not touch the user's own edits, or " +
+        'another client\'s, unless you pass by="*" (all authors) or a specific author name; ' +
+        "pass a txn token to undo one exact change. Some changes cannot be reversed — " +
+        "permanent deletions, or changes whose prior state is unknown — and are reported as " +
+        "irreversible; a to-do brought back from an undone delete returns to the Inbox " +
+        "without its schedule. Undoing the creation of an area or tag deletes it " +
+        "permanently — requires dangerously_permanent. An undo is refused when the item " +
+        "changed outside this interface since (its list or project, status, schedule, " +
+        "trashed state, or a field like the title moved) — pass " +
         "acknowledge_out_of_band_changes to overwrite it anyway.",
       inputSchema: {
         last: z.number().int().min(1).optional().describe("How many to unwind (default 1)"),
@@ -2379,9 +2437,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe(
             'Whose changes to undo: an exact author name, or "*" for everyone. Defaults to ' +
-              '"mcp" (only changes made through this interface). Matches exactly — "mcp" ' +
-              'never matches an "undo:mcp" record. Selects WHICH changes to undo; the undo ' +
-              'itself is always recorded as "undo:mcp". Not combinable with txn.',
+              "this client's own writes (only changes made through this connection). Matches " +
+              "exactly. Selects WHICH changes to undo, and never a change already undone. Not " +
+              "combinable with txn.",
           ),
         txn: z
           .string()
@@ -2411,15 +2469,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const items = await getClient().write.undo({
           ...(args.last !== undefined && { last: args.last }),
           ...(args.txn !== undefined && { txn: args.txn }),
-          // Asymmetric default: agents must not clobber the user's own edits
-          // without explicitly opting in via by:"*".
-          ...(args.txn === undefined && { by: args.by ?? "mcp" }),
+          // Asymmetric default: agents must not clobber the user's own edits (or
+          // another client's) without explicitly opting in via by:"*". Scoped to
+          // this client's own handshake identity, so each session undoes its own.
+          ...(args.txn === undefined && { by: args.by ?? mcpActor() }),
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
           ...(args.acknowledge_out_of_band_changes === true && {
             acknowledgeOutOfBandChanges: true,
           }),
-          actor: "mcp",
+          actor: mcpActor(),
         });
         return jsonResult(items);
       }),

@@ -105,11 +105,12 @@ export interface UndoOptions {
   last?: number;
   /**
    * SELECTION filter — undo only mutations recorded under this actor. An exact
-   * actor string (e.g. "mcp", "mike") or "*" for all actors. Undefined means
-   * all (the CLI's global default); the MCP surface defaults it to "mcp".
+   * actor string (e.g. "mcp:claude-code", "mike") or "*" for all actors.
+   * Undefined means all (the CLI's global default); the MCP surface defaults it
+   * to the connecting client's own derived actor (`mcp:<client>`).
    *
-   * Matching is EXACT: `by: "mcp"` selects records whose actor is exactly
-   * "mcp" and never an undo record (`undo:mcp`) — inverse mutations are their
+   * Matching is EXACT: `by: "mike"` selects records whose actor is exactly
+   * "mike" and never an undo record (`undo:mike`) — inverse mutations are their
    * own actor and are never themselves undo targets. NOT the same as `actor`
    * below, which names who the NEW inverse mutation is attributed to.
    */

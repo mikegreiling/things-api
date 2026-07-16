@@ -5,7 +5,7 @@
  * tools route to the right operations, and that every description obeys the
  * consumer-voice contract (docs/design/surface-copy.md).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -60,7 +60,25 @@ function fakeVector(
   return { vector, calls };
 }
 
-async function connect(vectors: WriteVector[]): Promise<void> {
+/**
+ * A validated vector whose only op sits at a raised disruption tier — the
+ * config profile's default ceiling (workstation: 1) blocks it, and only the
+ * daemon-startup flag lifts that. url-scheme so the invocation compiles.
+ */
+function tierVector(op: string, disruption: number): WriteVector {
+  return {
+    id: "url-scheme",
+    matrix: { [op]: { support: "yes", disruption, validation: "validated" } } as VectorMatrix,
+    async execute() {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+async function connect(
+  vectors: WriteVector[],
+  opts: { maxDisruption?: 0 | 1 | 2 | 3 } = {},
+): Promise<void> {
   const env = {
     ...process.env,
     THINGS_DB: fixture.path,
@@ -69,6 +87,7 @@ async function connect(vectors: WriteVector[]): Promise<void> {
   };
   const server = createThingsMcpServer({
     dbPath: fixture.path,
+    ...(opts.maxDisruption !== undefined && { maxDisruption: opts.maxDisruption }),
     openOptions: {
       env,
       vectors,
@@ -83,6 +102,29 @@ async function connect(vectors: WriteVector[]): Promise<void> {
     await client.close();
     await server.close();
   };
+}
+
+/** Collect every property name at any depth of a JSON-schema object (arg names). */
+function schemaArgNames(schema: unknown): string[] {
+  const names: string[] = [];
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    const props = obj["properties"];
+    if (props !== undefined && typeof props === "object" && props !== null) {
+      for (const [key, child] of Object.entries(props as Record<string, unknown>)) {
+        names.push(key);
+        walk(child);
+      }
+    }
+    walk(obj["items"]);
+    for (const composite of ["anyOf", "oneOf", "allOf"]) {
+      const arr = obj[composite];
+      if (Array.isArray(arr)) for (const el of arr) walk(el);
+    }
+  };
+  walk(schema);
+  return names;
 }
 
 function textOf(result: unknown): unknown {
@@ -665,6 +707,27 @@ describe("things MCP server", () => {
     expect(calls[0]).toContain("things:///add?title=From%20MCP");
   });
 
+  it("attributes a write to the client's derived actor (mcp:<client-name>)", async () => {
+    const { vector } = fakeVector(() => {
+      seedTodo(fixture.db, {
+        uuid: "MCP-ACTOR",
+        title: "Attributed",
+        creationDate: Math.floor(NOW.getTime() / 1000),
+      });
+    });
+    await connect([vector]);
+    const result = await client.callTool({ name: "add_todo", arguments: { title: "Attributed" } });
+    expect(result.isError ?? false).toBe(false);
+    // The in-process client connects as { name: "test-client" }; every write it
+    // makes is recorded under the sanitized handshake identity, not a bare "mcp".
+    const lines = readFileSync(join(stateDir, "audit", "2026-07.jsonl"), "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+    const records = lines.map((l) => JSON.parse(l) as AuditRecord);
+    const add = records.find((r) => r.op === "todo.add");
+    expect(add?.actor).toBe("mcp:test-client");
+  });
+
   it("add_todo dry_run plans without executing", async () => {
     const { vector, calls } = fakeVector(null);
     await connect([vector]);
@@ -1075,7 +1138,10 @@ describe("things MCP server", () => {
       writeFileSync(join(dir, "2026-07.jsonl"), full.map((r) => JSON.stringify(r)).join("\n"));
     }
 
-    it("defaults to by:'mcp' — skips a NEWER human record, reverses the mcp one", async () => {
+    it("defaults to this client's derived actor — skips a NEWER human record, reverses its own", async () => {
+      // The in-process test client connects as { name: "test-client" }, so its
+      // writes are attributed to "mcp:test-client" and the default `by` scopes
+      // undo to exactly that — never the human's edits, never a bare "mcp".
       const mcpTodo = seedTodo(fixture.db, { title: "Agent", status: "completed" });
       const humanTodo = seedTodo(fixture.db, { title: "Human" });
       seedAuditTrail([
@@ -1083,7 +1149,7 @@ describe("things MCP server", () => {
           ts: "2026-07-05T09:00:00Z",
           op: "todo.complete",
           uuid: mcpTodo,
-          actor: "mcp",
+          actor: "mcp:test-client",
           pre: { status: "open" },
         },
         { ts: "2026-07-05T09:30:00Z", op: "todo.add", uuid: humanTodo, actor: "mike" },
@@ -1101,7 +1167,7 @@ describe("things MCP server", () => {
       const items = textOf(result) as { plan: { target: { uuid: string; actor: string } } }[];
       expect(items).toHaveLength(1);
       expect(items[0]?.plan.target.uuid).toBe(mcpTodo);
-      expect(items[0]?.plan.target.actor).toBe("mcp");
+      expect(items[0]?.plan.target.actor).toBe("mcp:test-client");
     });
 
     it("by:'*' reaches the human record (newest wins)", async () => {
@@ -1127,6 +1193,32 @@ describe("things MCP server", () => {
       });
       expect(bad.isError).toBe(true);
       expect(JSON.stringify(bad)).toContain("txn cannot be combined");
+    });
+  });
+
+  describe("daemon-startup disruption ceiling", () => {
+    it("blocks a tier-gated op when the daemon was started without the flag", async () => {
+      const uuid = seedTodo(fixture.db, { title: "ceiling" });
+      await connect([tierVector("todo.update", 2)]);
+      const result = await client.callTool({
+        name: "update_todo",
+        arguments: { uuid, title: "renamed", dry_run: true },
+      });
+      expect(result.isError).toBe(true);
+      const error = textOf(result) as { code: string };
+      expect(error.code).toBe("blocked:disruption-tier");
+    });
+
+    it("permits the same op when the daemon was started with the ceiling raised", async () => {
+      const uuid = seedTodo(fixture.db, { title: "ceiling" });
+      await connect([tierVector("todo.update", 2)], { maxDisruption: 2 });
+      const result = await client.callTool({
+        name: "update_todo",
+        arguments: { uuid, title: "renamed", dry_run: true },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const outcome = textOf(result) as { kind: string };
+      expect(outcome.kind).toBe("dry-run");
     });
   });
 
@@ -1157,6 +1249,43 @@ describe("things MCP server", () => {
           expect(match, `"${name}" leaks "${match?.[0] ?? ""}" (${pattern})`).toBeNull();
         }
       }
+    });
+  });
+
+  describe("tool-argument casing", () => {
+    // The MCP surface convention is snake_case for every tool argument (CLI
+    // flags stay kebab-case; internal WriteOptions/BatchOp stay camelCase).
+    it("every tool argument is snake_case (no camelCase leaks)", async () => {
+      await connect([fakeVector(null).vector]);
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        for (const name of schemaArgNames(tool.inputSchema)) {
+          expect(name, `${tool.name}.${name} is not snake_case`).not.toMatch(/[a-z0-9][A-Z]/);
+        }
+      }
+    });
+
+    it("batch maps snake_case per-op acknowledgements into the engine option names", async () => {
+      // trash.empty is refused without the permanent-delete acknowledgement; the
+      // snake_case per-op option must reach the engine and lift that refusal.
+      // (trash.empty compiles only for the applescript vector.)
+      await connect([fakeVector(null, { id: "applescript", ops: ["trash.empty"] }).vector]);
+      const blocked = await client.callTool({
+        name: "batch",
+        arguments: { ops: [{ op: "trash.empty", params: {} }], dry_run: true },
+      });
+      const blockedResults = textOf(blocked) as { outcome: { kind: string } }[];
+      expect(blockedResults[0]?.outcome.kind).toBe("blocked");
+
+      const allowed = await client.callTool({
+        name: "batch",
+        arguments: {
+          ops: [{ op: "trash.empty", params: {}, options: { dangerously_permanent: true } }],
+          dry_run: true,
+        },
+      });
+      const allowedResults = textOf(allowed) as { outcome: { kind: string } }[];
+      expect(allowedResults[0]?.outcome.kind).toBe("dry-run");
     });
   });
 
