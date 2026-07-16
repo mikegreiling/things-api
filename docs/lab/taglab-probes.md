@@ -107,3 +107,46 @@ Our filter model (`src/read/queries.ts` `tagScopeSql`, 6 EXISTS clauses; `untagg
 - **MCP / JSON**: entities carry an additive `inheritedTags?` field (`entities.ts:70`); the detail tool description says tags "(direct and inherited)" (`mcp/server.ts:572`). The `--tag` / `untagged` **filters** honor the full direct+inherited+descendant membership (`tagScopeSql`/`untaggedScopeSql`/`tagWithDescendants`) even though list rows render only direct tags.
 
 `inheritedTagsFor` (`src/read/tags.ts:104`) walks task → heading's project → project → area, collecting each ancestor's direct tags and excluding the item's own — i.e. the same chain as the filter SQL. No rendering changes were made (out of scope).
+
+---
+
+## TAGINH2 — the two never-oracled inheritance axes, now GUI-oracled
+
+**Campaign date:** 2026-07-15. **Env:** one disposable clone `taginh2-lab` of `things-lab-golden-v1` (Things 3.22.11 / macOS 15.7.7 / DB v26), airgapped, clock-pinned 2026-07-15, SIP on, session unlocked. **NO Accessibility grant** — the oracle is VNC-framebuffer screenshots of the filtered list (a screen capture needs no TCC grant), so this was cheaper than the TAGINH1 AX path. Reproducible: [`lab/scripts/research-taginh2.sh`](../../lab/scripts/research-taginh2.sh) (`setup`/`probe-a`/`probe-b`/`shot`/`teardown`); report + screenshots under the gitignored `lab/artifacts/taginh2-lab/`. Torn down at completion; `uic6-lab` (concurrent campaign) and the golden untouched.
+
+**Filter driven by the URL scheme.** `things:///show?id=<list-or-uuid>&filter=<TagName>` genuinely applies the tag filter (verified by list-shrink), including in built-in lists — no coordinate-clicks needed for the tag filters. "No Tag" is not URL-addressable, so it was selected by a vncdo click on the overflow (`…`) → "No Tag" chip.
+
+### Headline: filter inheritance is CONTEXT-DEPENDENT — and our SQL models the right context
+
+The Things GUI applies project/area/heading tag-inheritance to child to-dos **in flat lists** (Today / Anytime / any built-in list or area scope) but **NOT in a project's own in-place filter bar** (§9a oddity). The library's `--tag` / `untagged` filters operate over flat lists and scopes — the flat-list context is the one our SQL claims to model. **In that context every axis MATCHES; there is NO divergence and NO SQL change.** The in-project-filter-bar behavior is the opposite (empty results under an inherited tag; "No Tag" *includes* the headed child) and is recorded as a Things quirk the model does not — and should not — claim.
+
+### (a) Tag-hierarchy descendant expansion (`tagWithDescendants`) — MATCH, both directions, both contexts
+
+Fixtures in area `T2HierArea`: `ZZ-ONLY-LOW` tagged ONLY the child tag `low`; `ZZ-ONLY-PRIO` tagged ONLY the parent tag `prio` (golden's `prio → low, high` triad, DB-confirmed). Bonus `LAB-TAGGED-BOTH` tagged `high`.
+
+| Direction | Context | Observed GUI (screenshot) | Our SQL | Verdict |
+|---|---|---|---|---|
+| filter by PARENT `prio`, item tagged only `low` | area `T2HierArea` | `ZZ-ONLY-LOW` **present** (`a1-ii`… ) | `tagWithDescendants(prio)`={prio,low,high} → match | ✅ |
+| filter by PARENT `prio` | built-in `Anytime` | `ZZ-ONLY-LOW` **present**, list shrank to the prio-family (`a1-i-prio.png`) | match | ✅ |
+| filter by CHILD `low`, item tagged only `prio` | area `T2HierArea` | `ZZ-ONLY-PRIO` **absent** — list shrank 2→1, only `ZZ-ONLY-LOW` (`a2-ii-low.png`) | {low} → no expansion up to parent → excluded | ✅ |
+| filter by CHILD `low` | built-in `Anytime` | `ZZ-ONLY-PRIO` **absent** (`a2-i-low.png`); `high`-tagged item also dropped | excluded | ✅ |
+
+Independent corroboration: `LAB-TAGGED-BOTH` (tag `high`) filters **IN** under `prio` and **OUT** under `low` — parent→descendant expansion is one-directional exactly as `tagWithDescendants` models. The descendant expansion, previously "documented-not-oracled" (the code comment in `tagWithDescendants` and the TAGINH1 ⚠ row), is now **GUI-oracled**.
+
+### (b) Heading-chain inheritance (`tagScopeSql` clauses 5/6 + `untaggedScopeSql`) — MATCH, flat context
+
+Fixtures: area `T2Area` (tag `T2AreaTag`) ▸ project `T2Proj` (tag `T2ProjTag`) ▸ heading `T2Heading` ▸ `ZZ-HEADED-CHILD` (`project=NULL, heading=T2Heading`, NO direct tag) — exactly the clause-5/6 DB shape (a headed child's project link lives on the heading, not `t.project`). Control `ZZ-DIRECT-CHILD` (`project=T2Proj, heading=NULL`). Both scheduled Today so the flat Today list enumerates them individually.
+
+| Clause | Probe | Observed GUI (screenshot) | Our SQL | Verdict |
+|---|---|---|---|---|
+| 5 (heading → its project's tag) | Today, `filter=T2ProjTag` | `ZZ-HEADED-CHILD` **present** (+ control) — carries the project tag through the heading (`b-today-01-projtag.png`) | clause 5 `h.uuid=t.heading` JOIN `h.project`'s TMTaskTag | ✅ |
+| 6 (heading → its project's area tag) | Today, `filter=T2AreaTag` | `ZZ-HEADED-CHILD` **present** (+ control) (`b-today-02-areatag.png`) | clause 6 `h → project → area`'s TMAreaTag | ✅ |
+| negation (`untaggedScopeSql`) | Today, "No Tag" | `ZZ-HEADED-CHILD` **excluded** (both ZZ excluded) — the app treats it as tagged-by-inheritance (`b-today-04-notag.png`) | six-clause NOT | ✅ |
+
+Clauses 5/6 — modeled "by construction" in TAGINH1 (the heading-nested distinction was DB-only there) — are now **GUI-oracled** in the flat-list context.
+
+### (c) The context divergence (Things quirk, NOT an SQL bug)
+
+In `T2Proj`'s OWN view, `filter=T2ProjTag` and `filter=T2AreaTag` each returned an **empty** list (neither child), and the in-project "No Tag" filter **included** `ZZ-HEADED-CHILD` — the exact opposite of the flat-list result above (evidence `b1-projtag.png`, `b2-areatag.png`, `b3-03-notag-filtered.png`). Taken alone those three DIVERGE from the SQL, but they reflect a GUI context (`project show`'s in-place filter bar) that `--tag`/`untagged` do not model. Recorded as oddity §9a. **No production change** — the library filters over flat lists/scopes, where every axis matches.
+
+**Verdict roll-up:** a1 ✅ ×2 · a2 ✅ ×2 · b1 ✅ · b2 ✅ · b3 ✅ — all MATCH the SQL model. Zero divergence in the modeled (flat-list) context; the in-project-filter-bar inconsistency is a newly documented Things quirk. Screenshots confirmed by hand (`b-today-01-projtag.png`, `b-today-04-notag.png`, `a2-ii-low.png` inspected directly).
