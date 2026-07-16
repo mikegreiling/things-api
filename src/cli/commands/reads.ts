@@ -58,24 +58,17 @@ import {
 } from "../tag-filters.ts";
 import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
 import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
-import {
-  AREA_PREVIEW_LIMIT,
-  PROJECT_PREVIEW_LIMIT,
-  truncateList,
-  truncateToday,
-  partitionSomedaySection,
-  previewSections,
-  previewSomedaySections,
-  type GroupedLimits,
-} from "../../read/truncation.ts";
+import type { GroupedLimits } from "../../read/sections.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
+  AREA_PREVIEW_LIMIT,
   GROUPED_ALL_DESC,
   LIMIT_DESC,
   PERIOD_SINCE,
   PERIOD_UNTIL,
   PROJECT_LIMIT_DESC,
+  PROJECT_PREVIEW_LIMIT,
 } from "../../surface-copy.ts";
 
 /**
@@ -165,12 +158,15 @@ export function registerReadCommands(program: Command): void {
           opts,
           "today",
           (c) => {
-            const full = c.read.today(filter);
-            const { data, truncation } = truncateToday(full, lim.limit);
+            const { view, full, truncation } = c.read.today({ ...filter, limit: lim.limit });
             // The renderer needs the PRE-cap view to keep This Evening honest
             // under truncation, so the lines are precomputed here; the global
             // footer (whole-view remainder) is still appended by the driver.
-            return { data, truncation, lines: renderToday(full, data, base, { eveningOnly }) };
+            return {
+              data: view,
+              truncation,
+              lines: renderToday(full, view, base, { eveningOnly }),
+            };
           },
           // Type-correct fallback for the TodayView payload; never reached
           // because `lines` is always precomputed above.
@@ -242,15 +238,13 @@ export function registerReadCommands(program: Command): void {
           opts,
           "inbox",
           (c) => {
-            const { data, truncation } = truncateList(
-              c.read.inbox({
-                ...tagFilterFields(opts),
-                ...(opts.overdue === true && { overdue: true }),
-                ...(since !== undefined && { since }),
-                ...(until !== undefined && { until }),
-              }),
-              effectiveLimit,
-            );
+            const { items: data, truncation } = c.read.inbox({
+              ...tagFilterFields(opts),
+              ...(opts.overdue === true && { overdue: true }),
+              ...(since !== undefined && { since }),
+              ...(until !== undefined && { until }),
+              limit: effectiveLimit,
+            });
             const lines = renderList(data);
             // Standard row-truncation hint (bigger --limit / --all), as every
             // flat view — handled here (not via the driver's hintBase) so the
@@ -355,9 +349,12 @@ export function registerReadCommands(program: Command): void {
           opts,
           "anytime",
           (c) => {
-            const full = c.read.anytime(filter);
-            const { data, grouped } = previewSections(full, limits);
-            return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
+            const { view, full, grouped } = c.read.anytime({
+              ...filter,
+              areaLimit: area.limit,
+              projectLimit: project.limit,
+            });
+            return { data: view, grouped, lines: renderAnytimePreview(full, limits, base) };
           },
           // Grouped views hand back precomputed `lines`; renderSections is the
           // type-correct fallback for the SidebarSection[] payload but is never
@@ -448,25 +445,31 @@ export function registerReadCommands(program: Command): void {
           opts,
           "someday",
           (c) => {
-            const full = c.read.someday({
+            const { view, full, grouped } = c.read.someday({
               ...filter,
               ...(showActive && { activeProjectItems: true }),
+              areaLimit: area.limit,
+              projectLimit: projectCap,
             });
             // Hidden-items-never-silent: when the toggle is off, one extra
-            // query counts what it would reveal so the hint can say so.
+            // query counts what it would reveal (someday to-dos inside active
+            // projects — the ones carrying a project/heading reference) so the
+            // hint can say so.
             const hiddenActiveItems = showActive
               ? 0
-              : c.read
-                  .someday({ ...filter, activeProjectItems: true })
-                  .reduce(
-                    (n, s) =>
-                      n +
-                      partitionSomedaySection(s).children.reduce((m, g) => m + g.items.length, 0),
-                    0,
-                  );
-            const { data, grouped } = previewSomedaySections(full, limits);
+              : c.read.someday({ ...filter, activeProjectItems: true }).full.reduce(
+                  (n, s) =>
+                    n +
+                    s.items.filter(
+                      // A child = a to-do carrying a project/heading ref (loose
+                      // null check: the ref field is undefined, not null, when
+                      // absent — matching partitionSomedaySection's `?? null`).
+                      (i) => i.type === "to-do" && (i.project ?? i.headingProject) != null,
+                    ).length,
+                  0,
+                );
             return {
-              data,
+              data: view,
               grouped,
               lines: renderSomedayPreview(full, limits, base, showActive, hiddenActiveItems),
             };
@@ -564,15 +567,13 @@ export function registerReadCommands(program: Command): void {
           opts,
           "upcoming",
           (c) => {
-            const { data, truncation } = truncateList(
-              c.read.upcoming({
-                ...(until !== undefined && { until }),
-                ...(since !== undefined && { since }),
-                ...tagFilterFields(opts),
-                ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
-              }),
-              effectiveLimit,
-            );
+            const { items: data, truncation } = c.read.upcoming({
+              ...(until !== undefined && { until }),
+              ...(since !== undefined && { since }),
+              ...tagFilterFields(opts),
+              ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
+              limit: effectiveLimit,
+            });
             const lines = renderUpcoming(data);
             if (defaultWindowActive && until !== undefined) {
               const windowLabel = shortDate(until, localToday());
@@ -688,18 +689,17 @@ export function registerReadCommands(program: Command): void {
         runRead(
           opts,
           "logbook",
-          (c) =>
-            truncateList(
-              c.read.logbook({
-                limit: null,
-                ...(opts.area !== undefined && { area: opts.area }),
-                ...(opts.project !== undefined && { project: opts.project }),
-                ...(since !== undefined && { since }),
-                ...(until !== undefined && { until }),
-                ...tagFilterFields(opts),
-              }),
-              effectiveLimit,
-            ),
+          (c) => {
+            const { items, truncation } = c.read.logbook({
+              ...(opts.area !== undefined && { area: opts.area }),
+              ...(opts.project !== undefined && { project: opts.project }),
+              ...(since !== undefined && { since }),
+              ...(until !== undefined && { until }),
+              ...tagFilterFields(opts),
+              limit: effectiveLimit,
+            });
+            return { data: items, truncation };
+          },
           (items: ListItem[]) => renderLogbook(items),
           base,
           "logbook",
@@ -720,7 +720,10 @@ export function registerReadCommands(program: Command): void {
       runRead(
         opts,
         "trash",
-        (c) => truncateList(c.read.trash({ limit: null }), lim.limit),
+        (c) => {
+          const { items, truncation } = c.read.trash({ limit: lim.limit });
+          return { data: items, truncation };
+        },
         renderList,
         invocation("trash", []),
         "trash",
@@ -976,7 +979,10 @@ export function registerReadCommands(program: Command): void {
       runRead(
         opts,
         "changes",
-        (c) => truncateList(c.read.changes({ since, limit: null }), lim.limit),
+        (c) => {
+          const { items, truncation } = c.read.changes({ since, limit: lim.limit });
+          return { data: items, truncation };
+        },
         (items) =>
           items.length === 0
             ? ["(no changes)"]
@@ -1054,21 +1060,20 @@ export function registerReadCommands(program: Command): void {
       runRead(
         opts,
         "search",
-        (c) =>
-          truncateList(
-            c.read.search(query, {
-              limit: null,
-              ...(opts["project"] !== undefined && { project: opts["project"] as string }),
-              ...(opts["area"] !== undefined && { area: opts["area"] as string }),
-              ...tagFilterFields(tagFlags),
-              ...(overdue && { overdue: true }),
-              ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
-              ...(opts["logged"] === true && { logged: true }),
-              ...(opts["trashed"] === true && { trashed: true }),
-              ...(all && { all: true }),
-            }),
-            lim.limit,
-          ),
+        (c) => {
+          const { items, truncation } = c.read.search(query, {
+            limit: lim.limit,
+            ...(opts["project"] !== undefined && { project: opts["project"] as string }),
+            ...(opts["area"] !== undefined && { area: opts["area"] as string }),
+            ...tagFilterFields(tagFlags),
+            ...(overdue && { overdue: true }),
+            ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
+            ...(opts["logged"] === true && { logged: true }),
+            ...(opts["trashed"] === true && { trashed: true }),
+            ...(all && { all: true }),
+          });
+          return { data: items, truncation };
+        },
         renderSearch,
         base,
       );

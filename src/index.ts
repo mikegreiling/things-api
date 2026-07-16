@@ -7,7 +7,17 @@
  */
 
 export { openThings } from "./client.ts";
-export type { OpenOptions, ThingsClient } from "./client.ts";
+export type {
+  BoundedAreaView,
+  BoundedList,
+  BoundedSectionsView,
+  BoundedTodayView,
+  GroupedBound,
+  ListBound,
+  OpenOptions,
+  ThingsClient,
+} from "./client.ts";
+export type { Truncation, GroupedTruncation, BlockCount } from "./contracts.ts";
 export { diagnose } from "./diagnose.ts";
 export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
 export { probeAutomation } from "./write/automation-probe.ts";

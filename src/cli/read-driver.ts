@@ -21,10 +21,8 @@ import {
   type GroupedTruncation,
   type Truncation,
 } from "../contracts.ts";
-import { resolveCap } from "../read/caps.ts";
-import { DEFAULT_LIST_LIMIT } from "../read/truncation.ts";
 import { omitEmpty } from "../model/serialize.ts";
-import { schemaWarnings } from "../surface-copy.ts";
+import { DEFAULT_LIST_LIMIT, schemaWarnings } from "../surface-copy.ts";
 
 export interface GlobalReadOpts {
   json?: boolean;
@@ -244,9 +242,9 @@ export function parseLimit(opts: {
 /**
  * Resolve one cap flag (`--limit`, `--area-limit`, `--project-limit`) against
  * `--all`: positive integer required, `--all` conflicts with an explicit
- * value and otherwise lifts the cap (null). The conflict/default decision is
- * the shared {@link resolveCap}; this surface adds the string→integer
- * validation and the usage-error emission.
+ * value and otherwise lifts the cap (null). This surface owns the string→integer
+ * validation and the usage-error emission; the client re-applies the same
+ * conflict/default semantics on the resolved value it receives.
  */
 export function parseCap(
   flag: string,
@@ -256,7 +254,10 @@ export function parseCap(
   json = false,
 ): LimitResolution {
   const n = value === undefined ? undefined : Number(value);
-  const decision = resolveCap(n, all, defaultLimit);
+  // Resolve --all/value into a cap: an explicit value beside --all is a
+  // conflict; --all alone lifts the cap (null); otherwise the value or default.
+  const decision: number | null | "conflict" =
+    all && n !== undefined ? "conflict" : all ? null : (n ?? defaultLimit);
   // Conflict takes precedence over value validation (an explicit value beside
   // --all is rejected before we scrutinize the value itself).
   if (decision === "conflict") {

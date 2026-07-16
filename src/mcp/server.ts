@@ -25,26 +25,17 @@ import {
   type Truncation,
 } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
-import {
-  AREA_PREVIEW_LIMIT,
-  DEFAULT_LIST_LIMIT,
-  PROJECT_PREVIEW_LIMIT,
-  capAreaSections,
-  truncateList,
-  truncateToday,
-  previewSections,
-  previewSomedaySections,
-  type GroupedLimits,
-} from "../read/truncation.ts";
-import { resolveCap } from "../read/caps.ts";
 import { noUuidMatch, ReferenceResolutionError } from "../read/queries.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
+  AREA_PREVIEW_LIMIT,
   DATE_FORMAT,
+  DEFAULT_LIST_LIMIT,
   LIMIT_DESC,
   OMIT_EMPTY_NOTE,
   PROJECT_LIMIT_DESC,
+  PROJECT_PREVIEW_LIMIT,
   REF_FORMAT,
   REMINDER_FORMAT,
   schemaWarnings,
@@ -129,6 +120,23 @@ function groupedResult(data: unknown, grouped: GroupedTruncation): ToolResult {
       { type: "text", text: JSON.stringify({ grouped, ...(note !== undefined && { note }) }) },
     ],
   };
+}
+
+/**
+ * Resolve one MCP cap (limit / area_limit / project_limit) against `all` into a
+ * row cap for the client: `null` = every row, `"conflict"` when an explicit
+ * value is combined with `all: true` (the tool returns a usage error), else the
+ * value or the default. The client re-applies the same semantics on what it
+ * receives; this copy owns the conflict detection the MCP surface reports.
+ */
+function resolveCap(
+  value: number | undefined,
+  all: boolean | undefined,
+  defaultLimit: number,
+): number | null | "conflict" {
+  if (all === true && value !== undefined) return "conflict";
+  if (all === true) return null;
+  return value ?? defaultLimit;
 }
 
 /** Resolve MCP limit/all (flat read tools) into a row cap (null = every row). */
@@ -603,62 +611,52 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         };
         switch (args.view) {
           case "today": {
-            const { data, truncation } = truncateToday(
-              c.read.today({ ...filter, ...(args.evening === true && { eveningOnly: true }) }),
+            const { view, truncation } = c.read.today({
+              ...filter,
+              ...(args.evening === true && { eveningOnly: true }),
               limit,
-            );
-            return truncatedResult(data, truncation);
+            });
+            return truncatedResult(view, truncation);
           }
           case "inbox": {
-            const { data, truncation } = truncateList(c.read.inbox(filter), limit);
-            return truncatedResult(data, truncation);
+            const { items, truncation } = c.read.inbox({ ...filter, limit });
+            return truncatedResult(items, truncation);
           }
           case "anytime": {
-            const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
-            const { data, grouped } = previewSections(c.read.anytime(filter), limits);
-            return groupedResult(data, grouped);
+            const { view, grouped } = c.read.anytime({ ...filter, areaLimit, projectLimit });
+            return groupedResult(view, grouped);
           }
           case "upcoming": {
-            const { data, truncation } = truncateList(
-              c.read.upcoming({
-                ...filter,
-                ...(args.horizon !== undefined && { horizon: args.horizon }),
-              }),
+            const { items, truncation } = c.read.upcoming({
+              ...filter,
+              ...(args.horizon !== undefined && { horizon: args.horizon }),
               limit,
-            );
-            return truncatedResult(data, truncation);
+            });
+            return truncatedResult(items, truncation);
           }
           case "someday": {
             const active = showActiveProjectItems;
             if (typeof active === "number" && args.all === true) {
               return usage("pass at most one of a numeric show_active_project_items / all");
             }
-            const limits: GroupedLimits = {
-              area: areaLimit,
-              // true = every item per project; a number caps each list.
-              project: typeof active === "number" ? active : null,
-            };
-            const { data, grouped } = previewSomedaySections(
-              c.read.someday({
-                ...filter,
-                ...((active === true || typeof active === "number") && {
-                  activeProjectItems: true,
-                }),
+            const { view, grouped } = c.read.someday({
+              ...filter,
+              ...((active === true || typeof active === "number") && {
+                activeProjectItems: true,
               }),
-              limits,
-            );
-            return groupedResult(data, grouped);
+              areaLimit,
+              // true = every item per project; a number caps each list.
+              projectLimit: typeof active === "number" ? active : null,
+            });
+            return groupedResult(view, grouped);
           }
           case "logbook": {
-            const { data, truncation } = truncateList(
-              c.read.logbook({ ...filter, limit: null }),
-              limit,
-            );
-            return truncatedResult(data, truncation);
+            const { items, truncation } = c.read.logbook({ ...filter, limit });
+            return truncatedResult(items, truncation);
           }
           case "trash": {
-            const { data, truncation } = truncateList(c.read.trash({ limit: null }), limit);
-            return truncatedResult(data, truncation);
+            const { items, truncation } = c.read.trash({ limit });
+            return truncatedResult(items, truncation);
           }
         }
       }),
@@ -706,21 +704,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
-        const { data, truncation } = truncateList(
-          getClient().read.search(args.query, {
-            limit: null,
-            ...tagFilterFromArgs(args),
-            ...(args.overdue === true && { overdue: true }),
-            ...(args.project !== undefined && { project: args.project }),
-            ...(args.area !== undefined && { area: args.area }),
-            ...(args.type !== undefined && { type: args.type }),
-            ...(args.logged === true && { logged: true }),
-            ...(args.trashed === true && { trashed: true }),
-            ...(args.all === true && { all: true }),
-          }),
+        const { items, truncation } = getClient().read.search(args.query, {
           limit,
-        );
-        return truncatedResult(data, truncation);
+          ...tagFilterFromArgs(args),
+          ...(args.overdue === true && { overdue: true }),
+          ...(args.project !== undefined && { project: args.project }),
+          ...(args.area !== undefined && { area: args.area }),
+          ...(args.type !== undefined && { type: args.type }),
+          ...(args.logged === true && { logged: true }),
+          ...(args.trashed === true && { trashed: true }),
+          ...(args.all === true && { all: true }),
+        });
+        return truncatedResult(items, truncation);
       }),
   );
 
@@ -746,11 +741,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (Number.isNaN(since.getTime())) {
           return usage(`since is not a parseable date: ${args.since}`);
         }
-        const { data, truncation } = truncateList(
-          getClient().read.changes({ since, limit: null }),
-          limit,
-        );
-        return truncatedResult(data, truncation);
+        const { items, truncation } = getClient().read.changes({ since, limit });
+        return truncatedResult(items, truncation);
       }),
   );
 
@@ -851,15 +843,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (areaLimit === "conflict" || projectLimit === "conflict") {
           return usage("pass at most one of area_limit/project_limit / all");
         }
-        const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
-        const { data, grouped } = capAreaSections(
-          getClient().read.areaView(args.ref, {
-            overdue: args.overdue === true,
-            ...tagFilterFromArgs(args),
-          }),
-          limits,
-        );
-        return groupedResult(data, grouped);
+        const { view, grouped } = getClient().read.areaView(args.ref, {
+          overdue: args.overdue === true,
+          ...tagFilterFromArgs(args),
+          areaLimit,
+          projectLimit,
+        });
+        return groupedResult(view, grouped);
       }),
   );
 

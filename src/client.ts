@@ -5,7 +5,7 @@
 import type { AuditWriter } from "./audit/log.ts";
 import { createAuditWriter } from "./audit/log.ts";
 import { loadConfig, type ThingsApiConfig } from "./config.ts";
-import { PKG_VERSION } from "./contracts.ts";
+import { PKG_VERSION, type GroupedTruncation, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import {
@@ -51,6 +51,16 @@ import {
   type UpcomingFilter,
   type ViewFilter,
 } from "./read/views.ts";
+import {
+  capAreaSections,
+  previewSections,
+  previewSomedaySections,
+  truncateList,
+  truncateToday,
+} from "./read/truncation.ts";
+import type { GroupedLimits } from "./read/sections.ts";
+import { resolveCap } from "./read/caps.ts";
+import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "./surface-copy.ts";
 import type {
   AreaAddParams,
   AreaUpdateParams,
@@ -128,6 +138,87 @@ export interface OpenOptions {
   };
 }
 
+/**
+ * Row cap for a bounded FLAT view (inbox/today/upcoming/logbook/trash/search/
+ * changes). Resolution follows resolveCap: omitted → the 50-row default,
+ * an explicit number caps at it, `null` or `all: true` returns every row.
+ */
+export interface ListBound {
+  limit?: number | null;
+  all?: boolean;
+}
+
+/**
+ * Per-block caps for a bounded GROUPED view (anytime/someday) or the composite
+ * area card. Each omitted cap falls back to the view's own default (anytime:
+ * 30 per area, 3 per project; someday: 30 per area, every active-project item;
+ * area card: 30 per section); `null` on a cap, or `all: true`, lifts it.
+ */
+export interface GroupedBound {
+  areaLimit?: number | null;
+  projectLimit?: number | null;
+  all?: boolean;
+}
+
+/** A bounded flat view: the shown rows plus the exact truncation counts. */
+export interface BoundedList<T> {
+  items: T[];
+  truncation: Truncation;
+}
+
+/**
+ * A bounded Today view: `view` is the shown split (capped in render order —
+ * Today, then This Evening), `full` the pre-cap split (renderers annotate the
+ * hidden remainder from it), and `truncation` the exact counts.
+ */
+export interface BoundedTodayView {
+  view: TodayView;
+  full: TodayView;
+  truncation: Truncation;
+}
+
+/**
+ * A bounded sidebar catalogue (anytime/someday): `view` is the
+ * per-block-capped sections, `full` the pre-cap sections, `grouped` the
+ * per-block counts.
+ */
+export interface BoundedSectionsView {
+  view: SidebarSection[];
+  full: SidebarSection[];
+  grouped: GroupedTruncation;
+}
+
+/** A bounded composite area card: the per-section-capped view, the pre-cap view, and the per-block counts. */
+export interface BoundedAreaView {
+  view: AreaView;
+  full: AreaView;
+  grouped: GroupedTruncation;
+}
+
+/** Resolve a flat-view row cap (omitted → default 50; null or all → unbounded). */
+function listCap(bound: ListBound | undefined): number | null {
+  if (bound?.limit === null) return null;
+  const decision = resolveCap(bound?.limit, bound?.all, DEFAULT_LIST_LIMIT);
+  return decision === "conflict" ? null : decision;
+}
+
+/** Resolve per-block caps (each omitted → its view default; null on a cap, or all, lifts it). */
+function groupedCaps(
+  bound: GroupedBound | undefined,
+  areaDefault: number,
+  projectDefault: number | null,
+): GroupedLimits {
+  const one = (value: number | null | undefined, dflt: number | null): number | null => {
+    if (bound?.all === true) return null;
+    if (value === null) return null;
+    return value ?? dflt;
+  };
+  return {
+    area: one(bound?.areaLimit, areaDefault),
+    project: one(bound?.projectLimit, projectDefault),
+  };
+}
+
 export interface ThingsClient {
   dbPath: string;
   config: ThingsApiConfig;
@@ -140,13 +231,33 @@ export interface ThingsClient {
    */
   schemaStatus(): SchemaStatus;
   read: {
-    today(filter?: TodayFilter): TodayView;
-    inbox(filter?: InboxFilter): ListItem[];
-    anytime(filter?: ViewFilter): SidebarSection[];
-    upcoming(filter?: UpcomingFilter): ListItem[];
-    someday(filter?: SomedayFilter): SidebarSection[];
-    logbook(options?: LogbookFilter): ListItem[];
-    trash(options?: { limit?: number | null }): ListItem[];
+    /**
+     * The Today list (Today + This Evening split) with the sidebar badge,
+     * bounded to `limit` rows (default 50) counted in render order — Today
+     * first, then This Evening. `all`/`limit: null` returns every row; `full`
+     * carries the pre-cap split.
+     */
+    today(options?: TodayFilter & ListBound): BoundedTodayView;
+    /** Inbox captures, bounded (default 50). */
+    inbox(options?: InboxFilter & ListBound): BoundedList<ListItem>;
+    /**
+     * Anytime catalogue: every area header and project row is always present;
+     * `areaLimit` (default 30) caps each area/loose block, `projectLimit`
+     * (default 3) each project block. `all` lifts both.
+     */
+    anytime(options?: ViewFilter & GroupedBound): BoundedSectionsView;
+    /** Future-scheduled items in date order, bounded (default 50). */
+    upcoming(options?: UpcomingFilter & ListBound): BoundedList<ListItem>;
+    /**
+     * Someday catalogue: `areaLimit` (default 30) caps each group; with
+     * `activeProjectItems`, `projectLimit` (default: every item) caps each
+     * active project's trailing child list. `all` lifts both.
+     */
+    someday(options?: SomedayFilter & GroupedBound): BoundedSectionsView;
+    /** Logbook entries (most recent first), bounded (default 50). */
+    logbook(options?: Omit<LogbookFilter, "limit"> & ListBound): BoundedList<ListItem>;
+    /** Trashed items (most recently modified first), bounded (default 50). */
+    trash(options?: ListBound): BoundedList<ListItem>;
     /**
      * Projects in sidebar order. LATER (someday + future-scheduled) projects
      * are excluded by default — `later: true` appends them after the active
@@ -168,12 +279,16 @@ export interface ThingsClient {
      * Composite area view: direct to-dos, projects in sidebar order, later,
      * logged. `overdue: true` keeps only the loose to-dos AND child projects
      * whose OWN deadline is overdue; the tag filters keep only the rows
-     * matching by their own tags — no descent into project contents.
+     * matching by their own tags — no descent into project contents. Bounded
+     * per section: `projectLimit`/`areaLimit` (default 30 each) cap the
+     * project-rows and direct-to-dos sections; `all` lifts both. `full` carries
+     * the pre-cap view.
      */
-    areaView(ref: string, options?: ViewFilter): AreaView;
+    areaView(ref: string, options?: ViewFilter & GroupedBound): BoundedAreaView;
     areas(): Area[];
     tags(): Tag[];
-    search(query: string, options?: SearchOptions): SearchResultItem[];
+    /** Title/notes substring search, ranked, bounded (default 50). */
+    search(query: string, options?: SearchOptions): BoundedList<SearchResultItem>;
     /**
      * Did-you-mean fallback: case-insensitive title-only substring match over
      * areas/projects/to-dos (open + untrashed), ordered and capped. `type`
@@ -183,8 +298,8 @@ export interface ThingsClient {
       query: string,
       options?: { type?: "to-do" | "project" | "area"; limit?: number },
     ): LiteSearchResult;
-    /** Rows created/modified since a moment — incl. trashed/logged/templates. */
-    changes(options: { since: Date; limit?: number | null }): ChangedItem[];
+    /** Rows created/modified since a moment — incl. trashed/logged/templates — bounded (default 50). */
+    changes(options: { since: Date } & ListBound): BoundedList<ChangedItem>;
     byUuid(uuid: string): AnyTask | null;
     /**
      * Classify a loose reference (uuid, >=6-char prefix, share link, or
@@ -482,24 +597,87 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     fingerprint,
     schemaStatus: () => toSchemaStatus(fingerprint()),
     read: {
-      today: (f) => todayView(conn.db, now(), f),
-      inbox: (f) => inboxView(conn.db, now(), f),
-      anytime: (f) => anytimeView(conn.db, now(), f),
-      upcoming: (f) => upcomingView(conn.db, now(), f),
-      someday: (f) => somedayView(conn.db, now(), f),
-      logbook: (o) => logbookView(conn.db, now(), o),
-      trash: (o) => trashView(conn.db, now(), o),
+      // The list views own their bounding: run the full filtered query, then
+      // truncate to the resolved cap (default 50 / per-block 30·3) — the exact
+      // move the CLI/MCP surfaces used to make. `full` rides along for the human
+      // renderers that annotate the hidden remainder.
+      today: (o) => {
+        const full = todayView(conn.db, now(), o);
+        const { data, truncation } = truncateToday(full, listCap(o));
+        return { view: data, full, truncation };
+      },
+      inbox: (o) => {
+        const { data, truncation } = truncateList(inboxView(conn.db, now(), o), listCap(o));
+        return { items: data, truncation };
+      },
+      anytime: (o) => {
+        const full = anytimeView(conn.db, now(), o);
+        const { data, grouped } = previewSections(
+          full,
+          groupedCaps(o, AREA_PREVIEW_LIMIT, PROJECT_PREVIEW_LIMIT),
+        );
+        return { view: data, full, grouped };
+      },
+      upcoming: (o) => {
+        const { data, truncation } = truncateList(upcomingView(conn.db, now(), o), listCap(o));
+        return { items: data, truncation };
+      },
+      someday: (o) => {
+        const full = somedayView(conn.db, now(), o);
+        const { data, grouped } = previewSomedaySections(
+          full,
+          groupedCaps(o, AREA_PREVIEW_LIMIT, null),
+        );
+        return { view: data, full, grouped };
+      },
+      logbook: (o) => {
+        // The bound is the truncation cap; the underlying query stays unbounded
+        // (limit: null) so the exact total behind the cut is honest.
+        const { limit: _limit, all: _all, ...filter } = o ?? {};
+        const { data, truncation } = truncateList(
+          logbookView(conn.db, now(), { ...filter, limit: null }),
+          listCap(o),
+        );
+        return { items: data, truncation };
+      },
+      trash: (o) => {
+        const { data, truncation } = truncateList(
+          trashView(conn.db, now(), { limit: null }),
+          listCap(o),
+        );
+        return { items: data, truncation };
+      },
       // Thread the injected clock so `--overdue`'s (and later's) today boundary
       // rides the same clock as every other view — never a hardcoded date.
       projects: (o) => projectsView(conn.db, { ...o, now: now() }),
       projectView: (ref, o) =>
         projectView(conn.db, resolveProjectUuid(conn.db, ref, { trashed: true }), now(), o ?? {}),
-      areaView: (ref, o) => areaView(conn.db, ref, now(), o ?? {}),
+      areaView: (ref, o) => {
+        const full = areaView(conn.db, ref, now(), o ?? {});
+        const { data, grouped } = capAreaSections(
+          full,
+          groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
+        );
+        return { view: data, full, grouped };
+      },
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
-      search: (query, o) => searchView(conn.db, query, o, now()),
+      search: (query, o) => {
+        const { limit: _limit, ...rest } = o ?? {};
+        const { data, truncation } = truncateList(
+          searchView(conn.db, query, { ...rest, limit: null }, now()),
+          listCap(o),
+        );
+        return { items: data, truncation };
+      },
       liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o, now()),
-      changes: (o) => changesView(conn.db, now(), o),
+      changes: (o) => {
+        const { data, truncation } = truncateList(
+          changesView(conn.db, now(), { since: o.since, limit: null }),
+          listCap(o),
+        );
+        return { items: data, truncation };
+      },
       showTarget: (ref) => classifyShowTarget(conn.db, ref),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
