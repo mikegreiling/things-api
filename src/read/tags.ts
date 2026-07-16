@@ -55,10 +55,11 @@ export function tagsView(db: DatabaseSync): Tag[] {
     seen.add(row.uuid);
     const parentRow = row.parent ? byUuid.get(row.parent) : undefined;
     out.push({
-      uuid: row.uuid,
       title: row.title ?? "",
       shortcut: row.shortcut,
-      parent: parentRow ? { uuid: parentRow.uuid, title: parentRow.title ?? "" } : null,
+      // Parent tag's NAME (null for a root) — the tree is reconstructable from
+      // names alone; tag uuids are never surfaced.
+      parent: parentRow ? (parentRow.title ?? "") : null,
     });
     for (const child of childrenOf.get(row.uuid) ?? []) visit(child);
   };
@@ -85,7 +86,8 @@ export function areasView(db: DatabaseSync): Area[] {
     uuid: row.uuid,
     title: row.title ?? "",
     visible: row.visible !== 0,
-    tags: areaTags(db, row.uuid),
+    // Surface area tags by NAME only (tag uuids are internal).
+    tags: areaTags(db, row.uuid).map((t) => ({ title: t.title })),
   }));
 }
 
@@ -118,10 +120,11 @@ export function areaTags(db: DatabaseSync, areaUuid: string): Ref[] {
  * pill row uses (fetchTagsForTasks), applied across the project+area union.
  */
 export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): InheritedTag[] {
-  const collected = new Map<string, InheritedTag>();
+  // Work with uuid-carrying rows INTERNALLY (dedup + canonical ranking need the
+  // uuid); the surfaced InheritedTag carries the tag NAME only.
+  const collected = new Map<string, { ref: Ref; source: InheritedTag["source"] }>();
   const addAll = (refs: Ref[], source: InheritedTag["source"]) => {
-    for (const ref of refs)
-      if (!collected.has(ref.uuid)) collected.set(ref.uuid, { tag: ref, source });
+    for (const ref of refs) if (!collected.has(ref.uuid)) collected.set(ref.uuid, { ref, source });
   };
 
   let projectUuid = row.project;
@@ -151,13 +154,13 @@ export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): InheritedTag[]
   const direct = new Set(
     (fetchTagsForTasks(db, [row.uuid]).get(row.uuid) ?? []).map((t) => t.uuid),
   );
-  const result = [...collected.values()].filter((i) => !direct.has(i.tag.uuid));
+  const result = [...collected.values()].filter((i) => !direct.has(i.ref.uuid));
   if (result.length > 1) {
     // Re-rank the project+area union in one canonical `index, uuid` pass so the
     // merged inherited chips match the GUI's tag order (the per-source lists
     // arrive already ordered, but their concatenation is not globally sorted).
     const rank = new Map<string, number>();
-    const uuids = result.map((i) => i.tag.uuid);
+    const uuids = result.map((i) => i.ref.uuid);
     const rows = db
       .prepare(
         `SELECT uuid FROM TMTag WHERE uuid IN (${uuids.map(() => "?").join(", ")})
@@ -165,7 +168,8 @@ export function inheritedTagsFor(db: DatabaseSync, row: TaskRow): InheritedTag[]
       )
       .all(...uuids) as { uuid: string }[];
     rows.forEach((r, i) => rank.set(r.uuid, i));
-    result.sort((a, b) => (rank.get(a.tag.uuid) ?? 0) - (rank.get(b.tag.uuid) ?? 0));
+    result.sort((a, b) => (rank.get(a.ref.uuid) ?? 0) - (rank.get(b.ref.uuid) ?? 0));
   }
-  return result;
+  // Surface the tag NAME only (uuid stays internal).
+  return result.map((i) => ({ tag: { title: i.ref.title }, source: i.source }));
 }

@@ -17,6 +17,17 @@ export interface Ref {
 }
 
 /**
+ * A surfaced tag: its NAME only. Tag uuids are a fully internal implementation
+ * detail (like checklist item ids) — names are app-enforced-unique (TAGW1-c),
+ * so a name is a sufficient reference, and no surface emits or accepts a tag
+ * uuid. Nested-tag context, where it matters, is conveyed by the tag listing's
+ * `parent` field, not here on the pill.
+ */
+export interface TagRef {
+  title: string;
+}
+
+/**
  * A tag inherited from an ancestor container, carrying its provenance. Sources
  * are ONLY `project` or `area` — a heading cannot be tagged (TAGINH1, verified
  * in a VM), so it is never a source. The nearest ancestor wins when a tag sits
@@ -24,7 +35,7 @@ export interface Ref {
  * container the tag is DIRECTLY assigned to.
  */
 export interface InheritedTag {
-  tag: Ref;
+  tag: TagRef;
   source: { type: "project" | "area"; uuid: string; title: string };
 }
 
@@ -76,8 +87,8 @@ interface TaskCommon {
   /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
   reminder: ReminderTime | null;
   area: Ref | null;
-  /** Direct tags only — mirrors DB truth (inherited tags are computed; see inheritedTags). */
-  tags: Ref[];
+  /** Direct tags only, by name — mirrors DB truth (inherited tags are computed; see inheritedTags). */
+  tags: TagRef[];
   /**
    * Tags inherited from an ancestor project/area, each with its provenance
    * (native UI tag filtering includes these — T18). Populated on the
@@ -129,14 +140,21 @@ export interface Area {
   uuid: string;
   title: string;
   visible: boolean;
-  tags: Ref[];
+  tags: TagRef[];
 }
 
+/**
+ * A tag in the `things tags` taxonomy listing. Uuid-free (an internal detail):
+ * the tree is conveyed by `parent` — the parent tag's NAME (null for a root) —
+ * so a consumer can reconstruct the hierarchy, and by indentation in the human
+ * render. Names are globally unique (TAGW1-c), so the leaf name alone is a
+ * usable tag reference.
+ */
 export interface Tag {
-  uuid: string;
   title: string;
   shortcut: string | null;
-  parent: Ref | null;
+  /** Parent tag's NAME, or null for a root tag. */
+  parent: string | null;
 }
 
 /**

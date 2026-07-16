@@ -28,6 +28,8 @@ import type { UndoItemResult } from "../../write/undo.ts";
 import type { VectorId } from "../../write/vectors/types.ts";
 
 import { errorEnvelope, ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
+import { ReferenceResolutionError } from "../../read/queries.ts";
+import { usageError } from "../read-driver.ts";
 
 interface WriteFlagOpts {
   json?: boolean;
@@ -135,11 +137,10 @@ function applyWhenSugar(opts: Record<string, unknown>): string | null {
 }
 
 /** Apply the sugar or print the usage error; false = caller returns. */
-function whenSugarOk(opts: Record<string, unknown>): boolean {
+function whenSugarOk(opts: Record<string, unknown> & { json?: boolean }): boolean {
   const err = applyWhenSugar(opts);
   if (err === null) return true;
-  process.stderr.write(`error: ${err}\n`);
-  process.exitCode = ExitCode.Usage;
+  usageError(opts, err);
   return false;
 }
 
@@ -173,6 +174,29 @@ async function runWrite(
     const result = await fn(client);
     emitResult(result, opts, meta(client));
   } catch (err) {
+    // An unresolved write target (uuid/partial-uuid/name that is ambiguous or
+    // not-found) is a usage-class failure carrying machine-readable candidates
+    // — never the generic `unexpected`.
+    if (err instanceof ReferenceResolutionError) {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: err.code,
+                message: err.message,
+                details: { candidates: err.candidates },
+              },
+              meta(client),
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(`error: ${err.message}\n`);
+      }
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;
     const message = err instanceof Error ? err.message : String(err);
     if (opts.json) {
@@ -347,7 +371,7 @@ export function registerWriteCommands(program: Command): void {
         .description(
           "Create a to-do; its uuid is printed on success. Projects, areas, and headings " +
             "must name existing items — unknown or ambiguous references are rejected. A tag " +
-            "may be a name, a uuid, or a parent/child path, and must exist unless " +
+            "may be a name or a parent/child path, and must exist unless " +
             "--create-tags. Adding into a completed/canceled project reopens that project — " +
             "requires --acknowledge-project-reopen.",
         )
@@ -360,7 +384,7 @@ export function registerWriteCommands(program: Command): void {
         .option("--deadline <date>", "YYYY-MM-DD")
         .option(
           "--tags <list>",
-          "comma-separated tags; each a name, a uuid, or a parent/child path (must exist unless --create-tags)",
+          "comma-separated tags; each a name or a parent/child path (must exist unless --create-tags)",
         )
         .option("--checklist-item <text>", "checklist item (repeatable)", collect, [])
         .option("--project <ref>", "destination project (uuid or unique name)")
@@ -424,13 +448,11 @@ export function registerWriteCommands(program: Command): void {
       (k) => opts[k] !== undefined,
     );
     if (notesModes.length > 1) {
-      process.stderr.write("error: --notes, --append-notes, --prepend-notes are exclusive\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
       return;
     }
     if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
-      process.stderr.write("error: pass at most one of --reminder / --clear-reminder\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass at most one of --reminder / --clear-reminder");
       return;
     }
     if (!whenSugarOk(opts)) return;
@@ -493,10 +515,10 @@ export function registerWriteCommands(program: Command): void {
     const detach = opts["detach"] === true;
     const dest = project !== undefined || area !== undefined || opts["heading"] !== undefined;
     if ((inbox && (dest || detach)) || (detach && dest)) {
-      process.stderr.write(
-        "error: --inbox/--detach are exclusive with each other and with --project/--area/--heading\n",
+      usageError(
+        opts,
+        "--inbox/--detach are exclusive with each other and with --project/--area/--heading",
       );
-      process.exitCode = ExitCode.Usage;
       return;
     }
     await runWrite(opts, (c) =>
@@ -536,8 +558,8 @@ export function registerWriteCommands(program: Command): void {
         .command("tags <uuid>")
         .description(
           "Set or extend a to-do's tags. --set REPLACES the full tag set (an empty value " +
-            "clears all tags); --add merges with the current tags. Each tag may be a name, a " +
-            "uuid, or a parent/child path, and must exist unless --create-tags.",
+            "clears all tags); --add merges with the current tags. Each tag may be a name " +
+            "or a parent/child path, and must exist unless --create-tags.",
         )
         .option("--set <list>", "comma-separated tags: full replacement")
         .option("--add <list>", "comma-separated tags: merge with existing"),
@@ -546,8 +568,7 @@ export function registerWriteCommands(program: Command): void {
     const set = splitCsv(opts["set"] as string | undefined);
     const add = splitCsv(opts["add"] as string | undefined);
     if ((set === undefined) === (add === undefined)) {
-      process.stderr.write("error: pass exactly one of --set or --add\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass exactly one of --set or --add");
       return;
     }
     await runWrite(opts, (c) =>
@@ -593,25 +614,21 @@ export function registerWriteCommands(program: Command): void {
       (k) => opts[k] !== undefined,
     );
     if (granular.length > 1) {
-      process.stderr.write("error: pass at most ONE granular checklist action per call\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass at most ONE granular checklist action per call");
       return;
     }
     const action = granular[0];
     if (action !== undefined) {
       if ((opts["item"] as string[]).length > 0) {
-        process.stderr.write("error: --item (wholesale) is exclusive with granular actions\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "--item (wholesale) is exclusive with granular actions");
         return;
       }
       if (action === "rename" && opts["to"] === undefined) {
-        process.stderr.write("error: --rename requires --to <title>\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "--rename requires --to <title>");
         return;
       }
       if (action === "moveItem" && opts["toPosition"] === undefined) {
-        process.stderr.write("error: --move-item requires --to-position <n>\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "--move-item requires --to-position <n>");
         return;
       }
       // Target: --index (1-based) OR the action flag's title value. When a
@@ -621,8 +638,7 @@ export function registerWriteCommands(program: Command): void {
           ? { index: Number(opts["index"]) }
           : { item: flagVal(opts[action]) ?? "" };
       if (action !== "add" && opts["index"] === undefined && target.item === "") {
-        process.stderr.write(`error: --${action} needs a title, or use --index <n>\n`);
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, `--${action} needs a title, or use --index <n>`);
         return;
       }
       const edit =
@@ -1091,13 +1107,11 @@ export function registerWriteCommands(program: Command): void {
         (k) => opts[k] !== undefined,
       );
       if (notesModes.length > 1) {
-        process.stderr.write("error: --notes, --append-notes, --prepend-notes are exclusive\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "--notes, --append-notes, --prepend-notes are exclusive");
         return;
       }
       if (opts["reminder"] !== undefined && opts["clearReminder"] === true) {
-        process.stderr.write("error: pass at most one of --reminder / --clear-reminder\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "pass at most one of --reminder / --clear-reminder");
         return;
       }
       if (!whenSugarOk(opts)) return;
@@ -1131,7 +1145,7 @@ export function registerWriteCommands(program: Command): void {
         .description(
           "Set or extend a project's tags (target by uuid or unique name). --set REPLACES the " +
             "full tag set (an empty value clears all tags); --add merges with the current tags. " +
-            "Each tag may be a name, a uuid, or a parent/child path, and must exist unless " +
+            "Each tag may be a name or a parent/child path, and must exist unless " +
             "--create-tags.",
         )
         .option("--set <list>", "comma-separated tags: full replacement")
@@ -1141,8 +1155,7 @@ export function registerWriteCommands(program: Command): void {
     const set = splitCsv(opts["set"] as string | undefined);
     const add = splitCsv(opts["add"] as string | undefined);
     if ((set === undefined) === (add === undefined)) {
-      process.stderr.write("error: pass exactly one of --set or --add\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass exactly one of --set or --add");
       return;
     }
     await runWrite(opts, (c) =>
@@ -1164,8 +1177,7 @@ export function registerWriteCommands(program: Command): void {
       .option("--detach", "remove the current area assignment (exclusive with --area)"),
   ).action(async (uuid: string, opts: WriteFlagOpts & { area?: string; detach?: boolean }) => {
     if ((opts.detach === true) === (opts.area !== undefined)) {
-      process.stderr.write("error: pass exactly one of --area / --detach\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass exactly one of --area / --detach");
       return;
     }
     await runWrite(opts, (c) =>
@@ -1319,12 +1331,12 @@ export function registerWriteCommands(program: Command): void {
       area
         .command("add <title>")
         .description(
-          "Create an area, optionally tagged. Each tag may be a name, a uuid, or a " +
+          "Create an area, optionally tagged. Each tag may be a name or a " +
             "parent/child path, and must exist unless --create-tags.",
         )
         .option(
           "--tags <list>",
-          "comma-separated tags; each a name, a uuid, or a parent/child path (must exist unless --create-tags)",
+          "comma-separated tags; each a name or a parent/child path (must exist unless --create-tags)",
         ),
     ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -1341,21 +1353,20 @@ export function registerWriteCommands(program: Command): void {
       area
         .command("update <ref>")
         .description(
-          "Rename an area and/or replace its tags (the full set). Each tag may be a name, a " +
-            "uuid, or a parent/child path, and must exist unless --create-tags. Target by " +
+          "Rename an area and/or replace its tags (the full set). Each tag may be a name " +
+            "or a parent/child path, and must exist unless --create-tags. Target by " +
             "uuid or unique name.",
         )
         .option("--title <text>", "new name")
         .option(
           "--tags <list>",
-          'comma-separated tags (full replacement; "" clears all); each a name, a uuid, or a parent/child path',
+          'comma-separated tags (full replacement; "" clears all); each a name or a parent/child path',
         ),
     ),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const tags = splitCsv(opts["tags"] as string | undefined);
     if (opts["title"] === undefined && tags === undefined) {
-      process.stderr.write("error: pass --title and/or --tags\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass --title and/or --tags");
       return;
     }
     await runWrite(opts, (c) =>
@@ -1394,8 +1405,7 @@ export function registerWriteCommands(program: Command): void {
       opts["last"] === true,
     ].filter(Boolean).length;
     if (chosen !== 1) {
-      process.stderr.write("error: pass exactly one of --before / --after / --first / --last\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass exactly one of --before / --after / --first / --last");
       return;
     }
     await runWrite(opts, (c) =>
@@ -1470,20 +1480,15 @@ export function registerWriteCommands(program: Command): void {
       opts["shortcut"] === undefined &&
       opts["clearShortcut"] === undefined
     ) {
-      process.stderr.write(
-        "error: pass --title, --parent, --unnest, --shortcut, and/or --clear-shortcut\n",
-      );
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "pass --title, --parent, --unnest, --shortcut, and/or --clear-shortcut");
       return;
     }
     if (opts["parent"] !== undefined && opts["unnest"] === true) {
-      process.stderr.write("error: --parent and --unnest are exclusive\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "--parent and --unnest are exclusive");
       return;
     }
     if (opts["shortcut"] !== undefined && opts["clearShortcut"] === true) {
-      process.stderr.write("error: --shortcut and --clear-shortcut are exclusive\n");
-      process.exitCode = ExitCode.Usage;
+      usageError(opts, "--shortcut and --clear-shortcut are exclusive");
       return;
     }
     await runWrite(opts, (c) =>
@@ -1680,8 +1685,7 @@ export function registerWriteCommands(program: Command): void {
       // --txn selects one exact record; --last/--by select a set. Mixing them
       // is a usage error (house style).
       if (opts["txn"] !== undefined && (opts["last"] !== undefined || opts["by"] !== undefined)) {
-        process.stderr.write("error: --txn cannot be combined with --last or --by\n");
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, "--txn cannot be combined with --last or --by");
         return;
       }
       let client: ThingsClient | null = null;
@@ -1720,15 +1724,18 @@ export function registerWriteCommands(program: Command): void {
               ? ExitCode.Usage
               : ExitCode.Ok;
         if (items.length === 0) {
-          const scope = opts["by"] !== undefined ? ` for actor ${String(opts["by"])}` : "";
-          process.stderr.write(`error: no undoable mutations found in the audit trail${scope}\n`);
+          // The JSONL summary line (targets: 0) already conveys this as data on
+          // stdout; the prose note is a human-only affordance on stderr.
+          if (opts.json !== true) {
+            const scope = opts["by"] !== undefined ? ` for actor ${String(opts["by"])}` : "";
+            process.stderr.write(`error: no undoable mutations found in the audit trail${scope}\n`);
+          }
         }
       } catch (err) {
         // runUndo throws RangeError for a --txn token that names no undoable
         // mutation or one already undone — a usage error (exit 2).
         if (err instanceof RangeError) {
-          process.stderr.write(`error: ${err.message}\n`);
-          process.exitCode = ExitCode.Usage;
+          usageError(opts, err.message);
         } else {
           throw err;
         }

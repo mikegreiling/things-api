@@ -717,7 +717,7 @@ describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
     // A parent whose index sits ABOVE its children's — the interleave case that
     // makes a flat global sort put a child before its parent. DFS must not.
     const parent = seedTag(fx.db, "errands", null, -3281);
-    const childB = seedTag(fx.db, "z-groceries", parent, -12063);
+    seedTag(fx.db, "z-groceries", parent, -12063);
     seedTag(fx.db, "a-hardware", parent, -12000);
     seedTag(fx.db, "calls", null, -3000); // later root
 
@@ -726,7 +726,10 @@ describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
     // children order by their own index (childB -12063 before childA -12000);
     // the sibling root `calls` follows the whole errands subtree.
     expect(order).toEqual(["errands", "z-groceries", "a-hardware", "calls"]);
-    expect(tagsView(fx.db).find((t) => t.uuid === childB)?.parent?.uuid).toBe(parent);
+    // Nesting is carried by the parent NAME (uuids are internal); no uuid field.
+    const childRow = tagsView(fx.db).find((t) => t.title === "z-groceries");
+    expect(childRow?.parent).toBe("errands");
+    expect(tagsView(fx.db).every((t) => !("uuid" in t))).toBe(true);
   });
 });
 

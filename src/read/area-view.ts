@@ -43,7 +43,8 @@ export function areaView(db: DatabaseSync, ref: string, now?: Date): AreaView {
     uuid: row.uuid,
     title: row.title ?? "",
     visible: row.visible !== 0,
-    tags: areaTags(db, uuid),
+    // Area tags by NAME only (tag uuids are internal).
+    tags: areaTags(db, uuid).map((t) => ({ title: t.title })),
   };
 
   const refs = makeRefResolver(db);

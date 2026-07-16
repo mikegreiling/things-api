@@ -212,6 +212,49 @@ describe("things MCP server", () => {
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
+  it("update_project on an ambiguous NAME returns structured candidates (name sugar + machine detail)", async () => {
+    // MCP inherits the name/partial-uuid write-target sugar via the shared
+    // pipeline: passing a NAME (not a uuid) resolves it — proven by the
+    // ambiguity, which also proves the structured candidates ride the result.
+    seedProject(fixture.db, { title: "Dup" });
+    seedProject(fixture.db, { title: "Dup" });
+    await connect([fakeVector(null, { ops: ["project.update"] }).vector]);
+    const result = await client.callTool({
+      name: "update_project",
+      arguments: { uuid: "Dup", title: "x" },
+    });
+    expect(result.isError).toBe(true);
+    const err = textOf(result) as { code: string; details?: { candidates?: unknown[] } };
+    expect(err.code).toBe("ambiguous");
+    expect(err.details?.candidates).toHaveLength(2);
+    expect(err.details?.candidates?.[0]).toHaveProperty("title", "Dup");
+  });
+
+  it("a not-found write target returns code=not-found (structured, empty candidates)", async () => {
+    await connect([fakeVector(null, { ops: ["project.update"] }).vector]);
+    const result = await client.callTool({
+      name: "update_project",
+      arguments: { uuid: "ghost", title: "x" },
+    });
+    expect(result.isError).toBe(true);
+    const err = textOf(result) as { code: string; details?: { candidates?: unknown[] } };
+    expect(err.code).toBe("not-found");
+    expect(err.details?.candidates).toEqual([]);
+  });
+
+  it("set_tags with an unknown tag returns the blocked hazard naming the missing tag", async () => {
+    const todo = seedTodo(fixture.db, { title: "t" });
+    await connect([fakeVector(null, { ops: ["todo.set-tags"] }).vector]);
+    const result = await client.callTool({
+      name: "set_tags",
+      arguments: { uuid: todo, tags: ["ghost"] },
+    });
+    expect(result.isError).toBe(true);
+    const err = textOf(result) as { code: string; message: string };
+    expect(err.code).toBe("blocked:H-UNKNOWN-TAG");
+    expect(err.message).toContain("ghost");
+  });
+
   it("search untagged narrows results; conflicts with exact_tag", async () => {
     const focus = seedTag(fixture.db, "focus");
     const tagged = seedTodo(fixture.db, { title: "note tagged" });

@@ -39,6 +39,7 @@ import {
   runRead,
   shellQuote,
   truncationHint,
+  usageError,
   withClient,
   type GlobalReadOpts,
 } from "../read-driver.ts";
@@ -86,10 +87,14 @@ const OVERDUE_DESC = "only open items past their deadline (due today is not over
  * pairing it with `--tag`/`--exact-tag` is contradictory. Emits the usage error
  * (same style as the view's other conflicts) and returns true when it fires.
  */
-function untaggedConflict(opts: { untagged?: boolean; tag?: string; exactTag?: boolean }): boolean {
+function untaggedConflict(opts: {
+  untagged?: boolean;
+  tag?: string;
+  exactTag?: boolean;
+  json?: boolean;
+}): boolean {
   if (opts.untagged === true && (opts.tag !== undefined || opts.exactTag === true)) {
-    process.stderr.write("error: --untagged does not combine with --tag/--exact-tag\n");
-    process.exitCode = ExitCode.Usage;
+    usageError(opts, "--untagged does not combine with --tag/--exact-tag");
     return true;
   }
   return false;
@@ -234,8 +239,7 @@ export function registerReadCommands(program: Command): void {
           ["--until", until],
         ] as const) {
           if (value !== undefined && Number.isNaN(value.getTime())) {
-            process.stderr.write(`error: ${flag} is not a parseable date\n`);
-            process.exitCode = ExitCode.Usage;
+            usageError(opts, `${flag} is not a parseable date`);
             return;
           }
         }
@@ -339,10 +343,10 @@ export function registerReadCommands(program: Command): void {
       ) => {
         if (untaggedConflict(opts)) return;
         if (opts.limit !== undefined) {
-          process.stderr.write(
-            "error: --limit is not available on anytime — cap blocks with --area-limit / --project-limit, or pass --all\n",
+          usageError(
+            opts,
+            "--limit is not available on anytime — cap blocks with --area-limit / --project-limit, or pass --all",
           );
-          process.exitCode = ExitCode.Usage;
           return;
         }
         const area = parseCap(
@@ -350,6 +354,7 @@ export function registerReadCommands(program: Command): void {
           opts.areaLimit,
           AREA_PREVIEW_LIMIT,
           opts.all === true,
+          opts.json === true,
         );
         if (!area.ok) return;
         const project = parseCap(
@@ -357,6 +362,7 @@ export function registerReadCommands(program: Command): void {
           opts.projectLimit,
           PROJECT_PREVIEW_LIMIT,
           opts.all === true,
+          opts.json === true,
         );
         if (!project.ok) return;
         const limits: GroupedLimits = { area: area.limit, project: project.limit };
@@ -448,6 +454,7 @@ export function registerReadCommands(program: Command): void {
             opts.showActiveProjectItems,
             0,
             opts.all === true,
+            opts.json === true,
           );
           if (!capped.ok) return;
           projectCap = capped.limit;
@@ -457,6 +464,7 @@ export function registerReadCommands(program: Command): void {
           opts.areaLimit,
           AREA_PREVIEW_LIMIT,
           opts.all === true,
+          opts.json === true,
         );
         if (!area.ok) return;
         const limits: GroupedLimits = { area: area.limit, project: projectCap };
@@ -555,8 +563,7 @@ export function registerReadCommands(program: Command): void {
         const sinceGiven = opts.since !== undefined;
         const limitGiven = opts.limit !== undefined;
         if (opts.all === true && (untilGiven || sinceGiven)) {
-          process.stderr.write("error: --all does not combine with --until/--since\n");
-          process.exitCode = ExitCode.Usage;
+          usageError(opts, "--all does not combine with --until/--since");
           return;
         }
         const lim = parseLimit(opts);
@@ -572,14 +579,12 @@ export function registerReadCommands(program: Command): void {
         const untilDate =
           opts.all === true || dropWindowDefault ? undefined : parsePeriodEnd(opts.until);
         if (untilDate !== undefined && Number.isNaN(untilDate.getTime())) {
-          process.stderr.write(`error: --until is not a parseable period: ${opts.until}\n`);
-          process.exitCode = ExitCode.Usage;
+          usageError(opts, `--until is not a parseable period: ${opts.until}`);
           return;
         }
         const sinceDate = sinceGiven ? parsePeriodStart(opts.since as string) : undefined;
         if (sinceDate !== undefined && Number.isNaN(sinceDate.getTime())) {
-          process.stderr.write(`error: --since is not a parseable period: ${opts.since}\n`);
-          process.exitCode = ExitCode.Usage;
+          usageError(opts, `--since is not a parseable period: ${opts.since}`);
           return;
         }
         const until = untilDate === undefined ? undefined : localToday(untilDate);
@@ -706,8 +711,7 @@ export function registerReadCommands(program: Command): void {
           ["--until", until],
         ] as const) {
           if (value !== undefined && Number.isNaN(value.getTime())) {
-            process.stderr.write(`error: ${flag} is not a parseable date\n`);
-            process.exitCode = ExitCode.Usage;
+            usageError(opts, `${flag} is not a parseable date`);
             return;
           }
         }
@@ -900,7 +904,7 @@ export function registerReadCommands(program: Command): void {
 
   program
     .command("tags")
-    .description("Tag taxonomy (parent → child hierarchy flattened with refs)")
+    .description("Tag taxonomy — the parent → child hierarchy as an indented tree")
     .option("--all", "show every tag (no default restriction applies)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -909,18 +913,27 @@ export function registerReadCommands(program: Command): void {
         opts,
         "tags",
         (c) => c.read.tags(),
-        // Mirror `things areas`: a dim, shortened uuid in a fixed left column
-        // (uuidCol/uuidDisplayWidth — copy-safe prefix, right-padded so names
-        // align), then the tag name. A child tag's parent path is muted context
-        // (`parent/` dim, the render-language dim=metadata law), so the leaf name
-        // stays prominent; rows already arrive in canonical DFS order (index,
-        // uuid) from tagsView, children following their parent.
+        // An INDENTED TREE, leaf names only — nesting is conveyed by indentation
+        // (2 spaces per depth level), mirroring the Things GUI. Tag names are
+        // globally unique (TAGW1-c), so each displayed leaf name is directly
+        // usable as a tag ref — no path prefix or uuid needed. Rows arrive in
+        // canonical DFS order (index, uuid) from tagsView, children following
+        // their parent; the tree IS structure, so leaf names render plainly (not
+        // dim). Depth is the length of the parent-name chain (names are unique).
         (data) => {
-          const w = uuidDisplayWidth(data);
-          return data.map(
-            (t) =>
-              `${dim(uuidCol(t.uuid, w))}  ${t.parent ? dim(`${t.parent.title}/`) : ""}${t.title}`,
-          );
+          const parentOf = new Map(data.map((t) => [t.title, t.parent]));
+          const depthOf = (title: string): number => {
+            let depth = 0;
+            const seen = new Set<string>();
+            let cur = parentOf.get(title) ?? null;
+            while (cur !== null && !seen.has(cur)) {
+              seen.add(cur);
+              depth++;
+              cur = parentOf.get(cur) ?? null;
+            }
+            return depth;
+          };
+          return data.map((t) => `${"  ".repeat(depthOf(t.title))}${t.title}`);
         },
       );
     });
@@ -946,8 +959,7 @@ export function registerReadCommands(program: Command): void {
       if (!lim.ok) return;
       const since = parsePeriodStart(opts.since);
       if (Number.isNaN(since.getTime())) {
-        process.stderr.write(`error: --since is not a parseable date: ${opts.since}\n`);
-        process.exitCode = ExitCode.Usage;
+        usageError(opts, `--since is not a parseable date: ${opts.since}`);
         return;
       }
       const base = invocation("changes", [`--since ${shellQuote(opts.since)}`]);
@@ -993,10 +1005,10 @@ export function registerReadCommands(program: Command): void {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((query: string, opts: GlobalReadOpts & Record<string, unknown>) => {
+      const json = opts["json"] === true;
       const type = opts["type"] as string | undefined;
       if (type !== undefined && type !== "todo" && type !== "project") {
-        process.stderr.write("error: --type must be todo or project\n");
-        process.exitCode = ExitCode.Usage;
+        usageError({ json }, "--type must be todo or project");
         return;
       }
       if (
@@ -1004,6 +1016,7 @@ export function registerReadCommands(program: Command): void {
           untagged: opts["untagged"] === true,
           ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
           exactTag: opts["exactTag"] === true,
+          json,
         })
       )
         return;
@@ -1013,14 +1026,13 @@ export function registerReadCommands(program: Command): void {
       // pull in completed/canceled/trashed rows, so the combination is
       // contradictory (like --untagged with --tag).
       if (overdue && (opts["logged"] === true || opts["trashed"] === true || all)) {
-        process.stderr.write("error: --overdue does not combine with --logged/--trashed/--all\n");
-        process.exitCode = ExitCode.Usage;
+        usageError({ json }, "--overdue does not combine with --logged/--trashed/--all");
         return;
       }
       const limitOpt = opts["limit"] as string | undefined;
       // --all widens the scope AND lifts the row limit — combining it with an
       // explicit --limit is contradictory (like every other view).
-      const lim = parseLimit({ all, ...(limitOpt !== undefined && { limit: limitOpt }) });
+      const lim = parseLimit({ all, json, ...(limitOpt !== undefined && { limit: limitOpt }) });
       if (!lim.ok) return;
       const base = invocation("search", [
         shellQuote(query),

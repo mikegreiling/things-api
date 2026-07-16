@@ -9,7 +9,6 @@ import { type Command, Option } from "commander";
 
 import type { AnyTask } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
-import { ExitCode } from "../../contracts.ts";
 import type { ProjectView } from "../../read/project-view.ts";
 import type { ShowTarget } from "../../read/show-target.ts";
 import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
@@ -25,7 +24,14 @@ import { renderAreaView, type AreaShowOpts } from "./area.ts";
 import { renderProjectView, showToggleFlags } from "./project.ts";
 import { renderDetail } from "./todo.ts";
 import { openInThings } from "./reads.ts";
-import { invocation, parseCap, runRead, shellQuote, withClient } from "../read-driver.ts";
+import {
+  invocation,
+  parseCap,
+  runRead,
+  shellQuote,
+  usageError,
+  withClient,
+} from "../read-driver.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 
 /**
@@ -107,11 +113,11 @@ export function registerShowCommands(program: Command): void {
         },
       ) => {
         if (opts.limit !== undefined) {
-          process.stderr.write(
-            "error: --limit is not available on show — areas cap per section with " +
-              "--area-limit / --project-limit; project and to-do cards are uncapped\n",
+          usageError(
+            opts,
+            "--limit is not available on show — areas cap per section with " +
+              "--area-limit / --project-limit; project and to-do cards are uncapped",
           );
-          process.exitCode = ExitCode.Usage;
           return;
         }
         const areaCap = parseCap(
@@ -119,6 +125,7 @@ export function registerShowCommands(program: Command): void {
           opts.areaLimit,
           AREA_PREVIEW_LIMIT,
           opts.all === true,
+          opts.json === true,
         );
         if (!areaCap.ok) return;
         const projectCap = parseCap(
@@ -126,6 +133,7 @@ export function registerShowCommands(program: Command): void {
           opts.projectLimit,
           AREA_PREVIEW_LIMIT,
           opts.all === true,
+          opts.json === true,
         );
         if (!projectCap.ok) return;
         const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };

@@ -12,6 +12,7 @@ import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
 import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
+import { ReferenceResolutionError } from "../read/queries.ts";
 import {
   errorEnvelope,
   ExitCode,
@@ -26,6 +27,32 @@ import { DEFAULT_LIST_LIMIT } from "../read/pagination.ts";
 export interface GlobalReadOpts {
   json?: boolean;
   db?: string;
+}
+
+/**
+ * The single usage-error emitter every command surface routes flag/argument
+ * errors through, so `--json` is honored uniformly: under `--json` a
+ * `{ok:false, error:{code:"usage", …}}` envelope goes to STDOUT (machine
+ * consumers read one stream); otherwise the prose `error:` line goes to
+ * STDERR. `details` carries the same machine-readable `candidates`/`suggestions`
+ * shape the resolver errors use. Always sets the Usage exit code.
+ */
+export function usageError(
+  opts: { json?: boolean },
+  message: string,
+  details?: { candidates?: unknown[]; suggestions?: string[] },
+): void {
+  if (opts.json === true) {
+    const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
+    process.stdout.write(
+      `${JSON.stringify(
+        errorEnvelope({ code: "usage", message, ...(details !== undefined && { details }) }, meta),
+      )}\n`,
+    );
+  } else {
+    process.stderr.write(`error: ${message}\n`);
+  }
+  process.exitCode = ExitCode.Usage;
 }
 
 export interface PagedResult<T> {
@@ -62,8 +89,7 @@ export function runRead<T>(
   // An empty --db would silently fall through to the default database path —
   // reject it loudly instead of reading somewhere the caller did not name.
   if (opts.db !== undefined && opts.db.trim() === "") {
-    process.stderr.write("error: --db requires a non-empty path\n");
-    process.exitCode = ExitCode.Usage;
+    usageError(opts, "--db requires a non-empty path");
     return;
   }
   let client: ThingsClient | null = null;
@@ -142,6 +168,24 @@ export function runRead<T>(
       process.exitCode = ExitCode.Usage;
       return;
     }
+    // An unresolved uuid/partial-uuid/name (ambiguous or not-found) is a
+    // usage-class failure carrying machine-readable candidates.
+    if (err instanceof ReferenceResolutionError) {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              { code: err.code, message: err.message, details: { candidates: err.candidates } },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(`error: ${err.message}\n`);
+      }
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;
     const message = err instanceof Error ? err.message : String(err);
     if (opts.json) {
@@ -180,8 +224,12 @@ export type LimitResolution = { ok: true; limit: number | null } | { ok: false }
  * bad input: `--limit` must be a positive integer, and it may not combine
  * with `--all`.
  */
-export function parseLimit(opts: { limit?: string; all?: boolean }): LimitResolution {
-  return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true);
+export function parseLimit(opts: {
+  limit?: string;
+  all?: boolean;
+  json?: boolean;
+}): LimitResolution {
+  return parseCap("--limit", opts.limit, DEFAULT_LIST_LIMIT, opts.all === true, opts.json === true);
 }
 
 /**
@@ -196,19 +244,18 @@ export function parseCap(
   value: string | undefined,
   defaultLimit: number,
   all: boolean,
+  json = false,
 ): LimitResolution {
   const n = value === undefined ? undefined : Number(value);
   const decision = resolveCap(n, all, defaultLimit);
   // Conflict takes precedence over value validation (an explicit value beside
   // --all is rejected before we scrutinize the value itself).
   if (decision === "conflict") {
-    process.stderr.write(`error: ${flag} and --all are mutually exclusive\n`);
-    process.exitCode = ExitCode.Usage;
+    usageError({ json }, `${flag} and --all are mutually exclusive`);
     return { ok: false };
   }
   if (n !== undefined && (!Number.isInteger(n) || n < 1)) {
-    process.stderr.write(`error: ${flag} must be a positive integer\n`);
-    process.exitCode = ExitCode.Usage;
+    usageError({ json }, `${flag} must be a positive integer`);
     return { ok: false };
   }
   return { ok: true, limit: decision };

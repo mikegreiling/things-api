@@ -196,14 +196,15 @@ function sortedTags(tags: string[]): string[] {
 }
 
 /**
- * Resolve tag refs (title / uuid / `parent/child` path) into pre-state: the
- * leaf titles to apply, plus the unknown (`missingTags`) and duplicate-name
- * (`ambiguousTags`) refs the H-UNKNOWN-TAG / H-DUPLICATE-TAG guards refuse on.
+ * Resolve tag refs (title or `parent/child` path — names only) into pre-state:
+ * the leaf titles to apply, plus the unknown (`missingTags`) refs the
+ * H-UNKNOWN-TAG guard refuses on. Tags apply BY NAME through the app's own
+ * vector, so the app resolves the name (duplicate names resolve app-side, as
+ * in the GUI) — the resolver is a pure existence check.
  */
 function applyTagRefs(db: DatabaseSync, pre: PreState, tags: string[]): void {
   const res = resolveTagRefs(db, tags);
   pre.missingTags = res.missing;
-  pre.ambiguousTags = res.ambiguous;
   pre.resolvedTagTitles = res.titles;
 }
 
@@ -231,7 +232,6 @@ const todoAdd: CommandSpec<"todo.add"> = {
   op: "todo.add",
   hazards: [
     "H-UNKNOWN-TAG",
-    "H-DUPLICATE-TAG",
     "H-UNKNOWN-DESTINATION",
     "H-AMBIGUOUS-HEADING",
     "H-REOPEN-RESOLVED-PROJECT",
@@ -533,7 +533,7 @@ const todoMove: CommandSpec<"todo.move"> = {
 
 const todoSetTags: CommandSpec<"todo.set-tags"> = {
   op: "todo.set-tags",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
@@ -750,7 +750,7 @@ const projectUpdate: CommandSpec<"project.update"> = {
 
 const projectSetTags: CommandSpec<"project.set-tags"> = {
   op: "project.set-tags",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
@@ -1021,7 +1021,7 @@ const projectDelete: CommandSpec<"project.delete"> = {
 
 const areaAdd: CommandSpec<"area.add"> = {
   op: "area.add",
-  hazards: ["H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
+  hazards: ["H-UNKNOWN-TAG"],
   preRead(db, params) {
     const pre = emptyPreState();
     if (params.tags !== undefined) applyTagRefs(db, pre, params.tags);
@@ -1163,7 +1163,7 @@ const todoDuplicate: CommandSpec<"todo.duplicate"> = {
 
 const areaUpdate: CommandSpec<"area.update"> = {
   op: "area.update",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG", "H-DUPLICATE-TAG"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-UNKNOWN-TAG"],
   preRead(db, params) {
     if (params.title === undefined && params.tags === undefined) {
       throw new RangeError("area.update needs title and/or tags");

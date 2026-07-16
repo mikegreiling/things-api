@@ -10,7 +10,6 @@ import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, ReorderParams } from "./operations.ts";
-import type { TagAmbiguity } from "./tag-refs.ts";
 
 export interface ResolvedContainer {
   uuid: string;
@@ -68,12 +67,10 @@ export interface PreState {
   missingTags: string[];
   /**
    * Resolved leaf titles for the tag SET ops (todo.add/set-tags,
-   * project.set-tags, area.add/update) — uuid/path refs already resolved to
-   * their app title, de-duplicated. What actually gets applied + asserted.
+   * project.set-tags, area.add/update) — name/path refs de-duplicated. What
+   * actually gets applied (by name, app-resolved) + asserted.
    */
   resolvedTagTitles: string[];
-  /** Tag refs that matched >1 tag (duplicate-name pathological state, TAGW1-c). */
-  ambiguousTags: TagAmbiguity[];
   /** tag.add parent resolution. */
   parentTag: ContainerResolution | null;
   /** area.delete / tag.delete target resolution (TMArea/TMTag). */
@@ -152,7 +149,6 @@ export function emptyPreState(): PreState {
     destHeading: null,
     missingTags: [],
     resolvedTagTitles: [],
-    ambiguousTags: [],
     parentTag: null,
     entityTarget: null,
     childTags: [],

@@ -186,12 +186,14 @@ describe("H-UNKNOWN-TAG / H-UNKNOWN-DESTINATION / H-AMBIGUOUS-HEADING", () => {
     expect(check("todo.set-tags", { uuid: todo, tags: ["REAL"] })).toBeNull(); // case-insensitive
   });
 
-  it("accepts a uuid or a parent/child path as a tag value (no unknown-tag block)", () => {
+  it("accepts a name or a parent/child path as a tag value (uuids are NOT accepted)", () => {
     const work = seedTag(fixture.db, "Work");
     const errands = seedTag(fixture.db, "Errands", work);
     const todo = seedTodo(fixture.db, { title: "t" });
-    expect(check("todo.set-tags", { uuid: todo, tags: [errands] })).toBeNull(); // by uuid
+    expect(check("todo.set-tags", { uuid: todo, tags: ["Errands"] })).toBeNull(); // by name
     expect(check("todo.set-tags", { uuid: todo, tags: ["Work/Errands"] })).toBeNull(); // by path
+    // A tag uuid is no longer a valid ref — it names no tag, so it is unknown.
+    expect(check("todo.set-tags", { uuid: todo, tags: [errands] })?.hazard).toBe("H-UNKNOWN-TAG");
   });
 
   it("fails fast on unknown and ambiguous destinations", () => {
@@ -230,23 +232,16 @@ describe("H-UNKNOWN-TAG / H-UNKNOWN-DESTINATION / H-AMBIGUOUS-HEADING", () => {
   });
 });
 
-describe("H-DUPLICATE-TAG (Cloud-sync duplicate-name pathological state)", () => {
-  it("refuses fail-closed and lists the candidate uuids when a tag name is ambiguous", () => {
+describe("duplicate tag names delegate to the app (no refusal)", () => {
+  it("a name matching two tags is KNOWN — the app resolves it, exactly as the GUI does", () => {
+    // A duplicate-name pair is a Cloud-sync-only pathological state. We apply
+    // tags BY NAME through the app's own vector, so the app resolves it — we
+    // never pick a uuid, so there is no ambiguity refusal (the old
+    // H-DUPLICATE-TAG guard was removed).
     const root = seedTag(fixture.db, "Work");
     seedTag(fixture.db, "Work", root); // a second `Work` — only Cloud sync can make this
     const todo = seedTodo(fixture.db, { title: "t" });
-    const block = check("todo.set-tags", { uuid: todo, tags: ["Work"] });
-    expect(block?.hazard).toBe("H-DUPLICATE-TAG");
-    expect(block?.detail).toContain("more than one tag");
-    expect(block?.detail).toContain(root.slice(0, 7)); // short-uuid candidate listing
-    expect(block?.remediation).toContain("uuid");
-  });
-
-  it("clears once the ref is disambiguated by uuid", () => {
-    const root = seedTag(fixture.db, "Work");
-    const nested = seedTag(fixture.db, "Work", root);
-    const todo = seedTodo(fixture.db, { title: "t" });
-    expect(check("todo.set-tags", { uuid: todo, tags: [nested] })).toBeNull();
+    expect(check("todo.set-tags", { uuid: todo, tags: ["Work"] })).toBeNull();
   });
 });
 

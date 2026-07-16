@@ -134,7 +134,8 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
         : decodePackedDate(row.deadline),
     reminder: decodeReminderTime(row.reminderTime),
     area: refs(row.area),
-    tags,
+    // Surface tags by NAME only — tag uuids are an internal detail (TAGW1-c).
+    tags: tags.map((t) => ({ title: t.title })),
     repeating: mapRepeating(row),
     created: decodeEpochReal(row.creationDate) ?? new Date(0),
     modified: decodeEpochReal(row.userModificationDate) ?? new Date(0),
