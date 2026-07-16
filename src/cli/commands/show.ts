@@ -11,7 +11,7 @@ import type { AnyTask } from "../../model/entities.ts";
 import type { AreaView } from "../../read/area-view.ts";
 import type { ProjectView } from "../../read/project-view.ts";
 import type { ShowTarget } from "../../read/show-target.ts";
-import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
+import { capAreaSections, type GroupedLimits } from "../../read/truncation.ts";
 import { stripThingsUri } from "../../read/queries.ts";
 import { AREA_PREVIEW_LIMIT, GROUPED_ALL_DESC } from "../../surface-copy.ts";
 import {

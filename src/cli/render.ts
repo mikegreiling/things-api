@@ -37,7 +37,7 @@ import {
   partitionSomedaySection,
   splitSectionBlocks,
   type GroupedLimits,
-} from "../read/pagination.ts";
+} from "../read/truncation.ts";
 import { FULL_MONTHS, upcomingBucket } from "./period.ts";
 import type { Project } from "../model/entities.ts";
 import {

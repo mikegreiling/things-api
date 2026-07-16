@@ -21,8 +21,8 @@ import {
   blockedCode,
   PKG_VERSION,
   verifyFailedCode,
-  type GroupedPagination,
-  type Pagination,
+  type GroupedTruncation,
+  type Truncation,
 } from "../contracts.ts";
 import { diagnose } from "../diagnose.ts";
 import {
@@ -30,12 +30,12 @@ import {
   DEFAULT_LIST_LIMIT,
   PROJECT_PREVIEW_LIMIT,
   capAreaSections,
-  paginateList,
-  paginateToday,
+  truncateList,
+  truncateToday,
   previewSections,
   previewSomedaySections,
   type GroupedLimits,
-} from "../read/pagination.ts";
+} from "../read/truncation.ts";
 import { resolveCap } from "../read/caps.ts";
 import { noUuidMatch, ReferenceResolutionError } from "../read/queries.ts";
 import {
@@ -99,27 +99,27 @@ function readResult(data: unknown): ToolResult {
 
 /**
  * A read result carrying truncation metadata: the data (already limited) in
- * the first content block, and a second block with the {@link Pagination}
+ * the first content block, and a second block with the {@link Truncation}
  * numbers plus a one-line note the agent can read when rows were dropped.
  */
-function paginatedResult(data: unknown, pagination: Pagination): ToolResult {
-  const note = pagination.truncated
-    ? `showing ${pagination.shown} of ${pagination.total} items — pass limit (or all: true) to see more`
+function truncatedResult(data: unknown, truncation: Truncation): ToolResult {
+  const note = truncation.truncated
+    ? `showing ${truncation.shown} of ${truncation.total} items — pass limit (or all: true) to see more`
     : undefined;
   return {
     content: [
       { type: "text", text: JSON.stringify(omitEmpty(data)) },
-      { type: "text", text: JSON.stringify({ pagination, ...(note !== undefined && { note }) }) },
+      { type: "text", text: JSON.stringify({ truncation, ...(note !== undefined && { note }) }) },
     ],
   };
 }
 
 /**
  * Grouped read result (anytime/someday): the per-block-truncated sections plus
- * a second block carrying the {@link GroupedPagination} counts and, when
+ * a second block carrying the {@link GroupedTruncation} counts and, when
  * anything was hidden, a one-line note the agent can read.
  */
-function groupedResult(data: unknown, grouped: GroupedPagination): ToolResult {
+function groupedResult(data: unknown, grouped: GroupedTruncation): ToolResult {
   const note = grouped.truncated
     ? "some blocks are previews — raise area_limit/project_limit for more per block, or all: true for every item"
     : undefined;
@@ -603,15 +603,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         };
         switch (args.view) {
           case "today": {
-            const { data, pagination } = paginateToday(
+            const { data, truncation } = truncateToday(
               c.read.today({ ...filter, ...(args.evening === true && { eveningOnly: true }) }),
               limit,
             );
-            return paginatedResult(data, pagination);
+            return truncatedResult(data, truncation);
           }
           case "inbox": {
-            const { data, pagination } = paginateList(c.read.inbox(filter), limit);
-            return paginatedResult(data, pagination);
+            const { data, truncation } = truncateList(c.read.inbox(filter), limit);
+            return truncatedResult(data, truncation);
           }
           case "anytime": {
             const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
@@ -619,14 +619,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return groupedResult(data, grouped);
           }
           case "upcoming": {
-            const { data, pagination } = paginateList(
+            const { data, truncation } = truncateList(
               c.read.upcoming({
                 ...filter,
                 ...(args.horizon !== undefined && { horizon: args.horizon }),
               }),
               limit,
             );
-            return paginatedResult(data, pagination);
+            return truncatedResult(data, truncation);
           }
           case "someday": {
             const active = showActiveProjectItems;
@@ -650,15 +650,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return groupedResult(data, grouped);
           }
           case "logbook": {
-            const { data, pagination } = paginateList(
+            const { data, truncation } = truncateList(
               c.read.logbook({ ...filter, limit: null }),
               limit,
             );
-            return paginatedResult(data, pagination);
+            return truncatedResult(data, truncation);
           }
           case "trash": {
-            const { data, pagination } = paginateList(c.read.trash({ limit: null }), limit);
-            return paginatedResult(data, pagination);
+            const { data, truncation } = truncateList(c.read.trash({ limit: null }), limit);
+            return truncatedResult(data, truncation);
           }
         }
       }),
@@ -706,7 +706,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
-        const { data, pagination } = paginateList(
+        const { data, truncation } = truncateList(
           getClient().read.search(args.query, {
             limit: null,
             ...tagFilterFromArgs(args),
@@ -720,7 +720,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           }),
           limit,
         );
-        return paginatedResult(data, pagination);
+        return truncatedResult(data, truncation);
       }),
   );
 
@@ -746,11 +746,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (Number.isNaN(since.getTime())) {
           return usage(`since is not a parseable date: ${args.since}`);
         }
-        const { data, pagination } = paginateList(
+        const { data, truncation } = truncateList(
           getClient().read.changes({ since, limit: null }),
           limit,
         );
-        return paginatedResult(data, pagination);
+        return truncatedResult(data, truncation);
       }),
   );
 

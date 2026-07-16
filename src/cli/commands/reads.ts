@@ -61,13 +61,13 @@ import { ExitCode, okEnvelope, type EnvelopeMeta } from "../../contracts.ts";
 import {
   AREA_PREVIEW_LIMIT,
   PROJECT_PREVIEW_LIMIT,
-  paginateList,
-  paginateToday,
+  truncateList,
+  truncateToday,
   partitionSomedaySection,
   previewSections,
   previewSomedaySections,
   type GroupedLimits,
-} from "../../read/pagination.ts";
+} from "../../read/truncation.ts";
 import {
   ALL_DESC,
   AREA_LIMIT_DESC,
@@ -166,11 +166,11 @@ export function registerReadCommands(program: Command): void {
           "today",
           (c) => {
             const full = c.read.today(filter);
-            const { data, pagination } = paginateToday(full, lim.limit);
+            const { data, truncation } = truncateToday(full, lim.limit);
             // The renderer needs the PRE-cap view to keep This Evening honest
             // under truncation, so the lines are precomputed here; the global
             // footer (whole-view remainder) is still appended by the driver.
-            return { data, pagination, lines: renderToday(full, data, base, { eveningOnly }) };
+            return { data, truncation, lines: renderToday(full, data, base, { eveningOnly }) };
           },
           // Type-correct fallback for the TodayView payload; never reached
           // because `lines` is always precomputed above.
@@ -242,7 +242,7 @@ export function registerReadCommands(program: Command): void {
           opts,
           "inbox",
           (c) => {
-            const { data, pagination } = paginateList(
+            const { data, truncation } = truncateList(
               c.read.inbox({
                 ...tagFilterFields(opts),
                 ...(opts.overdue === true && { overdue: true }),
@@ -256,7 +256,7 @@ export function registerReadCommands(program: Command): void {
             // flat view — handled here (not via the driver's hintBase) so the
             // creation-window note can sit last, mirroring upcoming's window
             // footer mechanics.
-            const hint = truncationHint(base, pagination);
+            const hint = truncationHint(base, truncation);
             if (hint !== null) lines.push("", hint);
             // Presentation order is unchanged (manual ORDER BY index); the date
             // bound is an invisible axis in the rows, so name the effective
@@ -274,7 +274,7 @@ export function registerReadCommands(program: Command): void {
                     : `(created through ${untilLabel})`;
               lines.push("", dim(note));
             }
-            return { data, pagination, lines };
+            return { data, truncation, lines };
           },
           renderList,
           undefined,
@@ -564,7 +564,7 @@ export function registerReadCommands(program: Command): void {
           opts,
           "upcoming",
           (c) => {
-            const { data, pagination } = paginateList(
+            const { data, truncation } = truncateList(
               c.read.upcoming({
                 ...(until !== undefined && { until }),
                 ...(since !== undefined && { since }),
@@ -576,16 +576,16 @@ export function registerReadCommands(program: Command): void {
             const lines = renderUpcoming(data);
             if (defaultWindowActive && until !== undefined) {
               const windowLabel = shortDate(until, localToday());
-              if (pagination.truncated && pagination.limit !== null) {
+              if (truncation.truncated && truncation.limit !== null) {
                 // Bare invocation, row cap biting inside the default window: one
                 // line names BOTH the window and the two levers, so neither the
                 // limit nor the horizon is a hidden second bound.
-                const more = pagination.total - pagination.shown;
+                const more = truncation.total - truncation.shown;
                 lines.push(
                   "",
                   dim(
                     `── ${more} more item${more === 1 ? "" : "s"} through ${windowLabel} — ` +
-                      `see more: \`${base} --limit ${pagination.limit * 2}\` · ` +
+                      `see more: \`${base} --limit ${truncation.limit * 2}\` · ` +
                       `\`${base} --all\` ──`,
                   ),
                 );
@@ -600,23 +600,23 @@ export function registerReadCommands(program: Command): void {
                   ),
                 );
               }
-            } else if (pagination.truncated && pagination.limit !== null) {
+            } else if (truncation.truncated && truncation.limit !== null) {
               // The user stated a bound: no window line, only a row hint, and
               // only when an explicit --limit truncated. A stated --until/--since
               // makes --all a usage error (and would discard the very window
               // they asked for), so a bounded run offers just a bigger cap.
-              const more = pagination.total - pagination.shown;
+              const more = truncation.total - truncation.shown;
               const bounded = untilGiven || sinceGiven;
               const allLever = bounded ? "" : ` · \`${base} --all\``;
               lines.push(
                 "",
                 dim(
                   `── ${more} more item${more === 1 ? "" : "s"} — ` +
-                    `see more: \`${base} --limit ${pagination.limit * 2}\`${allLever} ──`,
+                    `see more: \`${base} --limit ${truncation.limit * 2}\`${allLever} ──`,
                 ),
               );
             }
-            return { data, pagination, lines };
+            return { data, truncation, lines };
           },
           (items: ListItem[]) => renderUpcoming(items),
           undefined,
@@ -689,7 +689,7 @@ export function registerReadCommands(program: Command): void {
           opts,
           "logbook",
           (c) =>
-            paginateList(
+            truncateList(
               c.read.logbook({
                 limit: null,
                 ...(opts.area !== undefined && { area: opts.area }),
@@ -720,7 +720,7 @@ export function registerReadCommands(program: Command): void {
       runRead(
         opts,
         "trash",
-        (c) => paginateList(c.read.trash({ limit: null }), lim.limit),
+        (c) => truncateList(c.read.trash({ limit: null }), lim.limit),
         renderList,
         invocation("trash", []),
         "trash",
@@ -976,7 +976,7 @@ export function registerReadCommands(program: Command): void {
       runRead(
         opts,
         "changes",
-        (c) => paginateList(c.read.changes({ since, limit: null }), lim.limit),
+        (c) => truncateList(c.read.changes({ since, limit: null }), lim.limit),
         (items) =>
           items.length === 0
             ? ["(no changes)"]
@@ -1055,7 +1055,7 @@ export function registerReadCommands(program: Command): void {
         opts,
         "search",
         (c) =>
-          paginateList(
+          truncateList(
             c.read.search(query, {
               limit: null,
               ...(opts["project"] !== undefined && { project: opts["project"] as string }),

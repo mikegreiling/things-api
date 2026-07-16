@@ -1,13 +1,13 @@
 /**
  * Shared list-view truncation: turn a full, filtered result into the rows a
- * surface actually shows (default 50) plus the exact {@link Pagination}
+ * surface actually shows (default 50) plus the exact {@link Truncation}
  * metadata every surface reports so nothing is ever silently dropped. The
  * limit counts ITEMS in render order and truncates mid-group; grouped shapes
  * (the Today split, sidebar sections) drop the trailing groups that fall
  * entirely past the cut so no empty header survives. `limit === null` means
  * "all rows" (the caller passed --all / all: true).
  */
-import type { BlockCount, GroupedPagination, Pagination } from "../contracts.ts";
+import type { BlockCount, GroupedTruncation, Truncation } from "../contracts.ts";
 import type { Ref } from "../model/entities.ts";
 import type { AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
@@ -26,7 +26,7 @@ export interface GroupedLimits {
   project: number | null;
 }
 
-const whole = (total: number, limit: number | null): Pagination => ({
+const whole = (total: number, limit: number | null): Truncation => ({
   shown: total,
   total,
   limit,
@@ -34,15 +34,15 @@ const whole = (total: number, limit: number | null): Pagination => ({
 });
 
 /** Flat list: slice to the limit; total is the full filtered length. */
-export function paginateList<T>(
+export function truncateList<T>(
   items: T[],
   limit: number | null,
-): { data: T[]; pagination: Pagination } {
+): { data: T[]; truncation: Truncation } {
   const total = items.length;
-  if (limit === null || total <= limit) return { data: items, pagination: whole(total, limit) };
+  if (limit === null || total <= limit) return { data: items, truncation: whole(total, limit) };
   return {
     data: items.slice(0, limit),
-    pagination: { shown: limit, total, limit, truncated: true },
+    truncation: { shown: limit, total, limit, truncated: true },
   };
 }
 
@@ -51,18 +51,18 @@ export function paginateList<T>(
  * so a limit smaller than the Today block trims Evening to nothing. The badge
  * (a whole-view count summary) is preserved unchanged.
  */
-export function paginateToday(
+export function truncateToday(
   view: TodayView,
   limit: number | null,
-): { data: TodayView; pagination: Pagination } {
+): { data: TodayView; truncation: Truncation } {
   const total = view.today.length + view.evening.length;
-  if (limit === null || total <= limit) return { data: view, pagination: whole(total, limit) };
+  if (limit === null || total <= limit) return { data: view, truncation: whole(total, limit) };
   const today = view.today.slice(0, limit);
   const evening = view.evening.slice(0, Math.max(0, limit - today.length));
   const shown = today.length + evening.length;
   return {
     data: { today, evening, badge: view.badge },
-    pagination: { shown, total, limit, truncated: true },
+    truncation: { shown, total, limit, truncated: true },
   };
 }
 
@@ -107,7 +107,7 @@ const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
 export function previewSections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; grouped: GroupedPagination } {
+): { data: SidebarSection[]; grouped: GroupedTruncation } {
   const outSections: SidebarSection[] = [];
   const blocks: BlockCount[] = [];
   let truncated = false;
@@ -189,7 +189,7 @@ export function partitionSomedaySection(section: SidebarSection): SomedayPartiti
 export function previewSomedaySections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; grouped: GroupedPagination } {
+): { data: SidebarSection[]; grouped: GroupedTruncation } {
   const outSections: SidebarSection[] = [];
   const blocks: BlockCount[] = [];
   let truncated = false;
@@ -240,7 +240,7 @@ export function previewSomedaySections(
 export function capAreaSections(
   view: AreaView,
   limits: GroupedLimits,
-): { data: AreaView; grouped: GroupedPagination } {
+): { data: AreaView; grouped: GroupedTruncation } {
   const blocks: BlockCount[] = [];
   let truncated = false;
   const projects = limits.project === null ? view.projects : view.projects.slice(0, limits.project);

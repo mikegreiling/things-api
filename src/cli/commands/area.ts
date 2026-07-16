@@ -11,7 +11,7 @@ import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
-import { capAreaSections, type GroupedLimits } from "../../read/pagination.ts";
+import { capAreaSections, type GroupedLimits } from "../../read/truncation.ts";
 import { openInThings } from "./reads.ts";
 import {
   invocation,
