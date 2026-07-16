@@ -108,8 +108,12 @@ describe("tiered name resolution (areas/tags)", () => {
   it("the throwing wrapper reports not-found vs ambiguous", () => {
     seedArea(fx.db, "Dup");
     seedArea(fx.db, "Dup");
-    expect(() => resolveAreaUuid(fx.db, "Nope")).toThrow(/not found/);
-    expect(() => resolveAreaUuid(fx.db, "Dup")).toThrow(/ambiguous/);
+    // Not-found names the accepted forms (Part 2 error copy); ambiguous states
+    // the match count and how to disambiguate.
+    expect(() => resolveAreaUuid(fx.db, "Nope")).toThrow(
+      /no area matching "Nope" — tried uuid, partial-uuid, and name/,
+    );
+    expect(() => resolveAreaUuid(fx.db, "Dup")).toThrow(/"Dup" matches 2 areas/);
   });
 });
 

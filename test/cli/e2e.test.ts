@@ -287,7 +287,7 @@ describe("cli search (Phase 12 ergonomics)", () => {
 
     const bad = runCli(["search", "alpha", "--tag", "nope", "--json", "--db", fx.path]);
     expect(bad.exitCode).not.toBe(0);
-    expect(JSON.parse(bad.stdout).error.message).toMatch(/tag not found/);
+    expect(JSON.parse(bad.stdout).error.message).toMatch(/no tag matching/);
   });
 });
 
@@ -1502,7 +1502,7 @@ describe("cli namespace implied-show (item 2)", () => {
     const proj = seedProject(fx.db, { title: "Firmware", index: 1 });
     const out = runCliErr(["area", proj, "--db", fx.path]);
     expect(out.exitCode).toBe(2);
-    expect(out.stderr).toContain("area not found");
+    expect(out.stderr).toContain("no area matching");
   });
 
   it("meta.resolvedCommand + normalized echo ride along like other sugar", () => {

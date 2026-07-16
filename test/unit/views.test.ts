@@ -765,9 +765,9 @@ describe("tag-filtered list views (Phase 10)", () => {
 
   it("throws loudly on unknown or ambiguous tag references", () => {
     seedTagChain();
-    expect(() => todayView(fx.db, NOW, { tag: "nope" })).toThrow(/tag not found/);
+    expect(() => todayView(fx.db, NOW, { tag: "nope" })).toThrow(/no tag matching/);
     seedTag(fx.db, "focus"); // duplicate title
-    expect(() => todayView(fx.db, NOW, { tag: "focus" })).toThrow(/ambiguous/);
+    expect(() => todayView(fx.db, NOW, { tag: "focus" })).toThrow(/"focus" matches \d+ tags/);
   });
 
   it("filters anytime/someday/logbook the same way", () => {
@@ -949,9 +949,9 @@ describe("searchView (Phase 12 ergonomics)", () => {
   it("honors --limit and fails loudly on unknown refs", () => {
     seedSearchWorld();
     expect(searchView(fx.db, "widget", { limit: 2 })).toHaveLength(2);
-    expect(() => searchView(fx.db, "widget", { project: "nope" })).toThrow(/project not found/);
-    expect(() => searchView(fx.db, "widget", { area: "nope" })).toThrow(/area not found/);
-    expect(() => searchView(fx.db, "widget", { tag: "nope" })).toThrow(/tag not found/);
+    expect(() => searchView(fx.db, "widget", { project: "nope" })).toThrow(/no project matching/);
+    expect(() => searchView(fx.db, "widget", { area: "nope" })).toThrow(/no area matching/);
+    expect(() => searchView(fx.db, "widget", { tag: "nope" })).toThrow(/no tag matching/);
   });
 });
 
@@ -1172,8 +1172,8 @@ describe("areaView", () => {
     fx = buildFixtureDb();
     seedArea(fx.db, "Dup");
     seedArea(fx.db, "Dup");
-    expect(() => areaView(fx.db, "Nope", NOW)).toThrow(/not found/);
-    expect(() => areaView(fx.db, "Dup", NOW)).toThrow(/ambiguous/);
+    expect(() => areaView(fx.db, "Nope", NOW)).toThrow(/no area matching/);
+    expect(() => areaView(fx.db, "Dup", NOW)).toThrow(/"Dup" matches 2 areas/);
   });
 });
 
@@ -1192,12 +1192,14 @@ describe("resolveTaskUuidPrefix", () => {
     // exact match wins over prefix ambiguity
     expect(resolveTaskUuidPrefix(fx.db, "SHORTUUID111111111111")).toBe("SHORTUUID111111111111");
     expect(() => resolveTaskUuidPrefix(fx.db, "ABC")).toThrow(/at least 6/);
-    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDEF1234567890ZZZZ99")).toThrow(/no record/);
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDEF1234567890ZZZZ99")).toThrow(
+      /no to-do matching/,
+    );
     fx.db.exec("DELETE FROM TMTask WHERE uuid = 'SHORTUUID111111111111'");
     seedTodo(fx.db, { uuid: "ABCDEG9999999999CCCCCC", title: "three" });
-    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDE9")).toThrow(/no record/);
+    expect(() => resolveTaskUuidPrefix(fx.db, "ABCDE9")).toThrow(/no to-do matching/);
     expect(() => resolveTaskUuidPrefix(fx.db, "ABC" + "DE".repeat(2))).toThrow(
-      /ambiguous|no record/,
+      /ambiguous|no to-do matching/,
     );
   });
 });

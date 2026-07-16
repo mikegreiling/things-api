@@ -347,8 +347,8 @@ describe("runMakeRepeatingProject — refusals + gating", () => {
       { uuid: "NOPE-000000", frequency: "weekly", interval: 1 },
       GUI,
     ).catch((e: Error) => e);
-    // resolveTaskUuidPrefix throws on an unknown uuid; either a throw or a block is acceptable.
-    if (res instanceof Error) expect(res.message).toMatch(/unknown|no .*record|not/i);
+    // the project resolver refuses an unknown ref; either a throw or a block is acceptable.
+    if (res instanceof Error) expect(res.message).toMatch(/unknown|no project matching|not/i);
     else expect(res).toMatchObject({ kind: "blocked" });
   });
 

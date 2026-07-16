@@ -141,9 +141,11 @@ export interface ErrorEnvelope {
      * Structured, machine-readable failure context (ADDITIVE). For an
      * unresolved show/bare-noun subject it carries `candidates` — the
      * did-you-mean title matches (standard item shapes, capped) so an agent
-     * can self-correct without a second round-trip.
+     * can self-correct without a second round-trip. For a bare mutation verb
+     * (`things update <ref>`) it carries `suggestions` — the concrete
+     * namespaced command(s) to run instead.
      */
-    details?: { candidates?: unknown[] };
+    details?: { candidates?: unknown[]; suggestions?: string[] };
   };
   meta: EnvelopeMeta;
 }

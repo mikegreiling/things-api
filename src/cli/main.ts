@@ -21,6 +21,7 @@ import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
+import { runVerbHint } from "./verb-hint.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
 import { ExitCode, PKG_VERSION } from "../contracts.ts";
 
@@ -71,8 +72,15 @@ export function runCli(): void {
   // The single router (docs/design/cli-grammar.md): classify the invocation,
   // then dispatch its normalized argv. Sugar forms (bare noun, keyword-in-show)
   // normalize into the canonical grammar here.
-  const { argv } = resolveInvocation(program, process.argv.slice(2));
-  program.parse(argv, { from: "user" });
+  const resolved = resolveInvocation(program, process.argv.slice(2));
+  // A bare top-level mutation verb (`things update <ref>`) never reaches
+  // commander: it is answered with a namespaced-write suggestion instead of the
+  // show-sugar's confusing usage error (docs/design/cli-grammar.md).
+  if (resolved.form === "verb-hint") {
+    runVerbHint(program, resolved.argv);
+    return;
+  }
+  program.parse(resolved.argv, { from: "user" });
 }
 
 // Direct-run detection must survive the npm .bin symlink (argv[1] ends with
