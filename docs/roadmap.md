@@ -138,5 +138,28 @@ The read-side routing sugar (bare noun, `show`/`open` keyword rewrites, loose re
 
 **Phase 2 — parked (specified, not built):** resource-scoped closed-enum verbs, gh-style — `things project <ref> add-heading <title>`, `things project <ref> add-todo <title>`. Fixed slots (position 2 = ref, position 3 = verb from a closed enum), flags for everything else. This is the honest ergonomic home for heading creation (headings are subordinate resources); `things heading create` stays for type-consistency. The closed enum is the discipline that keeps it from drifting into the free-form write grammar that is a deliberate non-goal. Spec: [design/cli-grammar.md](design/cli-grammar.md) § Phase 2.
 
+## §K. HELPBENCH — agent-ergonomics eval loop (parked; Mike + orchestrator ideation 2026-07-15)
+
+An eval harness that measures how well a low-capability agent can accomplish real tasks armed only with the CLI's help system (and, later, the future agent skill — the SKILL.md handbook parked in up-next §5). It doubles as **regression CI for the agent-facing docs**: when help text or the skill changes, the loop catches a drop in agent success before it ships.
+
+Design sketch to build against:
+- **Task suite**: rote tasks with **machine-checkable success** — every task asserts against a fixture DB (or CLI output), never a judgment call. No LLM-judge, no "looks right."
+- **Driver**: spawns a **low-capability model (Haiku-class floor)** with **only Bash + the CLI** (or CLI + skill), **zero priors** (no Things pretraining leaned on, no hints beyond what the surfaces themselves teach), a **fixed prompt**, and **N repetitions** per task for variance.
+- **Metrics, ORDERED — success-rate FIRST, then turns/tokens GATED on success.** Efficiency is only counted on runs that succeeded. Un-gated efficiency is explicitly avoided: it rewards guessing over reading the help (a fast wrong answer would score better than a slower correct one).
+- **A/B discipline**: a **pinned model version per baseline** (so a model update can't be mistaken for a help-text regression), plus **holdout tasks + paraphrase variants** to guard against overfitting the help copy to the benchmark's exact phrasing.
+- **First natural A/B pair**: **pre-#152 help vs the shipped signpost system** — the zero-knowledge-traversal work that motivated the signposts is the obvious first baseline to score.
+
+Status: **parked, not scheduled.**
+
+## §L. `--overdue` convenience filter (parked pending Mike; small)
+
+Logged by the **#152 zero-knowledge traversal**: "overdue" is not a first-class filter. It is **composable today** — deadline markers in list rows, deadline fields in `--json`, and `today`'s app-parity surfacing of overdue-deadline items all expose the raw signal — but an agent has to **assemble** it rather than ask for it. Candidate small enhancement: a convenience `--overdue` that names the intent directly.
+
+Constraints to honor if built:
+- **Bounds & defaults doctrine** ([design/cli-grammar.md](design/cli-grammar.md) § Bounds & defaults) — decide whether `--overdue` is a content scope (both defaults still apply) or a bound (lifts the range default); it reads as a content scope.
+- **App parity** — the Things GUI has **no overdue view either**, so shipping this is a **deliberate decision to exceed the app**. Weigh it the way inherited-tags display was weighed (where we deliberately DID exceed the app), rather than defaulting to parity.
+
+Status: **parked pending Mike.**
+
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)
