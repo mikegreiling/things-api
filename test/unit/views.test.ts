@@ -880,6 +880,95 @@ describe('untagged filter (GUI "No Tag")', () => {
   });
 });
 
+describe("overdue filter (open items past their deadline)", () => {
+  // NOW is local 2026-07-02. "Overdue" = OPEN, deadline strictly BEFORE today.
+  // A world of active to-dos spanning the deadline boundary, reused per view.
+  function seedOverdueWorld() {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "od-yesterday", start: "active", deadline: "2026-07-01" });
+    seedTodo(fx.db, { title: "od-today", start: "active", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "od-tomorrow", start: "active", deadline: "2026-07-03" });
+    seedTodo(fx.db, { title: "od-none", start: "active" });
+    // Completed + past deadline, never swept (stopDate NULL): OPEN_OR_UNSWEPT
+    // keeps it in anytime/today, but --overdue (status = 0) must drop it.
+    seedTodo(fx.db, {
+      title: "od-done",
+      start: "active",
+      status: "completed",
+      deadline: "2026-06-30",
+    });
+  }
+
+  it("anytime: boundary — due-yesterday IN; today/tomorrow/none/completed OUT", () => {
+    seedOverdueWorld();
+    const titles = flat(anytimeView(fx.db, NOW, { overdue: true })).map((i) => i.title);
+    expect(titles).toEqual(["od-yesterday"]);
+    // The unfiltered view still carries the whole world (overdue only narrows).
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).toEqual(
+      expect.arrayContaining(["od-yesterday", "od-today", "od-tomorrow", "od-none", "od-done"]),
+    );
+  });
+
+  it("today: keeps only the open, past-deadline members", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "today-overdue", start: "active", deadline: "2026-07-01" });
+    seedTodo(fx.db, { title: "today-due", start: "active", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "today-sched", start: "active", startDate: "2026-07-02" });
+    const view = todayView(fx.db, NOW, { overdue: true });
+    expect([...view.today, ...view.evening].map((i) => i.title)).toEqual(["today-overdue"]);
+  });
+
+  it("inbox: keeps only inbox captures past their deadline", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "inbox-overdue", start: "inbox", deadline: "2026-07-01" });
+    seedTodo(fx.db, { title: "inbox-future", start: "inbox", deadline: "2026-07-03" });
+    seedTodo(fx.db, { title: "inbox-plain", start: "inbox" });
+    expect(inboxView(fx.db, NOW, { overdue: true }).map((i) => i.title)).toEqual(["inbox-overdue"]);
+  });
+
+  it("someday: keeps only incubated items past their deadline", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "someday-overdue", start: "someday", deadline: "2026-07-01" });
+    seedTodo(fx.db, { title: "someday-future", start: "someday", deadline: "2026-07-03" });
+    seedTodo(fx.db, { title: "someday-plain", start: "someday" });
+    const titles = flat(somedayView(fx.db, NOW, { overdue: true })).map((i) => i.title);
+    expect(titles).toEqual(["someday-overdue"]);
+  });
+
+  it("search: narrows a needle to its open, past-deadline matches", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "widget overdue", start: "active", deadline: "2026-07-01" });
+    seedTodo(fx.db, { title: "widget due", start: "active", deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "widget none", start: "active" });
+    const titles = searchView(fx.db, "widget", { overdue: true }, NOW).map((i) => i.title);
+    expect(titles).toEqual(["widget overdue"]);
+  });
+
+  it("composes with --tag as an intersection (overdue AND tagged)", () => {
+    fx = buildFixtureDb();
+    const focus = seedTag(fx.db, "focus");
+    const tagged = seedTodo(fx.db, { title: "od tagged", start: "active", deadline: "2026-07-01" });
+    tagTask(fx.db, tagged, focus);
+    seedTodo(fx.db, { title: "od untagged", start: "active", deadline: "2026-07-01" });
+    const titles = flat(anytimeView(fx.db, NOW, { overdue: true, tag: "focus" })).map(
+      (i) => i.title,
+    );
+    expect(titles).toEqual(["od tagged"]);
+  });
+
+  it("keys the boundary on the injected clock — due-today becomes overdue tomorrow", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "due-0702", start: "active", deadline: "2026-07-02" });
+    // NOW = 07-02: not yet overdue.
+    expect(flat(anytimeView(fx.db, NOW, { overdue: true })).map((i) => i.title)).toEqual([]);
+    // One day later the SAME row is overdue — no hardcoded date anywhere.
+    const tomorrow = new Date(2026, 6, 3, 12, 0);
+    expect(flat(anytimeView(fx.db, tomorrow, { overdue: true })).map((i) => i.title)).toEqual([
+      "due-0702",
+    ]);
+  });
+});
+
 describe("searchView (Phase 12 ergonomics)", () => {
   function seedSearchWorld() {
     fx = buildFixtureDb();

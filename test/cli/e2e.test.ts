@@ -1656,3 +1656,48 @@ describe("cli search heading doctrine + ranking (item 5)", () => {
     ]);
   });
 });
+
+describe("overdue filter (cli)", () => {
+  it("today --overdue narrows to open, past-deadline members", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "past", start: "active", deadline: isoFromToday(-1) });
+    seedTodo(fx.db, { title: "due-today", start: "active", deadline: isoFromToday(0) });
+    seedTodo(fx.db, { title: "future", start: "active", deadline: isoFromToday(3) });
+    const env = JSON.parse(runCli(["today", "--overdue", "--json", "--db", fx.path]).stdout);
+    expect(env.data.today.map((i: { title: string }) => i.title)).toEqual(["past"]);
+  });
+
+  it("is a content scope: it never lifts the default row cap", () => {
+    fx = buildFixtureDb();
+    // 55 overdue inbox captures > the default 50: a content scope must not lift
+    // the cap the way a range bound (--since/--until) would.
+    for (let i = 0; i < 55; i++) {
+      seedTodo(fx.db, {
+        title: `cap ${i}`,
+        start: "inbox",
+        deadline: isoFromToday(-1),
+        index: i,
+      });
+    }
+    const capped = JSON.parse(runCli(["inbox", "--overdue", "--json", "--db", fx.path]).stdout);
+    expect(capped.data).toHaveLength(50);
+    // --all (a volume lift) still reveals them all — overdue composes with it.
+    const all = JSON.parse(
+      runCli(["inbox", "--overdue", "--all", "--json", "--db", fx.path]).stdout,
+    );
+    expect(all.data).toHaveLength(55);
+  });
+
+  it("search --overdue refuses the status-widening flags", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "widget", start: "active", deadline: isoFromToday(-1) });
+    for (const flag of ["--logged", "--trashed", "--all"]) {
+      const { exitCode } = runCli(["search", "widget", "--overdue", flag, "--db", fx.path]);
+      expect(exitCode, flag).toBe(2);
+    }
+    // On its own it is accepted and narrows the needle.
+    const ok = runCli(["search", "widget", "--overdue", "--json", "--db", fx.path]);
+    expect(ok.exitCode).toBe(0);
+    expect(JSON.parse(ok.stdout).data.map((i: { title: string }) => i.title)).toEqual(["widget"]);
+  });
+});

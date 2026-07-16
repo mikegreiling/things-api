@@ -220,6 +220,8 @@ Content scope (which items qualify):
   --tag <ref>        items with this tag: direct, inherited, or on a descendant tag
   --exact-tag        with --tag: the named tag only, no hierarchy descendants
   --untagged         only items with no tag at all (the app's "No Tag" filter)
+  --overdue          only open items past their deadline, due today excluded
+                     (today, inbox, anytime, someday, search)
   --area <ref>       restrict to one area (logbook, search)
   --project <ref>    restrict to one project (logbook, search)
   --type <kind>      search only: todo | project

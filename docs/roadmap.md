@@ -151,15 +151,16 @@ Design sketch to build against:
 
 Status: **parked, not scheduled.**
 
-## §L. `--overdue` convenience filter (parked pending Mike; small)
+## §L. `--overdue` convenience filter — SHIPPED (2026-07-16)
 
-Logged by the **#152 zero-knowledge traversal**: "overdue" is not a first-class filter. It is **composable today** — deadline markers in list rows, deadline fields in `--json`, and `today`'s app-parity surfacing of overdue-deadline items all expose the raw signal — but an agent has to **assemble** it rather than ask for it. Candidate small enhancement: a convenience `--overdue` that names the intent directly.
+Logged by the **#152 zero-knowledge traversal**: "overdue" was not a first-class filter — it was composable but an agent had to assemble it. Shipped as a **content scope** (Mike ruling 2026-07-15): `--overdue` = OPEN items whose `deadline` is strictly BEFORE today (due-today is NOT overdue, mirroring the app's Today red-badge split, where an equal-to-today deadline is "due" and only an earlier one is "overdue"). The boundary rides the injected clock, never a hardcoded date.
 
-Constraints to honor if built:
-- **Bounds & defaults doctrine** ([design/cli-grammar.md](design/cli-grammar.md) § Bounds & defaults) — decide whether `--overdue` is a content scope (both defaults still apply) or a bound (lifts the range default); it reads as a content scope.
-- **App parity** — the Things GUI has **no overdue view either**, so shipping this is a **deliberate decision to exceed the app**. Weigh it the way inherited-tags display was weighed (where we deliberately DID exceed the app), rather than defaulting to parity.
+How the constraints landed:
+- **Bounds & defaults doctrine** — it is a **content scope**: it never lifts a `--limit`/`--since`/`--until` default and composes as AND with `--tag`/`--untagged`. Confirmed against the doctrine in [design/cli-grammar.md](design/cli-grammar.md) § Bounds & defaults.
+- **App parity** — the GUI has no overdue view; this deliberately exceeds the app, weighed like inherited-tags display.
+- **View set** — exposed on the current-work views where `--tag` applies AND the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search` (search rejects the combination with `--logged`/`--trashed`/`--all`, whose status-widening contradicts overdue's open-only predicate). Deliberately EXCLUDED: `upcoming` (forward-looking — every cohort requires a future startDate or future deadline, the exact negation of overdue) and `logbook`/`trash` (closed items — "open past deadline" is definitionally empty). `area show` / `project show` accept no content scopes today (no `--tag` there either), so they are out of scope. Mirrored on the MCP `read_view`/`search` tools with the same guards.
 
-Status: **parked pending Mike.**
+Status: **shipped.**
 
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)

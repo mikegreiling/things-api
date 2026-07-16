@@ -497,6 +497,21 @@ describe("write-command help states the contract", () => {
     }
   });
 
+  it("current-work views + search expose --overdue with a behavioral one-liner", () => {
+    // --overdue is a content scope on the current-work views and search; the
+    // one-liner states behavior and the due-today carve-out.
+    for (const name of ["today", "inbox", "anytime", "someday", "search"]) {
+      const help = helpFor(name);
+      expect(help, name).toContain("--overdue");
+      expect(help, name).toContain("past their deadline");
+      expect(help, name).toContain("due today is not overdue");
+    }
+    // Excluded views (forward-looking / closed-item) do NOT offer it.
+    for (const name of ["upcoming", "logbook", "trash"]) {
+      expect(helpFor(name), name).not.toContain("--overdue");
+    }
+  });
+
   it("list views + search expose --exact-tag alongside --tag", () => {
     for (const name of ["today", "inbox", "search", "logbook"]) {
       const help = helpFor(name);

@@ -453,7 +453,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     fingerprint,
     read: {
       today: (f) => todayView(conn.db, now(), f),
-      inbox: (f) => inboxView(conn.db, f),
+      inbox: (f) => inboxView(conn.db, now(), f),
       anytime: (f) => anytimeView(conn.db, now(), f),
       upcoming: (f) => upcomingView(conn.db, now(), f),
       someday: (f) => somedayView(conn.db, now(), f),
@@ -465,7 +465,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       areaView: (ref) => areaView(conn.db, ref, now()),
       areas: () => areasView(conn.db),
       tags: () => tagsView(conn.db),
-      search: (query, o) => searchView(conn.db, query, o),
+      search: (query, o) => searchView(conn.db, query, o, now()),
       liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o),
       changes: (o) => changesView(conn.db, o),
       showTarget: (ref) => classifyShowTarget(conn.db, ref),

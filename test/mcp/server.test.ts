@@ -233,6 +233,50 @@ describe("things MCP server", () => {
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
+  it("read_view overdue narrows to open, past-deadline members; rejects forward/closed views", async () => {
+    // NOW is pinned to 2026-07-05, so 07-04 is overdue, 07-05 is due-today.
+    seedTodo(fixture.db, { title: "MCP overdue", start: "active", deadline: "2026-07-04" });
+    seedTodo(fixture.db, { title: "MCP due", start: "active", deadline: "2026-07-05" });
+    seedTodo(fixture.db, { title: "MCP future", start: "active", deadline: "2026-07-08" });
+    await connect([fakeVector(null).vector]);
+    const view = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "today", overdue: true } }),
+    ) as { today: { title: string }[]; evening: unknown[] };
+    expect(view.today.map((i) => i.title)).toEqual(["MCP overdue"]);
+    const rejections = await Promise.all(
+      ["upcoming", "logbook", "trash"].map((bad) =>
+        client
+          .callTool({ name: "read_view", arguments: { view: bad, overdue: true } })
+          .then((rej) => [bad, rej] as const),
+      ),
+    );
+    for (const [bad, rej] of rejections) {
+      expect(rej.isError, bad).toBe(true);
+      expect(textOf(rej)).toMatchObject({ code: "usage" });
+    }
+  });
+
+  it("search overdue narrows to open, past-deadline matches; refuses status-widening flags", async () => {
+    seedTodo(fixture.db, { title: "widget overdue", start: "active", deadline: "2026-07-04" });
+    seedTodo(fixture.db, { title: "widget due", start: "active", deadline: "2026-07-05" });
+    await connect([fakeVector(null).vector]);
+    const hits = textOf(
+      await client.callTool({ name: "search", arguments: { query: "widget", overdue: true } }),
+    ) as { title: string }[];
+    expect(hits.map((i) => i.title)).toEqual(["widget overdue"]);
+    const rejections = await Promise.all(
+      ["logged", "trashed", "all"].map((flag) =>
+        client
+          .callTool({ name: "search", arguments: { query: "widget", overdue: true, [flag]: true } })
+          .then((rej) => [flag, rej] as const),
+      ),
+    );
+    for (const [flag, rej] of rejections) {
+      expect(rej.isError, flag).toBe(true);
+      expect(textOf(rej)).toMatchObject({ code: "usage" });
+    }
+  });
+
   it("search respects the open-by-default scope", async () => {
     seedTodo(fixture.db, { title: "findable open" });
     seedTodo(fixture.db, { title: "findable done", status: "completed" });

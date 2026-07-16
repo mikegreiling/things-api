@@ -152,7 +152,7 @@ The optional flags on a read view fall into four classes:
 
 - **Volume caps** — `--limit`, `--area-limit`, `--project-limit`. How many rows/blocks to show.
 - **Range bounds** — `--since`, `--until`. The time window the view covers.
-- **Content scopes** — `--tag`, `--untagged` (its inversion — the GUI's "No Tag", mutually exclusive with `--tag`/`--exact-tag`), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
+- **Content scopes** — `--tag`, `--untagged` (its inversion — the GUI's "No Tag", mutually exclusive with `--tag`/`--exact-tag`), `--overdue` (open items past their deadline — see below), `--area`, `--project`, `--type`, the search query, a bare subject. *Which* items qualify.
 - **Visibility toggles** — `--show-later`, `--logged`, `--trashed`, `--evening`. Whether an otherwise-hidden class is folded in.
 
 `--all` is its own thing: it removes restrictions (see the `--all` doctrine above) and conflicts with an explicit cap/bound exactly as before.
@@ -174,6 +174,21 @@ Worked examples on `upcoming` (default window `--until 1m`, default cap `--limit
 **Required-flag exception.** A REQUIRED bound carries no lift signal, because the user had no choice about stating it. `things changes` requires `--since`, so its presence does NOT lift the default `--limit 50`; `changes` behavior is unchanged.
 
 Rationale: defaults exist to keep the bare invocation small; once the user states any explicit bound they have taken over output sizing, so a stale second default must not silently re-clamp the result.
+
+### The `--overdue` content scope (Mike-approved)
+
+`--overdue` restricts a view to OPEN items whose `deadline` is strictly BEFORE today. It is a **content scope**, so it obeys the doctrine above: it never lifts a `--limit`/`--since`/`--until` default and composes as an intersection (`AND`) with `--tag`/`--untagged` and every other scope.
+
+**Due-today is NOT overdue** (`deadline < today`, not `<=`). This mirrors the app's own Today sidebar badge, which splits the red count into "due" (a deadline EQUAL to today) and "overdue" (an EARLIER deadline) — `--overdue` names only the latter. The boundary is the same injected clock every dated view uses (`localToday(now)` → packed date); it is never a hardcoded date. The scope also re-asserts open-ness (`status = 0`): on `today`/`anytime` (whose membership is `OPEN_OR_UNSWEPT`) a checked-but-unswept row that happens to sit past a deadline is dropped — overdue is *remaining* work.
+
+**Where it applies.** `--overdue` is offered on the current-work views where `--tag` applies and the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search`. On `search` it lists open items, so it is refused together with the status-widening `--logged`/`--trashed`/`--all` (the same fail-closed style as `--untagged` with `--tag`).
+
+**Where it is deliberately excluded (per view):**
+- `upcoming` — a forward-looking, future-time-bounded view: every cohort requires a future `startDate` or a future `deadline` (the deadline-forecast cohort is exactly `deadline > today`, the negation of overdue). A past deadline contradicts the view's own frame, so the flag is not offered; the rare future-scheduled-yet-past-deadline row is better surfaced by `anytime --overdue`.
+- `logbook` / `trash` — closed / trashed items. "Open items past a deadline" is definitionally empty there, so the flag is not offered.
+- `area show` / `project show` — the composite card views accept no content scopes today (no `--tag` either), so `--overdue` is out of scope for them.
+
+The MCP `read_view` and `search` tools carry `overdue` with the identical guards (rejected on `upcoming`/`logbook`/`trash`, and against `logged`/`trashed`/`all` on search).
 
 ## Did-you-mean fallback (unresolved subjects)
 

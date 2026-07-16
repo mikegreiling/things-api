@@ -179,6 +179,10 @@ const tagFilterShape = {
     .boolean()
     .optional()
     .describe("Only items with no tag (direct or inherited); not combinable with tag/exact_tag"),
+  overdue: z
+    .boolean()
+    .optional()
+    .describe("Only open items past their deadline (due today is not overdue)"),
 };
 
 /** untagged inverts tag, so pairing them is contradictory (surface guard). */
@@ -426,6 +430,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (args.view !== "today" && args.evening === true) {
           return usage(`evening applies only to today, not ${args.view}`);
         }
+        // --overdue is a current-work content scope: the forward-looking
+        // `upcoming` and the closed-item `logbook`/`trash` do not accept it.
+        if (
+          args.overdue === true &&
+          args.view !== "today" &&
+          args.view !== "inbox" &&
+          args.view !== "anytime" &&
+          args.view !== "someday"
+        ) {
+          return usage(`overdue applies to today/inbox/anytime/someday, not ${args.view}`);
+        }
         if (args.view === "someday" && args.project_limit !== undefined) {
           return usage(
             "project_limit does not apply to someday — pass a number as show_active_project_items " +
@@ -444,6 +459,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ...(args.tag !== undefined && { tag: args.tag }),
           ...(args.exact_tag === true && { exactTag: true }),
           ...(args.untagged === true && { untagged: true }),
+          ...(args.overdue === true && { overdue: true }),
         };
         switch (args.view) {
           case "today": {
@@ -540,6 +556,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     async (args) =>
       guard(() => {
         if (untaggedConflict(args)) return usage("pass untagged, or tag/exact_tag — not both");
+        if (
+          args.overdue === true &&
+          (args.logged === true || args.trashed === true || args.all === true)
+        ) {
+          return usage("overdue lists open items; it does not combine with logged/trashed/all");
+        }
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
         const { data, pagination } = paginateList(
@@ -548,6 +570,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(args.tag !== undefined && { tag: args.tag }),
             ...(args.exact_tag === true && { exactTag: true }),
             ...(args.untagged === true && { untagged: true }),
+            ...(args.overdue === true && { overdue: true }),
             ...(args.project !== undefined && { project: args.project }),
             ...(args.area !== undefined && { area: args.area }),
             ...(args.type !== undefined && { type: args.type }),
