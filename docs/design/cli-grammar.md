@@ -181,14 +181,21 @@ Rationale: defaults exist to keep the bare invocation small; once the user state
 
 **Due-today is NOT overdue** (`deadline < today`, not `<=`). This mirrors the app's own Today sidebar badge, which splits the red count into "due" (a deadline EQUAL to today) and "overdue" (an EARLIER deadline) — `--overdue` names only the latter. The boundary is the same injected clock every dated view uses (`localToday(now)` → packed date); it is never a hardcoded date. The scope also re-asserts open-ness (`status = 0`): on `today`/`anytime` (whose membership is `OPEN_OR_UNSWEPT`) a checked-but-unswept row that happens to sit past a deadline is dropped — overdue is *remaining* work.
 
-**Where it applies.** `--overdue` is offered on the current-work views where `--tag` applies and the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search`. On `search` it lists open items, so it is refused together with the status-widening `--logged`/`--trashed`/`--all` (the same fail-closed style as `--untagged` with `--tag`).
+**Where it applies.** `--overdue` is offered on the current-work views where `--tag` applies and the scope is coherent: `today`, `inbox`, `anytime`, `someday`, and `search`; and on the container/list views `things projects`, `project show`, and `area show` (and their `things <id>` sugar). On `search` it lists open items, so it is refused together with the status-widening `--logged`/`--trashed`/`--all` (the same fail-closed style as `--untagged` with `--tag`).
+
+**Container/list semantics (OWN-DEADLINE UNIFORM).** In the container/list views `--overdue` keeps each listed ENTITY iff its OWN deadline is overdue — there is NO recursion into container contents. Deadlines are not inherited, so this scope is safe here even though the container views do not yet accept `--tag` (see the parked `--tag`-in-containers item below):
+- **`things projects`** (project LIST) — keeps projects whose own deadline is overdue. Projects are `TMTask type=1` carrying their own `deadline` column, so the same `OVERDUE` predicate applies to project rows verbatim.
+- **`project show`** (and `things <project-id>`) — filters the project's child TO-DOS to those whose own deadline is overdue. Headings left with no surviving child collapse (no empty sections); the project header itself always renders.
+- **`area show`** (and `things <area-id>`) — filters the displayed rows by each row's OWN deadline: the area's loose to-dos by theirs AND its child projects by the project's own deadline. There is NO descent into project contents — an overdue to-do *inside* a non-overdue project does not surface here (that is `project show --overdue`). Sections with no surviving rows collapse to the view's existing empty state.
+
+As on every other view it is a content scope: it never lifts a `--limit`/section cap, and it composes as `AND` with the scopes these views already accept. The container "no strict `--limit`" doctrine holds — `--overdue` narrows content, it does not impose or lift the per-section caps (`--area-limit`/`--project-limit`) or make a strict total limit legal.
 
 **Where it is deliberately excluded (per view):**
 - `upcoming` — a forward-looking, future-time-bounded view: every cohort requires a future `startDate` or a future `deadline` (the deadline-forecast cohort is exactly `deadline > today`, the negation of overdue). A past deadline contradicts the view's own frame, so the flag is not offered; the rare future-scheduled-yet-past-deadline row is better surfaced by `anytime --overdue`.
 - `logbook` / `trash` — closed / trashed items. "Open items past a deadline" is definitionally empty there, so the flag is not offered.
-- `area show` / `project show` — the composite card views accept no content scopes today (no `--tag` either), so `--overdue` is out of scope for them.
+- `things areas` (area LIST) and any area-as-entity list — an area is not a dated entity (it carries no `deadline` column), so `--overdue` is vacuous. It is rejected fail-closed on the areas list with a clear message (mirroring the `upcoming`/`logbook`/`trash` exclusion style). Because `things areas <ref>` is a true synonym of `area show <ref>`, the flag IS accepted there (it filters that one area's rows); only the bare list rejects it. The MCP `list_collections` tool likewise rejects `overdue` for `kind: areas`/`tags`.
 
-The MCP `read_view` and `search` tools carry `overdue` with the identical guards (rejected on `upcoming`/`logbook`/`trash`, and against `logged`/`trashed`/`all` on search).
+The MCP tools carry `overdue` with the identical guards: `read_view`/`search` (rejected on `upcoming`/`logbook`/`trash`, and against `logged`/`trashed`/`all` on search), `get_project`/`get_area` (own-deadline filter + heading collapse / no recursion), and `list_collections` (`projects` only; `areas`/`tags` rejected).
 
 ## Did-you-mean fallback (unresolved subjects)
 

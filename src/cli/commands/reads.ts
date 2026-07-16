@@ -787,6 +787,7 @@ export function registerReadCommands(program: Command): void {
     .option("--area <ref>", "filter by area (uuid or unique name)")
     .option("--show-later", "include someday/future-scheduled projects after each active block")
     .option("--show-logged [n]", "showing one project: include logged items (bare = all)")
+    .option("--overdue", "only projects past their deadline (due today is not overdue)")
     .option("--all", "include someday/future-scheduled projects (same as --show-later)")
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -794,10 +795,16 @@ export function registerReadCommands(program: Command): void {
       (
         id: string | undefined,
         opts: GlobalReadOpts &
-          ProjectShowActionOpts & { area?: string; showLater?: boolean; all?: boolean },
+          ProjectShowActionOpts & {
+            area?: string;
+            showLater?: boolean;
+            all?: boolean;
+            overdue?: boolean;
+          },
       ) => {
         // Given a ref, this IS `things project show <ref>` — delegate to the same
-        // code path so the output is identical (a true synonym).
+        // code path so the output is identical (a true synonym). --overdue rides
+        // along (it filters the shown project's children there).
         if (id !== undefined) {
           runProjectShow(id, opts);
           return;
@@ -806,6 +813,11 @@ export function registerReadCommands(program: Command): void {
         // — so it is exactly --show-later (the charter: --all removes every
         // default restriction on the view's own content).
         const showLater = opts.showLater === true || opts.all === true;
+        // OWN-DEADLINE UNIFORM content scope: keep only projects whose own
+        // deadline is overdue. Composes as AND with --area/--show-later; a
+        // content scope, it never lifts a limit. Threaded into the hidden-later
+        // counting queries too so the counts reflect the same filter.
+        const overdue = opts.overdue === true;
         let hints: LaterHints | undefined;
         withClient(
           opts,
@@ -815,12 +827,15 @@ export function registerReadCommands(program: Command): void {
             const visible = c.read.projects({
               ...scope,
               ...(showLater && { later: true }),
+              ...(overdue && { overdue: true }),
             });
             if (opts.area === undefined) {
               // Sidebar scaffold: every VISIBLE area renders (project-less
               // ones say so), in sidebar order; the loose block leads. One
               // extra projects query buys the hidden-later counts.
-              const full = showLater ? visible : c.read.projects({ later: true });
+              const full = showLater
+                ? visible
+                : c.read.projects({ later: true, ...(overdue && { overdue: true }) });
               const shown = new Set(visible.map((i) => i.uuid));
               const groups: LaterHints["groups"] = [
                 { area: null, hidden: 0 },
@@ -840,7 +855,11 @@ export function registerReadCommands(program: Command): void {
               hints = { groups };
             } else if (!showLater) {
               // --area scoped: only the bottom hint needs a count.
-              const full = c.read.projects({ ...scope, later: true });
+              const full = c.read.projects({
+                ...scope,
+                later: true,
+                ...(overdue && { overdue: true }),
+              });
               hints = { groups: [{ area: null, hidden: full.length - visible.length }] };
             }
             return visible;
@@ -856,6 +875,7 @@ export function registerReadCommands(program: Command): void {
               // own scope (--area) plus the flag that surfaces the later block.
               const reveal = invocation("projects", [
                 opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
+                overdue && "--overdue",
                 "--show-later",
               ]);
               lines.push("", disclosureHint(hidden, "later project", [{ command: reveal }]));
@@ -879,13 +899,28 @@ export function registerReadCommands(program: Command): void {
     .option("--show-logged [n]", "showing one area: include the n most recent logged items")
     .option("--project-limit <n>", "showing one area: maximum project rows to show")
     .option("--area-limit <n>", "showing one area: maximum direct to-dos to show")
+    .option(
+      "--overdue",
+      "showing one area: only rows whose own deadline is past (due today is not overdue)",
+    )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((id: string | undefined, opts: GlobalReadOpts & AreaShowActionOpts) => {
       // Given a ref, this IS `things area show <ref>` — delegate to the same code
-      // path so the output is identical (a true synonym).
+      // path so the output is identical (a true synonym); --overdue filters its
+      // rows there.
       if (id !== undefined) {
         runAreaShow(id, opts);
+        return;
+      }
+      // The areas LIST has no deadline to compare against — an area is not a
+      // dated entity — so --overdue is vacuous here and rejected fail-closed
+      // (the same exclusion style #159 used for upcoming/logbook/trash).
+      if (opts.overdue === true) {
+        usageError(
+          opts,
+          "--overdue does not apply to the areas list — areas have no deadline; use it on `things areas <ref>` (that area's rows) or `things projects --overdue`",
+        );
         return;
       }
       withClient(

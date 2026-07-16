@@ -45,13 +45,14 @@ import { DidYouMeanError } from "../did-you-mean.ts";
 function typedShowCommand(t: ShowTarget, ref: string, opts: ProjectShowFlags): string {
   const cmd = t.kind === "area" ? "area show" : t.kind === "project" ? "project show" : "todo show";
   const echoRef = t.viaHeading === true ? t.uuid : stripThingsUri(ref);
-  // The loose router's --show-later/--show-logged toggles only apply to the
-  // area/project cards — never echo them onto `todo show`, which lacks them.
-  const flags = t.kind === "to-do" ? [] : showToggleFlags(opts);
+  // The loose router's --show-later/--show-logged/--overdue flags only apply to
+  // the area/project cards — never echo them onto `todo show`, which lacks them.
+  const flags =
+    t.kind === "to-do" ? [] : [...showToggleFlags(opts), opts.overdue === true && "--overdue"];
   return invocation(cmd, [shellQuote(echoRef), ...flags]);
 }
 
-type ProjectShowFlags = { showLater?: boolean; showLogged?: boolean | string };
+type ProjectShowFlags = { showLater?: boolean; showLogged?: boolean | string; overdue?: boolean };
 
 /**
  * The routing sugars whose canonical form is worth echoing: a verb-omitted
@@ -97,6 +98,10 @@ export function registerShowCommands(program: Command): void {
       `areas: maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`,
     )
     .option("--all", `areas: ${GROUPED_ALL_DESC}`)
+    .option(
+      "--overdue",
+      "projects/areas: only items whose own deadline is past (due today is not overdue)",
+    )
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -110,6 +115,7 @@ export function registerShowCommands(program: Command): void {
           areaLimit?: string;
           projectLimit?: string;
           all?: boolean;
+          overdue?: boolean;
         },
       ) => {
         if (opts.limit !== undefined) {
@@ -137,7 +143,11 @@ export function registerShowCommands(program: Command): void {
         );
         if (!projectCap.ok) return;
         const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
-        const hintBase = invocation("show", [shellQuote(ref), ...showToggleFlags(opts)]);
+        const hintBase = invocation("show", [
+          shellQuote(ref),
+          ...showToggleFlags(opts),
+          opts.overdue === true && "--overdue",
+        ]);
         runRead<ShowPayload>(
           opts,
           "show",
@@ -163,8 +173,9 @@ export function registerShowCommands(program: Command): void {
             if (isRoutingSugar(t, ref)) setInvocationCanonical(typedShowCommand(t, ref, opts));
             // Projects and to-do cards are uncapped: headings are true
             // containers, so no strict total limit applies.
+            const overdue = opts.overdue === true;
             if (t.kind === "project") {
-              const view = c.read.projectView(t.uuid);
+              const view = c.read.projectView(t.uuid, { overdue });
               // --all reveals the project card's hidden later rows (charter),
               // matching `things project show … --all`.
               const projectOpts = {
@@ -178,7 +189,7 @@ export function registerShowCommands(program: Command): void {
               };
             }
             if (t.kind === "area") {
-              const view = c.read.areaView(t.uuid);
+              const view = c.read.areaView(t.uuid, { overdue });
               const { data, grouped } = capAreaSections(view, limits);
               return {
                 data: { type: "area", view: data },

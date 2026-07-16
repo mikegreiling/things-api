@@ -221,7 +221,9 @@ Content scope (which items qualify):
   --exact-tag        with --tag: the named tag only, no hierarchy descendants
   --untagged         only items with no tag at all (the app's "No Tag" filter)
   --overdue          only open items past their deadline, due today excluded
-                     (today, inbox, anytime, someday, search)
+                     (today, inbox, anytime, someday, search; and the
+                     containers projects, project show, area show — by each
+                     entity's OWN deadline, no recursion; not the areas list)
   --area <ref>       restrict to one area (logbook, search)
   --project <ref>    restrict to one project (logbook, search)
   --type <kind>      search only: todo | project

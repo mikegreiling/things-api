@@ -649,10 +649,21 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One project's full contents: metadata plus its to-dos grouped under their headings.",
-      inputSchema: { uuid: z.string().describe("Project uuid or unique name") },
+      inputSchema: {
+        uuid: z.string().describe("Project uuid or unique name"),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe(
+            "Keep only child to-dos past their deadline (due today is not overdue); headings left empty are dropped",
+          ),
+      },
       annotations: READ_ONLY,
     },
-    async (args) => guard(() => jsonResult(getClient().read.projectView(args.uuid))),
+    async (args) =>
+      guard(() =>
+        jsonResult(getClient().read.projectView(args.uuid, { overdue: args.overdue === true })),
+      ),
   );
 
   server.registerTool(
@@ -678,6 +689,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .min(1)
           .optional()
           .describe(`maximum project rows to return (default ${AREA_PREVIEW_LIMIT})`),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe(
+            "Keep only rows (loose to-dos AND child projects) whose own deadline is past (due today is not overdue); no descent into project contents",
+          ),
         all: z.boolean().optional().describe("return both sections in full (no caps)"),
       },
       annotations: READ_ONLY,
@@ -690,7 +707,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           return usage("pass at most one of area_limit/project_limit / all");
         }
         const limits: GroupedLimits = { area: areaLimit, project: projectLimit };
-        const { data, grouped } = capAreaSections(getClient().read.areaView(args.ref), limits);
+        const { data, grouped } = capAreaSections(
+          getClient().read.areaView(args.ref, { overdue: args.overdue === true }),
+          limits,
+        );
         return groupedResult(data, grouped);
       }),
   );
@@ -701,15 +721,28 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "List every project, area, or tag (tags include their parent-tag nesting). Use to " +
         "refresh the inventory summarized in the server instructions.",
-      inputSchema: { kind: z.enum(["projects", "areas", "tags"]) },
+      inputSchema: {
+        kind: z.enum(["projects", "areas", "tags"]),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe(
+            "projects only: keep only projects past their deadline (due today is not overdue); areas/tags carry no deadline and reject it",
+          ),
+      },
       annotations: READ_ONLY,
     },
     async (args) =>
       guard(() => {
         const c = getClient();
+        // areas/tags are not dated entities — overdue is vacuous, rejected
+        // fail-closed (the same style read_view uses for the wrong views).
+        if (args.overdue === true && args.kind !== "projects") {
+          return usage(`overdue applies only to projects, not ${args.kind}`);
+        }
         return jsonResult(
           args.kind === "projects"
-            ? c.read.projects()
+            ? c.read.projects({ overdue: args.overdue === true })
             : args.kind === "areas"
               ? c.read.areas()
               : c.read.tags(),
