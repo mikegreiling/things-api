@@ -107,6 +107,7 @@ import {
   LIVE,
   OPEN,
   OPEN_OR_UNSWEPT,
+  OVERDUE,
   PROJECT_ANYTIME_ACTIVE,
 } from "./predicates.ts";
 import { groupBySidebar } from "./sidebar-order.ts";
@@ -139,6 +140,17 @@ export interface ViewFilter {
    * `tag`/`exactTag` (the CLI/MCP surfaces reject the combination).
    */
   untagged?: boolean;
+  /**
+   * Only OPEN items whose deadline is strictly BEFORE today (due-today is NOT
+   * overdue — it mirrors the app's Today badge, where an equal-to-today
+   * deadline is "due" and only an earlier one is "overdue"). A content scope
+   * like `tag`: it narrows, never lifts a default, and composes as AND with
+   * `tag`/`untagged`. The boundary rides the view's injected clock (see
+   * {@link OVERDUE}). Honored by the current-work views (today, inbox, anytime,
+   * someday, search); the forward-looking `upcoming` and the closed-item
+   * `logbook` deliberately do not accept it (see docs/design/cli-grammar.md).
+   */
+  overdue?: boolean;
 }
 
 function tagFilter(
@@ -150,6 +162,21 @@ function tagFilter(
   const target = resolveTagUuid(db, filter.tag);
   const uuids = filter.exactTag === true ? [target] : tagWithDescendants(db, target);
   return { sql: ` AND ${tagScopeSql(uuids.length)}`, binds: tagScopeBinds(uuids) };
+}
+
+/**
+ * The `--overdue` content scope as a spliceable SQL fragment (empty when off).
+ * Appended AFTER {@link tagFilter} in every host view so it intersects with the
+ * tag scope, and its single packed-today bind trails the tag binds in the same
+ * order. `packedToday` is encodePackedDate(localToday(now)) — the caller's
+ * injected clock — never a hardcoded date.
+ */
+function overdueFilter(
+  filter: ViewFilter | undefined,
+  packedToday: number,
+): { sql: string; binds: number[] } {
+  if (filter?.overdue !== true) return { sql: "", binds: [] };
+  return { sql: ` AND ${OVERDUE}`, binds: [packedToday] };
 }
 
 function materialize(db: DatabaseSync, rows: TaskRow[], boundary = logBoundary(db)): ListItem[] {
@@ -197,6 +224,7 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
   const tf = tagFilter(db, filter);
+  const of = overdueFilter(filter, packedToday);
   // Membership + comparator per the UI-oracle research (lab, 2026-07-04;
   // docs/lab/today-order-research.md, two reproducing runs + exact live
   // reconciliation: 405 − 12 suppressed = 393 = the UI's own count):
@@ -219,11 +247,11 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
        (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
        OR (t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
            AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))
-     )${tf.sql}
+     )${tf.sql}${of.sql}
      ORDER BY t.startBucket ASC,
               COALESCE(t.todayIndexReferenceDate, t.startDate, t.deadline) DESC,
               t.todayIndex ASC, t.uuid ASC`,
-    [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds],
+    [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds, ...of.binds],
   );
   const items = materialize(db, rows, boundary);
   // Evening membership expires daily: raw startBucket=1 counts only while
@@ -268,8 +296,11 @@ export interface InboxFilter extends ViewFilter {
   until?: Date;
 }
 
-export function inboxView(db: DatabaseSync, filter?: InboxFilter): ListItem[] {
+export function inboxView(db: DatabaseSync, now?: Date, filter?: InboxFilter): ListItem[] {
   const tf = tagFilter(db, filter);
+  // `now` is threaded only for the `--overdue` boundary (the inbox order and
+  // the since/until window key on epoch creationDate, not on today).
+  const of = overdueFilter(filter, encodePackedDate(localToday(now)));
   const where = [OPEN, "t.start = 0"];
   const binds: (string | number)[] = [];
   // creationDate is an epoch REAL (Unix seconds) — mirror the changes/logbook
@@ -282,10 +313,11 @@ export function inboxView(db: DatabaseSync, filter?: InboxFilter): ListItem[] {
     where.push("t.creationDate <= ?");
     binds.push(filter.until.getTime() / 1000);
   }
-  const rows = fetchTaskRows(db, `${where.join(" AND ")}${tf.sql} ORDER BY t."index" ASC`, [
-    ...binds,
-    ...tf.binds,
-  ]);
+  const rows = fetchTaskRows(
+    db,
+    `${where.join(" AND ")}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
+    [...binds, ...tf.binds, ...of.binds],
+  );
   return materialize(db, rows);
 }
 
@@ -303,6 +335,7 @@ export interface SidebarSection {
 export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): SidebarSection[] {
   const packedToday = encodePackedDate(localToday(now));
   const tf = tagFilter(db, filter);
+  const of = overdueFilter(filter, packedToday);
   // Mirrors UI membership: every active item, including Today members
   // (starred in the UI) and pending-promotion rows (start=2, past-dated) —
   // MINUS children of non-active containers (the project cascade). Membership
@@ -315,8 +348,16 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
   const rows = fetchTaskRows(
     db,
     `${OPEN_OR_UNSWEPT} AND ${ANYTIME_SELF("t")}
-     AND ${PROJECT_ANYTIME_ACTIVE}${tf.sql} ORDER BY t."index" ASC`,
-    [boundary.getTime() / 1000, packedToday, packedToday, packedToday, packedToday, ...tf.binds],
+     AND ${PROJECT_ANYTIME_ACTIVE}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
+    [
+      boundary.getTime() / 1000,
+      packedToday,
+      packedToday,
+      packedToday,
+      packedToday,
+      ...tf.binds,
+      ...of.binds,
+    ],
   );
   return groupBySidebar(db, materialize(db, rows, boundary));
 }
@@ -541,6 +582,7 @@ export function somedayView(
 ): SidebarSection[] {
   const tf = tagFilter(db, filter);
   const packedToday = encodePackedDate(localToday(now));
+  const of = overdueFilter(filter, packedToday);
   // Default membership excludes ALL project children (the UI shows only
   // container-less someday to-dos, area members, and someday project rows);
   // the toggle adds someday children of anytime-ACTIVE projects only.
@@ -552,8 +594,8 @@ export function somedayView(
   const rows = fetchTaskRows(
     db,
     `${OPEN} AND t.start = 2 AND t.startDate IS NULL
-     AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql} ORDER BY t."index" ASC`,
-    [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds],
+     AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql}${of.sql} ORDER BY t."index" ASC`,
+    [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds, ...of.binds],
   );
   const sections = groupBySidebar(db, materialize(db, rows));
   // GUI order within a Someday group (live side-by-side, 2026-07-12):
@@ -833,9 +875,14 @@ export function searchView(
   db: DatabaseSync,
   query: string,
   options?: SearchOptions,
+  now?: Date,
 ): SearchResultItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 50);
   const needle = `%${query}%`;
+  // `--overdue` narrows to OPEN, past-deadline matches. Its open-only predicate
+  // is contradictory with the status-widening flags (logged/trashed/all); the
+  // CLI/MCP surfaces reject that combination, so here it simply intersects.
+  const of = overdueFilter(options, encodePackedDate(localToday(now)));
 
   // The scope predicates (everything except the match needle), reused verbatim
   // for the needle query AND the heading-credited-project query so both honor
@@ -875,8 +922,8 @@ export function searchView(
   // Needle matches: title OR notes. No SQL LIMIT — ranking runs before the cap.
   const rows = fetchTaskRows(
     db,
-    `${scope.join(" AND ")} AND (t.title LIKE ? OR t.notes LIKE ?)${tf.sql}`,
-    [...scopeBinds, needle, needle, ...tf.binds],
+    `${scope.join(" AND ")} AND (t.title LIKE ? OR t.notes LIKE ?)${tf.sql}${of.sql}`,
+    [...scopeBinds, needle, needle, ...tf.binds, ...of.binds],
   );
   const needleLower = query.toLowerCase();
   const matches = new Map<string, SearchMatch>();
@@ -909,8 +956,8 @@ export function searchView(
       const placeholders = wanted.map(() => "?").join(", ");
       const projectRows = fetchTaskRows(
         db,
-        `${scope.join(" AND ")} AND t.type = 1 AND t.uuid IN (${placeholders})${tf.sql}`,
-        [...scopeBinds, ...wanted, ...tf.binds],
+        `${scope.join(" AND ")} AND t.type = 1 AND t.uuid IN (${placeholders})${tf.sql}${of.sql}`,
+        [...scopeBinds, ...wanted, ...tf.binds, ...of.binds],
       );
       for (const item of materialize(db, projectRows)) {
         const matchedVia = {

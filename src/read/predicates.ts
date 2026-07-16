@@ -32,6 +32,21 @@ export const OPEN = `${LIVE} AND t.status = 0`;
  */
 export const OPEN_OR_UNSWEPT = `${LIVE} AND NOT (t.status IN (2, 3) AND t.stopDate IS NOT NULL AND t.stopDate <= ?)`;
 
+/**
+ * The `--overdue` content scope: OPEN items whose deadline falls strictly
+ * BEFORE today. Due-TODAY is deliberately NOT overdue (`<`, not `<=`) —
+ * mirroring the app's own Today badge split, where a deadline EQUAL to today
+ * reads as "due" and only an EARLIER deadline reads as "overdue". One bind:
+ * today as a packed-date int (encodePackedDate(localToday(now))), so the
+ * boundary rides the same injected clock every other view uses — never a
+ * hardcoded date. The `t.status = 0` clause re-tightens the OPEN_OR_UNSWEPT
+ * views (today/anytime) so a checked-but-unswept row that happens to sit past
+ * a deadline is excluded — overdue is remaining, OPEN work. Trash exclusion is
+ * the hosting view's job (every view this composes into already drops trashed
+ * and derived-trashed rows), so it is not repeated here.
+ */
+export const OVERDUE = `t.deadline IS NOT NULL AND t.deadline < ? AND t.status = 0`;
+
 /** An item's own anytime membership: unscheduled-active, or dated <= today. */
 export const ANYTIME_SELF = (col: string): string =>
   `((${col}.start = 1 AND (${col}.startDate IS NULL OR ${col}.startDate <= ?))

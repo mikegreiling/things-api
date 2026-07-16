@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 
 import { runAreaShow, type AreaShowActionOpts } from "./area.ts";
 import { runProjectShow, type ProjectShowActionOpts } from "./project.ts";
-import type { ListItem, TodayView } from "../../read/views.ts";
+import type { ListItem, TodayView, ViewFilter } from "../../read/views.ts";
 import { localToday } from "../../model/dates.ts";
 import { dim } from "../style.ts";
 import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
@@ -78,6 +78,9 @@ export function openInThings(uuid: string): string {
 /** Help copy for the `--untagged` content scope (the GUI's "No Tag"). */
 const UNTAGGED_DESC = 'only items with no tag, direct or inherited — the app\'s "No Tag" filter';
 
+/** Help copy for the `--overdue` content scope (open items past their deadline). */
+const OVERDUE_DESC = "only open items past their deadline (due today is not overdue)";
+
 /**
  * Shared usage guard: `--untagged` is a content scope that inverts `--tag`, so
  * pairing it with `--tag`/`--exact-tag` is contradictory. Emits the usage error
@@ -132,6 +135,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--untagged", UNTAGGED_DESC)
+    .option("--overdue", OVERDUE_DESC)
     .option("--evening", "show only the This Evening section")
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
@@ -143,6 +147,7 @@ export function registerReadCommands(program: Command): void {
           tag?: string;
           exactTag?: boolean;
           untagged?: boolean;
+          overdue?: boolean;
           evening?: boolean;
           limit?: string;
           all?: boolean;
@@ -156,12 +161,14 @@ export function registerReadCommands(program: Command): void {
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
           opts.untagged === true && "--untagged",
+          opts.overdue === true && "--overdue",
           eveningOnly && "--evening",
         ]);
         const filter = {
           ...(opts.tag !== undefined && { tag: opts.tag }),
           ...(opts.exactTag === true && { exactTag: true }),
           ...(opts.untagged === true && { untagged: true }),
+          ...(opts.overdue === true && { overdue: true }),
           ...(eveningOnly && { eveningOnly: true }),
         };
         runRead(
@@ -197,6 +204,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--untagged", UNTAGGED_DESC)
+    .option("--overdue", OVERDUE_DESC)
     .option("--since <when>", `only captures created on/after this bound: ${PERIOD_SINCE}`)
     .option("--until <when>", `only captures created on/before this bound: ${PERIOD_UNTIL}`)
     .option("--limit <n>", LIMIT_DESC)
@@ -209,6 +217,7 @@ export function registerReadCommands(program: Command): void {
           tag?: string;
           exactTag?: boolean;
           untagged?: boolean;
+          overdue?: boolean;
           since?: string;
           until?: string;
           limit?: string;
@@ -241,6 +250,7 @@ export function registerReadCommands(program: Command): void {
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
           opts.untagged === true && "--untagged",
+          opts.overdue === true && "--overdue",
           opts.since !== undefined && `--since ${shellQuote(opts.since)}`,
           opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
         ]);
@@ -253,6 +263,7 @@ export function registerReadCommands(program: Command): void {
                 ...(opts.tag !== undefined && { tag: opts.tag }),
                 ...(opts.exactTag === true && { exactTag: true }),
                 ...(opts.untagged === true && { untagged: true }),
+                ...(opts.overdue === true && { overdue: true }),
                 ...(since !== undefined && { since }),
                 ...(until !== undefined && { until }),
               }),
@@ -306,6 +317,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--untagged", UNTAGGED_DESC)
+    .option("--overdue", OVERDUE_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option("--project-limit <n>", PROJECT_LIMIT_DESC)
     .option("--all", GROUPED_ALL_DESC)
@@ -318,6 +330,7 @@ export function registerReadCommands(program: Command): void {
           tag?: string;
           exactTag?: boolean;
           untagged?: boolean;
+          overdue?: boolean;
           areaLimit?: string;
           projectLimit?: string;
           all?: boolean;
@@ -351,18 +364,21 @@ export function registerReadCommands(program: Command): void {
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
           opts.untagged === true && "--untagged",
+          opts.overdue === true && "--overdue",
         ]);
+        // Content scopes compose (AND): --overdue narrows a tagged/untagged
+        // set, so the filter is built additively rather than one-or-the-other.
+        const filter: ViewFilter = {
+          ...(opts.tag !== undefined && { tag: opts.tag }),
+          ...(opts.exactTag === true && { exactTag: true }),
+          ...(opts.untagged === true && { untagged: true }),
+          ...(opts.overdue === true && { overdue: true }),
+        };
         runRead(
           opts,
           "anytime",
           (c) => {
-            const full = c.read.anytime(
-              opts.tag !== undefined
-                ? { tag: opts.tag, ...(opts.exactTag === true && { exactTag: true }) }
-                : opts.untagged === true
-                  ? { untagged: true }
-                  : undefined,
-            );
+            const full = c.read.anytime(filter);
             const { data, grouped } = previewSections(full, limits);
             return { data, grouped, lines: renderAnytimePreview(full, limits, base) };
           },
@@ -392,6 +408,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--untagged", UNTAGGED_DESC)
+    .option("--overdue", OVERDUE_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option(
       "--show-active-project-items [n]",
@@ -408,6 +425,7 @@ export function registerReadCommands(program: Command): void {
           tag?: string;
           exactTag?: boolean;
           untagged?: boolean;
+          overdue?: boolean;
           areaLimit?: string;
           showActiveProjectItems?: boolean | string;
           all?: boolean;
@@ -446,11 +464,13 @@ export function registerReadCommands(program: Command): void {
           ...(opts.tag !== undefined && { tag: opts.tag }),
           ...(opts.exactTag === true && { exactTag: true }),
           ...(opts.untagged === true && { untagged: true }),
+          ...(opts.overdue === true && { overdue: true }),
         };
         const base = invocation("someday", [
           opts.tag !== undefined && `--tag ${shellQuote(opts.tag)}`,
           opts.exactTag === true && "--exact-tag",
           opts.untagged === true && "--untagged",
+          opts.overdue === true && "--overdue",
         ]);
         runRead(
           opts,
@@ -954,13 +974,14 @@ export function registerReadCommands(program: Command): void {
         "`via heading`); projects rank above to-dos, active above someday, ties broken by " +
         "most-recently-modified. Default scope: OPEN + untrashed items only — widen with " +
         "--logged / --trashed / --all. Scope with --project / --area / --tag (tag matches " +
-        "include hierarchy descendants) / --type.",
+        "include hierarchy descendants) / --type / --overdue (open items past their deadline).",
     )
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
     .option("--tag <ref>", "restrict by tag: direct, inherited, or descendant-tagged")
     .option("--exact-tag", "match the named tag only — exclude hierarchy descendants")
     .option("--untagged", UNTAGGED_DESC)
+    .option("--overdue", OVERDUE_DESC)
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
     .option("--trashed", "include trashed items")
@@ -986,7 +1007,16 @@ export function registerReadCommands(program: Command): void {
         })
       )
         return;
+      const overdue = opts["overdue"] === true;
       const all = opts["all"] === true;
+      // --overdue lists OPEN, past-deadline items; the status-widening flags
+      // pull in completed/canceled/trashed rows, so the combination is
+      // contradictory (like --untagged with --tag).
+      if (overdue && (opts["logged"] === true || opts["trashed"] === true || all)) {
+        process.stderr.write("error: --overdue does not combine with --logged/--trashed/--all\n");
+        process.exitCode = ExitCode.Usage;
+        return;
+      }
       const limitOpt = opts["limit"] as string | undefined;
       // --all widens the scope AND lifts the row limit — combining it with an
       // explicit --limit is contradictory (like every other view).
@@ -999,6 +1029,7 @@ export function registerReadCommands(program: Command): void {
         opts["tag"] !== undefined && `--tag ${shellQuote(opts["tag"] as string)}`,
         opts["exactTag"] === true && "--exact-tag",
         opts["untagged"] === true && "--untagged",
+        overdue && "--overdue",
         type !== undefined && `--type ${type}`,
         opts["logged"] === true && "--logged",
         opts["trashed"] === true && "--trashed",
@@ -1015,6 +1046,7 @@ export function registerReadCommands(program: Command): void {
               ...(opts["tag"] !== undefined && { tag: opts["tag"] as string }),
               ...(opts["exactTag"] === true && { exactTag: true }),
               ...(opts["untagged"] === true && { untagged: true }),
+              ...(overdue && { overdue: true }),
               ...(type !== undefined && { type: type === "todo" ? "to-do" : "project" }),
               ...(opts["logged"] === true && { logged: true }),
               ...(opts["trashed"] === true && { trashed: true }),
