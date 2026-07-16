@@ -169,5 +169,16 @@ Status: **shipped.**
 
 Status: **shipped.**
 
+## §M. Drop the `full` field from bounded client views — enrich truncation metadata (Mike, 2026-07-16; pre-v1.0 API polish)
+
+**Context.** Phase 1 of the client-promotion re-architecture (PR #183) made every list view bounded at the `ThingsClient`: flat views return `{ items, truncation }`, grouped views and Today return `{ view, full, truncation|grouped }`. The `full` field (the pre-truncation view alongside the bounded one) is a **deliberate wart**: the human renderers annotate hidden-count hints ("… N more") from pre-cap *structure* that the current metadata cannot express, and keeping `full` let them stay byte-identical during the refactor. It costs nothing at runtime (rows are loaded pre-cap regardless) but is shape noise on a bounded-by-default API. **Mike's direction (2026-07-16): the API should be wart-free before stabilizing for a v1.0 RC — do this while breaking changes are still free.**
+
+**The cleanup, three steps:**
+1. **`Truncation` gains an optional per-section breakdown** for split flat views — `sections?: [{ key: "today" | "evening", shown, total }]` — so `renderToday` derives the Evening remainder from metadata instead of the pre-cap view.
+2. **`GroupedTruncation.blocks` becomes identity-carrying and nested**: each block reports `{ ref/title, kind, shown, total }`, project blocks nest inside their area block, blocks dropped whole still appear (`shown: 0`) so no header vanishes untraceably, and someday's trailing active-project-items section reports its hidden count the same way.
+3. **Delete `full`** from `BoundedTodayView` / `BoundedSectionsView` / `BoundedAreaView`; renderers consume `{ view, truncation | grouped }` only.
+
+**Acceptance:** renderer output byte-identical before/after (the render fixture tests are the harness); `full` absent from the public API; the enriched `meta.grouped` / `meta.truncation` shapes documented in [design/contracts.md](design/contracts.md) and README §"For agents". **Breaking** (the `meta.grouped` wire shape grows; the client return types shrink) — schedule before the v1.0 RC, after the phase-2 air-gap lands (it touches the same surfaces).
+
 ## Shelved indefinitely (Mike, item 4)
 First-class support for "ignored"/archived tags, emoji-stripping opt-in, pseudo-archived areas. Revisit only if real usage surfaces a need. (The leading-symbol-significant rule already protects emoji-prefixed archival tags for free — v0.6.0.)
