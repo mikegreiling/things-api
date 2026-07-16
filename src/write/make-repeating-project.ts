@@ -17,7 +17,7 @@
  * persists even if the promote refuses.
  */
 import type { AuditRecord } from "../audit/schema.ts";
-import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { resolveProjectWriteTarget } from "../read/queries.ts";
 import { assertRepeatRule } from "./commands.ts";
 import type { ProjectCreateRepeatingParams, RepeatRuleParams } from "./operations.ts";
 import { classifyProjectRepeat, loadTarget, type ProjectRepeatTaxonomy } from "./pre-state.ts";
@@ -99,7 +99,7 @@ export async function runMakeRepeatingProject(
   params: RepeatRuleParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  const uuid = resolveTaskUuidPrefix(deps.db, params.uuid);
+  const uuid = resolveProjectWriteTarget(deps.db, params.uuid);
   // Validate the rule BEFORE any coercion — a bad rule must never leave a
   // coerced-to-someday project stranded.
   assertRepeatRule(params);

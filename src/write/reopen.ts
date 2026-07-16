@@ -6,7 +6,7 @@
  * as the project and a stopDate within CASCADE_WINDOW_SECONDS of the
  * project's. Each child reopen is a full verified mutation.
  */
-import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { resolveProjectWriteTarget } from "../read/queries.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 
 /** P03: cascade writes stamp children within <2s of the project row. */
@@ -51,7 +51,7 @@ export async function runProjectReopen(
   uuid: string,
   options: ProjectReopenOptions = {},
 ): Promise<ProjectReopenResult> {
-  uuid = resolveTaskUuidPrefix(deps.db, uuid);
+  uuid = resolveProjectWriteTarget(deps.db, uuid);
   const { restoreChildren, ...writeOptions } = options;
   // Candidates must be computed BEFORE the reopen clears the project's
   // stopDate (the window is relative to it).

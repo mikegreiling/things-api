@@ -107,23 +107,27 @@ export function stripThingsUri(ref: string): string {
   return s;
 }
 
-export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string): string {
+export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity = "to-do"): string {
   const ref = stripThingsUri(refRaw);
   const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
     | { uuid: string }
     | undefined;
   if (exact !== undefined) return exact.uuid;
   if (ref.length < 6) {
-    throw new RangeError(`no record with uuid "${ref}" (prefixes need at least 6 characters)`);
+    throw new RangeError(
+      `no ${entity} matching uuid or partial-uuid "${ref}" (a partial-uuid needs at least 6 characters)`,
+    );
   }
   const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
   const rows = db
     .prepare("SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ? LIMIT 6")
     .all(ref, upper) as { uuid: string; title: string | null }[];
-  if (rows.length === 0) throw new RangeError(`no record with uuid or prefix "${ref}"`);
+  if (rows.length === 0) {
+    throw new RangeError(`no ${entity} matching uuid or partial-uuid "${ref}"`);
+  }
   if (rows.length > 1) {
     const list = rows.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
-    throw new RangeError(`uuid prefix "${ref}" is ambiguous — matches: ${list}`);
+    throw new RangeError(`partial-uuid "${ref}" is ambiguous — matches: ${list}`);
   }
   return rows[0]?.uuid ?? ref;
 }
@@ -147,6 +151,12 @@ export interface NamedResolution {
   resolved: { uuid: string; title: string } | null;
   /** 0 = not found, 1 = ok, >1 = ambiguous at the deciding tier. */
   matches: number;
+  /**
+   * The rows at the deciding tier when it was ambiguous (matches > 1) — the
+   * candidates a fail-closed resolver lists so the caller can disambiguate by
+   * uuid. Absent when resolved or not-found.
+   */
+  candidates?: { uuid: string; title: string }[];
 }
 
 /**
@@ -177,14 +187,14 @@ export function resolveNamedRef(
   for (const cond of ["title = ?", "title = ? COLLATE NOCASE"]) {
     const rows = sel(cond, [ref]);
     if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
-    if (rows.length > 1) return { resolved: null, matches: rows.length };
+    if (rows.length > 1) return { resolved: null, matches: rows.length, candidates: rows };
   }
 
   const key = normalizeNameKey(ref);
   if (key !== "") {
     const hits = sel("title IS NOT NULL").filter((r) => normalizeNameKey(r.title) === key);
     if (hits.length === 1) return { resolved: hits[0] ?? null, matches: 1 };
-    if (hits.length > 1) return { resolved: null, matches: hits.length };
+    if (hits.length > 1) return { resolved: null, matches: hits.length, candidates: hits };
   }
 
   // The uuid-prefix tier is suppressed on the sugar routing path (bare-noun /
@@ -195,10 +205,15 @@ export function resolveNamedRef(
     const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
     const rows = sel("uuid >= ? AND uuid < ?", [ref, upper]);
     if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
-    if (rows.length > 1) return { resolved: null, matches: rows.length };
+    if (rows.length > 1) return { resolved: null, matches: rows.length, candidates: rows };
   }
 
   return { resolved: null, matches: 0 };
+}
+
+/** The accepted-forms clause for a name-accepting resolver's not-found copy. */
+function acceptedForms(prefixTier: boolean): string {
+  return prefixTier ? "tried uuid, partial-uuid, and name" : "tried uuid and name";
 }
 
 function resolveUuidOrThrow(
@@ -214,9 +229,63 @@ function resolveUuidOrThrow(
   if (r.resolved !== null) return r.resolved.uuid;
   throw new RangeError(
     r.matches === 0
-      ? `${kind} not found: ${ref} (list ${kind}s with \`${listCmd}\`)`
-      : `${kind} reference is ambiguous: ${ref} (${r.matches} matches — use the exact name or uuid)`,
+      ? `no ${kind} matching "${ref}" — ${acceptedForms(options?.prefixTier !== false)} (list ${kind}s with \`${listCmd}\`)`
+      : `"${ref}" matches ${r.matches} ${kind}s — use the exact name or a uuid`,
   );
+}
+
+/**
+ * Resolve a PROJECT write target from a uuid, partial-uuid, or unique name.
+ * Project write verbs (`things project update <ref>`, etc.) accept names
+ * through this; to-do and heading write targets stay uuid-only.
+ *
+ * A uuid / unique uuid-prefix resolves FIRST over every task (reusing
+ * {@link resolveTaskUuidPrefix}), so a wrong-TYPE id — a to-do uuid handed to a
+ * project verb — passes through to the op's own guard, which reports it with a
+ * targeted "that is a to-do, not a project" message rather than a misleading
+ * not-found. Otherwise the ref resolves as a project NAME through the SAME
+ * tiered {@link resolveNamedRef} matching the read side uses (shared core, not
+ * a fork) across projects (trashed included, for `project restore`), fail-
+ * closed with a candidate listing on an ambiguous name so a duplicated project
+ * title is disambiguated by uuid rather than guessed.
+ */
+export function resolveProjectWriteTarget(db: DatabaseSync, refRaw: string): string {
+  const ref = stripThingsUri(refRaw);
+  try {
+    return resolveTaskUuidPrefix(db, ref, "project");
+  } catch (err) {
+    // An ambiguous uuid-prefix is a real conflict — surface it verbatim. A
+    // plain not-found (or too-short) ref is not a uuid: fall to the name tiers.
+    if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
+  }
+  const r = resolveNamedRef(db, "TMTask", "type = 1", [], ref, { prefixTier: false });
+  if (r.resolved !== null) return r.resolved.uuid;
+  if (r.matches === 0) {
+    throw new RangeError(
+      `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)`,
+    );
+  }
+  const rows = describeProjectCandidates(db, r.candidates ?? []);
+  throw new RangeError(
+    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${rows}`,
+  );
+}
+
+/** Short-uuid + area-context candidate lines for an ambiguous project name. */
+function describeProjectCandidates(
+  db: DatabaseSync,
+  candidates: { uuid: string; title: string }[],
+): string {
+  const areaStmt = db.prepare(
+    "SELECT a.title AS title FROM TMTask p LEFT JOIN TMArea a ON a.uuid = p.area WHERE p.uuid = ?",
+  );
+  return candidates
+    .map((c) => {
+      const area = (areaStmt.get(c.uuid) as { title: string | null } | undefined)?.title ?? null;
+      const context = area !== null ? ` (in ${area})` : "";
+      return `  ${c.uuid.slice(0, 8)} — ${c.title}${context}`;
+    })
+    .join("\n");
 }
 
 export function resolveTagUuid(db: DatabaseSync, ref: string): string {

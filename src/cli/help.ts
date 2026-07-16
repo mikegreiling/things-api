@@ -263,7 +263,11 @@ Command names always win: \`things today\` is the view, never an item called
 
 A to-do takes a ref by uuid, prefix, or share link — never by title. A bare NAME
 resolves against areas and projects only; on a tie, the area wins. When a name
-does not resolve, the error offers close title matches you can copy.`,
+does not resolve, the error offers close title matches you can copy.
+
+WRITE targets: project, area, and tag verbs accept a uuid OR a unique name (a
+duplicated project name is refused, listing the candidates to pick from by uuid);
+to-do and heading writes take a uuid or prefix only.`,
 
   output: `OUTPUT — human tables vs. --json
 
@@ -309,6 +313,10 @@ Configuration that affects writes — \`things config set <key> <value>\`:
   maxDisruption       ceiling for how disruptive a change may be
   ui-enabled          allow the GUI-driven operations
   allow-experimental  enable experimental strategies (e.g. native reorder)
+
+Writes are NAMESPACED: a bare \`things <verb> …\` (update, add, delete, complete,
+cancel, move, …) is not a command — it points you at the typed form
+(\`things todo|project|area|tag|heading <verb> …\`), never running the change.
 
 Discover every operation and the flags it needs: \`things capabilities\`.
 A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,

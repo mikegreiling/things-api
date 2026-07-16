@@ -283,6 +283,54 @@ describe("plural collection synonym — `things projects <ref>` / `things areas 
   });
 });
 
+describe("top-level mutation verbs → verb-hint (Part 3)", () => {
+  it("a bare mutation verb is classified verb-hint, not show-sugar", () => {
+    for (const verb of ["update", "add", "create", "delete", "complete", "cancel", "move"]) {
+      const r = resolve([verb, "health"]);
+      expect(r.form, verb).toBe("verb-hint");
+      expect(r.ref, verb).toBe(verb);
+      // argv is the original tokens, untouched — the handler re-parses them.
+      expect(r.argv, verb).toEqual([verb, "health"]);
+    }
+  });
+
+  it("a mutation verb with no ref is still verb-hint", () => {
+    expect(resolve(["update"]).form).toBe("verb-hint");
+    expect(resolve(["delete"]).form).toBe("verb-hint");
+  });
+
+  it("catalog-exposed verbs (not just the common set) are reserved too", () => {
+    for (const verb of ["duplicate", "restore", "reopen", "rename", "archive", "make-repeating"]) {
+      expect(resolve([verb, "x"]).form, verb).toBe("verb-hint");
+    }
+  });
+
+  it("verb-hint fires through leading global flags", () => {
+    const r = resolve(["--json", "update", "health"]);
+    expect(r.form).toBe("verb-hint");
+    expect(r.ref).toBe("update");
+    expect(r.argv).toEqual(["--json", "update", "health"]);
+  });
+
+  it("registered top-level commands still win over the verb reservation", () => {
+    // `tags` is the list view, not the write verb — precedence 1 keeps it.
+    expect(resolve(["tags"]).form).toBe("canonical");
+    expect(resolve(["today"]).form).toBe("canonical");
+  });
+
+  it("reserved-word trade-off: a bare noun that IS a verb can no longer be shown", () => {
+    // An item literally named "update" is unreachable via bare `things update`
+    // (it routes to the write hint); the full `things area show update` still
+    // works — documented in docs/design/cli-grammar.md.
+    expect(resolve(["update"]).form).toBe("verb-hint");
+    expect(resolve(["area", "show", "update"]).form).toBe("canonical");
+  });
+
+  it("a non-verb bare noun still routes through show", () => {
+    expect(resolve(["Hobbies"]).form).toBe("bare-noun");
+  });
+});
+
 describe("invocation context", () => {
   it("records the current invocation and lets the action fill in canonical", () => {
     resolve(["Hobbies"]);

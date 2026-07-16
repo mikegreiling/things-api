@@ -11,7 +11,7 @@ import { undoToken, type AuditRecord } from "../audit/schema.ts";
 import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
-import { resolveTaskUuidPrefix } from "../read/queries.ts";
+import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
@@ -250,15 +250,21 @@ export async function runMutation<K extends OperationKind>(
   const startedAt = deps.now?.() ?? new Date();
   // Uuid params accept unique PREFIXES (>= 6 chars) — resolved to full uuids
   // here so guards/compiles/audit all see canonical ids. Throws (RangeError)
-  // on unknown or ambiguous prefixes, like the title resolvers.
+  // on unknown or ambiguous prefixes, like the title resolvers. PROJECT write
+  // targets additionally accept a unique NAME (project titles are addressed
+  // like areas/tags); to-do and heading targets stay uuid-only, differing only
+  // in the entity noun their not-found copy names.
   const p = params as Record<string, unknown>;
   if (typeof p["uuid"] === "string") {
-    params = { ...params, uuid: resolveTaskUuidPrefix(deps.db, p["uuid"]) };
+    const uuid = op.startsWith("project.")
+      ? resolveProjectWriteTarget(deps.db, p["uuid"])
+      : resolveTaskUuidPrefix(deps.db, p["uuid"], op.startsWith("heading.") ? "heading" : "to-do");
+    params = { ...params, uuid };
   }
   if (Array.isArray(p["uuids"])) {
     params = {
       ...params,
-      uuids: (p["uuids"] as string[]).map((u) => resolveTaskUuidPrefix(deps.db, u)),
+      uuids: (p["uuids"] as string[]).map((u) => resolveTaskUuidPrefix(deps.db, u, "item")),
     };
   }
   const spec = COMMANDS[op] as CommandSpec<K>;

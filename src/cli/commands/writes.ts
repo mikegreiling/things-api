@@ -924,9 +924,10 @@ export function registerWriteCommands(program: Command): void {
     addRepeatRuleFlags(
       addWriteFlags(
         project
-          .command("reschedule-repeat <uuid>")
+          .command("reschedule-repeat <ref>")
           .description(
-            "Change an existing repeating project's rule in place (the project keeps its identity). " +
+            "Change an existing repeating project's rule in place (target by uuid or unique name; " +
+              "the project keeps its identity). " +
               "Set the frequency and interval, and optionally the weekday set, monthly/yearly day, " +
               "end bound, reminders, or deadline. `things undo` restores the previous rule.",
           )
@@ -963,7 +964,7 @@ export function registerWriteCommands(program: Command): void {
       "Resume a paused repeating project: it starts spawning occurrences again.",
     ],
   ] as const) {
-    addDriveGuiFlag(addWriteFlags(project.command(`${verb} <uuid>`).description(desc))).action(
+    addDriveGuiFlag(addWriteFlags(project.command(`${verb} <ref>`).description(desc))).action(
       async (uuid: string, opts: WriteFlagOpts) => {
         await runWrite(opts, (c) => c.write.run(op, { uuid }, writeOptionsFrom(opts)));
       },
@@ -974,7 +975,7 @@ export function registerWriteCommands(program: Command): void {
     addRepeatRuleFlags(
       addWriteFlags(
         project
-          .command("make-repeating <uuid>")
+          .command("make-repeating <ref>")
           .description(
             "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
               "series — the original disappears and a fresh recurring project takes its place (its " +
@@ -1067,12 +1068,13 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("update <uuid>")
+      .command("update <ref>")
       .description(
-        "Update a project's title/notes/when/deadline/reminder. --append-notes/" +
-          "--prepend-notes join with a newline (exclusive with --notes). --reminder needs " +
-          "--when today|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing " +
-          "reminder is auto-preserved.",
+        "Update a project's title/notes/when/deadline/reminder. Target by uuid or unique " +
+          "name — a duplicated project name is refused, listing the candidates to pick from " +
+          "by uuid. --append-notes/--prepend-notes join with a newline (exclusive with " +
+          "--notes). --reminder needs --when today|evening|YYYY-MM-DD; when re-scheduling " +
+          "WITHOUT --reminder an existing reminder is auto-preserved.",
       ),
   )
     .option("--title <text>", "new title")
@@ -1125,11 +1127,12 @@ export function registerWriteCommands(program: Command): void {
   addCreateTagsFlag(
     addWriteFlags(
       project
-        .command("tags <uuid>")
+        .command("tags <ref>")
         .description(
-          "Set or extend a project's tags. --set REPLACES the full tag set (an empty value " +
-            "clears all tags); --add merges with the current tags. Each tag may be a name, a " +
-            "uuid, or a parent/child path, and must exist unless --create-tags.",
+          "Set or extend a project's tags (target by uuid or unique name). --set REPLACES the " +
+            "full tag set (an empty value clears all tags); --add merges with the current tags. " +
+            "Each tag may be a name, a uuid, or a parent/child path, and must exist unless " +
+            "--create-tags.",
         )
         .option("--set <list>", "comma-separated tags: full replacement")
         .option("--add <list>", "comma-separated tags: merge with existing"),
@@ -1151,10 +1154,11 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("move <uuid>")
+      .command("move <ref>")
       .description(
-        "Move a project to another area, or DETACH it from its current area (--detach). " +
-          "Status and schedule are untouched. Unknown areas are rejected.",
+        "Move a project (target by uuid or unique name) to another area, or DETACH it from " +
+          "its current area (--detach). Status and schedule are untouched. Unknown areas are " +
+          "rejected.",
       )
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--detach", "remove the current area assignment (exclusive with --area)"),
@@ -1177,10 +1181,11 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("cancel <uuid>")
+      .command("cancel <ref>")
       .description(
-        "Cancel a project. Canceling also cancels its open to-dos, so an explicit " +
-          "--children policy is required; already-completed children are never altered.",
+        "Cancel a project (target by uuid or unique name). Canceling also cancels its open " +
+          "to-dos, so an explicit --children policy is required; already-completed children " +
+          "are never altered.",
       )
       .requiredOption(
         "--children <policy>",
@@ -1198,9 +1203,10 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("reopen <uuid>")
+      .command("reopen <ref>")
       .description(
-        "Reopen a completed/canceled project. Its children stay completed/canceled unless " +
+        "Reopen a completed/canceled project (target by uuid or unique name). Its children " +
+          "stay completed/canceled unless " +
           "--restore-children also reopens the ones that were resolved together with the " +
           "project — children resolved earlier are never touched. Exit 3 if any child " +
           "restore fails.",
@@ -1255,10 +1261,10 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("restore <uuid>")
+      .command("restore <ref>")
       .description(
-        "Restore a TRASHED project IN PLACE: schedule, area, and children all keep their " +
-          "state. Only trashed projects qualify.",
+        "Restore a TRASHED project IN PLACE (target by uuid or unique name): schedule, area, " +
+          "and children all keep their state. Only trashed projects qualify.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.restoreProject(uuid, writeOptionsFrom(opts)));
@@ -1266,10 +1272,10 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("duplicate <uuid>")
+      .command("duplicate <ref>")
       .description(
-        "Duplicate a project INCLUDING its children; the copy's uuid is printed on " +
-          "success. Not available for repeating projects.",
+        "Duplicate a project (target by uuid or unique name) INCLUDING its children; the " +
+          "copy's uuid is printed on success. Not available for repeating projects.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.duplicateProject(uuid, writeOptionsFrom(opts)));
@@ -1277,10 +1283,10 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("complete <uuid>")
+      .command("complete <ref>")
       .description(
-        "Complete a project. Completing also completes its open to-dos, so an explicit " +
-          "--children policy is required.",
+        "Complete a project (target by uuid or unique name). Completing also completes its " +
+          "open to-dos, so an explicit --children policy is required.",
       )
       .requiredOption(
         "--children <policy>",
@@ -1298,10 +1304,10 @@ export function registerWriteCommands(program: Command): void {
 
   addWriteFlags(
     project
-      .command("delete <uuid>")
+      .command("delete <ref>")
       .description(
-        "Move a project to the Trash; its children go with it (recover with `things " +
-          "project restore`).",
+        "Move a project (target by uuid or unique name) to the Trash; its children go with " +
+          "it (recover with `things project restore`).",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.deleteProject(uuid, writeOptionsFrom(opts)));

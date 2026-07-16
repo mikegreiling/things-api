@@ -101,7 +101,39 @@ export type InvocationForm =
   /** `things open <ref>` — explicit loose router by reference. */
   | "loose-open"
   /** `things show <view-keyword>` — rewritten to the `<view-keyword>` command. */
-  | "show-keyword";
+  | "show-keyword"
+  /**
+   * `things <mutation-verb> …` at the top level — a bare mutation verb (update,
+   * add, delete, …) that would otherwise fall into show-sugar. Dispatched to a
+   * dedicated hint handler that suggests the namespaced write command instead
+   * of emitting a confusing `show` usage error. `ref` carries the verb.
+   */
+  | "verb-hint";
+
+/**
+ * Write verbs that shadow the bare-noun sugar in first position (the
+ * reserved-word rule extended to writes). The registered write-group
+ * subcommands (`todo`/`project`/`area`/`heading`/`tag`) supply the real set at
+ * classify time; these SYNONYMS are verbs users type that map to a differently
+ * named command (`create` → `add`). Documented in docs/design/cli-grammar.md.
+ */
+export const MUTATION_VERB_SYNONYMS = new Set(["create"]);
+
+/**
+ * The write-command groups whose subcommands are reserved mutation verbs, in
+ * the order the namespaced-form hint lists them (`things todo|project|area|
+ * tag|heading <verb> …`).
+ */
+export const WRITE_GROUP_ORDER = ["todo", "project", "area", "tag", "heading"];
+
+/** The reserved mutation-verb set: every write-group subcommand plus the synonyms. */
+export function mutationVerbs(program: Command): Set<string> {
+  const verbs = new Set(MUTATION_VERB_SYNONYMS);
+  for (const group of WRITE_GROUP_ORDER) {
+    for (const v of subcommandsOf(program, group)) verbs.add(v);
+  }
+  return verbs;
+}
 
 export interface ResolvedInvocation {
   form: InvocationForm;
@@ -153,7 +185,7 @@ export function resolveInvocation(program: Command, args: string[]): ResolvedInv
  * fall-through to commander (which reports it), rather than guessing whether
  * the next token is that flag's value or the subject.
  */
-function indexPastLeadingFlags(args: string[]): number | null {
+export function indexPastLeadingFlags(args: string[]): number | null {
   let i = 0;
   while (i < args.length) {
     const tok = args[i] ?? "";
@@ -172,7 +204,7 @@ function indexPastLeadingFlags(args: string[]): number | null {
 }
 
 /** The registered subcommand names + aliases of a command group (empty when the group is unknown). */
-function subcommandsOf(program: Command, groupName: string): Set<string> {
+export function subcommandsOf(program: Command, groupName: string): Set<string> {
   const group = program.commands.find(
     (c) => c.name() === groupName || c.aliases().includes(groupName),
   );
@@ -208,7 +240,11 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
     }
     // Precedence 3 through leading global flags: a bare-noun subject routes
     // through `show` with the flags left in place — commander accepts options
-    // before arguments on the subcommand.
+    // before arguments on the subcommand. A leading MUTATION VERB is caught
+    // first and routed to the write hint instead of the show-sugar.
+    if (mutationVerbs(program).has(first.toLowerCase())) {
+      return { form: "verb-hint", argv: args, canonical: null, ref: first };
+    }
     return { form: "bare-noun", argv: ["show", ...args], canonical: null, ref: first };
   }
 
@@ -280,6 +316,13 @@ function classify(program: Command, args: string[]): ResolvedInvocation {
   // here (they were handled above), so this only fires for the expansions.
   if (SHOW_KEYWORDS.has(first.toLowerCase()) && !known.has(first.toLowerCase())) {
     return keywordDispatch(first.toLowerCase(), args.slice(1));
+  }
+
+  // A bare MUTATION VERB (`things update health`) is not a reference — routing
+  // it through `show` produces a confusing usage error, so it is caught here
+  // and dispatched to the write-hint handler (docs/design/cli-grammar.md).
+  if (mutationVerbs(program).has(first.toLowerCase())) {
+    return { form: "verb-hint", argv: args, canonical: null, ref: first };
   }
 
   // Precedence 3: not a command — a bare-noun reference, routed through `show`.

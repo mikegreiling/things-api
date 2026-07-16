@@ -194,6 +194,77 @@ describe("blocked paths (exit 4, nothing executed)", () => {
   });
 });
 
+describe("project write targets accept names (Part 1)", () => {
+  it("resolves a project by unique name (dry-run compiles with the real uuid)", async () => {
+    const proj = seedProject(fixture.db, { title: "Firmware" });
+    await run(["project", "update", "Firmware", "--title", "Renamed", "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    expect(String((env["data"] as Record<string, unknown>)["invocation"])).toContain(proj);
+  });
+
+  it("dash/case-forgiving name resolution (mirrors the read side)", async () => {
+    const proj = seedProject(fixture.db, { title: "Restore Astro City Cabinet" });
+    await run([
+      "project",
+      "update",
+      "restore-astro-city-cabinet",
+      "--title",
+      "X",
+      "--dry-run",
+      "--json",
+    ]);
+    const env = envelope();
+    expect(String((env["data"] as Record<string, unknown>)["invocation"])).toContain(proj);
+  });
+
+  it("a uuid still resolves unchanged", async () => {
+    const proj = seedProject(fixture.db, { title: "ByUuid" });
+    await run(["project", "update", proj, "--title", "X", "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    expect(String((env["data"] as Record<string, unknown>)["invocation"])).toContain(proj);
+  });
+
+  it("an unknown project name is refused, naming the accepted forms", async () => {
+    await run(["project", "update", "Ghostproject", "--title", "X", "--json"]);
+    const env = envelope();
+    expect(env["ok"]).toBe(false);
+    expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
+      'no project matching "Ghostproject" — tried uuid, partial-uuid, and name',
+    );
+  });
+
+  it("a duplicated project name is refused fail-closed, listing candidates with area context", async () => {
+    const work = seedArea(fixture.db, "Work");
+    const p1 = seedProject(fixture.db, { title: "Dup", area: work });
+    const p2 = seedProject(fixture.db, { title: "Dup" });
+    await run(["project", "update", "Dup", "--title", "X", "--json"]);
+    const env = envelope();
+    const message = String((env["error"] as Record<string, unknown>)["message"]);
+    expect(message).toContain('"Dup" matches 2 projects');
+    expect(message).toContain(p1.slice(0, 8));
+    expect(message).toContain(p2.slice(0, 8));
+    expect(message).toContain("(in Work)");
+  });
+
+  it("to-do write targets stay uuid-only (Part 2 entity noun)", async () => {
+    await run(["todo", "update", "Buymilk", "--title", "X", "--json"]);
+    const env = envelope();
+    expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
+      'no to-do matching uuid or partial-uuid "Buymilk"',
+    );
+  });
+
+  it("heading write targets stay uuid-only (Part 2 entity noun)", async () => {
+    await run(["heading", "rename", "Sometitle", "New Name", "--json"]);
+    const env = envelope();
+    expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
+      'no heading matching uuid or partial-uuid "Sometitle"',
+    );
+  });
+});
+
 describe("capabilities", () => {
   it("dumps the lab-validated matrix for one op", async () => {
     await run(["capabilities", "--op", "todo.delete", "--json"]);
