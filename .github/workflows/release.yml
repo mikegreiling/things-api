@@ -1,0 +1,31 @@
+name: Release
+# Publishes to npm when a v* tag is pushed. The full check suite gates the
+# publish twice: explicitly below (visible in logs, survives a package.json
+# edit) and via the package's own prepublishOnly script.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC provenance)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      # Trusted publishing: add this repo + workflow as a Trusted Publisher in
+      # the package's settings on npmjs.com (Settings → Publishing access) —
+      # then no token exists to leak. Until that's configured, create a
+      # granular NPM_TOKEN repo secret and uncomment the env block.
+      - run: npm publish
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
