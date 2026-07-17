@@ -14,9 +14,28 @@
     { "kind": "tag", "key": "soil", "title": "soil" },
     { "kind": "tag", "key": "unrelated", "title": "office" },
     { "kind": "area", "key": "garden", "title": "Garden", "tags": ["outdoor"] },
-    { "kind": "project", "key": "beds", "title": "Raised beds", "area": "garden", "tags": ["weekend"] },
-    { "kind": "todo", "key": "t1", "title": "Compost rotation", "project": "beds", "start": "active", "tags": ["soil"] },
-    { "kind": "todo", "key": "t2", "title": "Order edging stones", "project": "beds", "start": "active" }
+    {
+      "kind": "project",
+      "key": "beds",
+      "title": "Raised beds",
+      "area": "garden",
+      "tags": ["weekend"]
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Compost rotation",
+      "project": "beds",
+      "start": "active",
+      "tags": ["soil"]
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Order edging stones",
+      "project": "beds",
+      "start": "active"
+    }
   ],
   "finalAnswer": { "required": true, "shape": "{\"tags\": string[], \"count\": number}" },
   "assertions": [

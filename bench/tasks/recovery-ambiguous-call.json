@@ -11,8 +11,20 @@
   "seed": [
     { "kind": "project", "key": "taxes", "title": "Taxes", "start": "active" },
     { "kind": "project", "key": "move", "title": "Studio move", "start": "active" },
-    { "kind": "todo", "key": "t1", "title": "Call the office", "project": "taxes", "start": "active" },
-    { "kind": "todo", "key": "t2", "title": "Call the office", "project": "move", "start": "active" }
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Call the office",
+      "project": "taxes",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Call the office",
+      "project": "move",
+      "start": "active"
+    }
   ],
   "assertions": [
     {

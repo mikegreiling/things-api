@@ -9,7 +9,13 @@
     { "kind": "area", "key": "home", "title": "Home" },
     { "kind": "area", "key": "errands", "title": "Errands" },
     { "kind": "todo", "key": "t1", "title": "Fix porch light", "area": "home", "start": "active" },
-    { "kind": "todo", "key": "t2", "title": "Pick up dry cleaning", "area": "errands", "start": "active" }
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Pick up dry cleaning",
+      "area": "errands",
+      "start": "active"
+    }
   ],
   "finalAnswer": { "required": true, "shape": "{\"outcome\": \"deleted\" | \"not_found\"}" },
   "assertions": [

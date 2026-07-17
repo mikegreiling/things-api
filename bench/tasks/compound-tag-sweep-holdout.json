@@ -12,8 +12,20 @@
     { "kind": "todo", "key": "t1", "title": "Pack books", "project": "move", "start": "active" },
     { "kind": "todo", "key": "t2", "title": "Label crates", "project": "move", "start": "active" },
     { "kind": "todo", "key": "t3", "title": "Reserve van", "project": "move", "start": "active" },
-    { "kind": "todo", "key": "t4", "title": "Collect quotes", "project": "move", "status": "completed" },
-    { "kind": "todo", "key": "t5", "title": "Gather receipts", "project": "taxes", "start": "active" }
+    {
+      "kind": "todo",
+      "key": "t4",
+      "title": "Collect quotes",
+      "project": "move",
+      "status": "completed"
+    },
+    {
+      "kind": "todo",
+      "key": "t5",
+      "title": "Gather receipts",
+      "project": "taxes",
+      "start": "active"
+    }
   ],
   "assertions": [
     {
