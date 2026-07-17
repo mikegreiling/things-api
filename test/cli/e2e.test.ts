@@ -48,8 +48,9 @@ const withTty = <T>(value: boolean | undefined, fn: () => T): T => {
 function isoFromToday(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  const p = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
 const titlesOf = (stdout: string): string[] =>
