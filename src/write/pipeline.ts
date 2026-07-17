@@ -521,7 +521,27 @@ export async function runMutation<K extends OperationKind>(
     // 5. Compile + expected delta.
     const nowEpoch = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
     const token = readAuthToken(deps.db);
-    const invocation: CompiledInvocation = spec.compile(params, vector.id, pre, { token });
+    // The simulator vector applies mutations from STRUCTURED op/params via SQL,
+    // never from a compiled payload — and a single VectorId cannot satisfy the
+    // transport-specific `spec.compile` of every operation (url-scheme-only vs
+    // applescript/shortcuts). So skip compile for it and synthesize a redacted
+    // marker for the audit trail. Real transports compile as before, then carry
+    // the structured input additively (they ignore it).
+    const invocation: CompiledInvocation =
+      vector.simulates === true
+        ? {
+            vector: vector.id,
+            kind: "open-url",
+            payload: `simulated:${op}`,
+            redactedPayload: `simulated:${op}`,
+            op,
+            opParams: params,
+          }
+        : spec.compile(params, vector.id, pre, { token });
+    if (vector.simulates !== true) {
+      invocation.op = op;
+      invocation.opParams = params;
+    }
     const delta = spec.expectedDelta(pre, params, {
       nowEpoch,
       todayIso: localToday(deps.now?.() ?? new Date()),

@@ -6,6 +6,7 @@
 import { loadConfig, type ThingsApiConfig } from "../../config.ts";
 import { createAppleScriptVector } from "./applescript.ts";
 import { createShortcutsVector } from "./shortcuts.ts";
+import { createSimulatorVector, simulatorFenceActive } from "./simulator.ts";
 import type { WriteVector } from "./types.ts";
 import type { UiDriveAux } from "./ui-drag.ts";
 import { createUiVector } from "./ui.ts";
@@ -24,6 +25,15 @@ export function defaultVectors(
   config: ThingsApiConfig = loadConfig(),
   uiAux: UiDriveAux = {},
 ): WriteVector[] {
+  // Bench harness (Phase 0): when the simulator's triple fence is satisfied
+  // (THINGS_SIM_WRITES=1 + THINGS_DB set to a benchFixture DB), the simulator
+  // REPLACES every real transport — no url-scheme/applescript/shortcuts/ui path
+  // can reach a real app in this mode. The fence is inert (and this branch never
+  // taken) for ordinary consumers.
+  const dbPath = process.env["THINGS_DB"];
+  if (dbPath !== undefined && simulatorFenceActive(dbPath)) {
+    return [createSimulatorVector(dbPath)];
+  }
   return [
     createUrlSchemeVector(),
     createAppleScriptVector(),
