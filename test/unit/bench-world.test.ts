@@ -30,6 +30,26 @@ describe("bench world profile", () => {
     }
   });
 
+  it("seeds standalone (container-less) anytime to-dos with no Today/overdue leak", () => {
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const fixture = buildBenchFixture([], { seed, clock: CLOCK });
+      const db = new DatabaseSync(fixture.path, { readOnly: true });
+      // Open, actionable-now (Anytime), truly container-less loose to-dos exist.
+      const standalone = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM TMTask
+           WHERE type = 0 AND status = 0 AND trashed = 0 AND start = 1
+             AND startDate IS NULL AND deadline IS NULL
+             AND area IS NULL AND project IS NULL AND heading IS NULL
+             AND rt1_recurrenceRule IS NULL`,
+        )
+        .get() as { n: number };
+      expect(standalone.n).toBeGreaterThanOrEqual(4);
+      db.close();
+      fixture.cleanup();
+    }
+  });
+
   it("is deterministic: same (seed, clock) → identical DB content hash", () => {
     const a = buildBenchFixture([], { seed: 7, clock: CLOCK });
     const b = buildBenchFixture([], { seed: 7, clock: CLOCK });

@@ -29,7 +29,9 @@ export function buildScorecard(
   gitSha: string,
 ): Scorecard {
   const groups = new Map<string, RunRecord[]>();
-  for (const r of records) {
+  // Budget-skipped placeholders (runs.jsonl bookkeeping) were never executed — they
+  // are neither successes nor failures, so they must not enter any cell.
+  for (const r of records.filter((rec) => rec.skipped === undefined)) {
     const family = familyOf(r.taskId);
     const key = `${r.arm}|${r.model}|${family}`;
     const bucket = groups.get(key) ?? [];
@@ -56,6 +58,7 @@ export function buildScorecard(
       successRate: round(ok.length / runs.length),
       meanErrorsSeen: round(mean(ok.map((r) => r.errorsSeen))),
       meanTokensIn: round(mean(ok.map((r) => r.tokensIn))),
+      meanTokensInCached: round(mean(ok.map((r) => r.tokensInCached ?? 0))),
       meanTokensOut: round(mean(ok.map((r) => r.tokensOut))),
       meanStaticContextTokens: round(mean(ok.map((r) => r.staticContextTokens))),
       meanDynamicContextTokens: round(mean(ok.map((r) => r.dynamicContextTokens))),
@@ -105,6 +108,7 @@ export function renderScorecardMarkdown(sc: Scorecard): string {
     "safety✗",
     "friction",
     "tok_in",
+    "cached",
     "tok_out",
     "static",
     "dynamic",
@@ -125,6 +129,7 @@ export function renderScorecardMarkdown(sc: Scorecard): string {
         c.safetyViolations,
         c.meanErrorsSeen,
         c.meanTokensIn,
+        c.meanTokensInCached,
         c.meanTokensOut,
         c.meanStaticContextTokens,
         c.meanDynamicContextTokens,
@@ -136,6 +141,12 @@ export function renderScorecardMarkdown(sc: Scorecard): string {
   }
   lines.push("");
   lines.push("_Efficiency columns (friction … ms) are means over SUCCESSFUL runs only._");
+  lines.push("");
+  lines.push(
+    "_`tok_in` is TOTAL input including cache reads/writes (the honest context volume); " +
+      "`cached` is the cache-read portion of it. The provider's raw `usage.input` is " +
+      "cache-discounted, so cache-friendly arms would under-report `tok_in` if read raw._",
+  );
   lines.push("");
   return lines.join("\n");
 }

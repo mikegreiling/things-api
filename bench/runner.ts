@@ -37,6 +37,7 @@ import {
   type ArmContext,
   type Collector,
 } from "./arms.ts";
+import { EXIT_TOKEN_BUDGET, executeSweep, type SweepUnit } from "./budget.ts";
 import { buildCodexAgentAuth, codexLoginHint, hasCodexCredential } from "./codex-auth.ts";
 import { buildBenchFixture } from "./fixture.ts";
 import { grade } from "./grade.ts";
@@ -64,11 +65,20 @@ interface RunnerOptions {
   worldSeed: number;
   /** Debugging escape hatch: run against bare task seeds only. */
   noWorld: boolean;
+  /**
+   * Sweep-wide cap on total tokens (tokensIn + tokensOut, accumulated across
+   * completed runs). 0 = unlimited. Once exceeded, no further runs launch; the
+   * remainder are recorded as skipped and the process exits {@link EXIT_TOKEN_BUDGET}.
+   */
+  maxTotalTokens: number;
 }
 
 interface ExecOutcome {
   turns: number;
+  /** TOTAL input tokens (incl. cache reads/writes) — see RunRecord.tokensIn. */
   tokensIn: number;
+  /** Cache-read portion of tokensIn (provider usage.cacheRead). */
+  tokensInCached: number;
   tokensOut: number;
   finalText: string | null;
   dynamicText: string;
@@ -232,6 +242,7 @@ async function runPseudo(
   return {
     turns: 1,
     tokensIn: 0,
+    tokensInCached: 0,
     tokensOut: 0,
     finalText,
     dynamicText: JSON.stringify(messages),
@@ -239,9 +250,25 @@ async function runPseudo(
   };
 }
 
+/**
+ * Assistant-message usage as pi-ai reports it (`@earendil-works/pi-ai` `Usage`).
+ * CRITICAL: `input` is the cache-DISCOUNTED input — the codex/openai Responses
+ * backend subtracts `cached_tokens` and `cache_write_tokens` from `input_tokens`
+ * before reporting `usage.input` (pi-ai `api/openai-responses-shared.js`). The true
+ * total input is `input + cacheRead + cacheWrite`; the split is genuinely reported,
+ * so no estimate is needed. `totalTokens` is the raw provider total (input+output).
+ */
 interface UsageEvent {
   type?: string;
-  message?: { role?: string; usage?: { input?: number; output?: number } };
+  message?: {
+    role?: string;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+    };
+  };
 }
 
 async function runAgent(
@@ -282,6 +309,7 @@ async function runAgent(
 
   let turns = 0;
   let tokensIn = 0;
+  let tokensInCached = 0;
   let tokensOut = 0;
   const unsubscribe = agent.subscribe((event) => {
     const e = event as unknown as UsageEvent;
@@ -289,8 +317,12 @@ async function runAgent(
       turns++;
       if (turns > maxTurns) agent.abort();
     } else if (e.type === "message_end" && e.message?.role === "assistant" && e.message.usage) {
-      tokensIn += e.message.usage.input ?? 0;
-      tokensOut += e.message.usage.output ?? 0;
+      const u = e.message.usage;
+      const cacheRead = u.cacheRead ?? 0;
+      // usage.input is cache-DISCOUNTED; re-add cache reads + writes for the honest total.
+      tokensIn += (u.input ?? 0) + cacheRead + (u.cacheWrite ?? 0);
+      tokensInCached += cacheRead;
+      tokensOut += u.output ?? 0;
     }
   });
 
@@ -308,6 +340,7 @@ async function runAgent(
   return {
     turns,
     tokensIn,
+    tokensInCached,
     tokensOut,
     finalText: lastAssistantText(messages),
     dynamicText: JSON.stringify(messages),
@@ -418,6 +451,7 @@ async function runOne(
           toolCalls: collector.toolCalls,
           errorsSeen: collector.errorsSeen,
           tokensIn: outcome.tokensIn,
+          tokensInCached: outcome.tokensInCached,
           tokensOut: outcome.tokensOut,
           wallMs,
         },
@@ -447,6 +481,7 @@ async function runOne(
     turns: outcome.turns,
     toolCalls: collector.toolCalls,
     tokensIn: outcome.tokensIn,
+    tokensInCached: outcome.tokensInCached,
     tokensOut: outcome.tokensOut,
     staticContextTokens: estimateTokens(armCtx.staticText),
     dynamicContextTokens: estimateTokens(outcome.dynamicText),
@@ -456,6 +491,43 @@ async function runOne(
     ...(gradeResult.failureNotes !== undefined && { failureNotes: gradeResult.failureNotes }),
   };
   return record;
+}
+
+/**
+ * A placeholder record for a run the budget cap skipped before it ran. Marked
+ * `skipped` so reporting never scores it as a failure; all metrics are zero.
+ */
+function skippedRecord(
+  task: TaskSpec,
+  rep: number,
+  opts: RunnerOptions,
+  ctx: { gitSha: string; outDir: string },
+): RunRecord {
+  return {
+    runId: ctx.outDir,
+    taskId: task.id,
+    paraphrase: null,
+    rep,
+    arm: opts.arm,
+    model: opts.pseudo ? "pseudo" : opts.model,
+    provider: opts.provider,
+    promptHash: "",
+    gitSha: ctx.gitSha,
+    success: false,
+    safety: "ok",
+    errorsSeen: 0,
+    turns: 0,
+    toolCalls: 0,
+    tokensIn: 0,
+    tokensInCached: 0,
+    tokensOut: 0,
+    staticContextTokens: 0,
+    dynamicContextTokens: 0,
+    wallMs: 0,
+    worldSeed: opts.noWorld ? null : opts.worldSeed,
+    transcript: "",
+    skipped: "token-budget",
+  };
 }
 
 async function run(opts: RunnerOptions): Promise<void> {
@@ -473,21 +545,35 @@ async function run(opts: RunnerOptions): Promise<void> {
   writeFileSync(runsPath, "");
 
   const ctx = { gitSha: gitSha(), skill: loadSkill(), outDir };
-  const records: RunRecord[] = [];
-
+  const totalSelected = tasks.length * opts.reps;
+  const units: SweepUnit[] = [];
   for (const task of tasks) {
-    for (let rep = 0; rep < opts.reps; rep++) {
-      const record = await runOne(task, rep, opts, ctx);
-      appendFileSync(runsPath, `${JSON.stringify(record)}\n`);
-      records.push(record);
-      const verdict = record.success ? "PASS" : "FAIL";
-      const note = record.failureNotes ? ` — ${record.failureNotes}` : "";
-      process.stdout.write(
-        `[${verdict}] ${task.id} rep${rep} arm=${opts.arm} safety=${record.safety} ` +
-          `errors=${record.errorsSeen} tools=${record.toolCalls}${note}\n`,
-      );
-    }
+    for (let rep = 0; rep < opts.reps; rep++) units.push({ task, rep });
   }
+
+  const onRecord = (record: RunRecord, skipped: boolean): void => {
+    appendFileSync(runsPath, `${JSON.stringify(record)}\n`);
+    if (skipped) {
+      process.stdout.write(
+        `[SKIP] ${record.taskId} rep${record.rep} arm=${opts.arm} — token budget spent\n`,
+      );
+      return;
+    }
+    const verdict = record.success ? "PASS" : "FAIL";
+    const note = record.failureNotes ? ` — ${record.failureNotes}` : "";
+    process.stdout.write(
+      `[${verdict}] ${record.taskId} rep${record.rep} arm=${opts.arm} safety=${record.safety} ` +
+        `errors=${record.errorsSeen} tools=${record.toolCalls}${note}\n`,
+    );
+  };
+
+  const { records, skipped, spentTokens } = await executeSweep(
+    units,
+    opts.maxTotalTokens,
+    (task, rep) => runOne(task, rep, opts, ctx),
+    (task, rep) => skippedRecord(task, rep, opts, ctx),
+    onRecord,
+  );
 
   const familyOf = (taskId: string) =>
     tasks.find((t) => t.id === taskId)?.family ?? ("longtail" as TaskSpec["family"]);
@@ -495,6 +581,13 @@ async function run(opts: RunnerOptions): Promise<void> {
   process.stdout.write(
     `\nwrote ${records.length} runs → ${runsPath}\nscorecard → ${join(outDir, "scorecard.md")}\n`,
   );
+  if (skipped.length > 0) {
+    process.stderr.write(
+      `\ntoken budget exceeded: spent ${spentTokens} tokens (cap ${opts.maxTotalTokens}); ` +
+        `${records.length} runs completed, ${skipped.length} of ${totalSelected} skipped.\n`,
+    );
+    process.exitCode = EXIT_TOKEN_BUDGET;
+  }
 }
 
 async function main(): Promise<void> {
@@ -513,6 +606,11 @@ async function main(): Promise<void> {
     .option("--pseudo", "scripted zero-cost executor (no LLM, no API key)", false)
     .option("--world-seed <n>", "evergreen world profile PRNG seed", "1")
     .option("--no-world", "bare task seeds only (debugging escape hatch)")
+    .option(
+      "--max-total-tokens <n>",
+      "stop the sweep once total tokens (in+out) exceed n; 0 = unlimited",
+      "0",
+    )
     .option("--out <dir>", "output directory", join(BENCH_DIR, "artifacts", runId))
     .action(async (raw: Record<string, string | boolean>) => {
       const opts: RunnerOptions = {
@@ -526,6 +624,7 @@ async function main(): Promise<void> {
         out: raw["out"] as string,
         worldSeed: Math.max(0, Number(raw["worldSeed"]) || 1),
         noWorld: raw["world"] === false,
+        maxTotalTokens: Math.max(0, Number(raw["maxTotalTokens"]) || 0),
         ...(typeof raw["task"] === "string" && { task: raw["task"] }),
       };
       if (!opts.pseudo && opts.model === "") {

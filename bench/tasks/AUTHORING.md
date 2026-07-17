@@ -39,6 +39,16 @@ Adding a `pseudoScript` to every task surfaced three genuine corpus bugs (the sc
 - **Long-tail families** (recurrence, reorders, undo) are deferred until simulator coverage lands — see bench/ROADMAP.md known-limits.
 - `LIKE` is ASCII-case-insensitive in SQLite — title matches on `%potting soil%`/`%214%` tolerate case variance; exact-title assertions are case-sensitive on purpose (seeded titles are unambiguous).
 
+## Standalone (container-less) to-dos — reasoning-standalone (2026-07-17, round-1 prep)
+
+New dev task `reasoning-standalone.json` (family `domain-reasoning`, tier 2) probes whether an agent understands that a to-do can live in **no** project/area and still be actionable. Seeds one standalone active to-do (`Sharpen the mower blade`, no `container`) plus a distractor project-contained to-do (`Caulk the tub surround` in project `Bathroom reno` in area `Homestead`) with distinct titles; the prompt asks which project/area the standalone item is filed under. Required answer `{container, view, actionable}` must say `container:"none"`, `view:"anytime"`, `actionable:true` (read-only — carries `db-unchanged`).
+
+Encoding facts verified against the CLI read path (`things show`/`things search`/`things anytime` with the sim fence), authored 2026-07-17:
+
+- **A standalone to-do has no container columns set:** `TMTask.area`, `TMTask.project`, and `TMTask.heading` are all NULL. The "no container" SQL assertion is `project IS NULL AND area IS NULL AND heading IS NULL` (plus `start=1` for anytime-actionable, `startDate IS NULL` for undated).
+- **`things show <uuid> --json`** returns a `detail` object that simply **omits** the `project` and `area` keys for a standalone item; a project-contained item's detail carries both `project:{uuid,title}` and (inherited) `area:{uuid,title}`. Their presence/absence is the golden signal the agent reads — that's the task's `pseudoScript` golden path (`things show "$(things search … | jq -r '.data[0].uuid')" --json`).
+- **`things anytime --json`** groups the standalone item under the `area:null` group (project-filed items sit under their area's group), and `things today` is empty for it — so `view:"anytime"`, not `today`. A `start=active` (start=1) to-do with no `startDate` is "Anytime" (actionable now), distinct from `start=someday` (start=2, deferred). `todaySection:"today"` appears in the detail JSON but is an internal label — it does NOT place an undated anytime item in the Today view.
+
 ## World-profile reconciliation (2026-07-17)
 
 The evergreen world (`bench/world.ts`) layers a lived-in library under every task's seeds. Reconciliations: **reads-inbox-count** was redesigned — its global "count the Inbox" assertion cannot coexist with a rotating world (the true count varies by world seed), so it became a scoped inbox lookup ("is there something about calling a plumber?") preserving its tier-1 read/answer-grading smoke purpose. All other tasks passed unchanged on top of the world (their SQL was already title/container-scoped). World-side guarantees the corpus relies on: world rows contribute nothing to Today and carry no non-future startDate/deadline; world titles are fenced against corpus strings (normalized equality + LIKE patterns) by `validateWorld`, which runs on every fixture build.

@@ -191,7 +191,16 @@ export interface RunRecord {
   errorsSeen: number;
   turns: number;
   toolCalls: number;
+  /**
+   * TOTAL input tokens across the run's assistant turns, INCLUDING cache reads and
+   * writes (the honest context volume the model processed). The provider's
+   * `usage.input` is cache-DISCOUNTED (it subtracts cached + cache-write tokens — see
+   * pi-ai `openai-responses-shared.js`), so a cache-friendly arm under-counts if you
+   * read it raw; this field re-adds `cacheRead + cacheWrite` to report the true total.
+   */
   tokensIn: number;
+  /** Of `tokensIn`, the portion served from the prompt cache (provider `usage.cacheRead`). */
+  tokensInCached: number;
   tokensOut: number;
   /** System prompt + tool defs (+ skill bytes if loaded). */
   staticContextTokens: number;
@@ -206,6 +215,13 @@ export interface RunRecord {
   /** Path (relative to the run's out dir) to the transcript file. */
   transcript: string;
   failureNotes?: string;
+  /**
+   * Present only on a placeholder record for a run that was NEVER executed because a
+   * sweep-level cap tripped first (currently only `"token-budget"`, from
+   * `--max-total-tokens`). Reporting IGNORES skipped records — they are not scored as
+   * failures — so this is bookkeeping in runs.jsonl, not a graded attempt.
+   */
+  skipped?: "token-budget";
 }
 
 /** Aggregated metrics for one arm × model × family cell (successful runs only for 3–5). */
@@ -218,7 +234,10 @@ export interface ScorecardCell {
   successRate: number;
   /** Means below are over SUCCESSFUL runs only. */
   meanErrorsSeen: number;
+  /** Mean TOTAL input tokens (incl. cache) over successful runs. */
   meanTokensIn: number;
+  /** Mean cache-read input tokens over successful runs (the discounted portion of `meanTokensIn`). */
+  meanTokensInCached: number;
   meanTokensOut: number;
   meanStaticContextTokens: number;
   meanDynamicContextTokens: number;
