@@ -34,6 +34,7 @@
     "lab:gc": "node lab/runner/main.ts gc",
     "lab:regress": "bash lab/scripts/regress.sh",
     "bench": "node bench/runner.ts",
+    "bench:login": "node bench/login.ts",
     "bench:report": "node bench/report.ts",
     "check": "npm run typecheck && npm run lint && npm run fmt:check && npm run test"
   },
