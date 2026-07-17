@@ -1,0 +1,968 @@
+/**
+ * Pure/injectable core of the AGENTBENCH refinement loop (side-effect-free on import;
+ * the CLI driver lives in `bench/loop.ts`). Everything the loop needs to REASON is
+ * here — arm allowlists, patch parsing, the accept/revert decision math (CONSTITUTION
+ * metric ladder), the failure digest, the surface-improvement charter, state-file
+ * append, and the checkpoint renderer — plus `runIteration`, one loop turn driven
+ * entirely through an injected {@link IterationDeps} seam so it is unit-testable with
+ * fakes (no git, no subprocess bench, no live model).
+ */
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import type { Classification, Refiner, RefinerOutput } from "./refiner.ts";
+import type { Arm, RunRecord, TaskSpec } from "./types.ts";
+
+const CORE_DIR = dirname(fileURLToPath(import.meta.url));
+
+// --- arm scopes (patch allowlists) -----------------------------------------
+
+/**
+ * Per-arm patch allowlist. A refiner patch touching ANY file outside its arm's list
+ * is rejected (the iteration counts as a no-accept). Patterns support `*` (one path
+ * segment) and `**` (any depth); paths are repo-relative POSIX.
+ */
+export const ARM_ALLOWLISTS: Record<Arm, string[]> = {
+  cli: [
+    "src/cli/help.ts",
+    "src/cli/commands/*.ts",
+    "src/cli/excess-args.ts",
+    "src/cli/did-you-mean.ts",
+    "src/cli/verb-hint.ts",
+  ],
+  skill: ["skills/things-cli/**"],
+  mcp: ["src/mcp/server.ts"],
+};
+
+/** Translate a `*`/`**` glob into an anchored RegExp over a POSIX path. */
+function globToRegExp(glob: string): RegExp {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i] as string;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++; // consume the second `*`
+        if (glob[i + 1] === "/") {
+          // `**/` — zero or more leading path segments.
+          i++;
+          re += "(?:.*/)?";
+        } else {
+          // trailing `**` — anything, including nested `/`.
+          re += ".*";
+        }
+      } else {
+        re += "[^/]*";
+      }
+    } else if (".+?^${}()|[]\\".includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp(`${re}$`);
+}
+
+/** True iff `file` (repo-relative POSIX) matches at least one allowlist pattern. */
+export function matchesAllowlist(file: string, patterns: string[]): boolean {
+  return patterns.some((p) => globToRegExp(p).test(file));
+}
+
+/**
+ * The repo-relative paths a unified diff touches. Reads the `diff --git a/… b/…`
+ * headers, falling back to `+++`/`---` hunk headers, and strips the `a/`|`b/` prefix.
+ */
+const stripAB = (p: string): string => p.replace(/^[ab]\//, "").trim();
+
+export function filesInPatch(patch: string): string[] {
+  const files = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const git = /^diff --git a\/(\S+) b\/(\S+)/.exec(line);
+    if (git) {
+      files.add(stripAB(git[1] as string));
+      files.add(stripAB(git[2] as string));
+      continue;
+    }
+    const hunk = /^(?:---|\+\+\+) ([^\t\n]+)/.exec(line);
+    if (hunk) {
+      const p = (hunk[1] as string).trim();
+      if (p !== "/dev/null") files.add(stripAB(p));
+    }
+  }
+  return [...files];
+}
+
+/** The touched files that fall OUTSIDE the given allowlist. */
+export function filesOutsideAllowlist(patch: string, patterns: string[]): string[] {
+  return filesInPatch(patch).filter((f) => !matchesAllowlist(f, patterns));
+}
+
+// --- metrics + decision math -----------------------------------------------
+
+export interface SplitMetrics {
+  runs: number;
+  successes: number;
+  safetyViolations: number;
+  /** Mean errorsSeen over SUCCESSFUL runs (CONSTITUTION: efficiency on successes). */
+  frictionOnSuccesses: number;
+  /** Median tokensIn over SUCCESSFUL runs. */
+  medianTokensInOnSuccesses: number;
+}
+
+export interface PairMetrics {
+  dev: SplitMetrics;
+  validation: SplitMetrics;
+}
+
+export interface PairRuns {
+  dev: RunRecord[];
+  validation: RunRecord[];
+}
+
+function mean(values: number[]): number {
+  return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+export function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const s = [...values].toSorted((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0
+    ? ((s[mid - 1] as number) + (s[mid] as number)) / 2
+    : (s[mid] as number);
+}
+
+export function splitMetrics(records: RunRecord[]): SplitMetrics {
+  const ok = records.filter((r) => r.success);
+  return {
+    runs: records.length,
+    successes: ok.length,
+    safetyViolations: records.filter((r) => r.safety === "violated").length,
+    frictionOnSuccesses: mean(ok.map((r) => r.errorsSeen)),
+    medianTokensInOnSuccesses: median(ok.map((r) => r.tokensIn)),
+  };
+}
+
+export function pairMetrics(runs: PairRuns): PairMetrics {
+  return { dev: splitMetrics(runs.dev), validation: splitMetrics(runs.validation) };
+}
+
+export interface Decision {
+  accept: boolean;
+  /** True when the patch must be parked for Mike (gui-semantic change) rather than reverted-and-forgotten. */
+  needsMike: boolean;
+  reason: string;
+}
+
+/** ≥10% reduction threshold for the token tie-break (after ≤ before × 0.9). */
+export const TOKEN_REDUCTION_FACTOR = 0.9;
+
+const EPS = 1e-9;
+const approxEq = (a: number, b: number): boolean => Math.abs(a - b) < EPS;
+
+/**
+ * The CONSTITUTION accept/revert rule, as a pure function of before/after metrics.
+ *
+ * Accept iff: zero safety regressions on EITHER split; validation success is
+ * non-inferior (after ≥ before); AND one of the dev tie-break rungs holds —
+ *   1. dev success ↑, or
+ *   2. dev success = AND friction-on-successes ↓, or
+ *   3. dev success = AND friction = AND median tokensIn-on-successes ↓ by ≥10%.
+ * `guiSemanticChange` short-circuits to a non-accept that is parked for Mike,
+ * regardless of any measured gain.
+ */
+export function decideAccept(
+  before: PairMetrics,
+  after: PairMetrics,
+  guiSemanticChange: boolean,
+): Decision {
+  if (guiSemanticChange) {
+    return { accept: false, needsMike: true, reason: "gui semantic change — stashed for Mike" };
+  }
+  if (
+    after.dev.safetyViolations > before.dev.safetyViolations ||
+    after.validation.safetyViolations > before.validation.safetyViolations
+  ) {
+    return { accept: false, needsMike: false, reason: "safety regression" };
+  }
+  if (after.validation.successes < before.validation.successes) {
+    return { accept: false, needsMike: false, reason: "validation success regressed" };
+  }
+  if (after.dev.successes > before.dev.successes) {
+    return { accept: true, needsMike: false, reason: "dev success ↑" };
+  }
+  if (after.dev.successes === before.dev.successes) {
+    if (after.dev.frictionOnSuccesses < before.dev.frictionOnSuccesses - EPS) {
+      return { accept: true, needsMike: false, reason: "dev success = ; friction ↓" };
+    }
+    if (
+      approxEq(after.dev.frictionOnSuccesses, before.dev.frictionOnSuccesses) &&
+      after.dev.medianTokensInOnSuccesses <=
+        before.dev.medianTokensInOnSuccesses * TOKEN_REDUCTION_FACTOR
+    ) {
+      return {
+        accept: true,
+        needsMike: false,
+        reason: "dev success = ; friction = ; median tokensIn ↓ ≥10%",
+      };
+    }
+  }
+  return { accept: false, needsMike: false, reason: "no dev improvement" };
+}
+
+// --- usage fail-safe: token budget + rate-limit circuit breaker ------------
+
+export interface UsageDelta {
+  tokensIn: number;
+  tokensOut: number;
+}
+
+/** Sum tokensIn+tokensOut across a set of bench runs (for budget accounting). */
+export function sumRunTokens(runs: RunRecord[]): UsageDelta {
+  let tokensIn = 0;
+  let tokensOut = 0;
+  for (const r of runs) {
+    tokensIn += r.tokensIn;
+    tokensOut += r.tokensOut;
+  }
+  return { tokensIn, tokensOut };
+}
+
+export const TOKEN_BUDGET_DEFAULT = 12_000_000;
+export const BUDGET_WARN_FRACTION = 0.6;
+export const CONSECUTIVE_PROVIDER_ERROR_LIMIT = 5;
+export const BUDGET_ABORT_EXIT_CODE = 8;
+export const RATE_LIMIT_ABORT_EXIT_CODE = 9;
+
+/** A retryable provider failure (HTTP 429 / quota / 5xx). */
+export class ProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderError";
+  }
+}
+
+/** Heuristically detect a rate-limit/quota/5xx provider failure from any throwable. */
+export function isProviderError(err: unknown): boolean {
+  if (err instanceof ProviderError) return true;
+  const status =
+    (err as { status?: number } | null)?.status ??
+    (err as { statusCode?: number } | null)?.statusCode;
+  if (typeof status === "number" && (status === 429 || status >= 500)) return true;
+  const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
+  return /\b429\b|rate.?limit|quota|too many requests|overloaded|insufficient_quota|\b5\d\d\b|server error|service unavailable/.test(
+    msg,
+  );
+}
+
+export type LoopAbortKind = "token-budget" | "rate-limit";
+
+/** A clean, resumable abort: unwinds the loop so the caller can finalize + exit. */
+export class LoopAbort extends Error {
+  readonly kind: LoopAbortKind;
+  readonly code: number;
+  constructor(kind: LoopAbortKind, code: number, message: string) {
+    super(message);
+    this.name = "LoopAbort";
+    this.kind = kind;
+    this.code = code;
+  }
+}
+
+/**
+ * Cumulative usage fail-safe for ONE loop invocation. Sums tokensIn+tokensOut across
+ * every subject bench sweep AND refiner call; warns once at {@link BUDGET_WARN_FRACTION},
+ * forces a clean abort (exit {@link BUDGET_ABORT_EXIT_CODE}) at 100%, and trips a
+ * rate-limit breaker (exit {@link RATE_LIMIT_ABORT_EXIT_CODE}) after
+ * {@link CONSECUTIVE_PROVIDER_ERROR_LIMIT} consecutive provider errors.
+ */
+export class Budget {
+  readonly limit: number;
+  usedTokens = 0;
+  #warned = false;
+  #consecutiveProviderErrors = 0;
+
+  constructor(limit: number = TOKEN_BUDGET_DEFAULT) {
+    this.limit = limit;
+  }
+
+  add(delta: UsageDelta): void {
+    this.usedTokens += delta.tokensIn + delta.tokensOut;
+  }
+
+  fraction(): number {
+    return this.limit <= 0 ? 1 : this.usedTokens / this.limit;
+  }
+
+  remaining(): number {
+    return Math.max(0, this.limit - this.usedTokens);
+  }
+
+  /** True EXACTLY ONCE — the first check after cumulative usage reaches the warn line. */
+  crossedWarnThreshold(): boolean {
+    if (!this.#warned && this.fraction() >= BUDGET_WARN_FRACTION) {
+      this.#warned = true;
+      return true;
+    }
+    return false;
+  }
+
+  /** Throw {@link LoopAbort} if at/over 100%. Call BEFORE each sweep and refiner call. */
+  assertUnderBudget(phase: string): void {
+    if (this.fraction() >= 1) {
+      throw new LoopAbort(
+        "token-budget",
+        BUDGET_ABORT_EXIT_CODE,
+        `token budget exhausted before ${phase}: used ${this.usedTokens} / ${this.limit} tokens`,
+      );
+    }
+  }
+
+  /** Count one provider error; throw {@link LoopAbort} on the Nth CONSECUTIVE one. */
+  recordProviderError(): void {
+    this.#consecutiveProviderErrors++;
+    if (this.#consecutiveProviderErrors >= CONSECUTIVE_PROVIDER_ERROR_LIMIT) {
+      throw new LoopAbort(
+        "rate-limit",
+        RATE_LIMIT_ABORT_EXIT_CODE,
+        `${this.#consecutiveProviderErrors} consecutive provider errors — rate-limit circuit breaker tripped`,
+      );
+    }
+  }
+
+  /** A successful provider interaction resets the consecutive-error streak. */
+  resetProviderErrors(): void {
+    this.#consecutiveProviderErrors = 0;
+  }
+
+  get consecutiveProviderErrors(): number {
+    return this.#consecutiveProviderErrors;
+  }
+}
+
+/** Args to size the runner's `--max-total-tokens` to the remaining budget (if supported). */
+export function maxTotalTokensArgs(supported: boolean, remaining: number): string[] {
+  return supported && remaining > 0 ? ["--max-total-tokens", String(Math.floor(remaining))] : [];
+}
+
+// --- surface-improvement charter (refiner system prompt) -------------------
+
+/** The CONSTITUTION metric ladder, sliced verbatim from CONSTITUTION.md (with a fallback). */
+export function metricLadderText(constitutionPath = join(CORE_DIR, "CONSTITUTION.md")): string {
+  const fallback =
+    "1. Safety  2. Task success  3. Friction (errors seen)  4. Context tokens  5. Tool calls / latency.";
+  try {
+    const md = readFileSync(constitutionPath, "utf8");
+    const start = md.indexOf("## The metric ladder");
+    if (start < 0) return fallback;
+    const rest = md.slice(start + "## The metric ladder".length);
+    const next = rest.indexOf("\n## ");
+    return `## The metric ladder${next < 0 ? rest : rest.slice(0, next)}`.trim();
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * The refiner's system prompt: the metric ladder (verbatim), the non-opinionated and
+ * smallest-generalizable-change doctrines, the arm scope + exact file list, the GUI
+ * rule (skill arm only), and the strict output contract.
+ */
+export function buildCharter(arm: Arm): string {
+  const files = ARM_ALLOWLISTS[arm];
+  const guiRule =
+    arm === "skill"
+      ? "- GUI-FACT RULE: `references/gui.md` states facts about the Things app UI that " +
+        "this loop CANNOT verify. You may COMPRESS or RELOCATE those facts, but you may " +
+        "NEVER add, remove, or alter their semantics. If your patch changes gui.md " +
+        "semantics in any way, you MUST set `guiSemanticChange` to true so a human reviews it.\n"
+      : "";
+  return [
+    "You are the AGENTBENCH surface refiner. You improve ONE consumer surface so that a",
+    "zero-context, non-frontier agent understands and operates Things correctly. You never",
+    "execute tasks and never grade — you analyze the supplied failure digest and propose the",
+    "SMALLEST GENERALIZABLE change.",
+    "",
+    "OPTIMIZE STRICTLY BY THIS LEXICOGRAPHIC LADDER (a lower rung never trades for a higher):",
+    "",
+    metricLadderText(),
+    "",
+    "DOCTRINE:",
+    "- NON-OPINIONATED: surfaces teach capabilities and structure — the data model, what a",
+    "  command does, how a human sees the result. They NEVER give GTD/workflow advice.",
+    "- SMALLEST GENERALIZABLE CHANGE: fix the root cause a failure class reveals, not the exact",
+    "  benchmark phrasing. Do not memorize task wording. Prefer one precise edit over many.",
+    "- Every failure is CLASSIFIED before any copy change: (a) discovery — couldn't find the",
+    "  command; (b) behavior-misunderstanding; (c) data-model-misunderstanding; (d)",
+    "  argument-construction; (e) failed recovery; (f) tool-defect (a real bug — flag it, do",
+    "  not paper over it with copy).",
+    "",
+    `ARM SCOPE — you are refining the "${arm}" surface. Your patch may touch ONLY these paths:`,
+    ...files.map((f) => `  - ${f}`),
+    "A patch touching anything else is rejected outright.",
+    guiRule,
+    "OUTPUT CONTRACT — reply with ONLY a single fenced ```json object, no prose around it:",
+    "```json",
+    "{",
+    '  "classifications": [{"taskId": "...", "class": "a|b|c|d|e|f or the class name", "note": "..."}],',
+    '  "patch": "<a unified git diff (git apply -p1) touching only allowed files; \\"\\" if no change is warranted>",',
+    '  "rationale": "<why this is the smallest generalizable fix>",',
+    '  "predictedBlastRadius": "<which tasks/behaviors this should move, and any risk>",',
+    '  "guiSemanticChange": false',
+    "}",
+    "```",
+  ].join("\n");
+}
+
+// --- failure digest --------------------------------------------------------
+
+export interface TranscriptData {
+  messages?: unknown[];
+}
+
+export type TranscriptLoader = (record: RunRecord) => TranscriptData | null;
+
+export interface DigestItem {
+  taskId: string;
+  family: string;
+  preClass: string;
+}
+
+export interface DigestResult {
+  text: string;
+  hash: string;
+  items: DigestItem[];
+}
+
+/** ~8k-token cap on the digest (≈4 chars/token). */
+export const MAX_DIGEST_CHARS = 32_000;
+const MAX_EXCERPT_CHARS = 2_000;
+const MAX_RESULT_CHARS = 500;
+
+interface ToolCallBlock {
+  type?: string;
+  name?: string;
+  arguments?: unknown;
+  text?: string;
+}
+
+/** A compact transcript excerpt: the commands/tool calls tried + their output/errors. */
+function extractExcerpt(messages: unknown[]): string {
+  const lines: string[] = [];
+  for (const raw of messages) {
+    const m = raw as { role?: string; content?: unknown };
+    if (!Array.isArray(m.content)) continue;
+    for (const b of m.content as ToolCallBlock[]) {
+      if (b.type === "toolCall") {
+        const args = b.arguments as { command?: string } | undefined;
+        const call =
+          typeof args?.command === "string"
+            ? args.command
+            : `${b.name ?? "tool"}(${JSON.stringify(b.arguments ?? {})})`;
+        lines.push(`$ ${call}`);
+      } else if (m.role === "toolResult" && b.type === "text" && typeof b.text === "string") {
+        const text =
+          b.text.length > MAX_RESULT_CHARS ? `${b.text.slice(0, MAX_RESULT_CHARS)}…` : b.text;
+        lines.push(`> ${text.replace(/\n/g, "\n> ")}`);
+      }
+    }
+  }
+  const joined = lines.join("\n");
+  return joined.length > MAX_EXCERPT_CHARS ? `${joined.slice(0, MAX_EXCERPT_CHARS)}…` : joined;
+}
+
+/** Heuristic pre-classification (a hint the refiner re-decides). */
+export function preClassify(record: RunRecord, excerpt: string): string {
+  const notes = (record.failureNotes ?? "").toLowerCase();
+  const hay = `${notes}\n${excerpt.toLowerCase()}`;
+  if (
+    /typeerror|referenceerror|unexpected error|\bat object\.|stack trace|internal error/.test(hay)
+  ) {
+    return "tool-defect";
+  }
+  if (/command not found|unknown command|not a things command|did you mean/.test(hay)) {
+    return "discovery";
+  }
+  if (
+    /unknown option|unknown argument|invalid option|error: option|too many arguments|usage:/.test(
+      hay,
+    )
+  ) {
+    return "argument-construction";
+  }
+  if (/db-unchanged|safety/.test(notes)) {
+    return "recovery";
+  }
+  if (/inbox|area|project|heading|tag|someday|deadline|start date|scheduled/.test(hay)) {
+    return "data-model-misunderstanding";
+  }
+  return "behavior-misunderstanding";
+}
+
+/**
+ * Build the failure digest from DEV runs only (NEVER validation/holdout content):
+ * failed dev runs plus high-friction dev successes (errorsSeen ≥ 2), grouped to one
+ * representative item per task, capped at ~8k tokens.
+ */
+export function buildDigest(
+  devRuns: RunRecord[],
+  tasks: Map<string, TaskSpec>,
+  loadTranscript: TranscriptLoader,
+): DigestResult {
+  const selected = devRuns.filter((r) => {
+    const task = tasks.get(r.taskId);
+    // Defensive belt-and-suspenders: a non-dev task must never enter the digest.
+    if (task !== undefined && task.split !== "dev") return false;
+    return !r.success || r.errorsSeen >= 2;
+  });
+
+  const byTask = new Map<string, RunRecord[]>();
+  for (const r of selected) {
+    const bucket = byTask.get(r.taskId) ?? [];
+    bucket.push(r);
+    byTask.set(r.taskId, bucket);
+  }
+
+  const sections: string[] = [];
+  const items: DigestItem[] = [];
+  let budget = MAX_DIGEST_CHARS;
+
+  for (const taskId of [...byTask.keys()].toSorted()) {
+    const reps = byTask.get(taskId) as RunRecord[];
+    // Prefer a failing rep (worst friction); else the worst high-friction success.
+    const failing = reps.filter((r) => !r.success);
+    const pool = failing.length > 0 ? failing : reps;
+    const rep = pool.toSorted((a, b) => b.errorsSeen - a.errorsSeen)[0] as RunRecord;
+
+    const task = tasks.get(taskId);
+    const family = task?.family ?? "unknown";
+    const transcript = loadTranscript(rep);
+    const excerpt = transcript?.messages ? extractExcerpt(transcript.messages) : "";
+    const preClass = preClassify(rep, excerpt);
+
+    const graded = rep.success
+      ? "(high-friction success — no grading failure)"
+      : (rep.failureNotes ?? "(failed, no notes)");
+    const section = [
+      `## ${taskId}  [family: ${family}]  (pre-class: ${preClass}, errorsSeen: ${rep.errorsSeen})`,
+      `prompt: ${task?.prompt ?? "(unknown)"}`,
+      `graded failure: ${graded}`,
+      "transcript excerpt:",
+      excerpt === "" ? "(no tool calls captured)" : excerpt,
+      "",
+    ].join("\n");
+
+    if (section.length > budget) break;
+    budget -= section.length;
+    sections.push(section);
+    items.push({ taskId, family, preClass });
+  }
+
+  const header =
+    "=== FAILURE DIGEST — DEV SPLIT ONLY ===\n" +
+    "Failed or high-friction dev tasks. Validation/holdout content is intentionally absent.\n\n";
+  const text =
+    sections.length > 0
+      ? header + sections.join("\n")
+      : `${header}(no failing or high-friction dev runs)\n`;
+  const hash = createHash("sha256").update(text).digest("hex").slice(0, 12);
+  return { text, hash, items };
+}
+
+const MAX_FILE_CHARS = 24_000;
+
+/** Assemble the refiner user content: current target file bodies + the digest. */
+export function renderUserContent(
+  arm: Arm,
+  targetFiles: Record<string, string>,
+  digestText: string,
+): string {
+  const parts: string[] = [`=== CURRENT "${arm}" SURFACE FILES ===`, ""];
+  for (const path of Object.keys(targetFiles).toSorted()) {
+    const body = targetFiles[path] as string;
+    const shown =
+      body.length > MAX_FILE_CHARS
+        ? `${body.slice(0, MAX_FILE_CHARS)}\n… [truncated ${body.length - MAX_FILE_CHARS} chars]`
+        : body;
+    parts.push(`--- FILE: ${path} ---`, shown, "");
+  }
+  parts.push("", digestText);
+  return parts.join("\n");
+}
+
+// --- one loop iteration (injectable seam) ----------------------------------
+
+export interface IterationDeps {
+  refiner: Refiner;
+  /** Read the arm's current target files → { repoRelativePath: body }. */
+  readArmFiles: () => Record<string, string>;
+  loadTranscript: TranscriptLoader;
+  /** `git apply --check` then `git apply`; ok=false on either failure. */
+  gitApply: (patch: string) => { ok: boolean; error?: string };
+  /** `npm run fmt` + `npm run check`, judged by exit code. */
+  runGate: () => { ok: boolean; output: string };
+  /** Re-bench dev + validation at the current working-tree state. */
+  benchSplits: () => PairRuns;
+  /** `git checkout -- <files>` to revert the working tree. */
+  revertFiles: (files: string[]) => void;
+  /** Commit exactly these files. */
+  commit: (message: string, files: string[]) => void;
+  /** Persist a parked patch; returns the path written. */
+  stashPatch: (name: string, content: string) => string;
+  /** Emit the prominent 60%-budget warning (console + a loop-state.json note). */
+  onBudgetWarning: () => void;
+  log: (msg: string) => void;
+}
+
+export interface IterationParams {
+  arm: Arm;
+  iteration: number;
+  prevMetrics: PairMetrics;
+  /** Dev runs from the previous bench, for the digest. */
+  prevDevRuns: RunRecord[];
+  tasks: Map<string, TaskSpec>;
+  /** The invocation-wide usage fail-safe (token budget + provider-error breaker). */
+  budget: Budget;
+}
+
+export interface IterationResult {
+  iteration: number;
+  arm: Arm;
+  digestHash: string;
+  accepted: boolean;
+  needsMike: boolean;
+  reason: string;
+  rationale: string;
+  patchSummary: string;
+  classifications: Classification[];
+  guiSemanticChange: boolean;
+  metricsBefore: PairMetrics;
+  metricsAfter: PairMetrics | null;
+  /** The re-bench runs (only when a re-bench happened AND was kept, i.e. accepted). */
+  afterRuns: PairRuns | null;
+  touchedFiles: string[];
+  needsMikePatchPath?: string;
+}
+
+function firstLine(s: string): string {
+  const line = s.split("\n").find((l) => l.trim() !== "") ?? "";
+  return line.trim().slice(0, 120) || "(no rationale)";
+}
+
+function summarizePatch(output: RefinerOutput, touched: string[]): string {
+  const added = (output.patch.match(/^\+(?!\+\+)/gm) ?? []).length;
+  const removed = (output.patch.match(/^-(?!--)/gm) ?? []).length;
+  return `${touched.length} file(s) [${touched.join(", ")}], +${added}/-${removed}`;
+}
+
+/**
+ * Run ONE loop iteration: digest → refiner → allowlist → apply → gate → gui-guard →
+ * re-bench → accept/revert. Every side effect goes through {@link IterationDeps} so a
+ * test can drive the whole control flow with fakes. Returns the outcome; the caller
+ * records state and decides whether to continue.
+ */
+export async function runIteration(
+  deps: IterationDeps,
+  params: IterationParams,
+): Promise<IterationResult> {
+  const { arm, iteration, prevMetrics, budget } = params;
+  const digest = buildDigest(params.prevDevRuns, params.tasks, deps.loadTranscript);
+  const targetFiles = deps.readArmFiles();
+
+  // Budget gate BEFORE the refiner call (may throw a clean LoopAbort; nothing applied).
+  budget.assertUnderBudget(`refiner call (iter ${iteration})`);
+  let output: RefinerOutput;
+  try {
+    output = await deps.refiner.refine({
+      systemPrompt: buildCharter(arm),
+      userContent: renderUserContent(arm, targetFiles, digest.text),
+    });
+    budget.resetProviderErrors();
+  } catch (e) {
+    if (isProviderError(e)) {
+      deps.log(`iter ${iteration}: provider error (refiner) — ${(e as Error).message}`);
+      budget.recordProviderError(); // throws LoopAbort(rate-limit) on the Nth consecutive
+      return {
+        iteration,
+        arm,
+        digestHash: digest.hash,
+        accepted: false,
+        needsMike: false,
+        reason: "provider error (refiner)",
+        rationale: "",
+        patchSummary: "",
+        classifications: [],
+        guiSemanticChange: false,
+        metricsBefore: prevMetrics,
+        metricsAfter: null,
+        afterRuns: null,
+        touchedFiles: [],
+      };
+    }
+    throw e;
+  }
+  if (output.usage !== undefined) budget.add(output.usage);
+  if (budget.crossedWarnThreshold()) deps.onBudgetWarning();
+  const touched = filesInPatch(output.patch);
+
+  const base: IterationResult = {
+    iteration,
+    arm,
+    digestHash: digest.hash,
+    accepted: false,
+    needsMike: false,
+    reason: "",
+    rationale: output.rationale,
+    patchSummary: summarizePatch(output, touched),
+    classifications: output.classifications,
+    guiSemanticChange: output.guiSemanticChange,
+    metricsBefore: prevMetrics,
+    metricsAfter: null,
+    afterRuns: null,
+    touchedFiles: touched,
+  };
+
+  // Allowlist (no side effects yet — nothing to revert).
+  if (output.patch.trim() === "" || touched.length === 0) {
+    deps.log(`iter ${iteration}: refiner proposed no change`);
+    return { ...base, reason: "no patch proposed" };
+  }
+  const outside = touched.filter((f) => !matchesAllowlist(f, ARM_ALLOWLISTS[arm]));
+  if (outside.length > 0) {
+    deps.log(`iter ${iteration}: allowlist violation — ${outside.join(", ")}`);
+    return { ...base, reason: `allowlist violation: ${outside.join(", ")}` };
+  }
+
+  // Apply.
+  const applied = deps.gitApply(output.patch);
+  if (!applied.ok) {
+    deps.log(`iter ${iteration}: git apply failed — ${applied.error ?? ""}`);
+    return { ...base, reason: `git apply failed: ${applied.error ?? "(no detail)"}` };
+  }
+
+  // Gate (fmt + check).
+  const gate = deps.runGate();
+  if (!gate.ok) {
+    deps.revertFiles(touched);
+    deps.log(`iter ${iteration}: gate failed — reverted`);
+    return { ...base, reason: "gate failed (fmt/check)" };
+  }
+
+  // GUI-semantic guard: never auto-accept; park for Mike, revert.
+  if (output.guiSemanticChange) {
+    const patchPath = deps.stashPatch(`needs-mike-iter${iteration}.patch`, output.patch);
+    deps.revertFiles(touched);
+    deps.log(`iter ${iteration}: gui-semantic change — parked at ${patchPath}, reverted`);
+    return {
+      ...base,
+      needsMike: true,
+      reason: "gui semantic change — stashed for Mike",
+      needsMikePatchPath: patchPath,
+    };
+  }
+
+  // Re-bench + decide. The budget gate here fires AFTER apply+gate, so a clean abort
+  // (or a provider error) must revert the applied-but-unaccepted patch first.
+  let afterRuns: PairRuns;
+  try {
+    budget.assertUnderBudget(`re-bench (iter ${iteration})`);
+    afterRuns = deps.benchSplits();
+  } catch (e) {
+    deps.revertFiles(touched);
+    if (e instanceof LoopAbort) throw e;
+    if (isProviderError(e)) {
+      deps.log(`iter ${iteration}: provider error (bench) — reverted`);
+      budget.recordProviderError(); // throws LoopAbort(rate-limit) on the Nth consecutive
+      return { ...base, reason: "provider error (bench)" };
+    }
+    throw e;
+  }
+  budget.add(sumRunTokens([...afterRuns.dev, ...afterRuns.validation]));
+  budget.resetProviderErrors();
+  if (budget.crossedWarnThreshold()) deps.onBudgetWarning();
+  const afterMetrics = pairMetrics(afterRuns);
+  const decision = decideAccept(prevMetrics, afterMetrics, false);
+  if (decision.accept) {
+    deps.commit(`loop(${arm}) iter ${iteration}: ${firstLine(output.rationale)}`, touched);
+    deps.log(`iter ${iteration}: ACCEPT — ${decision.reason}`);
+    return {
+      ...base,
+      accepted: true,
+      reason: decision.reason,
+      metricsAfter: afterMetrics,
+      afterRuns,
+    };
+  }
+  deps.revertFiles(touched);
+  deps.log(`iter ${iteration}: revert — ${decision.reason}`);
+  return { ...base, reason: decision.reason, metricsAfter: afterMetrics };
+}
+
+// --- state file + checkpoint -----------------------------------------------
+
+export interface LoopStateEntry {
+  timestamp: string;
+  arm: Arm;
+  iteration: number;
+  digestHash: string;
+  patchSummary: string;
+  rationale: string;
+  decision: "accept" | "revert" | "needs-mike";
+  reason: string;
+  guiSemanticChange: boolean;
+  classifications: Classification[];
+  metricsBefore: PairMetrics;
+  metricsAfter: PairMetrics | null;
+}
+
+/** A non-iteration note in the state log: a 60% budget warning or a clean abort. */
+export interface BudgetNoteEntry {
+  timestamp: string;
+  arm: Arm;
+  kind: "budget-warning" | "abort";
+  reason: string;
+  usedTokens: number;
+  limit: number;
+}
+
+/** Anything appended to loop-state.json — an iteration outcome or a budget note. */
+export type LoopStateRecord = LoopStateEntry | BudgetNoteEntry;
+
+/** Build a budget-warning / abort note for the state log. */
+export function budgetNote(
+  arm: Arm,
+  kind: BudgetNoteEntry["kind"],
+  reason: string,
+  budget: Budget,
+  timestamp: string,
+): BudgetNoteEntry {
+  return { timestamp, arm, kind, reason, usedTokens: budget.usedTokens, limit: budget.limit };
+}
+
+/** Map an iteration outcome to the decision label recorded in state/checkpoint. */
+export function decisionLabel(result: IterationResult): LoopStateEntry["decision"] {
+  if (result.accepted) return "accept";
+  if (result.needsMike) return "needs-mike";
+  return "revert";
+}
+
+/** Append one record to the JSON-array loop-state file (creating it if absent). */
+export function appendLoopState(statePath: string, entry: LoopStateRecord): void {
+  let existing: LoopStateRecord[] = [];
+  if (existsSync(statePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
+      if (Array.isArray(parsed)) existing = parsed as LoopStateRecord[];
+    } catch {
+      existing = [];
+    }
+  }
+  existing.push(entry);
+  writeFileSync(statePath, `${JSON.stringify(existing, null, 2)}\n`);
+}
+
+/** Build a state entry from an iteration result + timestamp. */
+export function toStateEntry(result: IterationResult, timestamp: string): LoopStateEntry {
+  return {
+    timestamp,
+    arm: result.arm,
+    iteration: result.iteration,
+    digestHash: result.digestHash,
+    patchSummary: result.patchSummary,
+    rationale: result.rationale,
+    decision: decisionLabel(result),
+    reason: result.reason,
+    guiSemanticChange: result.guiSemanticChange,
+    classifications: result.classifications,
+    metricsBefore: result.metricsBefore,
+    metricsAfter: result.metricsAfter,
+  };
+}
+
+export interface CheckpointData {
+  arm: Arm;
+  subjectModel: string;
+  refinerModel: string;
+  reps: number;
+  results: IterationResult[];
+  baselineMetrics: PairMetrics;
+  finalMetrics: PairMetrics;
+  /** Holdout metrics run once at the final state, or null when skipped (clean abort). */
+  holdout: SplitMetrics | null;
+  /** Why the holdout was skipped (only set when `holdout` is null). */
+  holdoutNote?: string;
+  needsMikePatches: string[];
+  stopReason: string;
+}
+
+function fmtSplit(m: SplitMetrics): string {
+  return (
+    `${m.successes}/${m.runs} success, safety✗ ${m.safetyViolations}, ` +
+    `friction ${m.frictionOnSuccesses.toFixed(2)}, med tokIn ${Math.round(m.medianTokensInOnSuccesses)}`
+  );
+}
+
+/** Render the end-of-loop checkpoint.md. */
+export function renderCheckpoint(data: CheckpointData): string {
+  const L: string[] = [];
+  L.push(`# AGENTBENCH loop checkpoint — ${data.arm}`);
+  L.push("");
+  L.push(`- subject model: \`${data.subjectModel}\``);
+  L.push(`- refiner model: \`${data.refinerModel}\``);
+  L.push(`- reps: ${data.reps}`);
+  L.push(`- iterations run: ${data.results.length}`);
+  L.push(`- stop reason: ${data.stopReason}`);
+  L.push("");
+
+  L.push("## Iterations");
+  L.push("");
+  L.push("| iter | decision | reason | rationale | patch |");
+  L.push("| --- | --- | --- | --- | --- |");
+  for (const r of data.results) {
+    const rat = firstLine(r.rationale).replace(/\|/g, "\\|");
+    const sum = r.patchSummary.replace(/\|/g, "\\|");
+    L.push(`| ${r.iteration} | ${decisionLabel(r)} | ${r.reason} | ${rat} | ${sum} |`);
+  }
+  L.push("");
+
+  L.push("## Metrics (before → after)");
+  L.push("");
+  L.push(`- dev baseline: ${fmtSplit(data.baselineMetrics.dev)}`);
+  L.push(`- dev final: ${fmtSplit(data.finalMetrics.dev)}`);
+  L.push(`- validation baseline: ${fmtSplit(data.baselineMetrics.validation)}`);
+  L.push(`- validation final: ${fmtSplit(data.finalMetrics.validation)}`);
+  L.push(
+    data.holdout !== null
+      ? `- **holdout (final state, run once): ${fmtSplit(data.holdout)}**`
+      : `- **holdout: SKIPPED — ${data.holdoutNote ?? "clean abort"}**`,
+  );
+  L.push("");
+
+  const classCounts = new Map<string, number>();
+  for (const r of data.results) {
+    for (const c of r.classifications) {
+      classCounts.set(c.class, (classCounts.get(c.class) ?? 0) + 1);
+    }
+  }
+  L.push("## Per-class failure counts (refiner classifications)");
+  L.push("");
+  if (classCounts.size === 0) {
+    L.push("_(none)_");
+  } else {
+    for (const cls of [...classCounts.keys()].toSorted()) {
+      L.push(`- ${cls}: ${classCounts.get(cls)}`);
+    }
+  }
+  L.push("");
+
+  L.push("## needs-mike patches");
+  L.push("");
+  if (data.needsMikePatches.length === 0) {
+    L.push("_(none)_");
+  } else {
+    for (const p of data.needsMikePatches) L.push(`- \`${p}\``);
+  }
+  L.push("");
+  return L.join("\n");
+}
