@@ -215,6 +215,13 @@ export interface RunRecord {
   /** Path (relative to the run's out dir) to the transcript file. */
   transcript: string;
   failureNotes?: string;
+  /**
+   * Present only on a placeholder record for a run that was NEVER executed because a
+   * sweep-level cap tripped first (currently only `"token-budget"`, from
+   * `--max-total-tokens`). Reporting IGNORES skipped records — they are not scored as
+   * failures — so this is bookkeeping in runs.jsonl, not a graded attempt.
+   */
+  skipped?: "token-budget";
 }
 
 /** Aggregated metrics for one arm × model × family cell (successful runs only for 3–5). */

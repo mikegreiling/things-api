@@ -29,7 +29,9 @@ export function buildScorecard(
   gitSha: string,
 ): Scorecard {
   const groups = new Map<string, RunRecord[]>();
-  for (const r of records) {
+  // Budget-skipped placeholders (runs.jsonl bookkeeping) were never executed — they
+  // are neither successes nor failures, so they must not enter any cell.
+  for (const r of records.filter((rec) => rec.skipped === undefined)) {
     const family = familyOf(r.taskId);
     const key = `${r.arm}|${r.model}|${family}`;
     const bucket = groups.get(key) ?? [];
