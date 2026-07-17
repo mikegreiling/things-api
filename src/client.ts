@@ -579,7 +579,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
 
   const writeDeps: WriteDeps = {
     db: conn.db,
-    vectors: options.vectors ?? defaultVectors(config, createUiDriveAux(conn.db)),
+    vectors: options.vectors ?? defaultVectors(config, createUiDriveAux(conn.db), located.path),
     config,
     audit,
     fingerprint,

@@ -70,6 +70,7 @@ import {
   PERIOD_UNTIL,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
+  simFenceActive,
   validateViewArgs,
   type EnvelopeMeta,
   type GroupedLimits,
@@ -78,15 +79,33 @@ import {
   type ViewFilter,
 } from "../../index.ts";
 
+/** Result of an `open` command: the reveal URI, and whether it was simulated. */
+export interface RevealResult {
+  uri: string;
+  /** true when the simulator fence is active: the URI was NOT opened. */
+  simulated: boolean;
+}
+
 /**
  * Foreground the Things app on a resource via its share URI. A GUI action
  * on this Mac — NOT headless; the shared implementation behind every
- * `open` command. Returns the URI it launched.
+ * `open` command. Under the simulator fence the reveal URI is returned
+ * without opening it, so a bench run never foregrounds the real app.
  */
-export function openInThings(uuid: string): string {
+export function openInThings(uuid: string): RevealResult {
   const uri = `things:///show?id=${uuid}`;
+  if (simFenceActive()) {
+    return { uri, simulated: true };
+  }
   execFileSync("/usr/bin/open", [uri]);
-  return uri;
+  return { uri, simulated: false };
+}
+
+/** One human-readable line describing an `open` result (simulated or real). */
+export function revealLine(d: RevealResult): string {
+  return d.simulated
+    ? `would open ${d.uri} (simulated; the app was not opened)`
+    : `opened ${d.uri}`;
 }
 
 /** Help copy for the `--overdue` content scope (open items past their deadline). */

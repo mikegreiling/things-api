@@ -521,7 +521,27 @@ export async function runMutation<K extends OperationKind>(
     // 5. Compile + expected delta.
     const nowEpoch = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
     const token = readAuthToken(deps.db);
-    const invocation: CompiledInvocation = spec.compile(params, vector.id, pre, { token });
+    // The simulator vector applies mutations from STRUCTURED op/params via SQL,
+    // never from a compiled payload — and a single VectorId cannot satisfy the
+    // transport-specific `spec.compile` of every operation (url-scheme-only vs
+    // applescript/shortcuts). So skip compile for it and synthesize a redacted
+    // marker for the audit trail. Real transports compile as before, then carry
+    // the structured input additively (they ignore it).
+    const invocation: CompiledInvocation =
+      vector.simulates === true
+        ? {
+            vector: vector.id,
+            kind: "open-url",
+            payload: `simulated:${op}`,
+            redactedPayload: `simulated:${op}`,
+            op,
+            opParams: params,
+          }
+        : spec.compile(params, vector.id, pre, { token });
+    if (vector.simulates !== true) {
+      invocation.op = op;
+      invocation.opParams = params;
+    }
     const delta = spec.expectedDelta(pre, params, {
       nowEpoch,
       todayIso: localToday(deps.now?.() ?? new Date()),
@@ -568,16 +588,20 @@ export async function runMutation<K extends OperationKind>(
 
     // 6. Ensure the app is running in the BACKGROUND before dispatch —
     // plain opens and AppleEvents to a closed Things steal focus (A40/A41).
-    const running = await (deps.ensureRunning ?? defaultEnsureRunning)(appRunning);
-    if (!running) {
-      audit({ result: blockedCode({ reason: "environment" }) });
-      return {
-        kind: "blocked",
-        op,
-        reason: "environment",
-        detail: "Things did not become available after a background launch attempt",
-        remediation: "launch Things manually and retry",
-      };
+    // A simulating vector applies SQL to a fixture DB and never touches the
+    // real app, so it neither needs nor may trigger the background launch.
+    if (vector.simulates !== true) {
+      const running = await (deps.ensureRunning ?? defaultEnsureRunning)(appRunning);
+      if (!running) {
+        audit({ result: blockedCode({ reason: "environment" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "environment",
+          detail: "Things did not become available after a background launch attempt",
+          remediation: "launch Things manually and retry",
+        };
+      }
     }
 
     // 7. Execute + verify. The environment tuple diff feeds failure

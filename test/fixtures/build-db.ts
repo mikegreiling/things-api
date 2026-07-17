@@ -34,4 +34,9 @@ function seedMeta(db: DatabaseSync): void {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><integer>26</integer></plist>`;
   db.prepare("INSERT INTO Meta (key, value) VALUES ('databaseVersion', ?)").run(plist);
+  // The bench-harness marker: the simulator write vector refuses to touch any
+  // database that does not carry it (one of three fences — see
+  // src/write/vectors/simulator.ts). Every fixture is a synthetic, disposable
+  // bench DB, so the marker rides here.
+  db.prepare("INSERT INTO Meta (key, value) VALUES ('benchFixture', '1')").run();
 }

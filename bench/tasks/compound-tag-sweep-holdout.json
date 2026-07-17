@@ -1,0 +1,90 @@
+{
+  "id": "compound-tag-sweep-holdout",
+  "family": "compound",
+  "tier": 3,
+  "split": "holdout",
+  "prompt": "Tag every open to-do in my 'Studio move' project with 'boxes'. Only the ones still open, and only in that project.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "tag",
+      "key": "boxes",
+      "title": "boxes"
+    },
+    {
+      "kind": "project",
+      "key": "move",
+      "title": "Studio move",
+      "start": "active"
+    },
+    {
+      "kind": "project",
+      "key": "taxes",
+      "title": "Taxes",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Pack books",
+      "container": "move",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Label crates",
+      "container": "move",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t3",
+      "title": "Reserve van",
+      "container": "move",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t4",
+      "title": "Collect quotes",
+      "container": "move",
+      "status": "completed"
+    },
+    {
+      "kind": "todo",
+      "key": "t5",
+      "title": "Gather receipts",
+      "container": "taxes",
+      "start": "active"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMTask p ON t.project=p.uuid WHERE p.title='Studio move' AND t.type=0 AND t.status=0 AND t.trashed=0 AND NOT EXISTS (SELECT 1 FROM TMTaskTag tt JOIN TMTag g ON tt.tags=g.uuid WHERE tt.tasks=t.uuid AND g.title='boxes')",
+      "expect": [
+        {
+          "n": 0
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(DISTINCT tt.tasks) AS n FROM TMTaskTag tt JOIN TMTag g ON tt.tags=g.uuid WHERE g.title='boxes'",
+      "expect": [
+        {
+          "n": 3
+        }
+      ]
+    }
+  ],
+  "maxTurns": 30,
+  "timeoutMs": 240000,
+  "pseudoScript": [
+    "for u in $(things show \"Studio move\" --json | jq -r '.data.view.active[]|select(.status==\"open\")|.uuid'); do things todo tags \"$u\" --add boxes; done"
+  ]
+}

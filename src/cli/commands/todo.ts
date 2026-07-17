@@ -16,7 +16,7 @@ import {
   todoBox,
   whenValue,
 } from "../glyphs.ts";
-import { openInThings } from "./reads.ts";
+import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
 import { runRead, withClient } from "../read-driver.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
@@ -159,9 +159,9 @@ export function registerTodoCommands(program: Command): void {
             throw new RangeError(
               `"${ref}" is a ${t.viaHeading === true ? "heading" : t.kind}, not a to-do (try \`things open\`)`,
             );
-          return { uri: openInThings(t.uuid) };
+          return openInThings(t.uuid);
         },
-        (d) => [`opened ${d.uri}`],
+        (d) => [revealLine(d)],
       );
     });
 }

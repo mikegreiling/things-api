@@ -1,0 +1,44 @@
+{
+  "id": "writes-schedule-wednesday",
+  "family": "writes",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "Add a to-do to buy potting soil, scheduled for this Wednesday.",
+  "paraphrases": [
+    "Put \"Buy potting soil\" on my list for Wednesday this week.",
+    "I need to remember to buy potting soil on Wednesday — add that for me."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "yard",
+      "title": "Yard & Garden"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Water the ferns",
+      "container": "yard",
+      "start": "active",
+      "startDate": "2026-07-20"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE type=0 AND trashed=0 AND status=0 AND title LIKE '%potting soil%' AND startDate=132807424 AND start=1",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things todo add \"Buy potting soil\" --when 2026-07-22"]
+}

@@ -26,6 +26,16 @@ export interface CompiledInvocation {
   input?: unknown;
   /** ui-drive only: the ordered Accessibility recipe the driver executes. */
   recipe?: UiRecipe;
+  /**
+   * STRUCTURED input for the simulator write vector (bench harness): the
+   * resolved operation kind and its (uuid/when-normalized) params. Populated by
+   * the pipeline right after {@link CommandSpec.compile}; the real transport
+   * vectors ignore them entirely. They exist so a synthetic SQL applier never
+   * has to reverse-engineer the payload URL / AppleScript to learn the intent.
+   */
+  op?: OperationKind;
+  /** @see op — the resolved params object for the simulator applier. */
+  opParams?: unknown;
 }
 
 /**
@@ -201,4 +211,14 @@ export interface WriteVector {
   id: VectorId;
   matrix: VectorMatrix;
   execute(invocation: CompiledInvocation): Promise<ExecuteResult>;
+  /**
+   * The bench-harness SIMULATOR vector (src/write/vectors/simulator.ts). It
+   * presents under a real {@link VectorId} but applies mutations via SQL from
+   * the structured `invocation.op`/`opParams`, never from a compiled payload.
+   * A single VectorId cannot satisfy the transport-specific `spec.compile` of
+   * EVERY operation (some are url-scheme-only, others applescript/shortcuts), so
+   * the pipeline SKIPS compile for a simulator and hands it structured input
+   * directly. Undefined/false for every real transport vector.
+   */
+  simulates?: boolean;
 }

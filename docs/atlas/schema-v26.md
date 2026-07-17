@@ -128,7 +128,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 
 1. `reminderTime` bit layout (safe to derive from fixtures: set reminders at known times in the lab VM, read back).
 2. ~~`repeater` BLOB vs `rt1_recurrenceRule`~~ **ANSWERED (lab, 2026-07-03): 3.22.11 authors `rt1_recurrenceRule`; `repeater` stays NULL.**
-3. Heading `status` semantics when a heading is archived in UI (no non-open headings existed in the probed library).
+3. Heading `status` semantics when a heading is archived in UI — **PARTIALLY ANSWERED (2026-07-17, aggregate-only production shape survey for the bench world profile): non-open headings DO occur in the wild (two `type=2` rows with `status=3` observed), so archived/completed headings take completed status.** Remaining: whether UI "archive heading" is what writes `status=3` (vs project completion cascading) — lab probe still wanted.
 4. ~~`TMAreaTag` population conditions~~ **PARTIALLY ANSWERED (lab): AppleScript `set tag names of area` populates `TMAreaTag` immediately. Why Mike's production table is empty despite historical area-tag use remains a curiosity.**
 5. Tombstone lifecycle: when exactly `leavesTombstone` rows produce `TMTombstone` entries (delete-to-trash vs empty-trash vs sync).
 6. Logbook timing: `logInterval`/`manualLogDate` interaction with when completed items visually move to Logbook (research "Logbook timing" ancillary finding).

@@ -15,6 +15,7 @@ import {
   ExitCode,
   okEnvelope,
   shortcutProxies,
+  simFenceActive,
   type EnvelopeMeta,
   type ShortcutsState,
 } from "../../index.ts";
@@ -78,7 +79,11 @@ export function registerSetup(program: Command): void {
       let exitCode: number = ExitCode.Ok;
       let detail = state.detail;
 
-      if (opts.check !== true && state.missing.length > 0) {
+      if (opts.check !== true && state.missing.length > 0 && simFenceActive()) {
+        // Under the simulator fence: report the install sheets as simulated
+        // rather than opening them, so a bench run never touches the host app.
+        detail = "simulated: install sheets were not opened (the Shortcuts app was not touched)";
+      } else if (opts.check !== true && state.missing.length > 0) {
         for (const name of state.missing) {
           const file = join(SHORTCUTS_DIR, `${name}.shortcut`);
           if (!existsSync(file)) {
