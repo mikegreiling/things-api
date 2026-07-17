@@ -1,5 +1,6 @@
 name: Release
-# Publishes to npm when a v* tag is pushed. The full check suite gates the
+# Publishes to npm when a v* tag is pushed, then creates the matching GitHub
+# Release from the tag's CHANGELOG section. The full check suite gates the
 # publish twice: explicitly below (visible in logs, survives a package.json
 # edit) and via the package's own prepublishOnly script.
 on:
@@ -20,6 +21,13 @@ jobs:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
       - run: npm ci
+      - name: Verify tag matches package.json version
+        run: |
+          pkg="v$(node -p 'require("./package.json").version')"
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $pkg" >&2
+            exit 1
+          fi
       - run: npm run check
       - run: npm run build
       # Trusted publishing: add this repo + workflow as a Trusted Publisher in
@@ -29,3 +37,28 @@ jobs:
       - run: npm publish
         # env:
         #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Separate job so the npm-publishing job keeps contents: read.
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release from CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$(awk -v ver="$version" '$0 ~ "^## " ver " " {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md)"
+          {
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) for full history."
+            echo
+            echo "$notes"
+          } > /tmp/release-notes.md
+          if [ -z "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
+          fi
