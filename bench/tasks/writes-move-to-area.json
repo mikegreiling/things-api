@@ -40,7 +40,7 @@
   "assertions": [
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Renew library card' AND a.title='Errands' AND t.trashed=0 AND t.status=0 AND t.start=0",
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Renew library card' AND a.title='Errands' AND t.trashed=0 AND t.status=0 AND t.start=1",
       "expect": [
         {
           "n": 1

@@ -214,6 +214,23 @@ describe("simulator write vector — covered operations", () => {
     expect(row(t3)["project"]).toBeNull();
   });
 
+  it("todo.move: filing an INBOX item into a container promotes it to Anytime; someday start survives", async () => {
+    const area = seedArea(fixture.db, "FileArea");
+    const proj = seedProject(fixture.db, { title: "FileProj" });
+    const inboxTodo = seedTodo(fixture.db, { title: "from-inbox", start: "inbox" });
+    const somedayTodo = seedTodo(fixture.db, { title: "keep-someday", start: "someday" });
+    expect(
+      (await runMutation(deps(vector), "todo.move", { uuid: inboxTodo, area: { uuid: area } }))
+        .kind,
+    ).toBe("ok");
+    expect(row(inboxTodo)["start"]).toBe(1); // inbox → anytime on filing
+    expect(
+      (await runMutation(deps(vector), "todo.move", { uuid: somedayTodo, project: { uuid: proj } }))
+        .kind,
+    ).toBe("ok");
+    expect(row(somedayTodo)["start"]).toBe(2); // someday is preserved
+  });
+
   it("todo.move {detach}: clears container but PRESERVES the schedule", async () => {
     const proj = seedProject(fixture.db, { title: "Proj" });
     const t = seedTodo(fixture.db, {

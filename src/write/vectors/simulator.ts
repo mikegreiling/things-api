@@ -478,7 +478,7 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       if (h.resolved === null) throw new Error("simulator: unresolved heading");
       sim
         .prepare(
-          "UPDATE TMTask SET heading = ?, project = NULL, area = NULL, userModificationDate = ? WHERE uuid = ?",
+          "UPDATE TMTask SET heading = ?, project = NULL, area = NULL, start = CASE WHEN start = 0 THEN 1 ELSE start END, userModificationDate = ? WHERE uuid = ?",
         )
         .run(h.resolved.uuid, ctx.nowEpoch, params.uuid);
       return;
@@ -487,16 +487,19 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       const projUuid = containerUuid(sim, params.project, "project");
       sim
         .prepare(
-          "UPDATE TMTask SET project = ?, heading = NULL, area = NULL, userModificationDate = ? WHERE uuid = ?",
+          "UPDATE TMTask SET project = ?, heading = NULL, area = NULL, start = CASE WHEN start = 0 THEN 1 ELSE start END, userModificationDate = ? WHERE uuid = ?",
         )
         .run(projUuid, ctx.nowEpoch, params.uuid);
       return;
     }
     if (params.area !== undefined) {
       const areaUuid = containerUuid(sim, params.area, "area");
+      // Filing an inbox item into a container promotes it to Anytime (start
+      // 0→1), matching the app; someday (2) and already-active items keep
+      // their start. Same promotion on the project/heading branches above.
       sim
         .prepare(
-          "UPDATE TMTask SET area = ?, project = NULL, heading = NULL, userModificationDate = ? WHERE uuid = ?",
+          "UPDATE TMTask SET area = ?, project = NULL, heading = NULL, start = CASE WHEN start = 0 THEN 1 ELSE start END, userModificationDate = ? WHERE uuid = ?",
         )
         .run(areaUuid, ctx.nowEpoch, params.uuid);
     }
