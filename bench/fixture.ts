@@ -183,7 +183,7 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
 
 /** Build a fresh fixture DB, apply the seeds, and snapshot its baseline hash. */
 export function buildBenchFixture(seeds: SeedSpec[]): BenchFixture {
-  const fixture = buildFixtureDb();
+  const fixture = buildFixtureDb({ benchMarker: true });
   applySeeds(fixture.db, seeds);
   // Close flushes WAL to disk so the child process opens a consistent file and the
   // baseline hash reflects the committed seed state.

@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 import { loadConfig, type ThingsApiConfig } from "../../config.ts";
 import { createAppleScriptVector } from "./applescript.ts";
 import { createShortcutsVector } from "./shortcuts.ts";
-import { createSimulatorVector, simulatorFenceReason } from "./simulator.ts";
+import { createSimulatorVector, dbCarriesBenchMarker, simulatorFenceReason } from "./simulator.ts";
 import type { WriteVector } from "./types.ts";
 import type { UiDriveAux } from "./ui-drag.ts";
 import { createUiVector } from "./ui.ts";
@@ -56,6 +56,25 @@ export function defaultVectors(
       throw new Error(`${FENCE_UNSATISFIED}${reason}`);
     }
     return [createSimulatorVector(thingsDb)];
+  }
+  // Marker fail-closed (2026-07-17 incident): a database carrying the
+  // benchFixture marker is a synthetic bench fixture BY CONSTRUCTION, and the
+  // only legitimate way to write "against" one is the simulator. Reaching this
+  // point with a marked DB means the env fence is absent/incomplete (the exact
+  // shape of the escape that fired real url-scheme adds at a live app while
+  // verification read the fixture) — refuse rather than return real transports.
+  const envDb = process.env["THINGS_DB"];
+  const markedPath = [resolvedDbPath, envDb]
+    .filter((p): p is string => p !== undefined && p.trim() !== "")
+    .find((p) => dbCarriesBenchMarker(p));
+  if (markedPath !== undefined) {
+    throw new Error(
+      `the database in use (${markedPath}) is a bench fixture (Meta.benchFixture marker) but ` +
+        "the simulator fence is not active — refusing to dispatch real write transports " +
+        "against a live app on behalf of a synthetic fixture. Set the full fence env " +
+        "(THINGS_SIM_WRITES=1, THINGS_DB, scratch THINGS_API_STATE_DIR/THINGS_API_CONFIG_DIR) " +
+        "or use an unmarked DB.",
+    );
   }
   return [
     createUrlSchemeVector(),

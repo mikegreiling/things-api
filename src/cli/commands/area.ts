@@ -340,7 +340,7 @@ export function registerAreaCommands(program: Command): void {
             throw new RangeError(
               `"${ref}" is a ${t.viaHeading === true ? "heading" : t.kind}, not an area (try \`things open\`)`,
             );
-          return openInThings(t.uuid);
+          return openInThings(t.uuid, opts.db);
         },
         (d) => [revealLine(d)],
       );

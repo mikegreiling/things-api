@@ -70,6 +70,7 @@ import {
   PERIOD_UNTIL,
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
+  dbCarriesBenchMarker,
   simFenceActive,
   validateViewArgs,
   type EnvelopeMeta,
@@ -89,12 +90,19 @@ export interface RevealResult {
 /**
  * Foreground the Things app on a resource via its share URI. A GUI action
  * on this Mac — NOT headless; the shared implementation behind every
- * `open` command. Under the simulator fence the reveal URI is returned
- * without opening it, so a bench run never foregrounds the real app.
+ * `open` command. The reveal is withheld (URI returned, app untouched)
+ * when the simulator fence is active OR when the database this command is
+ * reading — via `--db` or THINGS_DB — is a marked bench fixture: revealing
+ * a synthetic uuid in the operator's real app is always a bug (2026-07-17
+ * incident: a bare `--db <fixture>` invocation popped a "list does not
+ * exist" modal in the live app).
  */
-export function openInThings(uuid: string): RevealResult {
+export function openInThings(uuid: string, dbPath?: string): RevealResult {
   const uri = `things:///show?id=${uuid}`;
-  if (simFenceActive()) {
+  const fixtureCandidates = [dbPath, process.env["THINGS_DB"]].filter(
+    (p): p is string => p !== undefined && p.trim() !== "",
+  );
+  if (simFenceActive() || fixtureCandidates.some((p) => dbCarriesBenchMarker(p))) {
     return { uri, simulated: true };
   }
   execFileSync("/usr/bin/open", [uri]);

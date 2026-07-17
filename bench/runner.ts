@@ -9,7 +9,7 @@
  *
  * Real runs require the provider's API key in the environment (OPENAI_API_KEY).
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -127,8 +127,13 @@ function buildFenceEnv(dbPath: string, clock: Clock, scratch: Scratch): Record<s
     THINGS_NOW: clock.now,
     THINGS_TZ: clock.tz,
     THINGS_WIDTH: "100",
-    THINGS_CONFIG_DIR: scratch.config,
-    THINGS_STATE_DIR: scratch.state,
+    // The REAL config/state override names are THINGS_API_* (src/paths.ts).
+    // An earlier revision used THINGS_CONFIG_DIR/THINGS_STATE_DIR, which the
+    // CLI ignores — bench audit records then landed in the operator's real
+    // audit trail (2026-07-17 incident). The simulator fence now REQUIRES
+    // these two to be set, so a regression here fails the run loudly.
+    THINGS_API_CONFIG_DIR: scratch.config,
+    THINGS_API_STATE_DIR: scratch.state,
     NO_COLOR: "1",
   };
   const path = process.env["PATH"];
@@ -289,6 +294,36 @@ async function runAgent(
 
 // --- main loop -------------------------------------------------------------
 
+/**
+ * Zero-dispatch fence preflight (2026-07-17 incident): before ANY task runs
+ * against this fixture+env, prove the child CLI actually wires the simulator.
+ * A `--dry-run` write returns its compiled invocation WITHOUT executing; under
+ * the fence that is the literal `simulated:<op>` marker — anything else (a
+ * real `things:///…` payload, a nonzero exit from a broken fence) means real
+ * transports could reach the operator's app, and the run must abort.
+ */
+function assertFenceFunctional(fenceEnv: Record<string, string>): void {
+  const res = spawnSync(
+    process.execPath,
+    [BIN_PATH, "todo", "add", "__fence_preflight__", "--dry-run", "--json"],
+    { env: fenceEnv, encoding: "utf8", timeout: 30_000 },
+  );
+  let invocation = "";
+  try {
+    const env = JSON.parse(res.stdout) as { data?: { invocation?: string } };
+    invocation = env.data?.invocation ?? "";
+  } catch {
+    // fall through to the error below with whatever we captured
+  }
+  if (res.status !== 0 || !invocation.startsWith("simulated:")) {
+    throw new Error(
+      `fence preflight FAILED — refusing to run any task. dry-run exit=${res.status}, ` +
+        `invocation=${JSON.stringify(invocation)} (expected "simulated:todo.add"). ` +
+        `stderr: ${res.stderr.slice(0, 500)}`,
+    );
+  }
+}
+
 async function runOne(
   task: TaskSpec,
   rep: number,
@@ -298,6 +333,7 @@ async function runOne(
   const scratch = makeScratch();
   const fixture = buildBenchFixture(task.seed);
   const fenceEnv = buildFenceEnv(fixture.path, task.clock, scratch);
+  assertFenceFunctional(fenceEnv);
   const collector = newCollector();
   const prompt = task.prompt;
 

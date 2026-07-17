@@ -6,6 +6,7 @@
  * and (c) an audit record appended.
  */
 import { randomUUID } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -76,7 +77,7 @@ function deps(vector: WriteVector, overrides: Partial<WriteDeps> = {}): WriteDep
 }
 
 beforeEach(() => {
-  fixture = buildFixtureDb();
+  fixture = buildFixtureDb({ benchMarker: true });
   auditRecords = [];
 });
 afterEach(() => {
@@ -88,16 +89,25 @@ describe("simulator write vector — covered operations", () => {
   let savedDb: string | undefined;
   let vector: WriteVector;
 
+  let savedState: string | undefined;
+  let savedConfig: string | undefined;
+
   beforeEach(() => {
     savedSim = process.env["THINGS_SIM_WRITES"];
     savedDb = process.env["THINGS_DB"];
+    savedState = process.env["THINGS_API_STATE_DIR"];
+    savedConfig = process.env["THINGS_API_CONFIG_DIR"];
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
+    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
     vector = createSimulatorVector(fixture.path, { now: () => NOW });
   });
   afterEach(() => {
     restoreEnv("THINGS_SIM_WRITES", savedSim);
     restoreEnv("THINGS_DB", savedDb);
+    restoreEnv("THINGS_API_STATE_DIR", savedState);
+    restoreEnv("THINGS_API_CONFIG_DIR", savedConfig);
   });
 
   const row = (uuid: string): Record<string, unknown> =>
@@ -499,21 +509,50 @@ describe("simulator fence", () => {
     saved = {
       THINGS_SIM_WRITES: process.env["THINGS_SIM_WRITES"],
       THINGS_DB: process.env["THINGS_DB"],
+      THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
+      THINGS_API_CONFIG_DIR: process.env["THINGS_API_CONFIG_DIR"],
     };
+    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
+    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
   });
   afterEach(() => {
-    restoreEnv("THINGS_SIM_WRITES", saved["THINGS_SIM_WRITES"]);
-    restoreEnv("THINGS_DB", saved["THINGS_DB"]);
+    for (const key of Object.keys(saved)) restoreEnv(key, saved[key]);
   });
 
-  it("no env gate → defaultVectors excludes the simulator (real transports)", () => {
+  it("no env gate + unmarked/absent THINGS_DB → defaultVectors returns real transports", () => {
     delete process.env["THINGS_SIM_WRITES"];
-    process.env["THINGS_DB"] = fixture.path;
+    delete process.env["THINGS_DB"];
     const vectors = defaultVectors(CONFIG);
     expect(vectors).toHaveLength(4);
     expect(vectors.map((v) => v.id)).toEqual(["url-scheme", "applescript", "shortcuts", "ui"]);
     // None of the real transports is the simulator.
     expect(vectors.some((v) => v.simulates === true)).toBe(false);
+  });
+
+  // Marker backstop (2026-07-17 incident): a marked fixture in use WITHOUT the
+  // env gate must refuse real transports — this is the exact escape that fired
+  // real url-scheme adds at a live app while verification read the fixture.
+  it("no env gate but THINGS_DB is a MARKED fixture → defaultVectors throws", () => {
+    delete process.env["THINGS_SIM_WRITES"];
+    process.env["THINGS_DB"] = fixture.path;
+    expect(() => defaultVectors(CONFIG)).toThrow(/bench fixture.*fence is not active/s);
+  });
+
+  it("no env gate but the client OPENED a marked fixture (--db) → defaultVectors throws", () => {
+    delete process.env["THINGS_SIM_WRITES"];
+    delete process.env["THINGS_DB"];
+    expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
+      /bench fixture.*fence is not active/s,
+    );
+  });
+
+  it("gate set but scratch state/config dirs unset → defaultVectors throws (audit-pollution guard)", () => {
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    delete process.env["THINGS_API_STATE_DIR"];
+    expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
+      /fence is unsatisfied: THINGS_API_STATE_DIR is not set/,
+    );
   });
 
   it("gate set + valid fence → defaultVectors returns ONLY the simulator", () => {
@@ -538,6 +577,15 @@ describe("simulator fence", () => {
     process.env["THINGS_DB"] = fixture.path;
     expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
       /fence is unsatisfied:.*benchFixture/,
+    );
+  });
+
+  it("gate set but fixture databaseVersion drifted → defaultVectors throws (schema tripwire)", () => {
+    fixture.db.prepare("UPDATE Meta SET value = '27' WHERE key = 'databaseVersion'").run();
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
+      /fence is unsatisfied:.*databaseVersion 27.*re-modeled in lockstep/s,
     );
   });
 
@@ -610,13 +658,16 @@ describe("simulator fence — host-escape guards (no live app under the fence)",
     saved = {
       THINGS_SIM_WRITES: process.env["THINGS_SIM_WRITES"],
       THINGS_DB: process.env["THINGS_DB"],
+      THINGS_API_STATE_DIR: process.env["THINGS_API_STATE_DIR"],
+      THINGS_API_CONFIG_DIR: process.env["THINGS_API_CONFIG_DIR"],
     };
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
+    process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
   });
   afterEach(() => {
-    restoreEnv("THINGS_SIM_WRITES", saved["THINGS_SIM_WRITES"]);
-    restoreEnv("THINGS_DB", saved["THINGS_DB"]);
+    for (const key of Object.keys(saved)) restoreEnv(key, saved[key]);
   });
 
   it("simFenceActive reflects the ambient THINGS_DB fence", () => {

@@ -24,6 +24,7 @@
 import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+import { readDatabaseVersion } from "../../db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime, localToday } from "../../model/dates.ts";
 import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "../operations.ts";
 import { resolveArea, resolveHeading, resolveProject, resolveTag } from "../pre-state.ts";
@@ -74,7 +75,45 @@ export function simulatorFenceReason(
   if (!hasBenchMarker(dbPath)) {
     return `the database at ${dbPath} carries no Meta.benchFixture marker`;
   }
+  // Scratch state/config dirs are part of the fence (2026-07-17 incident): a
+  // simulated run without them appends bench audit records into the operator's
+  // real audit trail and reads their real config profile.
+  for (const key of ["THINGS_API_STATE_DIR", "THINGS_API_CONFIG_DIR"] as const) {
+    const dir = env[key];
+    if (dir === undefined || dir.trim() === "") {
+      return `${key} is not set — simulated runs must use scratch state/config dirs, never the operator's real ones`;
+    }
+  }
+  const version = fixtureDatabaseVersion(dbPath);
+  if (version !== SIMULATED_DATABASE_VERSION) {
+    return (
+      `the fixture reports databaseVersion ${version ?? "unknown"} but the simulator's ` +
+      `appliers model version ${SIMULATED_DATABASE_VERSION} — a Things schema change must be ` +
+      `re-modeled in lockstep (atlas → seed builders → simulator appliers → bench world/corpus; ` +
+      `see docs/lab/drift-runbook.md) before simulated writes may resume`
+    );
+  }
   return null;
+}
+
+/**
+ * The Things schema generation the appliers are written against. When a
+ * Things update bumps the real database version, the fence refuses to
+ * simulate until the whole modeling chain is consciously re-verified —
+ * a schema tripwire, not a compatibility claim.
+ */
+export const SIMULATED_DATABASE_VERSION = 26;
+
+function fixtureDatabaseVersion(dbPath: string): number | null {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, timeout: 2000 });
+    return readDatabaseVersion(db);
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
 }
 
 /** Whether the simulator's triple fence is satisfied for `dbPath`. */
@@ -97,6 +136,16 @@ export function simFenceActive(env: NodeJS.ProcessEnv = process.env): boolean {
   const dbPath = env["THINGS_DB"];
   if (dbPath === undefined || dbPath.trim() === "") return false;
   return simulatorFenceActive(dbPath, env);
+}
+
+/**
+ * Whether the database at `dbPath` carries the bench-fixture marker — i.e. it
+ * is a synthetic bench DB by construction. Consulted by defaultVectors as a
+ * fail-closed backstop (a marked DB must never be paired with real write
+ * transports) and by the reveal gate. False on any read error.
+ */
+export function dbCarriesBenchMarker(dbPath: string): boolean {
+  return hasBenchMarker(dbPath);
 }
 
 function hasBenchMarker(dbPath: string): boolean {

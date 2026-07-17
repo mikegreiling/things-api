@@ -274,7 +274,7 @@ export function registerProjectCommands(program: Command): void {
             const what = t.viaHeading === true ? "heading" : t.kind;
             throw new RangeError(`"${ref}" is a ${what}, not a project (try \`things open\`)`);
           }
-          return openInThings(t.uuid);
+          return openInThings(t.uuid, opts.db);
         },
         (d) => [revealLine(d)],
       );

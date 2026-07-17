@@ -16,7 +16,7 @@ export interface FixtureDb {
   close(): void;
 }
 
-export function buildFixtureDb(): FixtureDb {
+export function buildFixtureDb(opts: { benchMarker?: boolean } = {}): FixtureDb {
   // Path must be unique across TEST FILES, not just within one: a pid+counter
   // scheme resets per file (module isolation) while the worker pid persists,
   // so a later file reopened an earlier file's leftover db — "table already
@@ -25,18 +25,21 @@ export function buildFixtureDb(): FixtureDb {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA_SQL);
-  seedMeta(db);
+  seedMeta(db, opts.benchMarker === true);
   return { db, path, close: () => db.close() };
 }
 
-function seedMeta(db: DatabaseSync): void {
+function seedMeta(db: DatabaseSync, benchMarker: boolean): void {
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><integer>26</integer></plist>`;
   db.prepare("INSERT INTO Meta (key, value) VALUES ('databaseVersion', ?)").run(plist);
-  // The bench-harness marker: the simulator write vector refuses to touch any
-  // database that does not carry it (one of three fences — see
-  // src/write/vectors/simulator.ts). Every fixture is a synthetic, disposable
-  // bench DB, so the marker rides here.
-  db.prepare("INSERT INTO Meta (key, value) VALUES ('benchFixture', '1')").run();
+  // The bench-harness marker is OPT-IN: it brands a DB as a synthetic bench
+  // fixture, which (a) the simulator fence requires and (b) defaultVectors
+  // treats as fail-closed — a marked DB may NEVER be paired with real write
+  // transports. Ordinary unit-test fixtures must stay unmarked: they exercise
+  // the real-vector code paths through their own seams.
+  if (benchMarker) {
+    db.prepare("INSERT INTO Meta (key, value) VALUES ('benchFixture', '1')").run();
+  }
 }
