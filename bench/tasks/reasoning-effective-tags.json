@@ -7,25 +7,49 @@
   "paraphrases": [
     "If I filtered by each of my tags, which filters would surface 'Compost rotation'? In other words, what is its full effective tag set? Answer as JSON {\"tags\": [...], \"count\": N}."
   ],
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
-    { "kind": "tag", "key": "outdoor", "title": "outdoor" },
-    { "kind": "tag", "key": "weekend", "title": "weekend" },
-    { "kind": "tag", "key": "soil", "title": "soil" },
-    { "kind": "tag", "key": "unrelated", "title": "office" },
-    { "kind": "area", "key": "garden", "title": "Garden", "tags": ["outdoor"] },
+    {
+      "kind": "tag",
+      "key": "outdoor",
+      "title": "outdoor"
+    },
+    {
+      "kind": "tag",
+      "key": "weekend",
+      "title": "weekend"
+    },
+    {
+      "kind": "tag",
+      "key": "soil",
+      "title": "soil"
+    },
+    {
+      "kind": "tag",
+      "key": "unrelated",
+      "title": "office"
+    },
+    {
+      "kind": "area",
+      "key": "garden",
+      "title": "Garden",
+      "tags": ["outdoor"]
+    },
     {
       "kind": "project",
       "key": "beds",
       "title": "Raised beds",
-      "area": "garden",
+      "container": "garden",
       "tags": ["weekend"]
     },
     {
       "kind": "todo",
       "key": "t1",
       "title": "Compost rotation",
-      "project": "beds",
+      "container": "beds",
       "start": "active",
       "tags": ["soil"]
     },
@@ -33,16 +57,32 @@
       "kind": "todo",
       "key": "t2",
       "title": "Order edging stones",
-      "project": "beds",
+      "container": "beds",
       "start": "active"
     }
   ],
-  "finalAnswer": { "required": true, "shape": "{\"tags\": string[], \"count\": number}" },
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"tags\": string[], \"count\": number}"
+  },
   "assertions": [
-    { "type": "answer-includes", "path": "tags", "values": ["outdoor", "weekend", "soil"] },
-    { "type": "answer", "path": "count", "equals": 3 },
-    { "type": "db-unchanged" }
+    {
+      "type": "answer-includes",
+      "path": "tags",
+      "values": ["outdoor", "weekend", "soil"]
+    },
+    {
+      "type": "answer",
+      "path": "count",
+      "equals": 3
+    },
+    {
+      "type": "db-unchanged"
+    }
   ],
   "maxTurns": 15,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things show \"$(things search \"Compost rotation\" --json | jq -r '.data[0].uuid')\" --all --json"
+  ]
 }

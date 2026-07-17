@@ -7,37 +7,61 @@
   "paraphrases": [
     "I finished the office call for my taxes — check that one off. (I have another to-do with the same name elsewhere; leave that one alone.)"
   ],
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
-    { "kind": "project", "key": "taxes", "title": "Taxes", "start": "active" },
-    { "kind": "project", "key": "move", "title": "Studio move", "start": "active" },
+    {
+      "kind": "project",
+      "key": "taxes",
+      "title": "Taxes",
+      "start": "active"
+    },
+    {
+      "kind": "project",
+      "key": "move",
+      "title": "Studio move",
+      "start": "active"
+    },
     {
       "kind": "todo",
       "key": "t1",
       "title": "Call the office",
-      "project": "taxes",
+      "container": "taxes",
       "start": "active"
     },
     {
       "kind": "todo",
       "key": "t2",
       "title": "Call the office",
-      "project": "move",
+      "container": "move",
       "start": "active"
     }
   ],
   "assertions": [
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMTask p ON t.project=p.uuid WHERE t.title='Call the office' AND p.title='Taxes' AND t.status=3 AND t.trashed=0",
-      "expect": [[1]]
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMTask p ON t.project=p.uuid WHERE t.title='Call the office' AND p.title='Taxes' AND t.status=3 AND t.trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
     },
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMTask p ON t.project=p.uuid WHERE t.title='Call the office' AND p.title='Studio move' AND t.status=0 AND t.trashed=0",
-      "expect": [[1]]
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMTask p ON t.project=p.uuid WHERE t.title='Call the office' AND p.title='Studio move' AND t.status=0 AND t.trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
     }
   ],
   "maxTurns": 25,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo complete \"$(things show Taxes --json | jq -r '.data.view.active[]|select(.title==\"Call the office\")|.uuid')\""
+  ]
 }

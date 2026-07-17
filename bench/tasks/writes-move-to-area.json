@@ -8,20 +8,49 @@
     "Move the library-card renewal task into Errands.",
     "That 'Renew library card' item sitting in my inbox belongs in my Errands area — put it there."
   ],
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
-    { "kind": "area", "key": "errands", "title": "Errands" },
-    { "kind": "area", "key": "home", "title": "Home" },
-    { "kind": "todo", "key": "t1", "title": "Renew library card", "start": "inbox" },
-    { "kind": "todo", "key": "t2", "title": "Fix porch light", "area": "home", "start": "active" }
+    {
+      "kind": "area",
+      "key": "errands",
+      "title": "Errands"
+    },
+    {
+      "kind": "area",
+      "key": "home",
+      "title": "Home"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Renew library card",
+      "start": "inbox"
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Fix porch light",
+      "container": "home",
+      "start": "active"
+    }
   ],
   "assertions": [
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Renew library card' AND a.title='Errands' AND t.trashed=0 AND t.status=0 AND t.start=1",
-      "expect": [[1]]
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Renew library card' AND a.title='Errands' AND t.trashed=0 AND t.status=0 AND t.start=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
     }
   ],
   "maxTurns": 20,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo move \"$(things inbox --json | jq -r '.data[]|select(.title==\"Renew library card\")|.uuid')\" --area Errands"
+  ]
 }

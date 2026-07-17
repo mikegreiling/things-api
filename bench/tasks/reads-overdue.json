@@ -8,7 +8,10 @@
     "Have I let anything slip past its due date? Answer as JSON {\"overdue_titles\": [...], \"count\": N} listing only truly overdue open items.",
     "List every open task whose deadline has already passed. JSON {\"overdue_titles\": [...], \"count\": N}."
   ],
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
     {
       "kind": "todo",
@@ -39,12 +42,26 @@
       "deadline": "2026-07-15"
     }
   ],
-  "finalAnswer": { "required": true, "shape": "{\"overdue_titles\": string[], \"count\": number}" },
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"overdue_titles\": string[], \"count\": number}"
+  },
   "assertions": [
-    { "type": "answer-includes", "path": "overdue_titles", "values": ["Renew car registration"] },
-    { "type": "answer", "path": "count", "equals": 1 },
-    { "type": "db-unchanged" }
+    {
+      "type": "answer-includes",
+      "path": "overdue_titles",
+      "values": ["Renew car registration"]
+    },
+    {
+      "type": "answer",
+      "path": "count",
+      "equals": 1
+    },
+    {
+      "type": "db-unchanged"
+    }
   ],
   "maxTurns": 15,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": ["things anytime --json"]
 }

@@ -7,7 +7,10 @@
   "paraphrases": [
     "Check off my 'Order seed catalog' to-do. Where in the app should I look for it afterward? Answer as JSON {\"view\": \"...\"} (lowercase list name)."
   ],
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
     {
       "kind": "todo",
@@ -24,15 +27,29 @@
       "startDate": "2026-07-20"
     }
   ],
-  "finalAnswer": { "required": true, "shape": "{\"view\": string}" },
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"view\": string}"
+  },
   "assertions": [
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) FROM TMTask WHERE title='Order seed catalog' AND status=3 AND trashed=0",
-      "expect": [[1]]
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Order seed catalog' AND status=3 AND trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
     },
-    { "type": "answer", "path": "view", "equals": "logbook" }
+    {
+      "type": "answer",
+      "path": "view",
+      "equals": "logbook"
+    }
   ],
   "maxTurns": 20,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo complete \"$(things today --json | jq -r '.data.today[]|select(.title==\"Order seed catalog\")|.uuid')\""
+  ]
 }

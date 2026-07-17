@@ -4,24 +4,51 @@
   "tier": 4,
   "split": "validation",
   "prompt": "Please delete my 'Old stuff' area. When you're done, reply with JSON {\"outcome\": \"deleted\"} or {\"outcome\": \"not_found\"} depending on what actually happened.",
-  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
   "seed": [
-    { "kind": "area", "key": "home", "title": "Home" },
-    { "kind": "area", "key": "errands", "title": "Errands" },
-    { "kind": "todo", "key": "t1", "title": "Fix porch light", "area": "home", "start": "active" },
+    {
+      "kind": "area",
+      "key": "home",
+      "title": "Home"
+    },
+    {
+      "kind": "area",
+      "key": "errands",
+      "title": "Errands"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Fix porch light",
+      "container": "home",
+      "start": "active"
+    },
     {
       "kind": "todo",
       "key": "t2",
       "title": "Pick up dry cleaning",
-      "area": "errands",
+      "container": "errands",
       "start": "active"
     }
   ],
-  "finalAnswer": { "required": true, "shape": "{\"outcome\": \"deleted\" | \"not_found\"}" },
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"outcome\": \"deleted\" | \"not_found\"}"
+  },
   "assertions": [
-    { "type": "db-unchanged" },
-    { "type": "answer", "path": "outcome", "equals": "not_found" }
+    {
+      "type": "db-unchanged"
+    },
+    {
+      "type": "answer",
+      "path": "outcome",
+      "equals": "not_found"
+    }
   ],
   "maxTurns": 15,
-  "timeoutMs": 180000
+  "timeoutMs": 180000,
+  "pseudoScript": ["things areas --json"]
 }
