@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-07-16
+
+- **BREAKING (JSON shape): `meta.grouped.blocks` is now identity-carrying and nested** (#188) — each block reports `{ kind, ref, title, shown, total, limit }` (the former `uuid` field is now `ref`), project blocks nest inside their area/loose block under `children` (anytime item-lists; someday's active-project child groups), and a fully-truncated block still appears with `shown: 0`. The split `today` view's `meta.truncation` gains a per-section breakdown (`sections: [{ key: "today"|"evening", shown, total }]`).
+- **BREAKING (library): the bounded read shapes no longer expose a pre-truncation `full` view** (#188) — `BoundedTodayView`/`BoundedSectionsView`/`BoundedAreaView` are `{ view, truncation | grouped }`; the human renderers derive every hidden-count hint from the enriched metadata above.
+- **Fixed: `area show` caps only the ACTIVE project rows** (#188) — future-scheduled and someday project rows always survive into the card's Upcoming/Someday sections (previously a raw slice could drop them from an area with more than 30 projects).
+
 - **The audit trail now survives a crash mid-write** (#180): every mutation records an intent marker immediately before the app is touched and its outcome after read-after-write verification, so a process killed between the two leaves evidence instead of an applied-but-unrecorded change — `things doctor` reports any started-but-unrecorded changes for reconciliation. Audit appends are now flushed to disk as a single atomic write (previously unflushed, tear-prone under concurrent writers), and unreadable lines encountered when reading history are reported on STDERR instead of dropped silently. Intent markers are never undo targets. (Companion test sweep #181: all 48 MCP tools are now driven through the protocol layer in tests.)
 
 - **`undo` now refuses an inverse that would overwrite a container, status, schedule, or trashed-state change made outside things-api since the original change** (#177) — previously only title/notes/deadline/reminder/tags were guarded, so a manual move/reopen/reschedule was silently clobbered by a later undo. Pass `--acknowledge-out-of-band-changes` (MCP `acknowledge_out_of_band_changes`) to overwrite anyway; `--dry-run` previews the would-block outcome. Axes with no captured after-state (cascade children, repeat state, backdated timestamps, reorder ranks) fall back to the inverse's own verified re-read, documented at the guard.
