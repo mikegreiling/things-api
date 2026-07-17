@@ -9,7 +9,7 @@
  *
  * Real runs require the provider's API key in the environment (OPENAI_API_KEY).
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -55,6 +55,10 @@ interface RunnerOptions {
   task?: string;
   pseudo: boolean;
   out: string;
+  /** Evergreen world profile: PRNG seed (bench/world.ts). */
+  worldSeed: number;
+  /** Debugging escape hatch: run against bare task seeds only. */
+  noWorld: boolean;
 }
 
 interface ExecOutcome {
@@ -127,8 +131,13 @@ function buildFenceEnv(dbPath: string, clock: Clock, scratch: Scratch): Record<s
     THINGS_NOW: clock.now,
     THINGS_TZ: clock.tz,
     THINGS_WIDTH: "100",
-    THINGS_CONFIG_DIR: scratch.config,
-    THINGS_STATE_DIR: scratch.state,
+    // The REAL config/state override names are THINGS_API_* (src/paths.ts).
+    // An earlier revision used THINGS_CONFIG_DIR/THINGS_STATE_DIR, which the
+    // CLI ignores — bench audit records then landed in the operator's real
+    // audit trail (2026-07-17 incident). The simulator fence now REQUIRES
+    // these two to be set, so a regression here fails the run loudly.
+    THINGS_API_CONFIG_DIR: scratch.config,
+    THINGS_API_STATE_DIR: scratch.state,
     NO_COLOR: "1",
   };
   const path = process.env["PATH"];
@@ -289,6 +298,36 @@ async function runAgent(
 
 // --- main loop -------------------------------------------------------------
 
+/**
+ * Zero-dispatch fence preflight (2026-07-17 incident): before ANY task runs
+ * against this fixture+env, prove the child CLI actually wires the simulator.
+ * A `--dry-run` write returns its compiled invocation WITHOUT executing; under
+ * the fence that is the literal `simulated:<op>` marker — anything else (a
+ * real `things:///…` payload, a nonzero exit from a broken fence) means real
+ * transports could reach the operator's app, and the run must abort.
+ */
+function assertFenceFunctional(fenceEnv: Record<string, string>): void {
+  const res = spawnSync(
+    process.execPath,
+    [BIN_PATH, "todo", "add", "__fence_preflight__", "--dry-run", "--json"],
+    { env: fenceEnv, encoding: "utf8", timeout: 30_000 },
+  );
+  let invocation = "";
+  try {
+    const env = JSON.parse(res.stdout) as { data?: { invocation?: string } };
+    invocation = env.data?.invocation ?? "";
+  } catch {
+    // fall through to the error below with whatever we captured
+  }
+  if (res.status !== 0 || !invocation.startsWith("simulated:")) {
+    throw new Error(
+      `fence preflight FAILED — refusing to run any task. dry-run exit=${res.status}, ` +
+        `invocation=${JSON.stringify(invocation)} (expected "simulated:todo.add"). ` +
+        `stderr: ${res.stderr.slice(0, 500)}`,
+    );
+  }
+}
+
 async function runOne(
   task: TaskSpec,
   rep: number,
@@ -296,8 +335,13 @@ async function runOne(
   ctx: { gitSha: string; skill: { files: Record<string, string>; bytes: string }; outDir: string },
 ): Promise<RunRecord> {
   const scratch = makeScratch();
-  const fixture = buildBenchFixture(task.seed);
+  const tasksDir = isAbsolute(opts.tasks) ? opts.tasks : resolve(process.cwd(), opts.tasks);
+  const fixture = buildBenchFixture(
+    task.seed,
+    opts.noWorld ? undefined : { seed: opts.worldSeed, clock: task.clock, tasksDir },
+  );
   const fenceEnv = buildFenceEnv(fixture.path, task.clock, scratch);
+  assertFenceFunctional(fenceEnv);
   const collector = newCollector();
   const prompt = task.prompt;
 
@@ -388,6 +432,7 @@ async function runOne(
     staticContextTokens: estimateTokens(armCtx.staticText),
     dynamicContextTokens: estimateTokens(outcome.dynamicText),
     wallMs,
+    worldSeed: opts.noWorld ? null : opts.worldSeed,
     transcript: transcriptRel,
     ...(gradeResult.failureNotes !== undefined && { failureNotes: gradeResult.failureNotes }),
   };
@@ -447,6 +492,8 @@ async function main(): Promise<void> {
     .option("--reps <n>", "repetitions per task", "1")
     .option("--task <id>", "run a single task by id")
     .option("--pseudo", "scripted zero-cost executor (no LLM, no API key)", false)
+    .option("--world-seed <n>", "evergreen world profile PRNG seed", "1")
+    .option("--no-world", "bare task seeds only (debugging escape hatch)")
     .option("--out <dir>", "output directory", join(BENCH_DIR, "artifacts", runId))
     .action(async (raw: Record<string, string | boolean>) => {
       const opts: RunnerOptions = {
@@ -458,6 +505,8 @@ async function main(): Promise<void> {
         reps: Math.max(1, Number(raw["reps"])),
         pseudo: raw["pseudo"] === true,
         out: raw["out"] as string,
+        worldSeed: Math.max(0, Number(raw["worldSeed"]) || 1),
+        noWorld: raw["world"] === false,
         ...(typeof raw["task"] === "string" && { task: raw["task"] }),
       };
       if (!opts.pseudo && opts.model === "") {

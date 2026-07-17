@@ -4,9 +4,9 @@
  * `src/cli` nor `src/mcp`), applies a task's declarative SeedSpecs, then snapshots a
  * content hash of the on-disk DB for the db-unchanged safety check.
  *
- * NOTE: buildFixtureDb (test/fixtures) seeds the Meta row; the concurrent simulator
- * work additionally stamps a `benchFixture=1` marker. We do not depend on that beyond
- * passing the fixture path through to the fenced child processes.
+ * NOTE: buildFixtureDb seeds the Meta row; the `benchFixture=1` marker is opt-in and
+ * this builder always opts in — the simulator fence requires it, and a marked DB can
+ * never be paired with real write transports (defaultVectors fails closed).
  */
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -23,6 +23,7 @@ import {
   type SeedTaskOpts,
 } from "../test/fixtures/seed.ts";
 import type { SeedSpec, TaskSeedFields } from "./types.ts";
+import { applyWorld, type WorldOptions } from "./world.ts";
 
 export interface BenchFixture {
   /** Absolute path to the fixture DB (used as THINGS_DB for every child process). */
@@ -181,9 +182,17 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
   }
 }
 
-/** Build a fresh fixture DB, apply the seeds, and snapshot its baseline hash. */
-export function buildBenchFixture(seeds: SeedSpec[]): BenchFixture {
-  const fixture = buildFixtureDb();
+/**
+ * Build a fresh fixture DB — the evergreen world profile first (when given),
+ * the task's own seeds layered on top — and snapshot its baseline hash.
+ * applyWorld validates the world invariants (no Today/overdue contribution,
+ * corpus-collision fence, decodable recurrence blobs) before task seeds land.
+ * benchMarker brands the DB as a bench fixture: the simulator fence requires
+ * it, and defaultVectors refuses to pair a marked DB with real transports.
+ */
+export function buildBenchFixture(seeds: SeedSpec[], world?: WorldOptions): BenchFixture {
+  const fixture = buildFixtureDb({ benchMarker: true });
+  if (world !== undefined) applyWorld(fixture.db, world);
   applySeeds(fixture.db, seeds);
   // Close flushes WAL to disk so the child process opens a consistent file and the
   // baseline hash reflects the committed seed state.

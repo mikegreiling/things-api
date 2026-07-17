@@ -279,7 +279,9 @@ export function registerShowCommands(program: Command): void {
         opts,
         "open",
         (c) =>
-          keyword !== null ? openInThings(keyword) : openInThings(c.read.showTarget(ref).uuid),
+          keyword !== null
+            ? openInThings(keyword, opts.db)
+            : openInThings(c.read.showTarget(ref).uuid, opts.db),
         (d) => [revealLine(d)],
       );
     });

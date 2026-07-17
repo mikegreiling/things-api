@@ -198,6 +198,11 @@ export interface RunRecord {
   /** Everything else in context (prompt, results, errors). */
   dynamicContextTokens: number;
   wallMs: number;
+  /**
+   * PRNG seed of the evergreen world profile the run's fixture carried
+   * (bench/world.ts), or null when the world was disabled (`--no-world`).
+   */
+  worldSeed: number | null;
   /** Path (relative to the run's out dir) to the transcript file. */
   transcript: string;
   failureNotes?: string;

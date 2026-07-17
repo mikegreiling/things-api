@@ -15,7 +15,8 @@ The full block→accept→re-enable cycle is regression-tested end-to-end in [te
 2. **Rebuild the lab golden** for the new Things version: download the new trial build (update `vendor/manifest.json` with version + SHA-256), run [`lab/scripts/golden-build.sh`](../../lab/scripts/golden-build.sh) `v<N+1>`, then the human session in [golden-runbook.md](golden-runbook.md) (~1 hour). Check trial-clock inheritance if updating in place (DRIFT-1: if the old clock carries over, rebuild from L0).
 3. **Re-run the full regression** against the new golden: `npm run lab:regress`. Any verdict/tier delta = the update moved the write surface; reconcile suite expectations deliberately, updating the results docs and capability notes with evidence.
 4. **Ship the baseline.** Regenerate the fixture DDL snapshot from the new schema, add `src/db/baselines/db-v<N>.ts` (databaseVersion, fingerprint, known app versions), release.
-5. `things doctor` returns to `ok`; writes re-enable.
+5. **Re-model the bench simulation chain in lockstep** (AGENTBENCH scaffolds an entire synthetic Things DB, so schema knowledge is load-bearing there too): update in order `docs/atlas/schema-v<N>.md` → `test/fixtures/schema-v<N>.sql` + seed builders → `src/write/vectors/simulator.ts` appliers → bump `SIMULATED_DATABASE_VERSION` (the simulator fence REFUSES to run against a fixture whose `databaseVersion` differs — the tripwire that makes forgetting this step loud, not silent) → `bench/world.ts` generator + corpus encodings (`bench/tasks/AUTHORING.md`) → re-run the SIMFID replay suite (see bench/ROADMAP.md) to re-certify applier fidelity against the new golden.
+6. `things doctor` returns to `ok`; writes re-enable.
 
 ## Impatient escape hatch (at your own risk)
 

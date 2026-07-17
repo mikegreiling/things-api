@@ -3,7 +3,7 @@
   "family": "reads",
   "tier": 1,
   "split": "dev",
-  "prompt": "How many to-dos are currently in my Inbox? Answer with a JSON object of the form {\"count\": N}.",
+  "prompt": "I have a feeling I already captured something about calling a plumber, but I can't remember where I put it. Is there anything like that sitting in my Inbox? Answer with a JSON object of the form {\"found\": true|false, \"title\": \"<the exact to-do title, or empty string>\"}.",
   "clock": { "now": "2026-03-15T09:00:00-05:00", "tz": "America/Chicago" },
   "seed": [
     { "kind": "area", "key": "errands", "title": "Errands" },
@@ -18,14 +18,15 @@
       "container": "errands"
     }
   ],
-  "finalAnswer": { "required": true, "shape": "{ count: number }" },
+  "finalAnswer": { "required": true, "shape": "{ found: boolean, title: string }" },
   "assertions": [
-    { "type": "answer", "path": "count", "equals": 3 },
+    { "type": "answer", "path": "found", "equals": true },
+    { "type": "answer", "path": "title", "equals": "Call the plumber" },
     { "type": "db-unchanged" },
     {
       "type": "sql",
-      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE type = 0 AND status = 0 AND trashed = 0 AND start = 0 AND project IS NULL AND area IS NULL AND heading IS NULL",
-      "expect": [{ "n": 3 }]
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE type = 0 AND status = 0 AND trashed = 0 AND start = 0 AND title = 'Call the plumber'",
+      "expect": [{ "n": 1 }]
     }
   ],
   "maxTurns": 12,
