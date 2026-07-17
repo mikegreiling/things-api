@@ -11,22 +11,29 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendLedger,
   appendLoopState,
   Budget,
   BUDGET_ABORT_EXIT_CODE,
   budgetNote,
+  buildCharter,
+  buildLedgerEntry,
   CONSECUTIVE_PROVIDER_ERROR_LIMIT,
   decideAccept,
   decisionLabel,
+  extractLessons,
   filesInPatch,
   filesOutsideAllowlist,
+  isLedgerCandidate,
   isProviderError,
+  ledgerFileName,
   LoopAbort,
   matchesAllowlist,
   maxTotalTokensArgs,
   pairMetrics,
   ProviderError,
   RATE_LIMIT_ABORT_EXIT_CODE,
+  renderLedgerEntry,
   runIteration,
   splitMetrics,
   sumRunTokens,
@@ -37,7 +44,13 @@ import {
   type PairMetrics,
   type PairRuns,
 } from "../../bench/loop-core.ts";
-import type { RefinerInput, RefinerOutput } from "../../bench/refiner.ts";
+import type {
+  DebriefInput,
+  DebriefOutput,
+  Refiner,
+  RefinerInput,
+  RefinerOutput,
+} from "../../bench/refiner.ts";
 import type { RunRecord } from "../../bench/types.ts";
 
 // --- fixtures --------------------------------------------------------------
@@ -106,6 +119,24 @@ function refinerOutput(o: Partial<RefinerOutput> = {}): RefinerOutput {
   };
 }
 
+function debriefOutput(o: Partial<DebriefOutput> = {}): DebriefOutput {
+  return {
+    attribution: "help wording clarified discovery",
+    lesson: "name the verb",
+    confidence: "medium",
+    ...o,
+  };
+}
+
+/** A full fake Refiner: `refine` resolves `output`, `debrief` resolves `debrief` (or is overridden). */
+function fakeRefiner(output: RefinerOutput, over: Partial<Refiner> = {}): Refiner {
+  return {
+    refine: (_in: RefinerInput) => Promise.resolve(output),
+    debrief: (_in: DebriefInput) => Promise.resolve(debriefOutput()),
+    ...over,
+  };
+}
+
 interface Calls {
   gitApply: string[];
   runGate: number;
@@ -130,7 +161,7 @@ function makeDeps(
     onBudgetWarning: 0,
   };
   const deps: IterationDeps = {
-    refiner: { refine: (_in: RefinerInput) => Promise.resolve(output) },
+    refiner: fakeRefiner(output),
     readArmFiles: () => ({ "src/cli/help.ts": "body" }),
     loadTranscript: () => null,
     gitApply: (patch) => {
@@ -165,8 +196,13 @@ function makeDeps(
 }
 
 /** Fresh per-call params with a roomy budget unless a test overrides it. */
-function emptyParams(): Pick<IterationParams, "iteration" | "prevDevRuns" | "tasks" | "budget"> {
-  return { iteration: 1, prevDevRuns: [], tasks: new Map(), budget: new Budget(1e12) };
+function emptyParams(): Pick<IterationParams, "iteration" | "prevRuns" | "tasks" | "budget"> {
+  return {
+    iteration: 1,
+    prevRuns: { dev: [], validation: [] },
+    tasks: new Map(),
+    budget: new Budget(1e12),
+  };
 }
 
 // --- patch parsing + allowlist --------------------------------------------
@@ -471,7 +507,9 @@ describe("runIteration budget/circuit-breaker", () => {
   it("counts a refiner provider error as a no-accept without applying", async () => {
     const budget = new Budget(1e9);
     const { deps, calls } = makeDeps(refinerOutput(), {
-      refiner: { refine: () => Promise.reject(new ProviderError("429 rate limit")) },
+      refiner: fakeRefiner(refinerOutput(), {
+        refine: () => Promise.reject(new ProviderError("429 rate limit")),
+      }),
     });
     const before = metrics(runsWith(1, 3), runsWith(2, 2));
     const result = await runIteration(deps, {
@@ -490,7 +528,9 @@ describe("runIteration budget/circuit-breaker", () => {
     const budget = new Budget(1e9);
     for (let i = 0; i < CONSECUTIVE_PROVIDER_ERROR_LIMIT - 1; i++) budget.recordProviderError();
     const { deps } = makeDeps(refinerOutput(), {
-      refiner: { refine: () => Promise.reject(new ProviderError("503")) },
+      refiner: fakeRefiner(refinerOutput(), {
+        refine: () => Promise.reject(new ProviderError("503")),
+      }),
     });
     const before = metrics(runsWith(1, 3), runsWith(2, 2));
     await expect(
@@ -529,12 +569,14 @@ describe("appendLoopState", () => {
       needsMike: false,
       reason: "dev success ↑",
       rationale: "fix discovery",
+      predictedBlastRadius: "discovery family",
       patchSummary: "1 file",
       classifications: [{ taskId: "t", class: "discovery", note: "n" }],
       guiSemanticChange: false,
       metricsBefore: metrics(runsWith(1, 3), runsWith(2, 2)),
       metricsAfter: metrics(runsWith(2, 3), runsWith(2, 2)),
       afterRuns: null,
+      debrief: { attribution: "clearer verb", lesson: "name the verb", confidence: "medium" },
       touchedFiles: ["src/cli/help.ts"],
       ...o,
     };
@@ -566,5 +608,229 @@ describe("appendLoopState", () => {
     expect(decisionLabel(makeResult({ accepted: true }))).toBe("accept");
     expect(decisionLabel(makeResult({ accepted: false, needsMike: true }))).toBe("needs-mike");
     expect(decisionLabel(makeResult({ accepted: false, needsMike: false }))).toBe("revert");
+  });
+});
+
+// --- post-hoc debrief ------------------------------------------------------
+
+describe("runIteration debrief", () => {
+  it("records a debrief on the ACCEPTED path", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps } = makeDeps(refinerOutput(), {
+      refiner: fakeRefiner(refinerOutput(), {
+        debrief: () =>
+          Promise.resolve({
+            attribution: "helped discovery",
+            lesson: "state the verb",
+            confidence: "high",
+          }),
+      }),
+      benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(result.accepted).toBe(true);
+    expect(result.debrief).toEqual({
+      attribution: "helped discovery",
+      lesson: "state the verb",
+      confidence: "high",
+    });
+  });
+
+  it("records a debrief on the REVERTED path too", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps } = makeDeps(refinerOutput(), {
+      refiner: fakeRefiner(refinerOutput(), {
+        debrief: () =>
+          Promise.resolve({
+            attribution: "no measurable effect",
+            lesson: "avoid cosmetic edits",
+            confidence: "low",
+          }),
+      }),
+      benchSplits: (): PairRuns => ({ dev: runsWith(1, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("no dev improvement");
+    expect(result.debrief.lesson).toBe("avoid cosmetic edits");
+  });
+
+  it("does NOT block the loop when the debrief call fails", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps, calls } = makeDeps(refinerOutput(), {
+      refiner: fakeRefiner(refinerOutput(), {
+        debrief: () => Promise.reject(new ProviderError("debrief 503")),
+      }),
+      benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(result.accepted).toBe(true); // still committed
+    expect(calls.commit).toHaveLength(1);
+    expect(result.debrief.attribution).toBe("debrief-failed");
+  });
+});
+
+// --- charter feed-forward --------------------------------------------------
+
+describe("buildCharter prior lessons", () => {
+  it("injects a Prior lessons section for the arm's lessons", () => {
+    const charter = buildCharter("cli", [
+      "name the verb before its object",
+      "prefer one precise edit",
+    ]);
+    expect(charter).toContain("PRIOR LESSONS (this arm)");
+    expect(charter).toContain("name the verb before its object");
+  });
+
+  it("omits the section when there are no prior lessons", () => {
+    expect(buildCharter("cli", [])).not.toContain("PRIOR LESSONS");
+  });
+});
+
+// --- per-arm ledger --------------------------------------------------------
+
+function iterationResult(o: Partial<IterationResult> = {}): IterationResult {
+  return {
+    iteration: 1,
+    arm: "cli",
+    digestHash: "d00d",
+    accepted: true,
+    needsMike: false,
+    reason: "dev success ↑",
+    rationale: "clarify inbox wording\n(second line)",
+    predictedBlastRadius: "reads-inbox family",
+    patchSummary: "1 file(s) [src/cli/help.ts], +3/-1",
+    classifications: [],
+    guiSemanticChange: false,
+    metricsBefore: metrics(runsWith(1, 3), runsWith(2, 2)),
+    metricsAfter: metrics(runsWith(2, 3), runsWith(2, 2)),
+    afterRuns: null,
+    debrief: {
+      attribution: "clearer inbox copy",
+      lesson: "define state before container",
+      confidence: "medium",
+    },
+    touchedFiles: ["src/cli/help.ts"],
+    ...o,
+  };
+}
+
+describe("ledger rendering", () => {
+  it("ledgerFileName is per-arm", () => {
+    expect(ledgerFileName("cli")).toBe("cli.md");
+    expect(ledgerFileName("skill")).toBe("skill.md");
+    expect(ledgerFileName("mcp")).toBe("mcp.md");
+  });
+
+  it("isLedgerCandidate selects accepted, reverted, and needs-mike — not bare rejects", () => {
+    expect(isLedgerCandidate(iterationResult({ accepted: true }))).toBe(true);
+    expect(
+      isLedgerCandidate(iterationResult({ accepted: false, metricsAfter: metrics([], []) })),
+    ).toBe(true);
+    expect(
+      isLedgerCandidate(iterationResult({ accepted: false, needsMike: true, metricsAfter: null })),
+    ).toBe(true);
+    // allowlist/gate/provider reject: no re-bench, not parked → no ledger entry
+    expect(
+      isLedgerCandidate(iterationResult({ accepted: false, needsMike: false, metricsAfter: null })),
+    ).toBe(false);
+  });
+
+  it("renders an entry with a machine-readable id+lesson marker and the human body", () => {
+    const entry = buildLedgerEntry(iterationResult(), {
+      batchId: "loop-cli-0",
+      date: "2026-07-17",
+      artifactsPointer: "loop-state: bench/loop-state.json; checkpoint: out/checkpoint.md",
+    });
+    const md = renderLedgerEntry(entry);
+    expect(md).toContain(
+      '<!-- ledger-entry id="loop-cli-0-cli-iter1" lesson="define state before container" -->',
+    );
+    expect(md).toContain("**ACCEPTED**");
+    // The change summary is the FIRST line of the rationale only …
+    expect(md).toContain("**change:** clarify inbox wording — files: src/cli/help.ts");
+    // … while the pre-hoc hypothesis carries the full rationale.
+    expect(md).toContain("**pre-hoc hypothesis:** clarify inbox wording");
+    expect(md).toContain("attribution — clearer inbox copy");
+    expect(md).toContain("success 1/3 → 2/3");
+  });
+
+  it("shows 'not measured' deltas for a needs-mike candidate", () => {
+    const entry = buildLedgerEntry(
+      iterationResult({ accepted: false, needsMike: true, metricsAfter: null }),
+      { batchId: "b", date: "2026-07-17", artifactsPointer: "x" },
+    );
+    const md = renderLedgerEntry(entry);
+    expect(md).toContain("**NEEDS-MIKE**");
+    expect(md).toContain("not measured (parked before re-bench)");
+  });
+});
+
+function ledgerWith(lessons: string[]): string {
+  return lessons
+    .map((l, i) => `<!-- ledger-entry id="b-cli-iter${i}" lesson="${l}" -->\n### entry ${i}\n`)
+    .join("\n");
+}
+
+const longLesson = (n: number): string => `lesson ${n} ${"x".repeat(95)}`;
+
+describe("extractLessons", () => {
+  it("returns the most recent lessons, oldest→newest, capped by count", () => {
+    const md = ledgerWith(["l1", "l2", "l3", "l4"]);
+    expect(extractLessons(md, 2)).toEqual(["l3", "l4"]);
+  });
+
+  it("skips empty lessons (debrief-failed/skipped entries contribute nothing)", () => {
+    const md = ledgerWith(["kept-1", "", "kept-2"]);
+    expect(extractLessons(md, 15)).toEqual(["kept-1", "kept-2"]);
+  });
+
+  it("drops OLDEST first to fit the token cap", () => {
+    // ~25 tokens each (~100 chars); a 30-token cap keeps only the newest.
+    const md = ledgerWith([longLesson(1), longLesson(2), longLesson(3)]);
+    const kept = extractLessons(md, 15, 30);
+    expect(kept.length).toBeLessThan(3);
+    expect(kept.at(-1)).toContain("lesson 3");
+    expect(kept.join("\n")).not.toContain("lesson 1");
+  });
+});
+
+describe("appendLedger idempotence", () => {
+  it("creates the arm file, appends once, and never duplicates across re-runs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ledger-"));
+    const path = join(dir, "cli.md");
+    const batch1 = [
+      buildLedgerEntry(iterationResult({ iteration: 1 }), {
+        batchId: "b1",
+        date: "2026-07-17",
+        artifactsPointer: "a",
+      }),
+      buildLedgerEntry(
+        iterationResult({
+          iteration: 2,
+          accepted: false,
+          metricsAfter: metrics(runsWith(1, 3), runsWith(2, 2)),
+        }),
+        { batchId: "b1", date: "2026-07-17", artifactsPointer: "a" },
+      ),
+    ];
+
+    expect(appendLedger(path, "cli", batch1)).toBe(2);
+    expect(appendLedger(path, "cli", batch1)).toBe(0); // idempotent re-run of the same batch
+    const md = readFileSync(path, "utf8");
+    expect(md).toContain("# AGENTBENCH refinement ledger — `cli` arm");
+    expect((md.match(/ledger-entry id="b1-cli-iter1"/g) ?? []).length).toBe(1);
+
+    // A distinct batch appends its own entries without touching the prior ones.
+    const batch2 = [
+      buildLedgerEntry(iterationResult({ iteration: 1 }), {
+        batchId: "b2",
+        date: "2026-07-18",
+        artifactsPointer: "a",
+      }),
+    ];
+    expect(appendLedger(path, "cli", batch2)).toBe(1);
+    const md2 = readFileSync(path, "utf8");
+    expect((md2.match(/<!-- ledger-entry /g) ?? []).length).toBe(3);
   });
 });

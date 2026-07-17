@@ -58,9 +58,72 @@ export interface RefinerOutput {
   usage?: UsageDelta;
 }
 
+/** Confidence the post-hoc debrief attaches to its attribution. */
+export type Confidence = "high" | "medium" | "low";
+
+/** The single input to a post-hoc debrief call. */
+export interface DebriefInput {
+  /** The debrief charter (system prompt). */
+  systemPrompt: string;
+  /** Patch + pre-hoc rationale/blast-radius + per-task before/after numbers (no task text). */
+  userContent: string;
+}
+
+/** The required, strictly-parsed post-hoc debrief output. */
+export interface DebriefOutput {
+  /** What most likely accounts for the measured delta, positive or negative. */
+  attribution: string;
+  /** One transferable sentence — feeds forward into later charters. */
+  lesson: string;
+  confidence: Confidence;
+  usage?: UsageDelta;
+}
+
 /** The seam the loop driver depends on; swap a fake in tests. */
 export interface Refiner {
   refine(input: RefinerInput): Promise<RefinerOutput>;
+  /** Post-hoc debrief of a re-benched candidate (accepted or reverted). */
+  debrief(input: DebriefInput): Promise<DebriefOutput>;
+}
+
+/** Normalize an arbitrary confidence string to the closed set (default "low"). */
+export function normalizeConfidence(value: unknown): Confidence {
+  const v = String(value ?? "").toLowerCase();
+  return v === "high" || v === "medium" || v === "low" ? v : "low";
+}
+
+/**
+ * Parse a debrief object from a model response (same fence-preference strategy as
+ * {@link parseRefinerOutput}). Requires a string `attribution`; `lesson` defaults to ""
+ * and `confidence` is normalized. Returns null when nothing parses into such an object.
+ */
+export function parseDebriefOutput(text: string | null): DebriefOutput | null {
+  if (text === null) return null;
+  const candidates: string[] = [];
+  const fences = [...text.matchAll(/```(\w*)\n([\s\S]*?)```/g)];
+  const jsonFences = fences.filter((m) => m[1]?.toLowerCase() === "json");
+  for (const m of (jsonFences.length > 0 ? jsonFences : fences).toReversed()) {
+    candidates.push((m[2] ?? "").trim());
+  }
+  candidates.push(text.trim());
+
+  for (const raw of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj["attribution"] !== "string") continue;
+    return {
+      attribution: obj["attribution"] as string,
+      lesson: typeof obj["lesson"] === "string" ? obj["lesson"] : "",
+      confidence: normalizeConfidence(obj["confidence"]),
+    };
+  }
+  return null;
 }
 
 /**
@@ -234,5 +297,30 @@ export class CodexRefiner implements Refiner {
     if (retry !== null) return { ...retry, usage };
 
     throw new Error("refiner output did not parse as the required JSON after one retry");
+  }
+
+  async debrief(input: DebriefInput): Promise<DebriefOutput> {
+    // DebriefInput is structurally a RefinerInput (systemPrompt + userContent).
+    const usage: UsageDelta = { tokensIn: 0, tokensOut: 0 };
+    const account = (u: UsageDelta): void => {
+      usage.tokensIn += u.tokensIn;
+      usage.tokensOut += u.tokensOut;
+    };
+
+    const a = await this.#callOnce(input, "");
+    account(a.usage);
+    const first = parseDebriefOutput(a.text);
+    if (first !== null) return { ...first, usage };
+
+    const b = await this.#callOnce(
+      input,
+      "\n\nYour previous reply did not parse. Reply with ONLY a single fenced " +
+        '```json object {"attribution","lesson","confidence"} — no prose around it.',
+    );
+    account(b.usage);
+    const retry = parseDebriefOutput(b.text);
+    if (retry !== null) return { ...retry, usage };
+
+    throw new Error("debrief output did not parse as the required JSON after one retry");
   }
 }

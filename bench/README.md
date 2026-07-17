@@ -2,7 +2,7 @@
 
 A mini-project measuring how well **zero-context, non-frontier agents** can use the three consumer surfaces — the bare CLI (help system only), the CLI plus the agent skill (`skills/things-cli/`), and the MCP server — and a refinement loop that hones each surface's copy against those measurements.
 
-Start here, then: [CONSTITUTION.md](CONSTITUTION.md) (invariants — metric ladder, promotion rules, content doctrine), [ROADMAP.md](ROADMAP.md) (current state, resume pointer, round history). Both are living documents under the root AGENTS.md update-in-the-same-change rule.
+Start here, then: [CONSTITUTION.md](CONSTITUTION.md) (invariants — metric ladder, promotion rules, content doctrine), [ROADMAP.md](ROADMAP.md) (current state, resume pointer, round history), and [ledger/](ledger/README.md) (the append-only per-arm knowledge ledgers — what worked and what didn't, one file per surface, written by the refinement loop). All are living documents under the root AGENTS.md update-in-the-same-change rule.
 
 ## How it works
 
