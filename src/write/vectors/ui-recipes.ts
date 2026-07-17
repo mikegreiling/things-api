@@ -148,6 +148,59 @@ export function convertToProjectRecipe(
   };
 }
 
+/**
+ * Convert a HEADING to a project (HEADCERT1). Unlike the to-do path, a heading
+ * is not `things:///show`-selectable (the UIC1 blocker); instead the recipe
+ * reveals the heading's PARENT PROJECT (whose view shows the heading as a
+ * content-table row), selects the heading row by POSITION (the select-heading-
+ * row primitive — positional because heading rows expose no stable AX title
+ * handle), then drives the same `Items ▸ Convert to Project…` + confirm sheet
+ * the to-do path uses. `projectUuid` is the owning project's uuid; `ordinal` is
+ * the heading's 0-based position among the project's headings (`index` order).
+ * DB effect (UI2-d / HEADCERT1): the heading uuid dies, a new type=1 project is
+ * promoted into the parent project's area, its children reparent (heading→NULL).
+ */
+export function headingConvertToProjectRecipe(projectUuid: string, ordinal: number): UiRecipe {
+  return {
+    op: "heading.convert-to-project",
+    targetUuid: projectUuid,
+    steps: [
+      {
+        primitive: "reveal",
+        label: "reveal the heading's project in Things (things:///show?id=<project>)",
+        value: projectUuid,
+      },
+      {
+        // Not needed for correctness (pure-AX row select + menu press are
+        // background-capable, no focus steal) — a fallback only.
+        primitive: "activate",
+        label: "bring Things to the foreground (skipped once background AX is certified)",
+        activateFallback: true,
+      },
+      {
+        primitive: "select-heading-row",
+        label: `select the heading row (position ${ordinal + 1} among the project's headings)`,
+        path: PROJECT_CONTENT_TABLE,
+        value: String(ordinal),
+        addressing: "title",
+      },
+      // With the heading selected, Convert to Project… is enabled (it exists
+      // regardless, so the canary resolves it; the press lands post-selection).
+      menuPress("Items ▸ Convert to Project…", `menu item "Convert to Project…" of ${ITEMS_MENU}`),
+      waitFor("the confirmation sheet", `sheet 1 of ${MAIN_WINDOW}`),
+      {
+        // The alert's primary button carries the locale-proof AXIdentifier
+        // "action-button-1" (UIC1); prefer it over the English title.
+        primitive: "press",
+        label: 'confirm — press "Convert"',
+        path: `(first button of sheet 1 of ${MAIN_WINDOW} whose value of attribute "AXIdentifier" is "action-button-1")`,
+        dynamic: true,
+        addressing: "axidentifier",
+      },
+    ],
+  };
+}
+
 // The to-do stop-repeat recipe was REMOVED (roadmap build item 4): it never
 // certified (its Stop popover lives only on the open card, reachable only by a
 // mouse double-click — UIC1/UIC2-d) and no project.stop-repeat is built either

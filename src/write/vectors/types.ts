@@ -81,6 +81,21 @@ export type UiPrimitive =
    */
   | "select-row"
   /**
+   * Select a HEADING as a content-table ROW by POSITION, purely via AX
+   * (HEADCERT1). A heading is not `things:///show`-selectable and its row
+   * exposes no stable AX title handle (only a hover-dependent "More" affordance
+   * carries the title), so identity is positional: the driver walks the
+   * revealed PROJECT view's content table and selects the Nth row that is
+   * genuinely selectable (`AXSelected` lands) AND reads back an EMPTY
+   * `Things3 → name of selected to dos` — the signature of a heading, since a
+   * heading is not a to-do (a to-do row's readback is its title; header/spacer
+   * rows do not take selection). Coordinate-free and background-capable. `path`
+   * is the content table; `value` the 0-based heading ordinal (its position
+   * among the project's headings in `index` order). With the heading selected,
+   * `Items ▸ Convert to Project…` enables.
+   */
+  | "select-heading-row"
+  /**
    * Set the Repeat dialog's date/time control (the reminder time, the "ends on
    * date" bound) — an `AXDateTimeArea` whose value is an NSDate, NOT a text
    * field (UIC6). System Events cannot set it (`set value … to <date>` errors

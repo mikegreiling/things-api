@@ -97,6 +97,8 @@ export interface PreState {
   areaOrder: string[] | null;
   /** project.make-repeating: the row-selection taxonomy (UIC4-f). */
   projectRepeat: ProjectRepeatTaxonomy | null;
+  /** heading.convert-to-project: the project-reveal + heading-row ordinal (HEADCERT1). */
+  headingConvert: HeadingConvertTaxonomy | null;
 }
 
 /**
@@ -162,7 +164,59 @@ export function emptyPreState(): PreState {
     reorder: null,
     areaOrder: null,
     projectRepeat: null,
+    headingConvert: null,
   };
+}
+
+/**
+ * Taxonomy for `heading.convert-to-project`'s pure-AX drive (HEADCERT1). A
+ * heading is not selectable via `things:///show` (the reveal URL selects to-dos
+ * only — the UIC1 blocker), but revealing the heading's PARENT PROJECT shows its
+ * content table, in which the heading renders as a selectable ROW. The row
+ * exposes no stable AX title handle (its title lives only in a hover-dependent
+ * "More" affordance), so identity is POSITIONAL: `ordinal` is the heading's
+ * 0-based position among the project's non-trashed headings in display (`index`)
+ * order, and the select-heading-row primitive walks the content table selecting
+ * the Nth row that is selectable AND has an empty `selected to dos` readback (a
+ * heading, not a to-do). Two same-titled headings are therefore unambiguous.
+ */
+export type HeadingConvertTaxonomy =
+  | { kind: "ok"; projectReveal: string; ordinal: number }
+  | {
+      kind: "refuse";
+      refusal: "not-a-heading" | "no-project" | "not-found";
+      detail: string;
+    };
+
+export function classifyHeadingConvert(
+  db: DatabaseSync,
+  target: AnyTask | null,
+): HeadingConvertTaxonomy {
+  if (target === null || target.type !== "heading") {
+    return { kind: "refuse", refusal: "not-a-heading", detail: "target is not a heading" };
+  }
+  const project = target.project;
+  if (project === null) {
+    return {
+      kind: "refuse",
+      refusal: "no-project",
+      detail: "the heading has no owning project — cannot reveal a project view to select its row",
+    };
+  }
+  const rows = db
+    .prepare(
+      `SELECT uuid FROM TMTask WHERE type = 2 AND project = ? AND trashed = 0 ORDER BY "index"`,
+    )
+    .all(project.uuid) as { uuid: string }[];
+  const ordinal = rows.findIndex((r) => r.uuid === target.uuid);
+  if (ordinal < 0) {
+    return {
+      kind: "refuse",
+      refusal: "not-found",
+      detail: "the heading was not found among its project's non-trashed headings",
+    };
+  }
+  return { kind: "ok", projectReveal: project.uuid, ordinal };
 }
 
 /**

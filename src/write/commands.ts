@@ -25,6 +25,7 @@ import type {
 } from "./operations.ts";
 import {
   childTagTitles,
+  classifyHeadingConvert,
   classifyProjectRepeat,
   computeReorderPre,
   emptyPreState,
@@ -46,6 +47,7 @@ import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
   areaReorderSidebarRecipe,
   convertToProjectRecipe,
+  headingConvertToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
   projectMakeRepeatingRecipe,
@@ -2036,6 +2038,7 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
     // (headings are not covered by nonHeadingTitle).
     const title = pre.target !== null ? pre.target.title : "";
     pre.sameTitleUuids = sameTitleTaskUuids(db, title, "project");
+    pre.headingConvert = classifyHeadingConvert(db, pre.target);
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
@@ -2055,9 +2058,18 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
       assert: [],
     };
   },
-  compile(params, vector) {
+  compile(_params, vector, pre) {
     if (vector !== "ui") unsupportedVector(this.op, vector);
-    return uiDrive(convertToProjectRecipe("heading.convert-to-project", params.uuid));
+    const tax = pre.headingConvert;
+    if (tax === null || tax.kind === "refuse") {
+      // H-UNKNOWN-DESTINATION blocks a non-heading target before compile; a
+      // refuse here means a parentless heading (or one absent from its project's
+      // heading set) slipped past — fail loud rather than drive the wrong row.
+      throw new Error(
+        `heading.convert-to-project: ${tax?.kind === "refuse" ? tax.detail : "no heading taxonomy resolved (guard bypassed?)"}`,
+      );
+    }
+    return uiDrive(headingConvertToProjectRecipe(tax.projectReveal, tax.ordinal));
   },
 };
 
