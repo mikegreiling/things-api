@@ -16,7 +16,7 @@
  * bench subprocess, the codex refiner) and the outer loop control.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
@@ -36,6 +36,7 @@ import {
   LoopAbort,
   maxTotalTokensArgs,
   pairMetrics,
+  planEdits,
   ProviderError,
   renderCheckpoint,
   runIteration,
@@ -43,6 +44,7 @@ import {
   sumRunTokens,
   TOKEN_BUDGET_DEFAULT,
   toStateEntry,
+  type ApplyResult,
   type IterationDeps,
   type IterationResult,
   type LedgerEntry,
@@ -51,7 +53,7 @@ import {
   type SplitMetrics,
   type TranscriptData,
 } from "./loop-core.ts";
-import { CodexRefiner } from "./refiner.ts";
+import { CodexRefiner, type CreateOp, type EditOp } from "./refiner.ts";
 import type { Arm, RunRecord, TaskSpec } from "./types.ts";
 
 const BENCH_DIR = dirname(fileURLToPath(import.meta.url));
@@ -125,18 +127,37 @@ function git(args: string[]): { status: number; stdout: string; stderr: string }
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-function gitApply(patch: string, outDir: string): { ok: boolean; error?: string } {
-  const patchPath = join(outDir, "current.patch");
-  writeFileSync(patchPath, patch.endsWith("\n") ? patch : `${patch}\n`);
-  const check = git(["apply", "--check", patchPath]);
-  if (check.status !== 0) return { ok: false, error: check.stderr.trim().slice(0, 400) };
-  const apply = git(["apply", patchPath]);
-  if (apply.status !== 0) return { ok: false, error: apply.stderr.trim().slice(0, 400) };
-  return { ok: true };
+/**
+ * Validate the refiner's exact find/replace edits against the arm allowlist + current
+ * files (via {@link planEdits}), then apply atomically. On success computes a REAL diff
+ * (git diff, with created files intent-added so they show) for the ledger/checkpoint/
+ * debrief. On any validation error, nothing is written.
+ */
+function applyEdits(arm: Arm, edits: EditOp[], creates: CreateOp[]): ApplyResult {
+  const abs = (rel: string): string => join(REPO_ROOT, rel);
+  const readFile = (rel: string): string | null =>
+    existsSync(abs(rel)) ? readFileSync(abs(rel), "utf8") : null;
+
+  const plan = planEdits(edits, creates, ARM_ALLOWLISTS[arm], readFile);
+  if (!plan.ok) {
+    return { ok: false, errors: plan.errors, modifiedFiles: [], createdFiles: [], diff: "" };
+  }
+  for (const w of plan.writes) writeFileSync(abs(w.file), w.content);
+
+  const modifiedFiles = plan.writes.filter((w) => !w.isNew).map((w) => w.file);
+  const createdFiles = plan.writes.filter((w) => w.isNew).map((w) => w.file);
+  // Intent-add new files so `git diff` includes them; the accept-commit fully adds them.
+  if (createdFiles.length > 0) git(["add", "-N", ...createdFiles]);
+  const diff = git(["diff", "--", ...modifiedFiles, ...createdFiles]).stdout;
+  return { ok: true, errors: [], modifiedFiles, createdFiles, diff };
 }
 
-function revertFiles(files: string[]): void {
-  if (files.length > 0) git(["checkout", "--", ...files]);
+function revert(modified: string[], created: string[]): void {
+  if (modified.length > 0) git(["checkout", "--", ...modified]);
+  if (created.length > 0) {
+    git(["reset", "--", ...created]); // drop any intent-to-add
+    for (const f of created) rmSync(join(REPO_ROOT, f), { force: true });
+  }
 }
 
 function commit(message: string, files: string[]): void {
@@ -313,10 +334,10 @@ async function runLoop(opts: LoopOptions): Promise<void> {
     refiner: new CodexRefiner({ model: opts.refinerModel, provider: opts.provider }),
     readArmFiles: () => readArmFiles(opts.arm),
     loadTranscript,
-    gitApply: (patch) => gitApply(patch, opts.outDir),
+    applyEdits: (edits, creates) => applyEdits(opts.arm, edits, creates),
     runGate,
     benchSplits,
-    revertFiles,
+    revert,
     commit,
     stashPatch: (name, content) => {
       const p = join(opts.outDir, name);

@@ -12,7 +12,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Classification, Confidence, Refiner, RefinerOutput } from "./refiner.ts";
+import type {
+  Classification,
+  Confidence,
+  CreateOp,
+  EditOp,
+  Refiner,
+  RefinerOutput,
+} from "./refiner.ts";
 import { estimateTokens } from "./tokens.ts";
 import type { Arm, RunRecord, TaskSpec } from "./types.ts";
 
@@ -412,20 +419,38 @@ export function buildCharter(arm: Arm, priorLessons: string[] = []): string {
     "  not paper over it with copy).",
     priorLessonsBlock(priorLessons),
     "",
-    `ARM SCOPE — you are refining the "${arm}" surface. Your patch may touch ONLY these paths:`,
+    `ARM SCOPE — you are refining the "${arm}" surface. You may touch ONLY these paths:`,
     ...files.map((f) => `  - ${f}`),
-    "A patch touching anything else is rejected outright.",
+    "An edit or new file touching anything else is rejected outright.",
     guiRule,
+    "HOW TO EXPRESS A CHANGE — do NOT emit a unified diff. Use exact find/replace edits:",
+    "- Each edit is { file, find, replace }. `find` must be copied VERBATIM from the file",
+    "  content shown above and must occur EXACTLY ONCE in that file (if it appears more than",
+    '  once, extend it with surrounding lines until it is unique). `replace` may be "" to',
+    "  delete the matched text. To add a brand-new file, use `creates: [{ file, content }]`.",
+    "- Worked example — insert a line after a known anchor by including the anchor in both",
+    "  `find` and `replace`:",
+    "```json",
+    "{",
+    '  "edits": [',
+    '    { "file": "src/cli/help.ts",',
+    '      "find": "  inbox           captured, still-unsorted to-dos\\n",',
+    '      "replace": "  inbox           captured, still-unsorted to-dos\\n  today           what is scheduled for today\\n" }',
+    "  ]",
+    "}",
+    "```",
     "OUTPUT CONTRACT — reply with ONLY a single fenced ```json object, no prose around it:",
     "```json",
     "{",
     '  "classifications": [{"taskId": "...", "class": "a|b|c|d|e|f or the class name", "note": "..."}],',
-    '  "patch": "<a unified git diff (git apply -p1) touching only allowed files; \\"\\" if no change is warranted>",',
+    '  "edits": [{"file": "<allowed path>", "find": "<exact unique substring>", "replace": "<new text or empty>"}],',
+    '  "creates": [{"file": "<allowed new path>", "content": "<full file body>"}],',
     '  "rationale": "<why this is the smallest generalizable fix>",',
     '  "predictedBlastRadius": "<which tasks/behaviors this should move, and any risk>",',
     '  "guiSemanticChange": false',
     "}",
     "```",
+    'For no change, return "edits": [] (and omit "creates").',
   ].join("\n");
 }
 
@@ -470,16 +495,17 @@ function perTaskLines(label: string, before: RunRecord[], after: RunRecord[]): s
   return lines;
 }
 
-/** Debrief user content: the patch + pre-hoc hypothesis + per-task before→after numbers. */
+/** Debrief user content: the applied diff + pre-hoc hypothesis + per-task before→after numbers. */
 export function renderDebriefUserContent(
   output: RefinerOutput,
+  diff: string,
   before: PairRuns,
   after: PairRuns,
 ): string {
   return [
-    "PATCH UNDER REVIEW (unified diff):",
+    "APPLIED CHANGE (real unified diff of what landed):",
     "```diff",
-    output.patch.trim() === "" ? "(empty)" : output.patch,
+    diff.trim() === "" ? "(empty)" : diff,
     "```",
     "",
     `PRE-HOC RATIONALE: ${output.rationale || "(none)"}`,
@@ -667,6 +693,135 @@ export function renderUserContent(
   return parts.join("\n");
 }
 
+// --- exact find/replace edit engine ----------------------------------------
+
+/** A validated write the apply engine will make (all or none). */
+export interface PlannedWrite {
+  file: string;
+  content: string;
+  isNew: boolean;
+}
+
+export interface EditPlan {
+  ok: boolean;
+  /** Per-edit validation errors (empty iff ok); fed back to the refiner on retry. */
+  errors: string[];
+  /** The writes to make when ok; empty when not ok (atomic — all or none). */
+  writes: PlannedWrite[];
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle === "") return 0;
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const i = haystack.indexOf(needle, from);
+    if (i < 0) break;
+    count++;
+    from = i + needle.length;
+  }
+  return count;
+}
+
+/**
+ * Validate exact find/replace edits + file creations against the arm allowlist and the
+ * current file bodies, WITHOUT touching anything. Every edit's `find` must occur exactly
+ * once; every target must be in the allowlist; a `creates` target must not already exist.
+ * Returns the full set of writes only when EVERY op validates (atomic — all or none), so
+ * the caller can apply with no half-applied state. `readFile` returns null for a missing
+ * file. Multiple edits to one file compose in order (each validated against the running
+ * content).
+ */
+export function planEdits(
+  edits: EditOp[],
+  creates: CreateOp[],
+  allowlist: string[],
+  readFile: (file: string) => string | null,
+): EditPlan {
+  const errors: string[] = [];
+  const working = new Map<string, string>();
+  const created = new Set<string>();
+
+  const current = (file: string): string | null => {
+    if (working.has(file)) return working.get(file) as string;
+    return readFile(file);
+  };
+
+  for (const edit of edits) {
+    if (!matchesAllowlist(edit.file, allowlist)) {
+      errors.push(`edit target not in arm allowlist: ${edit.file}`);
+      continue;
+    }
+    const content = current(edit.file);
+    if (content === null) {
+      errors.push(`file not found: ${edit.file}`);
+      continue;
+    }
+    const n = countOccurrences(content, edit.find);
+    if (n === 0) {
+      errors.push(`find not found in ${edit.file}: ${JSON.stringify(edit.find.slice(0, 60))}`);
+      continue;
+    }
+    if (n > 1) {
+      errors.push(
+        `find matched ${n} times in ${edit.file} (must be unique): ${JSON.stringify(edit.find.slice(0, 60))}`,
+      );
+      continue;
+    }
+    working.set(edit.file, content.replace(edit.find, edit.replace));
+  }
+
+  for (const create of creates) {
+    if (!matchesAllowlist(create.file, allowlist)) {
+      errors.push(`create target not in arm allowlist: ${create.file}`);
+      continue;
+    }
+    if (current(create.file) !== null) {
+      errors.push(`create target already exists: ${create.file}`);
+      continue;
+    }
+    working.set(create.file, create.content);
+    created.add(create.file);
+  }
+
+  if (errors.length > 0) return { ok: false, errors, writes: [] };
+  const writes: PlannedWrite[] = [...working.entries()].map(([file, content]) => ({
+    file,
+    content,
+    isNew: created.has(file),
+  }));
+  return { ok: true, errors: [], writes };
+}
+
+/** Outcome of applying a validated edit set to the working tree. */
+export interface ApplyResult {
+  ok: boolean;
+  /** Validation errors when !ok (nothing was written). */
+  errors: string[];
+  modifiedFiles: string[];
+  createdFiles: string[];
+  /** Real unified diff of the applied change (git diff), for ledger/checkpoint/debrief. */
+  diff: string;
+}
+
+/** Format per-edit validation errors as a refiner-retry feedback block. */
+export function renderApplyFeedback(errors: string[]): string {
+  return [
+    "",
+    "",
+    "YOUR PREVIOUS EDITS DID NOT APPLY. Fix these and resend the SAME JSON contract:",
+    ...errors.map((e) => `  - ${e}`),
+    "Remember: each `find` must be copied EXACTLY from the file above and be UNIQUE.",
+  ].join("\n");
+}
+
+/** +adds/-dels summary from a unified diff (ignoring the +++/--- file headers). */
+export function diffStat(diff: string): string {
+  const added = (diff.match(/^\+(?!\+\+)/gm) ?? []).length;
+  const removed = (diff.match(/^-(?!--)/gm) ?? []).length;
+  return `+${added}/-${removed}`;
+}
+
 // --- one loop iteration (injectable seam) ----------------------------------
 
 export interface IterationDeps {
@@ -674,14 +829,14 @@ export interface IterationDeps {
   /** Read the arm's current target files → { repoRelativePath: body }. */
   readArmFiles: () => Record<string, string>;
   loadTranscript: TranscriptLoader;
-  /** `git apply --check` then `git apply`; ok=false on either failure. */
-  gitApply: (patch: string) => { ok: boolean; error?: string };
+  /** Validate (allowlist + unique find + create-not-exists) then apply atomically. */
+  applyEdits: (edits: EditOp[], creates: CreateOp[]) => ApplyResult;
   /** `npm run fmt` + `npm run check`, judged by exit code. */
   runGate: () => { ok: boolean; output: string };
   /** Re-bench dev + validation at the current working-tree state. */
   benchSplits: () => PairRuns;
-  /** `git checkout -- <files>` to revert the working tree. */
-  revertFiles: (files: string[]) => void;
+  /** Revert the working tree: `git checkout` modified files, delete created ones. */
+  revert: (modified: string[], created: string[]) => void;
   /** Commit exactly these files. */
   commit: (message: string, files: string[]) => void;
   /** Persist a parked patch; returns the path written. */
@@ -734,6 +889,8 @@ export interface IterationResult {
   afterRuns: PairRuns | null;
   /** Post-hoc debrief (present for accepted + reverted; sentinel otherwise). */
   debrief: DebriefRecord;
+  /** True when the candidate's edits failed to apply even after the one feedback retry. */
+  applyFailed: boolean;
   touchedFiles: string[];
   needsMikePatchPath?: string;
 }
@@ -743,10 +900,14 @@ function firstLine(s: string): string {
   return line.trim().slice(0, 120) || "(no rationale)";
 }
 
-function summarizePatch(output: RefinerOutput, touched: string[]): string {
-  const added = (output.patch.match(/^\+(?!\+\+)/gm) ?? []).length;
-  const removed = (output.patch.match(/^-(?!--)/gm) ?? []).length;
-  return `${touched.length} file(s) [${touched.join(", ")}], +${added}/-${removed}`;
+/** Summarize applied files + diff stat for the ledger/checkpoint. */
+function patchSummaryFor(touched: string[], diff: string): string {
+  return `${touched.length} file(s) [${touched.join(", ")}], ${diffStat(diff)}`;
+}
+
+/** True when the refiner proposed nothing to apply. */
+function noEdits(o: RefinerOutput): boolean {
+  return (o.edits?.length ?? 0) === 0 && (o.creates?.length ?? 0) === 0;
 }
 
 /**
@@ -759,6 +920,7 @@ async function runDebrief(
   deps: IterationDeps,
   budget: Budget,
   output: RefinerOutput,
+  diff: string,
   before: PairRuns,
   after: PairRuns,
 ): Promise<DebriefRecord> {
@@ -766,7 +928,7 @@ async function runDebrief(
   try {
     const d = await deps.refiner.debrief({
       systemPrompt: buildDebriefCharter(),
-      userContent: renderDebriefUserContent(output, before, after),
+      userContent: renderDebriefUserContent(output, diff, before, after),
     });
     if (d.usage !== undefined) budget.add(d.usage);
     return { attribution: d.attribution, lesson: d.lesson, confidence: d.confidence };
@@ -791,16 +953,71 @@ export async function runIteration(
   const digest = buildDigest(prevRuns.dev, params.tasks, deps.loadTranscript);
   const targetFiles = deps.readArmFiles();
 
-  // Budget gate BEFORE the refiner call (may throw a clean LoopAbort; nothing applied).
-  budget.assertUnderBudget(`refiner call (iter ${iteration})`);
-  let output: RefinerOutput;
-  try {
-    output = await deps.refiner.refine({
-      systemPrompt: buildCharter(arm, params.priorLessons ?? []),
-      userContent: renderUserContent(arm, targetFiles, digest.text),
+  const charter = buildCharter(arm, params.priorLessons ?? []);
+  const baseUserContent = renderUserContent(arm, targetFiles, digest.text);
+
+  // One refiner call: budget-gated, usage-accounted. Throws ProviderError/LoopAbort.
+  const refineCall = async (extra: string): Promise<RefinerOutput> => {
+    budget.assertUnderBudget(`refiner call (iter ${iteration})`);
+    const out = await deps.refiner.refine({
+      systemPrompt: charter,
+      userContent: baseUserContent + extra,
     });
     budget.resetProviderErrors();
+    if (out.usage !== undefined) budget.add(out.usage);
+    if (budget.crossedWarnThreshold()) deps.onBudgetWarning();
+    return out;
+  };
+
+  const resultFor = (o: RefinerOutput, over: Partial<IterationResult>): IterationResult => ({
+    iteration,
+    arm,
+    digestHash: digest.hash,
+    accepted: false,
+    needsMike: false,
+    reason: "",
+    rationale: o.rationale,
+    predictedBlastRadius: o.predictedBlastRadius,
+    patchSummary: "",
+    classifications: o.classifications,
+    guiSemanticChange: o.guiSemanticChange,
+    metricsBefore: prevMetrics,
+    metricsAfter: null,
+    afterRuns: null,
+    debrief: notDebriefed(),
+    applyFailed: false,
+    touchedFiles: [],
+    ...over,
+  });
+
+  // Refiner call + apply, with ONE feedback retry on a validation failure. Provider
+  // errors (either call) surface here and count toward the circuit breaker.
+  let output: RefinerOutput;
+  let apply: ApplyResult;
+  try {
+    output = await refineCall("");
+    if (noEdits(output)) {
+      deps.log(`iter ${iteration}: refiner proposed no change`);
+      return resultFor(output, { reason: "no edits proposed" });
+    }
+    apply = deps.applyEdits(output.edits, output.creates ?? []);
+    if (!apply.ok) {
+      deps.log(
+        `iter ${iteration}: edits did not apply (${apply.errors.join("; ")}) — retrying once`,
+      );
+      output = await refineCall(renderApplyFeedback(apply.errors));
+      apply = noEdits(output)
+        ? {
+            ok: false,
+            errors: ["retry proposed no edits"],
+            modifiedFiles: [],
+            createdFiles: [],
+            diff: "",
+          }
+        : deps.applyEdits(output.edits, output.creates ?? []);
+    }
   } catch (e) {
+    if (e instanceof LoopAbort) throw e;
     if (isProviderError(e)) {
       deps.log(`iter ${iteration}: provider error (refiner) — ${(e as Error).message}`);
       budget.recordProviderError(); // throws LoopAbort(rate-limit) on the Nth consecutive
@@ -820,64 +1037,47 @@ export async function runIteration(
         metricsAfter: null,
         afterRuns: null,
         debrief: notDebriefed("(no candidate)"),
+        applyFailed: false,
         touchedFiles: [],
       };
     }
     throw e;
   }
-  if (output.usage !== undefined) budget.add(output.usage);
-  if (budget.crossedWarnThreshold()) deps.onBudgetWarning();
-  const touched = filesInPatch(output.patch);
 
-  const base: IterationResult = {
-    iteration,
-    arm,
-    digestHash: digest.hash,
-    accepted: false,
-    needsMike: false,
-    reason: "",
-    rationale: output.rationale,
-    predictedBlastRadius: output.predictedBlastRadius,
-    patchSummary: summarizePatch(output, touched),
-    classifications: output.classifications,
-    guiSemanticChange: output.guiSemanticChange,
-    metricsBefore: prevMetrics,
-    metricsAfter: null,
-    afterRuns: null,
-    debrief: notDebriefed(),
+  // Apply failed even after the one retry → an apply-failed candidate. Hypothesis is
+  // preserved in the ledger (no metrics, no debrief) — failed attempts are knowledge.
+  if (!apply.ok) {
+    const attempted = [
+      ...output.edits.map((e) => e.file),
+      ...(output.creates ?? []).map((c) => c.file),
+    ];
+    deps.log(`iter ${iteration}: edits failed to apply after retry — ${apply.errors.join("; ")}`);
+    return resultFor(output, {
+      applyFailed: true,
+      reason: `apply failed: ${apply.errors.join("; ")}`,
+      patchSummary: `${attempted.length} file(s) attempted [${[...new Set(attempted)].join(", ")}], not applied`,
+      touchedFiles: [...new Set(attempted)],
+    });
+  }
+
+  const touched = [...apply.modifiedFiles, ...apply.createdFiles];
+  const base = resultFor(output, {
+    patchSummary: patchSummaryFor(touched, apply.diff),
     touchedFiles: touched,
-  };
-
-  // Allowlist (no side effects yet — nothing to revert).
-  if (output.patch.trim() === "" || touched.length === 0) {
-    deps.log(`iter ${iteration}: refiner proposed no change`);
-    return { ...base, reason: "no patch proposed" };
-  }
-  const outside = touched.filter((f) => !matchesAllowlist(f, ARM_ALLOWLISTS[arm]));
-  if (outside.length > 0) {
-    deps.log(`iter ${iteration}: allowlist violation — ${outside.join(", ")}`);
-    return { ...base, reason: `allowlist violation: ${outside.join(", ")}` };
-  }
-
-  // Apply.
-  const applied = deps.gitApply(output.patch);
-  if (!applied.ok) {
-    deps.log(`iter ${iteration}: git apply failed — ${applied.error ?? ""}`);
-    return { ...base, reason: `git apply failed: ${applied.error ?? "(no detail)"}` };
-  }
+  });
 
   // Gate (fmt + check).
   const gate = deps.runGate();
   if (!gate.ok) {
-    deps.revertFiles(touched);
+    deps.revert(apply.modifiedFiles, apply.createdFiles);
     deps.log(`iter ${iteration}: gate failed — reverted`);
     return { ...base, reason: "gate failed (fmt/check)" };
   }
 
-  // GUI-semantic guard: never auto-accept; park for Mike, revert.
+  // GUI-semantic guard: never auto-accept; park the applied diff for Mike, revert.
   if (output.guiSemanticChange) {
-    const patchPath = deps.stashPatch(`needs-mike-iter${iteration}.patch`, output.patch);
-    deps.revertFiles(touched);
+    const patchPath = deps.stashPatch(`needs-mike-iter${iteration}.patch`, apply.diff);
+    deps.revert(apply.modifiedFiles, apply.createdFiles);
     deps.log(`iter ${iteration}: gui-semantic change — parked at ${patchPath}, reverted`);
     return {
       ...base,
@@ -888,13 +1088,13 @@ export async function runIteration(
   }
 
   // Re-bench + decide. The budget gate here fires AFTER apply+gate, so a clean abort
-  // (or a provider error) must revert the applied-but-unaccepted patch first.
+  // (or a provider error) must revert the applied-but-unaccepted change first.
   let afterRuns: PairRuns;
   try {
     budget.assertUnderBudget(`re-bench (iter ${iteration})`);
     afterRuns = deps.benchSplits();
   } catch (e) {
-    deps.revertFiles(touched);
+    deps.revert(apply.modifiedFiles, apply.createdFiles);
     if (e instanceof LoopAbort) throw e;
     if (isProviderError(e)) {
       deps.log(`iter ${iteration}: provider error (bench) — reverted`);
@@ -910,7 +1110,7 @@ export async function runIteration(
   const decision = decideAccept(prevMetrics, afterMetrics, false);
 
   // Post-hoc debrief runs for BOTH outcomes (accepted and reverted) — never blocking.
-  const debrief = await runDebrief(deps, budget, output, prevRuns, afterRuns);
+  const debrief = await runDebrief(deps, budget, output, apply.diff, prevRuns, afterRuns);
 
   if (decision.accept) {
     deps.commit(`loop(${arm}) iter ${iteration}: ${firstLine(output.rationale)}`, touched);
@@ -924,7 +1124,7 @@ export async function runIteration(
       debrief,
     };
   }
-  deps.revertFiles(touched);
+  deps.revert(apply.modifiedFiles, apply.createdFiles);
   deps.log(`iter ${iteration}: revert — ${decision.reason}`);
   return { ...base, reason: decision.reason, metricsAfter: afterMetrics, debrief };
 }
@@ -938,7 +1138,7 @@ export interface LoopStateEntry {
   digestHash: string;
   patchSummary: string;
   rationale: string;
-  decision: "accept" | "revert" | "needs-mike";
+  decision: "accept" | "revert" | "needs-mike" | "apply-failed";
   reason: string;
   guiSemanticChange: boolean;
   classifications: Classification[];
@@ -974,6 +1174,7 @@ export function budgetNote(
 export function decisionLabel(result: IterationResult): LoopStateEntry["decision"] {
   if (result.accepted) return "accept";
   if (result.needsMike) return "needs-mike";
+  if (result.applyFailed) return "apply-failed";
   return "revert";
 }
 
@@ -1111,7 +1312,7 @@ export interface LedgerEntry {
   date: string;
   arm: Arm;
   iteration: number;
-  decision: "ACCEPTED" | "REVERTED" | "NEEDS-MIKE";
+  decision: "ACCEPTED" | "REVERTED" | "NEEDS-MIKE" | "APPLY-FAILED";
   changeSummary: string;
   filesTouched: string[];
   diffStat: string;
@@ -1127,16 +1328,17 @@ export interface LedgerEntry {
 function ledgerDecision(result: IterationResult): LedgerEntry["decision"] {
   if (result.accepted) return "ACCEPTED";
   if (result.needsMike) return "NEEDS-MIKE";
+  if (result.applyFailed) return "APPLY-FAILED";
   return "REVERTED";
 }
 
 /**
- * A candidate worth a ledger entry: it was accepted, reverted after a re-bench, or
- * parked for Mike. (Allowlist / gate / empty-patch / provider-error iterations carry no
- * measured candidate and are recorded only in loop-state.json.)
+ * A candidate worth a ledger entry: it was accepted, reverted after a re-bench, parked
+ * for Mike, or died in apply-retry (failed attempts are knowledge too). Gate / empty /
+ * provider-error iterations carry no candidate and live only in loop-state.json.
  */
 export function isLedgerCandidate(result: IterationResult): boolean {
-  return result.accepted || result.needsMike || result.metricsAfter !== null;
+  return result.accepted || result.needsMike || result.applyFailed || result.metricsAfter !== null;
 }
 
 /** Deterministic per-candidate id: identical within a batch (idempotent), unique across. */
@@ -1168,7 +1370,7 @@ export function buildLedgerEntry(
 }
 
 function fmtSplitDelta(before: SplitMetrics, after: SplitMetrics | null): string {
-  if (after === null) return "not measured (parked before re-bench)";
+  if (after === null) return "not measured (no re-bench)";
   return (
     `success ${before.successes}/${before.runs} → ${after.successes}/${after.runs}; ` +
     `friction ${before.frictionOnSuccesses.toFixed(2)} → ${after.frictionOnSuccesses.toFixed(2)}; ` +
