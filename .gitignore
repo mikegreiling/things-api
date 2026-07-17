@@ -11,6 +11,9 @@ vendor/*
 # Lab artifacts (evidence records, screenshots, guest DB copies)
 lab/artifacts/
 
+# Bench raw runs + transcripts (accepted scorecards are committed under bench/results/)
+bench/artifacts/
+
 # Claude Code session-local state (agent worktrees live under here — must never
 # be committed or scanned by tooling)
 .claude/

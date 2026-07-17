@@ -20,5 +20,5 @@
     "outDir": "dist",
     "noEmit": true
   },
-  "include": ["src", "test", "lab/runner"]
+  "include": ["src", "test", "lab/runner", "bench"]
 }

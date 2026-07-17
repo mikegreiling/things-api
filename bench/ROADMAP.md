@@ -7,8 +7,8 @@ Living state of the bench mini-project. Update in the same change as any bench w
 **Phase 0 (harness build) — IN PROGRESS, started 2026-07-17, branch `mg/bench-harness`.** Full plan: `/Users/mike/.claude/plans/cuddly-greeting-gadget.md` (session "things-skill-loop"). Nothing has run against a real model yet.
 
 Phase 0 checklist:
-- [x] Simulator write vector + fence + fixture marker + unit tests (fe27cf1; adversarially reviewed — fail-closed fence + host-escape gating fix in flight)
-- [ ] Bench scaffolding: runner/sandbox/grade/report + pseudo-agent smoke (delegated, worktree)
+- [x] Simulator write vector + fence + fixture marker + unit tests (fe27cf1; adversarially reviewed, findings fixed in ebbb1ff — fail-closed fence, `--db` split-brain, host-escape gating, applier-branch tests)
+- [x] Bench scaffolding: runner/sandbox/arms/grade/report + pseudo-agent smoke — types/fixture/sandbox/arms/grade/report/runner + prompts/ + two sample tasks; `npm run bench -- --pseudo` exercises seed→sandbox→grade→report. Pi/just-bash API facts in [NOTES.md](NOTES.md).
 - [x] Task corpus v1 (90659a3 — 12 tasks, 7 families, 2 validation + 2 holdout; encodings verified in tasks/AUTHORING.md)
 - [x] Skill v0 (SKILL.md preamble + references skeleton; gui.md curated facts awaiting Mike's review)
 - [x] Living docs (this file, CONSTITUTION, README) + root docs (roadmap §K pointer, AGENTS.md living-docs entry, CHANGELOG)

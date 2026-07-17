@@ -33,6 +33,8 @@
     "lab:compare": "node lab/runner/main.ts compare",
     "lab:gc": "node lab/runner/main.ts gc",
     "lab:regress": "bash lab/scripts/regress.sh",
+    "bench": "node bench/runner.ts",
+    "bench:report": "node bench/report.ts",
     "check": "npm run typecheck && npm run lint && npm run fmt:check && npm run test"
   },
   "dependencies": {
@@ -41,7 +43,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10",
     "@types/node": "^24.13.2",
+    "just-bash": "3.1.0",
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
     "typescript": "^6.0.3",

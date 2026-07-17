@@ -1,0 +1,34 @@
+{
+  "id": "reads-inbox-count",
+  "family": "reads",
+  "tier": 1,
+  "split": "dev",
+  "prompt": "How many to-dos are currently in my Inbox? Answer with a JSON object of the form {\"count\": N}.",
+  "clock": { "now": "2026-03-15T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    { "kind": "area", "key": "errands", "title": "Errands" },
+    { "kind": "todo", "key": "i1", "title": "Buy stamps", "start": "inbox" },
+    { "kind": "todo", "key": "i2", "title": "Call the plumber", "start": "inbox" },
+    { "kind": "todo", "key": "i3", "title": "Return the library book", "start": "inbox" },
+    {
+      "kind": "todo",
+      "key": "a1",
+      "title": "Plan the weekend trip",
+      "start": "active",
+      "container": "errands"
+    }
+  ],
+  "finalAnswer": { "required": true, "shape": "{ count: number }" },
+  "assertions": [
+    { "type": "answer", "path": "count", "equals": 3 },
+    { "type": "db-unchanged" },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE type = 0 AND status = 0 AND trashed = 0 AND start = 0 AND project IS NULL AND area IS NULL AND heading IS NULL",
+      "expect": [{ "n": 3 }]
+    }
+  ],
+  "maxTurns": 12,
+  "timeoutMs": 60000,
+  "pseudoScript": ["things inbox --json"]
+}
