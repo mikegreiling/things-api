@@ -84,7 +84,16 @@ describe("truncateToday", () => {
     const { data, truncation } = truncateToday(view(4, 4), 6);
     expect(data.today).toHaveLength(4);
     expect(data.evening).toHaveLength(2);
-    expect(truncation).toEqual({ shown: 6, total: 8, limit: 6, truncated: true });
+    expect(truncation).toEqual({
+      shown: 6,
+      total: 8,
+      limit: 6,
+      truncated: true,
+      sections: [
+        { key: "today", shown: 4, total: 4 },
+        { key: "evening", shown: 2, total: 4 },
+      ],
+    });
     // The whole-view badge summary is preserved.
     expect(data.badge).toEqual({ dueOrOverdue: 1, other: 2 });
   });
@@ -133,9 +142,16 @@ describe("previewSections (anytime per-block preview)", () => {
     expect(data[1]?.items.some((i) => i.type === "project")).toBe(true);
     expect(meta.truncated).toBe(true);
     expect(meta.blocks).toEqual([
-      { kind: "loose", uuid: null, title: null, shown: 4, total: 9, limit: 4 },
-      { kind: "area", uuid: "a", title: "Hobbies", shown: 4, total: 10, limit: 4 },
-      { kind: "project", uuid: "p1", title: "Firmware", shown: 3, total: 8, limit: 3 },
+      { kind: "loose", ref: null, title: null, shown: 4, total: 9, limit: 4 },
+      {
+        kind: "area",
+        ref: "a",
+        title: "Hobbies",
+        shown: 4,
+        total: 10,
+        limit: 4,
+        children: [{ kind: "project", ref: "p1", title: "Firmware", shown: 3, total: 8, limit: 3 }],
+      },
     ]);
   });
 
@@ -200,15 +216,15 @@ describe("previewSomedaySections", () => {
     expect(meta.blocks).toEqual([
       {
         kind: "area",
-        uuid: "a",
+        ref: "a",
         title: "Hobbies",
         shown: 4,
         total: 8,
         limit: 4,
         totalProjects: 2,
         totalTodos: 6,
+        children: [{ kind: "project", ref: "p1", title: "Proj 1", shown: 2, total: 3, limit: 2 }],
       },
-      { kind: "project", uuid: "p1", title: "Proj 1", shown: 2, total: 3, limit: 2 },
     ]);
   });
 
@@ -216,7 +232,7 @@ describe("previewSomedaySections", () => {
     const { data, grouped: meta } = previewSomedaySections([section], { area: 50, project: null });
     expect(data[0]?.items).toHaveLength(11);
     expect(meta.truncated).toBe(false);
-    expect(meta.blocks.find((b) => b.kind === "project")?.limit).toBeNull();
+    expect(meta.blocks[0]?.children?.find((b) => b.kind === "project")?.limit).toBeNull();
   });
 });
 
@@ -244,8 +260,8 @@ describe("capAreaSections (area show per-section caps)", () => {
     expect(data.logged).toHaveLength(3);
     expect(grouped.truncated).toBe(true);
     expect(grouped.blocks).toEqual([
-      { kind: "projects", uuid: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
-      { kind: "area", uuid: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
+      { kind: "projects", ref: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
+      { kind: "area", ref: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
     ]);
   });
 

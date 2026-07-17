@@ -23,10 +23,14 @@ import { showToggleFlags } from "./project.ts";
 import {
   AREA_PREVIEW_LIMIT,
   GROUPED_ALL_DESC,
+  isActiveProjectRow,
+  isScheduledProjectRow,
+  isSomedayProjectRow,
   localToday,
   type AreaView,
   type BoundedAreaView,
   type GroupedLimits,
+  type GroupedTruncation,
   type Project,
   type Todo,
 } from "../../index.ts";
@@ -63,30 +67,35 @@ function loggedCount(showLogged: boolean | string | undefined): number {
   return Number.isInteger(n) && n > 0 ? n : RECENT_LOGGED_DEFAULT;
 }
 
-// Closed-but-unswept projects always sit in the active block (checked),
-// never in Upcoming/Someday — start/startDate only classify OPEN rows.
-const isSomedayProject = (p: Project) =>
-  p.status === "open" && p.start === "someday" && p.startDate === null;
-
 /**
  * GUI layout: active projects first (sidebar order), then the area's direct
  * to-dos. `--show-later` reveals the GUI's toggled sections — Upcoming
  * (future-scheduled projects, to-dos, and repeating templates intermixed in
  * date order) and Someday (someday projects as a leading block, then
  * someday to-dos). `--show-logged` reveals the full logbook.
+ *
+ * `view` is the already-bounded card (its ACTIVE project rows and direct to-dos
+ * capped; scheduled/someday project rows and the later/logged/trashed sections
+ * intact) and `grouped` the per-block metadata carrying each capped section's
+ * pre-cap total — so the "… N more" footers derive from metadata, never a
+ * pre-cap copy of the view.
  */
-export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
+export function renderAreaView(
+  view: AreaView,
+  grouped: GroupedTruncation,
+  opts: AreaShowOpts,
+): string[] {
   const todayIso = localToday();
-  const isScheduledProject = (p: Project) =>
-    p.status === "open" && p.startDate !== null && p.startDate > todayIso;
-  const activeProjects = view.projects.filter(
-    (p) => !isSomedayProject(p) && !isScheduledProject(p),
-  );
-  const somedayProjects = view.projects.filter(isSomedayProject);
+  // The card's ACTIVE project rows are already capped in `view`; scheduled and
+  // someday rows always survive and route to the Upcoming/Someday sections.
+  const activeProjects = view.projects.filter((p) => isActiveProjectRow(p, todayIso));
+  const somedayProjects = view.projects.filter(isSomedayProjectRow);
   // Upcoming intermixes scheduled projects, scheduled to-dos, and repeating
   // templates in date order (templates sort by their next occurrence).
   const upcoming: Array<{ date: string; item: Todo | Project }> = [
-    ...view.projects.filter(isScheduledProject).map((p) => ({ date: p.startDate ?? "", item: p })),
+    ...view.projects
+      .filter((p) => isScheduledProjectRow(p, todayIso))
+      .map((p) => ({ date: p.startDate ?? "", item: p })),
     ...view.later.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.date, item: t }))),
     ...view.later.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
   ].toSorted((a, b) => a.date.localeCompare(b.date));
@@ -104,11 +113,13 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   // Per-section caps (this view's sections are containers, so there is no
   // strict total limit): the project-ROWS block and the direct-to-dos block
   // truncate independently, each with its own exact-count footer. The card
-  // preamble and the toggled later/logged sections are never capped here.
+  // preamble and the toggled later/logged sections are never capped. The pre-cap
+  // totals come from the metadata; `limits` supplies the footer's doubling.
   const limits = opts.limits ?? { area: null, project: null };
-  const shownProjects =
-    limits.project === null ? activeProjects : activeProjects.slice(0, limits.project);
-  const shownActive = limits.area === null ? view.active : view.active.slice(0, limits.area);
+  const projectsBlock = grouped.blocks.find((b) => b.kind === "projects");
+  const activeBlock = grouped.blocks.find((b) => b.kind === "area");
+  const hiddenProjects = projectsBlock ? projectsBlock.total - projectsBlock.shown : 0;
+  const hiddenActive = activeBlock ? activeBlock.total - activeBlock.shown : 0;
   // The user's invocation, echoed by every disclosure hint (falls back to a
   // canonical typed command when a caller omits it, e.g. a direct unit test).
   const base = opts.hintBase ?? `things area show ${quoteTitle(view.area.title)}`;
@@ -142,15 +153,10 @@ export function renderAreaView(view: AreaView, opts: AreaShowOpts): string[] {
   const block = (rows: string[]) => {
     if (rows.length > 0) lines.push("", ...rows);
   };
-  block(shownProjects.map(fmtProject));
-  sectionMore(
-    activeProjects.length - shownProjects.length,
-    "project",
-    "--project-limit",
-    limits.project,
-  );
-  block(shownActive.map(fmt));
-  sectionMore(view.active.length - shownActive.length, "to-do", "--area-limit", limits.area);
+  block(activeProjects.map(fmtProject));
+  sectionMore(hiddenProjects, "project", "--project-limit", limits.project);
+  block(view.active.map(fmt));
+  sectionMore(hiddenActive, "to-do", "--area-limit", limits.area);
   if (activeProjects.length === 0 && view.active.length === 0) lines.push("", "(no active items)");
   if (opts.showLater === true) {
     if (upcoming.length > 0) {
@@ -282,7 +288,7 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
       return {
         data: bounded.view,
         grouped: bounded.grouped,
-        lines: renderAreaView(bounded.full, { ...opts, limits, hintBase }),
+        lines: renderAreaView(bounded.view, bounded.grouped, { ...opts, limits, hintBase }),
       };
     },
     () => [],

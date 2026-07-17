@@ -210,7 +210,16 @@ describe("cli end-to-end (fixture db)", () => {
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
     expect(env.data.today).toHaveLength(50);
     expect(env.data.evening).toHaveLength(0);
-    expect(env.meta.truncation).toEqual({ shown: 50, total: 75, limit: 50, truncated: true });
+    expect(env.meta.truncation).toEqual({
+      shown: 50,
+      total: 75,
+      limit: 50,
+      truncated: true,
+      sections: [
+        { key: "today", shown: 50, total: 55 },
+        { key: "evening", shown: 0, total: 20 },
+      ],
+    });
   });
 
   it("things todo show includes checklist and repeating flags", () => {
@@ -904,13 +913,19 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     }>;
     expect(blocks).toEqual(
       expect.arrayContaining([
-        { kind: "loose", uuid: null, title: null, shown: 5, total: 5, limit: 30 },
+        { kind: "loose", ref: null, title: null, shown: 5, total: 5, limit: 30 },
+        // The Firmware project block nests inside its area block.
         expect.objectContaining({
-          kind: "project",
-          title: "Firmware",
-          shown: 3,
-          total: 8,
-          limit: 3,
+          kind: "area",
+          children: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "project",
+              title: "Firmware",
+              shown: 3,
+              total: 8,
+              limit: 3,
+            }),
+          ]),
         }),
       ]),
     );
@@ -947,10 +962,15 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     const five = JSON.parse(
       runCli(["anytime", "--project-limit", "5", "--json", "--db", fx.path]).stdout,
     );
-    const fwBlock = five.meta.grouped.blocks.find(
-      (b: { title?: string }) => b.title === "Firmware",
+    const fwTop = five.meta.grouped.blocks as Array<{
+      title?: string;
+      shown: number;
+      children?: { title?: string; shown: number }[];
+    }>;
+    const fwBlock = [...fwTop, ...fwTop.flatMap((b) => b.children ?? [])].find(
+      (b) => b.title === "Firmware",
     );
-    expect(fwBlock.shown).toBe(5);
+    expect(fwBlock?.shown).toBe(5);
 
     const all = JSON.parse(runCli(["anytime", "--all", "--json", "--db", fx.path]).stdout);
     expect(all.meta.grouped.truncated).toBe(false);
@@ -1099,7 +1119,9 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     const env = JSON.parse(
       runCli(["someday", "--show-active-project-items", "2", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.meta.grouped.blocks).toEqual(
+    const somedayTop = env.meta.grouped.blocks as Array<{ children?: unknown[] }>;
+    const somedayBlocks = [...somedayTop, ...somedayTop.flatMap((b) => b.children ?? [])];
+    expect(somedayBlocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "project",

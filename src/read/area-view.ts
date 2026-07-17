@@ -32,6 +32,26 @@ export interface AreaView {
   trashed: Todo[];
 }
 
+// The area card splits its open projects into three display buckets by their
+// own schedule (the card mirrors the GUI: active projects as rows, scheduled
+// ones under Upcoming, someday ones under Someday). Closed-but-unswept projects
+// stay "active" (checked in place) — start/startDate only classify OPEN rows.
+// Shared by the bounding layer (capAreaSections keeps scheduled/someday whole
+// while capping the active rows) and the human renderer, so the split is
+// defined ONCE and the two never drift.
+
+/** A someday project row: open, incubated, no start date. */
+export const isSomedayProjectRow = (p: Project): boolean =>
+  p.status === "open" && p.start === "someday" && p.startDate === null;
+
+/** A future-scheduled project row (start date strictly after `todayIso`). */
+export const isScheduledProjectRow = (p: Project, todayIso: string): boolean =>
+  p.status === "open" && p.startDate !== null && p.startDate > todayIso;
+
+/** An active project row — everything that is neither someday nor future-scheduled. */
+export const isActiveProjectRow = (p: Project, todayIso: string): boolean =>
+  !isSomedayProjectRow(p) && !isScheduledProjectRow(p, todayIso);
+
 /** Resolves by uuid or unique (case-insensitive) title; throws like the ref resolvers. */
 export function areaView(
   db: DatabaseSync,

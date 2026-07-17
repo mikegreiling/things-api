@@ -44,31 +44,55 @@ export const ExitCode = {
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 
 /**
+ * Per-section counts for a SPLIT flat view — currently only `today`'s
+ * Today / This-Evening split. One entry per section IN RENDER ORDER, each
+ * reporting the rows `shown` of the `total` that matched after all filters.
+ * Lets a renderer keep a downstream section (This Evening) honest under a
+ * single global cap without a pre-truncation copy of the view.
+ */
+export interface SectionCount {
+  key: "today" | "evening";
+  shown: number;
+  total: number;
+}
+
+/**
  * List-view truncation metadata (ADDITIVE). Present on the meta of any read
  * command that applies a row limit; absent on unbounded/structured views.
  * `shown` items were returned of `total` that matched after all filters;
  * `limit` is the effective cap (null when the caller asked for all rows);
  * `truncated` is true exactly when `shown < total`. The dropped remainder is
- * `total - shown`.
+ * `total - shown`. `sections` is present only on a split flat view (the Today
+ * split), breaking the whole-view counts down per render section.
  */
 export interface Truncation {
   shown: number;
   total: number;
   limit: number | null;
   truncated: boolean;
+  /** Per-section shown/total breakdown for a split flat view; absent otherwise. */
+  sections?: SectionCount[];
 }
 
 /**
- * Per-block truncation for the grouped catalogues (anytime/someday) and the
- * sectioned detail views (`area show`). Every header/section is always
- * present; only the innermost item lists are capped. One entry per non-empty
- * block: the area-less loose block, an area's direct items, a project's
- * to-dos, or — in `area show` — the area's project-ROWS section ("projects").
+ * One identity-carrying block of a grouped catalogue (anytime/someday) or a
+ * sectioned detail view (`area show`). Every header/section is always rendered;
+ * only the innermost item lists are capped. Emitted for every block that has
+ * rows to cap (`total > 0`) — including a block whose rows were ALL dropped
+ * (`shown: 0`), so no truncated header is untraceable. A block with no
+ * cappable rows of its own (`total: 0`) is omitted UNLESS it wraps truncated
+ * `children` — an area whose only capped content is its project item-lists
+ * still appears as their container.
+ *
+ * Blocks are NESTED: an area/loose block carries its project blocks in
+ * `children` — in anytime the project item-lists inside the area, in someday
+ * the active-project child groups found in that section. The `area show`
+ * `projects`/`area` blocks are siblings of one area and stay top-level.
  */
-export interface BlockCount {
+export interface GroupBlock {
   kind: "loose" | "area" | "project" | "projects";
-  /** Container uuid (area or project); null for the loose block. */
-  uuid: string | null;
+  /** Container reference (area or project uuid); null for the loose block. */
+  ref: string | null;
   /** Container title; null for the loose block. */
   title: string | null;
   shown: number;
@@ -83,13 +107,15 @@ export interface BlockCount {
    */
   totalProjects?: number;
   totalTodos?: number;
+  /** Nested project blocks (anytime item-lists / someday active-project groups). Absent when none. */
+  children?: GroupBlock[];
 }
 
 /** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Truncation}. */
 export interface GroupedTruncation {
   /** True when any block hid items. */
   truncated: boolean;
-  blocks: BlockCount[];
+  blocks: GroupBlock[];
 }
 
 export interface EnvelopeMeta {

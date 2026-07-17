@@ -211,7 +211,7 @@ describe("formatItem styling (color on)", () => {
       evening: [],
       badge: { dueOrOverdue: 0, other: 1 },
     };
-    const out = renderToday(view, view, "things today").join("\n");
+    const out = renderToday(view, undefined, "things today").join("\n");
     expect(out).toContain(`${DIM}CheckedWin`);
     expect(out).toContain(`${DIM}${STRIKE}CheckedDrop`);
     // The open row carries none of the resolved wraps on its title.
