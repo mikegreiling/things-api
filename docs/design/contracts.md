@@ -93,6 +93,37 @@ List views are bounded by default and report exactly what was hidden — nothing
 
 **Breaking (pre-v1.0):** `meta.grouped.blocks` grew identity + nesting (`ref` replaced the former `uuid`; project blocks moved under `children`), and `meta.truncation` grew the optional `sections`. Same defaults and metadata apply over MCP.
 
+## Consumer clock (`meta.clock`, timezone / pinned now)
+
+Things view membership is DERIVED from stored calendar dates vs. an evaluation instant, so it is coherent under any evaluation clock (it is why two synced devices in different zones legitimately disagree about Today). By default every date boundary — today / evening / upcoming grouping and `--since`/`--until` clipping / `--overdue` / the logbook sweep / `changes --since` / inbox created-date bounds — evaluates in the **host** zone. Two environment knobs, read by both the CLI and the MCP server process, shift that:
+
+- **`THINGS_TZ`** — an IANA zone (e.g. `Asia/Tokyo`) so those boundaries evaluate for the CONSUMER'S calendar (an MCP endpoint hosted on one machine, queried from three zones away). Over MCP the date-sensitive tools (`read_view`, `search`, `changes_since`, `get_project`, `get_area`, `list_collections`, and the write tools that take `when`) also accept a per-call `tz` that overrides `THINGS_TZ` for that call.
+- **`THINGS_NOW`** — an ISO-8601 instant pinning "now" (a determinism knob for tests/lab).
+
+**Precedence:** per-call `tz` > `THINGS_TZ` > host zone. Effective clock = `{ now: THINGS_NOW ?? real now, zone: resolved zone ?? host }`. Invalid values **fail closed** — an unknown zone or unparseable instant is a usage error (exit 2 / MCP `usage`) naming the expected form, never a silent host fallback.
+
+**Additive honesty field.** When a consumer zone OR a pinned now is in effect, `--json` envelopes and MCP responses carry:
+
+```jsonc
+"meta": { "clock": { "timezone": "Asia/Tokyo", "today": "2026-07-03" } }
+```
+
+It is **absent on the host clock**, so the wire shape is unchanged for existing consumers (a machine consumer keys on presence, exactly like every other additive `meta.*` field).
+
+### Writes — normalize-before-dispatch
+
+The write grammar's only clock-relative tokens are `when: today` and `when: evening` (everything else is an explicit `YYYY-MM-DD` / `HH:mm`). Sent raw, the app would interpret the word on its OWN (host) clock, so when a consumer zone is in effect the pipeline normalizes BEFORE dispatch:
+
+- **`when: today`** → resolved to the consumer-zone calendar date and dispatched as the explicit `when=YYYY-MM-DD` (the reminder token rides along as `<date>@<time>`). Verification then agrees by construction (it compares the stored packed date against the same precomputed date). A consumer-today that is host-yesterday yields a past `startDate` — that is coherent Things semantics (the item lands in Today with overdue-start), documented, not special-cased.
+- **`when: evening`** → This Evening exists ONLY for the app machine's own current day (it is the `startBucket=1` rows whose `startDate` is exactly the app's today; an "evening of another day" is not representable in Things' model, not even in the GUI). So it is expressible only when the consumer's today equals the app's today, and is otherwise **refused fail-closed** (`blocked:clock`, exit 4) with a remediation.
+- **Reminder times (`HH:mm`)** are wall-clock and tz-less in Things' own model — they are NEVER translated.
+
+Internal machinery (undo inverse scheduling, reorder bounce legs) converses with app-written host state and is deliberately left on the host clock — only consumer-provided `when` tokens normalize.
+
+### Deployment note — host timezone alignment
+
+Changing the host's system **timezone** is safe: it relabels wall clocks but leaves absolute instants (and therefore Things Cloud's edit-timestamp sync ordering) unchanged. Changing the host's **clock** is NOT — Things Cloud merges are edit-timestamp-ordered (3-way merge, not last-writer-wins; see `docs/lab/headless-research.md` SYNC2), so clock skew corrupts merge ordering on a sync-live library. For a dedicated single-consumer host, aligning the system timezone with the consumer's (`sudo systemsetup -settimezone <zone>`) makes app-today ≡ consumer-today, so `when: evening` works natively and this consumer-timezone feature is only needed to serve OTHER zones.
+
 ## Omit-empty (entity payloads)
 
 **Contract:** in the `data` of every read (`--json` reads AND the MCP read tools), an entity omits any optional field whose value is empty — `null`, an empty string `""`, or an empty array `[]`. **A consumer MUST read an absent key as unset / empty / default, and MUST NOT distinguish absent from empty.** This is the whole point: `deadline` absent and `deadline: null` mean the identical thing; a consumer that branches on which one it got is wrong. Guard every access (`item.tags ?? []`, `item.deadline == null`).

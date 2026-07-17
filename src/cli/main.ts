@@ -22,8 +22,9 @@ import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
 import { runVerbHint } from "./verb-hint.ts";
+import { setRenderClock } from "./clock.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
-import { ExitCode, PKG_VERSION } from "../index.ts";
+import { ExitCode, PKG_VERSION, resolveClock } from "../index.ts";
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -65,6 +66,17 @@ export function runCli(): void {
       isTTY: process.stdout.isTTY === true,
     }),
   );
+  // Resolve the consumer clock ONCE (THINGS_TZ / THINGS_NOW) so the human
+  // renderers and period parsers evaluate dates in the same zone the library
+  // does. A malformed value is NOT fatal here: the command's own client-open
+  // re-resolves it and surfaces the usage error with --json awareness — so
+  // leave the render clock on the host default if resolution throws.
+  try {
+    const clock = resolveClock({ env: process.env });
+    setRenderClock({ now: clock.now, zone: clock.zone });
+  } catch {
+    // handled by the command path (openThings → runRead/runWrite usage error)
+  }
   const program = buildProgram();
   program.exitOverride((err) => {
     process.exit(err.exitCode === 0 ? ExitCode.Ok : ExitCode.Usage);

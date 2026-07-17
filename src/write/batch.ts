@@ -121,12 +121,13 @@ export async function runBatch(
                 entry.params as unknown as OperationParamsMap["reorder"],
                 writeOptions,
               )
-            : // same sequencing requirement as the reorder branch above
+            : // same sequencing requirement as the reorder branch above; batch is
+              // a consumer entry point, so a consumer `when` normalizes to the zone
               await runMutation(
                 deps,
                 entry.op as Exclude<OperationKind, "reorder">,
                 entry.params as never,
-                writeOptions,
+                { ...writeOptions, normalizeWhen: true },
               );
       } catch (err) {
         // Param-shape errors (exclusive combos etc.) surface per-op, not fatally.

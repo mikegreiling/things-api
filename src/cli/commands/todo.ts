@@ -17,6 +17,7 @@ import {
   whenValue,
 } from "../glyphs.ts";
 import { openInThings } from "./reads.ts";
+import { renderNow, renderZone } from "../clock.ts";
 import { runRead, withClient } from "../read-driver.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 
@@ -40,7 +41,7 @@ export function renderDetail(item: AnyTask | null): string[] {
       `  ${dim("project:")} ${item.project?.title ?? "—"}`,
     ];
   }
-  const todayIso = localToday();
+  const todayIso = localToday(renderNow(), renderZone());
   const label = item.type === "to-do" ? "To-Do:" : "Project:";
   const box = item.type === "to-do" ? todoBox(item) : projectCircle(item);
   const trashed = item.trashed ? ` ${red("(trashed)")}` : "";

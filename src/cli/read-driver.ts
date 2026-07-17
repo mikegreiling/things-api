@@ -10,6 +10,7 @@ import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
 import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
 import {
+  ClockError,
   DEFAULT_LIST_LIMIT,
   errorEnvelope,
   ExitCode,
@@ -106,6 +107,9 @@ export function runRead<T>(
     // `fn` has resolved any reference. Present only for the routing sugars
     // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
     const resolvedCommand = getInvocation()?.canonical ?? null;
+    // The clock honesty field: present only when a consumer zone / pinned now
+    // is in effect (absent = host clock, so the wire shape is unchanged).
+    const clock = client.clockMeta();
     const meta: EnvelopeMeta = {
       dbVersion: fp.observation.databaseVersion,
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
@@ -114,6 +118,7 @@ export function runRead<T>(
       ...(grouped !== undefined && { grouped }),
       ...(resolvedCommand !== null && { resolvedCommand }),
       ...(warnings.length > 0 && { warnings }),
+      ...(clock !== undefined && { clock }),
     };
     // Human output gets the note once on STDERR (never mixed into the piped
     // stdout rows); the --json envelope carries it in meta.warnings instead.
@@ -193,6 +198,12 @@ export function runRead<T>(
         process.stderr.write(`error: ${err.message}\n`);
       }
       process.exitCode = ExitCode.Usage;
+      return;
+    }
+    // A malformed THINGS_TZ / THINGS_NOW (or per-read zone) fails closed as a
+    // usage error naming the expected form — never a silent host fallback.
+    if (err instanceof ClockError) {
+      usageError(opts, err.message);
       return;
     }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;

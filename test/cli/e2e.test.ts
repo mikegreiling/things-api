@@ -56,6 +56,32 @@ function isoFromToday(days: number): string {
 const titlesOf = (stdout: string): string[] =>
   JSON.parse(stdout).data.map((i: { title: string }) => i.title);
 
+/** The `data.today` titles from a `today --json` envelope. */
+const todayTitles = (stdout: string): string[] =>
+  JSON.parse(stdout).data.today.map((i: { title: string }) => i.title);
+
+/**
+ * Run `fn` with process.env keys temporarily set/cleared, restoring them after.
+ * The CLI reads THINGS_TZ / THINGS_NOW straight from process.env (both the
+ * library clock and the render clock resolve from it), so drive it that way.
+ */
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const saved: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    saved[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
 /** Epoch SECONDS `daysAgo` before the real now (the CLI uses the real clock). */
 const epoch = (daysAgo: number): number => {
   const d = new Date();
@@ -2095,5 +2121,48 @@ describe("overdue in container views (cli)", () => {
     expect(() =>
       runCli(["project", "show", "P", "--overdue", "--limit", "5", "--db", fx!.path]),
     ).toThrow();
+  });
+
+  describe("consumer timezone (THINGS_TZ / THINGS_NOW)", () => {
+    it("THINGS_TZ flips today membership for a border-date item and stamps meta.clock", () => {
+      fx = buildFixtureDb();
+      // startDate Jul 2: a Today member once Jul 2 has arrived, future before it.
+      seedTodo(fx.db, { title: "tz-flip", startDate: "2026-07-02" });
+      // NOW is Jul 3 in Kiritimati (UTC+14) but still Jul 1 in Midway (UTC-11).
+      withEnv({ THINGS_NOW: "2026-07-02T10:00:00Z", THINGS_TZ: "Pacific/Kiritimati" }, () => {
+        const out = runCli(["today", "--json", "--db", fx!.path]).stdout;
+        expect(todayTitles(out)).toContain("tz-flip");
+        expect(JSON.parse(out).meta.clock).toEqual({
+          timezone: "Pacific/Kiritimati",
+          today: "2026-07-03",
+        });
+      });
+      withEnv({ THINGS_NOW: "2026-07-02T10:00:00Z", THINGS_TZ: "Pacific/Midway" }, () => {
+        const out = runCli(["today", "--json", "--db", fx!.path]).stdout;
+        expect(todayTitles(out)).not.toContain("tz-flip");
+        expect(JSON.parse(out).meta.clock).toEqual({
+          timezone: "Pacific/Midway",
+          today: "2026-07-01",
+        });
+      });
+    });
+
+    it("emits no meta.clock on the host clock (byte-shape unchanged)", () => {
+      fx = buildFixtureDb();
+      seedTodo(fx.db, { title: "plain", startDate: "2020-01-01" });
+      withEnv({ THINGS_NOW: undefined, THINGS_TZ: undefined }, () => {
+        const envelope = JSON.parse(runCli(["today", "--json", "--db", fx!.path]).stdout);
+        expect(envelope.meta.clock).toBeUndefined();
+      });
+    });
+
+    it("fails closed with a usage error on an invalid THINGS_TZ", () => {
+      fx = buildFixtureDb();
+      withEnv({ THINGS_TZ: "Bogus/Zone" }, () => {
+        const result = runCli(["today", "--json", "--db", fx!.path]);
+        expect(result.exitCode).toBe(2);
+        expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, error: { code: "usage" } });
+      });
+    });
   });
 });

@@ -204,8 +204,9 @@ export function capAreaSections(
   view: AreaView,
   limits: GroupedLimits,
   now?: Date,
+  zone?: string,
 ): { data: AreaView; grouped: GroupedTruncation } {
-  const todayIso = localToday(now);
+  const todayIso = localToday(now, zone);
   const blocks: GroupBlock[] = [];
   let truncated = false;
   // Cap the ACTIVE project rows in place; scheduled/someday rows always survive.

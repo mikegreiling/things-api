@@ -26,6 +26,7 @@ import {
   diagnose,
   FILTER_CONTRACT,
   hasTagPresence,
+  isValidTimeZone,
   LIMIT_DESC,
   MCP_WHEN_LABELS,
   noUuidMatch,
@@ -163,6 +164,26 @@ const limitShape = {
   limit: z.number().int().min(1).optional().describe(LIMIT_DESC),
   all: z.boolean().optional().describe(ALL_DESC),
 };
+
+/**
+ * The per-call time-zone knob for date-sensitive tools: an IANA zone that
+ * evaluates every date boundary (today/evening/upcoming/logbook/overdue/…) for
+ * the consumer's calendar, overriding the server's THINGS_TZ for THIS call.
+ */
+const TZ_DESC =
+  "IANA time zone (e.g. Asia/Tokyo) to evaluate date boundaries in for this call — " +
+  "overrides the server default. Reminder times stay wall-clock and are never shifted.";
+const tzShape = { tz: z.string().optional().describe(TZ_DESC) };
+
+/** A usage result when `tz` is present but not a recognized IANA zone; null when it is valid/absent. */
+function badTz(tz: string | undefined): ToolResult | null {
+  if (tz !== undefined && !isValidTimeZone(tz)) {
+    return usage(
+      `tz is not a valid IANA time zone: "${tz}" — expected e.g. "America/New_York" or "Asia/Tokyo"`,
+    );
+  }
+  return null;
+}
 
 function errorResult(error: {
   code: string;
@@ -399,6 +420,8 @@ interface WriteOptionArgs {
   acknowledge_tag_subtree?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
   create_tags?: boolean | undefined;
+  /** Per-call IANA zone (write tools that accept `when`): normalizes today/evening to the zone. */
+  tz?: string | undefined;
 }
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
@@ -436,6 +459,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
     ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
     ...(args.create_tags === true && { createTags: true }),
+    ...(args.tz !== undefined && { zone: args.tz }),
   });
 
   /** Run a handler, mapping environment/usage throws to tool errors. */
@@ -466,19 +490,32 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
    * longer matches the validated schema and its data may be incomplete. No
    * block is added when the schema checks out or the read itself errored.
    */
-  const readGuard = async (fn: () => Promise<ToolResult> | ToolResult): Promise<ToolResult> => {
+  const readGuard = async (
+    fn: () => Promise<ToolResult> | ToolResult,
+    tz?: string,
+  ): Promise<ToolResult> => {
     const result = await guard(fn);
     if (result.isError === true) return result;
     let warnings: string[] = [];
+    let clock: ReturnType<ThingsClient["clockMeta"]>;
     try {
-      warnings = schemaWarnings(getClient().schemaStatus());
+      const c = getClient();
+      warnings = schemaWarnings(c.schemaStatus());
+      // The clock honesty field for this call's effective zone (the per-call
+      // tz over the server default) — present only when a consumer zone /
+      // pinned now is in effect.
+      clock = c.clockMeta(tz);
     } catch {
       warnings = [];
     }
-    if (warnings.length === 0) return result;
+    const meta = {
+      ...(warnings.length > 0 && { warnings }),
+      ...(clock !== undefined && { clock }),
+    };
+    if (Object.keys(meta).length === 0) return result;
     return {
       ...result,
-      content: [...result.content, { type: "text", text: JSON.stringify({ meta: { warnings } }) }],
+      content: [...result.content, { type: "text", text: JSON.stringify({ meta }) }],
     };
   };
 
@@ -514,6 +551,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
+        ...tzShape,
         evening: z.boolean().optional().describe("today only: show only the This Evening section"),
         show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
@@ -562,6 +600,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         // Tag-conflict AND overdue-applicability both derive from the shared
         // contract: read_view honors overdue only on today/inbox/anytime/someday
         // (the current-work views), matching FILTER_CONTRACT.
@@ -609,26 +649,34 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const c = getClient();
         const filter = validated.filter;
+        const zone = args.tz !== undefined ? { zone: args.tz } : {};
         switch (args.view) {
           case "today": {
             const { view, truncation } = c.read.today({
               ...filter,
+              ...zone,
               ...(args.evening === true && { eveningOnly: true }),
               limit,
             });
             return truncatedResult(view, truncation);
           }
           case "inbox": {
-            const { items, truncation } = c.read.inbox({ ...filter, limit });
+            const { items, truncation } = c.read.inbox({ ...filter, ...zone, limit });
             return truncatedResult(items, truncation);
           }
           case "anytime": {
-            const { view, grouped } = c.read.anytime({ ...filter, areaLimit, projectLimit });
+            const { view, grouped } = c.read.anytime({
+              ...filter,
+              ...zone,
+              areaLimit,
+              projectLimit,
+            });
             return groupedResult(view, grouped);
           }
           case "upcoming": {
             const { items, truncation } = c.read.upcoming({
               ...filter,
+              ...zone,
               ...(args.horizon !== undefined && { horizon: args.horizon }),
               limit,
             });
@@ -641,6 +689,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             }
             const { view, grouped } = c.read.someday({
               ...filter,
+              ...zone,
               ...((active === true || typeof active === "number") && {
                 activeProjectItems: true,
               }),
@@ -651,15 +700,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             return groupedResult(view, grouped);
           }
           case "logbook": {
-            const { items, truncation } = c.read.logbook({ ...filter, limit });
+            const { items, truncation } = c.read.logbook({ ...filter, ...zone, limit });
             return truncatedResult(items, truncation);
           }
           case "trash": {
-            const { items, truncation } = c.read.trash({ limit });
+            const { items, truncation } = c.read.trash({ ...zone, limit });
             return truncatedResult(items, truncation);
           }
         }
-      }),
+      }, args.tz),
   );
 
   server.registerTool(
@@ -673,6 +722,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         query: z.string(),
         ...tagFilterShape,
+        ...tzShape,
         project: z
           .string()
           .optional()
@@ -694,6 +744,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         // Tag-conflict AND the overdue/status-widening incompatibility both
         // derive from the shared contract (search: statusWidening = true).
         const validated = validateViewArgs(
@@ -718,6 +770,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const { items, truncation } = getClient().read.search(args.query, {
           limit,
           ...validated.filter,
+          ...(args.tz !== undefined && { zone: args.tz }),
           ...(args.project !== undefined && { project: args.project }),
           ...(args.area !== undefined && { area: args.area }),
           ...(args.type !== undefined && { type: args.type }),
@@ -726,7 +779,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ...(args.all === true && { all: true }),
         });
         return truncatedResult(items, truncation);
-      }),
+      }, args.tz),
   );
 
   server.registerTool(
@@ -740,20 +793,27 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         since: z.string().describe("ISO date-time, e.g. 2026-07-06T08:00:00"),
         ...limitShape,
+        ...tzShape,
       },
       annotations: READ_ONLY,
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const limit = resolveLimit(args);
         if (limit === "conflict") return usage("pass at most one of limit / all");
         const since = new Date(args.since);
         if (Number.isNaN(since.getTime())) {
           return usage(`since is not a parseable date: ${args.since}`);
         }
-        const { items, truncation } = getClient().read.changes({ since, limit });
+        const { items, truncation } = getClient().read.changes({
+          since,
+          limit,
+          ...(args.tz !== undefined && { zone: args.tz }),
+        });
         return truncatedResult(items, truncation);
-      }),
+      }, args.tz),
   );
 
   server.registerTool(
@@ -787,6 +847,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         uuid: z.string().describe("Project uuid or unique name"),
         ...tagOnlyShape,
+        ...tzShape,
         overdue: z
           .boolean()
           .optional()
@@ -798,14 +859,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         return readResult(
           getClient().read.projectView(args.uuid, {
             overdue: args.overdue === true,
             ...tagFilterFields(tagPresence(args)),
+            ...(args.tz !== undefined && { zone: args.tz }),
           }),
         );
-      }),
+      }, args.tz),
   );
 
   server.registerTool(
@@ -821,6 +885,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         ref: z.string().describe("Area uuid or unique name"),
         ...tagOnlyShape,
+        ...tzShape,
         area_limit: z
           .number()
           .int()
@@ -845,6 +910,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
         const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
@@ -854,11 +921,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const { view, grouped } = getClient().read.areaView(args.ref, {
           overdue: args.overdue === true,
           ...tagFilterFields(tagPresence(args)),
+          ...(args.tz !== undefined && { zone: args.tz }),
           areaLimit,
           projectLimit,
         });
         return groupedResult(view, grouped);
-      }),
+      }, args.tz),
   );
 
   server.registerTool(
@@ -872,6 +940,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       inputSchema: {
         kind: z.enum(["projects", "areas", "tags"]),
         ...tagOnlyShape,
+        ...tzShape,
         overdue: z
           .boolean()
           .optional()
@@ -883,6 +952,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       readGuard(() => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const c = getClient();
         // areas/tags are not dated entities and have no per-row tag list to
         // filter — overdue and the tag filters are vacuous there, rejected
@@ -911,12 +982,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ? c.read.projects({
                 overdue: args.overdue === true,
                 ...tagFilterFields(tagPresence(args)),
+                ...(args.tz !== undefined && { zone: args.tz }),
               })
             : args.kind === "areas"
               ? c.read.areas()
               : c.read.tags(),
         );
-      }),
+      }, args.tz),
   );
 
   // ---------------------------------------------------------------- to-dos
@@ -948,12 +1020,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("Confirm adding into a completed/canceled project (this reopens it)"),
         ...createTagsShape,
+        ...tzShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
         if (sugar.kind === "error") return usage(sugar.message);
         const when = sugar.kind === "split" ? sugar.when : args.when;
@@ -1000,12 +1075,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         clear_reminder: z.boolean().optional(),
         deadline: z.string().optional().describe(DATE_FORMAT),
         clear_deadline: z.boolean().optional(),
+        ...tzShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
           (v) => v !== undefined,
         );
@@ -1917,13 +1995,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         when: whenSchema,
         deadline: z.string().optional().describe(DATE_FORMAT),
         todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
+        ...tzShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
-      guard(async () =>
-        mutationResult(
+      guard(async () => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
+        return mutationResult(
           await getClient().write.addProject(
             {
               title: args.title,
@@ -1935,8 +2016,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             },
             writeOptions(args),
           ),
-        ),
-      ),
+        );
+      }),
   );
 
   server.registerTool(
@@ -1959,12 +2040,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         clear_reminder: z.boolean().optional(),
         deadline: z.string().optional().describe(DATE_FORMAT),
         clear_deadline: z.boolean().optional(),
+        ...tzShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
           (v) => v !== undefined,
         );

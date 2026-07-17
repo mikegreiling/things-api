@@ -15,6 +15,7 @@ import {
   blockedCode,
   BOUNCE_MAX_ITEMS,
   capabilitiesTable,
+  ClockError,
   errorEnvelope,
   ExitCode,
   okEnvelope,
@@ -167,12 +168,14 @@ async function runWrite(
   const meta = (client_: ThingsClient | null): EnvelopeMeta => {
     let dbVersion: number | null = null;
     let fingerprint: EnvelopeMeta["fingerprint"] = "unknown";
+    let clock;
     if (client_ !== null) {
       const fp = client_.fingerprint();
       dbVersion = fp.observation.databaseVersion;
       fingerprint = fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown";
+      clock = client_.clockMeta();
     }
-    return { dbVersion, fingerprint, elapsedMs: Date.now() - started };
+    return { dbVersion, fingerprint, elapsedMs: Date.now() - started, ...(clock && { clock }) };
   };
 
   try {
@@ -201,6 +204,11 @@ async function runWrite(
         process.stderr.write(`error: ${err.message}\n`);
       }
       process.exitCode = ExitCode.Usage;
+      return;
+    }
+    // A malformed THINGS_TZ / THINGS_NOW fails closed as a usage error.
+    if (err instanceof ClockError) {
+      usageError(opts, err.message);
       return;
     }
     const isEnv = err instanceof ThingsDbNotFoundError || err instanceof ThingsDbOpenError;

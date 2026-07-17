@@ -142,6 +142,13 @@ export interface EnvelopeMeta {
    * (reads stay best-effort; run `things doctor`). Absent means none.
    */
   warnings?: string[];
+  /**
+   * The effective clock this response's date boundaries were computed for
+   * (ADDITIVE honesty field). Present ONLY when a consumer zone (`THINGS_TZ` /
+   * the MCP `tz` argument) or a pinned `THINGS_NOW` is in effect; ABSENT on the
+   * host clock, so the wire shape is unchanged for ordinary consumers.
+   */
+  clock?: { timezone: string; today: string };
 }
 
 export interface OkEnvelope<T> {

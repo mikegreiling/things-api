@@ -1,9 +1,12 @@
 /**
  * Period-and-calendar grammar shared by the read views: the `--since`/`--until`
  * whole-period parsers, the relative-period (`3d`/`2w`/`1m`/`1y`) grammar, and
- * the Upcoming date-bucket labeller. Fully pure — no CLI or app imports — so
- * the renderers and command registrations can both draw on it.
+ * the Upcoming date-bucket labeller. The only library dependency is the pair of
+ * zone-aware date helpers (through the single entry point) so a `--since 2w` is
+ * counted in the CONSUMER'S calendar, not the host's — byte-identical to the
+ * host math when no zone is in effect.
  */
+import { dayBoundInstant, localToday, type IsoDate } from "../index.ts";
 
 const FULL_MONTHS = [
   "January",
@@ -46,15 +49,41 @@ export { FULL_MONTHS };
  */
 const RELATIVE_PERIOD = /^(\d+)([dwmy])$/i;
 
-function relativePeriodDate(m: RegExpExecArray, now: Date, sign: 1 | -1): Date {
+/** Format a UTC-anchored Date's date fields as `YYYY-MM-DD`. */
+function isoFromUtc(dt: Date): IsoDate {
+  return `${String(dt.getUTCFullYear()).padStart(4, "0")}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+/**
+ * The target CALENDAR date for a relative period, counted from a base ISO date
+ * (the consumer's today) — days/weeks add days, months/years use the JS Date
+ * overflow the host arithmetic always used (Jan 31 + 1m → Mar 3). Pure calendar
+ * math on the date fields (UTC-anchored so the host zone never intrudes), so it
+ * is zone-agnostic once the base date is chosen.
+ */
+function relativeTargetIso(m: RegExpExecArray, baseIso: IsoDate, sign: 1 | -1): IsoDate {
+  const [y, mo, d] = baseIso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y ?? 1970, (mo ?? 1) - 1, d ?? 1));
   const n = sign * Number(m[1]);
   const unit = (m[2] ?? "").toLowerCase();
-  const d = new Date(now);
-  if (unit === "d") d.setDate(d.getDate() + n);
-  else if (unit === "w") d.setDate(d.getDate() + 7 * n);
-  else if (unit === "m") d.setMonth(d.getMonth() + n);
-  else d.setFullYear(d.getFullYear() + n);
-  return d;
+  if (unit === "d") dt.setUTCDate(dt.getUTCDate() + n);
+  else if (unit === "w") dt.setUTCDate(dt.getUTCDate() + 7 * n);
+  else if (unit === "m") dt.setUTCMonth(dt.getUTCMonth() + n);
+  else dt.setUTCFullYear(dt.getUTCFullYear() + n);
+  return isoFromUtc(dt);
+}
+
+/** The ISO date at a whole absolute period's START or END edge (`2024` → Jan 1 / Dec 31, etc.). */
+function absolutePeriodIso(m: RegExpExecArray, edge: "start" | "end"): IsoDate {
+  const year = Number(m[1]);
+  if (m[2] === undefined) return edge === "start" ? `${m[1]}-01-01` : `${m[1]}-12-31`;
+  const month = Number(m[2]) - 1;
+  if (m[3] === undefined) {
+    if (edge === "start") return `${m[1]}-${m[2]}-01`;
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return `${m[1]}-${m[2]}-${String(lastDay).padStart(2, "0")}`;
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`;
 }
 
 /**
@@ -75,20 +104,14 @@ export function doublePeriod(period: string): string {
  * periods (`2w`, `1m`, `1y`) count FORWARD from now through the end of the
  * landing day; anything else parses as an instant.
  */
-export function parsePeriodEnd(s: string, now: Date = new Date()): Date {
+export function parsePeriodEnd(s: string, now: Date = new Date(), zone?: string): Date {
   const rel = RELATIVE_PERIOD.exec(s.trim());
   if (rel !== null) {
-    const d = relativePeriodDate(rel, now, 1);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+    return dayBoundInstant(relativeTargetIso(rel, localToday(now, zone), 1), "end", zone);
   }
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
   if (m === null) return new Date(s);
-  const year = Number(m[1]);
-  // Day 0 of month n+1 = the last day of month n.
-  if (m[2] === undefined) return new Date(year, 11, 31, 23, 59, 59, 999);
-  const month = Number(m[2]) - 1;
-  if (m[3] === undefined) return new Date(year, month + 1, 0, 23, 59, 59, 999);
-  return new Date(year, month, Number(m[3]), 23, 59, 59, 999);
+  return dayBoundInstant(absolutePeriodIso(m, "end"), "end", zone);
 }
 
 /**
@@ -97,19 +120,14 @@ export function parsePeriodEnd(s: string, now: Date = new Date()): Date {
  * relative periods (`2w`, `1m`) count BACKWARD from now to the landing
  * day's midnight; anything else parses as an instant.
  */
-export function parsePeriodStart(s: string, now: Date = new Date()): Date {
+export function parsePeriodStart(s: string, now: Date = new Date(), zone?: string): Date {
   const rel = RELATIVE_PERIOD.exec(s.trim());
   if (rel !== null) {
-    const d = relativePeriodDate(rel, now, -1);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    return dayBoundInstant(relativeTargetIso(rel, localToday(now, zone), -1), "start", zone);
   }
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(s.trim());
   if (m === null) return new Date(s);
-  const year = Number(m[1]);
-  if (m[2] === undefined) return new Date(year, 0, 1);
-  const month = Number(m[2]) - 1;
-  if (m[3] === undefined) return new Date(year, month, 1);
-  return new Date(year, month, Number(m[3]));
+  return dayBoundInstant(absolutePeriodIso(m, "start"), "start", zone);
 }
 
 /**

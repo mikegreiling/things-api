@@ -72,6 +72,20 @@ export interface WriteOptions extends Acknowledgements {
    * already-undone mutation is distinguishable from a nonexistent one.
    */
   undoOf?: string;
+  /**
+   * Consumer IANA zone for THIS write, overriding the client's default zone.
+   * Only affects the clock-relative `when` tokens (today/evening) when
+   * {@link normalizeWhen} is set. Reminder times stay wall-clock and untranslated.
+   */
+  zone?: string;
+  /**
+   * Normalize a CONSUMER-provided clock-relative `when` (today/evening) to the
+   * effective consumer zone BEFORE dispatch — set by the consumer entry points
+   * (the client's `run`, batch), NEVER by the internal orchestrators (undo,
+   * reorder), whose when tokens converse with app-written host state and must
+   * stay on the host clock.
+   */
+  normalizeWhen?: boolean;
 }
 
 export interface MutationPlan {
@@ -114,7 +128,7 @@ export type MutationResult =
   | {
       kind: "blocked";
       op: OperationKind;
-      reason: "hazard" | "disruption-tier" | "drift" | "lock" | "environment";
+      reason: "hazard" | "disruption-tier" | "drift" | "lock" | "environment" | "clock";
       hazard?: HazardId;
       detail: string;
       remediation: string;
@@ -146,6 +160,8 @@ export interface WriteDeps {
   /** Seam: installed Things proxy shortcuts, for the pre-dispatch availability gate (availability.ts). */
   shortcutProxies?: () => ShortcutsState;
   now?: () => Date;
+  /** Default consumer IANA zone (client-resolved from THINGS_TZ); normalizes consumer `when` tokens. */
+  zone?: string;
   poller?: PollerDeps;
   pkgVersion?: string;
 }
@@ -243,6 +259,49 @@ function capturePre(
 /** Attach failure-hint attribution (likelyCause/hint) to a result, if any was classified. */
 function withHint<T extends object>(base: T, hint: FailureHint | null): T {
   return hint === null ? base : { ...base, likelyCause: hint.likelyCause, hint: hint.hint };
+}
+
+/**
+ * Normalize a CONSUMER-provided clock-relative `when` for the effective zone,
+ * so the app (which would interpret the bare word on the HOST clock) never sees
+ * a relative token that means a different calendar date for the consumer.
+ *
+ * - `today` → the consumer-zone calendar date, dispatched as an explicit
+ *   `when=YYYY-MM-DD` (with any reminder still appended) so verification agrees
+ *   by construction. When the consumer's today already equals the app's today
+ *   the token is left as-is (byte-identical dispatch). A consumer-today that is
+ *   host-yesterday yields a past startDate — coherent (lands in Today with
+ *   overdue-start semantics), documented, not special-cased.
+ * - `evening` → This Evening exists ONLY for the app machine's own current day
+ *   (the startBucket=1 rows whose startDate is exactly the app's today; an
+ *   "evening of another day" is not representable in Things' model, not even in
+ *   the GUI — see src/read/views.ts). Refused fail-closed when the dates differ.
+ *
+ * Reminder times are wall-clock and tz-less in Things' own model — never
+ * translated here.
+ */
+export function normalizeConsumerWhen(
+  params: Record<string, unknown>,
+  now: Date,
+  zone: string,
+):
+  | { ok: true; params: Record<string, unknown> }
+  | { ok: false; detail: string; remediation: string } {
+  const when = params["when"];
+  if (when !== "today" && when !== "evening") return { ok: true, params };
+  const consumerToday = localToday(now, zone);
+  const hostToday = localToday(now);
+  if (consumerToday === hostToday) return { ok: true, params };
+  if (when === "today") return { ok: true, params: { ...params, when: consumerToday } };
+  return {
+    ok: false,
+    detail:
+      `This Evening exists only for the app machine's current day (${hostToday}), but the ` +
+      `requested time zone (${zone}) is on ${consumerToday}, so the item cannot be placed there`,
+    remediation:
+      `schedule an explicit date (when=${consumerToday}; it lands in that day's section, not ` +
+      `This Evening), or set this host's system time zone to the consumer's so the calendars match`,
+  };
 }
 
 export async function runMutation<K extends OperationKind>(
@@ -385,6 +444,31 @@ export async function runMutation<K extends OperationKind>(
         detail: block.detail,
         remediation: block.remediation,
       };
+    }
+
+    // 3b. Consumer-zone `when` normalization (consumer entry points only —
+    // undo/reorder never set normalizeWhen, so their host-clock when tokens are
+    // untouched). Rewrites `today` to the consumer-zone date and refuses a
+    // cross-date `evening` fail-closed, BEFORE compile so the explicit-date
+    // branch of the delta verifies it.
+    const effectiveZone = options.zone ?? deps.zone;
+    if (options.normalizeWhen === true && effectiveZone !== undefined) {
+      const norm = normalizeConsumerWhen(
+        params as Record<string, unknown>,
+        deps.now?.() ?? new Date(),
+        effectiveZone,
+      );
+      if (!norm.ok) {
+        audit({ result: blockedCode({ reason: "clock" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "clock",
+          detail: norm.detail,
+          remediation: norm.remediation,
+        };
+      }
+      params = norm.params as OperationParamsMap[K];
     }
 
     // 4. Vector planning under the disruption policy.

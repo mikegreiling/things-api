@@ -22,6 +22,7 @@ import {
   type SidebarSection,
   type TodayView,
 } from "../index.ts";
+import { renderNow, renderZone } from "./clock.ts";
 import { bold, dim, strike, underline } from "./style.ts";
 import {
   areaMark,
@@ -144,7 +145,10 @@ const styleTags = (form: string): string => ` ${dim(form)}`;
  * (../style.ts); `--json` always carries full uuids.
  */
 export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {}): string {
-  const todayIso = localToday(opts.now);
+  // The consumer render clock supplies now+zone when the caller pins neither
+  // (production CLI); an explicit opts.now (tests) still wins, and the zone
+  // defaults to undefined off a set render clock — byte-identical to before.
+  const todayIso = localToday(opts.now ?? renderNow(), renderZone());
   const asTitle = opts.projectTitle === true && item.type === "project";
   const box = item.type === "project" ? projectCircle(item) : todoBox(item);
   const meta: string[] = [];
@@ -271,8 +275,10 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
  * startDate is exactly today — the UI's daily expiry), null otherwise.
  */
 export function todayMark(item: ListItem, now?: Date): string | null {
-  if (!isTodayMember(item, now)) return null;
-  const evening = item.todaySection === "evening" && item.startDate === localToday(now);
+  const instant = now ?? renderNow();
+  const zone = renderZone();
+  if (!isTodayMember(item, instant, zone)) return null;
+  const evening = item.todaySection === "evening" && item.startDate === localToday(instant, zone);
   return evening ? eveningMoon() : todayStar();
 }
 
@@ -557,7 +563,7 @@ const groupDate = (i: ListItem): string | null =>
  */
 export function renderUpcoming(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
-  const todayIso = localToday(now);
+  const todayIso = localToday(now ?? renderNow(), renderZone());
   const w = uuidDisplayWidth(items);
   const fmtOpts = now === undefined ? {} : { now };
   const dated = items.filter((i) => groupDate(i) !== null);
@@ -595,7 +601,7 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
 export function renderLogbook(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
-  const currentYear = localToday(now).slice(0, 4);
+  const currentYear = localToday(now ?? renderNow(), renderZone()).slice(0, 4);
   const lines: string[] = [];
   let openHeading: string | null = null;
   for (const item of items) {
