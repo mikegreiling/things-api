@@ -38,11 +38,18 @@ const withTty = <T>(value: boolean | undefined, fn: () => T): T => {
   }
 };
 
-/** ISO calendar date `days` from the real today (the CLI uses the real clock). */
+/**
+ * ISO calendar date `days` from the real LOCAL today (the CLI uses the real
+ * clock and computes "today" at local midnight). Formatted from the local
+ * date parts — NOT via toISOString(), which is UTC and yields the wrong
+ * calendar date whenever the local date and the UTC date differ (e.g. any
+ * US-evening run), silently shifting every seeded deadline by a day.
+ */
 function isoFromToday(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 const titlesOf = (stdout: string): string[] =>
