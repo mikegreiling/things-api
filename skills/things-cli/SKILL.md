@@ -9,7 +9,8 @@ description: Read and manage a user's tasks in the Things 3 app (macOS) through 
 
 ## Data model (read this first)
 
-- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Lives in exactly one place: the **Inbox** (unsorted), loose in an **area**, directly in a **project**, or under a **heading** inside a project.
+- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).
+- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.
 - **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.
 - **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.
 - **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.
