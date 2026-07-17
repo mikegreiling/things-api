@@ -44,6 +44,55 @@ Every command supports `--json`. Envelope JSON goes to **stdout**; all human/log
 - `error.code` mirrors the exit-code family (`verify-failed`, `blocked`, `drift-blocked`, `unsupported`, `environment`, `usage`, `unexpected`) plus finer-grained sub-codes where useful (e.g. `verify-failed/silent-noop`, `blocked:H-UNKNOWN-TAG`), and the reference-resolution codes `not-found` / `ambiguous`.
 - `error.details` is the additive machine-readable failure context: `candidates` (disambiguation entities) and/or `suggestions` (concrete commands to run). Present wherever a failure is self-correctable.
 
+## List-view truncation metadata (`meta.truncation` / `meta.grouped`)
+
+List views are bounded by default and report exactly what was hidden — nothing is ever silently dropped. Two shapes, additive and never omit-empty-pruned:
+
+**`meta.truncation`** — the flat / chronological views (`inbox`, `today`, `upcoming`, `logbook`, `trash`, `search`, `changes`):
+
+```jsonc
+{
+  "shown": 50,          // rows returned
+  "total": 75,          // rows that matched after all filters
+  "limit": 50,          // effective cap; null = unbounded (--all / limit:null)
+  "truncated": true,    // exactly shown < total
+  // Split flat views only (currently `today`): the whole-view counts broken
+  // down per render section, in render order. Absent on unsplit views.
+  "sections": [
+    { "key": "today",   "shown": 50, "total": 55 },
+    { "key": "evening", "shown": 0,  "total": 20 }
+  ]
+}
+```
+
+**`meta.grouped`** — the grouped catalogues (`anytime`, `someday`) and the sectioned detail views (`area show`, and `get_area` / `list_collections` over MCP). Every header/section is always rendered; only the innermost item lists are capped:
+
+```jsonc
+{
+  "truncated": true,          // any block hid items
+  "blocks": [                 // one identity-carrying block per capped list
+    { "kind": "loose", "ref": null, "title": null, "shown": 5, "total": 5, "limit": 30 },
+    {
+      "kind": "area", "ref": "<area-uuid>", "title": "Hobbies",
+      "shown": 4, "total": 10, "limit": 30,
+      // Project blocks NEST inside their area/loose block (anytime item-lists;
+      // someday's active-project child groups). area-show's projects/area
+      // blocks are siblings of one area and stay top-level.
+      "children": [
+        { "kind": "project", "ref": "<project-uuid>", "title": "Firmware",
+          "shown": 3, "total": 8, "limit": 3 }
+      ]
+    }
+  ]
+}
+```
+
+- `kind` ∈ `loose | area | project | projects` (`projects` = `area show`'s active project-ROWS section). `ref` is the container uuid (`null` for the loose block); `title` its name.
+- `shown`/`total`/`limit` are per block; the dropped remainder is `total - shown`. A block whose rows were ALL dropped still appears with `shown: 0` (so no truncated header is untraceable); a genuinely empty block (`total: 0`) is omitted.
+- Someday's mixed area/loose blocks additionally carry `totalProjects` / `totalTodos` (project rows list first, so the hidden split is derivable).
+
+**Breaking (pre-v1.0):** `meta.grouped.blocks` grew identity + nesting (`ref` replaced the former `uuid`; project blocks moved under `children`), and `meta.truncation` grew the optional `sections`. Same defaults and metadata apply over MCP.
+
 ## Omit-empty (entity payloads)
 
 **Contract:** in the `data` of every read (`--json` reads AND the MCP read tools), an entity omits any optional field whose value is empty — `null`, an empty string `""`, or an empty array `[]`. **A consumer MUST read an absent key as unset / empty / default, and MUST NOT distinguish absent from empty.** This is the whole point: `deadline` absent and `deadline: null` mean the identical thing; a consumer that branches on which one it got is wrong. Guard every access (`item.tags ?? []`, `item.deadline == null`).

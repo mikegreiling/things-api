@@ -7,8 +7,9 @@
  * entirely past the cut so no empty header survives. `limit === null` means
  * "all rows" (the caller passed --all / all: true).
  */
-import type { BlockCount, GroupedTruncation, Truncation } from "../contracts.ts";
-import type { AreaView } from "./area-view.ts";
+import type { GroupBlock, GroupedTruncation, SectionCount, Truncation } from "../contracts.ts";
+import { localToday } from "../model/dates.ts";
+import { isActiveProjectRow, type AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
 import { partitionSomedaySection, splitSectionBlocks, type GroupedLimits } from "./sections.ts";
@@ -42,20 +43,39 @@ export function truncateList<T>(
 /**
  * Today split: the cut runs across Today then This Evening in render order,
  * so a limit smaller than the Today block trims Evening to nothing. The badge
- * (a whole-view count summary) is preserved unchanged.
+ * (a whole-view count summary) is preserved unchanged. The truncation carries
+ * a per-section (`today`/`evening`) shown/total breakdown so a renderer can
+ * keep This Evening honest under the single global cap without a pre-cap copy.
  */
 export function truncateToday(
   view: TodayView,
   limit: number | null,
 ): { data: TodayView; truncation: Truncation } {
-  const total = view.today.length + view.evening.length;
-  if (limit === null || total <= limit) return { data: view, truncation: whole(total, limit) };
+  const todayTotal = view.today.length;
+  const eveningTotal = view.evening.length;
+  const total = todayTotal + eveningTotal;
+  const sections = (shownToday: number, shownEvening: number): SectionCount[] => [
+    { key: "today", shown: shownToday, total: todayTotal },
+    { key: "evening", shown: shownEvening, total: eveningTotal },
+  ];
+  if (limit === null || total <= limit) {
+    return {
+      data: view,
+      truncation: { ...whole(total, limit), sections: sections(todayTotal, eveningTotal) },
+    };
+  }
   const today = view.today.slice(0, limit);
   const evening = view.evening.slice(0, Math.max(0, limit - today.length));
   const shown = today.length + evening.length;
   return {
     data: { today, evening, badge: view.badge },
-    truncation: { shown, total, limit, truncated: true },
+    truncation: {
+      shown,
+      total,
+      limit,
+      truncated: true,
+      sections: sections(today.length, evening.length),
+    },
   };
 }
 
@@ -75,37 +95,40 @@ export function previewSections(
   limits: GroupedLimits,
 ): { data: SidebarSection[]; grouped: GroupedTruncation } {
   const outSections: SidebarSection[] = [];
-  const blocks: BlockCount[] = [];
+  const blocks: GroupBlock[] = [];
   let truncated = false;
   for (const section of sections) {
     const { direct, projects } = splitSectionBlocks(section);
     const shownDirect = takeUpTo(direct, limits.area);
-    if (direct.length > 0) {
-      if (direct.length > shownDirect.length) truncated = true;
-      blocks.push({
-        kind: section.area === null ? "loose" : "area",
-        uuid: section.area?.uuid ?? null,
-        title: section.area?.title ?? null,
-        shown: shownDirect.length,
-        total: direct.length,
-        limit: limits.area,
-      });
-    }
+    if (direct.length > shownDirect.length) truncated = true;
+    // Project item-lists nest inside their area/loose block.
+    const children: GroupBlock[] = [];
     const items: ListItem[] = [...shownDirect];
-    for (const { project, items: children } of projects) {
-      const shownChildren = takeUpTo(children, limits.project);
-      if (children.length > 0) {
-        if (children.length > shownChildren.length) truncated = true;
-        blocks.push({
+    for (const { project, items: kids } of projects) {
+      const shownChildren = takeUpTo(kids, limits.project);
+      if (kids.length > 0) {
+        if (kids.length > shownChildren.length) truncated = true;
+        children.push({
           kind: "project",
-          uuid: project.uuid,
+          ref: project.uuid,
           title: project.title,
           shown: shownChildren.length,
-          total: children.length,
+          total: kids.length,
           limit: limits.project,
         });
       }
       items.push(project, ...shownChildren);
+    }
+    if (direct.length > 0 || children.length > 0) {
+      blocks.push({
+        kind: section.area === null ? "loose" : "area",
+        ref: section.area?.uuid ?? null,
+        title: section.area?.title ?? null,
+        shown: shownDirect.length,
+        total: direct.length,
+        limit: limits.area,
+        ...(children.length > 0 && { children }),
+      });
     }
     outSections.push({ area: section.area, items });
   }
@@ -124,38 +147,41 @@ export function previewSomedaySections(
   limits: GroupedLimits,
 ): { data: SidebarSection[]; grouped: GroupedTruncation } {
   const outSections: SidebarSection[] = [];
-  const blocks: BlockCount[] = [];
+  const blocks: GroupBlock[] = [];
   let truncated = false;
   for (const section of sections) {
     const { own, children } = partitionSomedaySection(section);
     const shownOwn = takeUpTo(own, limits.area);
-    if (own.length > 0) {
-      if (own.length > shownOwn.length) truncated = true;
-      const totalProjects = own.filter((i) => i.type === "project").length;
-      blocks.push({
-        kind: section.area === null ? "loose" : "area",
-        uuid: section.area?.uuid ?? null,
-        title: section.area?.title ?? null,
-        shown: shownOwn.length,
-        total: own.length,
-        limit: limits.area,
-        totalProjects,
-        totalTodos: own.length - totalProjects,
-      });
-    }
+    if (own.length > shownOwn.length) truncated = true;
+    // The active-project child groups nest inside this section's own block.
+    const childBlocks: GroupBlock[] = [];
     const items: ListItem[] = [...shownOwn];
     for (const group of children) {
       const shown = takeUpTo(group.items, limits.project);
       if (group.items.length > shown.length) truncated = true;
-      blocks.push({
+      childBlocks.push({
         kind: "project",
-        uuid: group.project.uuid,
+        ref: group.project.uuid,
         title: group.project.title,
         shown: shown.length,
         total: group.items.length,
         limit: limits.project,
       });
       items.push(...shown);
+    }
+    if (own.length > 0 || childBlocks.length > 0) {
+      const totalProjects = own.filter((i) => i.type === "project").length;
+      blocks.push({
+        kind: section.area === null ? "loose" : "area",
+        ref: section.area?.uuid ?? null,
+        title: section.area?.title ?? null,
+        shown: shownOwn.length,
+        total: own.length,
+        limit: limits.area,
+        totalProjects,
+        totalTodos: own.length - totalProjects,
+        ...(childBlocks.length > 0 && { children: childBlocks }),
+      });
     }
     outSections.push({ area: section.area, items });
   }
@@ -165,26 +191,40 @@ export function previewSomedaySections(
 /**
  * Sectioned cap for the `area show` detail view: its sections are containers,
  * so there is no strict total limit — instead `limits.project` bounds the
- * project-ROWS section and `limits.area` the direct-to-dos section (null =
- * uncapped). The toggled later/logged lists and the trashed bucket pass
- * through untouched. Counts ride the same grouped-block shape the sidebar
- * catalogues emit (kind "projects" = the project-rows section).
+ * ACTIVE project-ROWS section and `limits.area` the direct-to-dos section
+ * (null = uncapped). The cap is render-aware: only the area's ACTIVE project
+ * rows are capped, while its future-scheduled and someday project rows always
+ * survive (the card renders them under its uncapped Upcoming/Someday sections),
+ * so the human view derives entirely from this bounded shape. The toggled
+ * later/logged lists and the trashed bucket pass through untouched. Counts ride
+ * the same grouped-block shape the sidebar catalogues emit (kind "projects" =
+ * the active project-rows section). `now` classifies the schedule split.
  */
 export function capAreaSections(
   view: AreaView,
   limits: GroupedLimits,
+  now?: Date,
 ): { data: AreaView; grouped: GroupedTruncation } {
-  const blocks: BlockCount[] = [];
+  const todayIso = localToday(now);
+  const blocks: GroupBlock[] = [];
   let truncated = false;
-  const projects = limits.project === null ? view.projects : view.projects.slice(0, limits.project);
-  if (view.projects.length > 0) {
-    if (projects.length < view.projects.length) truncated = true;
+  // Cap the ACTIVE project rows in place; scheduled/someday rows always survive.
+  const activeTotal = view.projects.filter((p) => isActiveProjectRow(p, todayIso)).length;
+  const shownActive = limits.project === null ? activeTotal : Math.min(activeTotal, limits.project);
+  let activeSeen = 0;
+  const projects = view.projects.filter((p) => {
+    if (!isActiveProjectRow(p, todayIso)) return true;
+    activeSeen += 1;
+    return limits.project === null || activeSeen <= limits.project;
+  });
+  if (activeTotal > 0) {
+    if (shownActive < activeTotal) truncated = true;
     blocks.push({
       kind: "projects",
-      uuid: view.area.uuid,
+      ref: view.area.uuid,
       title: view.area.title,
-      shown: projects.length,
-      total: view.projects.length,
+      shown: shownActive,
+      total: activeTotal,
       limit: limits.project,
     });
   }
@@ -193,7 +233,7 @@ export function capAreaSections(
     if (active.length < view.active.length) truncated = true;
     blocks.push({
       kind: "area",
-      uuid: view.area.uuid,
+      ref: view.area.uuid,
       title: view.area.title,
       shown: active.length,
       total: view.active.length,

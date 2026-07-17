@@ -13,9 +13,12 @@ import {
   partitionSomedaySection,
   splitSectionBlocks,
   templateStatus,
+  type GroupBlock,
   type GroupedLimits,
+  type GroupedTruncation,
   type ListItem,
   type Project,
+  type SectionCount,
   type SidebarSection,
   type TodayView,
 } from "../index.ts";
@@ -393,44 +396,49 @@ export function renderList(items: ListItem[]): string[] {
  * the per-row ★/⏾, where the marker still carries information.
  *
  * This Evening mirrors the GUI: it renders ONLY when evening items exist —
- * a truly-empty evening has no header at all. `full` is the pre-cap view and
- * `shown` the rows that survived the global `--limit`; the split lets the
- * section stay honest under truncation. When the cap hid some or all evening
- * rows, an honest muted hint counts the hidden ones and points at the isolated
- * `--evening` view — never the misleading `(empty)` a truncated evening used to
- * show. (In `--evening` mode that pointer is redundant, so the hint keeps the
- * `--limit`/`--all` levers instead.) `base` is the user's own invocation (flags
- * echoed). The global footer (row driver) still reports the whole-view
- * remainder separately.
+ * a truly-empty evening has no header at all. `view` is the rows that survived
+ * the global `--limit`; `sections` is the metadata's pre-cap per-section counts
+ * ({@link SectionCount}) — the Today/This-Evening totals the hint math needs, so
+ * the section stays honest under truncation without a pre-cap copy of the view.
+ * When the cap hid some or all evening rows, an honest muted hint counts the
+ * hidden ones and points at the isolated `--evening` view — never the misleading
+ * `(empty)` a truncated evening used to show. (In `--evening` mode that pointer
+ * is redundant, so the hint keeps the `--limit`/`--all` levers instead.) `base`
+ * is the user's own invocation (flags echoed). The global footer (row driver)
+ * still reports the whole-view remainder separately.
  *
  * `options.eveningOnly` (the `--evening` section filter) renders ONLY the This
  * Evening block — the Today header and its `(empty)` placeholder are suppressed
  * because that section is deliberately filtered out, not merely empty.
  */
 export function renderToday(
-  full: TodayView,
-  shown: TodayView,
+  view: TodayView,
+  sections: SectionCount[] | undefined,
   base: string,
   options?: { eveningOnly?: boolean },
 ): string[] {
-  const w = uuidDisplayWidth([...shown.today, ...shown.evening]);
+  // Pre-cap totals from the truncation metadata; fall back to the shown view's
+  // own lengths when a caller hands an unbounded view with no section counts.
+  const todayTotal = sections?.find((s) => s.key === "today")?.total ?? view.today.length;
+  const eveningTotal = sections?.find((s) => s.key === "evening")?.total ?? view.evening.length;
+  const w = uuidDisplayWidth([...view.today, ...view.evening]);
   const eveningOnly = options?.eveningOnly === true;
   const lines: string[] = eveningOnly
     ? []
     : [
-        `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${full.badge.dueOrOverdue} due/overdue · ${full.badge.other} other) ──`)}`,
-        ...(shown.today.length === 0 ? ["(empty)"] : shown.today.map((i) => formatItem(i, w))),
+        `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${view.badge.dueOrOverdue} due/overdue · ${view.badge.other} other) ──`)}`,
+        ...(view.today.length === 0 ? ["(empty)"] : view.today.map((i) => formatItem(i, w))),
       ];
-  if (full.evening.length > 0) {
+  if (eveningTotal > 0) {
     // A blank line before the header matches every other grouped renderer's
     // section spacing — but only when the Today section rendered above it. In
     // --evening mode the header is the first line, so no leading blank.
     if (!eveningOnly) lines.push("");
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
-    for (const i of shown.evening) lines.push(formatItem(i, w));
-    const hidden = full.evening.length - shown.evening.length;
+    for (const i of view.evening) lines.push(formatItem(i, w));
+    const hidden = eveningTotal - view.evening.length;
     if (hidden > 0) {
-      const more = shown.evening.length > 0 ? "more " : "";
+      const more = view.evening.length > 0 ? "more " : "";
       const count = `${hidden} ${more}evening item${hidden === 1 ? "" : "s"}`;
       // Normal Today view: the global truncation footer already carries the
       // quantity levers (a bigger --limit / --all), so this hint is a pure
@@ -438,7 +446,7 @@ export function renderToday(
       // pointer is redundant (--evening is already active), so keep offering
       // the levers that actually reveal more rows.
       if (eveningOnly) {
-        const total = full.today.length + full.evening.length;
+        const total = todayTotal + eveningTotal;
         lines.push(dim(`… ${count} — \`${base} --limit ${total}\` · \`${base} --all\``));
       } else {
         lines.push(dim(`… ${count} — \`${base} --evening\``));
@@ -700,9 +708,6 @@ export function disclosureHint(
   return dim(`${opts.indent === true ? "  " : ""}… ${count} ${phrase} — ${acts}`);
 }
 
-const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
-  limit === null ? items : items.slice(0, limit);
-
 /** Muted per-block truncation line: `… N more — \`drill-down\``. */
 function blockMoreLine(total: number, shown: number, drill: string | null): string {
   return dim(`  … ${total - shown} more${drill === null ? "" : ` — \`${drill}\``}`);
@@ -712,16 +717,34 @@ function blockMoreLine(total: number, shown: number, drill: string | null): stri
  * Type-aware variant for blocks that mix project rows and to-dos (someday's
  * loose/area blocks): the hidden remainder is split by type — `… 5 more
  * projects, 14 more to-dos` — omitting a type with nothing hidden and
- * pluralizing per count.
+ * pluralizing per count. The counts come from the block metadata (projects
+ * always list first, so the hidden split is derivable from `totalProjects`).
  */
-function mixedMoreLine(hidden: ListItem[], drill: string | null): string {
-  const projects = hidden.filter((i) => i.type === "project").length;
-  const todos = hidden.length - projects;
+function mixedMoreLine(projects: number, todos: number, drill: string | null): string {
   const parts = [
     ...(projects > 0 ? [`${projects} more project${projects === 1 ? "" : "s"}`] : []),
     ...(todos > 0 ? [`${todos} more to-do${todos === 1 ? "" : "s"}`] : []),
   ];
   return dim(`  … ${parts.join(", ")}${drill === null ? "" : ` — \`${drill}\``}`);
+}
+
+/** The area/loose block for a section, matched by identity in the grouped metadata. */
+function areaBlockFor(
+  grouped: GroupedTruncation,
+  area: { uuid: string } | null,
+): GroupBlock | undefined {
+  const kind = area === null ? "loose" : "area";
+  const ref = area?.uuid ?? null;
+  return grouped.blocks.find((b) => b.kind === kind && b.ref === ref);
+}
+
+/** A nested project block anywhere in the grouped metadata, matched by project uuid. */
+function projectBlockFor(grouped: GroupedTruncation, projectUuid: string): GroupBlock | undefined {
+  for (const b of grouped.blocks) {
+    const hit = b.children?.find((c) => c.kind === "project" && c.ref === projectUuid);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
 }
 
 /**
@@ -736,15 +759,17 @@ function groupedBottomLine(base: string, escalations: string[], allBase = base):
 
 /**
  * The anytime preview: the FULL block skeleton — every area header and every
- * project row — always renders; `limits.area` caps the loose block and each
- * area's direct to-dos, `limits.project` each project's to-dos. A truncated
- * block trails a muted `… N more — \`things (project|area) show '…'\``
- * drill-down (the loose block has no container, so it shows only the count),
- * and the view ends with one line escalating the caps that hit. Today members
- * are starred. Mirrors renderSections' layout exactly.
+ * project row — always renders; the `sections` are the already-bounded view
+ * and `grouped` the per-block metadata that carries each block's pre-cap total,
+ * so a truncated block trails a muted `… N more — \`things (project|area) show
+ * '…'\`` drill-down (the loose block has no container, so it shows only the
+ * count), and the view ends with one line escalating the caps that hit
+ * (`limits` supplies the doubling). Today members are starred. Mirrors
+ * renderSections' layout exactly.
  */
 export function renderAnytimePreview(
   sections: SidebarSection[],
+  grouped: GroupedTruncation,
   limits: GroupedLimits,
   base: string,
 ): string[] {
@@ -762,25 +787,26 @@ export function renderAnytimePreview(
       blank();
       lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
     }
+    // The section is already bounded, so its direct/child lists ARE the shown
+    // rows; the pre-cap totals come from the block metadata.
     const { direct, projects } = splitSectionBlocks(section);
     const suppressArea = section.area?.uuid ?? null;
-    const shownDirect = takeUpTo(direct, limits.area);
-    for (const item of shownDirect) {
+    const areaBlock = areaBlockFor(grouped, section.area);
+    for (const item of direct) {
       lines.push(formatItem(item, w, { suppressArea, mark: todayMark(item) }));
     }
-    if (direct.length > shownDirect.length) {
+    if (areaBlock !== undefined && areaBlock.total > areaBlock.shown) {
       areaHit = true;
       const drill =
         section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-      lines.push(blockMoreLine(direct.length, shownDirect.length, drill));
+      lines.push(blockMoreLine(areaBlock.total, areaBlock.shown, drill));
     }
     for (const { project, items: children } of projects) {
       blank();
       lines.push(
         formatItem(project, w, { projectTitle: true, suppressArea, mark: todayMark(project) }),
       );
-      const shownChildren = takeUpTo(children, limits.project);
-      for (const item of shownChildren) {
+      for (const item of children) {
         lines.push(
           formatItem(item, w, {
             suppressProject: project.uuid,
@@ -789,12 +815,15 @@ export function renderAnytimePreview(
           }),
         );
       }
-      if (children.length > shownChildren.length) {
+      const projectBlock = areaBlock?.children?.find(
+        (c) => c.kind === "project" && c.ref === project.uuid,
+      );
+      if (projectBlock !== undefined && projectBlock.total > projectBlock.shown) {
         projectHit = true;
         lines.push(
           blockMoreLine(
-            children.length,
-            shownChildren.length,
+            projectBlock.total,
+            projectBlock.shown,
             `things project show ${quoteTitle(project.title)}`,
           ),
         );
@@ -825,6 +854,7 @@ export function renderAnytimePreview(
  */
 export function renderSomedayPreview(
   sections: SidebarSection[],
+  grouped: GroupedTruncation,
   limits: GroupedLimits,
   base: string,
   showActive: boolean,
@@ -843,6 +873,8 @@ export function renderSomedayPreview(
     const w = uuidDisplayWidth(all);
     const trailing: Array<{ project: { uuid: string; title: string }; items: ListItem[] }> = [];
     for (const section of sections) {
+      // The section is already bounded; re-partitioning it yields the SHOWN own
+      // items and child groups, with pre-cap totals read from the metadata.
       const { own, children } = partitionSomedaySection(section);
       trailing.push(...children);
       if (section.area !== null) {
@@ -850,13 +882,18 @@ export function renderSomedayPreview(
         lines.push(`${bold("──")} ${areaMark()} ${bold(`${section.area.title} ──`)}`);
       }
       const suppressArea = section.area?.uuid ?? null;
-      const shownOwn = takeUpTo(own, limits.area);
-      for (const item of shownOwn) lines.push(formatItem(item, w, { suppressArea }));
-      if (own.length > shownOwn.length) {
+      for (const item of own) lines.push(formatItem(item, w, { suppressArea }));
+      const ownBlock = areaBlockFor(grouped, section.area);
+      if (ownBlock !== undefined && ownBlock.total > ownBlock.shown) {
         areaHit = true;
         const drill =
           section.area === null ? null : `things area show ${quoteTitle(section.area.title)}`;
-        lines.push(mixedMoreLine(own.slice(shownOwn.length), drill));
+        // Projects list first, so the hidden split is derivable from the block's
+        // totalProjects and how many of them were shown.
+        const shownProjects = Math.min(ownBlock.shown, ownBlock.totalProjects ?? 0);
+        const hiddenProjects = (ownBlock.totalProjects ?? 0) - shownProjects;
+        const hiddenTodos = ownBlock.total - ownBlock.shown - hiddenProjects;
+        lines.push(mixedMoreLine(hiddenProjects, hiddenTodos, drill));
       }
     }
     if (trailing.length > 0) {
@@ -867,16 +904,16 @@ export function renderSomedayPreview(
         lines.push(
           `${dim(uuidCol(group.project.uuid, w))}  ${underline(projectTitleAccent(group.project.title))}`,
         );
-        const shown = takeUpTo(group.items, limits.project);
-        for (const item of shown) {
+        for (const item of group.items) {
           lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
         }
-        if (group.items.length > shown.length) {
+        const projectBlock = projectBlockFor(grouped, group.project.uuid);
+        if (projectBlock !== undefined && projectBlock.total > projectBlock.shown) {
           projectHit = true;
           lines.push(
             blockMoreLine(
-              group.items.length,
-              shown.length,
+              projectBlock.total,
+              projectBlock.shown,
               `things project show ${quoteTitle(group.project.title)}`,
             ),
           );

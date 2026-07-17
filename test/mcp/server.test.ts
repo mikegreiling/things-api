@@ -133,6 +133,11 @@ function textOf(result: unknown): unknown {
   return JSON.parse(content[0]?.text ?? "null");
 }
 
+/** Flatten a nested grouped-block list (top-level blocks + their project children). */
+function flattenBlocks<T extends { children?: T[] }>(blocks: T[]): T[] {
+  return [...blocks, ...blocks.flatMap((b) => b.children ?? [])];
+}
+
 /** The warnings array from whichever result block carries meta.warnings. */
 function warningsOf(result: unknown): string[] | undefined {
   const content = (result as { content: { text: string }[] }).content;
@@ -555,15 +560,21 @@ describe("things MCP server", () => {
 
     const result = await client.callTool({ name: "read_view", arguments: { view: "anytime" } });
     const content = (result as { content: { text: string }[] }).content;
+    type Blk = {
+      kind: string;
+      title: string | null;
+      shown: number;
+      total: number;
+      limit: number | null;
+      children?: Blk[];
+    };
     const meta = JSON.parse(content[1]?.text ?? "{}") as {
-      grouped: {
-        truncated: boolean;
-        blocks: { title: string; shown: number; total: number; limit: number | null }[];
-      };
+      grouped: { truncated: boolean; blocks: Blk[] };
       note: string;
     };
     expect(meta.grouped.truncated).toBe(true);
-    expect(meta.grouped.blocks).toContainEqual(
+    // Project blocks nest inside their area block — flatten to match by identity.
+    expect(flattenBlocks(meta.grouped.blocks)).toContainEqual(
       expect.objectContaining({ kind: "project", title: "Firmware", shown: 3, total: 8, limit: 3 }),
     );
     expect(meta.note).toContain("per block");
@@ -574,8 +585,10 @@ describe("things MCP server", () => {
     });
     const widerMeta = JSON.parse(
       (wider as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as { grouped: { blocks: { title: string | null; shown: number }[] } };
-    expect(widerMeta.grouped.blocks.find((b) => b.title === "Firmware")?.shown).toBe(5);
+    ) as { grouped: { blocks: Blk[] } };
+    expect(flattenBlocks(widerMeta.grouped.blocks).find((b) => b.title === "Firmware")?.shown).toBe(
+      5,
+    );
 
     const all = await client.callTool({
       name: "read_view",
@@ -609,10 +622,17 @@ describe("things MCP server", () => {
         (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
       ) as {
         grouped: {
-          blocks: { kind: string; title: string | null; shown: number; total: number }[];
+          blocks: {
+            kind: string;
+            title: string | null;
+            shown: number;
+            total: number;
+            children?: { kind: string; title: string | null; shown: number; total: number }[];
+          }[];
         };
       };
-      expect(meta.grouped.blocks).toContainEqual(
+      // The active-project child block nests inside its section block.
+      expect(flattenBlocks(meta.grouped.blocks)).toContainEqual(
         expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
       );
     };

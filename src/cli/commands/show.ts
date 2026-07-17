@@ -222,7 +222,7 @@ export function registerShowCommands(program: Command): void {
               return {
                 data: { type: "area", view: bounded.view },
                 grouped: bounded.grouped,
-                lines: renderAreaView(bounded.full, { ...opts, limits, hintBase }),
+                lines: renderAreaView(bounded.view, bounded.grouped, { ...opts, limits, hintBase }),
               };
             }
             const detail = c.read.byUuid(t.uuid);

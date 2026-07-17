@@ -17,7 +17,7 @@ export type {
   OpenOptions,
   ThingsClient,
 } from "./client.ts";
-export type { Truncation, GroupedTruncation, BlockCount } from "./contracts.ts";
+export type { Truncation, GroupedTruncation, GroupBlock, SectionCount } from "./contracts.ts";
 export { diagnose } from "./diagnose.ts";
 export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
@@ -130,6 +130,11 @@ export type { IsoDate } from "./model/dates.ts";
 export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
 export type { ProjectView } from "./read/project-view.ts";
 export type { AreaView } from "./read/area-view.ts";
+export {
+  isActiveProjectRow,
+  isScheduledProjectRow,
+  isSomedayProjectRow,
+} from "./read/area-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
 
 // Reference resolution: the stable public error a uuid/partial-uuid/name raises

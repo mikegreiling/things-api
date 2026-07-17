@@ -657,6 +657,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         const { data, grouped } = capAreaSections(
           full,
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
+          now(),
         );
         return { view: data, full, grouped };
       },

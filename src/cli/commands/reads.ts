@@ -164,19 +164,19 @@ export function registerReadCommands(program: Command): void {
           opts,
           "today",
           (c) => {
-            const { view, full, truncation } = c.read.today({ ...filter, limit: lim.limit });
-            // The renderer needs the PRE-cap view to keep This Evening honest
-            // under truncation, so the lines are precomputed here; the global
-            // footer (whole-view remainder) is still appended by the driver.
+            const { view, truncation } = c.read.today({ ...filter, limit: lim.limit });
+            // The renderer keeps This Evening honest under truncation from the
+            // metadata's per-section counts; the lines are precomputed here and
+            // the global footer (whole-view remainder) is appended by the driver.
             return {
               data: view,
               truncation,
-              lines: renderToday(full, view, base, { eveningOnly }),
+              lines: renderToday(view, truncation.sections, base, { eveningOnly }),
             };
           },
           // Type-correct fallback for the TodayView payload; never reached
           // because `lines` is always precomputed above.
-          (data: TodayView) => renderToday(data, data, base, { eveningOnly }),
+          (data: TodayView) => renderToday(data, undefined, base, { eveningOnly }),
           base,
           "today",
         );
@@ -355,12 +355,16 @@ export function registerReadCommands(program: Command): void {
           opts,
           "anytime",
           (c) => {
-            const { view, full, grouped } = c.read.anytime({
+            const { view, grouped } = c.read.anytime({
               ...filter,
               areaLimit: area.limit,
               projectLimit: project.limit,
             });
-            return { data: view, grouped, lines: renderAnytimePreview(full, limits, base) };
+            return {
+              data: view,
+              grouped,
+              lines: renderAnytimePreview(view, grouped, limits, base),
+            };
           },
           // Grouped views hand back precomputed `lines`; renderSections is the
           // type-correct fallback for the SidebarSection[] payload but is never
@@ -451,7 +455,7 @@ export function registerReadCommands(program: Command): void {
           opts,
           "someday",
           (c) => {
-            const { view, full, grouped } = c.read.someday({
+            const { view, grouped } = c.read.someday({
               ...filter,
               ...(showActive && { activeProjectItems: true }),
               areaLimit: area.limit,
@@ -459,25 +463,33 @@ export function registerReadCommands(program: Command): void {
             });
             // Hidden-items-never-silent: when the toggle is off, one extra
             // query counts what it would reveal (someday to-dos inside active
-            // projects — the ones carrying a project/heading reference) so the
-            // hint can say so.
+            // projects) — summing the active-project child blocks' totals from
+            // that query's grouped metadata (projectLimit defaults to every
+            // item there, so each block's total is the full group size).
             const hiddenActiveItems = showActive
               ? 0
-              : c.read.someday({ ...filter, activeProjectItems: true }).full.reduce(
-                  (n, s) =>
-                    n +
-                    s.items.filter(
-                      // A child = a to-do carrying a project/heading ref (loose
-                      // null check: the ref field is undefined, not null, when
-                      // absent — matching partitionSomedaySection's `?? null`).
-                      (i) => i.type === "to-do" && (i.project ?? i.headingProject) != null,
-                    ).length,
-                  0,
-                );
+              : c.read
+                  .someday({ ...filter, activeProjectItems: true })
+                  .grouped.blocks.reduce(
+                    (n, b) =>
+                      n +
+                      (b.children?.reduce(
+                        (m, child) => m + (child.kind === "project" ? child.total : 0),
+                        0,
+                      ) ?? 0),
+                    0,
+                  );
             return {
               data: view,
               grouped,
-              lines: renderSomedayPreview(full, limits, base, showActive, hiddenActiveItems),
+              lines: renderSomedayPreview(
+                view,
+                grouped,
+                limits,
+                base,
+                showActive,
+                hiddenActiveItems,
+              ),
             };
           },
           // Precomputed lines above; renderSections is the type-correct
