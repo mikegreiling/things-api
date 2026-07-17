@@ -11,6 +11,7 @@
 
 ## Safety rails (non-negotiable)
 
+- **This is a PUBLIC repository.** Everything committed — code, docs, probe evidence, test fixtures, git history — is visible to anyone who cares to look. Never commit: PII; personal task-manager data (no task titles, project names, notes, or any other content derived from Mike's production Things DB — this includes "example" data and test fixtures, which must be fully synthetic, never copied or paraphrased from the real database); account credentials of ANY kind, ephemeral or otherwise (throwaway lab accounts, disposable inboxes, one-time codes included — record those only in gitignored `lab/artifacts/`). Remember that git history is public too: redacting a file later does not unpublish it, so get it right before committing.
 - Production Things DB (this host): READS ONLY, and only via `scripts/prod-read.sh` (one stable command shape — ad-hoc shapes re-trigger macOS consent). NEVER write to production; never point new binary shapes at the prod container (even `doctor`).
 - Writes go exclusively through official app surfaces (URL scheme / AppleScript / Shortcuts) — never direct SQLite writes. All write probing happens in disposable Tart VMs (`docs/lab/`).
 

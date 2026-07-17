@@ -1,7 +1,7 @@
 # Step 9 - Original Codex Session Context Extract
 
 Source session:
-- `/Users/mike/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl`
+- `~/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl`
 
 Extraction date:
 - 2026-06-19
@@ -31,7 +31,7 @@ Initial user goal:
 
 Initial implementation outcome:
 - The workspace was empty.
-- Seven Markdown artifacts were created under `/Users/mike/Projects/second-brain/docs/ai-gtd-things`.
+- Seven Markdown artifacts were created under `~/Projects/second-brain/docs/ai-gtd-things`.
 - Sources included Cultured Code support docs, official Things URL scheme docs, `things.py` docs/source, and `things-mcp`.
 
 Important framing from the first pass:
@@ -141,7 +141,7 @@ Ordering caveats:
 ### 2026-03-13 - Git / Provenance
 
 The docs were accidentally created as a nested git repo under:
-- `/Users/mike/Projects/second-brain/docs/ai-gtd-things/.git`
+- `~/Projects/second-brain/docs/ai-gtd-things/.git`
 
 Nested repo commits:
 - `190c412` - initial docs
@@ -150,13 +150,13 @@ Nested repo commits:
 User requested removing the nested git repo and committing at top level.
 
 Recorded outcome:
-- Safety backup created at `/Users/mike/Desktop/ai-gtd-things-backup-20260313-183252/ai-gtd-things`.
+- Safety backup created at `~/Desktop/ai-gtd-things-backup-20260313-183252/ai-gtd-things`.
 - Nested `.git` removed from `docs/ai-gtd-things`.
 - Docs committed in the top-level `second-brain` repo.
 - Top-level commit: `004b9f9` (`Add AI GTD Things research docs`).
 
 Current recovered location differs by path mount:
-- Original session path: `/Users/mike/Projects/second-brain`
+- Original session path: `~/Projects/second-brain`
 - Current canonical path: `/Volumes/Workspace/Projects/second-brain`
 
 ## Final Step 3 Closure
@@ -232,7 +232,7 @@ Guardrails:
 Use these patterns if more provenance is needed:
 
 ```sh
-jq -r 'select(.type=="response_item" and .payload.type=="message") | [.timestamp, .payload.role, ((.payload.content[0].text // .payload.content[0].content // "") | gsub("\n"; " ") | .[0:220])] | @tsv' /Users/mike/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl
+jq -r 'select(.type=="response_item" and .payload.type=="message") | [.timestamp, .payload.role, ((.payload.content[0].text // .payload.content[0].content // "") | gsub("\n"; " ") | .[0:220])] | @tsv' ~/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl
 ```
 
 Useful search terms:

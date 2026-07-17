@@ -8,24 +8,24 @@ Canonical current copy:
 - `/Volumes/Workspace/Projects/second-brain/docs/ai-gtd-things`
 
 Matching backup copies:
-- `/Users/mike/Projects-backup-2026-04-26/second-brain/docs/ai-gtd-things`
-- `/Users/mike/Desktop/junk/stuff/jank/junk/junk/ai-gtd-things-backup-20260313-183252/ai-gtd-things`
+- `~/Projects-backup-2026-04-26/second-brain/docs/ai-gtd-things`
+- `~/Desktop/junk/stuff/jank/junk/junk/ai-gtd-things-backup-20260313-183252/ai-gtd-things`
 
 Useful transcript/context sources:
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/01_2026-03-01_second-brain-ai-2026.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/02_2026-03-02_task-management-discussion.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/03_2026-03-03_reverse-engineering-things-app.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/11_2026-03-11_obsidian-things-integration.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/16_2026-03-13_things-app-automation.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/17_2026-03-13_macos-virtualization-for-testing.md`
-- `/Users/mike/Desktop/pkm-reconstruction/transcripts/30_2026-03-25_gtd-para-things-alignment.md`
+- `~/Desktop/pkm-reconstruction/transcripts/01_2026-03-01_second-brain-ai-2026.md`
+- `~/Desktop/pkm-reconstruction/transcripts/02_2026-03-02_task-management-discussion.md`
+- `~/Desktop/pkm-reconstruction/transcripts/03_2026-03-03_reverse-engineering-things-app.md`
+- `~/Desktop/pkm-reconstruction/transcripts/11_2026-03-11_obsidian-things-integration.md`
+- `~/Desktop/pkm-reconstruction/transcripts/16_2026-03-13_things-app-automation.md`
+- `~/Desktop/pkm-reconstruction/transcripts/17_2026-03-13_macos-virtualization-for-testing.md`
+- `~/Desktop/pkm-reconstruction/transcripts/30_2026-03-25_gtd-para-things-alignment.md`
 
 Likely original Codex session:
-- `/Users/mike/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl`
+- `~/.codex/sessions/2026/03/02/rollout-2026-03-02T14-01-57-019cb024-a47d-7a91-a7ac-425c580fdb0f.jsonl`
 
 Provenance note:
-- On 2026-03-13, that session recorded a safety backup at `/Users/mike/Desktop/ai-gtd-things-backup-20260313-183252/ai-gtd-things`, removal of nested git metadata from `/Users/mike/Projects/second-brain/docs/ai-gtd-things/.git`, and top-level commit `004b9f9` (`Add AI GTD Things research docs`).
-- The surviving Desktop backup currently found under `/Users/mike/Desktop/junk/stuff/jank/junk/junk/ai-gtd-things-backup-20260313-183252/ai-gtd-things` still has the nested repo's two commits: `190c412` and `d406674`.
+- On 2026-03-13, that session recorded a safety backup at `~/Desktop/ai-gtd-things-backup-20260313-183252/ai-gtd-things`, removal of nested git metadata from `~/Projects/second-brain/docs/ai-gtd-things/.git`, and top-level commit `004b9f9` (`Add AI GTD Things research docs`).
+- The surviving Desktop backup currently found under `~/Desktop/junk/stuff/jank/junk/junk/ai-gtd-things-backup-20260313-183252/ai-gtd-things` still has the nested repo's two commits: `190c412` and `d406674`.
 
 Non-canonical artifact:
 - `/Volumes/Workspace/Projects/test/src/things` appears to be a small throwaway test area, not the Things CLI/API implementation.
