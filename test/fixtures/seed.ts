@@ -115,8 +115,13 @@ export function seedSettings(
   );
 }
 
-export function seedArea(db: DatabaseSync, title: string, index = 0): string {
-  const uuid = uid("area");
+export function seedArea(
+  db: DatabaseSync,
+  title: string,
+  index = 0,
+  explicitUuid?: string,
+): string {
+  const uuid = explicitUuid ?? uid("area");
   db.prepare(`INSERT INTO TMArea (uuid, title, visible, "index") VALUES (?, ?, 1, ?)`).run(
     uuid,
     title,
@@ -130,8 +135,9 @@ export function seedTag(
   title: string,
   parent: string | null = null,
   index = 0,
+  explicitUuid?: string,
 ): string {
-  const uuid = uid("tag");
+  const uuid = explicitUuid ?? uid("tag");
   db.prepare(
     `INSERT INTO TMTag (uuid, title, shortcut, usedDate, parent, "index") VALUES (?, ?, NULL, NULL, ?, ?)`,
   ).run(uuid, title, parent, index);
@@ -185,9 +191,9 @@ export function seedChecklistItem(
   db: DatabaseSync,
   taskUuid: string,
   title: string,
-  opts: { status?: keyof typeof STATUS; index?: number } = {},
+  opts: { status?: keyof typeof STATUS; index?: number; uuid?: string } = {},
 ): string {
-  const uuid = uid("cli");
+  const uuid = opts.uuid ?? uid("cli");
   db.prepare(
     `INSERT INTO TMChecklistItem (uuid, userModificationDate, creationDate, title, status, stopDate, "index", task, leavesTombstone)
      VALUES (?, 1780000000, 1780000000, ?, ?, NULL, ?, ?, 0)`,

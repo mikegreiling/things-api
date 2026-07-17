@@ -55,6 +55,10 @@ interface RunnerOptions {
   task?: string;
   pseudo: boolean;
   out: string;
+  /** Evergreen world profile: PRNG seed (bench/world.ts). */
+  worldSeed: number;
+  /** Debugging escape hatch: run against bare task seeds only. */
+  noWorld: boolean;
 }
 
 interface ExecOutcome {
@@ -331,7 +335,11 @@ async function runOne(
   ctx: { gitSha: string; skill: { files: Record<string, string>; bytes: string }; outDir: string },
 ): Promise<RunRecord> {
   const scratch = makeScratch();
-  const fixture = buildBenchFixture(task.seed);
+  const tasksDir = isAbsolute(opts.tasks) ? opts.tasks : resolve(process.cwd(), opts.tasks);
+  const fixture = buildBenchFixture(
+    task.seed,
+    opts.noWorld ? undefined : { seed: opts.worldSeed, clock: task.clock, tasksDir },
+  );
   const fenceEnv = buildFenceEnv(fixture.path, task.clock, scratch);
   assertFenceFunctional(fenceEnv);
   const collector = newCollector();
@@ -424,6 +432,7 @@ async function runOne(
     staticContextTokens: estimateTokens(armCtx.staticText),
     dynamicContextTokens: estimateTokens(outcome.dynamicText),
     wallMs,
+    worldSeed: opts.noWorld ? null : opts.worldSeed,
     transcript: transcriptRel,
     ...(gradeResult.failureNotes !== undefined && { failureNotes: gradeResult.failureNotes }),
   };
@@ -483,6 +492,8 @@ async function main(): Promise<void> {
     .option("--reps <n>", "repetitions per task", "1")
     .option("--task <id>", "run a single task by id")
     .option("--pseudo", "scripted zero-cost executor (no LLM, no API key)", false)
+    .option("--world-seed <n>", "evergreen world profile PRNG seed", "1")
+    .option("--no-world", "bare task seeds only (debugging escape hatch)")
     .option("--out <dir>", "output directory", join(BENCH_DIR, "artifacts", runId))
     .action(async (raw: Record<string, string | boolean>) => {
       const opts: RunnerOptions = {
@@ -494,6 +505,8 @@ async function main(): Promise<void> {
         reps: Math.max(1, Number(raw["reps"])),
         pseudo: raw["pseudo"] === true,
         out: raw["out"] as string,
+        worldSeed: Math.max(0, Number(raw["worldSeed"]) || 1),
+        noWorld: raw["world"] === false,
         ...(typeof raw["task"] === "string" && { task: raw["task"] }),
       };
       if (!opts.pseudo && opts.model === "") {

@@ -38,3 +38,7 @@ Adding a `pseudoScript` to every task surfaced three genuine corpus bugs (the sc
 - **recovery-missing-area** grades recovery (report not-found, change nothing), not refusal etiquette; true refusal-semantics tasks are deferred (defining "correct refusal" needs Mike's input).
 - **Long-tail families** (recurrence, reorders, undo) are deferred until simulator coverage lands — see bench/ROADMAP.md known-limits.
 - `LIKE` is ASCII-case-insensitive in SQLite — title matches on `%potting soil%`/`%214%` tolerate case variance; exact-title assertions are case-sensitive on purpose (seeded titles are unambiguous).
+
+## World-profile reconciliation (2026-07-17)
+
+The evergreen world (`bench/world.ts`) layers a lived-in library under every task's seeds. Reconciliations: **reads-inbox-count** was redesigned — its global "count the Inbox" assertion cannot coexist with a rotating world (the true count varies by world seed), so it became a scoped inbox lookup ("is there something about calling a plumber?") preserving its tier-1 read/answer-grading smoke purpose. All other tasks passed unchanged on top of the world (their SQL was already title/container-scoped). World-side guarantees the corpus relies on: world rows contribute nothing to Today and carry no non-future startDate/deadline; world titles are fenced against corpus strings (normalized equality + LIKE patterns) by `validateWorld`, which runs on every fixture build.
