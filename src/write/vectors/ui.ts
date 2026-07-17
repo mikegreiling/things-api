@@ -200,6 +200,43 @@ end tell
 return "NOMATCH"`;
 }
 
+/**
+ * select-heading-row: select a HEADING as a content-table row by POSITION,
+ * purely via AX (HEADCERT1). A heading is not `things:///show`-selectable and
+ * its row carries no stable AX title handle, so identity is positional. Walks
+ * the revealed project view's content table; for each row it issues the row
+ * `select` action, then checks two things: the row genuinely took the selection
+ * (`selected of row` — header/spacer rows do not) AND `Things3 → name of
+ * selected to dos` is EMPTY (a heading is not a to-do; a to-do row's readback is
+ * its title). The Nth such heading row (0-based `ordinal`, in top-to-bottom =
+ * `index` order) is LEFT selected and the script returns "OK"; "NOMATCH" if the
+ * project has fewer headings. With the heading selected, `Items ▸ Convert to
+ * Project…` enables. Pure System Events, background-capable, no focus steal.
+ * One stable command shape per primitive.
+ */
+export function axSelectHeadingRowScript(tablePath: string, ordinal: number): string {
+  const n = Math.max(0, Math.trunc(ordinal));
+  return `tell application "System Events" to tell process "Things3"
+  set theTable to (${tablePath})
+  set rowCount to (count rows of theTable)
+  set headingSeen to 0
+  repeat with i from 1 to rowCount
+    try
+      select (row i of theTable)
+      delay 0.25
+      if (selected of (row i of theTable)) then
+        tell application "Things3" to set selNames to (name of selected to dos)
+        if (count of selNames) is 0 then
+          if headingSeen is ${n} then return "OK"
+          set headingSeen to headingSeen + 1
+        end if
+      end if
+    end try
+  end repeat
+end tell
+return "NOMATCH"`;
+}
+
 /** activate: foreground Things (the fallback preamble step). */
 export function axActivateScript(): string {
   return `tell application "Things3" to activate`;
@@ -359,7 +396,8 @@ function canaryPaths(recipe: UiRecipe): { path: string; label: string }[] {
       step.primitive !== "set-value" &&
       step.primitive !== "resolve" &&
       step.primitive !== "click-element" &&
-      step.primitive !== "select-row"
+      step.primitive !== "select-row" &&
+      step.primitive !== "select-heading-row"
     ) {
       continue;
     }
@@ -443,6 +481,12 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "select-row",
         label: step.label,
         script: axSelectRowScript(step.path ?? "", step.value ?? ""),
+      };
+    case "select-heading-row":
+      return {
+        primitive: "select-heading-row",
+        label: step.label,
+        script: axSelectHeadingRowScript(step.path ?? "", Number(step.value ?? "0")),
       };
     case "key":
       return { primitive: "key", label: step.label, script: axKeyScript(step.keys ?? "") };
@@ -623,19 +667,25 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       step = { ...step, path: effective };
     }
     const command = commandForStep(step, recipe.targetUuid);
-    if (step.primitive === "select-row") {
-      // Pure-AX row selection with readback verification (UIC4-a): "OK" only
-      // when a row selected to the target title.
+    if (step.primitive === "select-row" || step.primitive === "select-heading-row") {
+      // Pure-AX row selection with readback verification (UIC4-a / HEADCERT1):
+      // "OK" only when the intended row selected (title readback for a project
+      // row; the Nth empty-readback heading row for a heading).
       // the selection must land before the menu that acts on it is pressed
       const res = await run(command, STEP_TIMEOUT_MS);
       if (!res.ok || res.stdout.trim() !== "OK") {
         // clear any transient state before reporting
         await abort();
+        const noMatch =
+          step.primitive === "select-heading-row"
+            ? "the project view exposed no selectable heading row at the target position — the " +
+              "heading may have been converted/deleted already, or the project's headings changed"
+            : "no content-table row selected to the target project's title — it may not be a " +
+              "selectable row in this view, or its title changed";
         return partial(
           step.label,
           res.ok
-            ? "no content-table row selected to the target project's title — it may not be a " +
-                "selectable row in this view, or its title changed"
+            ? noMatch
             : res.timedOut === true
               ? "the row-selection step timed out"
               : res.stderr.trim() || "the row-selection step failed",

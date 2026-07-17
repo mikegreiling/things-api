@@ -20,8 +20,14 @@
  * `project.create-repeating` composite that rides it) `lab-certified` — the
  * pure-AX row-selection path, corrected at the sitting (the row `select` action,
  * not the silent-no-op table `AXSelectedRows` set; the detached editor's interval
- * field nests in group 1 exactly like the sheet). `heading.convert-to-project`
- * stays uncertified (still no row-selection handle for a heading).
+ * field nests in group 1 exactly like the sheet). HEADCERT1 (2026-07-17) then
+ * certified `heading.convert-to-project` `lab-certified` — the LAST uncertified
+ * op — by reusing the row `select` action on the heading's parent-project view:
+ * a heading row IS selectable (unlike the `things:///show` reveal UIC1 tried),
+ * addressed POSITIONALLY (heading rows expose no stable AX title, only a
+ * hover-dependent "More" affordance) by ordinal among the project's headings.
+ * With the heading selected, Convert to Project… enables. Every ui op is now
+ * lab-certified.
  *
  * This is DATA, not logic — the single source of truth surfaced by
  * `things capabilities`, the doctor ui-vector section, and the per-op warning a
@@ -43,7 +49,7 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
@@ -69,12 +75,8 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i"],
   },
   "heading.convert-to-project": {
-    status: "uncertified",
-    evidence: ["UI2-d", "UIC1-a"],
-    blocker:
-      "a heading is not selectable via things:///show (the reveal URL selects to-dos only; a " +
-      "heading id leaves the selection empty and Convert to Project… disabled), and heading rows " +
-      "expose no AX selection handle, so the drive no-ops (UIC1). Needs a row-selection path.",
+    status: "lab-certified",
+    evidence: ["UI2-d", "UIC1-a", "HEADCERT1"],
   },
 };
 
