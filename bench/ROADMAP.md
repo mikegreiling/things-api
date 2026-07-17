@@ -7,11 +7,11 @@ Living state of the bench mini-project. Update in the same change as any bench w
 **Phase 0 (harness build) — IN PROGRESS, started 2026-07-17, branch `mg/bench-harness`.** Full plan: `/Users/mike/.claude/plans/cuddly-greeting-gadget.md` (session "things-skill-loop"). Nothing has run against a real model yet.
 
 Phase 0 checklist:
-- [ ] Simulator write vector + fence + fixture marker + unit tests (delegated)
-- [ ] Bench scaffolding: runner/sandbox/arms/grade/report + pseudo-agent smoke (delegated, worktree)
-- [ ] Task corpus v1 (~12 tasks, all families represented, splits assigned)
-- [ ] Skill v0 (SKILL.md preamble + references skeleton; gui.md placeholder awaiting Mike's curation)
-- [ ] Living docs (this file, CONSTITUTION, README) + root docs (roadmap §K pointer, AGENTS.md living-docs entry, CHANGELOG)
+- [x] Simulator write vector + fence + fixture marker + unit tests (fe27cf1; adversarially reviewed — fail-closed fence + host-escape gating fix in flight)
+- [ ] Bench scaffolding: runner/sandbox/grade/report + pseudo-agent smoke (delegated, worktree)
+- [x] Task corpus v1 (90659a3 — 12 tasks, 7 families, 2 validation + 2 holdout; encodings verified in tasks/AUTHORING.md)
+- [x] Skill v0 (SKILL.md preamble + references skeleton; gui.md curated facts awaiting Mike's review)
+- [x] Living docs (this file, CONSTITUTION, README) + root docs (roadmap §K pointer, AGENTS.md living-docs entry, CHANGELOG)
 - [ ] PR for `mg/bench-harness`
 
 ## Phase ladder
@@ -28,5 +28,8 @@ Phase 0 checklist:
 
 ## Known limits & decisions log
 
-- 2026-07-17: Simulator presents as the `url-scheme` vector; ops outside its coverage read as "unsupported" to the agent even where real Things supports them — corpus must stay within coverage until the VM pack exists.
+- 2026-07-17: Simulator presents as the `url-scheme` vector; ops outside its coverage read as "unsupported" to the agent even where real Things supports them — corpus must stay within coverage until the VM pack exists. Same fidelity gap applies to a forced `--vector applescript|shortcuts|ui` (reports unsupported where the real CLI would succeed).
 - 2026-07-17: Corpus assertions are SQL + structured-final-answer matchers only (no library imports in grading), so grading stays decoupled from the surfaces under test.
+- 2026-07-17: Adversarial review of fe27cf1 — CLEAN on the big fidelity questions (guards/when-validation/hazard gates all run on the simulator path; evening/someday encodings agree with the read path; undo round-trips; audit marker is display-only). Fixed in follow-up: fail-closed fence (half-set env no longer falls through to real transports), env-vs-`--db` split-brain, host-escape gating (`things open`, setup/doctor probes) under the sim fence. Open question parked: real-app behavior on duplicate `tag.add` titles (simulator inserts; app merge behavior unverified).
+- 2026-07-17: Harness requirement (from the same review): the sandbox's `things` command must construct the child env from run config alone — agent-visible sandbox env state must not be able to unset `THINGS_DB`/`THINGS_SIM_WRITES`.
+- 2026-07-17 (Mike): **Evergreen world profile** — fixtures are regenerated per run from a declarative lived-in library (engineer-life areas/projects/years of logbook/checklists/reminders/recurring templates), all dates as OFFSETS from the pinned task clock (never absolute → never stale), seeded-PRNG inventory rotation, layered UNDER per-task seeds with a title-collision check and declared world invariants (v1 world is well-groomed: no stray open-overdue items, so global-count task assertions stay valid; a "messy world" profile is future work for truncation/recovery families). Prod DB consulted for SHAPE STATISTICS ONLY via scripts/prod-read.sh (survey in session scratchpad, never committed); zero content crosses over.
