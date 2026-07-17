@@ -81,10 +81,9 @@ None of these is an authoritative "last synced with the server" timestamp — th
 
 **Documented airgap exception (sanctioned).** This probe REQUIRES the sync server, so the airgap step was deliberately skipped: network stayed UP and the guest clock NTP-synced to real time (Mon Jul 13 2026). Preflight verified in-guest that the golden's trial is still valid at the real date — Things launched un-nagged ("5 days left", `A-01-launch.png`), trial expiry ~2026-07-18. Two clones (A, B) of `things-lab-golden-v1`, one at a time (2-VM budget), both signed into a single throwaway account. The host Things app/container was never touched.
 
-**Throwaway account (LIVE — burnable).** Created inside A's Things app via a disposable [mail.tm](https://mail.tm) inbox (readable over HTTPS from the host: `POST /token` → `GET /messages`) + random password, no Apple ID. Credentials recorded in `account-credentials.env`:
-- Things Cloud email `sync2labc9c6ca5c@web-library.net`, password `6s844pso7xwqjpaa` (16 lowercase+digits — vncdo can't type shifted chars).
-- mail.tm inbox password `PQOq8o4s-Y7jSRqi`. Verification: the confirmation mail from `thingscloud@culturedcode.com` carried a 6-digit code (one-time `112780`).
-- **Cleanup state: account is LIVE.** Web account management at `https://cloud.culturedcode.com` is reachable (HTTP 200) but deletion was not automatable headlessly this run. The account is safely burnable — throwaway email (mail.tm inboxes lapse) + recorded random password; both VMs deleted. Left for optional manual web deletion.
+**Throwaway account (burned).** Created inside A's Things app via a disposable [mail.tm](https://mail.tm) inbox (readable over HTTPS from the host: `POST /token` → `GET /messages`) + random password (16 lowercase+digits — vncdo can't type shifted chars), no Apple ID. Credentials were recorded only in `account-credentials.env` (gitignored artifact); the values formerly quoted in this doc have been redacted per the repo-visibility policy in [AGENTS.md](../../AGENTS.md).
+- Verification: the confirmation mail from `thingscloud@culturedcode.com` carried a one-time 6-digit code, fetched via the mail.tm API.
+- **Cleanup state: DELETED (2026-07-16), verified.** The original run's "manual web deletion" premise was wrong — `cloud.culturedcode.com` is not a web UI but the Syncrony sync API, and account deletion is one authenticated call, no email confirmation: `DELETE https://cloud.culturedcode.com/version/1/account/{email}` with header `Authorization: Password {password}` → `202 Accepted`, and the account resource goes `404 NotFound` within seconds (vs `401` for bad credentials on a live account — the 404/401 split is the deletion proof). Evidence: `lab/artifacts/burn-account-20260716-205854/` (gitignored). Endpoint shape per [nicolai86/things-cloud-sdk](https://github.com/nicolai86/things-cloud-sdk) and [disrupted/things-cloud-api](https://github.com/disrupted/things-cloud-api). This is the fast path if the lab ever needs to burn another Things Cloud account. Both probe VMs were deleted at the end of the original run.
 
 ### `BSSyncronyMetadata` — the SYNC1 headline, answered
 
@@ -92,7 +91,7 @@ None of these is an authoritative "last synced with the server" timestamp — th
 
 | key (stable) | decoded value | role |
 |---|---|---|
-| `WrEsQjsPnAqJYj12iDJHh7` | `sync2labc9c6ca5c@web-library.net` | account email |
+| `WrEsQjsPnAqJYj12iDJHh7` | *(account email — redacted)* | account email |
 | `XqhSTrhuoVfTqCeYdmi2H8` | `199f528b-1243-4ebf-8151-1284598cb3da` | account/sync-history UUID (**shared across devices**, not a per-device id) |
 | `5WPYRFuhkhgEcy39zNsbur` | `SYPrepActionNone` | sync-prep action state |
 | **`GryCJ44xPcJG6go5KeTZp1`** | **NSDate double ≈ now** (e.g. `805659262.1` = 2026-07-13 18:14:22 UTC) | **last-sync timestamp — advances on every sync** |
