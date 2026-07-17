@@ -1,0 +1,20 @@
+{
+  "id": "writes-add-inbox-todo",
+  "family": "writes",
+  "tier": 1,
+  "split": "dev",
+  "prompt": "Add a new to-do titled \"Water the plants\" to my Inbox.",
+  "clock": { "now": "2026-03-15T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [{ "kind": "todo", "key": "existing", "title": "Existing capture", "start": "inbox" }],
+  "finalAnswer": { "required": false, "shape": "none — this is a write task" },
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE type = 0 AND trashed = 0 AND title = 'Water the plants'",
+      "expect": [{ "n": 1 }]
+    }
+  ],
+  "maxTurns": 12,
+  "timeoutMs": 60000,
+  "pseudoScript": ["things todo add \"Water the plants\""]
+}

@@ -8,7 +8,7 @@ Living state of the bench mini-project. Update in the same change as any bench w
 
 Phase 0 checklist:
 - [ ] Simulator write vector + fence + fixture marker + unit tests (delegated)
-- [ ] Bench scaffolding: runner/sandbox/arms/grade/report + pseudo-agent smoke (delegated, worktree)
+- [x] Bench scaffolding: runner/sandbox/arms/grade/report + pseudo-agent smoke (delegated, worktree) — types/fixture/sandbox/arms/grade/report/runner + prompts/ + two sample tasks; `npm run bench -- --pseudo` exercises seed→sandbox→grade→report. Pi/just-bash API facts in [NOTES.md](NOTES.md).
 - [ ] Task corpus v1 (~12 tasks, all families represented, splits assigned)
 - [ ] Skill v0 (SKILL.md preamble + references skeleton; gui.md placeholder awaiting Mike's curation)
 - [ ] Living docs (this file, CONSTITUTION, README) + root docs (roadmap §K pointer, AGENTS.md living-docs entry, CHANGELOG)
