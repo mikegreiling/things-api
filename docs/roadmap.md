@@ -138,18 +138,13 @@ The read-side routing sugar (bare noun, `show`/`open` keyword rewrites, loose re
 
 **Phase 2 — parked (specified, not built):** resource-scoped closed-enum verbs, gh-style — `things project <ref> add-heading <title>`, `things project <ref> add-todo <title>`. Fixed slots (position 2 = ref, position 3 = verb from a closed enum), flags for everything else. This is the honest ergonomic home for heading creation (headings are subordinate resources); `things heading create` stays for type-consistency. The closed enum is the discipline that keeps it from drifting into the free-form write grammar that is a deliberate non-goal. Spec: [design/cli-grammar.md](design/cli-grammar.md) § Phase 2.
 
-## §K. HELPBENCH — agent-ergonomics eval loop (parked; Mike + orchestrator ideation 2026-07-15)
+## §K. HELPBENCH → AGENTBENCH — agent-ergonomics bench (UNPARKED 2026-07-17, superseded)
 
-An eval harness that measures how well a low-capability agent can accomplish real tasks armed only with the CLI's help system (and, later, the future agent skill — the SKILL.md handbook parked in up-next §5). It doubles as **regression CI for the agent-facing docs**: when help text or the skill changes, the loop catches a drop in agent success before it ships.
+The parked HELPBENCH sketch grew into **AGENTBENCH**, a self-contained mini-project under [`bench/`](../bench/README.md) covering all three consumer surfaces (bare CLI help, the agent skill at `skills/things-cli/`, MCP) with three isolated refinement loops. The HELPBENCH doctrine that survived: machine-checkable grading (no LLM judge), success-gated efficiency metrics, pinned model versions, holdout + paraphrase discipline. What changed: safety and friction joined the metric ladder, writes execute on the host via the fenced simulator vector (`src/write/vectors/simulator.ts`) instead of requiring VMs, and understanding/GUI-perception task families grade comprehension, not just mutations.
 
-Design sketch to build against:
-- **Task suite**: rote tasks with **machine-checkable success** — every task asserts against a fixture DB (or CLI output), never a judgment call. No LLM-judge, no "looks right."
-- **Driver**: spawns a **low-capability model (Haiku-class floor)** with **only Bash + the CLI** (or CLI + skill), **zero priors** (no Things pretraining leaned on, no hints beyond what the surfaces themselves teach), a **fixed prompt**, and **N repetitions** per task for variance.
-- **Metrics, ORDERED — success-rate FIRST, then turns/tokens GATED on success.** Efficiency is only counted on runs that succeeded. Un-gated efficiency is explicitly avoided: it rewards guessing over reading the help (a fast wrong answer would score better than a slower correct one).
-- **A/B discipline**: a **pinned model version per baseline** (so a model update can't be mistaken for a help-text regression), plus **holdout tasks + paraphrase variants** to guard against overfitting the help copy to the benchmark's exact phrasing.
-- **First natural A/B pair**: **pre-#152 help vs the shipped signpost system** — the zero-knowledge-traversal work that motivated the signposts is the obvious first baseline to score.
+Authoritative docs (living, in-repo): [bench/CONSTITUTION.md](../bench/CONSTITUTION.md) (invariants — changes are Mike-decisions), [bench/ROADMAP.md](../bench/ROADMAP.md) (state + resume pointer + round history). Approved plan of record from the 2026-07-17 session: session "things-skill-loop".
 
-Status: **parked, not scheduled.**
+Status: **Phase 0 (harness) in progress on `mg/bench-harness`.**
 
 ## §L. `--overdue` convenience filter — SHIPPED (2026-07-16)
 
