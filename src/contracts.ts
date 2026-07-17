@@ -79,8 +79,10 @@ export interface Truncation {
  * sectioned detail view (`area show`). Every header/section is always rendered;
  * only the innermost item lists are capped. Emitted for every block that has
  * rows to cap (`total > 0`) — including a block whose rows were ALL dropped
- * (`shown: 0`), so no truncated header is untraceable; a genuinely empty block
- * (`total: 0`) is omitted.
+ * (`shown: 0`), so no truncated header is untraceable. A block with no
+ * cappable rows of its own (`total: 0`) is omitted UNLESS it wraps truncated
+ * `children` — an area whose only capped content is its project item-lists
+ * still appears as their container.
  *
  * Blocks are NESTED: an area/loose block carries its project blocks in
  * `children` — in anytime the project item-lists inside the area, in someday
