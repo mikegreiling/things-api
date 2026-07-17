@@ -1,0 +1,27 @@
+{
+  "id": "writes-move-to-area",
+  "family": "writes",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "File my 'Renew library card' to-do under my Errands area.",
+  "paraphrases": [
+    "Move the library-card renewal task into Errands.",
+    "That 'Renew library card' item sitting in my inbox belongs in my Errands area — put it there."
+  ],
+  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    { "kind": "area", "key": "errands", "title": "Errands" },
+    { "kind": "area", "key": "home", "title": "Home" },
+    { "kind": "todo", "key": "t1", "title": "Renew library card", "start": "inbox" },
+    { "kind": "todo", "key": "t2", "title": "Fix porch light", "area": "home", "start": "active" }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Renew library card' AND a.title='Errands' AND t.trashed=0 AND t.status=0 AND t.start=1",
+      "expect": [[1]]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000
+}

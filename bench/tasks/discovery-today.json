@@ -1,0 +1,28 @@
+{
+  "id": "discovery-today",
+  "family": "discovery",
+  "tier": 1,
+  "split": "dev",
+  "prompt": "What's on my plate today? Reply with a JSON object {\"today_titles\": [\"...\"], \"count\": N} listing exactly the items on my Today list (including this evening) and how many there are.",
+  "paraphrases": [
+    "Give me a rundown of everything I have lined up for today, evening included. Answer with JSON {\"today_titles\": [...], \"count\": N} covering exactly the items on today's list.",
+    "Which of my tasks are due to be worked on today? Respond as JSON {\"today_titles\": [...], \"count\": N} with exactly the items on my Today list and their count."
+  ],
+  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    { "kind": "area", "key": "yard", "title": "Yard & Garden" },
+    { "kind": "todo", "key": "t1", "title": "Water the ferns", "area": "yard", "start": "active", "startDate": "2026-07-20" },
+    { "kind": "todo", "key": "t2", "title": "Sharpen mower blades", "area": "yard", "start": "active", "startDate": "2026-07-20", "evening": true },
+    { "kind": "todo", "key": "t3", "title": "Order compost bin", "area": "yard", "start": "active", "startDate": "2026-07-22" },
+    { "kind": "todo", "key": "t4", "title": "File warranty claim", "start": "inbox" },
+    { "kind": "todo", "key": "t5", "title": "Learn woodturning", "start": "someday" }
+  ],
+  "finalAnswer": { "required": true, "shape": "{\"today_titles\": string[], \"count\": number}" },
+  "assertions": [
+    { "type": "answer-includes", "path": "today_titles", "values": ["Water the ferns", "Sharpen mower blades"] },
+    { "type": "answer", "path": "count", "equals": 2 },
+    { "type": "db-unchanged" }
+  ],
+  "maxTurns": 15,
+  "timeoutMs": 180000
+}

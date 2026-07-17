@@ -1,0 +1,39 @@
+{
+  "id": "compound-garden-shed",
+  "family": "compound",
+  "tier": 3,
+  "split": "dev",
+  "prompt": "Set up a 'Garden shed' project in my Home area with two sections, 'Materials' and 'Build'. Put a to-do 'Buy lumber' under Materials with a deadline of this Friday, and a to-do 'Assemble frame' under Build.",
+  "paraphrases": [
+    "Create a new project called Garden shed in Home. Give it Materials and Build sections; under Materials add 'Buy lumber' due this Friday, and under Build add 'Assemble frame'."
+  ],
+  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    { "kind": "area", "key": "home", "title": "Home" },
+    { "kind": "todo", "key": "t1", "title": "Fix porch light", "area": "home", "start": "active" }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) FROM TMTask p JOIN TMArea a ON p.area=a.uuid WHERE p.type=1 AND p.title='Garden shed' AND a.title='Home' AND p.trashed=0",
+      "expect": [[1]]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) FROM TMTask h JOIN TMTask p ON h.project=p.uuid WHERE h.type=2 AND p.title='Garden shed' AND h.title IN ('Materials','Build') AND h.trashed=0",
+      "expect": [[2]]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMTask h ON t.heading=h.uuid WHERE t.type=0 AND t.title='Buy lumber' AND h.title='Materials' AND t.deadline=132807680 AND t.trashed=0 AND t.status=0",
+      "expect": [[1]]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) FROM TMTask t JOIN TMTask h ON t.heading=h.uuid WHERE t.type=0 AND t.title='Assemble frame' AND h.title='Build' AND t.trashed=0 AND t.status=0",
+      "expect": [[1]]
+    }
+  ],
+  "maxTurns": 30,
+  "timeoutMs": 240000
+}
