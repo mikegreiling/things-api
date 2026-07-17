@@ -3,10 +3,12 @@
  * equally validated candidates. Injectable for tests (FakeVector) and for
  * the lab, which runs the identical pipeline against probe vectors.
  */
+import { resolve } from "node:path";
+
 import { loadConfig, type ThingsApiConfig } from "../../config.ts";
 import { createAppleScriptVector } from "./applescript.ts";
 import { createShortcutsVector } from "./shortcuts.ts";
-import { createSimulatorVector, simulatorFenceActive } from "./simulator.ts";
+import { createSimulatorVector, simulatorFenceReason } from "./simulator.ts";
 import type { WriteVector } from "./types.ts";
 import type { UiDriveAux } from "./ui-drag.ts";
 import { createUiVector } from "./ui.ts";
@@ -19,20 +21,41 @@ import { createUrlSchemeVector } from "./url-scheme.ts";
  * are never dispatched. `config` is read from disk when not supplied (the
  * `things capabilities` surface has no client). `uiAux` carries the database
  * seam the sidebar drag driver asserts between hops — the client wires it;
- * surfaces that never execute (capabilities) omit it.
+ * surfaces that never execute (capabilities) omit it. `resolvedDbPath` is the
+ * database path the client actually opened (from openThings's resolution); it
+ * anchors the simulator fence's equality check so the applier and the pipeline's
+ * verifier can never split-brain across two different databases.
  */
 export function defaultVectors(
   config: ThingsApiConfig = loadConfig(),
   uiAux: UiDriveAux = {},
+  resolvedDbPath?: string,
 ): WriteVector[] {
-  // Bench harness (Phase 0): when the simulator's triple fence is satisfied
-  // (THINGS_SIM_WRITES=1 + THINGS_DB set to a benchFixture DB), the simulator
-  // REPLACES every real transport — no url-scheme/applescript/shortcuts/ui path
-  // can reach a real app in this mode. The fence is inert (and this branch never
-  // taken) for ordinary consumers.
-  const dbPath = process.env["THINGS_DB"];
-  if (dbPath !== undefined && simulatorFenceActive(dbPath)) {
-    return [createSimulatorVector(dbPath)];
+  // Bench harness (Phase 0): THINGS_SIM_WRITES=1 REQUESTS simulated writes. When
+  // it is unset (the ordinary path) the real transports are returned unchanged.
+  // When it IS set, the simulator's fence MUST hold — THINGS_DB names a fenced
+  // bench fixture (marker present, not the production container) AND equals the
+  // database the client opened. If any part is unsatisfied we FAIL CLOSED with a
+  // clear error rather than silently falling through to the real transports:
+  // in this mode no url-scheme/applescript/shortcuts/ui path may reach a real app.
+  if (process.env["THINGS_SIM_WRITES"] === "1") {
+    const thingsDb = process.env["THINGS_DB"];
+    if (thingsDb === undefined || thingsDb.trim() === "") {
+      throw new Error(`${FENCE_UNSATISFIED}THINGS_DB is not set`);
+    }
+    // dbPath equality: the client-opened DB must be the fenced DB (normalized),
+    // else the applier would write one database while the verifier reads another.
+    if (resolvedDbPath !== undefined && resolve(resolvedDbPath) !== resolve(thingsDb)) {
+      throw new Error(
+        `${FENCE_UNSATISFIED}the database the client opened (${resolvedDbPath}) does not equal ` +
+          `THINGS_DB (${thingsDb})`,
+      );
+    }
+    const reason = simulatorFenceReason(thingsDb);
+    if (reason !== null) {
+      throw new Error(`${FENCE_UNSATISFIED}${reason}`);
+    }
+    return [createSimulatorVector(thingsDb)];
   }
   return [
     createUrlSchemeVector(),
@@ -41,3 +64,5 @@ export function defaultVectors(
     createUiVector(config, undefined, uiAux),
   ];
 }
+
+const FENCE_UNSATISFIED = "simulated writes requested but the fence is unsatisfied: ";

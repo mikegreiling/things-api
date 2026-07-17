@@ -8,7 +8,7 @@ import { bold, dim, green } from "../style.ts";
 import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
-import { openInThings } from "./reads.ts";
+import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
 import {
   invocation,
@@ -340,9 +340,9 @@ export function registerAreaCommands(program: Command): void {
             throw new RangeError(
               `"${ref}" is a ${t.viaHeading === true ? "heading" : t.kind}, not an area (try \`things open\`)`,
             );
-          return { uri: openInThings(t.uuid) };
+          return openInThings(t.uuid);
         },
-        (d) => [`opened ${d.uri}`],
+        (d) => [revealLine(d)],
       );
     });
 }

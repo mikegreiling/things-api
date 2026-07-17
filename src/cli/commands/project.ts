@@ -14,7 +14,7 @@ import {
   thingsLink,
   whenValue,
 } from "../glyphs.ts";
-import { openInThings } from "./reads.ts";
+import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
 import { invocation, runRead, shellQuote, withClient } from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
@@ -274,9 +274,9 @@ export function registerProjectCommands(program: Command): void {
             const what = t.viaHeading === true ? "heading" : t.kind;
             throw new RangeError(`"${ref}" is a ${what}, not a project (try \`things open\`)`);
           }
-          return { uri: openInThings(t.uuid) };
+          return openInThings(t.uuid);
         },
-        (d) => [`opened ${d.uri}`],
+        (d) => [revealLine(d)],
       );
     });
 }

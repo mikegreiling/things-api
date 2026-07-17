@@ -85,6 +85,20 @@ export function simulatorFenceActive(
   return simulatorFenceReason(dbPath, env) === null;
 }
 
+/**
+ * Whether the simulator fence is active for the ambient environment — the
+ * single signal every host-escaping code path (reveal `open`, setup install
+ * sheets, the live-app doctor probes, the pipeline's app-launch) consults so a
+ * bench run never touches the real Things/Shortcuts app. True only when
+ * THINGS_SIM_WRITES=1 AND THINGS_DB names a fenced bench fixture (marker
+ * present, not the production container); false — the ordinary path — otherwise.
+ */
+export function simFenceActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  const dbPath = env["THINGS_DB"];
+  if (dbPath === undefined || dbPath.trim() === "") return false;
+  return simulatorFenceActive(dbPath, env);
+}
+
 function hasBenchMarker(dbPath: string): boolean {
   let db: DatabaseSync | undefined;
   try {

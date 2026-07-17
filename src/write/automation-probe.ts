@@ -9,13 +9,15 @@
 import { execFileSync } from "node:child_process";
 
 import { automationGrantee } from "./failure-hints.ts";
+import { simFenceActive } from "./vectors/simulator.ts";
 
 export type AutomationProbeStatus =
   | "granted"
   | "denied"
   | "pending"
   | "app-not-running"
-  | "inconclusive";
+  | "inconclusive"
+  | "simulated";
 
 export interface AutomationProbeResult {
   status: AutomationProbeStatus;
@@ -53,6 +55,14 @@ function defaultRun(script: string, timeoutMs: number): string {
 }
 
 export function probeAutomation(deps: AutomationProbeDeps = {}): AutomationProbeResult {
+  if (simFenceActive()) {
+    return {
+      status: "simulated",
+      detail:
+        "the simulator fence is active — the Automation probe was skipped so a bench run never " +
+        "sends an Apple Event to the app.",
+    };
+  }
   if (!(deps.isAppRunning ?? defaultIsAppRunning)()) {
     return {
       status: "app-not-running",

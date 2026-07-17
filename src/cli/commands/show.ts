@@ -26,7 +26,7 @@ import {
 import { renderAreaView, type AreaShowOpts } from "./area.ts";
 import { renderProjectView, showToggleFlags } from "./project.ts";
 import { renderDetail } from "./todo.ts";
-import { openInThings } from "./reads.ts";
+import { openInThings, revealLine } from "./reads.ts";
 import {
   invocation,
   parseCap,
@@ -278,10 +278,9 @@ export function registerShowCommands(program: Command): void {
       withClient(
         opts,
         "open",
-        (c) => ({
-          uri: keyword !== null ? openInThings(keyword) : openInThings(c.read.showTarget(ref).uuid),
-        }),
-        (d) => [`opened ${d.uri}`],
+        (c) =>
+          keyword !== null ? openInThings(keyword) : openInThings(c.read.showTarget(ref).uuid),
+        (d) => [revealLine(d)],
       );
     });
 }

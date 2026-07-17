@@ -15,13 +15,15 @@
 import { execFileSync } from "node:child_process";
 
 import { isThingsRunning } from "./automation-probe.ts";
+import { simFenceActive } from "./vectors/simulator.ts";
 
 export type AccessibilityProbeStatus =
   | "granted"
   | "denied"
   | "app-not-running"
   | "menu-missing"
-  | "inconclusive";
+  | "inconclusive"
+  | "simulated";
 
 export interface AccessibilityProbeResult {
   status: AccessibilityProbeStatus;
@@ -45,6 +47,14 @@ function defaultRun(script: string, timeoutMs: number): string {
 }
 
 export function probeAccessibility(deps: AccessibilityProbeDeps = {}): AccessibilityProbeResult {
+  if (simFenceActive()) {
+    return {
+      status: "simulated",
+      detail:
+        "the simulator fence is active — the Accessibility probe was skipped so a bench run never " +
+        "queries the app's UI tree.",
+    };
+  }
   if (!(deps.isAppRunning ?? isThingsRunning)()) {
     return {
       status: "app-not-running",

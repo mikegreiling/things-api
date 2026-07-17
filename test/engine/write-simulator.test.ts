@@ -20,8 +20,19 @@ import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
+import { openInThings, revealLine } from "../../src/cli/commands/reads.ts";
+import { probeAccessibility } from "../../src/write/accessibility-probe.ts";
+import { probeAutomation } from "../../src/write/automation-probe.ts";
+import { simFenceActive } from "../../src/write/vectors/simulator.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedChecklistItem, seedProject, seedTag, seedTodo } from "../fixtures/seed.ts";
+import {
+  seedArea,
+  seedChecklistItem,
+  seedHeading,
+  seedProject,
+  seedTag,
+  seedTodo,
+} from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -201,6 +212,107 @@ describe("simulator write vector — covered operations", () => {
     );
     expect(row(t3)["start"]).toBe(0);
     expect(row(t3)["project"]).toBeNull();
+  });
+
+  it("todo.move {detach}: clears container but PRESERVES the schedule", async () => {
+    const proj = seedProject(fixture.db, { title: "Proj" });
+    const t = seedTodo(fixture.db, {
+      title: "keep-when",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-09",
+    });
+    const res = await runMutation(deps(vector), "todo.move", { uuid: t, detach: true });
+    expect(res.kind).toBe("ok");
+    const r = row(t);
+    expect(r["project"]).toBeNull();
+    expect(r["area"]).toBeNull();
+    expect(r["heading"]).toBeNull();
+    // Schedule is untouched by a detach (start / startDate preserved).
+    expect(r["start"]).toBe(1);
+    expect(r["startDate"]).toBe(encodePackedDate("2026-07-09"));
+  });
+
+  it("todo.move to a heading: reaches the project via the heading (project NULL)", async () => {
+    const proj = seedProject(fixture.db, { title: "Book" });
+    const head = seedHeading(fixture.db, { title: "Chapter 1", project: proj });
+    const t = seedTodo(fixture.db, { title: "para" });
+    const res = await runMutation(deps(vector), "todo.move", {
+      uuid: t,
+      project: { uuid: proj },
+      heading: "Chapter 1",
+    });
+    expect(res.kind).toBe("ok");
+    const r = row(t);
+    expect(r["heading"]).toBe(head);
+    expect(r["project"]).toBeNull();
+    expect(r["area"]).toBeNull();
+  });
+
+  it("todo.update: explicit reminder clear (reminder null) with when today", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "T",
+      start: "active",
+      startDate: "2026-07-01",
+      reminder: "08:00",
+    });
+    expect(row(uuid)["reminderTime"]).toBe(encodeReminderTime("08:00"));
+    const res = await runMutation(deps(vector), "todo.update", {
+      uuid,
+      when: "today",
+      reminder: null,
+    });
+    expect(res.kind).toBe("ok");
+    const r = row(uuid);
+    expect(r["reminderTime"]).toBeNull();
+    expect(r["startDate"]).toBe(encodePackedDate(TODAY));
+  });
+
+  it("todo.add into an area", async () => {
+    const area = seedArea(fixture.db, "Errands");
+    const res = await runMutation(deps(vector), "todo.add", {
+      title: "buy milk",
+      area: { uuid: area },
+    });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with uuid");
+    const r = row(res.uuid);
+    expect(r["area"]).toBe(area);
+    expect(r["project"]).toBeNull();
+    expect(r["start"]).toBe(1); // Anytime under a container
+  });
+
+  it("project.add into an area", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const res = await runMutation(deps(vector), "project.add", {
+      title: "Q3 Launch",
+      area: { uuid: area },
+    });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with uuid");
+    const r = row(res.uuid);
+    expect(r["type"]).toBe(1);
+    expect(r["area"]).toBe(area);
+  });
+
+  it("area.update: tags branch replaces the area's tag set", async () => {
+    const area = seedArea(fixture.db, "Home");
+    const keep = seedTag(fixture.db, "keep");
+    seedTag(fixture.db, "add1");
+    seedTag(fixture.db, "add2");
+    // Pre-existing tag that the replacement must drop.
+    fixture.db.prepare("INSERT INTO TMAreaTag (areas, tags) VALUES (?, ?)").run(area, keep);
+    const res = await runMutation(deps(vector), "area.update", {
+      target: area,
+      tags: ["add1", "add2"],
+    });
+    expect(res.kind).toBe("ok");
+    const tags = fixture.db
+      .prepare(
+        "SELECT t.title FROM TMAreaTag at JOIN TMTag t ON at.tags = t.uuid WHERE at.areas = ? ORDER BY t.title",
+      )
+      .all(area) as { title: string }[];
+    expect(tags.map((t) => t.title)).toEqual(["add1", "add2"]);
   });
 
   it("todo.set-tags: full replacement", async () => {
@@ -387,12 +499,65 @@ describe("simulator fence", () => {
     expect(vectors.some((v) => v.simulates === true)).toBe(false);
   });
 
+  it("gate set + valid fence → defaultVectors returns ONLY the simulator", () => {
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    const vectors = defaultVectors(CONFIG, {}, fixture.path);
+    expect(vectors).toHaveLength(1);
+    expect(vectors[0]?.simulates).toBe(true);
+  });
+
+  // Fail-closed: once THINGS_SIM_WRITES=1 is set, an unsatisfied fence must THROW
+  // rather than fall through to the real transports (which would touch a real app).
+  it("gate set but THINGS_DB unset → defaultVectors throws (fail-closed)", () => {
+    process.env["THINGS_SIM_WRITES"] = "1";
+    delete process.env["THINGS_DB"];
+    expect(() => defaultVectors(CONFIG)).toThrow(/fence is unsatisfied: THINGS_DB is not set/);
+  });
+
+  it("gate set but no benchFixture marker → defaultVectors throws (fail-closed)", () => {
+    fixture.db.prepare("DELETE FROM Meta WHERE key = 'benchFixture'").run();
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    expect(() => defaultVectors(CONFIG, {}, fixture.path)).toThrow(
+      /fence is unsatisfied:.*benchFixture/,
+    );
+  });
+
+  it("gate set but THINGS_DB is a production-container path → defaultVectors throws", () => {
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] =
+      "/Users/x/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-XYZ/Things Database.thingsdatabase/main.sqlite";
+    expect(() => defaultVectors(CONFIG)).toThrow(/fence is unsatisfied:.*production/);
+  });
+
+  it("gate set but client-opened DB != THINGS_DB → defaultVectors throws (split-brain guard)", () => {
+    // The applier would write THINGS_DB while the verifier reads the --db path:
+    // the fence must reject the mismatch outright.
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    expect(() => defaultVectors(CONFIG, {}, "/some/other/database.sqlite")).toThrow(
+      /fence is unsatisfied: the database the client opened .* does not equal THINGS_DB/,
+    );
+  });
+
+  it("gate set + client-opened DB equals THINGS_DB after normalization → ok", () => {
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    // A non-normalized but equivalent path (extra `/./`) must still satisfy the
+    // equality check — resolve() normalizes both sides before comparing.
+    const dir = fixture.path.slice(0, fixture.path.lastIndexOf("/"));
+    const base = fixture.path.slice(fixture.path.lastIndexOf("/") + 1);
+    const vectors = defaultVectors(CONFIG, {}, `${dir}/./${base}`);
+    expect(vectors).toHaveLength(1);
+    expect(vectors[0]?.simulates).toBe(true);
+  });
+
   it("env set but no benchFixture marker → createSimulatorVector refuses", () => {
     fixture.db.prepare("DELETE FROM Meta WHERE key = 'benchFixture'").run();
     process.env["THINGS_SIM_WRITES"] = "1";
     process.env["THINGS_DB"] = fixture.path;
     expect(() => createSimulatorVector(fixture.path)).toThrow(/benchFixture/);
-    expect(defaultVectors(CONFIG)).toHaveLength(4);
   });
 
   it("THINGS_DB unset → createSimulatorVector refuses", () => {
@@ -419,6 +584,65 @@ describe("simulator fence", () => {
       (fixture.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as { title: string })
         .title,
     ).toBe("x"); // nothing was written
+  });
+});
+
+describe("simulator fence — host-escape guards (no live app under the fence)", () => {
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = {
+      THINGS_SIM_WRITES: process.env["THINGS_SIM_WRITES"],
+      THINGS_DB: process.env["THINGS_DB"],
+    };
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+  });
+  afterEach(() => {
+    restoreEnv("THINGS_SIM_WRITES", saved["THINGS_SIM_WRITES"]);
+    restoreEnv("THINGS_DB", saved["THINGS_DB"]);
+  });
+
+  it("simFenceActive reflects the ambient THINGS_DB fence", () => {
+    expect(simFenceActive()).toBe(true);
+    delete process.env["THINGS_SIM_WRITES"];
+    expect(simFenceActive()).toBe(false);
+  });
+
+  it("`open` (reveal) does NOT spawn `open` — returns the URI marked simulated", () => {
+    // If this touched the host it would call execFileSync('/usr/bin/open', …);
+    // under the fence it must return without opening.
+    const res = openInThings("ABC123");
+    expect(res.simulated).toBe(true);
+    expect(res.uri).toBe("things:///show?id=ABC123");
+    expect(revealLine(res)).toMatch(/would open .* \(simulated/);
+  });
+
+  it("the doctor Automation probe reports itself simulated (no osascript)", () => {
+    // A run seam that throws proves the osascript path is never entered.
+    const res = probeAutomation({
+      isAppRunning: () => true,
+      run: () => {
+        throw new Error("osascript must not run under the fence");
+      },
+    });
+    expect(res.status).toBe("simulated");
+  });
+
+  it("the doctor Accessibility probe reports itself simulated (no osascript)", () => {
+    const res = probeAccessibility({
+      isAppRunning: () => true,
+      run: () => {
+        throw new Error("osascript must not run under the fence");
+      },
+    });
+    expect(res.status).toBe("simulated");
+  });
+
+  it("fence inactive → the reveal would open for real (simulated=false)", () => {
+    delete process.env["THINGS_SIM_WRITES"];
+    // We do NOT actually invoke openInThings here (it would spawn `open`); we
+    // only assert the guard predicate flips, which is what gates the exec.
+    expect(simFenceActive()).toBe(false);
   });
 });
 
