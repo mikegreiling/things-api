@@ -6,8 +6,12 @@
  *
  *   node bench/runner.ts --arm cli --tasks bench/tasks --split dev --pseudo
  *   node bench/runner.ts --arm cli --model <id> --provider openai --split dev --reps 3
+ *   node bench/runner.ts --arm cli --model <id> --provider openai-codex --split dev
  *
- * Real runs require the provider's API key in the environment (OPENAI_API_KEY).
+ * Real runs authenticate one of two ways: `--provider openai` reads
+ * `OPENAI_API_KEY` from the environment; `--provider openai-codex` uses a
+ * ChatGPT-subscription OAuth credential stored by `npm run bench:login` at
+ * `~/.config/things-api-bench/auth.json` (never in the repo).
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -33,6 +37,7 @@ import {
   type ArmContext,
   type Collector,
 } from "./arms.ts";
+import { buildCodexAgentAuth, codexLoginHint, hasCodexCredential } from "./codex-auth.ts";
 import { buildBenchFixture } from "./fixture.ts";
 import { grade } from "./grade.ts";
 import { writeScorecard } from "./report.ts";
@@ -247,18 +252,32 @@ async function runAgent(
   timeoutMs: number,
 ): Promise<ExecOutcome> {
   const { Agent } = await import("@earendil-works/pi-agent-core");
-  const piai = await import("@earendil-works/pi-ai/compat");
-  // getModel is over-narrow on provider/model id literals; the runner takes them as
-  // free strings from the CLI, so widen the signature at the boundary.
-  const getModel = piai.getModel as (provider: string, model: string) => unknown;
 
-  const model = getModel(opts.provider, opts.model);
-  if (model === undefined) {
-    throw new Error(`unknown model ${opts.provider}/${opts.model}`);
+  // Auth resolves one of two ways: the env-key providers (openai) resolve their
+  // key from the environment via the default streamSimple; openai-codex resolves
+  // a ChatGPT-subscription OAuth token per turn through the agent's getApiKey hook
+  // (the codex Responses backend needs only that token — it derives the account
+  // id from the JWT and the base URL from model metadata, so no custom streamFn).
+  let model: unknown;
+  let getApiKey: ((provider: string) => Promise<string | undefined>) | undefined;
+  if (opts.provider === "openai-codex") {
+    const codex = await buildCodexAgentAuth(opts.model);
+    model = codex.model;
+    getApiKey = codex.getApiKey;
+  } else {
+    const piai = await import("@earendil-works/pi-ai/compat");
+    // getModel is over-narrow on provider/model id literals; the runner takes them as
+    // free strings from the CLI, so widen the signature at the boundary.
+    const getModel = piai.getModel as (provider: string, model: string) => unknown;
+    model = getModel(opts.provider, opts.model);
+    if (model === undefined) {
+      throw new Error(`unknown model ${opts.provider}/${opts.model}`);
+    }
   }
 
   const agent = new Agent({
     initialState: { systemPrompt: armCtx.systemPrompt, model: model as never, tools: armCtx.tools },
+    ...(getApiKey !== undefined && { getApiKey }),
   });
 
   let turns = 0;
@@ -511,6 +530,11 @@ async function main(): Promise<void> {
       };
       if (!opts.pseudo && opts.model === "") {
         process.stderr.write("real runs require --model <id> (or use --pseudo)\n");
+        process.exitCode = 1;
+        return;
+      }
+      if (!opts.pseudo && opts.provider === "openai-codex" && !(await hasCodexCredential())) {
+        process.stderr.write(codexLoginHint());
         process.exitCode = 1;
         return;
       }

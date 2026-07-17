@@ -14,9 +14,14 @@ project doctrine (doctrine lives in [CONSTITUTION.md](CONSTITUTION.md)).
 
 ## `@earendil-works/pi-agent-core`
 
-- `new Agent({ initialState: { systemPrompt, model, tools, thinkingLevel? } })`.
+- `new Agent({ initialState: { systemPrompt, model, tools, thinkingLevel? }, getApiKey? })`.
   Default `streamFn` is `streamSimple` from `@earendil-works/pi-ai/compat`, which
   resolves auth from the environment (`OPENAI_API_KEY` for the openai provider).
+- `AgentOptions.getApiKey: (provider) => Promise<string | undefined> | …` — resolved
+  BEFORE each turn (`agent-loop.js`: `resolvedApiKey = (getApiKey ? await
+  getApiKey(model.provider) : undefined) || config.apiKey`) and passed to the stream
+  as `options.apiKey`. This is the hook for expiring OAuth tokens; `provider` is
+  `model.provider`. Not passing it leaves the env path unchanged.
 - `agent.prompt(text)` runs the loop to completion; `agent.abort()` cancels;
   `agent.state.messages` holds the transcript afterwards.
 - `agent.subscribe((event) => …)` streams events. Relevant types:
@@ -38,6 +43,48 @@ project doctrine (doctrine lives in [CONSTITUTION.md](CONSTITUTION.md)).
   "@earendil-works/pi-ai/compat"` → `getModel("openai", "<model-id>")`. This is the
   same global API the default `streamSimple` consumes, so auth resolves from env.
 - Token/cost data lives on the assistant message: `message.usage.{input,output,cost}`.
+
+### ChatGPT-subscription OAuth (`openai-codex`) — verified against 0.80.10
+
+The bench runner's `--provider openai-codex` path (see `bench/codex-auth.ts`). Exact
+APIs, all read from `node_modules/@earendil-works/pi-ai/dist`:
+
+- **Provider:** `import { openaiCodexProvider } from
+  "@earendil-works/pi-ai/providers/openai-codex"` → `Provider<"openai-codex-responses">`,
+  id `"openai-codex"`, `baseUrl "https://chatgpt.com/backend-api"`, a STATIC model
+  catalog (so `getModel` works with no network refresh), auth via
+  `lazyOAuth({ name: "OpenAI (ChatGPT Plus/Pro)", … })`.
+- **Collection:** `import { createModels } from "@earendil-works/pi-ai"` →
+  `createModels({ credentials: CredentialStore })` returns a `MutableModels`;
+  `models.setProvider(openaiCodexProvider())`, then `models.getModel("openai-codex",
+  id)` (sync, `Model<Api>`).
+- **Auth resolution + refresh:** `models.getAuth(providerId)` → `AuthResult | undefined`
+  (`undefined` when unconfigured). It runs the OAuth refresh under the credential
+  store's per-provider `modify` lock (so concurrent turns cannot double-refresh a
+  rotated token) and returns the access token as `result.auth.apiKey`. The codex
+  OAuth `toAuth(credential)` returns exactly `{ apiKey: credential.access }` — no
+  headers, no baseUrl.
+- **No custom `streamFn` needed.** The default `streamSimple` dispatches on
+  `model.api` ("openai-codex-responses", registered via compat's
+  `openai-codex-responses.lazy`). That backend
+  (`api/openai-codex-responses.js`) needs ONLY `options.apiKey`: it parses the
+  ChatGPT account id out of the JWT access token itself (`extractAccountId` →
+  `atob(token.split(".")[1])`, claim `…chatgpt_account_id`) and resolves the request
+  URL from `model.baseUrl`. So supplying the token through the agent's
+  `getApiKey("openai-codex")` hook is the entire integration; `model.baseUrl` +
+  the JWT cover the rest.
+- **CredentialStore:** pi-ai exports the interface + an `InMemoryCredentialStore`
+  only — NO file-backed store. `bench/codex-auth.ts` implements `CredentialStore`
+  over a single `auth.json` (`{ [providerId]: Credential }`, 0600), the same shape
+  the login CLI writes; `modify` is serialized per provider id.
+- **Login CLI:** `node node_modules/@earendil-works/pi-ai/dist/cli.js login
+  [provider]` (bin `pi-ai`). It writes `auth.json` in **CWD**; `npm run bench:login`
+  (`bench/login.ts`) runs it with `cwd = ~/.config/things-api-bench/` and defaults
+  the provider arg to `openai-codex`, so the file lands beside the store's read path
+  and never in the repo. The CLI's `list` command enumerates OAuth-capable providers.
+- Codex model ids present in the pinned catalog include `gpt-5.3-codex-spark`,
+  `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-luna` — all reachable
+  under one ChatGPT subscription.
 
 ## `just-bash@3.1.0`
 

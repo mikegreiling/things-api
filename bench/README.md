@@ -13,10 +13,26 @@ Each run seeds a synthetic fixture Things DB, sandboxes the subject model (pi-ag
 ```sh
 npm run bench -- --arm cli --tasks bench/tasks --split dev --pseudo        # zero-cost harness smoke (scripted pseudo-agent)
 npm run bench -- --arm cli --model <pinned-model> --provider openai --split dev --reps 3
+npm run bench -- --arm cli --model <pinned-model> --provider openai-codex --split dev   # ChatGPT-subscription OAuth
 npm run bench -- --arm skill ... / --arm mcp ...                           # other arms
 ```
 
-Requires `OPENAI_API_KEY` for real runs (never committed; artifacts land in gitignored `bench/artifacts/`). Reports: `bench/report.ts` aggregates `runs.jsonl` into a scorecard; accepted-round scorecards are committed under `bench/results/`.
+Real runs authenticate one of two ways (artifacts always land in gitignored `bench/artifacts/`):
+
+- **`--provider openai`** reads `OPENAI_API_KEY` from the environment (never committed).
+- **`--provider openai-codex`** uses a ChatGPT-subscription OAuth credential (OpenAI's "openai-codex" provider). Sign in once:
+
+  ```sh
+  npm run bench:login          # opens the pi-ai OAuth flow for the openai-codex provider
+  ```
+
+  The token is stored at `~/.config/things-api-bench/auth.json` (0600, **outside the repo**) and refreshed automatically per turn. A run started without a stored credential fails fast with a message pointing back at `npm run bench:login` — it never falls back to an interactive prompt mid-run.
+
+  Caveats for codex-OAuth subjects:
+  - **Subscription rate caps apply.** These calls draw on your ChatGPT plan's usage limits, not a metered API balance — a large sweep (many tasks × reps × arms) can hit the plan's rate/usage ceiling and stall or error mid-run, unlike a pay-as-you-go API key. Size batches accordingly and expect throttling.
+  - **Softer model pinning.** The codex catalog exposes ChatGPT-product model ids (e.g. `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.6-sol`) whose backing weights and defaults can shift under you without an id change, so a codex-OAuth cell is a weaker reproducibility anchor than a dated API model id. Record the exact id and run date; treat cross-date comparisons on this path with care.
+
+Reports: `bench/report.ts` aggregates `runs.jsonl` into a scorecard; accepted-round scorecards are committed under `bench/results/`.
 
 ## Layout
 
