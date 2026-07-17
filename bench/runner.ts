@@ -68,7 +68,10 @@ interface RunnerOptions {
 
 interface ExecOutcome {
   turns: number;
+  /** TOTAL input tokens (incl. cache reads/writes) — see RunRecord.tokensIn. */
   tokensIn: number;
+  /** Cache-read portion of tokensIn (provider usage.cacheRead). */
+  tokensInCached: number;
   tokensOut: number;
   finalText: string | null;
   dynamicText: string;
@@ -232,6 +235,7 @@ async function runPseudo(
   return {
     turns: 1,
     tokensIn: 0,
+    tokensInCached: 0,
     tokensOut: 0,
     finalText,
     dynamicText: JSON.stringify(messages),
@@ -239,9 +243,25 @@ async function runPseudo(
   };
 }
 
+/**
+ * Assistant-message usage as pi-ai reports it (`@earendil-works/pi-ai` `Usage`).
+ * CRITICAL: `input` is the cache-DISCOUNTED input — the codex/openai Responses
+ * backend subtracts `cached_tokens` and `cache_write_tokens` from `input_tokens`
+ * before reporting `usage.input` (pi-ai `api/openai-responses-shared.js`). The true
+ * total input is `input + cacheRead + cacheWrite`; the split is genuinely reported,
+ * so no estimate is needed. `totalTokens` is the raw provider total (input+output).
+ */
 interface UsageEvent {
   type?: string;
-  message?: { role?: string; usage?: { input?: number; output?: number } };
+  message?: {
+    role?: string;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+    };
+  };
 }
 
 async function runAgent(
@@ -282,6 +302,7 @@ async function runAgent(
 
   let turns = 0;
   let tokensIn = 0;
+  let tokensInCached = 0;
   let tokensOut = 0;
   const unsubscribe = agent.subscribe((event) => {
     const e = event as unknown as UsageEvent;
@@ -289,8 +310,12 @@ async function runAgent(
       turns++;
       if (turns > maxTurns) agent.abort();
     } else if (e.type === "message_end" && e.message?.role === "assistant" && e.message.usage) {
-      tokensIn += e.message.usage.input ?? 0;
-      tokensOut += e.message.usage.output ?? 0;
+      const u = e.message.usage;
+      const cacheRead = u.cacheRead ?? 0;
+      // usage.input is cache-DISCOUNTED; re-add cache reads + writes for the honest total.
+      tokensIn += (u.input ?? 0) + cacheRead + (u.cacheWrite ?? 0);
+      tokensInCached += cacheRead;
+      tokensOut += u.output ?? 0;
     }
   });
 
@@ -308,6 +333,7 @@ async function runAgent(
   return {
     turns,
     tokensIn,
+    tokensInCached,
     tokensOut,
     finalText: lastAssistantText(messages),
     dynamicText: JSON.stringify(messages),
@@ -418,6 +444,7 @@ async function runOne(
           toolCalls: collector.toolCalls,
           errorsSeen: collector.errorsSeen,
           tokensIn: outcome.tokensIn,
+          tokensInCached: outcome.tokensInCached,
           tokensOut: outcome.tokensOut,
           wallMs,
         },
@@ -447,6 +474,7 @@ async function runOne(
     turns: outcome.turns,
     toolCalls: collector.toolCalls,
     tokensIn: outcome.tokensIn,
+    tokensInCached: outcome.tokensInCached,
     tokensOut: outcome.tokensOut,
     staticContextTokens: estimateTokens(armCtx.staticText),
     dynamicContextTokens: estimateTokens(outcome.dynamicText),

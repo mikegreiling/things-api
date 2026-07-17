@@ -543,6 +543,30 @@ const DEADLINE_ITEMS: readonly { title: string; deadline: [number, number] }[] =
   { title: "Order the birthday cake for pickup", deadline: [4, 12] },
 ];
 
+/**
+ * Standalone (container-less) to-dos — no area, no project, no heading. The survey
+ * shows a real loose tail of items that live directly in a built-in list rather than
+ * filed under any area. A mix of "anytime" (start=active, undated), "someday", and
+ * future-"scheduled" (start=active + strictly-future startDate — invariant 1 keeps
+ * them out of Today/overdue). The array is ordered anytime → someday → scheduled so a
+ * rotation slice from the front always retains the anytime coverage.
+ */
+const STANDALONE_TODOS: readonly {
+  title: string;
+  when: "anytime" | "someday" | "scheduled";
+  /** Future start offset (days) for `scheduled` — strictly > 0. */
+  offset?: readonly [number, number];
+}[] = [
+  { title: "Reply to the alumni association survey", when: "anytime" },
+  { title: "Return the neighbor's extension ladder", when: "anytime" },
+  { title: "Sort the hallway junk drawer", when: "anytime" },
+  { title: "Find a dentist taking new patients", when: "anytime" },
+  { title: "Look into a weekend pottery class", when: "someday" },
+  { title: "Price out a chest freezer for the garage", when: "someday" },
+  { title: "Confirm the chimney sweep booking", when: "scheduled", offset: [3, 12] },
+  { title: "Drop the winter coats at the tailor", when: "scheduled", offset: [5, 18] },
+];
+
 const NOTE_SNIPPETS: readonly string[] = [
   "Waiting on a callback — left a voicemail Tuesday.",
   "See the shared spreadsheet for the current numbers.",
@@ -804,6 +828,25 @@ export function applyWorld(db: DatabaseSync, opts: WorldOptions): WorldSummary {
       ...maybeNotes(),
       tags: someTags(0.3, int(rng, 1, 2)),
       ...created(5, 900),
+    });
+  }
+
+  // --- Standalone loose to-dos (no area/project/heading) ------------------
+  // A rotation keeps 6–8 (always the anytime block, since the pool is ordered
+  // anytime-first). Scheduled ones stay strictly future (invariant 1).
+  for (const s of STANDALONE_TODOS.slice(0, int(rng, 6, STANDALONE_TODOS.length))) {
+    const when: SeedTaskOpts =
+      s.when === "someday"
+        ? { start: "someday" }
+        : s.when === "scheduled" && s.offset !== undefined
+          ? { start: "active", startDate: dayIso(clock, int(rng, s.offset[0], s.offset[1])) }
+          : { start: "active" };
+    addTodo({
+      title: s.title,
+      ...when,
+      ...maybeNotes(0.3),
+      tags: someTags(0.25),
+      ...created(3, 400),
     });
   }
 

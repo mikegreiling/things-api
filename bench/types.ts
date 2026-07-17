@@ -191,7 +191,16 @@ export interface RunRecord {
   errorsSeen: number;
   turns: number;
   toolCalls: number;
+  /**
+   * TOTAL input tokens across the run's assistant turns, INCLUDING cache reads and
+   * writes (the honest context volume the model processed). The provider's
+   * `usage.input` is cache-DISCOUNTED (it subtracts cached + cache-write tokens — see
+   * pi-ai `openai-responses-shared.js`), so a cache-friendly arm under-counts if you
+   * read it raw; this field re-adds `cacheRead + cacheWrite` to report the true total.
+   */
   tokensIn: number;
+  /** Of `tokensIn`, the portion served from the prompt cache (provider `usage.cacheRead`). */
+  tokensInCached: number;
   tokensOut: number;
   /** System prompt + tool defs (+ skill bytes if loaded). */
   staticContextTokens: number;
@@ -218,7 +227,10 @@ export interface ScorecardCell {
   successRate: number;
   /** Means below are over SUCCESSFUL runs only. */
   meanErrorsSeen: number;
+  /** Mean TOTAL input tokens (incl. cache) over successful runs. */
   meanTokensIn: number;
+  /** Mean cache-read input tokens over successful runs (the discounted portion of `meanTokensIn`). */
+  meanTokensInCached: number;
   meanTokensOut: number;
   meanStaticContextTokens: number;
   meanDynamicContextTokens: number;

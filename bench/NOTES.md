@@ -42,7 +42,48 @@ project doctrine (doctrine lives in [CONSTITUTION.md](CONSTITUTION.md)).
 - Model lookup for the default agent stream: `import { getModel } from
   "@earendil-works/pi-ai/compat"` → `getModel("openai", "<model-id>")`. This is the
   same global API the default `streamSimple` consumes, so auth resolves from env.
-- Token/cost data lives on the assistant message: `message.usage.{input,output,cost}`.
+- Token/cost data lives on the assistant message: `message.usage` (the `Usage`
+  type). See "Token accounting" below — `usage.input` is cache-DISCOUNTED.
+
+### Token accounting — `usage.input` is cache-discounted (verified against 0.80.10)
+
+The `Usage` type (`dist/types.d.ts`) an assistant `message.usage` carries:
+
+- `input` — input tokens **minus** cache reads **minus** cache writes.
+- `output` — output tokens (already includes `reasoning`).
+- `cacheRead` — cached (prompt-cache-hit) input tokens.
+- `cacheWrite` — cache-write input tokens (0 for OpenAI Responses in practice).
+- `cacheWrite1h?` — Anthropic-only split.
+- `reasoning?` — reasoning tokens, a subset of `output`.
+- `totalTokens` — the provider's raw total (`input_tokens + output_tokens`).
+- `cost` — per-bucket cost breakdown.
+
+The discount happens in `dist/api/openai-responses-shared.js` (shared by the
+`openai-codex-responses` api the bench's `--provider openai-codex` uses), verbatim:
+
+```js
+const cachedTokens = inputDetails?.cached_tokens || 0;
+const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
+output.usage = {
+  // OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
+  input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
+  output: response.usage.output_tokens || 0,
+  cacheRead: cachedTokens,
+  cacheWrite: cacheWriteTokens,
+  reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
+  totalTokens: response.usage.total_tokens || 0,
+  ...
+};
+```
+
+Consequence: recording `usage.input` alone under-counts true context on cache-friendly
+arms (round-0's MCP `tokensIn` 2.3k vs a 16.6k cached tool catalog). Because the split
+**is** reported, the bench records the honest total directly — **no estimate needed**:
+`runner.ts` accumulates `tokensIn = input + cacheRead + cacheWrite` (the true input the
+model processed) and `tokensInCached = cacheRead`; `report.ts` shows `tok_in` (total)
+alongside a `cached` column. The runner reads these off the `message_end` event's
+`message.usage` (fields typed in `runner.ts`'s `UsageEvent`). `totalTokens` equals
+`tokensIn + output` and is available if a raw cross-check is ever wanted.
 
 ### ChatGPT-subscription OAuth (`openai-codex`) — verified against 0.80.10
 
