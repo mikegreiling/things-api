@@ -12,7 +12,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Classification, Refiner, RefinerOutput } from "./refiner.ts";
+import type { Classification, Confidence, Refiner, RefinerOutput } from "./refiner.ts";
+import { estimateTokens } from "./tokens.ts";
 import type { Arm, RunRecord, TaskSpec } from "./types.ts";
 
 const CORE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -364,12 +365,24 @@ export function metricLadderText(constitutionPath = join(CORE_DIR, "CONSTITUTION
   }
 }
 
+/** Render the "Prior lessons (this arm)" block from prior debrief lessons, or "". */
+function priorLessonsBlock(lessons: string[]): string {
+  if (lessons.length === 0) return "";
+  return [
+    "",
+    "PRIOR LESSONS (this arm) — hard-won from earlier refinement rounds; weigh them, do not",
+    "blindly repeat a move a lesson warns against:",
+    ...lessons.map((l) => `  - ${l}`),
+  ].join("\n");
+}
+
 /**
  * The refiner's system prompt: the metric ladder (verbatim), the non-opinionated and
  * smallest-generalizable-change doctrines, the arm scope + exact file list, the GUI
- * rule (skill arm only), and the strict output contract.
+ * rule (skill arm only), prior lessons for this arm (fed forward from the ledger), and
+ * the strict output contract.
  */
-export function buildCharter(arm: Arm): string {
+export function buildCharter(arm: Arm, priorLessons: string[] = []): string {
   const files = ARM_ALLOWLISTS[arm];
   const guiRule =
     arm === "skill"
@@ -397,6 +410,7 @@ export function buildCharter(arm: Arm): string {
     "  command; (b) behavior-misunderstanding; (c) data-model-misunderstanding; (d)",
     "  argument-construction; (e) failed recovery; (f) tool-defect (a real bug — flag it, do",
     "  not paper over it with copy).",
+    priorLessonsBlock(priorLessons),
     "",
     `ARM SCOPE — you are refining the "${arm}" surface. Your patch may touch ONLY these paths:`,
     ...files.map((f) => `  - ${f}`),
@@ -412,6 +426,68 @@ export function buildCharter(arm: Arm): string {
     '  "guiSemanticChange": false',
     "}",
     "```",
+  ].join("\n");
+}
+
+/**
+ * The post-hoc debrief system prompt. The debriefer is a metric-honest analyst: given a
+ * patch, its pre-hoc hypothesis, and the per-task before/after NUMBERS (no task text),
+ * it attributes the measured delta and distills one transferable lesson.
+ */
+export function buildDebriefCharter(): string {
+  return [
+    "You are the AGENTBENCH post-hoc debriefer. A candidate patch to one consumer surface",
+    "was just benched; you receive the patch, its author's pre-hoc hypothesis + predicted",
+    "blast radius, and the per-task before→after RESULTS (success / friction / tokensIn) for",
+    "the dev and validation splits. You did NOT see the task prompts and must not invent them.",
+    "",
+    "Judge only by the numbers and the diff. Attribute the delta (positive OR negative) to the",
+    "most likely cause, and state ONE transferable lesson a future refiner of ANY arm could use.",
+    "The lesson must generalize — never quote or paraphrase specific task content (you have none).",
+    "",
+    "OUTPUT CONTRACT — reply with ONLY a single fenced ```json object, no prose around it:",
+    "```json",
+    '{ "attribution": "...", "lesson": "one transferable sentence", "confidence": "high|medium|low" }',
+    "```",
+  ].join("\n");
+}
+
+/** Per-task numbers for a split's runs, keyed by taskId (NO task text — hygiene). */
+function perTaskLines(label: string, before: RunRecord[], after: RunRecord[]): string[] {
+  const ids = new Set<string>([...before, ...after].map((r) => r.taskId));
+  const agg = (runs: RunRecord[], id: string): string => {
+    const rows = runs.filter((r) => r.taskId === id);
+    const ok = rows.filter((r) => r.success);
+    const succ = `${ok.length}/${rows.length}`;
+    const err = mean(rows.map((r) => r.errorsSeen)).toFixed(1);
+    const tok = Math.round(median(ok.map((r) => r.tokensIn)));
+    return `${succ} succ, ${err} err, ${tok} tokIn`;
+  };
+  const lines = [`${label}:`];
+  for (const id of [...ids].toSorted()) {
+    lines.push(`  ${id}: ${agg(before, id)} → ${agg(after, id)}`);
+  }
+  return lines;
+}
+
+/** Debrief user content: the patch + pre-hoc hypothesis + per-task before→after numbers. */
+export function renderDebriefUserContent(
+  output: RefinerOutput,
+  before: PairRuns,
+  after: PairRuns,
+): string {
+  return [
+    "PATCH UNDER REVIEW (unified diff):",
+    "```diff",
+    output.patch.trim() === "" ? "(empty)" : output.patch,
+    "```",
+    "",
+    `PRE-HOC RATIONALE: ${output.rationale || "(none)"}`,
+    `PRE-HOC PREDICTED BLAST RADIUS: ${output.predictedBlastRadius || "(none)"}`,
+    "",
+    "PER-TASK RESULTS (before → after), success / mean-friction / median-tokensIn:",
+    ...perTaskLines("dev", before.dev, after.dev),
+    ...perTaskLines("validation", before.validation, after.validation),
   ].join("\n");
 }
 
@@ -619,11 +695,25 @@ export interface IterationParams {
   arm: Arm;
   iteration: number;
   prevMetrics: PairMetrics;
-  /** Dev runs from the previous bench, for the digest. */
-  prevDevRuns: RunRecord[];
+  /** Runs from the previous bench (dev feeds the digest; both feed the debrief). */
+  prevRuns: PairRuns;
   tasks: Map<string, TaskSpec>;
   /** The invocation-wide usage fail-safe (token budget + provider-error breaker). */
   budget: Budget;
+  /** Prior lessons for THIS arm (from the ledger), fed into the refiner charter. */
+  priorLessons?: string[];
+}
+
+/** The post-hoc debrief distilled for one candidate. */
+export interface DebriefRecord {
+  attribution: string;
+  lesson: string;
+  confidence: Confidence;
+}
+
+/** A candidate that was neither re-benched nor debriefed. */
+export function notDebriefed(note = "(not debriefed)"): DebriefRecord {
+  return { attribution: note, lesson: "", confidence: "low" };
 }
 
 export interface IterationResult {
@@ -634,6 +724,7 @@ export interface IterationResult {
   needsMike: boolean;
   reason: string;
   rationale: string;
+  predictedBlastRadius: string;
   patchSummary: string;
   classifications: Classification[];
   guiSemanticChange: boolean;
@@ -641,6 +732,8 @@ export interface IterationResult {
   metricsAfter: PairMetrics | null;
   /** The re-bench runs (only when a re-bench happened AND was kept, i.e. accepted). */
   afterRuns: PairRuns | null;
+  /** Post-hoc debrief (present for accepted + reverted; sentinel otherwise). */
+  debrief: DebriefRecord;
   touchedFiles: string[];
   needsMikePatchPath?: string;
 }
@@ -657,6 +750,33 @@ function summarizePatch(output: RefinerOutput, touched: string[]): string {
 }
 
 /**
+ * The post-hoc debrief for a re-benched candidate. NEVER blocks the loop: a parse
+ * failure or provider error is recorded as "debrief-failed" and swallowed (it does NOT
+ * feed the circuit breaker); if the budget is already spent the debrief is skipped.
+ * Debrief token usage, when reported, still counts against the budget.
+ */
+async function runDebrief(
+  deps: IterationDeps,
+  budget: Budget,
+  output: RefinerOutput,
+  before: PairRuns,
+  after: PairRuns,
+): Promise<DebriefRecord> {
+  if (budget.fraction() >= 1) return notDebriefed("debrief-skipped (budget)");
+  try {
+    const d = await deps.refiner.debrief({
+      systemPrompt: buildDebriefCharter(),
+      userContent: renderDebriefUserContent(output, before, after),
+    });
+    if (d.usage !== undefined) budget.add(d.usage);
+    return { attribution: d.attribution, lesson: d.lesson, confidence: d.confidence };
+  } catch (e) {
+    deps.log(`debrief failed (non-blocking) — ${(e as Error).message}`);
+    return notDebriefed("debrief-failed");
+  }
+}
+
+/**
  * Run ONE loop iteration: digest → refiner → allowlist → apply → gate → gui-guard →
  * re-bench → accept/revert. Every side effect goes through {@link IterationDeps} so a
  * test can drive the whole control flow with fakes. Returns the outcome; the caller
@@ -667,7 +787,8 @@ export async function runIteration(
   params: IterationParams,
 ): Promise<IterationResult> {
   const { arm, iteration, prevMetrics, budget } = params;
-  const digest = buildDigest(params.prevDevRuns, params.tasks, deps.loadTranscript);
+  const prevRuns = params.prevRuns;
+  const digest = buildDigest(prevRuns.dev, params.tasks, deps.loadTranscript);
   const targetFiles = deps.readArmFiles();
 
   // Budget gate BEFORE the refiner call (may throw a clean LoopAbort; nothing applied).
@@ -675,7 +796,7 @@ export async function runIteration(
   let output: RefinerOutput;
   try {
     output = await deps.refiner.refine({
-      systemPrompt: buildCharter(arm),
+      systemPrompt: buildCharter(arm, params.priorLessons ?? []),
       userContent: renderUserContent(arm, targetFiles, digest.text),
     });
     budget.resetProviderErrors();
@@ -691,12 +812,14 @@ export async function runIteration(
         needsMike: false,
         reason: "provider error (refiner)",
         rationale: "",
+        predictedBlastRadius: "",
         patchSummary: "",
         classifications: [],
         guiSemanticChange: false,
         metricsBefore: prevMetrics,
         metricsAfter: null,
         afterRuns: null,
+        debrief: notDebriefed("(no candidate)"),
         touchedFiles: [],
       };
     }
@@ -714,12 +837,14 @@ export async function runIteration(
     needsMike: false,
     reason: "",
     rationale: output.rationale,
+    predictedBlastRadius: output.predictedBlastRadius,
     patchSummary: summarizePatch(output, touched),
     classifications: output.classifications,
     guiSemanticChange: output.guiSemanticChange,
     metricsBefore: prevMetrics,
     metricsAfter: null,
     afterRuns: null,
+    debrief: notDebriefed(),
     touchedFiles: touched,
   };
 
@@ -783,6 +908,10 @@ export async function runIteration(
   if (budget.crossedWarnThreshold()) deps.onBudgetWarning();
   const afterMetrics = pairMetrics(afterRuns);
   const decision = decideAccept(prevMetrics, afterMetrics, false);
+
+  // Post-hoc debrief runs for BOTH outcomes (accepted and reverted) — never blocking.
+  const debrief = await runDebrief(deps, budget, output, prevRuns, afterRuns);
+
   if (decision.accept) {
     deps.commit(`loop(${arm}) iter ${iteration}: ${firstLine(output.rationale)}`, touched);
     deps.log(`iter ${iteration}: ACCEPT — ${decision.reason}`);
@@ -792,11 +921,12 @@ export async function runIteration(
       reason: decision.reason,
       metricsAfter: afterMetrics,
       afterRuns,
+      debrief,
     };
   }
   deps.revertFiles(touched);
   deps.log(`iter ${iteration}: revert — ${decision.reason}`);
-  return { ...base, reason: decision.reason, metricsAfter: afterMetrics };
+  return { ...base, reason: decision.reason, metricsAfter: afterMetrics, debrief };
 }
 
 // --- state file + checkpoint -----------------------------------------------
@@ -965,4 +1095,168 @@ export function renderCheckpoint(data: CheckpointData): string {
   }
   L.push("");
   return L.join("\n");
+}
+
+// --- per-arm knowledge ledger (bench/ledger/<arm>.md) ----------------------
+
+/** The ledger file name for one arm (files live under `bench/ledger/`). */
+export function ledgerFileName(arm: Arm): string {
+  return `${arm}.md`;
+}
+
+/** One committed, append-only ledger record for a single candidate. */
+export interface LedgerEntry {
+  /** Stable id (batch + arm + iteration) — dedups appends so the write is idempotent. */
+  id: string;
+  date: string;
+  arm: Arm;
+  iteration: number;
+  decision: "ACCEPTED" | "REVERTED" | "NEEDS-MIKE";
+  changeSummary: string;
+  filesTouched: string[];
+  diffStat: string;
+  hypothesis: string;
+  predictedBlastRadius: string;
+  metricsBefore: PairMetrics;
+  metricsAfter: PairMetrics | null;
+  debrief: DebriefRecord;
+  artifactsPointer: string;
+}
+
+/** UPPERCASE decision label for the ledger. */
+function ledgerDecision(result: IterationResult): LedgerEntry["decision"] {
+  if (result.accepted) return "ACCEPTED";
+  if (result.needsMike) return "NEEDS-MIKE";
+  return "REVERTED";
+}
+
+/**
+ * A candidate worth a ledger entry: it was accepted, reverted after a re-bench, or
+ * parked for Mike. (Allowlist / gate / empty-patch / provider-error iterations carry no
+ * measured candidate and are recorded only in loop-state.json.)
+ */
+export function isLedgerCandidate(result: IterationResult): boolean {
+  return result.accepted || result.needsMike || result.metricsAfter !== null;
+}
+
+/** Deterministic per-candidate id: identical within a batch (idempotent), unique across. */
+export function ledgerEntryId(batchId: string, arm: Arm, iteration: number): string {
+  return `${batchId}-${arm}-iter${iteration}`;
+}
+
+/** Build a ledger entry from an iteration result. */
+export function buildLedgerEntry(
+  result: IterationResult,
+  ctx: { batchId: string; date: string; artifactsPointer: string },
+): LedgerEntry {
+  return {
+    id: ledgerEntryId(ctx.batchId, result.arm, result.iteration),
+    date: ctx.date,
+    arm: result.arm,
+    iteration: result.iteration,
+    decision: ledgerDecision(result),
+    changeSummary: firstLine(result.rationale),
+    filesTouched: result.touchedFiles,
+    diffStat: result.patchSummary,
+    hypothesis: result.rationale || "(none)",
+    predictedBlastRadius: result.predictedBlastRadius || "(none)",
+    metricsBefore: result.metricsBefore,
+    metricsAfter: result.metricsAfter,
+    debrief: result.debrief,
+    artifactsPointer: ctx.artifactsPointer,
+  };
+}
+
+function fmtSplitDelta(before: SplitMetrics, after: SplitMetrics | null): string {
+  if (after === null) return "not measured (parked before re-bench)";
+  return (
+    `success ${before.successes}/${before.runs} → ${after.successes}/${after.runs}; ` +
+    `friction ${before.frictionOnSuccesses.toFixed(2)} → ${after.frictionOnSuccesses.toFixed(2)}; ` +
+    `median tokIn ${Math.round(before.medianTokensInOnSuccesses)} → ${Math.round(after.medianTokensInOnSuccesses)}`
+  );
+}
+
+/** Escape a lesson for the single-line entry marker (kept HTML-comment-safe). */
+function escapeMarker(text: string): string {
+  return text.replace(/\s+/g, " ").replace(/--+/g, "—").replace(/"/g, "'").trim();
+}
+
+/** Render one ledger entry (a hidden id+lesson marker followed by the human body). */
+export function renderLedgerEntry(entry: LedgerEntry): string {
+  const L: string[] = [];
+  L.push(`<!-- ledger-entry id="${entry.id}" lesson="${escapeMarker(entry.debrief.lesson)}" -->`);
+  L.push(`### ${entry.date} · ${entry.arm} · iter ${entry.iteration} · **${entry.decision}**`);
+  L.push("");
+  L.push(
+    `- **change:** ${entry.changeSummary} — files: ${entry.filesTouched.join(", ") || "(none)"}; diff ${entry.diffStat}`,
+  );
+  L.push(`- **pre-hoc hypothesis:** ${entry.hypothesis}`);
+  L.push(`- **predicted blast radius:** ${entry.predictedBlastRadius}`);
+  L.push(`- **measured deltas (before → after):**`);
+  L.push(`  - dev: ${fmtSplitDelta(entry.metricsBefore.dev, entry.metricsAfter?.dev ?? null)}`);
+  L.push(
+    `  - validation: ${fmtSplitDelta(entry.metricsBefore.validation, entry.metricsAfter?.validation ?? null)}`,
+  );
+  L.push(
+    `- **debrief:** attribution — ${entry.debrief.attribution}; lesson — ${entry.debrief.lesson || "(none)"}; confidence — ${entry.debrief.confidence}`,
+  );
+  L.push(`- **artifacts:** ${entry.artifactsPointer}`);
+  L.push("");
+  return L.join("\n");
+}
+
+/** The per-arm ledger file header (format lives in bench/ledger/README.md). */
+export function ledgerArmHeader(arm: Arm): string {
+  return [
+    `# AGENTBENCH refinement ledger — \`${arm}\` arm`,
+    "",
+    "Append-only. One entry per candidate (accepted, reverted, or parked). See",
+    "[README.md](README.md) for the format and the cross-arm feed-forward rule.",
+    "",
+  ].join("\n");
+}
+
+/** The ids already recorded in a ledger file (parsed from the entry markers). */
+export function ledgerEntryIds(md: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of md.matchAll(/<!-- ledger-entry id="([^"]+)"/g)) ids.add(m[1] as string);
+  return ids;
+}
+
+/**
+ * Append entries to one arm's ledger file, creating it (with the arm header) if absent.
+ * Idempotent: an entry whose id is already present is skipped, so re-running a batch
+ * never duplicates. Returns the number of entries actually appended.
+ */
+export function appendLedger(ledgerPath: string, arm: Arm, entries: LedgerEntry[]): number {
+  const exists = existsSync(ledgerPath);
+  const current = exists ? readFileSync(ledgerPath, "utf8") : ledgerArmHeader(arm);
+  const seen = ledgerEntryIds(current);
+  const fresh = entries.filter((e) => !seen.has(e.id));
+  if (fresh.length === 0) {
+    if (!exists) writeFileSync(ledgerPath, current);
+    return 0;
+  }
+  const body = fresh.map(renderLedgerEntry).join("\n");
+  const sep = current.endsWith("\n") ? "" : "\n";
+  writeFileSync(ledgerPath, `${current}${sep}${body}\n`);
+  return fresh.length;
+}
+
+/**
+ * The most recent lessons from one arm's ledger for the refiner charter: newest ~`max`
+ * non-empty lessons, then capped to ~`maxTokens` by dropping the OLDEST first. Returned
+ * oldest → newest. Holdout hygiene holds by construction — lessons derive from debriefs
+ * that never saw task text.
+ */
+export function extractLessons(md: string, max = 15, maxTokens = 2000): string[] {
+  const lessons: string[] = [];
+  for (const m of md.matchAll(/<!-- ledger-entry id="[^"]+" lesson="([^"]*)"/g)) {
+    const l = (m[1] ?? "").trim();
+    if (l !== "") lessons.push(l);
+  }
+  let recent = lessons.slice(-max);
+  while (recent.length > 0 && estimateTokens(recent.join("\n")) > maxTokens)
+    recent = recent.slice(1);
+  return recent;
 }

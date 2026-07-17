@@ -16,18 +16,23 @@
  * bench subprocess, the codex refiner) and the outer loop control.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
 import { codexLoginHint, hasCodexCredential } from "./codex-auth.ts";
 import {
+  appendLedger,
   appendLoopState,
   ARM_ALLOWLISTS,
   Budget,
   budgetNote,
+  buildLedgerEntry,
+  extractLessons,
+  isLedgerCandidate,
   isProviderError,
+  ledgerFileName,
   LoopAbort,
   maxTotalTokensArgs,
   pairMetrics,
@@ -40,6 +45,7 @@ import {
   toStateEntry,
   type IterationDeps,
   type IterationResult,
+  type LedgerEntry,
   type PairMetrics,
   type PairRuns,
   type SplitMetrics,
@@ -52,6 +58,7 @@ const BENCH_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(BENCH_DIR, "..");
 const TASKS_DIR = join(BENCH_DIR, "tasks");
 const STATE_PATH = join(BENCH_DIR, "loop-state.json");
+const LEDGER_DIR = join(BENCH_DIR, "ledger");
 
 interface LoopOptions {
   arm: Arm;
@@ -252,6 +259,14 @@ function loadTasks(): Map<string, TaskSpec> {
 async function runLoop(opts: LoopOptions): Promise<void> {
   const tasks = loadTasks();
   const budget = new Budget(opts.tokenBudget);
+  const ledgerPath = join(LEDGER_DIR, ledgerFileName(opts.arm));
+  const ledgerRel = relative(REPO_ROOT, ledgerPath).split("\\").join("/");
+  // Stable per-invocation batch id → re-running the same --out dedups ledger appends.
+  const batchId = basename(opts.outDir);
+  // Feed-forward: seed the charter with THIS arm's prior lessons only (README rule).
+  const priorLessons = existsSync(ledgerPath)
+    ? extractLessons(readFileSync(ledgerPath, "utf8"))
+    : [];
   let benchRound = 0;
 
   const onBudgetWarning = (): void => {
@@ -335,6 +350,20 @@ async function runLoop(opts: LoopOptions): Promise<void> {
     const checkpointPath = join(opts.outDir, "checkpoint.md");
     writeFileSync(checkpointPath, checkpoint);
     log(`\nwrote ${checkpointPath}`);
+
+    // Append this batch's candidates to THIS arm's ledger and commit it so the ledger
+    // rides the arm's PR (idempotent: a re-run with the same --out re-appends nothing).
+    const artifacts = `loop-state: ${relative(REPO_ROOT, STATE_PATH).split("\\").join("/")} (batch ${batchId}); checkpoint: ${relative(REPO_ROOT, checkpointPath).split("\\").join("/")}`;
+    const entries: LedgerEntry[] = results
+      .filter(isLedgerCandidate)
+      .map((r) =>
+        buildLedgerEntry(r, { batchId, date: ts().slice(0, 10), artifactsPointer: artifacts }),
+      );
+    const appended = appendLedger(ledgerPath, opts.arm, entries);
+    if (appended > 0) {
+      commit(`loop(${opts.arm}) ledger: +${appended} candidate(s) [batch ${batchId}]`, [ledgerRel]);
+      log(`appended ${appended} ledger entr${appended === 1 ? "y" : "ies"} → ${ledgerRel}`);
+    }
   };
 
   try {
@@ -353,9 +382,10 @@ async function runLoop(opts: LoopOptions): Promise<void> {
         arm: opts.arm,
         iteration: iter,
         prevMetrics,
-        prevDevRuns: prevRuns.dev,
+        prevRuns,
         tasks,
         budget,
+        priorLessons,
       });
       results.push(result);
       appendLoopState(STATE_PATH, toStateEntry(result, ts()));
