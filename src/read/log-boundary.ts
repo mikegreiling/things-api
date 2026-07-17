@@ -21,13 +21,25 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-export function logBoundary(db: DatabaseSync, now = new Date()): Date {
+import { dayBoundInstant, localToday } from "../model/dates.ts";
+
+// `zone` (optional IANA zone) is threaded so the daily/weekly/monthly sweep
+// edge is the CONSUMER'S local midnight, not the host's — byte-identical to a
+// bare `new Date(now); setHours(0,…)` when absent. logInterval=0 (immediately,
+// the golden default) is zone-independent (the boundary is `now`).
+export function logBoundary(db: DatabaseSync, now = new Date(), zone?: string): Date {
   const row = db.prepare("SELECT logInterval, manualLogDate FROM TMSettings").get() as
     | { logInterval: number | null; manualLogDate: number | null }
     | undefined;
   const manual = row?.manualLogDate != null ? new Date(row.manualLogDate * 1000) : null;
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
+  const startOfDay =
+    zone === undefined
+      ? ((): Date => {
+          const d = new Date(now);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        })()
+      : dayBoundInstant(localToday(now, zone), "start", zone);
   let auto: Date;
   switch (row?.logInterval ?? 0) {
     case 0:

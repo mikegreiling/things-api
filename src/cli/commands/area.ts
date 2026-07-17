@@ -9,6 +9,7 @@ import { areaMark, thingsLink } from "../glyphs.ts";
 import { Option } from "commander";
 
 import { openInThings } from "./reads.ts";
+import { renderNow, renderZone } from "../clock.ts";
 import {
   invocation,
   parseCap,
@@ -85,7 +86,7 @@ export function renderAreaView(
   grouped: GroupedTruncation,
   opts: AreaShowOpts,
 ): string[] {
-  const todayIso = localToday();
+  const todayIso = localToday(renderNow(), renderZone());
   // The card's ACTIVE project rows are already capped in `view`; scheduled and
   // someday rows always survive and route to the Upcoming/Someday sections.
   const activeProjects = view.projects.filter((p) => isActiveProjectRow(p, todayIso));

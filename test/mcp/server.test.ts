@@ -105,6 +105,53 @@ async function connect(
   };
 }
 
+/** Like {@link connect}, but with a pinned instant and extra clock env (THINGS_TZ/THINGS_NOW). */
+async function connectClock(
+  vectors: WriteVector[],
+  now: Date,
+  envExtra: Record<string, string> = {},
+): Promise<void> {
+  const env = {
+    ...process.env,
+    THINGS_DB: fixture.path,
+    THINGS_API_STATE_DIR: stateDir,
+    THINGS_API_CONFIG_DIR: join(stateDir, "config"),
+    ...envExtra,
+  };
+  const server = createThingsMcpServer({
+    dbPath: fixture.path,
+    openOptions: {
+      env,
+      vectors,
+      now: () => now,
+      writeOverrides: { isAppRunning: () => true, ensureRunning: async () => true },
+    },
+  });
+  client = new Client({ name: "test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  close = async () => {
+    await client.close();
+    await server.close();
+  };
+}
+
+/** The meta.clock block appended to a read result, if any. */
+function clockOf(result: unknown): { timezone: string; today: string } | undefined {
+  const content = (result as { content: { text: string }[] }).content;
+  for (const block of content) {
+    try {
+      const parsed = JSON.parse(block.text) as {
+        meta?: { clock?: { timezone: string; today: string } };
+      };
+      if (parsed.meta?.clock !== undefined) return parsed.meta.clock;
+    } catch {
+      // non-JSON block: skip
+    }
+  }
+  return undefined;
+}
+
 /** Collect every property name at any depth of a JSON-schema object (arg names). */
 function schemaArgNames(schema: unknown): string[] {
   const names: string[] = [];
@@ -235,6 +282,73 @@ describe("things MCP server", () => {
     const view = textOf(result) as { today: { title: string }[]; evening: unknown[] };
     expect(view.today.map((i) => i.title)).toContain("MCP-Today");
     expect(result.isError ?? false).toBe(false);
+  });
+
+  describe("consumer timezone (per-call tz)", () => {
+    // One instant, two calendars two days apart: Kiritimati (UTC+14) is Jul 3,
+    // Midway (UTC-11) is Jul 1. A startDate of Jul 2 is thus a past-or-today
+    // (Today member) date in Kiritimati but a FUTURE date in Midway.
+    const NOW_TZ = new Date("2026-07-02T10:00:00Z");
+
+    it("per-call tz overrides THINGS_TZ, flipping today membership + meta.clock", async () => {
+      seedTodo(fixture.db, { title: "TZ-item", startDate: "2026-07-02" });
+      await connectClock([fakeVector(null).vector], NOW_TZ, { THINGS_TZ: "Pacific/Midway" });
+
+      // Per-call Kiritimati (ahead): the item is a Today member; clock re-scoped.
+      const ahead = await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", tz: "Pacific/Kiritimati" },
+      });
+      expect((textOf(ahead) as { today: { title: string }[] }).today.map((i) => i.title)).toContain(
+        "TZ-item",
+      );
+      expect(clockOf(ahead)).toEqual({ timezone: "Pacific/Kiritimati", today: "2026-07-03" });
+
+      // No per-call tz → the server default (THINGS_TZ=Midway): NOT yet today.
+      const behind = await client.callTool({ name: "read_view", arguments: { view: "today" } });
+      expect(
+        (textOf(behind) as { today: { title: string }[] }).today.map((i) => i.title),
+      ).not.toContain("TZ-item");
+      expect(clockOf(behind)).toEqual({ timezone: "Pacific/Midway", today: "2026-07-01" });
+    });
+
+    it("emits no meta.clock on the host clock (no zone / no pinned now)", async () => {
+      seedTodo(fixture.db, { title: "Plain", startDate: "2026-07-02" });
+      await connectClock([fakeVector(null).vector], NOW_TZ);
+      const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
+      expect(clockOf(result)).toBeUndefined();
+    });
+
+    it("refuses when: evening fail-closed when the consumer's date differs from the host", async () => {
+      await connectClock([fakeVector(null).vector], NOW_TZ);
+      // The host's date for this instant matches at most ONE of these far-apart
+      // zones, so at least one evening write is refused with blocked:clock.
+      const results = await Promise.all(
+        ["Pacific/Kiritimati", "Pacific/Midway"].map((tz) =>
+          client.callTool({
+            name: "add_todo",
+            arguments: { title: `Ev-${tz}`, when: "evening", tz },
+          }),
+        ),
+      );
+      const refused = results.filter((r) => r.isError === true);
+      expect(refused.length).toBeGreaterThanOrEqual(1);
+      for (const r of refused) {
+        const err = textOf(r) as { code: string; message: string };
+        expect(err.code).toBe("blocked:clock");
+        expect(err.message).toMatch(/This Evening/i);
+      }
+    });
+
+    it("rejects an invalid per-call tz with a usage error", async () => {
+      await connectClock([fakeVector(null).vector], NOW_TZ);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "today", tz: "Bogus/Zone" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatchObject({ code: "usage" });
+    });
   });
 
   it("read_view today with evening: true returns only the This Evening section", async () => {

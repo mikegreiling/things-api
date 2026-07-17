@@ -15,6 +15,7 @@ import {
   whenValue,
 } from "../glyphs.ts";
 import { openInThings } from "./reads.ts";
+import { renderNow, renderZone } from "../clock.ts";
 import { invocation, runRead, shellQuote, withClient } from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
@@ -94,7 +95,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   // share link, then labeled when/deadline/tags lines and the full note.
   // The opened resource shows its tags green (GUI: list pills are gray).
   const p = view.project;
-  const todayIso = localToday();
+  const todayIso = localToday(renderNow(), renderZone());
   const areaSuffix = p.area === null ? "" : ` ${dim(`(${p.area.title})`)}`;
   // In the Trash the card says so — the only view where the project's
   // would-be-recovered (untrashed) children remain visible.

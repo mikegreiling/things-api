@@ -57,6 +57,7 @@ export function projectView(
   uuid: string,
   now?: Date,
   filter: ViewFilter = {},
+  zone?: string,
 ): ProjectView {
   const overdue = filter.overdue === true;
   const projectRow = fetchTaskByUuid(db, uuid);
@@ -86,7 +87,7 @@ export function projectView(
   // itself always renders. Headings that keep no surviving child collapse
   // (below). Its single packed-today bind trails the two uuid binds.
   const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
-  const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
+  const overdueBinds = overdue ? [encodePackedDate(localToday(now, zone))] : [];
   // Tag scope (§9a): the child to-dos are filtered by a tag carried DIRECTLY on
   // the row — the container semantics. The project's own tags are inherited by
   // EVERY child, so an inheritance-inclusive `--tag` would be vacuous here;
@@ -105,14 +106,14 @@ export function projectView(
     [uuid, uuid, ...tf.binds, ...overdueBinds],
   );
   const childTags = tagsOf(childRows);
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
   const todos = childRows.map((r) => ({
     row: r,
     todo: mapTodo(r, refs, childTags.get(r.uuid) ?? []),
   }));
   markLogged([project, ...todos.map((t) => t.todo)], boundary);
 
-  const packedToday = encodePackedDate(localToday(now));
+  const packedToday = encodePackedDate(localToday(now, zone));
   const active: Todo[] = [];
   const byHeading = new Map<string, Todo[]>();
   const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];

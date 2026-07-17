@@ -58,6 +58,7 @@ export function areaView(
   ref: string,
   now?: Date,
   filter: ViewFilter = {},
+  zone?: string,
 ): AreaView {
   const overdue = filter.overdue === true;
   const uuid = resolveAreaUuid(db, ref);
@@ -82,7 +83,7 @@ export function areaView(
       rows.map((r) => r.uuid),
     );
 
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
   // OWN-DEADLINE UNIFORM: `--overdue` filters BOTH displayed row kinds by each
   // row's OWN deadline (open, strictly before today) via the shared OVERDUE
   // predicate — the area's child PROJECTS by the project's own deadline AND the
@@ -90,7 +91,7 @@ export function areaView(
   // overdue to-do inside a non-overdue project never surfaces here — that is
   // `project show --overdue`). Sections with no surviving rows collapse.
   const overdueSql = overdue ? ` AND ${OVERDUE}` : "";
-  const overdueBinds = overdue ? [encodePackedDate(localToday(now))] : [];
+  const overdueBinds = overdue ? [encodePackedDate(localToday(now, zone))] : [];
   // Tag scope (§9a): BOTH displayed row kinds — the child PROJECTS and the
   // loose to-dos — are filtered by a tag carried DIRECTLY on the row (the
   // container semantics). The area's own tags are inherited by every row it
@@ -131,7 +132,7 @@ export function areaView(
     boundary,
   );
 
-  const packedToday = encodePackedDate(localToday(now));
+  const packedToday = encodePackedDate(localToday(now, zone));
   const active: Todo[] = [];
   const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
   const repeating: Todo[] = [];

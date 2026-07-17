@@ -99,12 +99,102 @@ export function addDaysIso(iso: IsoDate, days: number): IsoDate {
 }
 
 /**
- * Today's date in the machine's local timezone, as Things computes it.
- * The Today list boundary is local-midnight; injectable `now` for tests.
+ * Today's date, as Things computes it: local-midnight is the Today boundary.
+ * `now` is injectable (tests, pinned-clock runs). `zone` is an OPTIONAL IANA
+ * time zone — when absent the machine's host zone is used and the result is
+ * byte-identical to before this parameter existed; when given, the calendar
+ * date is computed IN THAT ZONE (a consumer three time zones away can ask for
+ * their own Today). DST/antimeridian correctness comes from {@link
+ * calendarDateInZone}'s use of Intl — never manual offset math.
  */
-export function localToday(now: Date = new Date()): IsoDate {
+export function localToday(now: Date = new Date(), zone?: string): IsoDate {
+  if (zone !== undefined) return calendarDateInZone(now, zone);
   const y = now.getFullYear();
   const m = now.getMonth() + 1;
   const d = now.getDate();
   return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
+ * The calendar date (`YYYY-MM-DD`) of an instant in a given IANA zone, via
+ * `Intl.DateTimeFormat` (the DST- and antimeridian-correct path — the platform
+ * ICU data owns the offset, so we never compute one by hand). Throws a
+ * RangeError on an unknown zone.
+ */
+export function calendarDateInZone(instant: Date, zone: string): IsoDate {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year").padStart(4, "0")}-${get("month")}-${get("day")}`;
+}
+
+/** Whether a string names an IANA time zone the platform recognizes. */
+export function isValidTimeZone(zone: string): boolean {
+  try {
+    // Constructing with the zone throws (RangeError) on an unknown identifier;
+    // reading back the resolved zone keeps this an expression, not a bare `new`.
+    return new Intl.DateTimeFormat("en-CA", { timeZone: zone }).resolvedOptions().timeZone !== "";
+  } catch {
+    return false;
+  }
+}
+
+/** The machine's host IANA zone (what the app itself renders in). */
+export function hostTimeZone(): string {
+  return new Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/**
+ * The instant at the START (00:00:00.000) or END (23:59:59.999) of a calendar
+ * date. Without a `zone` the day edge is the HOST-local one (byte-identical to
+ * a bare `new Date(y, m-1, d, …)`); with a `zone` it is that zone's day edge,
+ * resolved through the zone's offset (DST-corrected by a second Intl read).
+ */
+export function dayBoundInstant(iso: IsoDate, edge: "start" | "end", zone?: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (match === null) throw new RangeError(`not an ISO date: ${iso}`);
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  const [hh, mm, ss, ms] = edge === "start" ? [0, 0, 0, 0] : [23, 59, 59, 999];
+  if (zone === undefined) return new Date(y, m - 1, d, hh, mm, ss, ms);
+  // Treat the wall time as if UTC, then subtract the zone's offset at that
+  // instant; re-read once so a DST-boundary offset is corrected.
+  const guess = new Date(Date.UTC(y, m - 1, d, hh, mm, ss, ms));
+  const offset = zoneOffsetMs(guess, zone);
+  const first = new Date(guess.getTime() - offset);
+  const offset2 = zoneOffsetMs(first, zone);
+  return offset2 === offset ? first : new Date(guess.getTime() - offset2);
+}
+
+/** Milliseconds to add to a UTC instant to read it as wall-clock time in `zone` (the zone's offset). */
+function zoneOffsetMs(instant: Date, zone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  // formatToParts has no sub-second field; zone offsets are whole minutes, so
+  // the wall clock carries the instant's own milliseconds — restore them, else
+  // the offset is corrupted by up to a second (a day-boundary rounding error).
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+    instant.getUTCMilliseconds(),
+  );
+  return asUtc - instant.getTime();
 }

@@ -5,6 +5,7 @@
 import type { AuditWriter } from "./audit/log.ts";
 import { createAuditWriter } from "./audit/log.ts";
 import { loadConfig, type ThingsApiConfig } from "./config.ts";
+import { resolveClock, clockMeta as buildClockMeta, type ClockMeta } from "./model/clock.ts";
 import { PKG_VERSION, type GroupedTruncation, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
@@ -123,6 +124,12 @@ export interface OpenOptions {
   dbPath?: string;
   /** Injectable clock (tests, pinned-clock lab runs). */
   now?: () => Date;
+  /**
+   * Default consumer IANA zone for every date boundary (tests / explicit
+   * embedding). Overrides `THINGS_TZ` from the environment; a per-read `zone`
+   * still overrides this. Absent uses `THINGS_TZ`, else the host zone.
+   */
+  zone?: string;
   /** Injectable write vectors (tests: FakeVector; lab: probe vectors). */
   vectors?: WriteVector[];
   /** Env for config/state-dir resolution (tests). */
@@ -146,6 +153,16 @@ export interface OpenOptions {
 export interface ListBound {
   limit?: number | null;
   all?: boolean;
+}
+
+/**
+ * Per-read consumer-zone override (the MCP `tz` argument). Overrides the
+ * process default (`THINGS_TZ` / the `OpenOptions.zone` embedding / the host)
+ * for THIS read only. Absent uses that default; an invalid zone is rejected by
+ * the calling surface before it reaches here.
+ */
+export interface ClockScopedRead {
+  zone?: string;
 }
 
 /**
@@ -227,6 +244,13 @@ export interface ThingsClient {
    * once per client, so it costs nothing after the first read.
    */
   schemaStatus(): SchemaStatus;
+  /**
+   * The additive `meta.clock` honesty field for this client's effective clock,
+   * or undefined when the host clock is in force (no `THINGS_TZ`/`THINGS_NOW`
+   * and no per-read override). `zoneOverride` reflects a per-read zone (the MCP
+   * `tz` argument) so the reported `today` matches what that read computed.
+   */
+  clockMeta(zoneOverride?: string): ClockMeta | undefined;
   read: {
     /**
      * The Today list (Today + This Evening split) with the sidebar badge,
@@ -234,34 +258,37 @@ export interface ThingsClient {
      * first, then This Evening. `all`/`limit: null` returns every row; the
      * `truncation` metadata carries the per-section (`today`/`evening`) counts.
      */
-    today(options?: TodayFilter & ListBound): BoundedTodayView;
+    today(options?: TodayFilter & ListBound & ClockScopedRead): BoundedTodayView;
     /** Inbox captures, bounded (default 50). */
-    inbox(options?: InboxFilter & ListBound): BoundedList<ListItem>;
+    inbox(options?: InboxFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
     /**
      * Anytime catalogue: every area header and project row is always present;
      * `areaLimit` (default 30) caps each area/loose block, `projectLimit`
      * (default 3) each project block. `all` lifts both.
      */
-    anytime(options?: ViewFilter & GroupedBound): BoundedSectionsView;
+    anytime(options?: ViewFilter & GroupedBound & ClockScopedRead): BoundedSectionsView;
     /** Future-scheduled items in date order, bounded (default 50). */
-    upcoming(options?: UpcomingFilter & ListBound): BoundedList<ListItem>;
+    upcoming(options?: UpcomingFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
     /**
      * Someday catalogue: `areaLimit` (default 30) caps each group; with
      * `activeProjectItems`, `projectLimit` (default: every item) caps each
      * active project's trailing child list. `all` lifts both.
      */
-    someday(options?: SomedayFilter & GroupedBound): BoundedSectionsView;
+    someday(options?: SomedayFilter & GroupedBound & ClockScopedRead): BoundedSectionsView;
     /** Logbook entries (most recent first), bounded (default 50). */
-    logbook(options?: Omit<LogbookFilter, "limit"> & ListBound): BoundedList<ListItem>;
+    logbook(
+      options?: Omit<LogbookFilter, "limit"> & ListBound & ClockScopedRead,
+    ): BoundedList<ListItem>;
     /** Trashed items (most recently modified first), bounded (default 50). */
-    trash(options?: ListBound): BoundedList<ListItem>;
+    trash(options?: ListBound & ClockScopedRead): BoundedList<ListItem>;
     /**
      * Projects in sidebar order. LATER (someday + future-scheduled) projects
      * are excluded by default — `later: true` appends them after the active
      * block of their group (loose block / area), never intermingled.
      */
     projects(
-      options?: { areaUuid?: string; later?: boolean; overdue?: boolean } & ViewFilter,
+      options?: { areaUuid?: string; later?: boolean; overdue?: boolean } & ViewFilter &
+        ClockScopedRead,
     ): Project[];
     /**
      * Composite project view. Targets by uuid, unique name, or uuid prefix.
@@ -271,7 +298,7 @@ export interface ThingsClient {
      * inherited from this project are ignored). Any content scope collapses
      * headings left with no surviving child.
      */
-    projectView(ref: string, options?: ViewFilter): ProjectView;
+    projectView(ref: string, options?: ViewFilter & ClockScopedRead): ProjectView;
     /**
      * Composite area view: direct to-dos, projects in sidebar order, later,
      * logged. `overdue: true` keeps only the loose to-dos AND child projects
@@ -282,11 +309,11 @@ export interface ThingsClient {
      * always survive, routed to the card's later sections); `all` lifts both.
      * The `grouped` metadata carries the per-section counts.
      */
-    areaView(ref: string, options?: ViewFilter & GroupedBound): BoundedAreaView;
+    areaView(ref: string, options?: ViewFilter & GroupedBound & ClockScopedRead): BoundedAreaView;
     areas(): Area[];
     tags(): Tag[];
     /** Title/notes substring search, ranked, bounded (default 50). */
-    search(query: string, options?: SearchOptions): BoundedList<SearchResultItem>;
+    search(query: string, options?: SearchOptions & ClockScopedRead): BoundedList<SearchResultItem>;
     /**
      * Did-you-mean fallback: case-insensitive title-only substring match over
      * areas/projects/to-dos (open + untrashed), ordered and capped. `type`
@@ -297,7 +324,7 @@ export interface ThingsClient {
       options?: { type?: "to-do" | "project" | "area"; limit?: number },
     ): LiteSearchResult;
     /** Rows created/modified since a moment — incl. trashed/logged/templates — bounded (default 50). */
-    changes(options: { since: Date } & ListBound): BoundedList<ChangedItem>;
+    changes(options: { since: Date } & ListBound & ClockScopedRead): BoundedList<ChangedItem>;
     byUuid(uuid: string): AnyTask | null;
     /**
      * Classify a loose reference (uuid, >=6-char prefix, share link, or
@@ -520,8 +547,20 @@ export { applyChecklistEdit } from "./write/checklist.ts";
 export function openThings(options: OpenOptions = {}): ThingsClient {
   const located = locateThingsDb(options.dbPath ? { dbPath: options.dbPath } : undefined);
   const conn: ThingsConnection = openConnection(located.path);
-  const now = options.now ?? (() => new Date());
   const env = options.env ?? process.env;
+  // The effective clock, resolved once from the environment (THINGS_TZ /
+  // THINGS_NOW) plus any explicit embedding overrides. Every read/write date
+  // boundary rides `now` + `defaultZone`; a per-read `zone` overrides the zone.
+  // Malformed values throw ClockError here (fail closed — never a silent host
+  // fallback), surfaced by the CLI/MCP as a usage error.
+  const clock = resolveClock({
+    env,
+    ...(options.now !== undefined && { now: options.now }),
+    ...(options.zone !== undefined && { tz: options.zone }),
+  });
+  const now = clock.now;
+  const defaultZone = clock.zone;
+  const zoneOf = (o?: { zone?: string }): string | undefined => o?.zone ?? defaultZone;
   const config = loadConfig(env);
   let cachedStatus: FingerprintStatus | null = null;
   const fingerprint = (): FingerprintStatus => {
@@ -546,6 +585,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     fingerprint,
     lockPath: mutationLockPath(env),
     now,
+    // The consumer zone normalizes clock-relative `when` tokens (today/evening)
+    // to explicit dates before dispatch; a per-write `zone` overrides it.
+    ...(defaultZone !== undefined && { zone: defaultZone }),
     ...(options.writeOverrides?.ensureRunning !== undefined && {
       ensureRunning: options.writeOverrides.ensureRunning,
     }),
@@ -586,7 +628,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         if (legResult.kind !== "ok") return legResult;
       }
     }
-    return runMutation(writeDeps, op, params, writeOptions ?? {});
+    // Consumer entry point: normalize a consumer-provided `when` (today/evening)
+    // to the effective zone before dispatch (a no-op without a zone).
+    return runMutation(writeDeps, op, params, { ...writeOptions, normalizeWhen: true });
   };
 
   return {
@@ -594,6 +638,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     config,
     fingerprint,
     schemaStatus: () => toSchemaStatus(fingerprint()),
+    clockMeta: (zoneOverride) => buildClockMeta(clock, zoneOverride),
     read: {
       // The list views own their bounding: run the full filtered query, then
       // truncate to the resolved cap (default 50 / per-block 30·3) — the exact
@@ -601,27 +646,36 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       // capped view plus the truncation/grouped metadata (the human renderers
       // derive their hidden-count hints from that metadata alone).
       today: (o) => {
-        const { data, truncation } = truncateToday(todayView(conn.db, now(), o), listCap(o));
+        const { data, truncation } = truncateToday(
+          todayView(conn.db, now(), o, zoneOf(o)),
+          listCap(o),
+        );
         return { view: data, truncation };
       },
       inbox: (o) => {
-        const { data, truncation } = truncateList(inboxView(conn.db, now(), o), listCap(o));
+        const { data, truncation } = truncateList(
+          inboxView(conn.db, now(), o, zoneOf(o)),
+          listCap(o),
+        );
         return { items: data, truncation };
       },
       anytime: (o) => {
         const { data, grouped } = previewSections(
-          anytimeView(conn.db, now(), o),
+          anytimeView(conn.db, now(), o, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, PROJECT_PREVIEW_LIMIT),
         );
         return { view: data, grouped };
       },
       upcoming: (o) => {
-        const { data, truncation } = truncateList(upcomingView(conn.db, now(), o), listCap(o));
+        const { data, truncation } = truncateList(
+          upcomingView(conn.db, now(), o, zoneOf(o)),
+          listCap(o),
+        );
         return { items: data, truncation };
       },
       someday: (o) => {
         const { data, grouped } = previewSomedaySections(
-          somedayView(conn.db, now(), o),
+          somedayView(conn.db, now(), o, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, null),
         );
         return { view: data, grouped };
@@ -631,28 +685,38 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         // (limit: null) so the exact total behind the cut is honest.
         const { limit: _limit, all: _all, ...filter } = o ?? {};
         const { data, truncation } = truncateList(
-          logbookView(conn.db, now(), { ...filter, limit: null }),
+          logbookView(conn.db, now(), { ...filter, limit: null }, zoneOf(o)),
           listCap(o),
         );
         return { items: data, truncation };
       },
       trash: (o) => {
         const { data, truncation } = truncateList(
-          trashView(conn.db, now(), { limit: null }),
+          trashView(conn.db, now(), { limit: null }, zoneOf(o)),
           listCap(o),
         );
         return { items: data, truncation };
       },
       // Thread the injected clock so `--overdue`'s (and later's) today boundary
       // rides the same clock as every other view — never a hardcoded date.
-      projects: (o) => projectsView(conn.db, { ...o, now: now() }),
+      projects: (o) => {
+        const zone = zoneOf(o);
+        return projectsView(conn.db, { ...o, now: now(), ...(zone !== undefined && { zone }) });
+      },
       projectView: (ref, o) =>
-        projectView(conn.db, resolveProjectUuid(conn.db, ref, { trashed: true }), now(), o ?? {}),
+        projectView(
+          conn.db,
+          resolveProjectUuid(conn.db, ref, { trashed: true }),
+          now(),
+          o ?? {},
+          zoneOf(o),
+        ),
       areaView: (ref, o) => {
         const { data, grouped } = capAreaSections(
-          areaView(conn.db, ref, now(), o ?? {}),
+          areaView(conn.db, ref, now(), o ?? {}, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
           now(),
+          zoneOf(o),
         );
         return { view: data, grouped };
       },
@@ -661,15 +725,15 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       search: (query, o) => {
         const { limit: _limit, ...rest } = o ?? {};
         const { data, truncation } = truncateList(
-          searchView(conn.db, query, { ...rest, limit: null }, now()),
+          searchView(conn.db, query, { ...rest, limit: null }, now(), zoneOf(o)),
           listCap(o),
         );
         return { items: data, truncation };
       },
-      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o, now()),
+      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o, now(), defaultZone),
       changes: (o) => {
         const { data, truncation } = truncateList(
-          changesView(conn.db, now(), { since: o.since, limit: null }),
+          changesView(conn.db, now(), { since: o.since, limit: null }, zoneOf(o)),
           listCap(o),
         );
         return { items: data, truncation };

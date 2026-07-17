@@ -291,8 +291,13 @@ export interface TodayFilter extends ViewFilter {
 /** Badge = OPEN members only (the GUI badge counts remaining work). */
 const isOpen = (i: ListItem) => i.status === "open";
 
-export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): TodayView {
-  const todayIso = localToday(now);
+export function todayView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: TodayFilter,
+  zone?: string,
+): TodayView {
+  const todayIso = localToday(now, zone);
   const packedToday = encodePackedDate(todayIso);
   const tf = tagFilter(db, filter);
   const of = overdueFilter(filter, packedToday);
@@ -311,7 +316,7 @@ export function todayView(db: DatabaseSync, now?: Date, filter?: TodayFilter): T
   // has not yet passed keeps its comparator slot in place (GUI-parity ruling
   // 2026-07-14). The boundary is threaded into both the SQL filter and
   // materialize so the row's presence and its `logged` flag agree.
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
   const rows = fetchTaskRows(
     db,
     `${OPEN_OR_UNSWEPT} AND ${CONTAINER_UNTRASHED} AND (
@@ -367,11 +372,16 @@ export interface InboxFilter extends ViewFilter {
   until?: Date;
 }
 
-export function inboxView(db: DatabaseSync, now?: Date, filter?: InboxFilter): ListItem[] {
+export function inboxView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: InboxFilter,
+  zone?: string,
+): ListItem[] {
   const tf = tagFilter(db, filter);
   // `now` is threaded only for the `--overdue` boundary (the inbox order and
   // the since/until window key on epoch creationDate, not on today).
-  const of = overdueFilter(filter, encodePackedDate(localToday(now)));
+  const of = overdueFilter(filter, encodePackedDate(localToday(now, zone)));
   const where = [OPEN, "t.start = 0"];
   const binds: (string | number)[] = [];
   // creationDate is an epoch REAL (Unix seconds) — mirror the changes/logbook
@@ -389,7 +399,7 @@ export function inboxView(db: DatabaseSync, now?: Date, filter?: InboxFilter): L
     `${where.join(" AND ")}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...binds, ...tf.binds, ...of.binds],
   );
-  return materialize(db, rows, logBoundary(db, now));
+  return materialize(db, rows, logBoundary(db, now, zone));
 }
 
 /**
@@ -403,8 +413,13 @@ export interface SidebarSection {
   items: ListItem[];
 }
 
-export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): SidebarSection[] {
-  const packedToday = encodePackedDate(localToday(now));
+export function anytimeView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: ViewFilter,
+  zone?: string,
+): SidebarSection[] {
+  const packedToday = encodePackedDate(localToday(now, zone));
   const tf = tagFilter(db, filter);
   const of = overdueFilter(filter, packedToday);
   // Mirrors UI membership: every active item, including Today members
@@ -415,7 +430,7 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
   // the parent project be open, so a closed-but-unswept project's children stay
   // cascade-excluded — the checked project row represents them. The boundary is
   // threaded into the SQL filter and materialize so presence and `logged` agree.
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
   const rows = fetchTaskRows(
     db,
     `${OPEN_OR_UNSWEPT} AND ${ANYTIME_SELF("t")}
@@ -446,8 +461,8 @@ export function anytimeView(db: DatabaseSync, now?: Date, filter?: ViewFilter): 
  * deadline (deadlineSuppressionDate >= deadline); that column is not surfaced
  * on the entity, so a suppressed unscheduled overdue row is over-starred here.
  */
-export function isTodayMember(item: ListItem, now?: Date): boolean {
-  const today = localToday(now);
+export function isTodayMember(item: ListItem, now?: Date, zone?: string): boolean {
+  const today = localToday(now, zone);
   if (item.startDate !== null) return item.startDate <= today;
   return item.deadline !== null && item.deadline <= today;
 }
@@ -483,9 +498,14 @@ export interface UpcomingFilter extends ViewFilter {
  */
 const groupKey = (i: ListItem): string => i.startDate ?? i.deadline ?? "";
 
-export function upcomingView(db: DatabaseSync, now?: Date, filter?: UpcomingFilter): ListItem[] {
-  const packedToday = encodePackedDate(localToday(now));
-  const boundary = logBoundary(db, now);
+export function upcomingView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: UpcomingFilter,
+  zone?: string,
+): ListItem[] {
+  const packedToday = encodePackedDate(localToday(now, zone));
+  const boundary = logBoundary(db, now, zone);
   const until = filter?.until;
   const since = filter?.since;
   const untilBinds = until === undefined ? [] : [encodePackedDate(until)];
@@ -665,9 +685,10 @@ export function somedayView(
   db: DatabaseSync,
   now?: Date,
   filter?: SomedayFilter,
+  zone?: string,
 ): SidebarSection[] {
   const tf = tagFilter(db, filter);
-  const packedToday = encodePackedDate(localToday(now));
+  const packedToday = encodePackedDate(localToday(now, zone));
   const of = overdueFilter(filter, packedToday);
   // Default membership excludes ALL project children (the UI shows only
   // container-less someday to-dos, area members, and someday project rows);
@@ -683,7 +704,7 @@ export function somedayView(
      AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds, ...of.binds],
   );
-  const sections = groupBySidebar(db, materialize(db, rows, logBoundary(db, now)));
+  const sections = groupBySidebar(db, materialize(db, rows, logBoundary(db, now, zone)));
   // GUI order within a Someday group (live side-by-side, 2026-07-12):
   // PROJECT rows first (their sidebar order preserved), then direct to-dos in
   // drag order. Someday children of active projects (the activeProjectItems
@@ -716,7 +737,12 @@ export interface LogbookFilter extends ViewFilter {
   until?: Date;
 }
 
-export function logbookView(db: DatabaseSync, now?: Date, options?: LogbookFilter): ListItem[] {
+export function logbookView(
+  db: DatabaseSync,
+  now?: Date,
+  options?: LogbookFilter,
+  zone?: string,
+): ListItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 100);
   const tf = tagFilter(db, options);
   const where: string[] = [];
@@ -745,7 +771,7 @@ export function logbookView(db: DatabaseSync, now?: Date, options?: LogbookFilte
   // checked in their original lists, exactly like the GUI's Logbook. The
   // membership boundary rides the injected clock (threaded into both the SQL
   // filter and materialize so presence and the `logged` flag agree).
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
   const rows = fetchTaskRows(
     db,
     `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC${cap === null ? "" : " LIMIT ?"}`,
@@ -758,6 +784,7 @@ export function trashView(
   db: DatabaseSync,
   now?: Date,
   options?: { limit?: number | null },
+  zone?: string,
 ): ListItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 200);
   const rows = fetchTaskRows(
@@ -766,17 +793,23 @@ export function trashView(
      ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
     cap === null ? [] : [cap],
   );
-  return materialize(db, rows, logBoundary(db, now));
+  return materialize(db, rows, logBoundary(db, now, zone));
 }
 
 export function projectsView(
   db: DatabaseSync,
-  options?: { areaUuid?: string; later?: boolean; overdue?: boolean; now?: Date } & ViewFilter,
+  options?: {
+    areaUuid?: string;
+    later?: boolean;
+    overdue?: boolean;
+    now?: Date;
+    zone?: string;
+  } & ViewFilter,
 ): Project[] {
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
   // or unknown references throw like every other ref resolver.
   const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
-  const packedToday = encodePackedDate(localToday(options?.now));
+  const packedToday = encodePackedDate(localToday(options?.now, options?.zone));
   // Tag scope (§9a): the projects LIST is a FLAT view (like `anytime` restricted
   // to project rows), NOT a single-container view — projects sit in different
   // areas with heterogeneous inheritance, there is no universally-inherited tag
@@ -818,14 +851,14 @@ export function projectsView(
     ...tf.binds,
     ...activeFirstBinds,
   ]);
-  const items = materialize(db, rows, logBoundary(db, options?.now)) as Project[];
+  const items = materialize(db, rows, logBoundary(db, options?.now, options?.zone)) as Project[];
   if (options?.later !== true) return items;
   // Each group's later sub-block reads like Upcoming: SCHEDULED projects
   // first — date ascending, todayIndex within a day (the UI's drag order,
   // hidden on entities but present on the raw rows) — then someday in drag
   // order. The SQL already made group runs contiguous with actives leading,
   // so only the later runs are re-sorted (stable within someday).
-  const todayIso = localToday(options?.now);
+  const todayIso = localToday(options?.now, options?.zone);
   const ti = new Map(rows.map((r) => [r.uuid, r.todayIndex ?? 0]));
   const isLater = (p: Project) =>
     p.startDate !== null ? p.startDate > todayIso : p.start === "someday";
@@ -895,6 +928,7 @@ export function changesView(
   db: DatabaseSync,
   now: Date | undefined,
   options: { since: Date; limit?: number | null },
+  zone?: string,
 ): ChangedItem[] {
   const cap = options.limit === null ? null : (options.limit ?? 200);
   const sinceEpoch = options.since.getTime() / 1000;
@@ -905,7 +939,7 @@ export function changesView(
     [sinceEpoch, ...(cap === null ? [] : [cap])],
   );
   // oxlint-disable-next-line no-map-spread -- building fresh change objects, not mutating
-  return materialize(db, rows, logBoundary(db, now)).map((item, i) => ({
+  return materialize(db, rows, logBoundary(db, now, zone)).map((item, i) => ({
     ...item,
     changeKind:
       (rows[i]?.creationDate ?? 0) > sinceEpoch ? ("created" as const) : ("modified" as const),
@@ -944,6 +978,7 @@ export function liteTitleSearch(
   query: string,
   options?: { type?: "to-do" | "project" | "area"; limit?: number },
   now?: Date,
+  zone?: string,
 ): LiteSearchResult {
   const cap = options?.limit ?? 10;
   const type = options?.type;
@@ -965,7 +1000,7 @@ export function liteTitleSearch(
       `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?${LIKE_ESCAPE}`,
       [`%${escapeLike(query)}%`],
     );
-    tasks = materialize(db, rows, logBoundary(db, now));
+    tasks = materialize(db, rows, logBoundary(db, now, zone));
   }
 
   const projects = tasks.filter((t) => t.type === "project").toSorted(byStatusThenRecent);
@@ -987,16 +1022,17 @@ export function searchView(
   query: string,
   options?: SearchOptions,
   now?: Date,
+  zone?: string,
 ): SearchResultItem[] {
   const cap = options?.limit === null ? null : (options?.limit ?? 50);
   const needle = `%${escapeLike(query)}%`;
   // `--overdue` narrows to OPEN, past-deadline matches. Its open-only predicate
   // is contradictory with the status-widening flags (logged/trashed/all); the
   // CLI/MCP surfaces reject that combination, so here it simply intersects.
-  const of = overdueFilter(options, encodePackedDate(localToday(now)));
+  const of = overdueFilter(options, encodePackedDate(localToday(now, zone)));
   // Threaded into every materialize so the `logged` flag (--logged widens to
   // closed rows) honors the injected clock, not wall time.
-  const boundary = logBoundary(db, now);
+  const boundary = logBoundary(db, now, zone);
 
   // The scope predicates (everything except the match needle), reused verbatim
   // for the needle query AND the heading-credited-project query so both honor

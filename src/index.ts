@@ -127,6 +127,15 @@ export type {
   TodaySection,
 } from "./model/entities.ts";
 export type { IsoDate } from "./model/dates.ts";
+export {
+  calendarDateInZone,
+  dayBoundInstant,
+  hostTimeZone,
+  isValidTimeZone,
+} from "./model/dates.ts";
+export { resolveClock, clockMeta, ClockError } from "./model/clock.ts";
+export type { EffectiveClock, ClockMeta } from "./model/clock.ts";
+export type { ClockScopedRead } from "./client.ts";
 export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
 export type { ProjectView } from "./read/project-view.ts";
 export type { AreaView } from "./read/area-view.ts";

@@ -146,6 +146,10 @@ The `--plain` / `--pretty` output pair joins this universal set when roadmap §H
 
 A help-contract test enforces the charter mechanically: every registered list/detail command's `--help` must offer `--json`, `--db`, and `--all`.
 
+### Environment knobs (clock)
+
+Two env vars (deliberately NOT flags — they are process-wide policy, like `THINGS_WIDTH`) shift the calendar every date boundary evaluates in: `THINGS_TZ` (an IANA zone) and `THINGS_NOW` (an ISO instant pinning "now"). They resolve once per process; a malformed value is a usage error (exit 2). Under either, `--json` reads carry `meta.clock { timezone, today }`. Full contract — precedence, the additive field, and write-side normalize-before-dispatch — in [contracts.md](contracts.md) → "Consumer clock". (There is no per-command `--tz` flag; the per-call override is an MCP-only tool argument, since the CLI is a single-consumer process that sets the env once.)
+
 ### Bounds & defaults doctrine (Mike-approved)
 
 The optional flags on a read view fall into four classes:

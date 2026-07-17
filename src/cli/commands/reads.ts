@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 
 import { runAreaShow, type AreaShowActionOpts } from "./area.ts";
 import { runProjectShow, type ProjectShowActionOpts } from "./project.ts";
+import { renderNow, renderZone } from "../clock.ts";
 import { dim } from "../style.ts";
 import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
@@ -216,8 +217,14 @@ export function registerReadCommands(program: Command): void {
         if (tagFlagConflict(opts)) return;
         const lim = parseLimit(opts);
         if (!lim.ok) return;
-        const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
-        const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
+        const since =
+          opts.since !== undefined
+            ? parsePeriodStart(opts.since, renderNow(), renderZone())
+            : undefined;
+        const until =
+          opts.until !== undefined
+            ? parsePeriodEnd(opts.until, renderNow(), renderZone())
+            : undefined;
         for (const [flag, value] of [
           ["--since", since],
           ["--until", until],
@@ -263,9 +270,11 @@ export function registerReadCommands(program: Command): void {
             // window in a dim footer note. Human output only — the precomputed
             // lines never ride --json.
             if (boundGiven) {
-              const today = localToday();
-              const sinceLabel = since !== undefined ? shortDate(localToday(since), today) : null;
-              const untilLabel = until !== undefined ? shortDate(localToday(until), today) : null;
+              const today = localToday(renderNow(), renderZone());
+              const sinceLabel =
+                since !== undefined ? shortDate(localToday(since, renderZone()), today) : null;
+              const untilLabel =
+                until !== undefined ? shortDate(localToday(until, renderZone()), today) : null;
               const note =
                 sinceLabel !== null && untilLabel !== null
                   ? `(created ${sinceLabel} – ${untilLabel})`
@@ -559,18 +568,22 @@ export function registerReadCommands(program: Command): void {
         const dropLimitDefault = !limitGiven && opts.all !== true && (untilGiven || sinceGiven);
         const effectiveLimit = dropLimitDefault ? null : lim.limit;
         const untilDate =
-          opts.all === true || dropWindowDefault ? undefined : parsePeriodEnd(opts.until);
+          opts.all === true || dropWindowDefault
+            ? undefined
+            : parsePeriodEnd(opts.until, renderNow(), renderZone());
         if (untilDate !== undefined && Number.isNaN(untilDate.getTime())) {
           usageError(opts, `--until is not a parseable period: ${opts.until}`);
           return;
         }
-        const sinceDate = sinceGiven ? parsePeriodStart(opts.since as string) : undefined;
+        const sinceDate = sinceGiven
+          ? parsePeriodStart(opts.since as string, renderNow(), renderZone())
+          : undefined;
         if (sinceDate !== undefined && Number.isNaN(sinceDate.getTime())) {
           usageError(opts, `--since is not a parseable period: ${opts.since}`);
           return;
         }
-        const until = untilDate === undefined ? undefined : localToday(untilDate);
-        const since = sinceDate === undefined ? undefined : localToday(sinceDate);
+        const until = untilDate === undefined ? undefined : localToday(untilDate, renderZone());
+        const since = sinceDate === undefined ? undefined : localToday(sinceDate, renderZone());
         // The default window is in force only for a bare invocation (no
         // explicit cap or bound); that is the one case whose footer names the
         // window itself alongside the levers.
@@ -594,7 +607,7 @@ export function registerReadCommands(program: Command): void {
             });
             const lines = renderUpcoming(data);
             if (defaultWindowActive && until !== undefined) {
-              const windowLabel = shortDate(until, localToday());
+              const windowLabel = shortDate(until, localToday(renderNow(), renderZone()));
               if (truncation.truncated && truncation.limit !== null) {
                 // Bare invocation, row cap biting inside the default window: one
                 // line names BOTH the window and the two levers, so neither the
@@ -680,8 +693,14 @@ export function registerReadCommands(program: Command): void {
         if (tagFlagConflict(opts)) return;
         const lim = parseLimit(opts);
         if (!lim.ok) return;
-        const since = opts.since !== undefined ? parsePeriodStart(opts.since) : undefined;
-        const until = opts.until !== undefined ? parsePeriodEnd(opts.until) : undefined;
+        const since =
+          opts.since !== undefined
+            ? parsePeriodStart(opts.since, renderNow(), renderZone())
+            : undefined;
+        const until =
+          opts.until !== undefined
+            ? parsePeriodEnd(opts.until, renderNow(), renderZone())
+            : undefined;
         for (const [flag, value] of [
           ["--since", since],
           ["--until", until],
@@ -993,7 +1012,7 @@ export function registerReadCommands(program: Command): void {
     .action((opts: GlobalReadOpts & { since: string; limit?: string; all?: boolean }) => {
       const lim = parseLimit(opts);
       if (!lim.ok) return;
-      const since = parsePeriodStart(opts.since);
+      const since = parsePeriodStart(opts.since, renderNow(), renderZone());
       if (Number.isNaN(since.getTime())) {
         usageError(opts, `--since is not a parseable date: ${opts.since}`);
         return;
