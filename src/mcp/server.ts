@@ -351,10 +351,18 @@ function buildInstructions(getClient: () => ThingsClient): string {
       "rather than being guessed at. Create missing tags/areas/projects first (add_tag, " +
       "add_area, add_project).",
     `- Scheduling vocabulary: when = ${WHEN_VALUES}; deadlines are ${DATE_FORMAT}; reminders ` +
-      `are ${REMINDER_FORMAT}.`,
+      `are ${REMINDER_FORMAT}. Resolve relative calendar phrases against the Calendar context ` +
+      `below (or a date-sensitive read result's meta.clock.today), then pass the explicit date.`,
     "- Every write tool accepts dry_run: true to preview the change without applying it. " +
-      "Operations with cascading or permanent effects require the explicit confirmation " +
-      "parameter named in their description; refused calls return an error saying what to pass.",
+      "A preview creates no state, so later calls cannot reference an item that only appeared in " +
+      "a dry-run result. Operations with cascading or permanent effects require the explicit " +
+      "confirmation parameter named in their description; refused calls return an error saying " +
+      "what to pass.",
+    "- Read-result semantics: an item's tags are its direct tags; its effective tags also include " +
+      "tags inherited from its containing project and area. todaySection only describes placement " +
+      "within Today and does not itself mean the item is in Today; an open, unscheduled item with " +
+      "start=active is in Anytime. Completing an item makes it findable in Logbook.",
+    "- For capped reads, pass either limit or all: true, never both.",
     `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];
   try {
@@ -362,11 +370,15 @@ function buildInstructions(getClient: () => ThingsClient): string {
     const areas = c.read.areas();
     const tags = c.read.tags();
     const projects = c.read.projects();
+    const clock = c.clockMeta();
     const shown = projects.slice(0, INSTRUCTIONS_MAX_PROJECTS);
     const overflow = projects.length - shown.length;
     lines.push(
       "",
       "Current inventory (read at server start — refresh with list_collections):",
+      ...(clock !== undefined
+        ? [`- Calendar context at server start: ${JSON.stringify(clock)}`]
+        : []),
       `- Areas (${areas.length}): ${areas.map((a) => a.title).join(", ") || "none"}`,
       `- Tags (${tags.length}): ${tags.map(tagLabel).join(", ") || "none"}`,
       `- Open projects (${projects.length}): ${shown.map((p) => p.title).join("; ") || "none"}` +

@@ -468,5 +468,143 @@
         "medianTokensInOnSuccesses": 8304.5
       }
     }
+  },
+  {
+    "timestamp": "2026-07-18T03:37:16.901Z",
+    "arm": "mcp",
+    "iteration": 1,
+    "digestHash": "b8eb05ac8d53",
+    "patchSummary": "1 file(s) [src/mcp/server.ts], +8/-5",
+    "rationale": "A single conventions edit clarifies the misunderstood data-model boundaries: headings are project-scoped, Inbox is a view, effective tags require container inheritance, and todaySection is not list membership. It changes no execution behavior or write safety.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "c",
+        "note": "The agent treated an area as a project and did not understand that headings are project-scoped."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "c",
+        "note": "The agent treated Inbox as an area rather than a built-in view."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent reported direct tags without combining tags inherited from the containing project and area."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "b",
+        "note": "The agent incorrectly interpreted todaySection as Today membership despite start=active indicating Anytime for an unscheduled open item."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 25,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6,
+        "medianTokensInOnSuccesses": 35945
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 24072
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 23,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.34782608695652173,
+        "medianTokensInOnSuccesses": 36146
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 24189
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T03:43:11.683Z",
+    "arm": "mcp",
+    "iteration": 2,
+    "digestHash": "b8eb05ac8d53",
+    "patchSummary": "1 file(s) [src/mcp/server.ts], +6/-4",
+    "rationale": "One existing data-semantics convention is made operational and explicit. It addresses the recurring confusion between built-in views and containers, direct and inherited tags, and todaySection versus actual view membership without adding workflow advice or changing behavior.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated an area as a project, attempted to target a to-do by title where a UUID was required, and did not create the project before its headings."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated Inbox as an area instead of a built-in view, causing an avoidable failed search before recovering with read_view."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "data-model-misunderstanding",
+        "note": "The agent reported only the item's direct tags and did not combine tags inherited from its project and area."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "behavior-misunderstanding",
+        "note": "The agent interpreted todaySection as view membership despite the item being open, active, and unscheduled."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 25,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6,
+        "medianTokensInOnSuccesses": 35945
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 24072
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 24,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5,
+        "medianTokensInOnSuccesses": 36043
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 4,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.25,
+        "medianTokensInOnSuccesses": 24032
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T03:44:13.626Z",
+    "arm": "mcp",
+    "kind": "budget-warning",
+    "reason": "reached 61% of token budget",
+    "usedTokens": 7337179,
+    "limit": 12000000
   }
 ]
