@@ -1,0 +1,322 @@
+[
+  {
+    "timestamp": "2026-07-17T23:23:57.369Z",
+    "arm": "skill",
+    "iteration": 1,
+    "digestHash": "49095813d3c0",
+    "patchSummary": "2 file(s) [skills/things-cli/references/reads.md, skills/things-cli/references/writes.md], +8/-1",
+    "rationale": "The patch adds only the missing interpretation and construction rules exposed by the failures: JSON payload location for dependent writes, own versus inherited tags, `todaySection` versus actual view membership, and a supported relative-weekday calculation. It does not prescribe workflow or alter command behavior.",
+    "decision": "revert",
+    "reason": "git apply failed: error: corrupt patch at /Volumes/Workspace/Projects/things-api/bench/artifacts/loop-skill-1/current.patch:22",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "The agent parsed a write envelope as if `items` were top-level, producing a null project ref and causing downstream heading/to-do construction to fail."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated the search row's own `tags` as the to-do's effective tags and omitted inherited project and area tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent mistook `todaySection` metadata for Today membership instead of interpreting `start: \"active\"` as Anytime."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The write succeeded only after failed date-calculation commands; the surface did not identify the available portable-enough environment method for resolving a relative weekday."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 25,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.32,
+        "medianTokensInOnSuccesses": 12654
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 17906
+      }
+    },
+    "metricsAfter": null
+  },
+  {
+    "timestamp": "2026-07-17T23:25:09.365Z",
+    "arm": "skill",
+    "iteration": 2,
+    "digestHash": "49095813d3c0",
+    "patchSummary": "3 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/data-model.md, skills/things-cli/references/writes.md], +6/-3",
+    "rationale": "The patch corrects three compact contract ambiguities: explicit Inbox versus standalone active state, own versus inherited tags, and JSON write-envelope parsing. It also supplies one portable relative-date construction pattern to prevent repeated environment errors. No workflow advice or benchmark-specific object names are added.",
+    "decision": "revert",
+    "reason": "git apply failed: error: corrupt patch at /Volumes/Workspace/Projects/things-api/bench/artifacts/loop-skill-1/current.patch:49",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "The agent parsed a write response through .items[0].uuid instead of the documented data envelope, leaving dependent heading/to-do commands without the created project UUID."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated the to-do's tags array as its effective tags and did not union tags inherited from its project and area."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent inferred Today membership from todaySection even though the item had active disposition and no explicit schedule; todaySection alone is not view membership."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The write succeeded only after failed attempts to resolve a relative weekday using unavailable Python and BSD-specific date syntax."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 25,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.32,
+        "medianTokensInOnSuccesses": 12654
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 17906
+      }
+    },
+    "metricsAfter": null
+  },
+  {
+    "timestamp": "2026-07-18T01:27:05.009Z",
+    "arm": "skill",
+    "iteration": 1,
+    "digestHash": "1b4c8b1e51a7",
+    "patchSummary": "2 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/writes.md], +5/-3",
+    "rationale": "This adds only the missing interpretation and construction rules exposed by the failures: the JSON envelope path, summary-versus-detail tags, authoritative view fields, structured replies, explicit area movement, and an outside-in nested-placement pattern. It avoids benchmark-specific titles and preserves existing behavior.",
+    "decision": "accept",
+    "reason": "dev success ↑",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "The agent discovered the relevant verbs but lacked a compact construction pattern for nested project, heading, and to-do placement."
+      },
+      {
+        "taskId": "gui-complete-locate",
+        "class": "c",
+        "note": "The agent verified completion but did not apply the model rule that completed items belong in Logbook, likely distracted by logged:false."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "c",
+        "note": "The agent read the Inbox but did not reliably extract the matching row from the JSON envelope."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated tags in a search row as the complete effective tag set instead of inspecting full detail and inheritance."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent misread todaySection as view membership; an active undated item belongs to Anytime."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "d",
+        "note": "The agent first addressed the read envelope as .items instead of .data and then had to discover move placement syntax."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The agent understood --when but incurred errors while resolving a relative weekday into the required ISO date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 23,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7391304347826086,
+        "medianTokensInOnSuccesses": 17278
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 2,
+        "medianTokensInOnSuccesses": 21709
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 27,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.2222222222222222,
+        "medianTokensInOnSuccesses": 14822
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 4,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 21917
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T01:36:57.433Z",
+    "arm": "skill",
+    "iteration": 2,
+    "digestHash": "e64e5987853e",
+    "patchSummary": "2 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/writes.md], +3/-3",
+    "rationale": "These edits make three existing contracts operationally explicit: grouped Today output, authoritative effective-tag/view evidence, and safe construction and recovery for nested writes. A single portability note removes the observed relative-date error without prescribing workflow.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "e",
+        "note": "A malformed child step was followed by replaying already-successful parent creation, producing duplicate projects and headings instead of retrying only the failed command."
+      },
+      {
+        "taskId": "discovery-today",
+        "class": "b",
+        "note": "The agent found the correct command but did not account for Today JSON being grouped under data.today and data.evening."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated summary-row tags as effective tags instead of inspecting full detail for inherited tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent interpreted todaySection as view membership despite the undated start: active record being Anytime."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Relative-date construction used unavailable Python and then nonportable date arithmetic before succeeding."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 27,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.2222222222222222,
+        "medianTokensInOnSuccesses": 14822
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 4,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 21917
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 21,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.380952380952381,
+        "medianTokensInOnSuccesses": 14994
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 2,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5,
+        "medianTokensInOnSuccesses": 16426.5
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T01:48:12.170Z",
+    "arm": "skill",
+    "iteration": 3,
+    "digestHash": "e64e5987853e",
+    "patchSummary": "2 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/writes.md], +8/-3",
+    "rationale": "These edits make three hidden structural rules explicit: Today output is grouped, summary fields cannot establish effective tags or views, and create commands use one positional title plus parent flags. The recovery sentence prevents duplicate state when a compound write partially succeeds, while the runtime note removes a recurring relative-date construction error.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Parent references were supplied as positional arguments, and successful prefix creates were repeated after downstream failures, producing duplicates."
+      },
+      {
+        "taskId": "discovery-today",
+        "class": "c",
+        "note": "The grouped Today JSON shape was not converted into the requested combined title array."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated summary-row tags as the complete effective tag set instead of inspecting full detail."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent interpreted todaySection as view membership despite start active with no startDate indicating Anytime."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Relative-date construction used unavailable or incompatible runtime utilities before succeeding."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 27,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.2222222222222222,
+        "medianTokensInOnSuccesses": 14822
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 4,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 21917
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 24,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.75,
+        "medianTokensInOnSuccesses": 16563.5
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 3,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0,
+        "medianTokensInOnSuccesses": 15778
+      }
+    }
+  }
+]

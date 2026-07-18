@@ -25,6 +25,8 @@ Commands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambi
 
 `things today` / `inbox` / `upcoming` / `anytime` / `someday` / `logbook` / `trash`; `things show <ref>` (details incl. notes + checklist), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <when>`. Common filters: `--tag <name>`, `--untagged`, `--overdue`, `--limit N`. Always prefer `--json` when you will act on the output.
 
+JSON read results are in `.data` (usually `.data[]`), never `.items`; check `meta.truncation` before concluding no match exists. Search/list rows are summaries: their `tags` field is not necessarily the complete effective tag set, so use `things show <ref> --json` when notes, checklist, placement, or inherited tags matter. For view reasoning, `start: "inbox"` means Inbox, `start: "someday"` means Someday, and `start: "active"` with no `startDate` means Anytime; a dated open item belongs to Today when dated for `meta.clock.today`, otherwise Upcoming when future-dated. `todaySection` only describes Today-section placement and is not evidence that an undated item is in Today. Completed or canceled items belong in Logbook and trashed items in Trash, regardless of a stale-looking `logged` field. If the user requests a JSON reply schema, return exactly that object after the read or verified write.
+
 ## Writing
 
 Namespaced verbs: `things todo add|update|complete|cancel|reopen|move|delete|restore|tags|checklist ...`, `things project add|update|complete ...`, `things area ...`, `things tag ...`, `things heading add ...`, plus `things batch` (many changes from JSONL), `things undo`, `things reorder`. Rules that matter:
