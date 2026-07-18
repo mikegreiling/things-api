@@ -38,3 +38,27 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **debrief:** attribution — The explicit grouped-Today parsing likely produced the clear discovery gain, while UUID-based resume guidance reduced recovery friction. Overall results regressed, however, and several zero-token failures plus small samples make the unrelated read, reasoning, and GUI losses more consistent with brittle execution or run variance than with the targeted semantic edits.; lesson — Prefer narrowly scoped, verifiable guidance and validate aggregate behavior, since added rules can improve their target case without improving—and may destabilize—the broader arm.; confidence — medium
 - **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-2b); checkpoint: bench/artifacts/loop-skill-2b/checkpoint.md
 
+<!-- ledger-entry id="loop-skill-r2-skill-iter1" lesson="Make hidden command contracts explicit, but separate zero-execution failures and broad unrelated variance from patch effects when judging refinements." -->
+### 2026-07-18 · skill · iter 1 · **REVERTED**
+
+- **change:** These two narrow edits address the clearest graded root causes: recovery from candidate-bearing lookup failures and the  — files: skills/things-cli/SKILL.md, skills/things-cli/references/writes.md; diff 2 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/writes.md], +2/-2
+- **pre-hoc hypothesis:** These two narrow edits address the clearest graded root causes: recovery from candidate-bearing lookup failures and the one-operation-per-call checklist contract. They add exact, general command behavior without inventing unsupported syntax or masking the evening verification defect.
+- **predicted blast radius:** Candidate-based reads should recover more reliably for exact-title items, improving effective-tag and detail queries. Multi-action checklist tasks should avoid usage errors and preserve existing checked states. Risk is low: ambiguous candidates still require inspection, and the checklist guidance merely exposes the command's existing granular contract.
+- **measured deltas (before → after):**
+  - dev: success 48/54 → 45/54; friction 0.81 → 0.42; median tokIn 20508 → 20259
+  - validation: success 14/18 → 11/18; friction 0.79 → 0.36; median tokIn 22683 → 19152
+- **debrief:** attribution — The granular checklist guidance most likely caused the clear checklist friction reduction and dev success gain; candidate-retry guidance may explain small reasoning gains. The larger aggregate regression is diffuse across unrelated tasks, including a zero-token validation collapse, so it is more consistent with run variance or infrastructure effects than these narrow edits.; lesson — Make hidden command contracts explicit, but separate zero-execution failures and broad unrelated variance from patch effects when judging refinements.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-r2); checkpoint: bench/artifacts/loop-skill-r2/checkpoint.md
+
+<!-- ledger-entry id="loop-skill-r2-skill-iter2" lesson="Document verified command atomicity with a dependency-ordered example, and judge impact primarily on targeted evaluations while discounting unrelated or zero-token anomalies." -->
+### 2026-07-18 · skill · iter 2 · **REVERTED**
+
+- **change:** This is the smallest verified fix for a concrete failure class: it makes the checklist operation's one-action-per-call c — files: skills/things-cli/references/writes.md; diff 1 file(s) [skills/things-cli/references/writes.md], +1/-1
+- **pre-hoc hypothesis:** This is the smallest verified fix for a concrete failure class: it makes the checklist operation's one-action-per-call contract explicit and supplies the dependency-ordered command pattern without adding unrelated workflow guidance.
+- **predicted blast radius:** Should improve checklist tasks that combine checking, adding, removing, renaming, or moving entries by preventing multi-action usage errors. Risk is low and confined to checklist writes. It intentionally does not paper over the evening verification defect or add unvalidated guidance for the less-specific failures.
+- **measured deltas (before → after):**
+  - dev: success 48/54 → 51/54; friction 0.81 → 0.63; median tokIn 20508 → 19835
+  - validation: success 14/18 → 12/18; friction 0.79 → 0.50; median tokIn 22683 → 16027
+- **debrief:** attribution — The explicit one-action-per-invocation rule and ordered example most likely reduced checklist-command misuse: targeted evaluations improved in success or friction, while unchanged outcomes and large unrelated swings—especially zero-token runs—suggest residual task difficulty and benchmark variance rather than broad patch effects.; lesson — Document verified command atomicity with a dependency-ordered example, and judge impact primarily on targeted evaluations while discounting unrelated or zero-token anomalies.; confidence — high
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-r2); checkpoint: bench/artifacts/loop-skill-r2/checkpoint.md
+

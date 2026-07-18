@@ -606,5 +606,173 @@
     "reason": "reached 61% of token budget",
     "usedTokens": 7337179,
     "limit": 12000000
+  },
+  {
+    "timestamp": "2026-07-18T06:33:31.539Z",
+    "arm": "skill",
+    "iteration": 1,
+    "digestHash": "ac88d589d693",
+    "patchSummary": "2 file(s) [skills/things-cli/SKILL.md, skills/things-cli/references/writes.md], +2/-2",
+    "rationale": "These two narrow edits address the clearest graded root causes: recovery from candidate-bearing lookup failures and the one-operation-per-call checklist contract. They add exact, general command behavior without inventing unsupported syntax or masking the evening verification defect.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Argument construction failed during a dependency-ordered compound write; existing guidance already provides the required outside-in project, heading, and to-do pattern, so the excerpt does not justify additional copy."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "f",
+        "note": "Tool defect: the write appears to land but verification returns a mismatch, prompting duplicate creation. The surface already states that evening maps to the This Evening section."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "d",
+        "note": "The agent combined two granular checklist mutations in one invocation even though the command accepts one granular operation per call."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "d",
+        "note": "The agent used nonexistent noun-scoped search syntax before recovering; the task ultimately succeeded."
+      },
+      {
+        "taskId": "longtail-trash-restore",
+        "class": "a",
+        "note": "The agent explored nonexistent top-level deleted/list/restore commands before finding the documented trash view and namespaced restore verb."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "e",
+        "note": "The failed lookup returned the intended item as a candidate with its UUID, but the agent did not retry using that UUID to obtain full effective tags."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The agent chose an unavailable date-calculation runtime before recovering; relative weekdays already require conversion to an ISO date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 48,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.8125,
+        "medianTokensInOnSuccesses": 20508
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7857142857142857,
+        "medianTokensInOnSuccesses": 22683
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 45,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4222222222222222,
+        "medianTokensInOnSuccesses": 20259
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 11,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.36363636363636365,
+        "medianTokensInOnSuccesses": 19152
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T06:49:58.301Z",
+    "arm": "skill",
+    "kind": "budget-warning",
+    "reason": "reached 63% of token budget",
+    "usedTokens": 7503484,
+    "limit": 12000000
+  },
+  {
+    "timestamp": "2026-07-18T06:50:05.177Z",
+    "arm": "skill",
+    "iteration": 2,
+    "digestHash": "ac88d589d693",
+    "patchSummary": "1 file(s) [skills/things-cli/references/writes.md], +1/-1",
+    "rationale": "This is the smallest verified fix for a concrete failure class: it makes the checklist operation's one-action-per-call contract explicit and supplies the dependency-ordered command pattern without adding unrelated workflow guidance.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "The agent discovered the relevant nouns and dependency order but failed to construct successful nested create invocations."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "f",
+        "note": "The correct --when evening write produced a contradictory verification failure and retrying created duplicate state; this is a tool defect, not a documentation gap."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "d",
+        "note": "The agent combined --check and --add even though granular checklist operations permit exactly one action per invocation."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "d",
+        "note": "The agent invented a namespaced todo search command instead of using the documented top-level search command."
+      },
+      {
+        "taskId": "longtail-trash-restore",
+        "class": "a",
+        "note": "The agent explored nonexistent top-level deleted, list, show, and restore command forms before finding the trash view and namespaced restore operation."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "e",
+        "note": "The failed title lookup returned an exact candidate UUID, but the agent did not recover by retrying show with that UUID."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The agent understood that a concrete date was required but used an unavailable date-resolution runtime, causing avoidable invocation friction."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 48,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.8125,
+        "medianTokensInOnSuccesses": 20508
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7857142857142857,
+        "medianTokensInOnSuccesses": 22683
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 51,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6274509803921569,
+        "medianTokensInOnSuccesses": 19835
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 12,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5,
+        "medianTokensInOnSuccesses": 16026.5
+      }
+    }
   }
 ]
