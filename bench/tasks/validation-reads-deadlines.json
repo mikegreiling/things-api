@@ -1,0 +1,83 @@
+{
+  "id": "validation-reads-deadlines",
+  "family": "reads",
+  "tier": 2,
+  "split": "validation",
+  "prompt": "Which open to-dos in my Kitchen redo project have a deadline? Reply with JSON {\"titles\": [...], \"count\": N, \"soonest\": \"<title of the one due first>\"}.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "House projects"
+    },
+    {
+      "kind": "project",
+      "key": "p",
+      "title": "Kitchen redo",
+      "container": "a",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Order countertop",
+      "container": "p",
+      "start": "active",
+      "deadline": "2026-07-24"
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Return tile samples",
+      "container": "p",
+      "start": "active",
+      "deadline": "2026-07-30"
+    },
+    {
+      "kind": "todo",
+      "key": "t3",
+      "title": "Pick grout color",
+      "container": "p",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "t4",
+      "title": "Measure the alcove",
+      "container": "p",
+      "status": "completed",
+      "deadline": "2026-07-15"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"titles\": string[], \"count\": number, \"soonest\": string}"
+  },
+  "assertions": [
+    {
+      "type": "db-unchanged"
+    },
+    {
+      "type": "answer-includes",
+      "path": "titles",
+      "values": ["Order countertop", "Return tile samples"]
+    },
+    {
+      "type": "answer",
+      "path": "count",
+      "equals": 2
+    },
+    {
+      "type": "answer",
+      "path": "soonest",
+      "equals": "Order countertop"
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things projects \"Kitchen redo\" --json"]
+}

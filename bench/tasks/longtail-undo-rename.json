@@ -1,0 +1,54 @@
+{
+  "id": "longtail-undo-rename",
+  "family": "recovery-safety",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "Rename my 'Call the accountant' to-do to 'Email the accountant'. \u2014 Hmm, actually never mind, undo that and put it back exactly as it was.",
+  "paraphrases": [
+    "Change the accountant call task's title to 'Email the accountant'\u2026 then reverse that change entirely."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Paperwork"
+    },
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Call the accountant",
+      "container": "a",
+      "start": "active"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Call the accountant' AND status=0 AND trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Email the accountant'",
+      "expect": [
+        {
+          "n": 0
+        }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo update \"$(things search \"Call the accountant\" --json | jq -r '.data[0].uuid')\" --title \"Email the accountant\"",
+    "things undo"
+  ]
+}

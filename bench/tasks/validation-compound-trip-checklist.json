@@ -1,0 +1,52 @@
+{
+  "id": "validation-compound-trip-checklist",
+  "family": "compound",
+  "tier": 3,
+  "split": "validation",
+  "prompt": "Set up a to-do 'Pack for the campout' in my Trips area, scheduled for Friday, with a checklist of: tent, sleeping bag, headlamp.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Trips"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask t JOIN TMArea a ON t.area=a.uuid WHERE t.title='Pack for the campout' AND a.title='Trips' AND t.status=0 AND t.trashed=0 AND t.start=1 AND t.startDate=132807680",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMChecklistItem c JOIN TMTask t ON c.task=t.uuid WHERE t.title='Pack for the campout'",
+      "expect": [
+        {
+          "n": 3
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMChecklistItem c JOIN TMTask t ON c.task=t.uuid WHERE t.title='Pack for the campout' AND c.title IN ('tent','sleeping bag','headlamp')",
+      "expect": [
+        {
+          "n": 3
+        }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo add \"Pack for the campout\" --area \"$(things areas --json | jq -r '.data[]|select(.title==\"Trips\")|.uuid')\" --when 2026-07-24 --checklist-item tent --checklist-item \"sleeping bag\" --checklist-item headlamp"
+  ]
+}

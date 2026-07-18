@@ -1,0 +1,41 @@
+{
+  "id": "validation-writes-set-deadline",
+  "family": "writes",
+  "tier": 2,
+  "split": "validation",
+  "prompt": "Give my 'Submit the rebate form' to-do a deadline of July 30th.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Paperwork"
+    },
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Submit the rebate form",
+      "container": "a",
+      "start": "active"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Submit the rebate form' AND deadline=132808448 AND status=0 AND trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo update \"$(things search \"Submit the rebate form\" --json | jq -r '.data[0].uuid')\" --deadline 2026-07-30"
+  ]
+}

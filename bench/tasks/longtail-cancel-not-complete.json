@@ -1,0 +1,62 @@
+{
+  "id": "longtail-cancel-not-complete",
+  "family": "writes",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "I've decided against refinishing the porch swing \u2014 mark that to-do abandoned (not completed, I never did it), and tell me which list it moves to. Reply JSON {\"view\": \"<lowercase list name>\"}.",
+  "paraphrases": [
+    "The porch-swing refinish isn't happening. Close it out as won't-do rather than done, and say where I'd find the record. JSON {\"view\": \"...\"}."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Home base"
+    },
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Refinish the porch swing",
+      "container": "a",
+      "start": "active"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"view\": string}"
+  },
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Refinish the porch swing' AND status=2 AND trashed=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Refinish the porch swing' AND status=3",
+      "expect": [
+        {
+          "n": 0
+        }
+      ]
+    },
+    {
+      "type": "answer",
+      "path": "view",
+      "equals": "logbook"
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo cancel \"$(things search \"Refinish the porch swing\" --json | jq -r '.data[0].uuid')\""
+  ]
+}
