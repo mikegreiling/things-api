@@ -151,18 +151,28 @@ function resolveCap(
   return value ?? defaultLimit;
 }
 
-/** Resolve MCP limit/all (flat read tools) into a row cap (null = every row). */
+/**
+ * Resolve MCP limit/all (flat read tools) into a row cap (null = every row).
+ * all:true wins: it lifts the cap and takes precedence over a limit passed
+ * alongside it — an explicit "everything" request resolves the contradiction
+ * rather than erroring — so the pair is never a usage error on the flat tools.
+ */
 function resolveLimit(args: {
   limit?: number | undefined;
   all?: boolean | undefined;
-}): number | null | "conflict" {
-  return resolveCap(args.limit, args.all, DEFAULT_LIST_LIMIT);
+}): number | null {
+  if (args.all === true) return null;
+  return args.limit ?? DEFAULT_LIST_LIMIT;
 }
+
+/** Precedence notes appended to `limit`/`all` wherever a flat tool accepts both. */
+const LIMIT_IGNORED_NOTE = "ignored when all is set";
+const ALL_WINS_NOTE = "wins over limit if both are set";
 
 /** Shared limit/all input schema fragment for the flat read tools. */
 const limitShape = {
-  limit: z.number().int().min(1).optional().describe(LIMIT_DESC),
-  all: z.boolean().optional().describe(ALL_DESC),
+  limit: z.number().int().min(1).optional().describe(`${LIMIT_DESC}; ${LIMIT_IGNORED_NOTE}`),
+  all: z.boolean().optional().describe(`${ALL_DESC}; ${ALL_WINS_NOTE}`),
 };
 
 /**
@@ -362,7 +372,7 @@ function buildInstructions(getClient: () => ThingsClient): string {
       "tags inherited from its containing project and area. todaySection appears only for an item " +
       "in Today, naming its section there (today or evening); an unscheduled start=active item is " +
       "in Anytime and omits the field. Completing an item makes it findable in Logbook.",
-    "- For capped reads, pass either limit or all: true, never both.",
+    "- For capped reads, pass limit to cap rows or all: true for everything; if both are set, all wins.",
     `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];
   try {
@@ -588,7 +598,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .int()
           .min(1)
           .optional()
-          .describe(`flat views only (not anytime/someday): ${LIMIT_DESC}`),
+          .describe(`flat views only (not anytime/someday): ${LIMIT_DESC}; ${LIMIT_IGNORED_NOTE}`),
         area_limit: z
           .number()
           .int()
@@ -605,7 +615,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe(
-            "show everything (flat views: no row limit; anytime/someday: no per-block caps)",
+            "show everything (flat views: no row limit; anytime/someday: no per-block caps); " +
+              ALL_WINS_NOTE,
           ),
       },
       annotations: READ_ONLY,
@@ -653,7 +664,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           );
         }
         const limit = resolveLimit(args);
-        if (limit === "conflict") return usage("pass at most one of limit / all");
         const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
         const projectLimit = resolveCap(args.project_limit, args.all, PROJECT_PREVIEW_LIMIT);
         if (areaLimit === "conflict" || projectLimit === "conflict") {
@@ -749,8 +759,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         all: z
           .boolean()
           .optional()
-          .describe("Everything, unbounded: open + logged + trashed, no row limit"),
-        limit: z.number().int().min(1).optional().describe(LIMIT_DESC),
+          .describe(
+            `Everything, unbounded: open + logged + trashed, no row limit; ${ALL_WINS_NOTE}`,
+          ),
+        limit: z.number().int().min(1).optional().describe(`${LIMIT_DESC}; ${LIMIT_IGNORED_NOTE}`),
       },
       annotations: READ_ONLY,
     },
@@ -778,7 +790,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         );
         if (!validated.ok) return usage(validated.message);
         const limit = resolveLimit(args);
-        if (limit === "conflict") return usage("pass at most one of limit / all");
         const { items, truncation } = getClient().read.search(args.query, {
           limit,
           ...validated.filter,
@@ -814,7 +825,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const badZone = badTz(args.tz);
         if (badZone !== null) return badZone;
         const limit = resolveLimit(args);
-        if (limit === "conflict") return usage("pass at most one of limit / all");
         const since = new Date(args.since);
         if (Number.isNaN(since.getTime())) {
           return usage(`since is not a parseable date: ${args.since}`);
