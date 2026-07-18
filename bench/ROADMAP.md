@@ -4,7 +4,7 @@ Living state of the bench mini-project. Update in the same change as any bench w
 
 ## ⟹ RESUME HERE
 
-**Phase 0 (harness build) — IN PROGRESS, started 2026-07-17, branch `mg/bench-harness`.** Full plan: `/Users/mike/.claude/plans/cuddly-greeting-gadget.md` (session "things-skill-loop"). Nothing has run against a real model yet.
+**Refinement round 1 COMPLETE and integrated (2026-07-18, PRs #196–#207).** Phase 0 harness + Phase 1 baselines + one full refinement round on all three arms are on main. Current state: skill v0.2 (round-1 accept on top of Mike's v0.1 curation), MCP instructions conventions accepted, CLI help unchanged (0 accepts — weak-lever finding). See Round history below, per-arm [ledgers](ledger/README.md), committed scorecards in results/. **Next up (round 2): grow the corpus first** — larger validation split (current gates rest on 6 runs), long-tail families as simulator ops land (recurrence gated on the RSIM probe, docs/lab/probe-backlog.md §C) — then structural MCP candidates (tool consolidation vs the ~36k/task cost), further skill rounds, second model family for transfer. Ops rules: run loop batches DETACHED (nohup + watcher, never harness background tasks); prefix `export PATH="/opt/homebrew/bin:$PATH"` for bench/git commands. Subject auth: openai-codex OAuth (`npm run bench:login`), subjects gpt-5.4-mini, refiner gpt-5.6-sol.
 
 Phase 0 checklist:
 - [x] Simulator write vector + fence + fixture marker + unit tests (fe27cf1; adversarially reviewed, findings fixed in ebbb1ff — fail-closed fence, `--db` split-brain, host-escape gating, applier-branch tests)
