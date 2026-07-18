@@ -25,9 +25,24 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { readDatabaseVersion } from "../../db/fingerprint.ts";
-import { encodePackedDate, encodeReminderTime, localToday } from "../../model/dates.ts";
-import type { ContainerRef, OperationKind, OperationParamsMap, WhenValue } from "../operations.ts";
+import {
+  addDaysIso,
+  decodePackedDate,
+  encodePackedDate,
+  encodeReminderTime,
+  localToday,
+} from "../../model/dates.ts";
+import { decodeRecurrenceRule } from "../../model/recurrence.ts";
+import type {
+  ContainerRef,
+  OperationKind,
+  OperationParamsMap,
+  RepeatFrequency,
+  RepeatRuleParams,
+  WhenValue,
+} from "../operations.ts";
 import { resolveArea, resolveHeading, resolveProject, resolveTag } from "../pre-state.ts";
+import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
   CompiledInvocation,
@@ -428,6 +443,333 @@ function setStatus(
     .run(status, stopDate, ctx.nowEpoch, uuid);
 }
 
+// ------------------------------------------------- recurrence appliers
+//
+// The row-level shapes below reproduce the RSIM campaign verdicts
+// (docs/lab/rsim-results.md, RSIM1–6): making a to-do/project repeat, the
+// fixed-vs-after-completion identity asymmetry, in-place reschedule, and the
+// completion-side stamping that schedules the next after-completion occurrence
+// without materializing it. Rule blobs come from the SHARED composer
+// (recurrence-rule-blob.ts), so every emitted template decodes with the real
+// read-path decoder.
+
+/** A deadlined template's own `deadline` column carries this far-future sentinel (§8a). */
+const DEADLINE_SENTINEL_ISO = "4001-01-01";
+
+/** Add whole recurrence units to an ISO date (day/week/month/year). */
+function addUnitsIso(iso: string, frequency: RepeatFrequency, interval: number): string {
+  switch (frequency) {
+    case "daily":
+      return addDaysIso(iso, interval);
+    case "weekly":
+      return addDaysIso(iso, 7 * interval);
+    case "monthly":
+      return addMonthsIso(iso, interval);
+    case "yearly":
+      return addMonthsIso(iso, 12 * interval);
+  }
+}
+
+/** Add whole months to an ISO date, clamping the day to the target month's length. */
+function addMonthsIso(iso: string, months: number): string {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  const anchor = new Date(Date.UTC(y, m - 1 + months, 1));
+  const year = anchor.getUTCFullYear();
+  const month0 = anchor.getUTCMonth();
+  const lastDay = new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return (
+    `${String(year).padStart(4, "0")}-` +
+    `${String(month0 + 1).padStart(2, "0")}-` +
+    `${String(day).padStart(2, "0")}`
+  );
+}
+
+/** Epoch seconds at UTC-noon of an ISO date — the (decoder-ignored) rule anchor. */
+function epochOfIso(iso: string): number {
+  return Math.floor(Date.parse(`${iso}T12:00:00Z`) / 1000);
+}
+
+interface RecurrenceRowOpts {
+  uuid: string;
+  type: 0 | 1;
+  title: string;
+  notes: string;
+  area: string | null;
+  start: number;
+  startDate: number | null;
+  deadline: number | null;
+  recurrenceRuleXml?: string;
+  repeatingTemplate?: string | null;
+  instanceCreationCount?: number;
+  instanceCreationStartDate?: number | null;
+  nextInstanceStartDate?: number | null;
+  afterCompletionReferenceDate?: number | null;
+}
+
+/** Insert a template or instance row, covering the full rt1_* recurrence column set. */
+function insertRecurrenceRow(sim: DatabaseSync, ctx: ApplyCtx, o: RecurrenceRowOpts): void {
+  sim
+    .prepare(
+      `INSERT INTO TMTask (
+         uuid, type, status, stopDate, trashed, title, notes,
+         creationDate, userModificationDate,
+         start, startDate, startBucket, reminderTime, deadline, deadlineSuppressionDate,
+         "index", todayIndex, todayIndexReferenceDate, area, project, heading,
+         untrashedLeafActionsCount, openUntrashedLeafActionsCount,
+         checklistItemsCount, openChecklistItemsCount,
+         rt1_repeatingTemplate, rt1_recurrenceRule, rt1_instanceCreationStartDate,
+         rt1_instanceCreationPaused, rt1_instanceCreationCount,
+         rt1_afterCompletionReferenceDate, rt1_nextInstanceStartDate, repeater
+       ) VALUES (?, ?, 0, NULL, 0, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, 0, 0, NULL, ?, NULL, NULL,
+                 0, 0, 0, 0, ?, ?, ?, 0, ?, ?, ?, NULL)`,
+    )
+    .run(
+      o.uuid,
+      o.type,
+      o.title,
+      o.notes,
+      ctx.nowEpoch,
+      ctx.nowEpoch,
+      o.start,
+      o.startDate,
+      o.deadline,
+      o.area,
+      o.repeatingTemplate ?? null,
+      o.recurrenceRuleXml !== undefined ? new TextEncoder().encode(o.recurrenceRuleXml) : null,
+      o.instanceCreationStartDate ?? null,
+      o.instanceCreationCount ?? 0,
+      o.afterCompletionReferenceDate ?? null,
+      o.nextInstanceStartDate ?? null,
+    );
+}
+
+/** Copy a task's direct tag links onto another task (title/notes/tags/area copy from source). */
+function copyTaskTags(sim: DatabaseSync, fromUuid: string, toUuid: string): void {
+  const rows = sim.prepare("SELECT tags FROM TMTaskTag WHERE tasks = ?").all(fromUuid) as {
+    tags: string;
+  }[];
+  for (const r of rows) {
+    sim.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(toUuid, r.tags);
+  }
+}
+
+function loadRepeatSource(
+  sim: DatabaseSync,
+  uuid: string,
+): { title: string; notes: string; area: string | null; startDate: number | null } {
+  const src = sim
+    .prepare("SELECT title, notes, area, startDate FROM TMTask WHERE uuid = ?")
+    .get(uuid) as
+    | { title: string | null; notes: string | null; area: string | null; startDate: number | null }
+    | undefined;
+  if (src === undefined) throw new Error("simulator: make-repeating target not found");
+  return {
+    title: src.title ?? "",
+    notes: src.notes ?? "",
+    area: src.area,
+    startDate: src.startDate,
+  };
+}
+
+/**
+ * FIXED make-repeating (RSIM1 to-do / RSIM6 project / RSIM3 create leg): the
+ * source is DESTROYED (identity replacement) and replaced by a hidden template
+ * (start=someday, rule tp=0, next-occurrence dates) plus EXACTLY ONE instance
+ * dated at the current occurrence. Area/title/notes/tags copy to both.
+ */
+function applyMakeRepeatingFixed(
+  sim: DatabaseSync,
+  type: 0 | 1,
+  params: RepeatRuleParams,
+  ctx: ApplyCtx,
+): void {
+  const src = loadRepeatSource(sim, params.uuid);
+  const todayIso = ctx.todayIso;
+  const nextIso = addUnitsIso(todayIso, params.frequency, params.interval);
+  const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
+  const startEarlier = params.startDaysEarlier ?? 0;
+  const spec = composeRepeatRuleSpec(params, todayIso, epochOfIso(nextIso));
+  const templateUuid = genUuid();
+  const instanceUuid = genUuid();
+
+  insertRecurrenceRow(sim, ctx, {
+    uuid: templateUuid,
+    type,
+    title: src.title,
+    notes: src.notes,
+    area: src.area,
+    start: START.someday,
+    startDate: null,
+    deadline: deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null,
+    recurrenceRuleXml: ruleXml(spec),
+    instanceCreationCount: 1,
+    instanceCreationStartDate: encodePackedDate(nextIso),
+    nextInstanceStartDate: encodePackedDate(nextIso),
+  });
+  copyTaskTags(sim, params.uuid, templateUuid);
+
+  // ONE instance at the current occurrence (start=someday pending maintenance
+  // promotion). A deadlined series dates the instance's deadline at the
+  // occurrence and starts it `startDaysEarlier` before that (decode identity
+  // deadline = startDate − ts; deadlined creation is not itself RSIM-drive-proven).
+  const instStartIso = deadlined ? addDaysIso(todayIso, -startEarlier) : todayIso;
+  insertRecurrenceRow(sim, ctx, {
+    uuid: instanceUuid,
+    type,
+    title: src.title,
+    notes: src.notes,
+    area: src.area,
+    start: START.someday,
+    startDate: encodePackedDate(instStartIso),
+    deadline: deadlined ? encodePackedDate(todayIso) : null,
+    repeatingTemplate: templateUuid,
+  });
+  copyTaskTags(sim, params.uuid, instanceUuid);
+
+  sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(params.uuid);
+  sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(params.uuid);
+}
+
+/**
+ * AFTER-COMPLETION make-repeating (RSIM2): the source is PRESERVED and relinked
+ * as the sole first instance (identity kept — §8g: identity replacement is
+ * fixed-only). A new tp=1 template is created with NO next/reference dates
+ * (unknown until a completion). No fresh instance row is minted.
+ */
+function applyMakeRepeatingAfterCompletion(
+  sim: DatabaseSync,
+  type: 0 | 1,
+  params: RepeatRuleParams,
+  ctx: ApplyCtx,
+): void {
+  const src = loadRepeatSource(sim, params.uuid);
+  const refIso = decodePackedDate(src.startDate) ?? ctx.todayIso;
+  const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
+  const spec = composeRepeatRuleSpec(params, refIso, epochOfIso(refIso));
+  const templateUuid = genUuid();
+
+  insertRecurrenceRow(sim, ctx, {
+    uuid: templateUuid,
+    type,
+    title: src.title,
+    notes: src.notes,
+    area: src.area,
+    start: START.someday,
+    startDate: null,
+    deadline: deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null,
+    recurrenceRuleXml: ruleXml(spec),
+    instanceCreationCount: 0,
+  });
+  copyTaskTags(sim, params.uuid, templateUuid);
+
+  // Relink the preserved source as the instance; startDate/start unchanged.
+  sim
+    .prepare("UPDATE TMTask SET rt1_repeatingTemplate = ?, userModificationDate = ? WHERE uuid = ?")
+    .run(templateUuid, ctx.nowEpoch, params.uuid);
+}
+
+/** Route a make-repeating to the fixed or after-completion applier by rule type. */
+function applyMakeRepeating(
+  sim: DatabaseSync,
+  type: 0 | 1,
+  params: RepeatRuleParams,
+  ctx: ApplyCtx,
+): void {
+  if (params.afterCompletion === true) applyMakeRepeatingAfterCompletion(sim, type, params, ctx);
+  else applyMakeRepeatingFixed(sim, type, params, ctx);
+}
+
+/**
+ * reschedule-repeat (RSIM5, to-do or project): identity PRESERVED, the rule
+ * rewritten in place to the target `{frequency, interval, anchors}` with the
+ * instance-creation date advanced to the new next occurrence. `tp` and the
+ * deadline-ness (ts + the template's deadline column) are preserved unless the
+ * reschedule explicitly changes them. (The shipped op's interval-entry app bug
+ * — RSIM5 caveat — is NOT modeled here: the simulator applies the TARGET rule.)
+ */
+function applyReschedule(sim: DatabaseSync, params: RepeatRuleParams, ctx: ApplyCtx): void {
+  const row = sim
+    .prepare("SELECT rt1_recurrenceRule AS rule FROM TMTask WHERE uuid = ?")
+    .get(params.uuid) as { rule: unknown } | undefined;
+  if (row === undefined || row.rule === null) {
+    throw new Error("simulator: reschedule-repeat target is not a repeating template");
+  }
+  const existing = decodeRecurrenceRule(row.rule);
+  const paramsHasAnchor =
+    params.weekdays !== undefined || params.monthly !== undefined || params.yearly !== undefined;
+  const preserveAfterCompletion =
+    params.afterCompletion === undefined &&
+    !paramsHasAnchor &&
+    existing.type === "after-completion";
+  const effective: RepeatRuleParams = { ...params };
+  if (preserveAfterCompletion) effective.afterCompletion = true;
+
+  const todayIso = ctx.todayIso;
+  const nextIso = addUnitsIso(todayIso, params.frequency, params.interval);
+  const spec = composeRepeatRuleSpec(effective, todayIso, epochOfIso(nextIso));
+
+  const setsDeadline = params.deadline !== undefined || params.startDaysEarlier !== undefined;
+  if (!setsDeadline) spec.ts = existing.startOffsetDays; // preserve the prior start offset
+
+  const sets = [
+    "rt1_recurrenceRule = ?",
+    "rt1_instanceCreationStartDate = ?",
+    "rt1_nextInstanceStartDate = ?",
+    "userModificationDate = ?",
+  ];
+  const binds: (string | number | null | Uint8Array)[] = [
+    new TextEncoder().encode(ruleXml(spec)),
+    encodePackedDate(nextIso),
+    encodePackedDate(nextIso),
+    ctx.nowEpoch,
+  ];
+  if (setsDeadline) {
+    const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
+    sets.push("deadline = ?");
+    binds.push(deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null);
+  }
+  sim.prepare(`UPDATE TMTask SET ${sets.join(", ")} WHERE uuid = ?`).run(...binds, params.uuid);
+}
+
+/**
+ * Completion-side scheduling (RSIM4): completing an INSTANCE of an
+ * after-completion (tp=1) template stamps the template's reference + next-start
+ * dates (completion date, completion date + interval) WITHOUT materializing the
+ * next instance — it stays pending until its future start date arrives. A
+ * fixed-template instance (or a non-instance) is untouched here.
+ */
+function stampAfterCompletionTemplate(
+  sim: DatabaseSync,
+  instanceUuid: string,
+  ctx: ApplyCtx,
+): void {
+  const inst = sim
+    .prepare("SELECT rt1_repeatingTemplate AS tmpl FROM TMTask WHERE uuid = ?")
+    .get(instanceUuid) as { tmpl: string | null } | undefined;
+  const templateUuid = inst?.tmpl;
+  if (templateUuid === null || templateUuid === undefined) return;
+  const tpl = sim
+    .prepare("SELECT rt1_recurrenceRule AS rule FROM TMTask WHERE uuid = ?")
+    .get(templateUuid) as { rule: unknown } | undefined;
+  if (tpl === undefined || tpl.rule === null) return;
+  let rule;
+  try {
+    rule = decodeRecurrenceRule(tpl.rule);
+  } catch {
+    return; // undecodable template — leave it untouched
+  }
+  if (rule.type !== "after-completion") return;
+  const completionIso = ctx.todayIso;
+  const nextIso = addUnitsIso(completionIso, rule.unit, rule.interval);
+  sim
+    .prepare(
+      "UPDATE TMTask SET rt1_afterCompletionReferenceDate = ?, rt1_nextInstanceStartDate = ?, " +
+        "userModificationDate = ? WHERE uuid = ?",
+    )
+    .run(encodePackedDate(completionIso), encodePackedDate(nextIso), ctx.nowEpoch, templateUuid);
+}
+
 // --------------------------------------------------- applier registry
 
 type Applier = (sim: DatabaseSync, params: unknown, ctx: ApplyCtx) => void;
@@ -478,9 +820,12 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
 
   "todo.update": op<"todo.update">((sim, params, ctx) => applyEntityUpdate(sim, params, ctx)),
 
-  "todo.complete": op<"todo.complete">((sim, params, ctx) =>
-    setStatus(sim, params.uuid, STATUS.completed, ctx.nowEpoch, ctx),
-  ),
+  "todo.complete": op<"todo.complete">((sim, params, ctx) => {
+    setStatus(sim, params.uuid, STATUS.completed, ctx.nowEpoch, ctx);
+    // RSIM4: completing an after-completion instance schedules the next
+    // occurrence on its template without materializing it.
+    stampAfterCompletionTemplate(sim, params.uuid, ctx);
+  }),
   "todo.cancel": op<"todo.cancel">((sim, params, ctx) =>
     setStatus(sim, params.uuid, STATUS.canceled, ctx.nowEpoch, ctx),
   ),
@@ -642,6 +987,24 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
     if (projUuid === null) throw new Error("simulator: heading.create needs a project");
     insertTask(sim, 2, ctx, { uuid: genUuid(), title: params.title, project: projUuid });
   }),
+
+  // Recurrence ops (RSIM1–6). project.create-repeating is delivered by the
+  // runCreateRepeatingProject orchestrator over project.add + project.make-repeating
+  // (both covered here), so it needs no direct applier. pause/resume/stop-repeat
+  // are deliberately OMITTED — no RSIM shape proves their delta, and unsupported
+  // beats guessed.
+  "todo.make-repeating": op<"todo.make-repeating">((sim, params, ctx) =>
+    applyMakeRepeating(sim, 0, params, ctx),
+  ),
+  "todo.reschedule-repeat": op<"todo.reschedule-repeat">((sim, params, ctx) =>
+    applyReschedule(sim, params, ctx),
+  ),
+  "project.make-repeating": op<"project.make-repeating">((sim, params, ctx) =>
+    applyMakeRepeating(sim, 1, params, ctx),
+  ),
+  "project.reschedule-repeat": op<"project.reschedule-repeat">((sim, params, ctx) =>
+    applyReschedule(sim, params, ctx),
+  ),
 };
 
 /** The ops this simulator can apply — the ONLY entries in its honest matrix. */

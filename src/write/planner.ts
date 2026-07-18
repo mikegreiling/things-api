@@ -40,7 +40,17 @@ export function planVector(
   const viable: PlanCandidate[] = [];
 
   for (const vector of vectors) {
-    if (options.forcedVector !== undefined && vector.id !== options.forcedVector) continue;
+    // A simulating vector stands in for EVERY transport (it applies structured
+    // op/params as SQL, not a compiled payload), so a leg that forces a vector —
+    // e.g. the repeating-project orchestrators forcing `ui`, or a `url-scheme`
+    // coercion leg — must still resolve to the simulator under the bench fence.
+    if (
+      options.forcedVector !== undefined &&
+      vector.id !== options.forcedVector &&
+      vector.simulates !== true
+    ) {
+      continue;
+    }
     const support = vector.matrix[op];
     if (support === undefined) {
       considered.push({ vector: vector.id, why: "no matrix entry for this operation" });
