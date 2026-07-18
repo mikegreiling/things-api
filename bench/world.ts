@@ -40,6 +40,11 @@ import { fileURLToPath } from "node:url";
 
 import { encodePackedDate } from "../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../src/model/recurrence.ts";
+import { ruleXml, type RuleSpec } from "../src/write/recurrence-rule-blob.ts";
+
+// Re-exported so existing bench importers (and test/unit/bench-world.test.ts)
+// keep reaching the composer through world.ts.
+export { ruleXml };
 import {
   seedArea,
   seedChecklistItem,
@@ -126,58 +131,10 @@ function epochAt(clock: Clock, offsetDays: number): number {
 }
 
 // ------------------------------------------------------- recurrence blobs
-
-interface RuleOffsets {
-  dy?: number;
-  mo?: number;
-  wd?: number;
-  wdo?: number;
-}
-
-interface RuleSpec {
-  /** 0 fixed · 1 after-completion. */
-  tp: 0 | 1;
-  /** 16 daily · 256 weekly · 8 monthly · 4 yearly. */
-  fu: 16 | 256 | 8 | 4;
-  /** Interval multiplier. */
-  fa: number;
-  /** Start offset in days (≤0). */
-  ts?: number;
-  of?: RuleOffsets[];
-  /** Anchor epoch (sr/ia). */
-  anchor: number;
-}
-
-/** Distant-future `ed` sentinel (year 4001 — same class the app writes). */
-const RULE_FOREVER = 64_092_211_200;
-
-/** Compose an rt1_recurrenceRule XML plist the read-path decoder accepts. */
-export function ruleXml(spec: RuleSpec): string {
-  const offsets = (spec.of ?? [{ dy: 0 }])
-    .map((o) => {
-      const entries = Object.entries(o)
-        .map(([k, v]) => `<key>${k}</key><integer>${v}</integer>`)
-        .join("");
-      return `<dict>${entries}</dict>`;
-    })
-    .join("");
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n` +
-    `<plist version="1.0"><dict>` +
-    `<key>ed</key><integer>${RULE_FOREVER}</integer>` +
-    `<key>fa</key><integer>${spec.fa}</integer>` +
-    `<key>fu</key><integer>${spec.fu}</integer>` +
-    `<key>ia</key><integer>${spec.anchor}</integer>` +
-    `<key>of</key><array>${offsets}</array>` +
-    `<key>rc</key><integer>0</integer>` +
-    `<key>rrv</key><integer>4</integer>` +
-    `<key>sr</key><integer>${spec.anchor}</integer>` +
-    `<key>tp</key><integer>${spec.tp}</integer>` +
-    `<key>ts</key><integer>${spec.ts ?? 0}</integer>` +
-    `</dict></plist>\n`
-  );
-}
+// The rt1_recurrenceRule composer (ruleXml + RuleSpec) is the SHARED serializer
+// in src/write/recurrence-rule-blob.ts — the write-side inverse of the read
+// decoder, also used by the simulator's recurrence appliers. Both bench and the
+// simulator emit byte-compatible template blobs from the one source.
 
 // ------------------------------------------------------------- inventory
 

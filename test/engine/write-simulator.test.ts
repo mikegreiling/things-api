@@ -16,6 +16,8 @@ import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
+import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
+import { runCreateRepeatingProject } from "../../src/write/make-repeating-project.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
@@ -500,6 +502,287 @@ describe("simulator write vector — covered operations", () => {
     const items = await runUndo(d, auditDir, { last: 1 });
     expect(items).toHaveLength(1);
     expect(row(uuid)["title"]).toBe("Before");
+  });
+
+  // ---------------------------------------------------------- recurrence
+  // These reproduce the RSIM campaign row shapes (docs/lab/rsim-results.md).
+  // The pinned NOW (2026-07-05, a Sunday) matches the RSIM clock, so a default
+  // weekly rule anchors on Sunday (wd 0) and the next weekly occurrence is
+  // 2026-07-12 — exactly the packed dates RSIM recorded.
+
+  const GUI = { dangerouslyDriveGui: true } as const;
+  const decodeTemplate = (uuid: string) =>
+    decodeRecurrenceRule(row(uuid)["rt1_recurrenceRule"] as Uint8Array);
+  const instancesOf = (templateUuid: string): Record<string, unknown>[] =>
+    fixture.db
+      .prepare("SELECT * FROM TMTask WHERE rt1_repeatingTemplate = ?")
+      .all(templateUuid) as Record<string, unknown>[];
+
+  it("todo.make-repeating FIXED weekly (RSIM1): source deleted, hidden template + one instance", async () => {
+    const area = seedArea(fixture.db, "Garden");
+    const tag = seedTag(fixture.db, "chores");
+    const src = seedTodo(fixture.db, {
+      title: "Water the plants",
+      notes: "back porch first",
+      area,
+      start: "active",
+      startDate: "2026-07-01",
+    });
+    fixture.db.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(src, tag);
+
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Source DELETED (identity replacement), not merely trashed.
+    expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(src)).toBeUndefined();
+
+    // Template: hidden (start=someday), deadline-less, next occurrence 2026-07-12.
+    const tmpl = row(res.uuid);
+    expect(tmpl["type"]).toBe(0);
+    expect(tmpl["title"]).toBe("Water the plants");
+    expect(tmpl["notes"]).toBe("back porch first");
+    expect(tmpl["area"]).toBe(area);
+    expect(tmpl["start"]).toBe(2);
+    expect(tmpl["startDate"]).toBeNull();
+    expect(tmpl["deadline"]).toBeNull();
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(1);
+    expect(tmpl["rt1_instanceCreationStartDate"]).toBe(encodePackedDate("2026-07-12"));
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+    const rule = decodeTemplate(res.uuid);
+    expect(rule).toMatchObject({
+      type: "fixed",
+      unit: "weekly",
+      interval: 1,
+      offsets: [{ weekday: 0 }],
+    });
+
+    // EXACTLY one instance, dated at the current occurrence (today).
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["rt1_recurrenceRule"]).toBeNull();
+    expect(inst[0]?.["startDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(inst[0]?.["start"]).toBe(2);
+    expect(inst[0]?.["deadline"]).toBeNull();
+
+    // Title/tags/area copied onto BOTH new rows.
+    for (const uuid of [res.uuid, inst[0]?.["uuid"] as string]) {
+      const tags = fixture.db.prepare("SELECT tags FROM TMTaskTag WHERE tasks = ?").all(uuid) as {
+        tags: string;
+      }[];
+      expect(tags.map((t) => t.tags)).toEqual([tag]);
+    }
+  });
+
+  it("todo.make-repeating AFTER-COMPLETION weekly (RSIM2): source preserved as the sole instance", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Refill the water filter",
+      start: "active",
+      startDate: "2026-07-05",
+    });
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1, afterCompletion: true },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Source PRESERVED and relinked as the instance (identity kept).
+    const preserved = row(src);
+    expect(preserved["rt1_repeatingTemplate"]).toBe(res.uuid);
+    expect(preserved["startDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(preserved["start"]).toBe(1);
+    expect(preserved["rt1_recurrenceRule"]).toBeNull();
+
+    // Template only: tp=1, no next/reference dates until a completion.
+    const tmpl = row(res.uuid);
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(0);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBeNull();
+    expect(tmpl["rt1_afterCompletionReferenceDate"]).toBeNull();
+    expect(decodeTemplate(res.uuid)).toMatchObject({
+      type: "after-completion",
+      unit: "weekly",
+      interval: 1,
+      offsets: [{ weekday: 0 }],
+    });
+
+    // No FRESH instance minted — the preserved source is the only instance.
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["uuid"]).toBe(src);
+  });
+
+  it("todo.complete an after-completion instance (RSIM4): stamps the template, no new instance", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Rotate the compost",
+      start: "active",
+      startDate: "2026-07-05",
+    });
+    const made = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1, afterCompletion: true },
+      GUI,
+    );
+    if (made.kind !== "ok" || made.uuid === null) throw new Error("expected template uuid");
+    const templateUuid = made.uuid;
+
+    const done = await runMutation(deps(vector), "todo.complete", { uuid: src });
+    expect(done.kind).toBe("ok");
+
+    expect(row(src)["status"]).toBe(3);
+    const tmpl = row(templateUuid);
+    expect(tmpl["rt1_afterCompletionReferenceDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+    // The next occurrence is future-dated and NOT materialized — still one instance.
+    expect(instancesOf(templateUuid)).toHaveLength(1);
+  });
+
+  it("todo.reschedule-repeat (RSIM5): identity preserved, rule replaced in place", async () => {
+    const src = seedTodo(fixture.db, { title: "Sweep the deck", start: "active" });
+    const made = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    if (made.kind !== "ok" || made.uuid === null) throw new Error("expected template uuid");
+    const templateUuid = made.uuid;
+
+    const res = await runMutation(
+      deps(vector),
+      "todo.reschedule-repeat",
+      { uuid: templateUuid, frequency: "daily", interval: 2 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+
+    // Same template uuid, rule rewritten to the TARGET (daily/2 — the app's
+    // interval-entry bug is NOT modeled), creation date advanced.
+    expect(
+      fixture.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(templateUuid),
+    ).toBeDefined();
+    expect(decodeTemplate(templateUuid)).toMatchObject({
+      type: "fixed",
+      unit: "daily",
+      interval: 2,
+    });
+    expect(row(templateUuid)["rt1_instanceCreationStartDate"]).toBe(encodePackedDate("2026-07-07"));
+  });
+
+  it("project.make-repeating FIXED (RSIM6): area preserved, start normalized to Someday", async () => {
+    const area = seedArea(fixture.db, "Home Ops");
+    const proj = seedProject(fixture.db, {
+      title: "Weekly review",
+      area,
+      start: "active",
+    });
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+
+    expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(proj)).toBeUndefined();
+    const tmpl = row(res.uuid);
+    expect(tmpl["type"]).toBe(1);
+    expect(tmpl["area"]).toBe(area); // area PRESERVED
+    expect(tmpl["start"]).toBe(2); // normalized to Someday
+    expect(decodeTemplate(res.uuid)).toMatchObject({ type: "fixed", unit: "weekly", interval: 1 });
+
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["type"]).toBe(1);
+    expect(inst[0]?.["area"]).toBe(area);
+    expect(inst[0]?.["startDate"]).toBe(encodePackedDate("2026-07-05"));
+  });
+
+  it("project.create-repeating (RSIM3) via the orchestrator: template + one instance, area kept", async () => {
+    const area = seedArea(fixture.db, "Operations");
+    const res = await runCreateRepeatingProject(
+      deps(vector),
+      { title: "Monthly finances", area: { uuid: area }, frequency: "monthly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+    expect(res.op).toBe("project.create-repeating");
+
+    // Net effect: exactly the template + its one instance carry the title; the
+    // intermediate added project was consumed by the make-repeating replacement.
+    const titled = fixture.db
+      .prepare("SELECT uuid, rt1_recurrenceRule AS rule FROM TMTask WHERE title = ? AND type = 1")
+      .all("Monthly finances") as { uuid: string; rule: unknown }[];
+    expect(titled).toHaveLength(2);
+    const tmpl = row(res.uuid);
+    expect(tmpl["rt1_recurrenceRule"]).not.toBeNull();
+    expect(tmpl["area"]).toBe(area);
+    expect(tmpl["start"]).toBe(2);
+    expect(decodeTemplate(res.uuid)).toMatchObject({ type: "fixed", unit: "monthly", interval: 1 });
+
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["area"]).toBe(area);
+  });
+
+  it("make-repeating with the marquee last-Sunday-of-December rule (yearly mo/wd/wdo)", async () => {
+    const src = seedTodo(fixture.db, { title: "Year-end backup", start: "active" });
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      {
+        uuid: src,
+        frequency: "yearly",
+        interval: 1,
+        yearly: { month: 12, weekday: "sunday", ordinal: "last" },
+      },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+
+    // The complex anchor round-trips through the real decoder.
+    expect(decodeTemplate(res.uuid)).toMatchObject({
+      type: "fixed",
+      unit: "yearly",
+      interval: 1,
+      offsets: [{ month: 12, weekday: 0, weekdayOrdinal: -1 }],
+    });
+  });
+
+  it("reschedule-repeat refuses a non-template target", async () => {
+    const plain = seedTodo(fixture.db, { title: "not repeating", start: "active" });
+    const res = await runMutation(
+      deps(vector),
+      "todo.reschedule-repeat",
+      { uuid: plain, frequency: "daily", interval: 1 },
+      { ...GUI, verifyTimeoutMs: 250 },
+    );
+    // The applier throws (no rule blob); the pipeline surfaces it as a failure,
+    // and nothing is written.
+    expect(res.kind).not.toBe("ok");
+    expect(row(plain)["rt1_recurrenceRule"]).toBeNull();
+  });
+
+  it("keeps pause/resume OUT of the simulator matrix (no RSIM-proven shape)", () => {
+    for (const op of [
+      "todo.pause-repeat",
+      "todo.resume-repeat",
+      "project.pause-repeat",
+      "project.resume-repeat",
+    ] as const) {
+      expect(vector.matrix[op]).toBeUndefined();
+    }
   });
 });
 
