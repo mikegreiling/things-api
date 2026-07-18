@@ -1,0 +1,41 @@
+{
+  "skill": {
+    "success": "14/18",
+    "friction": 2,
+    "medTokIn": 55916,
+    "perTask": {
+      "recurrence-after-completion": "3/3",
+      "recurrence-marquee-yearly": "0/3",
+      "recurrence-multi-weekday": "2/3",
+      "recurrence-project": "3/3",
+      "recurrence-reschedule-holdout": "3/3",
+      "recurrence-weekly-fixed": "3/3"
+    }
+  },
+  "cli": {
+    "success": "11/18",
+    "friction": 1.64,
+    "medTokIn": 23945,
+    "perTask": {
+      "recurrence-after-completion": "1/3",
+      "recurrence-marquee-yearly": "0/3",
+      "recurrence-multi-weekday": "2/3",
+      "recurrence-project": "3/3",
+      "recurrence-reschedule-holdout": "3/3",
+      "recurrence-weekly-fixed": "2/3"
+    }
+  },
+  "mcp": {
+    "success": "12/18",
+    "friction": 0.67,
+    "medTokIn": 38254,
+    "perTask": {
+      "recurrence-after-completion": "3/3",
+      "recurrence-marquee-yearly": "1/3",
+      "recurrence-multi-weekday": "1/3",
+      "recurrence-project": "1/3",
+      "recurrence-reschedule-holdout": "3/3",
+      "recurrence-weekly-fixed": "3/3"
+    }
+  }
+}
