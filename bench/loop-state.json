@@ -318,5 +318,155 @@
         "medianTokensInOnSuccesses": 15778
       }
     }
+  },
+  {
+    "timestamp": "2026-07-18T02:12:19.979Z",
+    "arm": "cli",
+    "iteration": 1,
+    "digestHash": "544ad41911e9",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The dominant cross-task failure is misreading the universal JSON envelope, especially using .items or .item and then constructing empty references. Naming the exact result path in the top-level help fixes that root cause at the first surface every agent inspected, without changing command behavior.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "argument-construction",
+        "note": "The agent extracted IDs from nonexistent .items/.item fields, so subsequent write arguments were empty."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "data-model-misunderstanding",
+        "note": "The agent queried .items instead of the JSON envelope's .data array."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "behavior-misunderstanding",
+        "note": "The matching item was returned, but the agent did not reliably interpret the structured result and overdue deadline."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated search-result direct tags as the complete effective tag set instead of inspecting detail for inherited tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "data-model-misunderstanding",
+        "note": "The agent did not translate absent container fields and start=active from the JSON detail into none/anytime/actionable."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "behavior-misunderstanding",
+        "note": "The agent assumed Inbox required a destination option and invented unsupported flags before recovering."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 24,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7083333333333334,
+        "medianTokensInOnSuccesses": 7584
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 0,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0,
+        "medianTokensInOnSuccesses": 0
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 24,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.75,
+        "medianTokensInOnSuccesses": 9151
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 1,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0,
+        "medianTokensInOnSuccesses": 5970
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T02:21:50.855Z",
+    "arm": "cli",
+    "iteration": 2,
+    "digestHash": "544ad41911e9",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +3/-1",
+    "rationale": "Two failed tasks share the same root cause: agents correctly selected commands but guessed a conventional .items/.item JSON shape instead of the documented envelope's .data payload. Putting the shape directly on the top-level --json signpost is the smallest general fix and also clarifies how to interpret omitted optional fields.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "The agent assumed read and mutation envelopes used .items/.item, producing empty references and aborting the compound write."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "d",
+        "note": "The correct Inbox command was used, but the agent queried .items instead of the envelope payload at .data."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "b",
+        "note": "The agent found the relevant Today data but did not use or reproduce the documented overdue semantics."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated directly attached tags as the effective tag set and missed inherited container tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "The agent did not interpret absent container fields as no container or start=active as Anytime/actionable."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "b",
+        "note": "The agent did not understand that todo add without a destination creates an Inbox to-do."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 33,
+        "successes": 24,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7083333333333334,
+        "medianTokensInOnSuccesses": 7584
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 0,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0,
+        "medianTokensInOnSuccesses": 0
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 33,
+        "successes": 22,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5454545454545454,
+        "medianTokensInOnSuccesses": 10471.5
+      },
+      "validation": {
+        "runs": 6,
+        "successes": 2,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 8304.5
+      }
+    }
   }
 ]
