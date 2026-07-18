@@ -1067,5 +1067,305 @@
         "medianTokensInOnSuccesses": 8694
       }
     }
+  },
+  {
+    "timestamp": "2026-07-18T09:47:31.932Z",
+    "arm": "cli",
+    "iteration": 1,
+    "digestHash": "7e7d1361881c",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The compound failure began at the earliest JSON read: the agent assumed the conventional .id field, silently extracted an empty value, and then issued cascading writes with invalid references. Naming .uuid directly in the top-level --json signpost is the smallest generalizable clarification and preserves the envelope and payload-path contract.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "c",
+        "note": "Parsed JSON entities through .id instead of the documented .uuid, producing an empty area reference and cascading invalid write arguments."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "d",
+        "note": "Constructed an unsupported --when tonight value instead of the CLI vocabulary's evening value."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "e",
+        "note": "After title search failed, recovery did not locate and cancel the to-do or derive its resulting Logbook view."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "a",
+        "note": "Initially searched for generic add/done commands before discovering the namespaced todo checklist command."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "d",
+        "note": "Required recovery to construct the tag nesting and assignment commands correctly."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "c",
+        "note": "Used the host UTC date instead of the command envelope's Things clock and failed to apply the explicit overdue scope."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Treated search-result direct tags as the effective tag set and omitted container-inherited tags."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "b",
+        "note": "Assumed Inbox required an --in inbox option instead of understanding that an uncontained new to-do is created there by default."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Had difficulty constructing the supported --when value for a relative weekday."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 45,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6222222222222222,
+        "medianTokensInOnSuccesses": 12695
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 12,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 9373
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 45,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6666666666666666,
+        "medianTokensInOnSuccesses": 12108
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 12,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.8333333333333334,
+        "medianTokensInOnSuccesses": 11777.5
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T10:02:01.859Z",
+    "arm": "cli",
+    "iteration": 2,
+    "digestHash": "7e7d1361881c",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The compound failure began at the earliest JSON lookup: the agent assumed a conventional `.id` field, received an empty reference, and then accumulated blocked commands and duplicate retries. Naming `.uuid` beside the envelope and payload path in top-level help is the smallest generalizable correction for every scripted entity lookup.",
+    "decision": "accept",
+    "reason": "dev success ↑",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "data-model-misunderstanding",
+        "note": "The agent read `.id` from JSON entities even though the identifier field is `.uuid`, producing an empty area reference and cascading retries."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "argument-construction",
+        "note": "The agent passed unsupported natural-language value `tonight` instead of the documented `evening` value."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "behavior-misunderstanding",
+        "note": "The agent failed to connect canceling a to-do with its resulting placement in Logbook."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "discovery",
+        "note": "The agent initially searched for generic add/done commands before discovering `todo checklist`."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "discovery",
+        "note": "The agent needed multiple probes to discover tag nesting and to-do tag mutation commands."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "discovery",
+        "note": "The agent manually inspected dates instead of discovering the read views' `--overdue` filter."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated direct tags in search output as the effective tag set and omitted inherited tags."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "behavior-misunderstanding",
+        "note": "The agent assumed Inbox required an explicit destination flag, although an unscheduled containerless add already goes there."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "argument-construction",
+        "note": "The agent struggled to map the requested weekday to the accepted `--when` value grammar."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 45,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6222222222222222,
+        "medianTokensInOnSuccesses": 12695
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 12,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 9373
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 48,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4791666666666667,
+        "medianTokensInOnSuccesses": 12858.5
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 8538.5
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T10:03:17.224Z",
+    "arm": "cli",
+    "iteration": 3,
+    "digestHash": "a813feed7114",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "Make the common JSON row-array shape explicit at the earliest discovery surface. This directly addresses agents incorrectly probing .data.items while preserving the existing envelope contract.",
+    "decision": "revert",
+    "reason": "gate failed (fmt/check)",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "argument-construction",
+        "note": "The agent discovered the required namespaces but failed while constructing the multi-step heading/to-do arguments."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "argument-construction",
+        "note": "The tag was created, but the subsequent target lookup or tag assignment was constructed incorrectly."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated the JSON payload as an object with .items instead of the row array stored directly at .data."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "data-model-misunderstanding",
+        "note": "The agent interpreted search-row direct tags as the complete effective tag set and omitted inherited container tags."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "discovery",
+        "note": "The agent initially searched for unnamespaced list and move commands before recovering to the todo namespace."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "argument-construction",
+        "note": "The command syntax was found, but the relative weekday was converted to an incorrect absolute date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 48,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4791666666666667,
+        "medianTokensInOnSuccesses": 12858.5
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 8538.5
+      }
+    },
+    "metricsAfter": null
+  },
+  {
+    "timestamp": "2026-07-18T10:04:05.479Z",
+    "arm": "cli",
+    "iteration": 4,
+    "digestHash": "a813feed7114",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The repeated actionable failure is assuming that flat list JSON uses .data.items[]. The top-level discovery surface already mentions .data, but does not explicitly contrast the absent wrapper. Naming the exact array path and ruling out .items is the smallest generalizable clarification across inbox, search, and other flat list commands.",
+    "decision": "revert",
+    "reason": "gate failed (fmt/check)",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Argument construction failed during a multi-step project/heading/to-do creation sequence."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "d",
+        "note": "The agent searched successfully but treated the flat JSON payload as if it had an items wrapper, complicating target selection and mutation construction."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "c",
+        "note": "Data-model misunderstanding: inbox and search return row arrays directly at .data, but the agent queried .data.items[]."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Data-model misunderstanding: the agent used direct tags from a search row without retrieving inherited tags from item detail."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "a",
+        "note": "Discovery friction: the agent first looked for a top-level move command before finding the namespaced todo move command."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The command was discovered, but the relative weekday was converted into an incorrect absolute date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 48,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4791666666666667,
+        "medianTokensInOnSuccesses": 12858.5
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 8538.5
+      }
+    },
+    "metricsAfter": null
   }
 ]
