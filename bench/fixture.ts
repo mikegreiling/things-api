@@ -196,10 +196,38 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
  * benchMarker brands the DB as a bench fixture: the simulator fence requires
  * it, and defaultVectors refuses to pair a marked DB with real transports.
  */
+/**
+ * Recompute each project's denormalized leaf-action counters from its actual
+ * children. The real Things app maintains `untrashedLeafActionsCount` /
+ * `openUntrashedLeafActionsCount` on every project, but the per-row seed builders
+ * insert to-dos and their parent project independently and leave both at 0. That
+ * left a project's read surface (`things projects --json` →
+ * openUntrashedLeafActionsCount) reporting 0 open children while the write guards
+ * — which count children live — correctly saw them: an internal disagreement no
+ * real database exhibits (bench-caught). A leaf action is an untrashed to-do
+ * filed directly under the project OR under one of its headings, matching the
+ * open-children query the guards use (src/write/pre-state.ts).
+ */
+function reconcileLeafActionCounts(db: DatabaseSync): void {
+  const childrenOfProject =
+    "FROM TMTask c WHERE c.type = 0 AND c.trashed = 0 " +
+    "AND (c.project = TMTask.uuid OR c.heading IN " +
+    "(SELECT h.uuid FROM TMTask h WHERE h.type = 2 AND h.project = TMTask.uuid))";
+  db.prepare(
+    `UPDATE TMTask SET
+       untrashedLeafActionsCount = (SELECT COUNT(*) ${childrenOfProject}),
+       openUntrashedLeafActionsCount = (SELECT COUNT(*) ${childrenOfProject} AND c.status = 0)
+     WHERE type = 1`,
+  ).run();
+}
+
 export function buildBenchFixture(seeds: SeedSpec[], world?: WorldOptions): BenchFixture {
   const fixture = buildFixtureDb({ benchMarker: true });
   if (world !== undefined) applyWorld(fixture.db, world);
   applySeeds(fixture.db, seeds);
+  // The real app keeps every project's leaf-action counters in sync with its
+  // children; the seed builders do not, so reconcile once the whole tree exists.
+  reconcileLeafActionCounts(fixture.db);
   // Close flushes WAL to disk so the child process opens a consistent file and the
   // baseline hash reflects the committed seed state.
   fixture.close();
