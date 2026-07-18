@@ -1,0 +1,56 @@
+{
+  "id": "recurrence-weekly-fixed",
+  "family": "longtail",
+  "tier": 3,
+  "split": "dev",
+  "prompt": "Make my 'Refill the bird feeders' to-do repeat every Monday.",
+  "paraphrases": [
+    "Turn 'Refill the bird feeders' into a weekly repeating to-do that comes up on Mondays."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Refill the bird feeders",
+      "start": "active"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Refill the bird feeders' AND rt1_recurrenceRule IS NULL AND rt1_repeatingTemplate IS NULL AND trashed=0",
+      "expect": [
+        {
+          "n": 0
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Refill the bird feeders' AND start=2 AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>fu</key><integer>256</integer>%' AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>tp</key><integer>0</integer>%' AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>wd</key><integer>1</integer>%'",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask i JOIN TMTask t ON i.rt1_repeatingTemplate=t.uuid WHERE i.title='Refill the bird feeders' AND t.title='Refill the bird feeders' AND i.rt1_recurrenceRule IS NULL AND i.status=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    }
+  ],
+  "maxTurns": 22,
+  "timeoutMs": 200000,
+  "pseudoScript": [
+    "things todo make-repeating \"$(things search \"Refill the bird feeders\" --json | jq -r '.data[0].uuid')\" --frequency weekly --interval 1 --weekdays monday --dangerously-drive-gui"
+  ]
+}

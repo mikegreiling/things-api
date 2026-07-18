@@ -1,0 +1,48 @@
+{
+  "id": "recurrence-multi-weekday",
+  "family": "longtail",
+  "tier": 3,
+  "split": "dev",
+  "prompt": "I water the seedlings every Thursday and every Friday. Set that up as a repeating to-do titled 'Water the seedling trays'.",
+  "paraphrases": ["Make 'Water the seedling trays' repeat weekly on both Thursdays and Fridays."],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Water the seedling trays' AND start=2 AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>fu</key><integer>256</integer>%' AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>wd</key><integer>4</integer>%' AND CAST(rt1_recurrenceRule AS TEXT) LIKE '%<key>wd</key><integer>5</integer>%'",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Water the seedling trays' AND rt1_recurrenceRule IS NOT NULL",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask i JOIN TMTask t ON i.rt1_repeatingTemplate=t.uuid WHERE t.title='Water the seedling trays' AND i.rt1_recurrenceRule IS NULL AND i.status=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    }
+  ],
+  "maxTurns": 24,
+  "timeoutMs": 220000,
+  "pseudoScript": [
+    "things todo add \"Water the seedling trays\" --json",
+    "things todo make-repeating \"$(things search \"Water the seedling trays\" --json | jq -r '.data[0].uuid')\" --frequency weekly --interval 1 --weekdays thursday,friday --dangerously-drive-gui"
+  ]
+}
