@@ -62,3 +62,27 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **debrief:** attribution — The signpost likely improved discovery of namespaced writes and existing-container selection, matching gains in the targeted validation cases; however, the overall success decline is dispersed across unrelated tasks and, with only three runs each and no behavior change, is more consistent with run variance than a systematic patch effect.; lesson — Add concise guidance at the main discovery point, but judge it by replicated gains in the targeted task family rather than noisy suite-wide movement.; confidence — medium
 - **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r2); checkpoint: bench/artifacts/loop-cli-r2/checkpoint.md
 
+<!-- ledger-entry id="loop-cli-r3-cli-iter1" lesson="Place critical schema guidance at the point of use and require consistent held-out gains before attributing noisy task-level changes to it." -->
+### 2026-07-18 · cli · iter 1 · **REVERTED**
+
+- **change:** The compound failure began at the earliest JSON read: the agent assumed the conventional .id field, silently extracted a — files: src/cli/help.ts; diff 1 file(s) [src/cli/help.ts], +1/-1
+- **pre-hoc hypothesis:** The compound failure began at the earliest JSON read: the agent assumed the conventional .id field, silently extracted an empty value, and then issued cascading writes with invalid references. Naming .uuid directly in the top-level --json signpost is the smallest generalizable clarification and preserves the envelope and payload-path contract.
+- **predicted blast radius:** Should reduce malformed references in every workflow that discovers entities through --json, especially areas/projects followed by writes. It changes help text only, so there is no state-change risk; unrelated scheduling, inherited-tag, and recovery failures are not expected to move.
+- **measured deltas (before → after):**
+  - dev: success 45/54 → 45/54; friction 0.62 → 0.67; median tokIn 12695 → 12108
+  - validation: success 12/18 → 12/18; friction 1.00 → 0.83; median tokIn 9373 → 11778
+- **debrief:** attribution — The added .uuid hint produced no reliable aggregate effect: success was net-flat on dev and validation, while gains in some workflows were offset by regressions, including a held-out compound workflow. Because the change only helps agents that consult top-level help, the mixed friction and token shifts are most consistent with run variance rather than a broad causal improvement.; lesson — Place critical schema guidance at the point of use and require consistent held-out gains before attributing noisy task-level changes to it.; confidence — high
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r3); checkpoint: bench/artifacts/loop-cli-r3/checkpoint.md
+
+<!-- ledger-entry id="loop-cli-r3-cli-iter2" lesson="Expose nonstandard identifiers and response paths concisely at the earliest shared discovery surface to prevent small lookup mistakes from cascading." -->
+### 2026-07-18 · cli · iter 2 · **ACCEPTED**
+
+- **change:** The compound failure began at the earliest JSON lookup: the agent assumed a conventional `.id` field, received an empty  — files: src/cli/help.ts; diff 1 file(s) [src/cli/help.ts], +1/-1
+- **pre-hoc hypothesis:** The compound failure began at the earliest JSON lookup: the agent assumed a conventional `.id` field, received an empty reference, and then accumulated blocked commands and duplicate retries. Naming `.uuid` beside the envelope and payload path in top-level help is the smallest generalizable correction for every scripted entity lookup.
+- **predicted blast radius:** Should reduce malformed references and cascading retries in compound tasks and any JSON-driven read-then-write flow. It changes only concise help text, with negligible token cost and no command or database behavior risk.
+- **measured deltas (before → after):**
+  - dev: success 45/54 → 48/54; friction 0.62 → 0.48; median tokIn 12695 → 12859
+  - validation: success 12/18 → 14/18; friction 1.00 → 1.00; median tokIn 9373 → 8539
+- **debrief:** attribution — The explicit `.uuid` guidance likely prevented conventional `.id` assumptions in JSON-driven workflows, reducing cascading retries and token use while improving several compound/read-write outcomes. Mixed regressions and zero-token runs indicate substantial run variance, so not all observed gains are attributable to the help change.; lesson — Expose nonstandard identifiers and response paths concisely at the earliest shared discovery surface to prevent small lookup mistakes from cascading.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r3); checkpoint: bench/artifacts/loop-cli-r3/checkpoint.md
+
