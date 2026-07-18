@@ -317,6 +317,23 @@ const dryRunShape = {
   dry_run: z.boolean().optional().describe("Preview the planned change without applying anything"),
 };
 
+/**
+ * The per-call opt-in for the tools that reach a change only by driving the
+ * local Things app's accessibility interface. Shared by `repeat`, the
+ * `convert_to_project` heading action, and the `areas` reorder scope.
+ */
+const driveGuiShape = {
+  dangerously_drive_gui: z
+    .boolean()
+    .optional()
+    .describe(
+      "Required: this drives the local Things app through its accessibility interface to " +
+        "make a change the app offers nowhere else. It briefly interacts with the app's UI " +
+        "on the machine running this server, and must be turned on first with `things config " +
+        "set ui-enabled true`. Intended for a dedicated always-on Mac.",
+    ),
+};
+
 /** How a tag value may be expressed on any tag-accepting tool. */
 const TAG_REF_FORMAT =
   "each a tag name or a parent/child path; must exist unless create_tags is set";
@@ -1076,27 +1093,45 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
-    "update_todo",
+    "update",
     {
       description:
-        "Update a to-do's title, notes, schedule, reminder, or deadline. " +
-        "append_notes/prepend_notes add a line to the existing notes (exclusive with " +
-        "notes). Changing the schedule keeps an existing reminder unless the call sets a " +
-        "new one. clear_reminder works while the to-do is scheduled for today or this " +
-        "evening; a reminder on a future date can only be changed, not cleared " +
-        "(re-schedule to today first). Schedule and deadline changes are not available " +
-        "for repeating to-dos.",
+        "Edit an existing to-do, project, area, or tag — kind selects which. " +
+        "kind todo/project: title, notes (or append_notes/prepend_notes to add a line to the " +
+        "existing body, exclusive with notes), schedule (when), reminder/clear_reminder, and " +
+        "deadline/clear_deadline; changing the schedule keeps an existing reminder unless a new " +
+        "one is set, schedule and deadline changes are unavailable for repeating items, and " +
+        "clear_reminder needs the item scheduled for today or this evening (a reminder on a " +
+        "future date can only be changed, not cleared). kind area: title and/or tags (the full " +
+        "replacement set). kind tag: title, parent (nest under it) or unnest (to the top level; " +
+        "exclusive), and shortcut or clear_shortcut (exclusive). Tags must exist unless " +
+        "create_tags is set.",
       inputSchema: {
-        uuid: z.string(),
-        title: z.string().optional(),
-        notes: z.string().optional().describe("Replaces the whole notes body"),
-        append_notes: z.string().optional(),
-        prepend_notes: z.string().optional(),
+        kind: z.enum(["todo", "project", "area", "tag"]),
+        uuid: z
+          .string()
+          .describe(
+            "The item to update — a to-do by uuid; a project, area, or tag also accepts a " +
+              "unique name",
+          ),
+        title: z.string().optional().describe("New title (any kind)"),
+        notes: z.string().optional().describe("todo/project: replaces the whole notes body"),
+        append_notes: z.string().optional().describe("todo/project: add a line after the notes"),
+        prepend_notes: z.string().optional().describe("todo/project: add a line before the notes"),
         when: whenSchema,
-        reminder: z.string().optional().describe(REMINDER_FORMAT),
-        clear_reminder: z.boolean().optional(),
-        deadline: z.string().optional().describe(DATE_FORMAT),
-        clear_deadline: z.boolean().optional(),
+        reminder: z.string().optional().describe(`todo/project: ${REMINDER_FORMAT}`),
+        clear_reminder: z.boolean().optional().describe("todo/project: remove the reminder"),
+        deadline: z.string().optional().describe(`todo/project: ${DATE_FORMAT}`),
+        clear_deadline: z.boolean().optional().describe("todo/project: remove the deadline"),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe(`area: replace the tag set (full) — ${TAG_REF_FORMAT}`),
+        parent: z.string().optional().describe("tag: existing tag to nest under"),
+        unnest: z.boolean().optional().describe("tag: move the tag to the top level"),
+        shortcut: z.string().optional().describe("tag: keyboard shortcut character"),
+        clear_shortcut: z.boolean().optional().describe("tag: remove the keyboard shortcut"),
+        ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
       },
@@ -1106,51 +1141,133 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       guard(async () => {
         const badZone = badTz(args.tz);
         if (badZone !== null) return badZone;
-        const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
-          (v) => v !== undefined,
-        );
-        if (notesModes.length > 1) {
-          return usage("notes, append_notes, prepend_notes are exclusive");
+        const opts = writeOptions(args);
+        const c = getClient();
+        if (args.kind === "todo" || args.kind === "project") {
+          const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
+            (v) => v !== undefined,
+          );
+          if (notesModes.length > 1) {
+            return usage("notes, append_notes, prepend_notes are exclusive");
+          }
+          if (args.reminder !== undefined && args.clear_reminder === true) {
+            return usage("pass at most one of reminder / clear_reminder");
+          }
+          if (args.deadline !== undefined && args.clear_deadline === true) {
+            return usage("pass at most one of deadline / clear_deadline");
+          }
+          if (args.kind === "todo") {
+            const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
+            if (sugar.kind === "error") return usage(sugar.message);
+            const when = sugar.kind === "split" ? sugar.when : args.when;
+            const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
+            return mutationResult(
+              await c.write.updateTodo(
+                args.uuid,
+                {
+                  ...(args.title !== undefined && { title: args.title }),
+                  ...(args.notes !== undefined && { notes: args.notes }),
+                  ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
+                  ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
+                  ...(when !== undefined && { when: when as never }),
+                  ...(reminder !== undefined && { reminder }),
+                  ...(args.clear_reminder === true && { reminder: null }),
+                  ...(args.deadline !== undefined && { deadline: args.deadline }),
+                  ...(args.clear_deadline === true && { deadline: null }),
+                },
+                opts,
+              ),
+            );
+          }
+          return mutationResult(
+            await c.write.updateProject(
+              args.uuid,
+              {
+                ...(args.title !== undefined && { title: args.title }),
+                ...(args.notes !== undefined && { notes: args.notes }),
+                ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
+                ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
+                ...(args.when !== undefined && { when: args.when as never }),
+                ...(args.reminder !== undefined && { reminder: args.reminder }),
+                ...(args.clear_reminder === true && { reminder: null }),
+                ...(args.deadline !== undefined && { deadline: args.deadline }),
+                ...(args.clear_deadline === true && { deadline: null }),
+              },
+              opts,
+            ),
+          );
         }
-        if (args.reminder !== undefined && args.clear_reminder === true) {
-          return usage("pass at most one of reminder / clear_reminder");
+        if (args.kind === "area") {
+          if (args.title === undefined && args.tags === undefined) {
+            return usage("kind area requires title and/or tags");
+          }
+          return mutationResult(
+            await c.write.updateArea(
+              args.uuid,
+              {
+                ...(args.title !== undefined && { title: args.title }),
+                ...(args.tags !== undefined && { tags: args.tags }),
+              },
+              opts,
+            ),
+          );
         }
-        if (args.deadline !== undefined && args.clear_deadline === true) {
-          return usage("pass at most one of deadline / clear_deadline");
+        // kind tag
+        if (
+          args.title === undefined &&
+          args.parent === undefined &&
+          args.unnest === undefined &&
+          args.shortcut === undefined &&
+          args.clear_shortcut === undefined
+        ) {
+          return usage("kind tag requires title, parent, unnest, shortcut, and/or clear_shortcut");
         }
-        const sugar = splitWhenSugar(args.when, args.reminder !== undefined, MCP_WHEN_LABELS);
-        if (sugar.kind === "error") return usage(sugar.message);
-        const when = sugar.kind === "split" ? sugar.when : args.when;
-        const reminder = sugar.kind === "split" ? sugar.reminder : args.reminder;
+        if (args.parent !== undefined && args.unnest === true) {
+          return usage("parent and unnest are exclusive");
+        }
+        if (args.shortcut !== undefined && args.clear_shortcut === true) {
+          return usage("shortcut and clear_shortcut are exclusive");
+        }
         return mutationResult(
-          await getClient().write.updateTodo(
+          await c.write.updateTag(
             args.uuid,
             {
               ...(args.title !== undefined && { title: args.title }),
-              ...(args.notes !== undefined && { notes: args.notes }),
-              ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
-              ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-              ...(when !== undefined && { when: when as never }),
-              ...(reminder !== undefined && { reminder }),
-              ...(args.clear_reminder === true && { reminder: null }),
-              ...(args.deadline !== undefined && { deadline: args.deadline }),
-              ...(args.clear_deadline === true && { deadline: null }),
+              ...(args.parent !== undefined && { parent: args.parent }),
+              ...(args.unnest === true && { unnest: true }),
+              ...(args.shortcut !== undefined && { shortcut: args.shortcut }),
+              ...(args.clear_shortcut === true && { clearShortcut: true }),
             },
-            writeOptions(args),
+            opts,
           ),
         );
       }),
   );
 
   server.registerTool(
-    "set_todo_status",
+    "set_status",
     {
       description:
-        "Set a to-do's status: completed, canceled, or open (reopening a " +
-        "completed/canceled to-do). Not available for repeating to-dos.",
+        "Set a to-do's or project's status (scope selects which): completed, canceled, or open " +
+        "(reopening a completed/canceled item). Not available for repeating to-dos. " +
+        "scope project, completing or canceling requires a children policy: 'require-resolved' " +
+        "errors if open to-dos remain; 'auto-complete'/'auto-cancel' resolves them together with " +
+        "the project (canceling never alters already-completed children). scope project, status " +
+        "open, restore_children also reopens the to-dos that were resolved with the project.",
       inputSchema: {
-        uuid: z.string(),
+        scope: z.enum(["todo", "project"]),
+        uuid: z
+          .string()
+          .describe("The item — a to-do by uuid; a project also accepts a unique name"),
         status: z.enum(["completed", "canceled", "open"]),
+        children: z
+          .enum(["require-resolved", "auto-complete", "auto-cancel"])
+          .optional()
+          .describe("scope project, completed/canceled: what to do with the project's open to-dos"),
+        restore_children: z
+          .boolean()
+          .optional()
+          .describe("scope project, open only: also reopen the to-dos resolved with the project"),
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1159,13 +1276,52 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       guard(async () => {
         const c = getClient();
         const opts = writeOptions(args);
-        return mutationResult(
-          args.status === "completed"
-            ? await c.write.completeTodo(args.uuid, opts)
-            : args.status === "canceled"
-              ? await c.write.cancelTodo(args.uuid, opts)
-              : await c.write.reopenTodo(args.uuid, opts),
-        );
+        if (args.scope === "todo") {
+          if (args.children !== undefined || args.restore_children !== undefined) {
+            return usage("children/restore_children apply only to scope project");
+          }
+          return mutationResult(
+            args.status === "completed"
+              ? await c.write.completeTodo(args.uuid, opts)
+              : args.status === "canceled"
+                ? await c.write.cancelTodo(args.uuid, opts)
+                : await c.write.reopenTodo(args.uuid, opts),
+          );
+        }
+        // scope project
+        if (args.status !== "open" && args.restore_children !== undefined) {
+          return usage("restore_children applies only to status 'open'");
+        }
+        if (args.status === "completed") {
+          if (args.children !== "require-resolved" && args.children !== "auto-complete") {
+            return usage(
+              "status 'completed' requires children: 'require-resolved' or 'auto-complete'",
+            );
+          }
+          return mutationResult(
+            await c.write.completeProject(args.uuid, { children: args.children }, opts),
+          );
+        }
+        if (args.status === "canceled") {
+          if (args.children !== "require-resolved" && args.children !== "auto-cancel") {
+            return usage(
+              "status 'canceled' requires children: 'require-resolved' or 'auto-cancel'",
+            );
+          }
+          return mutationResult(
+            await c.write.cancelProject(args.uuid, { children: args.children }, opts),
+          );
+        }
+        if (args.children !== undefined) {
+          return usage("children applies only to status 'completed' or 'canceled'");
+        }
+        const outcome = await c.write.reopenProject(args.uuid, {
+          ...opts,
+          ...(args.restore_children === true && { restoreChildren: true }),
+        });
+        return outcome.project.kind === "ok" || outcome.project.kind === "dry-run"
+          ? jsonResult(outcome)
+          : mutationResult(outcome.project);
       }),
   );
 
@@ -1367,23 +1523,50 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   // ------------------------------------------------- to-dos AND projects
 
   server.registerTool(
-    "delete_item",
+    "delete",
     {
       description:
-        "Move a to-do or project to the Trash (recoverable via restore_item until the " +
-        "Trash is emptied). Deleting a project sends its to-dos to the Trash with it. Not " +
-        "available for repeating to-dos.",
-      inputSchema: { uuid: z.string(), ...dryRunShape },
+        "Delete a to-do/project (kind item), an area, or a tag — kind selects which. " +
+        "kind item: moves a to-do or project to the Trash (recoverable via restore_item until " +
+        "the Trash is emptied; a deleted project takes its to-dos with it; not available for " +
+        "repeating to-dos). kind area: PERMANENT — areas do not go to the Trash, so this cannot " +
+        "be undone and requires dangerously_permanent; the area's to-dos move to the Trash and " +
+        "its projects remain, no longer assigned to any area. kind tag: PERMANENT — requires " +
+        "dangerously_permanent; the tag is removed from every item, and if it has nested child " +
+        "tags they are ALL permanently deleted with it — pass acknowledge_tag_subtree to confirm.",
+      inputSchema: {
+        kind: z.enum(["item", "area", "tag"]),
+        uuid: z
+          .string()
+          .describe("The target — an item by uuid; an area or tag also accepts a unique name"),
+        dangerously_permanent: z
+          .boolean()
+          .optional()
+          .describe("kind area/tag: confirm permanent, unrecoverable deletion"),
+        acknowledge_tag_subtree: z
+          .boolean()
+          .optional()
+          .describe("kind tag: confirm permanent deletion of ALL nested child tags too"),
+        ...dryRunShape,
+      },
       annotations: DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
         const c = getClient();
-        return mutationResult(
-          itemType(args.uuid) === "to-do"
-            ? await c.write.deleteTodo(args.uuid, writeOptions(args))
-            : await c.write.deleteProject(args.uuid, writeOptions(args)),
-        );
+        const opts = writeOptions(args);
+        switch (args.kind) {
+          case "item":
+            return mutationResult(
+              itemType(args.uuid) === "to-do"
+                ? await c.write.deleteTodo(args.uuid, opts)
+                : await c.write.deleteProject(args.uuid, opts),
+            );
+          case "area":
+            return mutationResult(await c.write.deleteArea(args.uuid, opts));
+          case "tag":
+            return mutationResult(await c.write.deleteTag(args.uuid, opts));
+        }
       }),
   );
 
@@ -1471,29 +1654,92 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
-    "create_heading",
+    "heading",
     {
       description:
-        "Create a heading inside an existing project; its uuid is returned. The project " +
-        "must name an existing project. Uses the Things proxy shortcuts — set them up once " +
-        "with `things setup shortcuts`.",
+        "Manage a project heading — action selects which. create: a new heading in an existing " +
+        "project (project + title; returns its uuid; uses the Things proxy shortcuts, set up " +
+        "once with `things setup shortcuts`). rename: rename in place (uuid + title; works on " +
+        "archived headings). archive: retire a heading so it leaves the active project view " +
+        "(reversible with action unarchive); with open children pass children — complete or " +
+        "cancel resolve them with the heading in one cascade, reparent moves them to the project " +
+        "root keeping them open. unarchive: bring an archived heading back; restore_children also " +
+        "reopens the children the archive resolved with it. convert_to_project: promote a to-do " +
+        "or heading into a new project — this REPLACES the original and cannot be undone (a " +
+        "converted heading's to-dos move under the new project), and requires " +
+        "dangerously_drive_gui.",
       inputSchema: {
-        project: z.string().describe(`Existing project (${REF_FORMAT})`),
-        title: z.string(),
+        action: z.enum(["create", "rename", "archive", "unarchive", "convert_to_project"]),
+        project: z.string().optional().describe(`create: existing project (${REF_FORMAT})`),
+        uuid: z
+          .string()
+          .optional()
+          .describe("rename/archive/unarchive/convert_to_project: the target's uuid"),
+        title: z.string().optional().describe("create: the new heading; rename: the new title"),
+        children: z
+          .enum(["complete", "cancel", "reparent"])
+          .optional()
+          .describe("archive: required when the heading has open children"),
+        restore_children: z
+          .boolean()
+          .optional()
+          .describe("unarchive: also reopen the children archived with the heading"),
+        ...driveGuiShape,
         ...dryRunShape,
       },
-      annotations: NON_DESTRUCTIVE,
+      annotations: DESTRUCTIVE,
     },
     async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.createHeading(
-            containerRef(args.project),
-            args.title,
-            writeOptions(args),
-          ),
-        ),
-      ),
+      guard(async () => {
+        const c = getClient();
+        const opts = writeOptions(args);
+        switch (args.action) {
+          case "create":
+            if (args.project === undefined || args.title === undefined) {
+              return usage('action "create" requires project and title');
+            }
+            return mutationResult(
+              await c.write.createHeading(containerRef(args.project), args.title, opts),
+            );
+          case "rename":
+            if (args.uuid === undefined || args.title === undefined) {
+              return usage('action "rename" requires uuid and title');
+            }
+            return mutationResult(await c.write.renameHeading(args.uuid, args.title, opts));
+          case "archive": {
+            if (args.uuid === undefined) return usage('action "archive" requires uuid');
+            const r = await c.write.archiveHeading(
+              args.uuid,
+              args.children !== undefined ? { children: args.children } : {},
+              opts,
+            );
+            return r.heading.kind === "ok" || r.heading.kind === "dry-run"
+              ? jsonResult(r)
+              : mutationResult(r.heading);
+          }
+          case "unarchive": {
+            if (args.uuid === undefined) return usage('action "unarchive" requires uuid');
+            const r = await c.write.unarchiveHeading(
+              args.uuid,
+              args.restore_children === true ? { restoreChildren: true } : {},
+              opts,
+            );
+            return r.heading.kind === "ok" || r.heading.kind === "dry-run"
+              ? jsonResult(r)
+              : mutationResult(r.heading);
+          }
+          case "convert_to_project": {
+            if (args.uuid === undefined) {
+              return usage('action "convert_to_project" requires uuid');
+            }
+            const item = c.read.byUuid(args.uuid);
+            if (item === null) throw new RangeError(`no item with uuid ${args.uuid}`);
+            const op =
+              item.type === "heading" ? "heading.convert-to-project" : "todo.convert-to-project";
+            return mutationResult(await c.write.run(op, { uuid: args.uuid }, opts));
+          }
+        }
+      }),
   );
 
   server.registerTool(
@@ -1513,94 +1759,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
-    "rename_heading",
-    {
-      description: "Rename a heading in place (works on archived headings too).",
-      inputSchema: { uuid: z.string(), title: z.string(), ...dryRunShape },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.renameHeading(args.uuid, args.title, writeOptions(args)),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "archive_heading",
-    {
-      description:
-        "Archive a heading — it leaves the active project view (reversible with " +
-        "unarchive_heading). The preferred way to retire a heading: row deletion only " +
-        "exists in the app's UI / Shortcuts behind a per-run consent dialog. With open " +
-        "children the children policy is required: complete or cancel resolve them with " +
-        "the heading in one cascade; reparent moves them to the project root first, " +
-        "keeping them open (a compound sequence that undo reverses as one unit).",
-      inputSchema: {
-        uuid: z.string(),
-        children: z
-          .enum(["complete", "cancel", "reparent"])
-          .optional()
-          .describe("Required when the heading has open children"),
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const r = await getClient().write.archiveHeading(
-          args.uuid,
-          args.children !== undefined ? { children: args.children } : {},
-          writeOptions(args),
-        );
-        return r.heading.kind === "ok" || r.heading.kind === "dry-run"
-          ? jsonResult(r)
-          : mutationResult(r.heading);
-      }),
-  );
-
-  server.registerTool(
-    "unarchive_heading",
-    {
-      description:
-        "Un-archive a heading. restore_children also reopens the children the archive " +
-        "cascade resolved with it (matching resolution timestamps; someday state " +
-        "survives). Children resolved at other times are never touched.",
-      inputSchema: {
-        uuid: z.string(),
-        restore_children: z.boolean().optional(),
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const r = await getClient().write.unarchiveHeading(
-          args.uuid,
-          args.restore_children === true ? { restoreChildren: true } : {},
-          writeOptions(args),
-        );
-        return r.heading.kind === "ok" || r.heading.kind === "dry-run"
-          ? jsonResult(r)
-          : mutationResult(r.heading);
-      }),
-  );
-
   // -------------------------------------------- GUI-driven (Accessibility)
 
-  const driveGuiShape = {
-    dangerously_drive_gui: z
-      .boolean()
-      .optional()
-      .describe(
-        "Required: this drives the local Things app through its accessibility interface to " +
-          "make a change the app offers nowhere else. It briefly interacts with the app's UI " +
-          "on the machine running this server, and must be turned on first with `things config " +
-          "set ui-enabled true`. Intended for a dedicated always-on Mac.",
-      ),
-  };
   const WEEKDAY_ENUM = z.enum([
     "sunday",
     "monday",
@@ -1695,276 +1855,62 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   };
 
   server.registerTool(
-    "make_repeating",
+    "repeat",
     {
       description:
-        "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new recurring " +
-        "series — the original disappears and a fresh repeating item takes its place, so it " +
-        "cannot be undone. Set the frequency and interval, and optionally the weekday set, " +
-        "monthly/yearly day, end bound, reminders, or deadline. Returns the new item's uuid.",
+        "Manage recurrence on a to-do or project (scope) by driving the local Things app's " +
+        "interface — every action needs dangerously_drive_gui. action start: turn a plain item " +
+        "into a repeating one — this REPLACES it with a new series and cannot be undone (give " +
+        "frequency + interval and optionally the weekday set, monthly/yearly day, end bound, " +
+        "reminder, or per-occurrence deadline); returns the new item's uuid. action reschedule: " +
+        "change a repeating item's rule in place, keeping the same item (undoable — it restores " +
+        "the previous rule). action pause/resume: stop or restart its new occurrences, keeping " +
+        "the rule. action create (scope project only): create a project and make it repeating in " +
+        "one call — the project is created first and PERSISTS even if the make-repeating step " +
+        "refuses; give an area to place it or omit it to create in Someday (only frequency and " +
+        "interval are supported); returns the new project's uuid.",
       inputSchema: {
-        uuid: z.string().describe("The to-do to make repeating"),
-        ...repeatRuleShape,
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.run(
-            "todo.make-repeating",
-            {
-              uuid: args.uuid,
-              frequency: args.frequency,
-              interval: args.interval,
-              ...repeatExtras(args, args.frequency),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "reschedule_repeat",
-    {
-      description:
-        "Change a repeating to-do's rule in place, keeping the same item. Set the frequency and " +
-        "interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, or " +
-        "deadline. This can be undone — it restores the previous rule.",
-      inputSchema: {
-        uuid: z.string().describe("The repeating to-do to reschedule"),
-        ...repeatRuleShape,
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.run(
-            "todo.reschedule-repeat",
-            {
-              uuid: args.uuid,
-              frequency: args.frequency,
-              interval: args.interval,
-              ...repeatExtras(args, args.frequency),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "set_repeat_state",
-    {
-      description:
-        "Pause or resume a repeating to-do. 'pause' stops it spawning new occurrences but keeps " +
-        "its rule; 'resume' starts it again. The two are inverses of each other.",
-      inputSchema: {
-        uuid: z.string().describe("The repeating to-do"),
-        state: z.enum(["pause", "resume"]),
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const op = args.state === "pause" ? "todo.pause-repeat" : "todo.resume-repeat";
-        return mutationResult(
-          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
-        );
-      }),
-  );
-
-  server.registerTool(
-    "reschedule_project_repeat",
-    {
-      description:
-        "Change a repeating project's rule in place, keeping the same project. Set the frequency " +
-        "and interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, " +
-        "or deadline. This can be undone — it restores the previous rule.",
-      inputSchema: {
-        uuid: z.string().describe(`The repeating project to reschedule (${REF_FORMAT})`),
-        ...repeatRuleShape,
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.run(
-            "project.reschedule-repeat",
-            {
-              uuid: args.uuid,
-              frequency: args.frequency,
-              interval: args.interval,
-              ...repeatExtras(args, args.frequency),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "set_project_repeat_state",
-    {
-      description:
-        "Pause or resume a repeating project. 'pause' stops it spawning new occurrences but keeps " +
-        "its rule; 'resume' starts it again. The two are inverses of each other.",
-      inputSchema: {
-        uuid: z.string().describe(`The repeating project (${REF_FORMAT})`),
-        state: z.enum(["pause", "resume"]),
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const op = args.state === "pause" ? "project.pause-repeat" : "project.resume-repeat";
-        return mutationResult(
-          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
-        );
-      }),
-  );
-
-  server.registerTool(
-    "reorder_area",
-    {
-      description:
-        "Move an area to a new position in the area order. Give the area plus exactly one " +
-        "destination: before/after another area, or position first/last. The move is made by " +
-        "driving the Things window with the pointer — the app comes to the front and the " +
-        "sidebar may scroll while the area is dragged; the area's projects and to-dos are " +
-        "untouched. Area references are a uuid or a unique name.",
-      inputSchema: {
-        target: z.string().describe("The area to move (uuid or unique name)"),
-        before: z
+        scope: z.enum(["todo", "project"]),
+        action: z.enum(["start", "reschedule", "pause", "resume", "create"]),
+        uuid: z
           .string()
           .optional()
-          .describe("Place it immediately above this area (uuid or unique name)"),
-        after: z
+          .describe(
+            "start/reschedule/pause/resume: the item (a project also accepts a unique name)",
+          ),
+        title: z.string().optional().describe("create (project): the new project's title"),
+        notes: z.string().optional().describe("create (project): notes"),
+        area: z.string().optional().describe(`create (project): destination area (${REF_FORMAT})`),
+        project_deadline: z
           .string()
           .optional()
-          .describe("Place it immediately below this area (uuid or unique name)"),
-        position: z
-          .enum(["first", "last"])
+          .describe(`create (project): the project's due date — ${DATE_FORMAT}`),
+        todos: z
+          .array(z.string())
           .optional()
-          .describe("Move it to the top or bottom of the area list"),
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.run(
-            "area.reorder",
-            {
-              target: args.target,
-              ...(args.before !== undefined && { before: args.before }),
-              ...(args.after !== undefined && { after: args.after }),
-              ...(args.position !== undefined && { position: args.position }),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "make_project_repeating",
-    {
-      description:
-        "Turn an existing project into a repeating one. This REPLACES the project with a new " +
-        "recurring series — the original disappears and a fresh repeating project takes its place " +
-        "(its area is kept), so it cannot be undone. An area-less project scheduled for Anytime is " +
-        "moved to Someday first (a cleanup-free intermediate step, shown by dry_run). Set the " +
-        "frequency and interval, and optionally the weekday set, monthly/yearly day, end bound, " +
-        "reminders, or deadline. Returns the new project's uuid.",
-      inputSchema: {
-        uuid: z.string().describe(`The project to make repeating (${REF_FORMAT})`),
-        ...repeatRuleShape,
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.makeRepeatingProject(
-            args.uuid,
-            {
-              frequency: args.frequency,
-              interval: args.interval,
-              ...repeatExtras(args, args.frequency),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "create_repeating_project",
-    {
-      description:
-        "Create a project and make it repeating in one call. TWO operations: the project is " +
-        "created first and PERSISTS even if the make-repeating step refuses; then it is promoted " +
-        "(which drives the GUI). Give an area to place it, or omit it to create in Someday. Only a " +
-        "frequency and an interval are supported. Returns the new repeating project's uuid.",
-      inputSchema: {
-        title: z.string(),
-        notes: z.string().optional(),
-        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
-        deadline: z.string().optional().describe(DATE_FORMAT),
-        todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
-        ...baseRepeatShape,
-        ...driveGuiShape,
-        ...dryRunShape,
-      },
-      annotations: DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.createRepeatingProject(
-            {
-              title: args.title,
-              ...(args.notes !== undefined && { notes: args.notes }),
-              ...(args.area !== undefined && { area: containerRef(args.area) }),
-              ...(args.deadline !== undefined && { deadline: args.deadline }),
-              ...(args.todos !== undefined && { todos: args.todos }),
-              frequency: args.frequency,
-              interval: args.interval,
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "convert_to_project",
-    {
-      description:
-        "Convert a to-do or a heading into a project. This REPLACES the original with a new " +
-        "project (a converted to-do keeps its notes; a converted heading is promoted alongside " +
-        "its project and its to-dos move under the new project). The original is gone and this " +
-        "cannot be undone. Returns the new project's uuid.",
-      inputSchema: {
-        uuid: z.string().describe("The to-do or heading to convert"),
+          .describe("create (project): initial child to-do titles"),
+        frequency: z
+          .enum(["daily", "weekly", "monthly", "yearly"])
+          .optional()
+          .describe("start/reschedule/create: how often it repeats"),
+        interval: z
+          .number()
+          .int()
+          .min(1)
+          .max(99)
+          .optional()
+          .describe("start/reschedule/create: every N units (1–99)"),
+        after_completion: repeatRuleShape.after_completion,
+        weekdays: repeatRuleShape.weekdays,
+        monthly_day: repeatRuleShape.monthly_day,
+        monthly_weekday: repeatRuleShape.monthly_weekday,
+        monthly_ordinal: repeatRuleShape.monthly_ordinal,
+        yearly_month: repeatRuleShape.yearly_month,
+        ends_after: repeatRuleShape.ends_after,
+        ends_on: repeatRuleShape.ends_on,
+        reminder: repeatRuleShape.reminder,
+        deadline: repeatRuleShape.deadline,
+        start_days_earlier: repeatRuleShape.start_days_earlier,
         ...driveGuiShape,
         ...dryRunShape,
       },
@@ -1972,12 +1918,66 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const item = getClient().read.byUuid(args.uuid);
-        if (item === null) throw new RangeError(`no item with uuid ${args.uuid}`);
-        const op =
-          item.type === "heading" ? "heading.convert-to-project" : "todo.convert-to-project";
+        const c = getClient();
+        const opts = writeOptions(args);
+        const { frequency, interval } = args;
+        if (args.action === "create") {
+          if (args.scope !== "project") return usage('action "create" requires scope "project"');
+          if (args.title === undefined) return usage('action "create" requires title');
+          if (frequency === undefined || interval === undefined) {
+            return usage('action "create" requires frequency and interval');
+          }
+          return mutationResult(
+            await c.write.createRepeatingProject(
+              {
+                title: args.title,
+                ...(args.notes !== undefined && { notes: args.notes }),
+                ...(args.area !== undefined && { area: containerRef(args.area) }),
+                ...(args.project_deadline !== undefined && { deadline: args.project_deadline }),
+                ...(args.todos !== undefined && { todos: args.todos }),
+                frequency,
+                interval,
+              },
+              opts,
+            ),
+          );
+        }
+        if (args.uuid === undefined) return usage(`action "${args.action}" requires uuid`);
+        if (args.action === "pause" || args.action === "resume") {
+          const op =
+            args.scope === "todo"
+              ? args.action === "pause"
+                ? "todo.pause-repeat"
+                : "todo.resume-repeat"
+              : args.action === "pause"
+                ? "project.pause-repeat"
+                : "project.resume-repeat";
+          return mutationResult(await c.write.run(op, { uuid: args.uuid }, opts));
+        }
+        // start | reschedule
+        if (frequency === undefined || interval === undefined) {
+          return usage(`action "${args.action}" requires frequency and interval`);
+        }
+        const extras = repeatExtras(args, frequency);
+        if (args.scope === "todo") {
+          const op = args.action === "start" ? "todo.make-repeating" : "todo.reschedule-repeat";
+          return mutationResult(
+            await c.write.run(op, { uuid: args.uuid, frequency, interval, ...extras }, opts),
+          );
+        }
+        // scope project
+        if (args.action === "reschedule") {
+          return mutationResult(
+            await c.write.run(
+              "project.reschedule-repeat",
+              { uuid: args.uuid, frequency, interval, ...extras },
+              opts,
+            ),
+          );
+        }
+        // scope project, action start → the dedicated make-repeating method
         return mutationResult(
-          await getClient().write.run(op, { uuid: args.uuid }, writeOptions(args)),
+          await c.write.makeRepeatingProject(args.uuid, { frequency, interval, ...extras }, opts),
         );
       }),
   );
@@ -2043,135 +2043,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   server.registerTool(
-    "update_project",
-    {
-      description:
-        "Update a project's title, notes, schedule, reminder, or deadline. " +
-        "append_notes/prepend_notes add a line to the existing notes (exclusive with notes). " +
-        "Changing the schedule keeps an existing reminder unless the call sets a new one. " +
-        "clear_reminder works while the project is scheduled for today or this evening; a " +
-        "reminder on a future date can only be changed, not cleared.",
-      inputSchema: {
-        uuid: z.string().describe(`The project to update (${REF_FORMAT})`),
-        title: z.string().optional(),
-        notes: z.string().optional().describe("Replaces the whole notes body"),
-        append_notes: z.string().optional(),
-        prepend_notes: z.string().optional(),
-        when: whenSchema,
-        reminder: z.string().optional().describe(REMINDER_FORMAT),
-        clear_reminder: z.boolean().optional(),
-        deadline: z.string().optional().describe(DATE_FORMAT),
-        clear_deadline: z.boolean().optional(),
-        ...tzShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const badZone = badTz(args.tz);
-        if (badZone !== null) return badZone;
-        const notesModes = [args.notes, args.append_notes, args.prepend_notes].filter(
-          (v) => v !== undefined,
-        );
-        if (notesModes.length > 1) {
-          return usage("notes, append_notes, prepend_notes are exclusive");
-        }
-        if (args.reminder !== undefined && args.clear_reminder === true) {
-          return usage("pass at most one of reminder / clear_reminder");
-        }
-        if (args.deadline !== undefined && args.clear_deadline === true) {
-          return usage("pass at most one of deadline / clear_deadline");
-        }
-        return mutationResult(
-          await getClient().write.updateProject(
-            args.uuid,
-            {
-              ...(args.title !== undefined && { title: args.title }),
-              ...(args.notes !== undefined && { notes: args.notes }),
-              ...(args.append_notes !== undefined && { appendNotes: args.append_notes }),
-              ...(args.prepend_notes !== undefined && { prependNotes: args.prepend_notes }),
-              ...(args.when !== undefined && { when: args.when as never }),
-              ...(args.reminder !== undefined && { reminder: args.reminder }),
-              ...(args.clear_reminder === true && { reminder: null }),
-              ...(args.deadline !== undefined && { deadline: args.deadline }),
-              ...(args.clear_deadline === true && { deadline: null }),
-            },
-            writeOptions(args),
-          ),
-        );
-      }),
-  );
-
-  server.registerTool(
-    "set_project_status",
-    {
-      description:
-        "Complete, cancel, or reopen a project. Completing or canceling requires a " +
-        "children policy: 'require-resolved' errors if open to-dos remain; " +
-        "'auto-complete'/'auto-cancel' resolves them together with the project (canceling " +
-        "never alters already-completed children). status 'open' reopens a completed or " +
-        "canceled project; its children stay completed/canceled unless restore_children " +
-        "also reopens the ones that were resolved together with the project.",
-      inputSchema: {
-        uuid: z.string().describe(`The project (${REF_FORMAT})`),
-        status: z.enum(["completed", "canceled", "open"]),
-        children: z
-          .enum(["require-resolved", "auto-complete", "auto-cancel"])
-          .optional()
-          .describe("Required for completed/canceled: what to do with the project's open to-dos"),
-        restore_children: z
-          .boolean()
-          .optional()
-          .describe("open only: also reopen the to-dos that were resolved with the project"),
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const c = getClient();
-        if (args.status !== "open" && args.restore_children !== undefined) {
-          return usage("restore_children applies only to status 'open'");
-        }
-        if (args.status === "completed") {
-          if (args.children !== "require-resolved" && args.children !== "auto-complete") {
-            return usage(
-              "status 'completed' requires children: 'require-resolved' or 'auto-complete'",
-            );
-          }
-          return mutationResult(
-            await c.write.completeProject(
-              args.uuid,
-              { children: args.children },
-              writeOptions(args),
-            ),
-          );
-        }
-        if (args.status === "canceled") {
-          if (args.children !== "require-resolved" && args.children !== "auto-cancel") {
-            return usage(
-              "status 'canceled' requires children: 'require-resolved' or 'auto-cancel'",
-            );
-          }
-          return mutationResult(
-            await c.write.cancelProject(args.uuid, { children: args.children }, writeOptions(args)),
-          );
-        }
-        if (args.children !== undefined) {
-          return usage("children applies only to status 'completed' or 'canceled'");
-        }
-        const outcome = await c.write.reopenProject(args.uuid, {
-          ...writeOptions(args),
-          ...(args.restore_children === true && { restoreChildren: true }),
-        });
-        return outcome.project.kind === "ok" || outcome.project.kind === "dry-run"
-          ? jsonResult(outcome)
-          : mutationResult(outcome.project);
-      }),
-  );
-
-  server.registerTool(
     "move_project",
     {
       description:
@@ -2228,65 +2099,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       ),
   );
 
-  server.registerTool(
-    "update_area",
-    {
-      description:
-        "Rename an area and/or replace its tags (the full set). Tags must exist unless " +
-        "create_tags is set.",
-      inputSchema: {
-        target: z.string().describe(`Area to update (${REF_FORMAT})`),
-        title: z.string().optional().describe("New name"),
-        tags: z
-          .array(z.string())
-          .optional()
-          .describe(`Tags (full replacement) — ${TAG_REF_FORMAT}`),
-        ...createTagsShape,
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        if (args.title === undefined && args.tags === undefined) {
-          return usage("pass title and/or tags");
-        }
-        return mutationResult(
-          await getClient().write.updateArea(
-            args.target,
-            {
-              ...(args.title !== undefined && { title: args.title }),
-              ...(args.tags !== undefined && { tags: args.tags }),
-            },
-            writeOptions(args),
-          ),
-        );
-      }),
-  );
-
-  server.registerTool(
-    "delete_area",
-    {
-      description:
-        "Delete an area PERMANENTLY — areas do not go to the Trash, so this cannot be " +
-        "undone; requires dangerously_permanent. The area's to-dos move to the Trash; its " +
-        "projects remain, no longer assigned to any area.",
-      inputSchema: {
-        target: z.string().describe(`Area to delete (${REF_FORMAT})`),
-        dangerously_permanent: z
-          .boolean()
-          .optional()
-          .describe("Confirm permanent, unrecoverable deletion"),
-        ...dryRunShape,
-      },
-      annotations: DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(await getClient().write.deleteArea(args.target, writeOptions(args))),
-      ),
-  );
-
   // ------------------------------------------------------------------ tags
 
   server.registerTool(
@@ -2308,85 +2120,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             writeOptions(args),
           ),
         ),
-      ),
-  );
-
-  server.registerTool(
-    "update_tag",
-    {
-      description:
-        "Rename a tag (existing assignments follow the rename), nest it under another " +
-        "existing tag, un-nest it to the top level, and set or clear its keyboard shortcut. " +
-        "parent and unnest are exclusive; shortcut and clear_shortcut are exclusive.",
-      inputSchema: {
-        target: z.string().describe(`Tag to update (${REF_FORMAT})`),
-        title: z.string().optional().describe("New name"),
-        parent: z.string().optional().describe("Existing tag to nest under"),
-        unnest: z.boolean().optional().describe("Move the tag to the top level"),
-        shortcut: z.string().optional().describe("Keyboard shortcut character"),
-        clear_shortcut: z.boolean().optional().describe("Remove the keyboard shortcut"),
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        if (
-          args.title === undefined &&
-          args.parent === undefined &&
-          args.unnest === undefined &&
-          args.shortcut === undefined &&
-          args.clear_shortcut === undefined
-        ) {
-          return usage("pass title, parent, unnest, shortcut, and/or clear_shortcut");
-        }
-        if (args.parent !== undefined && args.unnest === true) {
-          return usage("parent and unnest are exclusive");
-        }
-        if (args.shortcut !== undefined && args.clear_shortcut === true) {
-          return usage("shortcut and clear_shortcut are exclusive");
-        }
-        return mutationResult(
-          await getClient().write.updateTag(
-            args.target,
-            {
-              ...(args.title !== undefined && { title: args.title }),
-              ...(args.parent !== undefined && { parent: args.parent }),
-              ...(args.unnest === true && { unnest: true }),
-              ...(args.shortcut !== undefined && { shortcut: args.shortcut }),
-              ...(args.clear_shortcut === true && { clearShortcut: true }),
-            },
-            writeOptions(args),
-          ),
-        );
-      }),
-  );
-
-  server.registerTool(
-    "delete_tag",
-    {
-      description:
-        "Delete a tag PERMANENTLY — tags do not go to the Trash, so this cannot be undone; " +
-        "requires dangerously_permanent. The tag is removed from every item. If the tag " +
-        "has nested child tags they are ALL permanently deleted with it — pass " +
-        "acknowledge_tag_subtree to confirm.",
-      inputSchema: {
-        target: z.string().describe(`Tag to delete (${REF_FORMAT})`),
-        dangerously_permanent: z
-          .boolean()
-          .optional()
-          .describe("Confirm permanent, unrecoverable deletion"),
-        acknowledge_tag_subtree: z
-          .boolean()
-          .optional()
-          .describe("Confirm permanent deletion of ALL nested child tags too"),
-        ...dryRunShape,
-      },
-      annotations: DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(await getClient().write.deleteTag(args.target, writeOptions(args))),
       ),
   );
 
@@ -2502,7 +2235,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Today/inbox/someday/project/headings/area ordering must first be enabled once " +
         "via `things config set allow-experimental true`. This Evening and " +
         `scope=projects handle at most ${BOUNCE_MAX_ITEMS} items per call. An area's ` +
-        "to-dos and projects are ordered separately — one kind per call.",
+        "to-dos and projects are ordered separately — one kind per call. " +
+        "scope=areas instead moves the sidebar areas themselves: give target plus exactly " +
+        "one of before/after/position, and pass dangerously_drive_gui (it drives the local " +
+        "Things app). Every other scope takes uuids.",
       inputSchema: {
         scope: z.enum([
           "today",
@@ -2513,20 +2249,56 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           "headings",
           "area",
           "projects",
+          "areas",
         ]),
         container: z
           .string()
           .optional()
           .describe(`Project/area (${REF_FORMAT}) — required for those scopes`),
-        uuids: z.array(z.string()).describe("Desired order, top first (may be a subset)"),
+        uuids: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Desired order, top first (may be a subset) — required for every scope but areas",
+          ),
         strategy: z.enum(["native", "bounce"]).optional(),
+        target: z.string().optional().describe(`scope areas: the area to move (${REF_FORMAT})`),
+        before: z
+          .string()
+          .optional()
+          .describe(`scope areas: place it immediately above this area (${REF_FORMAT})`),
+        after: z
+          .string()
+          .optional()
+          .describe(`scope areas: place it immediately below this area (${REF_FORMAT})`),
+        position: z
+          .enum(["first", "last"])
+          .optional()
+          .describe("scope areas: move it to the top or bottom of the area list"),
+        ...driveGuiShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
-      guard(async () =>
-        mutationResult(
+      guard(async () => {
+        if (args.scope === "areas") {
+          if (args.target === undefined) return usage('scope "areas" requires target');
+          return mutationResult(
+            await getClient().write.run(
+              "area.reorder",
+              {
+                target: args.target,
+                ...(args.before !== undefined && { before: args.before }),
+                ...(args.after !== undefined && { after: args.after }),
+                ...(args.position !== undefined && { position: args.position }),
+              },
+              writeOptions(args),
+            ),
+          );
+        }
+        if (args.uuids === undefined) return usage(`scope "${args.scope}" requires uuids`);
+        return mutationResult(
           await getClient().write.reorder(
             {
               scope: args.scope,
@@ -2536,8 +2308,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             },
             writeOptions(args),
           ),
-        ),
-      ),
+        );
+      }),
   );
 
   server.registerTool(

@@ -212,22 +212,14 @@ afterEach(async () => {
 const EXPECTED_TOOLS = [
   "add_logged_todo",
   "backdate_todo",
-  "archive_heading",
   "get_area",
-  "create_heading",
-  "rename_heading",
-  "unarchive_heading",
   "clear_reminder",
-  // ui vector (Accessibility GUI)
-  "make_repeating",
-  "reschedule_repeat",
-  "set_repeat_state",
-  "convert_to_project",
-  "reschedule_project_repeat",
-  "set_project_repeat_state",
-  "reorder_area",
-  "make_project_repeating",
-  "create_repeating_project",
+  // verb-parameterized merges
+  "update", // update_todo/update_project/update_area/update_tag
+  "set_status", // set_todo_status/set_project_status
+  "delete", // delete_item/delete_area/delete_tag
+  "heading", // create/rename/archive/unarchive/convert_to_project
+  "repeat", // the 7 recurrence singletons (todo + project)
   // reads
   "read_view",
   "search",
@@ -237,32 +229,23 @@ const EXPECTED_TOOLS = [
   "list_collections",
   // to-dos
   "add_todo",
-  "update_todo",
-  "set_todo_status",
   "move_todo",
   "set_tags",
   "edit_checklist",
   // to-dos AND projects
-  "delete_item",
   "restore_item",
   "duplicate_item",
   // projects
   "add_project",
-  "update_project",
-  "set_project_status",
   "move_project",
   // areas
   "add_area",
-  "update_area",
-  "delete_area",
   // tags
   "add_tag",
-  "update_tag",
-  "delete_tag",
   // generic + discovery
   "run_operation",
   "batch",
-  "reorder",
+  "reorder", // now also the sidebar-area reorder (scope=areas)
   "undo",
   "capabilities",
   "doctor",
@@ -396,7 +379,20 @@ describe("things MCP server", () => {
     expect(textOf(conflict)).toMatchObject({ code: "usage" });
   });
 
-  it("update_project on an ambiguous NAME returns structured candidates (name sugar + machine detail)", async () => {
+  it("update kind todo edits a to-do (dry-run routes to todo.update)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "editable" });
+    await connect([fakeVector(null, { ops: ["todo.update"] }).vector]);
+    const outcome = textOf(
+      await client.callTool({
+        name: "update",
+        arguments: { kind: "todo", uuid, title: "renamed", dry_run: true },
+      }),
+    ) as { kind: string; op: string };
+    expect(outcome.kind).toBe("dry-run");
+    expect(outcome.op).toBe("todo.update");
+  });
+
+  it("update kind project on an ambiguous NAME returns structured candidates (name sugar + machine detail)", async () => {
     // MCP inherits the name/partial-uuid write-target sugar via the shared
     // pipeline: passing a NAME (not a uuid) resolves it — proven by the
     // ambiguity, which also proves the structured candidates ride the result.
@@ -404,8 +400,8 @@ describe("things MCP server", () => {
     seedProject(fixture.db, { title: "Dup" });
     await connect([fakeVector(null, { ops: ["project.update"] }).vector]);
     const result = await client.callTool({
-      name: "update_project",
-      arguments: { uuid: "Dup", title: "x" },
+      name: "update",
+      arguments: { kind: "project", uuid: "Dup", title: "x" },
     });
     expect(result.isError).toBe(true);
     const err = textOf(result) as { code: string; details?: { candidates?: unknown[] } };
@@ -417,8 +413,8 @@ describe("things MCP server", () => {
   it("a not-found write target returns code=not-found (structured, empty candidates)", async () => {
     await connect([fakeVector(null, { ops: ["project.update"] }).vector]);
     const result = await client.callTool({
-      name: "update_project",
-      arguments: { uuid: "ghost", title: "x" },
+      name: "update",
+      arguments: { kind: "project", uuid: "ghost", title: "x" },
     });
     expect(result.isError).toBe(true);
     const err = textOf(result) as { code: string; details?: { candidates?: unknown[] } };
@@ -894,7 +890,7 @@ describe("things MCP server", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("set_todo_status routes each status to the matching operation", async () => {
+  it("set_status scope todo routes each status to the matching operation", async () => {
     const uuid = seedTodo(fixture.db, { title: "status me" });
     await connect([
       fakeVector(null, { ops: ["todo.complete", "todo.cancel", "todo.reopen"] }).vector,
@@ -902,17 +898,26 @@ describe("things MCP server", () => {
     for (const [status, op] of [
       ["completed", "todo.complete"],
       ["canceled", "todo.cancel"],
+      ["open", "todo.reopen"],
     ] as const) {
       const outcome = textOf(
         // each call shares one MCP client/transport; concurrent calls would race on it
         await client.callTool({
-          name: "set_todo_status",
-          arguments: { uuid, status, dry_run: true },
+          name: "set_status",
+          arguments: { scope: "todo", uuid, status, dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe(op);
     }
+
+    // scope todo rejects the project-only children policy fields
+    const rejected = await client.callTool({
+      name: "set_status",
+      arguments: { scope: "todo", uuid, status: "completed", children: "auto-complete" },
+    });
+    expect(rejected.isError).toBe(true);
+    expect((textOf(rejected) as { code: string }).code).toBe("usage");
   });
 
   it("move_todo demands exactly one destination", async () => {
@@ -951,7 +956,7 @@ describe("things MCP server", () => {
     expect((textOf(missing) as { code: string }).code).toBe("usage");
   });
 
-  it("delete_item dispatches on the item's type", async () => {
+  it("delete kind item dispatches on the item's type", async () => {
     const todo = seedTodo(fixture.db, { title: "trash to-do" });
     const proj = seedProject(fixture.db, { title: "trash project" });
     await connect([
@@ -963,54 +968,63 @@ describe("things MCP server", () => {
     ] as const) {
       const outcome = textOf(
         // each call shares one MCP client/transport; concurrent calls would race on it
-        await client.callTool({ name: "delete_item", arguments: { uuid, dry_run: true } }),
+        await client.callTool({
+          name: "delete",
+          arguments: { kind: "item", uuid, dry_run: true },
+        }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe(op);
     }
     const unknown = await client.callTool({
-      name: "delete_item",
-      arguments: { uuid: "missing", dry_run: true },
+      name: "delete",
+      arguments: { kind: "item", uuid: "missing", dry_run: true },
     });
     expect(unknown.isError).toBe(true);
     expect((textOf(unknown) as { code: string }).code).toBe("usage");
   });
 
-  it("set_project_status enforces the children policy per status", async () => {
+  it("set_status scope project enforces the children policy per status", async () => {
     const proj = seedProject(fixture.db, { title: "lifecycle" });
     await connect([
       fakeVector(null, { ops: ["project.complete", "project.cancel", "project.reopen"] }).vector,
     ]);
     const noPolicy = await client.callTool({
-      name: "set_project_status",
-      arguments: { uuid: proj, status: "completed" },
+      name: "set_status",
+      arguments: { scope: "project", uuid: proj, status: "completed" },
     });
     expect(noPolicy.isError).toBe(true);
     expect((textOf(noPolicy) as { message: string }).message).toContain("require-resolved");
 
     const wrongPolicy = await client.callTool({
-      name: "set_project_status",
-      arguments: { uuid: proj, status: "canceled", children: "auto-complete" },
+      name: "set_status",
+      arguments: { scope: "project", uuid: proj, status: "canceled", children: "auto-complete" },
     });
     expect(wrongPolicy.isError).toBe(true);
 
     const completed = textOf(
       await client.callTool({
-        name: "set_project_status",
-        arguments: { uuid: proj, status: "completed", children: "auto-complete", dry_run: true },
+        name: "set_status",
+        arguments: {
+          scope: "project",
+          uuid: proj,
+          status: "completed",
+          children: "auto-complete",
+          dry_run: true,
+        },
       }),
     ) as { kind: string; op: string };
     expect(completed.kind).toBe("dry-run");
     expect(completed.op).toBe("project.complete");
   });
 
-  it("set_project_status open returns the reopen outcome with children detail", async () => {
+  it("set_status scope project open returns the reopen outcome with children detail", async () => {
     const proj = seedProject(fixture.db, { title: "reopen me", status: "completed" });
     await connect([fakeVector(null, { ops: ["project.reopen"] }).vector]);
     const outcome = textOf(
       await client.callTool({
-        name: "set_project_status",
-        arguments: { uuid: proj, status: "open", dry_run: true },
+        name: "set_status",
+        arguments: { scope: "project", uuid: proj, status: "open", dry_run: true },
       }),
     ) as { project: { kind: string; op: string }; children: unknown[] };
     expect(outcome.project.kind).toBe("dry-run");
@@ -1206,8 +1220,9 @@ describe("things MCP server", () => {
     const byName = new Map(tools.map((t) => [t.name, t]));
     expect(byName.get("read_view")?.annotations?.readOnlyHint).toBe(true);
     expect(byName.get("capabilities")?.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("delete_tag")?.annotations?.destructiveHint).toBe(true);
-    expect(byName.get("delete_area")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("delete")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("repeat")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("update")?.annotations?.destructiveHint).toBe(false);
     expect(byName.get("add_todo")?.annotations?.destructiveHint).toBe(false);
   });
 
@@ -1220,19 +1235,13 @@ describe("things MCP server", () => {
       };
       return schema?.properties?.["uuid"]?.description ?? "";
     };
-    // Project write targets resolve a unique NAME through the shared pipeline (#157).
-    for (const name of [
-      "update_project",
-      "set_project_status",
-      "move_project",
-      "make_project_repeating",
-      "reschedule_project_repeat",
-      "set_project_repeat_state",
-    ]) {
-      expect(uuidDesc(name), name).toContain("uuid or unique name");
+    // The merged write tools that can target a project resolve a unique NAME through the
+    // shared pipeline (#157) — their shared uuid arg advertises name acceptance.
+    for (const name of ["update", "set_status", "repeat", "move_project"]) {
+      expect(uuidDesc(name), name).toContain("unique name");
     }
-    // To-do write targets are identity-addressed — the target must never claim name acceptance.
-    for (const name of ["update_todo", "set_todo_status", "move_todo", "backdate_todo"]) {
+    // To-do-only write targets are identity-addressed — the target must never claim name acceptance.
+    for (const name of ["move_todo", "backdate_todo"]) {
       expect(uuidDesc(name), name).not.toContain("unique name");
     }
   });
@@ -1354,8 +1363,8 @@ describe("things MCP server", () => {
       const uuid = seedTodo(fixture.db, { title: "ceiling" });
       await connect([tierVector("todo.update", 2)]);
       const result = await client.callTool({
-        name: "update_todo",
-        arguments: { uuid, title: "renamed", dry_run: true },
+        name: "update",
+        arguments: { kind: "todo", uuid, title: "renamed", dry_run: true },
       });
       expect(result.isError).toBe(true);
       const error = textOf(result) as { code: string };
@@ -1366,8 +1375,8 @@ describe("things MCP server", () => {
       const uuid = seedTodo(fixture.db, { title: "ceiling" });
       await connect([tierVector("todo.update", 2)], { maxDisruption: 2 });
       const result = await client.callTool({
-        name: "update_todo",
-        arguments: { uuid, title: "renamed", dry_run: true },
+        name: "update",
+        arguments: { kind: "todo", uuid, title: "renamed", dry_run: true },
       });
       expect(result.isError ?? false).toBe(false);
       const outcome = textOf(result) as { kind: string };
@@ -1602,50 +1611,99 @@ describe("things MCP server", () => {
       expect((textOf(result) as { code: string }).code).toBe("blocked:H-REORDER-SCOPE");
       expect((textOf(result) as { message: string }).message).toContain("container is only valid");
     });
+
+    it("scope areas reorders the sidebar areas, gates the drive, and demands exactly one destination", async () => {
+      const target = seedArea(fixture.db, "Move Me", 0);
+      seedArea(fixture.db, "Anchor", 1);
+      await connect([fakeVector(null, { id: "ui", ops: ["area.reorder"] }).vector]);
+      const blocked = await client.callTool({
+        name: "reorder",
+        arguments: { scope: "areas", target, position: "last" },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "reorder",
+          arguments: {
+            scope: "areas",
+            target,
+            position: "last",
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("area.reorder");
+
+      // exactly-one-destination is enforced by the area.reorder op (RangeError → usage)
+      const twoDest = await client.callTool({
+        name: "reorder",
+        arguments: { scope: "areas", target, before: "a", after: "b", dangerously_drive_gui: true },
+      });
+      expect(twoDest.isError).toBe(true);
+      expect((textOf(twoDest) as { code: string }).code).toBe("usage");
+
+      // scope areas without a target is a usage error
+      const noTarget = await client.callTool({
+        name: "reorder",
+        arguments: { scope: "areas", dangerously_drive_gui: true },
+      });
+      expect(noTarget.isError).toBe(true);
+      expect((textOf(noTarget) as { code: string }).code).toBe("usage");
+    });
   });
 
-  describe("heading tools", () => {
-    it("create_heading plans through the proxy (dry-run) and rejects an unknown project", async () => {
+  describe("heading tool (action-parameterized)", () => {
+    it("action create plans through the proxy (dry-run), rejects an unknown project, and needs project + title", async () => {
       const project = seedProject(fixture.db, { title: "H-Proj" });
       await connect([fakeVector(null, { id: "shortcuts", ops: ["heading.create"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "create_heading",
-          arguments: { project, title: "Phase 1", dry_run: true },
+          name: "heading",
+          arguments: { action: "create", project, title: "Phase 1", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("heading.create");
 
       const unknown = await client.callTool({
-        name: "create_heading",
-        arguments: { project: "ghost-project", title: "x", dry_run: true },
+        name: "heading",
+        arguments: { action: "create", project: "ghost-project", title: "x", dry_run: true },
       });
       expect(unknown.isError).toBe(true);
+
+      const missing = await client.callTool({
+        name: "heading",
+        arguments: { action: "create", project, dry_run: true },
+      });
+      expect(missing.isError).toBe(true);
+      expect((textOf(missing) as { code: string }).code).toBe("usage");
     });
 
-    it("rename_heading plans an in-place rename (dry-run)", async () => {
+    it("action rename plans an in-place rename (dry-run)", async () => {
       const project = seedProject(fixture.db, { title: "R-Proj" });
       const heading = seedHeading(fixture.db, { title: "old", project });
       await connect([fakeVector(null, { id: "applescript", ops: ["heading.rename"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "rename_heading",
-          arguments: { uuid: heading, title: "new", dry_run: true },
+          name: "heading",
+          arguments: { action: "rename", uuid: heading, title: "new", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("heading.rename");
     });
 
-    it("archive_heading plans a childless archive; open children without a policy block", async () => {
+    it("action archive plans a childless archive; open children without a policy block", async () => {
       const project = seedProject(fixture.db, { title: "A-Proj" });
       const bare = seedHeading(fixture.db, { title: "Bare", project, index: 1 });
       await connect([fakeVector(null, { id: "applescript", ops: ["heading.archive"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "archive_heading",
-          arguments: { uuid: bare, dry_run: true },
+          name: "heading",
+          arguments: { action: "archive", uuid: bare, dry_run: true },
         }),
       ) as { heading: { kind: string; op: string } };
       expect(outcome.heading.kind).toBe("dry-run");
@@ -1654,54 +1712,78 @@ describe("things MCP server", () => {
       const withChild = seedHeading(fixture.db, { title: "Full", project, index: 2 });
       seedTodo(fixture.db, { title: "child", heading: withChild, project: null });
       const blocked = await client.callTool({
-        name: "archive_heading",
-        arguments: { uuid: withChild, dry_run: true },
+        name: "heading",
+        arguments: { action: "archive", uuid: withChild, dry_run: true },
       });
       expect(blocked.isError).toBe(true);
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-HEADING-CHILDREN");
     });
 
-    it("unarchive_heading plans an in-place restore (dry-run)", async () => {
+    it("action unarchive plans an in-place restore (dry-run)", async () => {
       const project = seedProject(fixture.db, { title: "U-Proj" });
       const heading = seedHeading(fixture.db, { title: "Archived", project });
       await connect([fakeVector(null, { id: "applescript", ops: ["heading.unarchive"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "unarchive_heading",
-          arguments: { uuid: heading, dry_run: true },
+          name: "heading",
+          arguments: { action: "unarchive", uuid: heading, dry_run: true },
         }),
       ) as { heading: { kind: string; op: string } };
       expect(outcome.heading.kind).toBe("dry-run");
       expect(outcome.heading.op).toBe("heading.unarchive");
     });
+
+    it("action convert_to_project dispatches on type and gates the drive", async () => {
+      const uuid = seedTodo(fixture.db, { title: "promote me" });
+      await connect([fakeVector(null, { id: "ui", ops: ["todo.convert-to-project"] }).vector]);
+      const blocked = await client.callTool({
+        name: "heading",
+        arguments: { action: "convert_to_project", uuid },
+      });
+      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
+
+      const outcome = textOf(
+        await client.callTool({
+          name: "heading",
+          arguments: {
+            action: "convert_to_project",
+            uuid,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.op).toBe("todo.convert-to-project");
+    });
   });
 
-  // The GUI-driven ops are two-key gated: without the drive acknowledgement they
-  // block (H-UI-DRIVE, a pre-vector hazard, so the default vector suffices); with
-  // it + a fake ui vector, dry_run compiles a plan without ever executing.
-  describe("repeat / ui-vector cluster", () => {
+  // The GUI-driven repeat ops are two-key gated: without the drive acknowledgement
+  // they block (H-UI-DRIVE, a pre-vector hazard, so the default vector suffices);
+  // with it + a fake ui vector, dry_run compiles a plan without ever executing. The
+  // merged `repeat` tool routes on (scope, action) — every old singleton maps to one.
+  describe("repeat tool (scope + action parameterized)", () => {
     const uiVector = (op: string) => fakeVector(null, { id: "ui", ops: [op] }).vector;
 
-    it("make_repeating blocks without the drive ack, and plans with it (dry-run)", async () => {
+    it("scope todo action start blocks without the drive ack, and plans with it (was make_repeating)", async () => {
       const uuid = seedTodo(fixture.db, { title: "recur me" });
-      await connect([fakeVector(null).vector]);
+      await connect([uiVector("todo.make-repeating")]);
       const blocked = await client.callTool({
-        name: "make_repeating",
-        arguments: { uuid, frequency: "daily", interval: 1 },
+        name: "repeat",
+        arguments: { scope: "todo", action: "start", uuid, frequency: "daily", interval: 1 },
       });
       expect(blocked.isError).toBe(true);
       const err = textOf(blocked) as { code: string; remediation: string };
       expect(err.code).toBe("blocked:H-UI-DRIVE");
       expect(err.remediation.length).toBeGreaterThan(0);
 
-      await close();
-      await connect([uiVector("todo.make-repeating")]);
-      const uuid2 = seedTodo(fixture.db, { title: "recur me 2" });
       const outcome = textOf(
         await client.callTool({
-          name: "make_repeating",
+          name: "repeat",
           arguments: {
-            uuid: uuid2,
+            scope: "todo",
+            action: "start",
+            uuid,
             frequency: "daily",
             interval: 1,
             dangerously_drive_gui: true,
@@ -1713,20 +1795,21 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("todo.make-repeating");
     });
 
-    it("reschedule_repeat blocks without the ack, and plans with it (dry-run)", async () => {
+    it("scope todo action reschedule blocks without the ack, and plans with it (was reschedule_repeat)", async () => {
       const uuid = seedTodo(fixture.db, { title: "rule", recurrenceRule: true });
       await connect([uiVector("todo.reschedule-repeat")]);
       const blocked = await client.callTool({
-        name: "reschedule_repeat",
-        arguments: { uuid, frequency: "weekly", interval: 2 },
+        name: "repeat",
+        arguments: { scope: "todo", action: "reschedule", uuid, frequency: "weekly", interval: 2 },
       });
-      expect(blocked.isError).toBe(true);
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "reschedule_repeat",
+          name: "repeat",
           arguments: {
+            scope: "todo",
+            action: "reschedule",
             uuid,
             frequency: "weekly",
             interval: 2,
@@ -1739,57 +1822,62 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("todo.reschedule-repeat");
     });
 
-    it("set_repeat_state routes pause/resume and gates the drive", async () => {
+    it("scope todo action pause routes and gates the drive; start/reschedule need frequency+interval (was set_repeat_state)", async () => {
       const uuid = seedTodo(fixture.db, { title: "paused?", recurrenceRule: true });
       await connect([uiVector("todo.pause-repeat")]);
       const blocked = await client.callTool({
-        name: "set_repeat_state",
-        arguments: { uuid, state: "pause" },
+        name: "repeat",
+        arguments: { scope: "todo", action: "pause", uuid },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "set_repeat_state",
-          arguments: { uuid, state: "pause", dangerously_drive_gui: true, dry_run: true },
+          name: "repeat",
+          arguments: {
+            scope: "todo",
+            action: "pause",
+            uuid,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.pause-repeat");
-    });
 
-    it("convert_to_project dispatches on type and gates the drive", async () => {
-      const uuid = seedTodo(fixture.db, { title: "promote me" });
-      await connect([uiVector("todo.convert-to-project")]);
-      const blocked = await client.callTool({
-        name: "convert_to_project",
-        arguments: { uuid },
+      // a rule action with no frequency/interval is a usage error naming what's missing
+      const missingRule = await client.callTool({
+        name: "repeat",
+        arguments: { scope: "todo", action: "start", uuid, dangerously_drive_gui: true },
       });
-      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
-
-      const outcome = textOf(
-        await client.callTool({
-          name: "convert_to_project",
-          arguments: { uuid, dangerously_drive_gui: true, dry_run: true },
-        }),
-      ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("todo.convert-to-project");
+      expect(missingRule.isError).toBe(true);
+      const err = textOf(missingRule) as { code: string; message: string };
+      expect(err.code).toBe("usage");
+      expect(err.message).toContain("frequency");
     });
 
-    it("reschedule_project_repeat blocks without the ack, and plans with it (dry-run)", async () => {
+    it("scope project action reschedule blocks without the ack, and plans with it (was reschedule_project_repeat)", async () => {
       const uuid = seedProject(fixture.db, { title: "Recurring Proj", recurrenceRule: true });
       await connect([uiVector("project.reschedule-repeat")]);
       const blocked = await client.callTool({
-        name: "reschedule_project_repeat",
-        arguments: { uuid, frequency: "monthly", interval: 1 },
+        name: "repeat",
+        arguments: {
+          scope: "project",
+          action: "reschedule",
+          uuid,
+          frequency: "monthly",
+          interval: 1,
+        },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "reschedule_project_repeat",
+          name: "repeat",
           arguments: {
+            scope: "project",
+            action: "reschedule",
             uuid,
             frequency: "monthly",
             interval: 1,
@@ -1802,66 +1890,47 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.reschedule-repeat");
     });
 
-    it("set_project_repeat_state routes pause/resume and gates the drive", async () => {
+    it("scope project action resume routes and gates the drive (was set_project_repeat_state)", async () => {
       const uuid = seedProject(fixture.db, { title: "Proj paused?", recurrenceRule: true });
       await connect([uiVector("project.resume-repeat")]);
       const blocked = await client.callTool({
-        name: "set_project_repeat_state",
-        arguments: { uuid, state: "resume" },
+        name: "repeat",
+        arguments: { scope: "project", action: "resume", uuid },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "set_project_repeat_state",
-          arguments: { uuid, state: "resume", dangerously_drive_gui: true, dry_run: true },
+          name: "repeat",
+          arguments: {
+            scope: "project",
+            action: "resume",
+            uuid,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.resume-repeat");
     });
 
-    it("reorder_area gates the drive, plans with it, and demands exactly one destination", async () => {
-      const target = seedArea(fixture.db, "Move Me", 0);
-      seedArea(fixture.db, "Anchor", 1);
-      await connect([uiVector("area.reorder")]);
-      const blocked = await client.callTool({
-        name: "reorder_area",
-        arguments: { target, position: "last" },
-      });
-      expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
-
-      const outcome = textOf(
-        await client.callTool({
-          name: "reorder_area",
-          arguments: { target, position: "last", dangerously_drive_gui: true, dry_run: true },
-        }),
-      ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("area.reorder");
-
-      const twoDest = await client.callTool({
-        name: "reorder_area",
-        arguments: { target, before: "a", after: "b", dangerously_drive_gui: true },
-      });
-      expect(twoDest.isError).toBe(true);
-      expect((textOf(twoDest) as { code: string }).code).toBe("usage");
-    });
-
-    it("make_project_repeating blocks without the ack, and plans with it (dry-run)", async () => {
+    it("scope project action start blocks without the ack, and plans with it (was make_project_repeating)", async () => {
       const area = seedArea(fixture.db, "Repeat Area");
       const uuid = seedProject(fixture.db, { title: "Promote Proj", area });
       await connect([fakeVector(null).vector]);
       const blocked = await client.callTool({
-        name: "make_project_repeating",
-        arguments: { uuid, frequency: "weekly", interval: 1 },
+        name: "repeat",
+        arguments: { scope: "project", action: "start", uuid, frequency: "weekly", interval: 1 },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "make_project_repeating",
+          name: "repeat",
           arguments: {
+            scope: "project",
+            action: "start",
             uuid,
             frequency: "weekly",
             interval: 1,
@@ -1874,18 +1943,26 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.make-repeating");
     });
 
-    it("create_repeating_project blocks without the ack (before creating), and plans with it", async () => {
+    it("scope project action create blocks before creating, plans with the ack, and requires scope project (was create_repeating_project)", async () => {
       await connect([fakeVector(null).vector]);
       const blocked = await client.callTool({
-        name: "create_repeating_project",
-        arguments: { title: "Weekly review", frequency: "weekly", interval: 1 },
+        name: "repeat",
+        arguments: {
+          scope: "project",
+          action: "create",
+          title: "Weekly review",
+          frequency: "weekly",
+          interval: 1,
+        },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "create_repeating_project",
+          name: "repeat",
           arguments: {
+            scope: "project",
+            action: "create",
             title: "Weekly review",
             frequency: "weekly",
             interval: 1,
@@ -1896,6 +1973,20 @@ describe("things MCP server", () => {
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.create-repeating");
+
+      const wrongScope = await client.callTool({
+        name: "repeat",
+        arguments: {
+          scope: "todo",
+          action: "create",
+          title: "x",
+          frequency: "weekly",
+          interval: 1,
+          dangerously_drive_gui: true,
+        },
+      });
+      expect(wrongScope.isError).toBe(true);
+      expect((textOf(wrongScope) as { code: string }).code).toBe("usage");
     });
   });
 
@@ -1916,32 +2007,32 @@ describe("things MCP server", () => {
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UNKNOWN-TAG");
     });
 
-    it("update_area plans a rename (dry-run) and requires title and/or tags", async () => {
+    it("update kind area plans a rename (dry-run) and requires title and/or tags", async () => {
       const area = seedArea(fixture.db, "Old Area");
       await connect([fakeVector(null, { id: "applescript", ops: ["area.update"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "update_area",
-          arguments: { target: area, title: "New Area", dry_run: true },
+          name: "update",
+          arguments: { kind: "area", uuid: area, title: "New Area", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("area.update");
 
       const empty = await client.callTool({
-        name: "update_area",
-        arguments: { target: area, dry_run: true },
+        name: "update",
+        arguments: { kind: "area", uuid: area, dry_run: true },
       });
       expect(empty.isError).toBe(true);
       expect((textOf(empty) as { code: string }).code).toBe("usage");
     });
 
-    it("delete_area requires the permanent-delete ack, then plans (dry-run)", async () => {
+    it("delete kind area requires the permanent-delete ack, then plans (dry-run)", async () => {
       const area = seedArea(fixture.db, "Doomed");
       await connect([fakeVector(null, { id: "applescript", ops: ["area.delete"] }).vector]);
       const blocked = await client.callTool({
-        name: "delete_area",
-        arguments: { target: area },
+        name: "delete",
+        arguments: { kind: "area", uuid: area },
       });
       expect(blocked.isError).toBe(true);
       const err = textOf(blocked) as { code: string; remediation: string };
@@ -1950,8 +2041,8 @@ describe("things MCP server", () => {
 
       const outcome = textOf(
         await client.callTool({
-          name: "delete_area",
-          arguments: { target: area, dangerously_permanent: true, dry_run: true },
+          name: "delete",
+          arguments: { kind: "area", uuid: area, dangerously_permanent: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
@@ -1967,46 +2058,49 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("tag.add");
     });
 
-    it("update_tag plans a rename (dry-run) and refuses exclusive parent/unnest", async () => {
+    it("update kind tag plans a rename (dry-run) and refuses exclusive parent/unnest", async () => {
       const tag = seedTag(fixture.db, "wip");
       await connect([fakeVector(null, { id: "applescript", ops: ["tag.update"] }).vector]);
       const outcome = textOf(
         await client.callTool({
-          name: "update_tag",
-          arguments: { target: tag, title: "in-progress", dry_run: true },
+          name: "update",
+          arguments: { kind: "tag", uuid: tag, title: "in-progress", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("tag.update");
 
       const conflict = await client.callTool({
-        name: "update_tag",
-        arguments: { target: tag, parent: "wip", unnest: true },
+        name: "update",
+        arguments: { kind: "tag", uuid: tag, parent: "wip", unnest: true },
       });
       expect(conflict.isError).toBe(true);
       expect((textOf(conflict) as { code: string }).code).toBe("usage");
     });
 
-    it("delete_tag guards the permanent delete and the child subtree, then plans", async () => {
+    it("delete kind tag guards the permanent delete and the child subtree, then plans", async () => {
       const parent = seedTag(fixture.db, "energy");
       seedTag(fixture.db, "low", parent);
       const solo = seedTag(fixture.db, "solo");
       await connect([fakeVector(null, { id: "applescript", ops: ["tag.delete"] }).vector]);
 
-      const noPerm = await client.callTool({ name: "delete_tag", arguments: { target: solo } });
+      const noPerm = await client.callTool({
+        name: "delete",
+        arguments: { kind: "tag", uuid: solo },
+      });
       expect((textOf(noPerm) as { code: string }).code).toBe("blocked:H-PERMANENT-DELETE");
 
       const subtree = await client.callTool({
-        name: "delete_tag",
-        arguments: { target: parent, dangerously_permanent: true },
+        name: "delete",
+        arguments: { kind: "tag", uuid: parent, dangerously_permanent: true },
       });
       expect(subtree.isError).toBe(true);
       expect((textOf(subtree) as { code: string }).code).toBe("blocked:H-TAG-SUBTREE-DELETE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "delete_tag",
-          arguments: { target: solo, dangerously_permanent: true, dry_run: true },
+          name: "delete",
+          arguments: { kind: "tag", uuid: solo, dangerously_permanent: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
