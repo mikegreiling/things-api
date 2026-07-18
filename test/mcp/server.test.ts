@@ -630,6 +630,22 @@ describe("things MCP server", () => {
     expect(logged).toHaveLength(2);
   });
 
+  it("search limit + all normalizes to all winning (no usage error)", async () => {
+    for (let i = 0; i < 4; i++) seedTodo(fixture.db, { title: `bulk ${i}`, index: i });
+    await connect([fakeVector(null).vector]);
+    const capped = textOf(
+      await client.callTool({ name: "search", arguments: { query: "bulk", limit: 2 } }),
+    ) as { title: string }[];
+    expect(capped).toHaveLength(2);
+    // all wins and limit is ignored — the call succeeds returning every match.
+    const both = await client.callTool({
+      name: "search",
+      arguments: { query: "bulk", limit: 2, all: true },
+    });
+    expect(both.isError ?? false).toBe(false);
+    expect(textOf(both) as { title: string }[]).toHaveLength(4);
+  });
+
   it("read_view caps at 50 by default and reports truncation in a second block", async () => {
     for (let i = 0; i < 60; i++)
       seedTodo(fixture.db, { title: `cap ${i}`, start: "inbox", index: i });
@@ -646,7 +662,7 @@ describe("things MCP server", () => {
     expect(meta.note).toContain("showing 50 of 60");
   });
 
-  it("read_view all: true lifts the cap; limit overrides it", async () => {
+  it("read_view all: true lifts the cap; limit + all normalizes to all winning", async () => {
     for (let i = 0; i < 60; i++)
       seedTodo(fixture.db, { title: `cap ${i}`, start: "inbox", index: i });
     await connect([fakeVector(null).vector]);
@@ -658,12 +674,14 @@ describe("things MCP server", () => {
       await client.callTool({ name: "read_view", arguments: { view: "inbox", limit: 10 } }),
     ) as unknown[];
     expect(limited).toHaveLength(10);
-    const conflict = await client.callTool({
+    // Both set: all wins and limit is ignored — the call succeeds with every row,
+    // never a usage error (the ergonomics fix for the observed limit+all misuse).
+    const both = await client.callTool({
       name: "read_view",
       arguments: { view: "inbox", limit: 10, all: true },
     });
-    expect(conflict.isError).toBe(true);
-    expect((textOf(conflict) as { code: string }).code).toBe("usage");
+    expect(both.isError ?? false).toBe(false);
+    expect(textOf(both) as unknown[]).toHaveLength(60);
   });
 
   it("read_view anytime previews 3 per project block by default; all lifts every cap", async () => {
@@ -2080,6 +2098,25 @@ describe("things MCP server", () => {
       });
       expect(bad.isError).toBe(true);
       expect((textOf(bad) as { code: string }).code).toBe("usage");
+    });
+
+    it("changes_since limit + all normalizes to all winning (no usage error)", async () => {
+      for (let i = 0; i < 3; i++) seedTodo(fixture.db, { title: `touched ${i}`, index: i });
+      await connect([fakeVector(null).vector]);
+      const capped = textOf(
+        await client.callTool({
+          name: "changes_since",
+          arguments: { since: "2020-01-01T00:00:00", limit: 1 },
+        }),
+      ) as { title: string }[];
+      expect(capped).toHaveLength(1);
+      // all wins and limit is ignored — the call succeeds returning every change.
+      const both = await client.callTool({
+        name: "changes_since",
+        arguments: { since: "2020-01-01T00:00:00", limit: 1, all: true },
+      });
+      expect(both.isError ?? false).toBe(false);
+      expect((textOf(both) as { title: string }[]).length).toBeGreaterThanOrEqual(3);
     });
 
     it("add_logged_todo plans a logbook create (dry-run) and rejects creation after completion", async () => {
