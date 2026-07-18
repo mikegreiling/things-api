@@ -21,6 +21,7 @@ import {
   CONSECUTIVE_PROVIDER_ERROR_LIMIT,
   decideAccept,
   decisionLabel,
+  diffStat,
   extractLessons,
   filesInPatch,
   filesOutsideAllowlist,
@@ -31,13 +32,16 @@ import {
   matchesAllowlist,
   maxTotalTokensArgs,
   pairMetrics,
+  planEdits,
   ProviderError,
   RATE_LIMIT_ABORT_EXIT_CODE,
+  renderApplyFeedback,
   renderLedgerEntry,
   runIteration,
   splitMetrics,
   sumRunTokens,
   toStateEntry,
+  type ApplyResult,
   type IterationDeps,
   type IterationParams,
   type IterationResult,
@@ -45,8 +49,10 @@ import {
   type PairRuns,
 } from "../../bench/loop-core.ts";
 import type {
+  CreateOp,
   DebriefInput,
   DebriefOutput,
+  EditOp,
   Refiner,
   RefinerInput,
   RefinerOutput,
@@ -108,14 +114,38 @@ function patchFor(...paths: string[]): string {
     .join("");
 }
 
+function editFor(file: string, find = "old line", replace = "new line"): EditOp {
+  return { file, find, replace };
+}
+
 function refinerOutput(o: Partial<RefinerOutput> = {}): RefinerOutput {
   return {
     classifications: [],
-    patch: patchFor("src/cli/help.ts"),
+    edits: [editFor("src/cli/help.ts")],
     rationale: "smallest generalizable fix\nsecond line",
     predictedBlastRadius: "one task",
     guiSemanticChange: false,
     ...o,
+  };
+}
+
+/** A failed apply (validation errors, nothing written). */
+function failApply(errors: string[]): ApplyResult {
+  return { ok: false, errors, modifiedFiles: [], createdFiles: [], diff: "" };
+}
+
+/** A default successful apply: modifies the edited files, creates the created ones. */
+function okApply(edits: EditOp[], creates: CreateOp[]): ApplyResult {
+  const createdFiles = creates.map((c) => c.file);
+  const modifiedFiles = [...new Set(edits.map((e) => e.file))].filter(
+    (f) => !createdFiles.includes(f),
+  );
+  return {
+    ok: true,
+    errors: [],
+    modifiedFiles,
+    createdFiles,
+    diff: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old line\n+new line\n",
   };
 }
 
@@ -138,10 +168,10 @@ function fakeRefiner(output: RefinerOutput, over: Partial<Refiner> = {}): Refine
 }
 
 interface Calls {
-  gitApply: string[];
+  applyEdits: Array<{ edits: EditOp[]; creates: CreateOp[] }>;
   runGate: number;
   benchSplits: number;
-  revertFiles: string[][];
+  revert: Array<{ modified: string[]; created: string[] }>;
   commit: Array<{ message: string; files: string[] }>;
   stashPatch: Array<{ name: string; content: string }>;
   onBudgetWarning: number;
@@ -152,10 +182,10 @@ function makeDeps(
   overrides: Partial<IterationDeps> = {},
 ): { deps: IterationDeps; calls: Calls } {
   const calls: Calls = {
-    gitApply: [],
+    applyEdits: [],
     runGate: 0,
     benchSplits: 0,
-    revertFiles: [],
+    revert: [],
     commit: [],
     stashPatch: [],
     onBudgetWarning: 0,
@@ -164,9 +194,9 @@ function makeDeps(
     refiner: fakeRefiner(output),
     readArmFiles: () => ({ "src/cli/help.ts": "body" }),
     loadTranscript: () => null,
-    gitApply: (patch) => {
-      calls.gitApply.push(patch);
-      return { ok: true };
+    applyEdits: (edits, creates) => {
+      calls.applyEdits.push({ edits, creates });
+      return okApply(edits, creates);
     },
     runGate: () => {
       calls.runGate++;
@@ -176,8 +206,8 @@ function makeDeps(
       calls.benchSplits++;
       return { dev: runsWith(1, 3), validation: runsWith(2, 2) };
     },
-    revertFiles: (files) => {
-      calls.revertFiles.push(files);
+    revert: (modified, created) => {
+      calls.revert.push({ modified, created });
     },
     commit: (message, files) => {
       calls.commit.push({ message, files });
@@ -312,17 +342,6 @@ describe("decideAccept (metric ladder)", () => {
 // --- runIteration control flow ---------------------------------------------
 
 describe("runIteration", () => {
-  it("rejects a patch touching files outside the arm allowlist (no apply)", async () => {
-    const { deps, calls } = makeDeps(refinerOutput({ patch: patchFor("src/index.ts") }));
-    const before = metrics(runsWith(1, 3), runsWith(2, 2));
-    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
-    expect(result.accepted).toBe(false);
-    expect(result.reason).toContain("allowlist violation");
-    expect(calls.gitApply).toHaveLength(0);
-    expect(calls.benchSplits).toBe(0);
-    expect(calls.commit).toHaveLength(0);
-  });
-
   it("reverts (no commit, no re-bench) when the gate fails", async () => {
     const { deps, calls } = makeDeps(refinerOutput(), {
       runGate: () => ({ ok: false, output: "typecheck error" }),
@@ -331,9 +350,9 @@ describe("runIteration", () => {
     const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
     expect(result.accepted).toBe(false);
     expect(result.reason).toContain("gate failed");
-    expect(calls.gitApply).toHaveLength(1);
+    expect(calls.applyEdits).toHaveLength(1);
     expect(calls.benchSplits).toBe(0);
-    expect(calls.revertFiles).toEqual([["src/cli/help.ts"]]);
+    expect(calls.revert).toEqual([{ modified: ["src/cli/help.ts"], created: [] }]);
     expect(calls.commit).toHaveLength(0);
   });
 
@@ -347,7 +366,7 @@ describe("runIteration", () => {
     expect(calls.commit).toHaveLength(1);
     expect(calls.commit[0]?.message).toContain("loop(cli) iter 1:");
     expect(calls.commit[0]?.files).toEqual(["src/cli/help.ts"]);
-    expect(calls.revertFiles).toHaveLength(0);
+    expect(calls.revert).toHaveLength(0);
     expect(result.afterRuns).not.toBeNull();
   });
 
@@ -360,14 +379,14 @@ describe("runIteration", () => {
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe("no dev improvement");
     expect(calls.commit).toHaveLength(0);
-    expect(calls.revertFiles).toEqual([["src/cli/help.ts"]]);
+    expect(calls.revert).toEqual([{ modified: ["src/cli/help.ts"], created: [] }]);
   });
 
-  it("parks a gui-semantic patch for Mike and reverts (no re-bench, no commit)", async () => {
+  it("parks a gui-semantic change for Mike and reverts (no re-bench, no commit)", async () => {
     const before = metrics(runsWith(1, 3), runsWith(2, 2));
     const { deps, calls } = makeDeps(
       refinerOutput({
-        patch: patchFor("skills/things-cli/references/gui.md"),
+        edits: [editFor("skills/things-cli/references/gui.md")],
         guiSemanticChange: true,
       }),
     );
@@ -379,19 +398,37 @@ describe("runIteration", () => {
     expect(result.accepted).toBe(false);
     expect(result.needsMike).toBe(true);
     expect(result.needsMikePatchPath).toBe("/out/needs-mike-iter1.patch");
-    expect(calls.stashPatch).toHaveLength(1);
+    // The stashed content is the REAL applied diff (not a model-authored patch).
+    expect(calls.stashPatch[0]?.content).toContain("+new line");
     expect(calls.benchSplits).toBe(0);
     expect(calls.commit).toHaveLength(0);
-    expect(calls.revertFiles).toEqual([["skills/things-cli/references/gui.md"]]);
+    expect(calls.revert).toEqual([
+      { modified: ["skills/things-cli/references/gui.md"], created: [] },
+    ]);
   });
 
-  it("treats an empty patch as a no-op no-accept", async () => {
-    const { deps, calls } = makeDeps(refinerOutput({ patch: "" }));
+  it("treats an empty edits list as a no-op no-accept (no apply, no re-bench)", async () => {
+    const { deps, calls } = makeDeps(refinerOutput({ edits: [] }));
     const before = metrics(runsWith(1, 3), runsWith(2, 2));
     const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
     expect(result.accepted).toBe(false);
-    expect(calls.gitApply).toHaveLength(0);
+    expect(result.reason).toBe("no edits proposed");
+    expect(calls.applyEdits).toHaveLength(0);
     expect(calls.benchSplits).toBe(0);
+  });
+
+  it("commits created files too when a create is part of the candidate", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps, calls } = makeDeps(
+      refinerOutput({
+        edits: [editFor("src/cli/help.ts")],
+        creates: [{ file: "src/cli/commands/new.ts", content: "export {};\n" }],
+      }),
+      { benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }) },
+    );
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(result.accepted).toBe(true);
+    expect(calls.commit[0]?.files).toEqual(["src/cli/help.ts", "src/cli/commands/new.ts"]);
   });
 });
 
@@ -486,7 +523,7 @@ describe("runIteration budget/circuit-breaker", () => {
     await expect(
       runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams(), budget }),
     ).rejects.toMatchObject({ kind: "token-budget", code: BUDGET_ABORT_EXIT_CODE });
-    expect(calls.gitApply).toHaveLength(0);
+    expect(calls.applyEdits).toHaveLength(0);
   });
 
   it("reverts the applied patch when the budget aborts before the re-bench", async () => {
@@ -498,10 +535,10 @@ describe("runIteration budget/circuit-breaker", () => {
     await expect(
       runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams(), budget }),
     ).rejects.toMatchObject({ kind: "token-budget", code: BUDGET_ABORT_EXIT_CODE });
-    expect(calls.gitApply).toHaveLength(1);
+    expect(calls.applyEdits).toHaveLength(1);
     expect(calls.runGate).toBe(1);
     expect(calls.benchSplits).toBe(0);
-    expect(calls.revertFiles).toEqual([["src/cli/help.ts"]]); // unapplied patch reverted
+    expect(calls.revert).toEqual([{ modified: ["src/cli/help.ts"], created: [] }]); // unapplied change reverted
   });
 
   it("counts a refiner provider error as a no-accept without applying", async () => {
@@ -520,7 +557,7 @@ describe("runIteration budget/circuit-breaker", () => {
     });
     expect(result.accepted).toBe(false);
     expect(result.reason).toContain("provider error");
-    expect(calls.gitApply).toHaveLength(0);
+    expect(calls.applyEdits).toHaveLength(0);
     expect(budget.consecutiveProviderErrors).toBe(1);
   });
 
@@ -577,6 +614,7 @@ describe("appendLoopState", () => {
       metricsAfter: metrics(runsWith(2, 3), runsWith(2, 2)),
       afterRuns: null,
       debrief: { attribution: "clearer verb", lesson: "name the verb", confidence: "medium" },
+      applyFailed: false,
       touchedFiles: ["src/cli/help.ts"],
       ...o,
     };
@@ -710,6 +748,7 @@ function iterationResult(o: Partial<IterationResult> = {}): IterationResult {
       lesson: "define state before container",
       confidence: "medium",
     },
+    applyFailed: false,
     touchedFiles: ["src/cli/help.ts"],
     ...o,
   };
@@ -722,7 +761,7 @@ describe("ledger rendering", () => {
     expect(ledgerFileName("mcp")).toBe("mcp.md");
   });
 
-  it("isLedgerCandidate selects accepted, reverted, and needs-mike — not bare rejects", () => {
+  it("isLedgerCandidate selects accepted, reverted, needs-mike, and apply-failed — not bare rejects", () => {
     expect(isLedgerCandidate(iterationResult({ accepted: true }))).toBe(true);
     expect(
       isLedgerCandidate(iterationResult({ accepted: false, metricsAfter: metrics([], []) })),
@@ -730,10 +769,33 @@ describe("ledger rendering", () => {
     expect(
       isLedgerCandidate(iterationResult({ accepted: false, needsMike: true, metricsAfter: null })),
     ).toBe(true);
-    // allowlist/gate/provider reject: no re-bench, not parked → no ledger entry
+    expect(
+      isLedgerCandidate(
+        iterationResult({ accepted: false, applyFailed: true, metricsAfter: null }),
+      ),
+    ).toBe(true);
+    // gate/provider reject: no re-bench, not parked, applied cleanly → no ledger entry
     expect(
       isLedgerCandidate(iterationResult({ accepted: false, needsMike: false, metricsAfter: null })),
     ).toBe(false);
+  });
+
+  it("renders an APPLY-FAILED entry with preserved hypothesis and no measured deltas", () => {
+    const entry = buildLedgerEntry(
+      iterationResult({
+        accepted: false,
+        applyFailed: true,
+        metricsAfter: null,
+        reason: "apply failed: find not found in src/cli/help.ts",
+        patchSummary: "1 file(s) attempted [src/cli/help.ts], not applied",
+      }),
+      { batchId: "b", date: "2026-07-17", artifactsPointer: "x" },
+    );
+    const md = renderLedgerEntry(entry);
+    expect(md).toContain("**APPLY-FAILED**");
+    expect(md).toContain("not measured (no re-bench)");
+    // hypothesis is preserved even though the change never landed
+    expect(md).toContain("**pre-hoc hypothesis:** clarify inbox wording");
   });
 
   it("renders an entry with a machine-readable id+lesson marker and the human body", () => {
@@ -762,7 +824,7 @@ describe("ledger rendering", () => {
     );
     const md = renderLedgerEntry(entry);
     expect(md).toContain("**NEEDS-MIKE**");
-    expect(md).toContain("not measured (parked before re-bench)");
+    expect(md).toContain("not measured (no re-bench)");
   });
 });
 
@@ -832,5 +894,188 @@ describe("appendLedger idempotence", () => {
     expect(appendLedger(path, "cli", batch2)).toBe(1);
     const md2 = readFileSync(path, "utf8");
     expect((md2.match(/<!-- ledger-entry /g) ?? []).length).toBe(3);
+  });
+});
+
+// --- exact find/replace edit contract --------------------------------------
+
+const HELP_BODY = "line A\nUNIQUE_ANCHOR\nline B\nDUP\nDUP\n";
+
+describe("planEdits contract", () => {
+  const allow = ["src/cli/help.ts", "src/cli/commands/*.ts"];
+  const read = (f: string): string | null => (f === "src/cli/help.ts" ? HELP_BODY : null);
+
+  it("applies a unique find/replace", () => {
+    const plan = planEdits(
+      [{ file: "src/cli/help.ts", find: "UNIQUE_ANCHOR", replace: "REPLACED" }],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(true);
+    expect(plan.writes).toEqual([
+      {
+        file: "src/cli/help.ts",
+        content: HELP_BODY.replace("UNIQUE_ANCHOR", "REPLACED"),
+        isNew: false,
+      },
+    ]);
+  });
+
+  it("supports an empty replace (pure deletion)", () => {
+    const plan = planEdits(
+      [{ file: "src/cli/help.ts", find: "UNIQUE_ANCHOR\n", replace: "" }],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(true);
+    expect(plan.writes[0]?.content).not.toContain("UNIQUE_ANCHOR");
+  });
+
+  it("rejects an edit whose file is outside the arm allowlist", () => {
+    const plan = planEdits([{ file: "src/index.ts", find: "x", replace: "y" }], [], allow, read);
+    expect(plan.ok).toBe(false);
+    expect(plan.errors[0]).toContain("not in arm allowlist");
+    expect(plan.writes).toHaveLength(0);
+  });
+
+  it("rejects a find that is missing", () => {
+    const plan = planEdits(
+      [{ file: "src/cli/help.ts", find: "NOPE", replace: "y" }],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(false);
+    expect(plan.errors[0]).toContain("find not found");
+  });
+
+  it("rejects a find that is not unique", () => {
+    const plan = planEdits(
+      [{ file: "src/cli/help.ts", find: "DUP", replace: "y" }],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(false);
+    expect(plan.errors[0]).toContain("matched 2 times");
+  });
+
+  it("is atomic — one bad edit voids the whole set (no writes)", () => {
+    const plan = planEdits(
+      [
+        { file: "src/cli/help.ts", find: "UNIQUE_ANCHOR", replace: "ok" },
+        { file: "src/cli/help.ts", find: "NOPE", replace: "y" },
+      ],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(false);
+    expect(plan.writes).toHaveLength(0); // the valid edit is NOT applied either
+  });
+
+  it("composes multiple edits to one file in order", () => {
+    const plan = planEdits(
+      [
+        { file: "src/cli/help.ts", find: "line A", replace: "line A2" },
+        { file: "src/cli/help.ts", find: "line B", replace: "line B2" },
+      ],
+      [],
+      allow,
+      read,
+    );
+    expect(plan.ok).toBe(true);
+    expect(plan.writes[0]?.content).toContain("line A2");
+    expect(plan.writes[0]?.content).toContain("line B2");
+  });
+
+  it("creates an allowlisted new file; rejects an existing target or one out of scope", () => {
+    const okc = planEdits([], [{ file: "src/cli/commands/new.ts", content: "x" }], allow, read);
+    expect(okc.ok).toBe(true);
+    expect(okc.writes[0]).toEqual({ file: "src/cli/commands/new.ts", content: "x", isNew: true });
+
+    const exists = planEdits([], [{ file: "src/cli/help.ts", content: "x" }], allow, read);
+    expect(exists.ok).toBe(false);
+    expect(exists.errors[0]).toContain("already exists");
+
+    const outside = planEdits([], [{ file: "src/index.ts", content: "x" }], allow, read);
+    expect(outside.ok).toBe(false);
+  });
+
+  it("diffStat counts adds/removes; renderApplyFeedback lists the errors", () => {
+    expect(diffStat("--- a/x\n+++ b/x\n+one\n+two\n-old\n")).toBe("+2/-1");
+    const fb = renderApplyFeedback(["find not found in x", "find matched 3 times"]);
+    expect(fb).toContain("find not found in x");
+    expect(fb).toContain("DID NOT APPLY");
+  });
+});
+
+describe("runIteration apply-retry", () => {
+  it("retries ONCE with the errors appended, then applies and commits", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const applied: EditOp[][] = [];
+    const seen: string[] = [];
+    const { deps, calls } = makeDeps(refinerOutput(), {
+      refiner: {
+        refine: (i: RefinerInput) => {
+          seen.push(i.userContent);
+          return Promise.resolve(refinerOutput());
+        },
+        debrief: () => Promise.resolve(debriefOutput()),
+      },
+      applyEdits: (edits: EditOp[], creates: CreateOp[]) => {
+        applied.push(edits);
+        return applied.length === 1
+          ? failApply(["find not found in src/cli/help.ts"])
+          : okApply(edits, creates);
+      },
+      benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(applied).toHaveLength(2); // one failed attempt + one successful retry
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toContain("DID NOT APPLY"); // feedback appended on the retry
+    expect(result.accepted).toBe(true);
+    expect(calls.commit).toHaveLength(1);
+  });
+
+  it("gives up after the retry → apply-failed candidate (no re-bench, no commit, ledger-worthy)", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    let attempts = 0;
+    const { deps, calls } = makeDeps(refinerOutput(), {
+      applyEdits: (_edits: EditOp[], _creates: CreateOp[]) => {
+        attempts++;
+        return failApply(["find matched 2 times in src/cli/help.ts (must be unique)"]);
+      },
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(attempts).toBe(2); // initial + one retry
+    expect(result.applyFailed).toBe(true);
+    expect(result.reason).toContain("apply failed");
+    expect(calls.benchSplits).toBe(0);
+    expect(calls.commit).toHaveLength(0);
+    expect(isLedgerCandidate(result)).toBe(true);
+    expect(decisionLabel(result)).toBe("apply-failed");
+  });
+
+  it("treats a retry that proposes no edits as apply-failed", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    let call = 0;
+    const { deps, calls } = makeDeps(refinerOutput(), {
+      refiner: {
+        refine: () => {
+          call++;
+          return Promise.resolve(call === 1 ? refinerOutput() : refinerOutput({ edits: [] }));
+        },
+        debrief: () => Promise.resolve(debriefOutput()),
+      },
+      applyEdits: (_e: EditOp[], _c: CreateOp[]) =>
+        failApply(["find not found in src/cli/help.ts"]),
+    });
+    const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
+    expect(result.applyFailed).toBe(true);
+    expect(calls.benchSplits).toBe(0);
   });
 });

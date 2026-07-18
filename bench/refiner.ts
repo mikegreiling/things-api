@@ -45,14 +45,34 @@ export interface RefinerInput {
   userContent: string;
 }
 
+/**
+ * One find/replace edit to an existing file. `find` must be an EXACT substring that
+ * occurs EXACTLY ONCE in the current file; `replace` may be "" (a pure deletion). This
+ * contract replaces unified diffs, which the refiner model cannot emit with reliable
+ * hunk math.
+ */
+export interface EditOp {
+  file: string;
+  find: string;
+  replace: string;
+}
+
+/** A new file to create (under the arm allowlist). */
+export interface CreateOp {
+  file: string;
+  content: string;
+}
+
 /** The required, strictly-parsed refiner output. */
 export interface RefinerOutput {
   classifications: Classification[];
-  /** Unified diff to apply within the arm's allowlist. */
-  patch: string;
+  /** Exact find/replace edits to existing files (all must validate, applied atomically). */
+  edits: EditOp[];
+  /** Optional new files to create under the arm allowlist. */
+  creates?: CreateOp[];
   rationale: string;
   predictedBlastRadius: string;
-  /** True iff the patch changes gui.md SEMANTICS (skill arm) — forces needs-mike. */
+  /** True iff the change alters gui.md SEMANTICS (skill arm) — forces needs-mike. */
   guiSemanticChange: boolean;
   /** Provider-reported token usage for this call (fed to the invocation token budget). */
   usage?: UsageDelta;
@@ -126,10 +146,30 @@ export function parseDebriefOutput(text: string | null): DebriefOutput | null {
   return null;
 }
 
+function parseEdits(value: unknown): EditOp[] {
+  if (!Array.isArray(value)) return [];
+  return (value as unknown[])
+    .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
+    .filter((e) => typeof e["file"] === "string" && typeof e["find"] === "string")
+    .map((e) => ({
+      file: e["file"] as string,
+      find: e["find"] as string,
+      replace: typeof e["replace"] === "string" ? (e["replace"] as string) : "",
+    }));
+}
+
+function parseCreates(value: unknown): CreateOp[] {
+  if (!Array.isArray(value)) return [];
+  return (value as unknown[])
+    .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+    .filter((c) => typeof c["file"] === "string" && typeof c["content"] === "string")
+    .map((c) => ({ file: c["file"] as string, content: c["content"] as string }));
+}
+
 /**
  * Extract the parsed refiner object from a model response. Prefers the LAST fenced
  * ```json block, then any fenced block, then the raw text. Returns null when no
- * candidate parses into an object carrying a string `patch` (the one required field);
+ * candidate parses into an object carrying an `edits` array (the one required field);
  * the other fields are defaulted leniently so a slightly-shaped-off response still
  * lands rather than forcing a retry.
  */
@@ -152,7 +192,7 @@ export function parseRefinerOutput(text: string | null): RefinerOutput | null {
     }
     if (typeof parsed !== "object" || parsed === null) continue;
     const obj = parsed as Record<string, unknown>;
-    if (typeof obj["patch"] !== "string") continue;
+    if (!Array.isArray(obj["edits"])) continue;
 
     const classifications: Classification[] = Array.isArray(obj["classifications"])
       ? (obj["classifications"] as unknown[])
@@ -166,7 +206,8 @@ export function parseRefinerOutput(text: string | null): RefinerOutput | null {
 
     return {
       classifications,
-      patch: obj["patch"] as string,
+      edits: parseEdits(obj["edits"]),
+      creates: parseCreates(obj["creates"]),
       rationale: typeof obj["rationale"] === "string" ? obj["rationale"] : "",
       predictedBlastRadius:
         typeof obj["predictedBlastRadius"] === "string" ? obj["predictedBlastRadius"] : "",
