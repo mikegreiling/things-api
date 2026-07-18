@@ -215,7 +215,9 @@ function capturePre(
   fields: Record<string, Record<string, unknown>>;
   trashedCount?: number;
 } {
-  const reader = createDbReader(deps.db);
+  // Same injected clock the write planner rides — so a captured pre-value of
+  // `todaySection` is judged under the SAME Today the post-op read will be.
+  const reader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
   const modDates: PreModDates = {};
   const fields: Record<string, Record<string, unknown>> = {};
   const captureFor = (uuid: string, assertions: { field: string }[]): void => {
@@ -664,7 +666,11 @@ export async function runMutation<K extends OperationKind>(
       );
     }
 
-    const reader = createDbReader(deps.db);
+    // Verify under the injected clock (deps.now/deps.zone), never the wall
+    // clock: an `evening`/`today` write dated pinned-today must read back IN
+    // Today at verify time, or its `todaySection` assertion fails under a
+    // pinned THINGS_NOW (bench-caught #211 regression).
+    const reader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
     const timeoutMs = options.verifyTimeoutMs ?? (appRunning ? 6000 : 10_000);
     const outcome = await pollUntilVerified(
       () => evaluateDelta(delta, reader, preCapture),
