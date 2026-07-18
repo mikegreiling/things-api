@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Ref } from "../../src/model/entities.ts";
+import { encodePackedDate } from "../../src/model/dates.ts";
 import {
   EnumDomainError,
   mapHeading,
@@ -11,6 +12,12 @@ import {
 
 const AREA: Ref = { uuid: "area-1", title: "LAB-AREA-A" };
 const refs = (uuid: string | null): Ref | null => (uuid === "area-1" ? AREA : null);
+
+// The default row is scheduled 2026-06-25; TODAY equals that day so the row is a
+// Today member (startDate <= today). FUTURE/PAST bracket it for the gate tests.
+const TODAY = encodePackedDate("2026-06-25");
+const FUTURE = encodePackedDate("2026-07-10");
+const PAST = encodePackedDate("2026-06-01");
 
 function row(overrides: Partial<TaskRow> = {}): TaskRow {
   return {
@@ -51,7 +58,7 @@ function row(overrides: Partial<TaskRow> = {}): TaskRow {
 
 describe("mapTodo", () => {
   it("maps a scheduled This Evening to-do", () => {
-    const todo = mapTodo(row(), refs, []);
+    const todo = mapTodo(row(), refs, [], TODAY);
     expect(todo.type).toBe("to-do");
     expect(todo.status).toBe("open");
     expect(todo.start).toBe("active");
@@ -62,9 +69,9 @@ describe("mapTodo", () => {
   });
 
   it("flags repeating templates and instances distinctly", () => {
-    const template = mapTodo(row({ rt1_recurrenceRule: new Uint8Array([1]) }), refs, []);
+    const template = mapTodo(row({ rt1_recurrenceRule: new Uint8Array([1]) }), refs, [], TODAY);
     expect(template.repeating.isTemplate).toBe(true);
-    const instance = mapTodo(row({ rt1_repeatingTemplate: "tpl-1" }), refs, []);
+    const instance = mapTodo(row({ rt1_repeatingTemplate: "tpl-1" }), refs, [], TODAY);
     expect(instance.repeating).toEqual({
       isTemplate: false,
       isInstance: true,
@@ -73,13 +80,47 @@ describe("mapTodo", () => {
   });
 
   it("throws EnumDomainError on out-of-domain status instead of guessing", () => {
-    expect(() => mapTodo(row({ status: 1 }), refs, [])).toThrow(EnumDomainError);
+    expect(() => mapTodo(row({ status: 1 }), refs, [], TODAY)).toThrow(EnumDomainError);
   });
 
   it("maps canceled/completed with stop timestamps", () => {
-    const done = mapTodo(row({ status: 3, stopDate: 1_780_000_200 }), refs, []);
+    const done = mapTodo(row({ status: 3, stopDate: 1_780_000_200 }), refs, [], TODAY);
     expect(done.status).toBe("completed");
     expect(done.stopped?.getTime()).toBe(1_780_000_200_000);
+  });
+});
+
+describe("mapTodaySection gate (Today members only)", () => {
+  // An undated active to-do carries startBucket=0 in the DB (prod truth) but is
+  // in Anytime, NOT Today — the field must be omitted, not reported "today".
+  it("omits todaySection for an undated Anytime to-do", () => {
+    const todo = mapTodo(row({ start: 1, startDate: null, startBucket: 0 }), refs, [], TODAY);
+    expect(todo.start).toBe("active");
+    expect(todo.todaySection).toBeNull();
+  });
+
+  // A future startDate (Upcoming) also carries startBucket=0; still not Today.
+  it("omits todaySection for a future-scheduled (Upcoming) to-do", () => {
+    const todo = mapTodo(row({ start: 1, startDate: FUTURE, startBucket: 0 }), refs, [], TODAY);
+    expect(todo.todaySection).toBeNull();
+  });
+
+  // Overdue scheduled rows (startDate < today) DO sit in Today.
+  it("keeps todaySection='today' for an overdue scheduled to-do", () => {
+    const todo = mapTodo(row({ start: 1, startDate: PAST, startBucket: 0 }), refs, [], TODAY);
+    expect(todo.todaySection).toBe("today");
+  });
+
+  // A dated Today member with startBucket=0 reports "today".
+  it("reports todaySection='today' for a to-do scheduled today", () => {
+    const todo = mapTodo(row({ start: 1, startDate: TODAY, startBucket: 0 }), refs, [], TODAY);
+    expect(todo.todaySection).toBe("today");
+  });
+
+  // Inbox rows (start=0) are never in Today, whatever their raw startBucket.
+  it("omits todaySection for an inbox to-do", () => {
+    const todo = mapTodo(row({ start: 0, startDate: null, startBucket: 0 }), refs, [], TODAY);
+    expect(todo.todaySection).toBeNull();
   });
 });
 
@@ -89,6 +130,7 @@ describe("mapProject / mapHeading", () => {
       row({ type: 1, untrashedLeafActionsCount: 5, openUntrashedLeafActionsCount: 2 }),
       refs,
       [],
+      TODAY,
     );
     expect(project.type).toBe("project");
     expect(project.openUntrashedLeafActionsCount).toBe(2);

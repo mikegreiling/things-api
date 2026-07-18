@@ -64,13 +64,16 @@ export function projectView(
   if (!projectRow || projectRow.type !== 1) throw new ProjectNotFoundError(uuid);
 
   const refs = makeRefResolver(db);
+  // The view's injected clock — gates `todaySection` to Today members in the
+  // mapper AND drives the scheduled/overdue bucketing below.
+  const packedToday = encodePackedDate(localToday(now, zone));
   const tagsOf = (rows: TaskRow[]) =>
     fetchTagsForTasks(
       db,
       rows.map((r) => r.uuid),
     );
   const projectTags = tagsOf([projectRow]);
-  const project = mapProject(projectRow, refs, projectTags.get(projectRow.uuid) ?? []);
+  const project = mapProject(projectRow, refs, projectTags.get(projectRow.uuid) ?? [], packedToday);
   // The card view surfaces area-inherited tags (the UI's tag filter honors them).
   project.inheritedTags = inheritedTagsFor(db, projectRow);
 
@@ -109,11 +112,10 @@ export function projectView(
   const boundary = logBoundary(db, now, zone);
   const todos = childRows.map((r) => ({
     row: r,
-    todo: mapTodo(r, refs, childTags.get(r.uuid) ?? []),
+    todo: mapTodo(r, refs, childTags.get(r.uuid) ?? [], packedToday),
   }));
   markLogged([project, ...todos.map((t) => t.todo)], boundary);
 
-  const packedToday = encodePackedDate(localToday(now, zone));
   const active: Todo[] = [];
   const byHeading = new Map<string, Todo[]>();
   const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];

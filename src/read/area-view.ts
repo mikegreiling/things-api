@@ -84,6 +84,9 @@ export function areaView(
     );
 
   const boundary = logBoundary(db, now, zone);
+  // The view's injected clock — gates `todaySection` to Today members in the
+  // mapper AND drives the scheduled/overdue bucketing below.
+  const packedToday = encodePackedDate(localToday(now, zone));
   // OWN-DEADLINE UNIFORM: `--overdue` filters BOTH displayed row kinds by each
   // row's OWN deadline (open, strictly before today) via the shared OVERDUE
   // predicate — the area's child PROJECTS by the project's own deadline AND the
@@ -113,7 +116,7 @@ export function areaView(
   );
   const projectTags = tagsOf(projectRows);
   const projects = markLogged(
-    projectRows.map((r) => mapProject(r, refs, projectTags.get(r.uuid) ?? [])),
+    projectRows.map((r) => mapProject(r, refs, projectTags.get(r.uuid) ?? [], packedToday)),
     boundary,
   );
 
@@ -125,14 +128,13 @@ export function areaView(
   const todoTags = tagsOf(todoRows);
   const todos = todoRows.map((r) => ({
     row: r,
-    todo: mapTodo(r, refs, todoTags.get(r.uuid) ?? []),
+    todo: mapTodo(r, refs, todoTags.get(r.uuid) ?? [], packedToday),
   }));
   markLogged(
     todos.map((t) => t.todo),
     boundary,
   );
 
-  const packedToday = encodePackedDate(localToday(now, zone));
   const active: Todo[] = [];
   const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
   const repeating: Todo[] = [];

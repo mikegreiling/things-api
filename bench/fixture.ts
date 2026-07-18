@@ -19,6 +19,7 @@ import {
   seedProject,
   seedTag,
   seedTodo,
+  tagArea,
   tagTask,
   type SeedTaskOpts,
 } from "../test/fixtures/seed.ts";
@@ -145,6 +146,11 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
       switch (s.kind) {
         case "area":
           uuid = seedArea(db, s.title, s.index ?? 0);
+          // Area tags live in TMAreaTag, not TMTaskTag — attachTags (tagTask)
+          // is the wrong table for areas, so seed them here via tagArea. Without
+          // this, area-inherited tags never reach the DB and inheritedTagsFor
+          // can only ever return project/own tags.
+          for (const title of s.tags ?? []) tagArea(db, uuid, ensureTag(title));
           break;
         case "tag": {
           const parentUuid = s.parent !== undefined ? (uuidByKey.get(s.parent) ?? null) : null;
