@@ -124,9 +124,23 @@ export interface VerifyReader {
   entityFields(entity: "area" | "tag", uuid: string): Record<string, unknown> | null;
 }
 
-export function createDbReader(db: DatabaseSync): VerifyReader {
+/**
+ * `now`/`zone` supply the evaluation clock the reader hands to `byUuid` (and thus
+ * `mapTodaySection`) so a verified read-after-write gates `todaySection` on the
+ * SAME injected clock the write planner used — never the wall clock. Under a
+ * pinned `THINGS_NOW` (consumer-timezone / bench fence), an `evening`/`today`
+ * item dated pinned-today would otherwise be judged future-dated by a real-clock
+ * reader and lose its `todaySection`, failing the delta assertion (bench-caught
+ * regression from the #211 todaySection gate). Defaults to the host clock so the
+ * pure verify-reader tests and ordering call sites are unaffected.
+ */
+export function createDbReader(
+  db: DatabaseSync,
+  now: Date = new Date(),
+  zone?: string,
+): VerifyReader {
   return {
-    taskByUuid: (uuid) => byUuid(db, uuid),
+    taskByUuid: (uuid) => byUuid(db, uuid, now, zone),
     areaExists(uuid) {
       return db.prepare("SELECT 1 FROM TMArea WHERE uuid = ?").get(uuid) !== undefined;
     },
@@ -173,7 +187,7 @@ export function createDbReader(db: DatabaseSync): VerifyReader {
       ).filter((r) => !excluded.has(r.uuid));
       const tasks: AnyTask[] = [];
       for (const r of rows) {
-        const task = byUuid(db, r.uuid);
+        const task = byUuid(db, r.uuid, now, zone);
         if (task !== null) tasks.push(task);
       }
       return tasks;
