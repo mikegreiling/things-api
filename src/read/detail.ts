@@ -13,6 +13,7 @@ import {
   type TaskRow,
 } from "../model/mappers.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
+import { encodePackedDate, localToday } from "../model/dates.ts";
 import {
   fetchChecklistRows,
   fetchTagsForTasks,
@@ -23,17 +24,29 @@ import {
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import { inheritedTagsFor } from "./tags.ts";
 
-export function byUuid(db: DatabaseSync, uuid: string): AnyTask | null {
+// `now`/`zone` supply the evaluation clock used to gate `todaySection` to
+// Today members (see mappers.mapTodaySection). They default to the host clock —
+// matching this module's existing logBoundary default; the client facade passes
+// the injected clock so a pinned-clock `show` reads under the consumer's Today.
+export function byUuid(
+  db: DatabaseSync,
+  uuid: string,
+  now: Date = new Date(),
+  zone?: string,
+): AnyTask | null {
   const row = fetchTaskByUuid(db, uuid);
   if (!row) return null;
-  return materializeOne(db, row);
+  return materializeOne(db, row, encodePackedDate(localToday(now, zone)));
 }
 
-function materializeOne(db: DatabaseSync, row: TaskRow): AnyTask {
+function materializeOne(db: DatabaseSync, row: TaskRow, packedToday: number): AnyTask {
   const refs = makeRefResolver(db);
   if (row.type === 2) return mapHeading(row, refs);
   const tags = fetchTagsForTasks(db, [row.uuid]).get(row.uuid) ?? [];
-  const entity = row.type === 1 ? mapProject(row, refs, tags) : mapTodo(row, refs, tags);
+  const entity =
+    row.type === 1
+      ? mapProject(row, refs, tags, packedToday)
+      : mapTodo(row, refs, tags, packedToday);
   markLogged([entity], logBoundary(db));
   entity.inheritedTags = inheritedTagsFor(db, row);
   if (entity.type === "to-do") {

@@ -93,10 +93,28 @@ function mapStart(row: { start: number | null; uuid: string }): StartState {
   return start;
 }
 
-function mapTodaySection(row: { startBucket: number | null; uuid: string }): TodaySection | null {
+/**
+ * `todaySection` is meaningful ONLY for items actually in the Today view. The
+ * DB stores a raw `startBucket` (0/1) on EVERY active row — prod carries
+ * startBucket=0 on every undated Anytime to-do, and future-scheduled
+ * (Upcoming) rows carry it too — so the raw bucket cannot be surfaced as-is:
+ * emitting "today" for an Anytime/Upcoming item wrongly implies Today
+ * membership (architecture.md; the MCP server note). We gate on the injected
+ * clock's `packedToday`: the field is emitted only when the row is active,
+ * dated, and not future-scheduled ("evening" via startBucket=1, else "today");
+ * overdue scheduled rows (startDate < today) stay in Today and keep it.
+ * Undated or future-dated rows OMIT the field (null).
+ */
+function mapTodaySection(
+  row: { start: number | null; startDate: number | null; startBucket: number | null; uuid: string },
+  packedToday: number,
+): TodaySection | null {
   if (row.startBucket === null) return null;
   const section = TODAY_SECTION_FROM_DB[row.startBucket];
   if (!section) throw new EnumDomainError("startBucket", row.startBucket, row.uuid);
+  if ((row.start ?? 0) !== 1) return null; // not start=active → not in Today
+  if (row.startDate === null) return null; // undated (Anytime)
+  if (row.startDate > packedToday) return null; // future startDate (Upcoming)
   return section;
 }
 
@@ -117,7 +135,7 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
   return info;
 }
 
-function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
+function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number) {
   return {
     uuid: row.uuid,
     title: row.title ?? "",
@@ -130,7 +148,7 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
     trashed: row.trashed === 1,
     start: mapStart(row),
     startDate: decodePackedDate(row.startDate),
-    todaySection: mapTodaySection(row),
+    todaySection: mapTodaySection(row, packedToday),
     // A template's own `deadline` column is not a real date: it is NULL
     // (deadline-less) or a far-future sentinel (4001-01-01, deadlined) that
     // flags whether spawned instances deadline. Surface it via
@@ -154,9 +172,9 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[]) {
   };
 }
 
-export function mapTodo(row: TaskRow, refs: RefResolver, tags: Ref[]): Todo {
+export function mapTodo(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number): Todo {
   return {
-    ...commonFields(row, refs, tags),
+    ...commonFields(row, refs, tags, packedToday),
     type: "to-do",
     project: refs(row.project),
     heading: refs(row.heading),
@@ -165,9 +183,14 @@ export function mapTodo(row: TaskRow, refs: RefResolver, tags: Ref[]): Todo {
   };
 }
 
-export function mapProject(row: TaskRow, refs: RefResolver, tags: Ref[]): Project {
+export function mapProject(
+  row: TaskRow,
+  refs: RefResolver,
+  tags: Ref[],
+  packedToday: number,
+): Project {
   return {
-    ...commonFields(row, refs, tags),
+    ...commonFields(row, refs, tags, packedToday),
     type: "project",
     untrashedLeafActionsCount: row.untrashedLeafActionsCount ?? 0,
     openUntrashedLeafActionsCount: row.openUntrashedLeafActionsCount ?? 0,

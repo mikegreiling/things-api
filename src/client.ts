@@ -741,14 +741,16 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       showTarget: (ref) => classifyShowTarget(conn.db, ref),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
+        // The injected clock gates `todaySection` to Today members under the
+        // consumer's own today (a pinned-clock/lab run reads honestly).
         try {
-          return byUuid(conn.db, resolveTaskUuidPrefix(conn.db, uuid));
+          return byUuid(conn.db, resolveTaskUuidPrefix(conn.db, uuid), now(), defaultZone);
         } catch (err) {
           if (err instanceof RangeError && !err.message.includes("ambiguous")) return null;
           throw err;
         }
       },
-      snapshot: () => snapshotView(conn.db),
+      snapshot: () => snapshotView(conn.db, now(), defaultZone),
     },
     write: {
       run,

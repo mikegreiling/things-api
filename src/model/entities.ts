@@ -66,9 +66,12 @@ interface TaskCommon {
   /** The "When" date (packed int in DB), null when unscheduled. */
   startDate: IsoDate | null;
   /**
-   * Raw This-Evening assignment (startBucket). Effective only while
-   * startDate == today — the UI rolls stale evening items back into Today
-   * proper. Use TodayView.evening for UI-faithful placement.
+   * Today-view section ("today" | "evening"), emitted ONLY for items actually
+   * in Today under the evaluation clock: start=active, dated, and not
+   * future-scheduled (overdue rows stay in Today). Anytime (undated) and
+   * Upcoming (future startDate) rows carry a raw startBucket in the DB but are
+   * NOT in Today, so the field is null (omitted) for them. Use
+   * TodayView.evening for UI-faithful placement.
    */
   todaySection: TodaySection | null;
   deadline: IsoDate | null;

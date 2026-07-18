@@ -250,7 +250,15 @@ function overdueFilter(
 // view's injected `now` via logBoundary(db, now) so the `logged` flag it stamps
 // honors the same clock as the SQL membership filter (a pinned test clock, a
 // lab run) — nothing here silently reaches for real time.
-function materialize(db: DatabaseSync, rows: TaskRow[], boundary: Date): ListItem[] {
+// `packedToday` (the view's injected clock, encodePackedDate(localToday(now)))
+// is threaded so the mapper can gate `todaySection` to Today members only —
+// the same clock the SQL membership filter uses.
+function materialize(
+  db: DatabaseSync,
+  rows: TaskRow[],
+  boundary: Date,
+  packedToday: number,
+): ListItem[] {
   const refs = makeRefResolver(db);
   const headingProject = makeHeadingProjectResolver(db);
   const tags = fetchTagsForTasks(
@@ -258,8 +266,8 @@ function materialize(db: DatabaseSync, rows: TaskRow[], boundary: Date): ListIte
     rows.map((r) => r.uuid),
   );
   const items = rows.map((row) => {
-    if (row.type === 1) return mapProject(row, refs, tags.get(row.uuid) ?? []);
-    const todo = mapTodo(row, refs, tags.get(row.uuid) ?? []);
+    if (row.type === 1) return mapProject(row, refs, tags.get(row.uuid) ?? [], packedToday);
+    const todo = mapTodo(row, refs, tags.get(row.uuid) ?? [], packedToday);
     if (todo.heading !== null) {
       const p = headingProject(todo.heading.uuid);
       if (p !== null) todo.headingProject = p;
@@ -329,7 +337,7 @@ export function todayView(
               t.todayIndex ASC, t.uuid ASC`,
     [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds, ...of.binds],
   );
-  const items = materialize(db, rows, boundary);
+  const items = materialize(db, rows, boundary, packedToday);
   // Evening membership expires daily: raw startBucket=1 counts only while
   // startDate is exactly today; stale evening items belong to Today proper.
   const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
@@ -399,7 +407,7 @@ export function inboxView(
     `${where.join(" AND ")}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...binds, ...tf.binds, ...of.binds],
   );
-  return materialize(db, rows, logBoundary(db, now, zone));
+  return materialize(db, rows, logBoundary(db, now, zone), encodePackedDate(localToday(now, zone)));
 }
 
 /**
@@ -445,7 +453,7 @@ export function anytimeView(
       ...of.binds,
     ],
   );
-  return groupBySidebar(db, materialize(db, rows, boundary));
+  return groupBySidebar(db, materialize(db, rows, boundary, packedToday));
 }
 
 /**
@@ -544,8 +552,8 @@ export function upcomingView(
     [packedToday, ...untilBinds, ...sinceBinds, ...tf.binds],
   );
 
-  const scheduled = materialize(db, rows, boundary);
-  const forecast = materialize(db, forecastRows, boundary);
+  const scheduled = materialize(db, rows, boundary, packedToday);
+  const forecast = materialize(db, forecastRows, boundary, packedToday);
 
   // The merged date-ordered stream keys on COALESCE(startDate, deadline) — a
   // scheduled row groups under its when-date, a forecast row under its deadline
@@ -585,7 +593,7 @@ export function upcomingView(
   );
   const horizon = Math.max(1, Math.min(10, Math.trunc(filter?.horizon ?? 1)));
   const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
-  const occurrences = materialize(db, templateRows, boundary).flatMap((template) => {
+  const occurrences = materialize(db, templateRows, boundary, packedToday).flatMap((template) => {
     const startDate = template.repeating.nextOccurrence ?? null;
     if (startDate === null) return [];
     // Whether occurrences deadline is the TEMPLATE's property, not the rule's:
@@ -653,7 +661,7 @@ export function upcomingView(
      ORDER BY t.todayIndex ASC, t."index" ASC`,
     [packedToday, ...tf.binds],
   );
-  const resting = materialize(db, restingRows, boundary).map((item) => {
+  const resting = materialize(db, restingRows, boundary, packedToday).map((item) => {
     const raw = restingRows.find((r) => r.uuid === item.uuid)?.rt1_recurrenceRule;
     if (raw !== null && raw !== undefined) {
       try {
@@ -704,7 +712,10 @@ export function somedayView(
      AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds, ...of.binds],
   );
-  const sections = groupBySidebar(db, materialize(db, rows, logBoundary(db, now, zone)));
+  const sections = groupBySidebar(
+    db,
+    materialize(db, rows, logBoundary(db, now, zone), encodePackedDate(localToday(now, zone))),
+  );
   // GUI order within a Someday group (live side-by-side, 2026-07-12):
   // PROJECT rows first (their sidebar order preserved), then direct to-dos in
   // drag order. Someday children of active projects (the activeProjectItems
@@ -777,7 +788,7 @@ export function logbookView(
     `${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?${extra}${tf.sql} ORDER BY t.stopDate DESC${cap === null ? "" : " LIMIT ?"}`,
     [boundary.getTime() / 1000, ...binds, ...tf.binds, ...(cap === null ? [] : [cap])],
   );
-  return materialize(db, rows, boundary);
+  return materialize(db, rows, boundary, encodePackedDate(localToday(now, zone)));
 }
 
 export function trashView(
@@ -793,7 +804,7 @@ export function trashView(
      ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
     cap === null ? [] : [cap],
   );
-  return materialize(db, rows, logBoundary(db, now, zone));
+  return materialize(db, rows, logBoundary(db, now, zone), encodePackedDate(localToday(now, zone)));
 }
 
 export function projectsView(
@@ -851,7 +862,12 @@ export function projectsView(
     ...tf.binds,
     ...activeFirstBinds,
   ]);
-  const items = materialize(db, rows, logBoundary(db, options?.now, options?.zone)) as Project[];
+  const items = materialize(
+    db,
+    rows,
+    logBoundary(db, options?.now, options?.zone),
+    packedToday,
+  ) as Project[];
   if (options?.later !== true) return items;
   // Each group's later sub-block reads like Upcoming: SCHEDULED projects
   // first — date ascending, todayIndex within a day (the UI's drag order,
@@ -938,8 +954,14 @@ export function changesView(
      ORDER BY t.userModificationDate DESC${cap === null ? "" : " LIMIT ?"}`,
     [sinceEpoch, ...(cap === null ? [] : [cap])],
   );
+  const changed = materialize(
+    db,
+    rows,
+    logBoundary(db, now, zone),
+    encodePackedDate(localToday(now, zone)),
+  );
   // oxlint-disable-next-line no-map-spread -- building fresh change objects, not mutating
-  return materialize(db, rows, logBoundary(db, now, zone)).map((item, i) => ({
+  return changed.map((item, i) => ({
     ...item,
     changeKind:
       (rows[i]?.creationDate ?? 0) > sinceEpoch ? ("created" as const) : ("modified" as const),
@@ -1000,7 +1022,12 @@ export function liteTitleSearch(
       `${OPEN} AND ${CONTAINER_UNTRASHED} AND ${typeSql} AND t.title LIKE ?${LIKE_ESCAPE}`,
       [`%${escapeLike(query)}%`],
     );
-    tasks = materialize(db, rows, logBoundary(db, now, zone));
+    tasks = materialize(
+      db,
+      rows,
+      logBoundary(db, now, zone),
+      encodePackedDate(localToday(now, zone)),
+    );
   }
 
   const projects = tasks.filter((t) => t.type === "project").toSorted(byStatusThenRecent);
@@ -1029,7 +1056,8 @@ export function searchView(
   // `--overdue` narrows to OPEN, past-deadline matches. Its open-only predicate
   // is contradictory with the status-widening flags (logged/trashed/all); the
   // CLI/MCP surfaces reject that combination, so here it simply intersects.
-  const of = overdueFilter(options, encodePackedDate(localToday(now, zone)));
+  const packedToday = encodePackedDate(localToday(now, zone));
+  const of = overdueFilter(options, packedToday);
   // Threaded into every materialize so the `logged` flag (--logged widens to
   // closed rows) honors the injected clock, not wall time.
   const boundary = logBoundary(db, now, zone);
@@ -1077,7 +1105,7 @@ export function searchView(
   );
   const needleLower = query.toLowerCase();
   const matches = new Map<string, SearchMatch>();
-  for (const item of materialize(db, rows, boundary)) {
+  for (const item of materialize(db, rows, boundary, packedToday)) {
     // Field credit: title beats notes when both carry the substring.
     const field: MatchField = item.title.toLowerCase().includes(needleLower) ? "title" : "notes";
     matches.set(item.uuid, { item, field });
@@ -1109,7 +1137,7 @@ export function searchView(
         `${scope.join(" AND ")} AND t.type = 1 AND t.uuid IN (${placeholders})${tf.sql}${of.sql}`,
         [...scopeBinds, ...wanted, ...tf.binds, ...of.binds],
       );
-      for (const item of materialize(db, projectRows, boundary)) {
+      for (const item of materialize(db, projectRows, boundary, packedToday)) {
         const matchedVia = {
           kind: "heading" as const,
           title: headingTitleFor.get(item.uuid) ?? "",
