@@ -56,6 +56,20 @@ export interface TaskSeedFields {
   evening?: boolean;
   trashed?: boolean;
   index?: number;
+  /**
+   * Pin the row's uuid so assertions can test identity (e.g. "the original row
+   * was PRESERVED across make-repeating"). Omit for a generated uuid.
+   */
+  uuid?: string;
+  /**
+   * Seed this todo as a REPEATING TEMPLATE (start forced to someday, rule blob
+   * composed via the shared `ruleXml` serializer — the same one the world and
+   * the simulator use). Raw decoder-facing spec (see bench/tasks/AUTHORING.md):
+   * tp 0 fixed | 1 after-completion; fu 16 daily | 256 weekly | 8 monthly | 4
+   * yearly; fa = interval; of = offset dicts (wd 0=Sun..6=Sat, dy 0-based day,
+   * mo 0-based month, wdo 1..5 | -1 last). Template-only — no instance row.
+   */
+  repeat?: { tp: 0 | 1; fu: 16 | 256 | 8 | 4; fa: number; of?: Record<string, number>[] };
 }
 
 export interface SeedBase {
@@ -80,6 +94,11 @@ export interface TodoSeed extends SeedBase, TaskSeedFields {
   kind: "todo";
   /** key-ref to an `area`, `project`, or `heading` seed. */
   container?: string;
+  /**
+   * key-ref to a `todo` seed carrying `repeat` — seeds THIS row as a live
+   * INSTANCE of that template (rt1_repeatingTemplate link, rule stays NULL).
+   */
+  instanceOf?: string;
 }
 
 export interface HeadingSeed extends SeedBase, TaskSeedFields {

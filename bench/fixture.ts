@@ -24,7 +24,10 @@ import {
   type SeedTaskOpts,
 } from "../test/fixtures/seed.ts";
 import type { SeedSpec, TaskSeedFields } from "./types.ts";
-import { applyWorld, type WorldOptions } from "./world.ts";
+import { applyWorld, ruleXml, type WorldOptions } from "./world.ts";
+
+/** Fixed anchor epoch for seeded rule blobs (decoder ignores it; determinism). */
+const SEED_RULE_ANCHOR = 1_780_000_000;
 
 export interface BenchFixture {
   /** Absolute path to the fixture DB (used as THINGS_DB for every child process). */
@@ -80,6 +83,13 @@ export function hashDbFiles(dbPath: string): string {
 
 function taskOpts(spec: TaskSeedFields): SeedTaskOpts {
   const opts: SeedTaskOpts = {};
+  if (spec.uuid !== undefined) opts.uuid = spec.uuid;
+  if (spec.repeat !== undefined) {
+    // A seeded repeating TEMPLATE: someday + rule blob, mirroring the world's
+    // template shape (and the simulator's applied shape). Template-only.
+    opts.start = "someday";
+    opts.recurrenceRuleXml = ruleXml({ ...spec.repeat, anchor: SEED_RULE_ANCHOR });
+  }
   if (spec.title !== undefined) opts.title = spec.title;
   if (spec.notes !== undefined) opts.notes = spec.notes;
   if (spec.status !== undefined) opts.status = spec.status;
@@ -166,10 +176,19 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
           uuid = seedHeading(db, { ...taskOpts(s), ...container(s.container) });
           attachTags(uuid, s.tags);
           break;
-        case "todo":
-          uuid = seedTodo(db, { ...taskOpts(s), ...container(s.container) });
+        case "todo": {
+          const opts = { ...taskOpts(s), ...container(s.container) };
+          if (s.instanceOf !== undefined) {
+            const tmpl = uuidByKey.get(s.instanceOf);
+            if (tmpl === undefined) {
+              throw new Error(`instanceOf references unknown todo seed: ${s.instanceOf}`);
+            }
+            opts.repeatingTemplate = tmpl;
+          }
+          uuid = seedTodo(db, opts);
           attachTags(uuid, s.tags);
           break;
+        }
         case "checklist-item": {
           const parent = uuidByKey.get(s.container);
           if (parent === undefined) {
