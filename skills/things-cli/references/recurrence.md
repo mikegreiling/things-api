@@ -1,11 +1,21 @@
 # Repeating to-dos and projects
 
-<!-- STATUS: v0 skeleton — rule-grammar specifics to be filled from `things capabilities` and command --help during bench rounds; do not assert unverified rule shapes. -->
+Verbs: `things todo make-repeating <ref>` / `things project make-repeating <ref>` (turn an existing item into a repeater), `things project create-repeating "<title>"` (new repeating project), `… reschedule-repeat <ref>` (change an existing rule in place). Base flags: `--frequency <daily|weekly|monthly|yearly>` and `--interval <n>` (every n units).
 
-Things supports repeating to-dos and repeating projects: a repeat rule generates the next instance on a schedule (after completion or on fixed dates). The CLI exposes this via the `make-repeating` / `create-repeating` / `reschedule-repeat` verbs on `todo` and `project` — check each verb's `--help` for the rule grammar it accepts.
+## The two repeat modes
 
-Practical guidance:
+- **Fixed schedule** (default): occurrences land on calendar dates regardless of when you finish. NOTE: making an item fixed-repeating REPLACES it — the original becomes a hidden template plus a fresh first occurrence, so its UUID changes; re-find the item by title afterward rather than reusing the old UUID.
+- **`--after-completion`**: the next occurrence is scheduled N units after you complete the current one. The item keeps its UUID.
 
-- Inspect an existing repeating item (`things show <ref> --json`) to see how its rule is represented before composing a new one.
-- A single rule expresses one pattern. If the user's request combines patterns that one rule cannot express, decompose it into multiple repeating items (e.g. two rules for two distinct weekly patterns) — verify what a single rule supports via the command's `--help` before deciding.
-- `--dry-run` first: repeat rules are easy to get subtly wrong, and the plan output shows exactly what will be created.
+## Rule vocabulary (compose with frequency)
+
+- Weekly on specific days: `--weekdays monday,thursday,friday` — one rule handles MULTIPLE weekdays; never create two repeaters for "every Thursday and Friday".
+- Monthly/yearly by date: `--on-day <1–31|last>`.
+- Monthly/yearly by nth weekday: `--on-weekday <day> --on-ordinal <1–5|last>`; yearly adds `--yearly-month <1–12>`. Example — "the last Sunday of December, every year": `--frequency yearly --yearly-month 12 --on-weekday sunday --on-ordinal last`.
+- End bound: `--ends-after <n>` occurrences or `--ends-on YYYY-MM-DD`. Each occurrence can carry `--reminder HH:mm`; `--deadline` + `--start-days-earlier <n>` make occurrences due-dated with early starts.
+
+## Behavior worth knowing
+
+- Only the CURRENT occurrence is a visible to-do; completing an after-completion occurrence schedules (but does not yet show) the next one.
+- `things show <ref> --json` on an occurrence exposes `repeating.templateUuid` — use it as the `<ref>` for `reschedule-repeat`.
+- `--dry-run` first for any unfamiliar rule: the plan output shows exactly what will be created.
