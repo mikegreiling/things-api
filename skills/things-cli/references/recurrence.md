@@ -1,6 +1,6 @@
 # Repeating to-dos and projects
 
-Verbs: `things todo make-repeating <ref>` / `things project make-repeating <ref>` (turn an existing item into a repeater), `things project create-repeating "<title>"` (new repeating project), `… reschedule-repeat <ref>` (change an existing rule in place). Base flags: `--frequency <daily|weekly|monthly|yearly>` and `--interval <n>` (every n units).
+Verbs: `things todo make-repeating <ref>` / `things project make-repeating <ref>` (turn an existing item into a repeater), `things project create-repeating "<title>"` (new repeating project), `… reschedule-repeat <ref>` (change an existing rule in place). Base flags: `--frequency <daily|weekly|monthly|yearly>` and required `--interval <n>` (use `--interval 1` for every unit). Repeating operations require `--allow-disruptive`, including dry runs. For a new weekly to-do, first run `things todo add "<title>" --json`, then `things todo make-repeating <returned-uuid> --frequency weekly --interval 1 --weekdays monday,thursday --allow-disruptive`; supply all requested weekdays comma-separated in that one rule.
 
 ## The two repeat modes
 
