@@ -1,0 +1,43 @@
+{
+  "id": "longtail-trash-restore",
+  "family": "recovery-safety",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "I accidentally deleted my 'Renew the passport' to-do \u2014 get it back for me.",
+  "paraphrases": ["My passport-renewal task ended up in the trash by mistake. Restore it."],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Paperwork"
+    },
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Renew the passport",
+      "container": "a",
+      "start": "active",
+      "trashed": true
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Renew the passport' AND trashed=0 AND status=0",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things todo restore \"$(things trash --json | jq -r '.data[]|select(.title==\"Renew the passport\")|.uuid')\""
+  ]
+}

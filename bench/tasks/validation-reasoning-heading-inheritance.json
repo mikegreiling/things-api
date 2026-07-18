@@ -1,0 +1,85 @@
+{
+  "id": "validation-reasoning-heading-inheritance",
+  "family": "domain-reasoning",
+  "tier": 3,
+  "split": "validation",
+  "prompt": "Look at my to-do 'Book the van rental'. What tags does it effectively carry (its own plus anything inherited)? And does the 'Logistics' heading it sits under hold any tags of its own? Reply JSON {\"tags\": [...], \"count\": N, \"heading_has_tags\": true|false}.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "tag",
+      "key": "tg1",
+      "title": "community"
+    },
+    {
+      "kind": "tag",
+      "key": "tg2",
+      "title": "outreach"
+    },
+    {
+      "kind": "tag",
+      "key": "tg3",
+      "title": "vehicles"
+    },
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Volunteering",
+      "tags": ["community"]
+    },
+    {
+      "kind": "project",
+      "key": "p",
+      "title": "Food drive",
+      "container": "a",
+      "start": "active",
+      "tags": ["outreach"]
+    },
+    {
+      "kind": "heading",
+      "key": "h",
+      "title": "Logistics",
+      "container": "p"
+    },
+    {
+      "kind": "todo",
+      "key": "t",
+      "title": "Book the van rental",
+      "container": "h",
+      "start": "active",
+      "tags": ["vehicles"]
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"tags\": string[], \"count\": number, \"heading_has_tags\": boolean}"
+  },
+  "assertions": [
+    {
+      "type": "db-unchanged"
+    },
+    {
+      "type": "answer-includes",
+      "path": "tags",
+      "values": ["community", "outreach", "vehicles"]
+    },
+    {
+      "type": "answer",
+      "path": "count",
+      "equals": 3
+    },
+    {
+      "type": "answer",
+      "path": "heading_has_tags",
+      "equals": false
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things show \"$(things search \"Book the van rental\" --json | jq -r '.data[0].uuid')\" --json"
+  ]
+}

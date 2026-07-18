@@ -1,0 +1,44 @@
+{
+  "id": "gui-evening-tonight",
+  "family": "gui-perception",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "Add 'Water the tomato planters' for tonight, and tell me which section of the Today list it will show up in. Reply JSON {\"section\": \"<lowercase>\"}.",
+  "paraphrases": [
+    "Put 'Water the tomato planters' on for this evening \u2014 which part of Today will the user see it under? JSON {\"section\": \"...\"}."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Home base"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"section\": string}"
+  },
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Water the tomato planters' AND status=0 AND trashed=0 AND start=1 AND startDate=132807168 AND startBucket=1",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "answer",
+      "path": "section",
+      "equals": "evening"
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things todo add \"Water the tomato planters\" --when evening"]
+}

@@ -1,0 +1,41 @@
+{
+  "id": "gui-upcoming-locate-holdout",
+  "family": "gui-perception",
+  "tier": 2,
+  "split": "holdout",
+  "prompt": "Schedule 'Confirm the cabin reservation' for next Monday, July 27th, and tell me which view I'll see it in until that day arrives. Reply JSON {\"view\": \"<lowercase view name>\"}.",
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "area",
+      "key": "a",
+      "title": "Trips"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"view\": string}"
+  },
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT COUNT(*) AS n FROM TMTask WHERE title='Confirm the cabin reservation' AND status=0 AND trashed=0 AND start=1 AND startDate=132808064",
+      "expect": [
+        {
+          "n": 1
+        }
+      ]
+    },
+    {
+      "type": "answer",
+      "path": "view",
+      "equals": "upcoming"
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things todo add \"Confirm the cabin reservation\" --when 2026-07-27"]
+}
