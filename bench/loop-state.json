@@ -774,5 +774,298 @@
         "medianTokensInOnSuccesses": 16026.5
       }
     }
+  },
+  {
+    "timestamp": "2026-07-18T07:41:16.484Z",
+    "arm": "cli",
+    "iteration": 1,
+    "digestHash": "2a85b5d7a479",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +3/-1",
+    "rationale": "The repeated cross-family root cause is assuming a conventional top-level .items array. This one-line clarification places the canonical envelope structure at the earliest surface every failing agent consulted, without changing command behavior or adding workflow advice.",
+    "decision": "accept",
+    "reason": "dev success ↑",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "data-model-misunderstanding",
+        "note": "The agent read mutation and area envelopes through top-level .items, producing empty UUIDs and cascading retries."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "behavior-misunderstanding",
+        "note": "The write succeeded, but the agent did not connect --when evening with the Today list's This Evening section."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "behavior-misunderstanding",
+        "note": "The cancellation succeeded, but the agent did not report that canceled items appear in Logbook."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "tool-defect",
+        "note": "The transcript shows correctly constructed granular checklist commands without errors, yet neither expected database change was observed."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "argument-construction",
+        "note": "The agent supplied the parent as a second positional argument instead of using the documented --parent option."
+      },
+      {
+        "taskId": "longtail-trash-restore",
+        "class": "data-model-misunderstanding",
+        "note": "The agent queried top-level .items and .id instead of the JSON envelope's .data payload and uuid fields, so it never obtained the trashed target."
+      },
+      {
+        "taskId": "longtail-undo-rename",
+        "class": "data-model-misunderstanding",
+        "note": "The first attempt extracted the search UUID from .items rather than .data; human output enabled recovery."
+      },
+      {
+        "taskId": "reads-inbox-count",
+        "class": "data-model-misunderstanding",
+        "note": "The agent queried top-level .items, making the populated Inbox appear empty."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "discovery",
+        "note": "The agent did not discover or use the directly available --overdue scope and instead attempted brittle manual snapshot filtering."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "data-model-misunderstanding",
+        "note": "The agent treated search's direct tags as the effective set instead of consulting detail output for inherited tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "data-model-misunderstanding",
+        "note": "The returned detail already exposed an active item with no container fields, but the agent did not translate that structure into the requested answer."
+      },
+      {
+        "taskId": "recovery-project-children-policy",
+        "class": "tool-defect",
+        "note": "The projects JSON reported zero open children while project completion immediately detected two, causing avoidable failed recovery."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "tool-defect",
+        "note": "The bare-verb hint suggested an invalid second positional destination even though todo move requires --area or --project."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "argument-construction",
+        "note": "The agent supplied a date in the wrong year despite the mutation envelope exposing the active clock date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 38,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6578947368421053,
+        "medianTokensInOnSuccesses": 12306.5
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 7,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.14285714285714285,
+        "medianTokensInOnSuccesses": 9782
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 44,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5909090909090909,
+        "medianTokensInOnSuccesses": 12324
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 9,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4444444444444444,
+        "medianTokensInOnSuccesses": 9479
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T07:56:50.516Z",
+    "arm": "cli",
+    "iteration": 2,
+    "digestHash": "dbf11076376b",
+    "patchSummary": "1 file(s) [src/cli/commands/show.ts], +5/-2",
+    "rationale": "The two domain-reasoning failures share one data-model gap: agents used or saw to-do detail without knowing where it lives in the show envelope or how direct tags, inherited tags, and absent containers are represented. Adding that contract at the show discovery point is the smallest generalizable documentation change and does not alter execution.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Constructed invalid positional arguments and created a duplicate area, making the destination reference ambiguous."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "d",
+        "note": "Assumed Today JSON was an array instead of using its today/evening sections."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "a",
+        "note": "Looked for abandon instead of discovering the namespaced todo cancel command."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "d",
+        "note": "Queried nonexistent JSON paths instead of using a view's overdue filter and actual payload structure."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Treated search summary tags as effective tags and did not inspect inheritedTags in to-do detail."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "Did not interpret omitted project/area fields as an uncontained to-do."
+      },
+      {
+        "taskId": "recovery-project-children-policy",
+        "class": "e",
+        "note": "Reached the correct operation but needed multiple attempts to recover from its child-cascade safety block."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Constructed a stale absolute date despite the envelope exposing the current local date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 44,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5909090909090909,
+        "medianTokensInOnSuccesses": 12324
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 9,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4444444444444444,
+        "medianTokensInOnSuccesses": 9479
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 40,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7,
+        "medianTokensInOnSuccesses": 9990.5
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 15,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.6,
+        "medianTokensInOnSuccesses": 11231
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-18T08:10:00.881Z",
+    "arm": "cli",
+    "kind": "budget-warning",
+    "reason": "reached 65% of token budget",
+    "usedTokens": 7754458,
+    "limit": 12000000
+  },
+  {
+    "timestamp": "2026-07-18T08:13:28.513Z",
+    "arm": "cli",
+    "iteration": 3,
+    "digestHash": "dbf11076376b",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +3/-0",
+    "rationale": "The highest-priority failure is an unintended duplicate area creation. One concise discovery-point contract distinguishes creation from selecting an existing container and simultaneously exposes the namespaced write grammar that caused repeated bare-verb errors.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Created an already-existing container and passed the project as an unsupported positional argument instead of using --project."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "d",
+        "note": "Initially searched for a bare add command instead of the namespaced todo add command."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "b",
+        "note": "Did not map abandoned to the supported cancel operation and its resulting Logbook state."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "c",
+        "note": "Misread the JSON shapes and did not use the built-in --overdue scope."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Treated direct tags from search as effective tags, omitting inherited container tags."
+      },
+      {
+        "taskId": "reasoning-standalone",
+        "class": "c",
+        "note": "Did not interpret omitted container fields and start=active as no container and Anytime."
+      },
+      {
+        "taskId": "recovery-project-children-policy",
+        "class": "e",
+        "note": "Found the operation but incurred repeated errors while recovering from its child-policy safety block."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Found todo add but constructed an incorrect absolute date for the relative schedule."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 54,
+        "successes": 44,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.5909090909090909,
+        "medianTokensInOnSuccesses": 12324
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 9,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.4444444444444444,
+        "medianTokensInOnSuccesses": 9479
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 54,
+        "successes": 38,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.9210526315789473,
+        "medianTokensInOnSuccesses": 11981
+      },
+      "validation": {
+        "runs": 18,
+        "successes": 11,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.8181818181818182,
+        "medianTokensInOnSuccesses": 8694
+      }
+    }
   }
 ]
