@@ -9,7 +9,7 @@ import { buildProgram } from "../../src/cli/main.ts";
 import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
 import { runVerbHint } from "../../src/cli/verb-hint.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedArea, seedProject } from "../fixtures/seed.ts";
+import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 let fixture: FixtureDb;
 let stdout: string[];
@@ -117,6 +117,35 @@ describe("verb-hint suggestions", () => {
     const details = error["details"] as { suggestions?: string[] };
     expect(details.suggestions).toEqual(["things area update Health --tags test"]);
     expect(process.exitCode).toBe(2);
+  });
+
+  it("move renders a positional destination behind the flag it belongs to (--area)", () => {
+    // `todo move` takes --area/--project/--heading, never a positional dest, so
+    // the generic `things todo move X Errands` echo would itself be a usage
+    // error. The destination resolves to an area → --area.
+    seedTodo(fixture.db, { title: "Buy paint", uuid: "todo-move-1" });
+    seedArea(fixture.db, "Errands");
+    dispatch(["move", "todo-move-1", "Errands"]);
+    expect(stderr.join("")).toContain("things todo move todo-move-1 --area Errands");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("move maps a project destination to --project", () => {
+    seedTodo(fixture.db, { title: "Buy paint", uuid: "todo-move-2" });
+    seedProject(fixture.db, { title: "Kitchen remodel" });
+    dispatch(["move", "todo-move-2", "Kitchen remodel"]);
+    expect(stderr.join("")).toContain('things todo move todo-move-2 --project "Kitchen remodel"');
+  });
+
+  it("move that already uses a container flag is echoed unchanged (no double-rewrite)", () => {
+    seedTodo(fixture.db, { title: "Buy paint", uuid: "todo-move-3" });
+    seedArea(fixture.db, "Errands");
+    dispatch(["move", "todo-move-3", "--area", "Errands"]);
+    const out = stderr.join("");
+    expect(out).toContain("things todo move todo-move-3 --area Errands");
+    // The area name must NOT be re-echoed as a stray positional destination.
+    expect(out).not.toContain("--area Errands --area");
+    expect(out).not.toContain("--project");
   });
 
   it("never executes the mutation — only a hint is emitted", () => {

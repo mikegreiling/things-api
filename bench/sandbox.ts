@@ -76,10 +76,26 @@ export function createSandbox(options: SandboxOptions): Sandbox {
   if (options.files !== undefined) bashOptions.files = options.files;
   const bash = new Bash(bashOptions);
 
-  return {
-    exec: async (line: string): Promise<ShellResult> => {
-      const result = await bash.exec(line);
-      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
-    },
+  // One sandbox is ONE shell over ONE fixture DB — a real terminal runs command
+  // lines strictly one at a time. But an agent may emit several tool calls in a
+  // single turn, and the driver dispatches them concurrently; without this gate
+  // two `things` children would run at once against the shared DB. For a
+  // checklist edit (read the whole list → wholesale rewrite, Things has no
+  // item-level surface) that is a lost update: both invocations read the same
+  // pre-state, each rewrites from it, and the last writer silently clobbers the
+  // other while BOTH report a verified success — the worst failure class, and a
+  // bench artifact (a shell never overlaps commands), not a product defect.
+  // Serialize every exec through a tail promise so concurrent tool calls queue.
+  let tail: Promise<unknown> = Promise.resolve();
+  const runSerial = (line: string): Promise<ShellResult> => {
+    const result = tail.then(() => bash.exec(line));
+    // Keep the chain alive regardless of how this call settles.
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result.then((r) => ({ stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode }));
   };
+
+  return { exec: runSerial };
 }

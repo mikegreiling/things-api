@@ -116,4 +116,35 @@ describe("bench world profile", () => {
     fixture.cleanup();
     expect(rows.map((r) => r.title)).toEqual(["Zebra placeholder task"]);
   });
+
+  it("reconciles project leaf-action counters so reads agree with the live child count", () => {
+    // A project with 2 open + 1 completed direct children, plus 1 open child
+    // nested under a heading. The per-row seed builders leave the project's
+    // counters at 0; buildBenchFixture must recompute them (bench-caught: the
+    // read reported 0 open children while the complete-project guard saw them).
+    const fixture = buildBenchFixture(
+      [
+        { kind: "area", key: "a", title: "House projects" },
+        { kind: "project", key: "p", title: "Garage cleanout", container: "a", start: "active" },
+        { kind: "todo", key: "t1", title: "Sort the paint cans", container: "p", start: "active" },
+        { kind: "todo", key: "t2", title: "List shelves online", container: "p", start: "active" },
+        { kind: "todo", key: "t3", title: "Haul junk", container: "p", status: "completed" },
+        { kind: "heading", key: "h", title: "Later", container: "p" },
+        { kind: "todo", key: "t4", title: "Sweep the floor", container: "h", start: "active" },
+      ],
+      undefined,
+    );
+    const db = new DatabaseSync(fixture.path, { readOnly: true });
+    const proj = db
+      .prepare(
+        `SELECT openUntrashedLeafActionsCount AS openCount, untrashedLeafActionsCount AS totalCount
+         FROM TMTask WHERE title = 'Garage cleanout' AND type = 1`,
+      )
+      .get() as { openCount: number; totalCount: number };
+    db.close();
+    fixture.cleanup();
+    // 3 open leaf actions (2 direct + 1 heading-nested), 4 total untrashed.
+    expect(proj.openCount).toBe(3);
+    expect(proj.totalCount).toBe(4);
+  });
 });

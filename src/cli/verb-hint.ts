@@ -83,6 +83,28 @@ function groupsWithVerb(program: Command, verb: string): string[] {
   return WRITE_GROUP_ORDER.filter((g) => subcommandsOf(program, g).has(verb));
 }
 
+/** Container flags a `move` accepts — its destination is never a positional. */
+const MOVE_CONTAINER_FLAGS = new Set(["--area", "--project", "--heading", "--inbox"]);
+
+/**
+ * `move` takes its destination as a FLAG (--area/--project/--heading), never as
+ * a second positional. Left alone, the generic echo turns `things move X Home`
+ * into the suggestion `things todo move X Home` — which is itself a usage error.
+ * When the echo tail carries a stray positional destination and no container
+ * flag, rewrite it behind the flag matching the destination's kind (falling back
+ * to --project when it does not resolve) so the suggestion is a command that
+ * actually runs. A tail that already uses a container flag is echoed unchanged.
+ */
+function moveEchoTail(p: ParsedVerbHint): string[] {
+  if (p.tail.some((t) => MOVE_CONTAINER_FLAGS.has(t))) return p.tail;
+  const destIdx = p.tail.findIndex((t) => !t.startsWith("-"));
+  if (destIdx < 0) return p.tail;
+  const dest = p.tail[destIdx] ?? "";
+  const rest = p.tail.filter((_, i) => i !== destIdx);
+  const flag = resolvedGroup(p.db, dest) === "area" ? "--area" : "--project";
+  return [flag, shellQuote(dest), ...rest];
+}
+
 /** Classify the ref's type with the read client; null when it does not uniquely resolve. */
 function resolvedGroup(db: string | undefined, ref: string): string | null {
   let client: ReturnType<typeof openThings> | null = null;
@@ -117,18 +139,21 @@ function suggestionsFor(program: Command, p: ParsedVerbHint): string[] {
   }
 
   const applicable = groupsWithVerb(program, verbLower);
+  // `move`'s destination is a flag, not a positional — rewrite a stray
+  // positional destination so every suggestion below is a runnable command.
+  const echoTail = verbLower === "move" ? moveEchoTail(p) : p.tail;
   // A ref that uniquely resolves to an area/project/to-do gets ONE concrete
   // suggestion — but only when that type actually offers the verb.
   if (p.ref !== null) {
     const group = resolvedGroup(p.db, p.ref);
     if (group !== null && applicable.includes(group)) {
-      return [typedForm(group, p.verb, p.ref, p.tail)];
+      return [typedForm(group, p.verb, p.ref, echoTail)];
     }
   }
   // Generic: every namespace that offers the verb (fall back to all write
   // groups if the verb is a synonym none register directly).
   const groups = applicable.length > 0 ? applicable : WRITE_GROUP_ORDER;
-  return groups.map((g) => typedForm(g, p.verb, p.ref, p.tail));
+  return groups.map((g) => typedForm(g, p.verb, p.ref, echoTail));
 }
 
 /** Human render: the error line, the suggestion(s), and the writes signpost. */
