@@ -164,7 +164,9 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   }
 
   lines.push("Global options (accepted by most commands)");
-  lines.push(`${"  --json".padEnd(col)}emit a versioned JSON envelope on stdout`);
+  lines.push(
+    `${"  --json".padEnd(col)}emit {apiVersion, ok, kind, data, meta}; payload is .data, not .items`,
+  );
   lines.push(`${"  --db <path>".padEnd(col)}read from an explicit database path`);
   lines.push(`${"  -h, --help".padEnd(col)}help for things, or for any <command>`);
   lines.push(`${"  -V, --version".padEnd(col)}print the version (${PKG_VERSION})`);
