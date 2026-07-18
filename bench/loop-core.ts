@@ -156,6 +156,49 @@ export function pairMetrics(runs: PairRuns): PairMetrics {
   return { dev: splitMetrics(runs.dev), validation: splitMetrics(runs.validation) };
 }
 
+/** Thrown when a bench sweep produced no parseable runs — a hard, loud stop. */
+export class SweepParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SweepParseError";
+  }
+}
+
+/**
+ * Parse a sweep's `runs.jsonl` from EXACTLY `benchDir` (the same directory the runner's
+ * `--out` wrote to), reading via the injected `readFile` (which returns null when the
+ * file is absent). A MISSING or EMPTY runs file is a hard {@link SweepParseError}, never
+ * a silent empty array: empty metrics mean zero successes, and the validation
+ * non-inferiority gate (`after.successes >= before.successes`) is then satisfied
+ * vacuously — so a lost sweep would silently promote regressions. The loop must abort
+ * loudly instead. (A genuinely all-failed sweep still returns its rows: 6 failed runs
+ * read as 6 rows / 0 successes, which is correct data, not a parse miss.)
+ */
+export function parseSweepRuns(
+  benchDir: string,
+  readFile: (path: string) => string | null,
+): RunRecord[] {
+  const runsPath = join(benchDir, "runs.jsonl");
+  const raw = readFile(runsPath);
+  if (raw === null) {
+    throw new SweepParseError(
+      `bench sweep produced no runs file at ${runsPath} — aborting (a missing sweep would ` +
+        `silently zero the metrics and vacate the validation non-inferiority gate)`,
+    );
+  }
+  const rows = raw
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l) => JSON.parse(l) as RunRecord);
+  if (rows.length === 0) {
+    throw new SweepParseError(
+      `bench sweep runs file is empty at ${runsPath} — aborting (empty metrics would ` +
+        `silently zero the metrics and vacate the validation non-inferiority gate)`,
+    );
+  }
+  return rows;
+}
+
 export interface Decision {
   accept: boolean;
   /** True when the patch must be parked for Mike (gui-semantic change) rather than reverted-and-forgotten. */

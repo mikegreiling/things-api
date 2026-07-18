@@ -32,6 +32,7 @@ import {
   matchesAllowlist,
   maxTotalTokensArgs,
   pairMetrics,
+  parseSweepRuns,
   planEdits,
   ProviderError,
   RATE_LIMIT_ABORT_EXIT_CODE,
@@ -40,6 +41,7 @@ import {
   runIteration,
   splitMetrics,
   sumRunTokens,
+  SweepParseError,
   toStateEntry,
   type ApplyResult,
   type IterationDeps,
@@ -1077,5 +1079,63 @@ describe("runIteration apply-retry", () => {
     const result = await runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() });
     expect(result.applyFailed).toBe(true);
     expect(calls.benchSplits).toBe(0);
+  });
+});
+
+// --- sweep-parse safety (baseline metrics path + loud parse misses) --------
+
+const jsonl = (rows: RunRecord[]): string => rows.map((r) => JSON.stringify(r)).join("\n");
+
+describe("parseSweepRuns", () => {
+  it("reads runs from EXACTLY the dir the sweep wrote to (read-dir == write-dir)", () => {
+    // Simulate a sweep writing runs to /out/bench/1/validation (the baseline dir).
+    const written = new Map<string, string>();
+    const writeDir = "/out/bench/1/validation";
+    written.set(
+      `${writeDir}/runs.jsonl`,
+      jsonl([
+        makeRun({ taskId: "gui-placement-room214", success: true, tokensIn: 28455 }),
+        makeRun({ taskId: "recovery-missing-area", success: false, tokensIn: 9263 }),
+      ]),
+    );
+    const read = (p: string): string | null => written.get(p) ?? null;
+
+    const rows = parseSweepRuns(writeDir, read);
+    expect(rows).toHaveLength(2);
+    expect(splitMetrics(rows).successes).toBe(1);
+
+    // A different dir was never written — reading it aborts instead of silently zeroing.
+    expect(() => parseSweepRuns("/out/bench/2/validation", read)).toThrow(SweepParseError);
+  });
+
+  it("aborts LOUD on a MISSING runs.jsonl (never defaults to zeros)", () => {
+    expect(() => parseSweepRuns("/out/x", () => null)).toThrow(SweepParseError);
+    try {
+      parseSweepRuns("/out/x", () => null);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect((e as Error).message).toContain("/out/x/runs.jsonl");
+      expect((e as Error).message).toContain("vacate the validation non-inferiority gate");
+    }
+  });
+
+  it("aborts LOUD on an EMPTY runs.jsonl", () => {
+    expect(() => parseSweepRuns("/out/x", () => "")).toThrow(SweepParseError);
+    expect(() => parseSweepRuns("/out/x", () => "  \n \n")).toThrow(SweepParseError);
+  });
+
+  it("an ALL-FAILED sweep is real data (rows/0-successes), NOT a parse miss", () => {
+    // The loop-cli-1 case: 6 validation runs that all failed → 6 rows, 0 successes,
+    // med tokIn 0 (over successful runs only). This is correct, not an abort.
+    const raw = jsonl(
+      Array.from({ length: 6 }, () => makeRun({ success: false, tokensIn: 12345 })),
+    );
+    const rows = parseSweepRuns("/out/bench/1/validation", () => raw);
+    expect(rows).toHaveLength(6);
+    const m = splitMetrics(rows);
+    expect(m.runs).toBe(6);
+    expect(m.successes).toBe(0);
+    expect(m.medianTokensInOnSuccesses).toBe(0);
+    expect(m.frictionOnSuccesses).toBe(0);
   });
 });
