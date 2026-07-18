@@ -70,7 +70,13 @@ function getPath(root: unknown, path: string): unknown {
   return cur;
 }
 
-/** Extract the parsed JSON from the LAST fenced ```json block (fallback: last ``` block). */
+/**
+ * Extract the parsed JSON from the LAST fenced ```json block (fallback: last
+ * ``` block). If the message carries no parseable fence at all, fall back to
+ * parsing the whole trimmed message as JSON — subjects sometimes reply with a
+ * bare object, which is substantively correct and graded as such (observed in
+ * batch loop-cli-r2: a right answer zeroed purely on fence formatting).
+ */
 export function parseFinalAnswer(text: string | null): unknown {
   if (text === null) return undefined;
   const fences = [...text.matchAll(/```(\w*)\n([\s\S]*?)```/g)];
@@ -83,7 +89,11 @@ export function parseFinalAnswer(text: string | null): unknown {
       // try the next candidate
     }
   }
-  return undefined;
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    return undefined;
+  }
 }
 
 function runSql(fixturePath: string, query: string): unknown {
