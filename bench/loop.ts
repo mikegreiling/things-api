@@ -36,12 +36,14 @@ import {
   LoopAbort,
   maxTotalTokensArgs,
   pairMetrics,
+  parseSweepRuns,
   planEdits,
   ProviderError,
   renderCheckpoint,
   runIteration,
   splitMetrics,
   sumRunTokens,
+  SweepParseError,
   TOKEN_BUDGET_DEFAULT,
   toStateEntry,
   type ApplyResult,
@@ -183,12 +185,9 @@ function runGate(): { ok: boolean; output: string } {
 
 // --- bench subprocess ------------------------------------------------------
 
-function readRuns(benchDir: string): RunRecord[] {
-  const runsPath = join(benchDir, "runs.jsonl");
-  return readFileSync(runsPath, "utf8")
-    .split("\n")
-    .filter((l) => l.trim() !== "")
-    .map((l) => JSON.parse(l) as RunRecord);
+/** Read a sweep's runs from the SAME dir the runner wrote to; abort loudly if missing/empty. */
+function readSweepRuns(benchDir: string): RunRecord[] {
+  return parseSweepRuns(benchDir, (p) => (existsSync(p) ? readFileSync(p, "utf8") : null));
 }
 
 /**
@@ -253,7 +252,9 @@ function benchSplit(
     }
     throw new Error(`bench subprocess failed (split=${split}, exit=${r.status})`);
   }
-  return readRuns(benchDir);
+  // Parse from EXACTLY the dir the runner wrote to (benchDir === --out); a missing or
+  // empty runs.jsonl aborts loudly rather than defaulting metrics to zeros.
+  return readSweepRuns(benchDir);
 }
 
 function loadTranscript(record: RunRecord): TranscriptData | null {
@@ -509,7 +510,18 @@ async function main(): Promise<void> {
         return;
       }
 
-      await runLoop(opts);
+      try {
+        await runLoop(opts);
+      } catch (e) {
+        // A lost/empty bench sweep is a hard stop: report loudly, never proceed on
+        // zeroed metrics (which would silently vacate the validation gate).
+        if (e instanceof SweepParseError) {
+          process.stderr.write(`\nABORT — ${e.message}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        throw e;
+      }
     });
   await program.parseAsync(process.argv);
 }
