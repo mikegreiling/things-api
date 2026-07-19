@@ -220,7 +220,7 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
 });
 
 describe("project make-repeating — FK instance filtered by type + childrenReplaced", () => {
-  it("derives the type=1 instance and reports the captured subtree count", () => {
+  it("DELETE-REMINT: every source subtree uuid is dead → childrenReplaced = full subtree", () => {
     withDb((db) => {
       const source = seedProject(db, {
         uuid: "PROJ-SRC",
@@ -228,18 +228,24 @@ describe("project make-repeating — FK instance filtered by type + childrenRepl
         start: "someday",
         creationDate: NOW_EPOCH - 10,
       });
-      seedTodo(db, { title: "child A", project: source });
-      seedTodo(db, { title: "child B", project: source });
-      seedHeading(db, { title: "Section", project: source });
+      const childA = seedTodo(db, { title: "child A", project: source });
+      const childB = seedTodo(db, { title: "child B", project: source });
+      const section = seedHeading(db, { title: "Section", project: source });
 
       const params = { uuid: source, ...RULE };
       const pre = COMMANDS["project.make-repeating"].preRead(db, params, NOW);
-      expect(pre.repeatSubtreeCount).toBe(3);
+      expect(pre.repeatSubtreeUuids?.toSorted()).toEqual([childA, childB, section].toSorted());
 
-      // Simulate the delete-and-remint fate: source project gone, template +
-      // instance projects minted, plus a plain child that ALSO links the template
-      // (defensive: child rows must be excluded by the type=1 filter).
-      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+      // Delete-and-remint: the source project AND its whole subtree are destroyed;
+      // template + instance projects are minted with a fresh (plain) subtree copy
+      // — one of which ALSO links the template (defensive: child rows must be
+      // excluded from the instance FK lookup by the type=1 filter).
+      db.prepare("DELETE FROM TMTask WHERE uuid IN (?, ?, ?, ?)").run(
+        source,
+        childA,
+        childB,
+        section,
+      );
       const template = seedProject(db, {
         uuid: "PROJ-TMPL",
         title: "Proj",
@@ -263,6 +269,63 @@ describe("project make-repeating — FK instance filtered by type + childrenRepl
         instanceUuid: "PROJ-INST",
         replacedUuid: "PROJ-SRC",
         childrenReplaced: 3,
+      });
+    });
+  });
+
+  it("PRESERVE (nested repeater): only the flattened nested-template uuid dies → childrenReplaced = 1", () => {
+    withDb((db) => {
+      const source = seedProject(db, {
+        uuid: "PROJ-SRC",
+        title: "Proj",
+        start: "someday",
+        creationDate: NOW_EPOCH - 10,
+      });
+      const nestedTemplate = seedTodo(db, {
+        title: "weekly chore",
+        project: source,
+        recurrenceRule: true,
+      });
+      const nestedInstance = seedTodo(db, {
+        title: "weekly chore",
+        project: source,
+        repeatingTemplate: nestedTemplate,
+      });
+
+      const params = { uuid: source, ...RULE };
+      const pre = COMMANDS["project.make-repeating"].preRead(db, params, NOW);
+      expect(pre.repeatSubtreeUuids?.toSorted()).toEqual(
+        [nestedTemplate, nestedInstance].toSorted(),
+      );
+
+      // Preserve-as-instance: the source project stays (relinked to the new
+      // template), the nested repeater is FLATTENED in place — the nested
+      // template row is hard-deleted, the visible nested instance survives
+      // (demoted to plain, its uuid intact) — and only the template is minted.
+      const template = seedProject(db, {
+        uuid: "PROJ-TMPL",
+        title: "Proj",
+        recurrenceRule: true,
+        creationDate: NOW_EPOCH,
+      });
+      db.prepare("UPDATE TMTask SET rt1_repeatingTemplate = ? WHERE uuid = ?").run(
+        template,
+        source,
+      );
+      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(nestedTemplate);
+      db.prepare("UPDATE TMTask SET rt1_repeatingTemplate = NULL WHERE uuid = ?").run(
+        nestedInstance,
+      );
+
+      const spec = COMMANDS["project.make-repeating"].expectedDelta(pre, params, CTX);
+      if (spec.mode !== "create") throw new Error("unreachable");
+      const evaluation = evaluateDelta(spec, createDbReader(db, NOW), EMPTY_PRE);
+
+      expect(evaluation.repeating).toEqual({
+        templateUuid: "PROJ-TMPL",
+        instanceUuid: "PROJ-SRC", // the preserved source IS the instance
+        replacedUuid: null,
+        childrenReplaced: 1, // only the flattened nested-template uuid is dead
       });
     });
   });

@@ -28,11 +28,11 @@ import {
   classifyHeadingConvert,
   classifyProjectRepeat,
   computeReorderPre,
-  countProjectSubtree,
   emptyPreState,
   loadTarget,
   projectChildren,
   projectStatus,
+  projectSubtreeUuids,
   resolveArea,
   resolveHeading,
   resolveProject,
@@ -1940,7 +1940,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     pre.target = loadTarget(db, params.uuid);
     pre.projectRepeat = classifyProjectRepeat(db, pre.target);
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
-    if (pre.target !== null) pre.repeatSubtreeCount = countProjectSubtree(db, pre.target.uuid);
+    if (pre.target !== null) pre.repeatSubtreeUuids = projectSubtreeUuids(db, pre.target.uuid);
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
@@ -1961,7 +1961,7 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
           repeating: {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
-            subtreeCount: pre.repeatSubtreeCount ?? 0,
+            subtreeUuids: pre.repeatSubtreeUuids ?? [],
           },
         }),
       },

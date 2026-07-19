@@ -53,10 +53,14 @@ export interface RepeatingProbe {
    */
   fingerprint: RepeatingFingerprint;
   /**
-   * Project conversions only: the count of source subtree rows (to-dos +
-   * headings) — surfaced as `childrenReplaced`. Absent for to-do conversions.
+   * Project conversions only: the uuids of the source subtree rows (to-dos +
+   * headings) captured pre-write. `childrenReplaced` counts how many of these
+   * are ABSENT post-op — dead uuids the caller may have held (the delete-remint
+   * fate kills the whole subtree; the nested-repeater preserve fate typically
+   * kills only the flattened nested-template row, the visible children surviving
+   * with their uuids). Absent (undefined) for to-do conversions.
    */
-  subtreeCount?: number;
+  subtreeUuids?: string[];
 }
 
 /**
@@ -82,7 +86,8 @@ export interface RepeatingFingerprint {
  *  - replacedUuid  — the original uuid when the source was destroyed (identity
  *                    replacement); null when the source was preserved AS the
  *                    instance (then instanceUuid === the original uuid).
- *  - childrenReplaced — project conversions only: source subtree rows re-minted.
+ *  - childrenReplaced — project conversions only: how many pre-read child uuids
+ *                    are now DEAD (dead-uuid signaling, like replacedUuid).
  */
 export interface RepeatingDiscovery {
   templateUuid: string;
@@ -230,6 +235,8 @@ export interface VerifyReader {
    * A DELETE leaves it absent; a preserve relinks it to the new template.
    */
   repeatingSourceFate(uuid: string): { present: boolean; templateFk: string | null };
+  /** How many of these uuids no longer exist as TMTask rows (dead-uuid count). */
+  countAbsent(uuids: string[]): number;
   modDateOf(uuid: string): number | null;
   /**
    * Assertable fields of a TMArea/TMTag row: title, tags (areas, sorted
@@ -324,6 +331,13 @@ export function createDbReader(
         .get(uuid) as { fk: string | null } | undefined;
       if (row === undefined) return { present: false, templateFk: null };
       return { present: true, templateFk: row.fk ?? null };
+    },
+    countAbsent(uuids) {
+      if (uuids.length === 0) return 0;
+      const stmt = db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?");
+      let absent = 0;
+      for (const u of uuids) if (stmt.get(u) === undefined) absent += 1;
+      return absent;
     },
     modDateOf(uuid) {
       const row = db.prepare("SELECT userModificationDate FROM TMTask WHERE uuid = ?").get(uuid) as
@@ -505,7 +519,12 @@ function evaluateRepeatingCreate(
     templateUuid: template.uuid,
     instanceUuid,
     replacedUuid,
-    ...(probe.subtreeCount !== undefined && { childrenReplaced: probe.subtreeCount }),
+    // How many pre-read child uuids are now DEAD (absent) — dead-uuid signaling,
+    // matching replacedUuid: the whole subtree in the delete-remint fate, just
+    // the flattened nested-template row in the preserve fate.
+    ...(probe.subtreeUuids !== undefined && {
+      childrenReplaced: reader.countAbsent(probe.subtreeUuids),
+    }),
   };
   return {
     satisfied: true,

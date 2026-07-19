@@ -98,12 +98,11 @@ export interface PreState {
   /** project.make-repeating: the row-selection taxonomy (UIC4-f). */
   projectRepeat: ProjectRepeatTaxonomy | null;
   /**
-   * project.make-repeating: the count of source subtree rows (non-trashed
-   * to-dos + headings) captured pre-write — surfaced as the result's
-   * `childrenReplaced` (the conversion re-mints the whole subtree). Null for
-   * non-project ops.
+   * project.make-repeating: the uuids of the source subtree rows (non-trashed
+   * to-dos + headings) captured pre-write — the result's `childrenReplaced`
+   * counts how many of these are dead post-op. Null for non-project ops.
    */
-  repeatSubtreeCount: number | null;
+  repeatSubtreeUuids: string[] | null;
   /** heading.convert-to-project: the project-reveal + heading-row ordinal (HEADCERT1). */
   headingConvert: HeadingConvertTaxonomy | null;
 }
@@ -171,27 +170,29 @@ export function emptyPreState(): PreState {
     reorder: null,
     areaOrder: null,
     projectRepeat: null,
-    repeatSubtreeCount: null,
+    repeatSubtreeUuids: null,
     headingConvert: null,
   };
 }
 
 /**
- * Count the source subtree rows of a project (non-trashed to-dos AND headings,
- * direct or heading-nested) — the `childrenReplaced` count for a repeating
- * conversion, which re-mints the whole subtree beneath the template.
+ * The uuids of a project's source subtree rows (non-trashed to-dos AND
+ * headings, direct or heading-nested). `childrenReplaced` counts how many of
+ * these are dead post-op — the whole subtree in the delete-remint fate, just
+ * the flattened nested-template row in the nested-repeater preserve fate.
  */
-export function countProjectSubtree(db: DatabaseSync, projectUuid: string): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM TMTask
-       WHERE trashed = 0 AND (
-         (type = 0 AND (project = ? OR heading IN
-           (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?)))
-         OR (type = 2 AND project = ?))`,
-    )
-    .get(projectUuid, projectUuid, projectUuid) as { n: number };
-  return row.n;
+export function projectSubtreeUuids(db: DatabaseSync, projectUuid: string): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT uuid FROM TMTask
+         WHERE trashed = 0 AND (
+           (type = 0 AND (project = ? OR heading IN
+             (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?)))
+           OR (type = 2 AND project = ?))`,
+      )
+      .all(projectUuid, projectUuid, projectUuid) as { uuid: string }[]
+  ).map((r) => r.uuid);
 }
 
 /**

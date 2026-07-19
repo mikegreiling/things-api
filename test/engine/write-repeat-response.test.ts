@@ -157,10 +157,11 @@ describe("project.make-repeating — repeating block with childrenReplaced", () 
       start: "someday",
       creationDate: NOW_EPOCH - 10,
     });
-    seedTodo(fixture.db, { title: "a", project: source });
-    seedTodo(fixture.db, { title: "b", project: source });
+    const childA = seedTodo(fixture.db, { title: "a", project: source });
+    const childB = seedTodo(fixture.db, { title: "b", project: source });
     const vector = uiVector(() => {
-      fixture.db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+      // Delete-and-remint: source project AND its subtree are destroyed.
+      fixture.db.prepare("DELETE FROM TMTask WHERE uuid IN (?, ?, ?)").run(source, childA, childB);
       const template = seedProject(fixture.db, {
         uuid: "PTMPL",
         title: "Weekly review",
