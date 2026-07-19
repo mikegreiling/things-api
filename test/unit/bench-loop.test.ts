@@ -15,13 +15,17 @@ import {
   appendLoopState,
   Budget,
   BUDGET_ABORT_EXIT_CODE,
+  BUDGET_ESTIMATE_ITERATIONS,
+  budgetLooksUndersized,
   budgetNote,
   buildCharter,
   buildLedgerEntry,
+  classifyBenchExit,
   CONSECUTIVE_PROVIDER_ERROR_LIMIT,
   decideAccept,
   decisionLabel,
   diffStat,
+  estimateBatchTokens,
   extractLessons,
   filesInPatch,
   filesOutsideAllowlist,
@@ -31,12 +35,15 @@ import {
   LoopAbort,
   matchesAllowlist,
   maxTotalTokensArgs,
+  medianRunTokens,
   pairMetrics,
   parseSweepRuns,
   planEdits,
+  projectBudget,
   ProviderError,
   RATE_LIMIT_ABORT_EXIT_CODE,
   renderApplyFeedback,
+  renderCheckpoint,
   renderLedgerEntry,
   runIteration,
   splitMetrics,
@@ -511,6 +518,155 @@ describe("Budget", () => {
     expect(isProviderError("Error: rate limit exceeded")).toBe(true);
     expect(isProviderError("insufficient_quota")).toBe(true);
     expect(isProviderError(new Error("bad argument"))).toBe(false);
+  });
+});
+
+// --- bench subprocess exit classification (runner budget-cap → clean abort) --
+
+describe("classifyBenchExit", () => {
+  it("returns (no throw) on a clean exit 0", () => {
+    expect(() =>
+      classifyBenchExit("dev", { status: 0, stdout: "wrote 6 runs", stderr: "" }),
+    ).not.toThrow();
+  });
+
+  it("maps the runner's --max-total-tokens cap (exit 8) to a clean token-budget LoopAbort", () => {
+    try {
+      classifyBenchExit("dev", {
+        status: BUDGET_ABORT_EXIT_CODE,
+        stdout: "token budget exceeded",
+        stderr: "",
+      });
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(LoopAbort);
+      expect((e as LoopAbort).kind).toBe("token-budget");
+      expect((e as LoopAbort).code).toBe(BUDGET_ABORT_EXIT_CODE);
+      expect((e as LoopAbort).message).toContain("split=dev");
+    }
+  });
+
+  it("maps a provider-error exit to a ProviderError (circuit breaker), not an abort", () => {
+    try {
+      classifyBenchExit("validation", {
+        status: 1,
+        stdout: "",
+        stderr: "Error: 429 rate limit exceeded",
+      });
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ProviderError);
+      expect(e).not.toBeInstanceOf(LoopAbort);
+    }
+  });
+
+  it("raises any OTHER nonzero exit as a hard Error (never a silent abort)", () => {
+    let thrown: unknown;
+    try {
+      classifyBenchExit("dev", { status: 1, stdout: "", stderr: "corrupt patch" });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(LoopAbort);
+    expect(thrown).not.toBeInstanceOf(ProviderError);
+    expect((thrown as Error).message).toContain("exit=1");
+  });
+
+  it("treats a null status (spawn failure) as a hard Error", () => {
+    expect(() => classifyBenchExit("dev", { status: null, stdout: "", stderr: "" })).toThrow(Error);
+  });
+});
+
+describe("runner budget-cap → clean abort artifacts", () => {
+  it("a bench sweep exit 8 reverts the applied patch and unwinds as a token-budget LoopAbort", async () => {
+    // The fixed benchSplit turns a runner exit 8 into exactly this LoopAbort; drive
+    // runIteration with a benchSplits seam that does the same and assert the loop reverts
+    // the applied-but-unaccepted patch and re-throws the abort — so the outer driver
+    // finalizes (ledger + checkpoint, exit 8) instead of crashing on an unhandled error.
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps, calls } = makeDeps(refinerOutput(), {
+      benchSplits: (): PairRuns => {
+        classifyBenchExit("dev", {
+          status: BUDGET_ABORT_EXIT_CODE,
+          stdout: "token budget exceeded",
+          stderr: "",
+        });
+        return { dev: [], validation: [] }; // unreachable — classifyBenchExit throws
+      },
+    });
+    await expect(
+      runIteration(deps, { arm: "cli", prevMetrics: before, ...emptyParams() }),
+    ).rejects.toMatchObject({ kind: "token-budget", code: BUDGET_ABORT_EXIT_CODE });
+    expect(calls.applyEdits).toHaveLength(1);
+    expect(calls.runGate).toBe(1);
+    expect(calls.commit).toHaveLength(0);
+    expect(calls.revert).toEqual([{ modified: ["src/cli/help.ts"], created: [] }]);
+  });
+
+  it("renders the checkpoint with the holdout SKIPPED on a clean abort", () => {
+    // The finalize path passes holdout=null + a note when the loop aborts; the checkpoint
+    // records the holdout as skipped rather than silently omitting it.
+    const md = renderCheckpoint({
+      arm: "cli",
+      subjectModel: "m",
+      refinerModel: "r",
+      reps: 3,
+      results: [],
+      baselineMetrics: metrics(runsWith(1, 3), runsWith(2, 2)),
+      finalMetrics: metrics(runsWith(1, 3), runsWith(2, 2)),
+      holdout: null,
+      holdoutNote: "token-budget abort — holdout not run",
+      needsMikePatches: [],
+      stopReason: "ABORTED (token-budget): budget exhausted",
+    });
+    expect(md).toContain("holdout: SKIPPED");
+    expect(md).toContain("token-budget abort — holdout not run");
+  });
+});
+
+// --- startup cost projection (token-budget sizing guidance) ----------------
+
+describe("startup cost projection", () => {
+  it("medianRunTokens sums tokensIn+tokensOut per run then takes the median", () => {
+    const runs = [
+      makeRun({ tokensIn: 100, tokensOut: 0 }),
+      makeRun({ tokensIn: 200, tokensOut: 50 }),
+      makeRun({ tokensIn: 300, tokensOut: 100 }),
+    ];
+    expect(medianRunTokens(runs)).toBe(250); // 100, 250, 400 → median 250
+  });
+
+  it("estimateBatchTokens prices baseline + iterations at the per-run median", () => {
+    const runs = Array.from({ length: 4 }, () => makeRun({ tokensIn: 1000, tokensOut: 0 }));
+    // 4 runs × 1000 median × (1 baseline + 2 iterations) = 12000
+    expect(estimateBatchTokens(runs, 2)).toBe(12000);
+    expect(estimateBatchTokens(runs, 0)).toBe(4000); // baseline only
+  });
+
+  it("budgetLooksUndersized flags a budget below 1.5× the estimate", () => {
+    expect(budgetLooksUndersized(10_000, 8_000)).toBe(true); // 10k < 12k
+    expect(budgetLooksUndersized(12_000, 8_000)).toBe(false); // exactly 1.5×
+    expect(budgetLooksUndersized(20_000, 8_000)).toBe(false);
+  });
+
+  it("projectBudget WARNS (loudly) when the budget is too small, and reports the numbers", () => {
+    const runs = Array.from({ length: 4 }, () => makeRun({ tokensIn: 1000, tokensOut: 0 }));
+    const p = projectBudget(runs, 10_000, 5);
+    expect(p.estimate).toBe(estimateBatchTokens(runs, BUDGET_ESTIMATE_ITERATIONS)); // 12000
+    expect(p.medianTokensPerRun).toBe(1000);
+    expect(p.baselineRuns).toBe(4);
+    expect(p.undersized).toBe(true);
+    expect(p.warning).not.toBeNull();
+    expect(p.warning).toContain("UNDERSIZED");
+    expect(p.line).toContain("cost projection");
+  });
+
+  it("projectBudget stays quiet (no warning) when the budget is ample", () => {
+    const runs = Array.from({ length: 4 }, () => makeRun({ tokensIn: 1000, tokensOut: 0 }));
+    const p = projectBudget(runs, 1_000_000, 5);
+    expect(p.undersized).toBe(false);
+    expect(p.warning).toBeNull();
   });
 });
 

@@ -397,6 +397,115 @@ export function maxTotalTokensArgs(supported: boolean, remaining: number): strin
   return supported && remaining > 0 ? ["--max-total-tokens", String(Math.floor(remaining))] : [];
 }
 
+/** The subset of a `spawnSync` result the loop needs to classify a bench subprocess. */
+export interface BenchExecResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Classify a bench SUBPROCESS result, throwing the matching loop signal (returns void on a
+ * clean exit — the caller then parses runs). Exit {@link BUDGET_ABORT_EXIT_CODE} is the
+ * runner's OWN `--max-total-tokens` cap tripping — a cap the loop sizes to its remaining
+ * budget — so it is the loop's token budget exhausting THROUGH the subprocess. It must
+ * surface as the SAME clean, resumable {@link LoopAbort} (token-budget, exit 8) the loop's
+ * own budget gate throws, so the outer loop reverts any unapplied patch and finalizes
+ * (ledger + checkpoint with the holdout skipped) rather than crashing on an unhandled
+ * error. A provider failure in the captured output becomes a {@link ProviderError} (fed to
+ * the circuit breaker); any OTHER nonzero exit is a hard {@link Error}.
+ */
+export function classifyBenchExit(split: string, r: BenchExecResult): void {
+  const status = r.status ?? 1;
+  if (status === 0) return;
+  if (status === BUDGET_ABORT_EXIT_CODE) {
+    throw new LoopAbort(
+      "token-budget",
+      BUDGET_ABORT_EXIT_CODE,
+      `bench subprocess hit its --max-total-tokens cap (split=${split}, exit ${BUDGET_ABORT_EXIT_CODE}) — ` +
+        `the loop's token budget exhausted through the runner; treating as a clean budget abort`,
+    );
+  }
+  if (isProviderError(`${r.stdout}${r.stderr}`)) {
+    throw new ProviderError(`bench subprocess provider error (split=${split})`);
+  }
+  throw new Error(`bench subprocess failed (split=${split}, exit=${status})`);
+}
+
+// --- startup cost projection (token-budget sizing guidance) ----------------
+
+/** Iterations the startup cost projection sizes the budget against. */
+export const BUDGET_ESTIMATE_ITERATIONS = 2;
+/** A budget below this multiple of the projected cost is flagged undersized. */
+export const BUDGET_ESTIMATE_SAFETY_FACTOR = 1.5;
+
+/** Median of per-run total tokens (tokensIn + tokensOut) across a set of runs. */
+export function medianRunTokens(runs: RunRecord[]): number {
+  return median(runs.map((r) => r.tokensIn + r.tokensOut));
+}
+
+/**
+ * Project a batch's cumulative token cost from the observed baseline sweep. The baseline
+ * benches dev+validation once; each refinement iteration re-benches the same dev+validation
+ * pair, so total runs ≈ baseline run count × (1 + iterations). Every run is priced at the
+ * baseline's observed median per-run tokens. Refiner, debrief, and the single holdout sweep
+ * are intentionally EXCLUDED (small next to the repeated dev+validation sweeps), making this
+ * a deliberate lower bound the safety factor then pads.
+ */
+export function estimateBatchTokens(baselineRuns: RunRecord[], iterations: number): number {
+  const perRun = medianRunTokens(baselineRuns);
+  return Math.round(baselineRuns.length * perRun * (1 + Math.max(0, iterations)));
+}
+
+/** True when `limit` is below the safety-factor multiple of the projected cost. */
+export function budgetLooksUndersized(limit: number, estimate: number): boolean {
+  return limit < BUDGET_ESTIMATE_SAFETY_FACTOR * estimate;
+}
+
+/** The startup cost projection: an always-printed line plus a loud warning when undersized. */
+export interface BudgetProjection {
+  medianTokensPerRun: number;
+  baselineRuns: number;
+  estimate: number;
+  undersized: boolean;
+  line: string;
+  warning: string | null;
+}
+
+/**
+ * Build the startup cost projection from the baseline sweep's runs. Never mutates the
+ * budget and never changes the default — it only estimates and, when the budget looks too
+ * small for {@link BUDGET_ESTIMATE_ITERATIONS} iterations, returns a loud `warning` the
+ * caller prints. The default `--token-budget` is left untouched by design.
+ */
+export function projectBudget(
+  baselineRuns: RunRecord[],
+  limit: number,
+  maxIterations: number,
+): BudgetProjection {
+  const medianTokensPerRun = Math.round(medianRunTokens(baselineRuns));
+  const estimate = estimateBatchTokens(baselineRuns, BUDGET_ESTIMATE_ITERATIONS);
+  const undersized = budgetLooksUndersized(limit, estimate);
+  const line =
+    `cost projection: ${baselineRuns.length} baseline runs @ ~${medianTokensPerRun} median tokens/run → ` +
+    `~${estimate} tokens projected for ${BUDGET_ESTIMATE_ITERATIONS} iterations ` +
+    `(budget ${limit}, planned max-iterations ${maxIterations})`;
+  const warning = undersized
+    ? `TOKEN BUDGET MAY BE UNDERSIZED: --token-budget ${limit} is below ` +
+      `${BUDGET_ESTIMATE_SAFETY_FACTOR}× the ~${estimate}-token projection for ` +
+      `${BUDGET_ESTIMATE_ITERATIONS} iterations. Consider raising --token-budget; the loop still ` +
+      `runs and aborts cleanly (exit ${BUDGET_ABORT_EXIT_CODE}) if the cap trips.`
+    : null;
+  return {
+    medianTokensPerRun,
+    baselineRuns: baselineRuns.length,
+    estimate,
+    undersized,
+    line,
+    warning,
+  };
+}
+
 // --- surface-improvement charter (refiner system prompt) -------------------
 
 /** The CONSTITUTION metric ladder, sliced verbatim from CONSTITUTION.md (with a fallback). */

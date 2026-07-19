@@ -29,6 +29,7 @@ import {
   Budget,
   budgetNote,
   buildLedgerEntry,
+  classifyBenchExit,
   extractLessons,
   isLedgerCandidate,
   isProviderError,
@@ -38,7 +39,7 @@ import {
   pairMetrics,
   parseSweepRuns,
   planEdits,
-  ProviderError,
+  projectBudget,
   renderCheckpoint,
   runIteration,
   splitMetrics,
@@ -245,13 +246,11 @@ function benchSplit(
   );
   process.stdout.write(r.stdout ?? "");
   process.stderr.write(r.stderr ?? "");
-  if ((r.status ?? 1) !== 0) {
-    const combined = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-    if (isProviderError(combined)) {
-      throw new ProviderError(`bench subprocess provider error (split=${split})`);
-    }
-    throw new Error(`bench subprocess failed (split=${split}, exit=${r.status})`);
-  }
+  // A runner exit 8 (its --max-total-tokens cap, sized to the loop's remaining budget)
+  // surfaces here as a clean token-budget LoopAbort — not a crash — so the loop finalizes;
+  // a provider-error exit becomes a ProviderError (circuit breaker); other nonzero exits
+  // are hard errors.
+  classifyBenchExit(split, { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" });
   // Parse from EXACTLY the dir the runner wrote to (benchDir === --out); a missing or
   // empty runs.jsonl aborts loudly rather than defaulting metrics to zeros.
   return readSweepRuns(benchDir);
@@ -396,6 +395,19 @@ async function runLoop(opts: LoopOptions): Promise<void> {
     let prevRuns = benchSplits();
     prevMetrics = pairMetrics(prevRuns);
     baseline = prevMetrics;
+
+    // Startup cost projection — now that the baseline sweep gives an observed per-run
+    // median, price every planned iteration at it and WARN LOUDLY when the token budget
+    // looks undersized. We never change the default budget silently, only advise.
+    const projection = projectBudget(
+      [...prevRuns.dev, ...prevRuns.validation],
+      budget.limit,
+      opts.maxIterations,
+    );
+    log(projection.line);
+    if (projection.warning !== null) {
+      process.stderr.write(`\n${"!".repeat(70)}\n!! ${projection.warning}\n${"!".repeat(70)}\n\n`);
+    }
 
     let consecutiveNoAccept = 0;
     for (let iter = 1; iter <= opts.maxIterations; iter++) {
