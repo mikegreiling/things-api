@@ -7,6 +7,7 @@ import type { Command } from "commander";
 import { localToday, templateStatus, type AnyTask } from "../../index.ts";
 import { blue, bold, dim, green, red } from "../style.ts";
 import {
+  containerLabel,
   deadlineDetail,
   inheritedChips,
   loggedDate,
@@ -38,7 +39,11 @@ export function renderDetail(item: AnyTask | null): string[] {
     return [
       `${bold("Heading:")} ${bold(item.title)}`,
       `  ${dim("uri:")} ${thingsLink(item.uuid)}`,
-      `  ${dim("project:")} ${item.project?.title ?? "—"}`,
+      `  ${dim("project:")} ${
+        item.project === null
+          ? "—"
+          : containerLabel(item.project.title, item.project.isRepeatingTemplate === true)
+      }`,
     ];
   }
   const todayIso = localToday(renderNow(), renderZone());
@@ -86,7 +91,13 @@ export function renderDetail(item: AnyTask | null): string[] {
   }
   meta("area", item.area?.title);
   if (item.type === "to-do") {
-    meta("project", (item.project ?? item.headingProject)?.title);
+    const projRef = item.project ?? item.headingProject;
+    meta(
+      "project",
+      projRef == null
+        ? undefined
+        : containerLabel(projRef.title, projRef.isRepeatingTemplate === true),
+    );
     meta("heading", item.heading?.title);
   }
   if (item.tags.length > 0) meta("tags", tagList(item.tags));
