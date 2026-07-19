@@ -254,6 +254,7 @@ Silent no-op is a first-class failure (`verify-failed/silent-noop`), per T03/T06
 | Id | Trigger (pre-read) | Policy |
 |---|---|---|
 | `H-REPEAT-SCHEDULE` | `when`/`deadline`/status/duplicate write on item with recurrence fields | Hard block, no override in v1 (T12 crash) |
+| `H-TEMPLATE-CHILD-RESTORE` | `todo.restore` on a trashed to-do whose container project is a repeating template | Hard block — the app refuses to move a template child out to a list (301, RSIM-S §S-R3); recreate it in the template instead |
 | `H-PROJECT-COMPLETE-CHILDREN` | `project.complete` with open untrashed children | Require explicit `children` policy (T08) |
 | `H-CHECKLIST-REPLACE` | checklist write over existing items with state | Require `acknowledgeChecklistReset` (T07) |
 | `H-REOPEN-RESOLVED-PROJECT` | adding open child to completed/canceled/logged project | Require explicit ack (T19) |

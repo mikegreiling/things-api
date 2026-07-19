@@ -874,6 +874,45 @@ describe("simulator write vector — covered operations", () => {
     expect(count("SELECT COUNT(*) AS n FROM TMChecklistItem")).toBe(4);
   });
 
+  it("project.make-repeating FIXED (RSIM-S S-R1): a pre-trashed child is hard-deleted with the source, absent from both copies", async () => {
+    const area = seedArea(fixture.db, "Zone SR");
+    const proj = seedProject(fixture.db, { title: "SR Proj", area, start: "active" });
+    const keep = seedTodo(fixture.db, { title: "SR Keep", project: proj, index: 0 });
+    // Trashed WHILE PLAIN, before the conversion (S-R1).
+    const gone = seedTodo(fixture.db, { title: "SR Gone", project: proj, index: 1, trashed: true });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+    const tmpl = res.uuid;
+
+    // DELETION includes the trashed child: source project, live child AND the
+    // pre-trashed child are all hard-deleted — no dangling row survives.
+    for (const uuid of [proj, keep, gone]) {
+      expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(uuid)).toBeUndefined();
+    }
+    // S-R1: "SR Gone" exists NOWHERE — neither copied nor left orphaned in Trash.
+    expect(count("SELECT COUNT(*) AS n FROM TMTask WHERE title = 'SR Gone'")).toBe(0);
+    expect(count("SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 1")).toBe(0);
+
+    // COPYING still excludes the trashed child: both copies carry ONLY "SR Keep".
+    const projInstances = fixture.db
+      .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND rt1_repeatingTemplate = ?")
+      .all(tmpl) as { uuid: string }[];
+    expect(projInstances).toHaveLength(1);
+    const instProj = projInstances[0]!.uuid;
+    for (const side of [tmpl, instProj]) {
+      const kids = subtreeOf(side).todos;
+      expect(kids).toHaveLength(1);
+      expect(kids[0]?.["title"]).toBe("SR Keep");
+    }
+  });
+
   it("project.make-repeating AFTER-COMPLETION (RSIM-R, was P4): source deleted, instance-side children PLAIN", async () => {
     const area = seedArea(fixture.db, "Zone B");
     const proj = seedProject(fixture.db, {

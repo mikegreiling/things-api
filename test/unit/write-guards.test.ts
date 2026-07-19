@@ -54,6 +54,44 @@ describe("H-REPEAT-SCHEDULE", () => {
   });
 });
 
+describe("H-TEMPLATE-CHILD-RESTORE", () => {
+  it("blocks restoring a trashed to-do that lives under a repeating-template project", () => {
+    const template = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const child = seedTodo(fixture.db, { title: "Child", project: template, trashed: true });
+    const block = check("todo.restore", { uuid: child });
+    expect(block?.hazard).toBe("H-TEMPLATE-CHILD-RESTORE");
+    expect(block?.detail).toContain("child of a repeating template");
+    expect(block?.remediation).toContain("recreate the to-do inside the template");
+  });
+
+  it("blocks a trashed HEADING-nested child of a template project (reached via headingProject)", () => {
+    const template = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const head = seedHeading(fixture.db, { title: "Phase", project: template });
+    const child = seedTodo(fixture.db, { title: "Nested", heading: head, trashed: true });
+    expect(check("todo.restore", { uuid: child })?.hazard).toBe("H-TEMPLATE-CHILD-RESTORE");
+  });
+
+  it("does NOT fire for an ordinary trashed to-do (plain project, or loose)", () => {
+    const plainProj = seedProject(fixture.db, { title: "Plain" });
+    const underPlain = seedTodo(fixture.db, {
+      title: "C",
+      project: plainProj,
+      trashed: true,
+    });
+    const loose = seedTodo(fixture.db, { title: "L", trashed: true });
+    expect(check("todo.restore", { uuid: underPlain })).toBeNull();
+    expect(check("todo.restore", { uuid: loose })).toBeNull();
+  });
+});
+
 describe("H-UNKNOWN-DESTINATION (heading.create project resolution)", () => {
   it("blocks when the destination project does not resolve", () => {
     expect(check("heading.create", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
