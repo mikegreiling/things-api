@@ -86,3 +86,27 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **debrief:** attribution — The explicit `.uuid` guidance likely prevented conventional `.id` assumptions in JSON-driven workflows, reducing cascading retries and token use while improving several compound/read-write outcomes. Mixed regressions and zero-token runs indicate substantial run variance, so not all observed gains are attributable to the help change.; lesson — Expose nonstandard identifiers and response paths concisely at the earliest shared discovery surface to prevent small lookup mistakes from cascading.; confidence — medium
 - **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r3); checkpoint: bench/artifacts/loop-cli-r3/checkpoint.md
 
+<!-- ledger-entry id="loop-cli-r4-cli-iter1" lesson="Treat small-sample gains from help-text changes as causal only when they repeat across relevant task families without comparable movement in unaffected controls." -->
+### 2026-07-19 · cli · iter 1 · **REVERTED**
+
+- **change:** The dominant cross-family failure is attempting bare mutation verbs before discovering that writes are namespaced. The s — files: src/cli/help.ts; diff 1 file(s) [src/cli/help.ts], +1/-1
+- **pre-hoc hypothesis:** The dominant cross-family failure is attempting bare mutation verbs before discovering that writes are namespaced. The smallest generalizable fix makes that grammar explicit at the top-level write discovery point without adding workflow advice or changing behavior.
+- **predicted blast radius:** Should reduce failed discovery calls for add, complete, cancel, checklist, and repeating mutations, and may prevent write tasks from terminating before any state change. It does not address unsupported natural-language dates or JSON data-model misunderstandings. Risk is limited to one concise help heading and no execution semantics.
+- **measured deltas (before → after):**
+  - dev: success 54/63 → 50/63; friction 1.02 → 1.08; median tokIn 13140 → 15984
+  - validation: success 15/24 → 15/24; friction 1.00 → 1.13; median tokIn 10937 → 13014
+- **debrief:** attribution — The heading likely reduced discovery friction in a few write-oriented runs, but the net success decline and large, contradictory shifts across unrelated tasks indicate run variance dominated; there is no consistent validation evidence that the wording improved outcomes.; lesson — Treat small-sample gains from help-text changes as causal only when they repeat across relevant task families without comparable movement in unaffected controls.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r4); checkpoint: bench/artifacts/loop-cli-r4/checkpoint.md
+
+<!-- ledger-entry id="loop-cli-r4-cli-iter2" lesson="When expanding discovery copy, preserve existing high-value cues and add canonical terms within a compact, complete action inventory." -->
+### 2026-07-19 · cli · iter 2 · **REVERTED**
+
+- **change:** The top-level discovery surface currently hides several canonical todo verbs that repeatedly caused agents to probe none — files: src/cli/help.ts; diff 1 file(s) [src/cli/help.ts], +1/-1
+- **pre-hoc hypothesis:** The top-level discovery surface currently hides several canonical todo verbs that repeatedly caused agents to probe nonexistent synonyms. Naming the registered verbs directly is the smallest generalizable change: it routes completion, cancellation, checklist, and recurrence tasks to `things todo --help` without adding workflow advice or changing behavior.
+- **predicted blast radius:** Should reduce discovery errors for todo completion, cancellation, checklist editing, and recurrence setup. It may also shorten basic add/update discovery. This copy-only change cannot fix the apparent newly-created-project defect, inherited-tag reasoning, Inbox semantics, overdue filtering, or unsupported natural-language dates. Safety risk is negligible because command behavior is unchanged.
+- **measured deltas (before → after):**
+  - dev: success 54/63 → 56/63; friction 1.02 → 0.77; median tokIn 13140 → 15181
+  - validation: success 15/24 → 14/24; friction 1.00 → 1.07; median tokIn 10937 → 12286
+- **debrief:** attribution — The copy change likely improved direct verb discovery for completion and basic creation, but replacing rather than extending the prior description removed schedule and move cues, matching increased cost on those workflows; the large mixed changes in unrelated tasks and recurrence/checklist regressions indicate substantial run variance rather than a broad causal benefit.; lesson — When expanding discovery copy, preserve existing high-value cues and add canonical terms within a compact, complete action inventory.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-cli-r4); checkpoint: bench/artifacts/loop-cli-r4/checkpoint.md
+
