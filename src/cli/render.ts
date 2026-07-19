@@ -27,6 +27,7 @@ import { bold, dim, strike, underline } from "./style.ts";
 import {
   areaMark,
   CHECKLIST_MARK,
+  containerLabel,
   countChip,
   dateChip,
   deadlineToken,
@@ -203,7 +204,10 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     container !== null
       ? container.uuid === opts.suppressProject
         ? ""
-        : ` (${container.title})`
+        : // The ↻ prefix (containerLabel) marks a container that is a repeating
+          // TEMPLATE project — the whole `(…)` run is dimmed below, so the mark
+          // rides the muted container styling. Areas never carry the flag.
+          ` (${containerLabel(container.title, container.isRepeatingTemplate === true)})`
       : item.area
         ? item.area.uuid === opts.suppressArea
           ? ""

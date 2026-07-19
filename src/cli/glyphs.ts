@@ -116,6 +116,26 @@ export function projectTitleAccent(title: string): string {
   return bold(title);
 }
 
+/**
+ * The bare repeat glyph — the same ↻ (U+21BB) seated inside the `[↻]`/`(↻)`
+ * template checkboxes above. Shared so the container-label mark can never
+ * drift from the checkbox family.
+ */
+export const REPEAT_MARK = "↻";
+
+/**
+ * A container label's inner text, prefixed with the ↻ template mark when that
+ * container PROJECT is a repeating template — `↻ Groceries` (the caller wraps
+ * it in `(…)` and dims the whole run, so the mark inherits the muted container
+ * styling; unlike the white repeat pseudo-checkbox, a container label is
+ * secondary context). Disambiguates the blueprint copy from its like-titled
+ * spawned instance (docs/lab/rsim-results.md §RSIM-P/§RSIM-R). Plain text when
+ * not a template — byte-identical to the bare title it used to render.
+ */
+export function containerLabel(title: string, isRepeatingTemplate = false): string {
+  return isRepeatingTemplate ? `${REPEAT_MARK} ${title}` : title;
+}
+
 /** Progress chip on project rows: `‹remaining/total›` (the GUI shows only the remaining count). */
 export function countChip(item: Project): string {
   const total = item.untrashedLeafActionsCount;
@@ -338,6 +358,11 @@ export const LEGEND: readonly LegendEntry[] = [
   {
     glyph: dim("‹Jul 31›"),
     meaning: "scheduled date, or ‹waiting›/‹paused›/‹ended› on a repeat template",
+    group: "Markers & chips",
+  },
+  {
+    glyph: dim("(↻ Project)"),
+    meaning: "container is a repeating template — ↻ marks the blueprint copy",
     group: "Markers & chips",
   },
   {

@@ -45,6 +45,7 @@ afterEach(() => {
 const glyphs = () => import("../../src/cli/glyphs.ts");
 const render = () => import("../../src/cli/render.ts");
 const width = () => import("../../src/cli/width.ts");
+const detailCard = () => import("../../src/cli/commands/todo.ts");
 
 function todo(overrides: Partial<Todo>): Todo {
   return {
@@ -243,6 +244,74 @@ describe("formatItem styling (color on)", () => {
       8,
     );
     expect(line).toContain(`${DIM}‹waiting›`);
+  });
+});
+
+describe("template-container marker (↻ prefix on the muted container)", () => {
+  it("list/search rows prefix ↻ inside the container label when the container project is a template", async () => {
+    const { formatItem } = await render();
+    const marked = formatItem(
+      todo({
+        title: "Water plants",
+        project: { uuid: "p1", title: "Weekly review", isRepeatingTemplate: true },
+      }),
+      8,
+    );
+    expect(stripSgr(marked)).toContain("(↻ Weekly review)");
+    // Control: an ordinary container carries no ↻.
+    const plain = formatItem(
+      todo({ title: "Water plants", project: { uuid: "p2", title: "One-off" } }),
+      8,
+    );
+    expect(stripSgr(plain)).toContain("(One-off)");
+    expect(stripSgr(plain)).not.toContain("↻");
+  });
+
+  it("marks a heading-resolved (headingProject) container the same way", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(
+      todo({
+        title: "Water plants",
+        headingProject: { uuid: "p1", title: "Weekly review", isRepeatingTemplate: true },
+      }),
+      8,
+    );
+    expect(stripSgr(line)).toContain("(↻ Weekly review)");
+  });
+
+  it("reuses the exact repeat glyph of the (↻) template circle — no invented glyph", async () => {
+    const { REPEAT_MARK, projectCircle } = await glyphs();
+    expect(REPEAT_MARK).toBe("↻");
+    expect(
+      projectCircle(
+        project({ repeating: { isTemplate: true, isInstance: false, templateUuid: null } }),
+      ),
+    ).toContain(REPEAT_MARK);
+  });
+
+  it("show detail: the to-do project line renders ↻ before a template project title", async () => {
+    const { renderDetail } = await detailCard();
+    const lines = renderDetail(
+      todo({
+        title: "Water plants",
+        project: { uuid: "p1", title: "Weekly review", isRepeatingTemplate: true },
+      }),
+    );
+    const projectLine = lines.find((l) => stripSgr(l).includes("project:"));
+    expect(projectLine && stripSgr(projectLine)).toContain("↻ Weekly review");
+  });
+
+  it("show detail: the HEADING card project line renders ↻ when its project is a template", async () => {
+    const { renderDetail } = await detailCard();
+    const lines = renderDetail({
+      uuid: "h1",
+      type: "heading",
+      title: "Prep",
+      status: "open",
+      project: { uuid: "p1", title: "Weekly review", isRepeatingTemplate: true },
+    });
+    const projectLine = lines.find((l) => stripSgr(l).includes("project:"));
+    expect(projectLine && stripSgr(projectLine)).toContain("↻ Weekly review");
   });
 });
 

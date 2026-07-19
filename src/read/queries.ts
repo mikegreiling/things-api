@@ -559,20 +559,43 @@ export function fetchTagsForTasks(db: DatabaseSync, taskUuids: string[]): Map<st
 }
 
 /**
+ * Stamps the repeating-template flag on a resolved container ref when the
+ * TMTask row it came from carries recurrence columns (`rt1_recurrenceRule` /
+ * `repeater` non-null) — the disambiguator the CLI renders as the ↻ prefix on
+ * a muted container label. Area rows carry neither column, so an area ref is
+ * never marked. The flag is set ONLY when true (omit-when-false; the entity
+ * emit boundary keeps `false`/`0` but not an absent key — see entities.Ref).
+ */
+function markTemplate(ref: Ref, recurrenceRule: unknown, repeater: unknown): Ref {
+  if (recurrenceRule != null || repeater != null) ref.isRepeatingTemplate = true;
+  return ref;
+}
+
+/**
  * Lazy heading-uuid -> owning-project Ref resolver, cached per instance.
  * Heading-nested to-dos carry project = NULL in the DB (the heading holds
- * the link); list views use this to surface the GUI's container label.
+ * the link); list views use this to surface the GUI's container label. The
+ * owning project's recurrence columns ride along so a to-do nested under a
+ * heading of a repeating-template project inherits the template mark.
  */
 export function makeHeadingProjectResolver(db: DatabaseSync): (headingUuid: string) => Ref | null {
   const cache = new Map<string, Ref | null>();
   const stmt = db.prepare(
-    "SELECT p.uuid AS uuid, p.title AS title FROM TMTask h JOIN TMTask p ON p.uuid = h.project WHERE h.uuid = ?",
+    "SELECT p.uuid AS uuid, p.title AS title, p.rt1_recurrenceRule AS rt1_recurrenceRule, p.repeater AS repeater FROM TMTask h JOIN TMTask p ON p.uuid = h.project WHERE h.uuid = ?",
   );
   return (headingUuid) => {
     const cached = cache.get(headingUuid);
     if (cached !== undefined) return cached;
-    const hit = stmt.get(headingUuid) as { uuid: string; title: string | null } | undefined;
-    const ref = hit ? { uuid: hit.uuid, title: hit.title ?? "" } : null;
+    const hit = stmt.get(headingUuid) as
+      | { uuid: string; title: string | null; rt1_recurrenceRule: unknown; repeater: unknown }
+      | undefined;
+    const ref = hit
+      ? markTemplate(
+          { uuid: hit.uuid, title: hit.title ?? "" },
+          hit.rt1_recurrenceRule,
+          hit.repeater,
+        )
+      : null;
     cache.set(headingUuid, ref);
     return ref;
   };
@@ -581,16 +604,27 @@ export function makeHeadingProjectResolver(db: DatabaseSync): (headingUuid: stri
 /** Lazy uuid -> Ref resolver over TMTask + TMArea titles, cached per instance. */
 export function makeRefResolver(db: DatabaseSync): (uuid: string | null) => Ref | null {
   const cache = new Map<string, Ref | null>();
-  const taskStmt = db.prepare("SELECT uuid, title FROM TMTask WHERE uuid = ?");
+  // The recurrence columns ride along so a to-do whose container PROJECT is a
+  // repeating template resolves a marked ref (TMArea has no such columns, so an
+  // area ref — same resolver — is never marked).
+  const taskStmt = db.prepare(
+    "SELECT uuid, title, rt1_recurrenceRule, repeater FROM TMTask WHERE uuid = ?",
+  );
   const areaStmt = db.prepare("SELECT uuid, title FROM TMArea WHERE uuid = ?");
   return (uuid) => {
     if (uuid === null) return null;
     const cached = cache.get(uuid);
     if (cached !== undefined) return cached;
     const hit = (taskStmt.get(uuid) ?? areaStmt.get(uuid)) as
-      | { uuid: string; title: string | null }
+      | { uuid: string; title: string | null; rt1_recurrenceRule?: unknown; repeater?: unknown }
       | undefined;
-    const ref = hit ? { uuid: hit.uuid, title: hit.title ?? "" } : null;
+    const ref = hit
+      ? markTemplate(
+          { uuid: hit.uuid, title: hit.title ?? "" },
+          hit.rt1_recurrenceRule,
+          hit.repeater,
+        )
+      : null;
     cache.set(uuid, ref);
     return ref;
   };

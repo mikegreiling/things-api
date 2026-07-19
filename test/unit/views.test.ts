@@ -1368,6 +1368,68 @@ describe("searchView (Phase 12 ergonomics)", () => {
   });
 });
 
+describe("template-container marker (container project is a repeating template)", () => {
+  // A repeating-template PROJECT is start=someday and hidden by the parent
+  // cascade, but its CHILDREN are plain rows that DO surface in search; the
+  // marker rides the resolved container ref so agents can tell the blueprint
+  // copy from its like-titled instance. The children carry no rt1_* columns,
+  // so the fact comes from the parent project's recurrence columns via the ref
+  // resolvers (direct project AND heading→project).
+  function seedTemplateWorld() {
+    fx = buildFixtureDb();
+    const tpl = seedProject(fx.db, {
+      title: "Weekly review",
+      start: "someday",
+      recurrenceRule: true,
+    });
+    const tplHeading = seedHeading(fx.db, { title: "Prep", project: tpl });
+    const plain = seedProject(fx.db, { title: "One-off launch" });
+    const directChild = seedTodo(fx.db, { title: "marker via project", project: tpl });
+    const headedChild = seedTodo(fx.db, { title: "marker via heading", heading: tplHeading });
+    seedTodo(fx.db, { title: "marker control", project: plain });
+    return { directChild, headedChild };
+  }
+
+  it("flags the container ref of a to-do whose PROJECT is a repeating template", () => {
+    seedTemplateWorld();
+    const hit = searchView(fx.db, "marker via project").find(
+      (i) => i.title === "marker via project",
+    );
+    expect(hit?.type).toBe("to-do");
+    if (hit?.type !== "to-do") throw new Error("expected a to-do");
+    expect(hit.project?.isRepeatingTemplate).toBe(true);
+  });
+
+  it("flags the HEADING-resolved container ref when the heading's project is a template", () => {
+    seedTemplateWorld();
+    const hit = searchView(fx.db, "marker via heading").find(
+      (i) => i.title === "marker via heading",
+    );
+    if (hit?.type !== "to-do") throw new Error("expected a to-do");
+    // Heading-nested children carry project=NULL; the mark lands on the
+    // headingProject ref resolved through the heading.
+    expect(hit.headingProject?.isRepeatingTemplate).toBe(true);
+  });
+
+  it("does NOT flag a control container whose project is an ordinary project", () => {
+    seedTemplateWorld();
+    const hit = searchView(fx.db, "marker control").find((i) => i.title === "marker control");
+    if (hit?.type !== "to-do") throw new Error("expected a to-do");
+    // Omit-when-false: the key is simply absent, never `false`.
+    expect(hit.project?.isRepeatingTemplate).toBeUndefined();
+  });
+
+  it("byUuid (show detail) carries the same marker on the container ref", () => {
+    const { directChild, headedChild } = seedTemplateWorld();
+    const direct = byUuid(fx.db, directChild);
+    if (direct?.type !== "to-do") throw new Error("expected a to-do");
+    expect(direct.project?.isRepeatingTemplate).toBe(true);
+    const headed = byUuid(fx.db, headedChild);
+    if (headed?.type !== "to-do") throw new Error("expected a to-do");
+    expect(headed.headingProject?.isRepeatingTemplate).toBe(true);
+  });
+});
+
 describe("searchView heading doctrine + ranking (item 5)", () => {
   it("a heading-title match surfaces the PARENT PROJECT (matchedVia), never a bare heading", () => {
     fx = buildFixtureDb();

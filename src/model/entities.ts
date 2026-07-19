@@ -14,6 +14,17 @@ export type TaskType = "to-do" | "project" | "heading"; // type 0 | 1 | 2
 export interface Ref {
   uuid: string;
   title: string;
+  /**
+   * Set (and only ever `true`) when this ref points at a repeating-template
+   * PROJECT — the blueprint row whose `rt1_recurrenceRule`/`repeater` is
+   * non-null (probe-verified: the template's CHILDREN are plain rows, so the
+   * fact lives on the parent project). Only container/project refs ever carry
+   * it — area and heading refs never do — so a consumer reads its absence as
+   * "not a template". It disambiguates the two identical-looking same-title
+   * copies a project conversion leaves behind (the template blueprint vs. its
+   * spawned instance; see RepeatingInfo). Omitted when false (never `false`).
+   */
+  isRepeatingTemplate?: true;
 }
 
 /**
