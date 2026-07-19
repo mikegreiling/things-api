@@ -760,6 +760,216 @@ describe("simulator write vector — covered operations", () => {
     });
   });
 
+  // ------------------------------------------------ project subtree (RSIM-P)
+  // These reproduce the RSIM-P verdicts (docs/lab/rsim-results.md §RSIM-P):
+  // making a PROJECT repeat deep-duplicates its whole child subtree under BOTH
+  // the hidden template and the instance, hard-deletes the source subtree, and
+  // (after-completion) links each instance-side child to its template sibling.
+
+  /** The heading + to-do rows currently hanging (directly or via a heading) off a project. */
+  const subtreeOf = (
+    projectUuid: string,
+  ): { headings: Record<string, unknown>[]; todos: Record<string, unknown>[] } => {
+    const headings = fixture.db
+      .prepare(`SELECT * FROM TMTask WHERE type = 2 AND project = ?`)
+      .all(projectUuid) as Record<string, unknown>[];
+    const hIds = headings.map((h) => h["uuid"] as string);
+    const ph = hIds.map(() => "?").join(", ");
+    const todos = fixture.db
+      .prepare(
+        `SELECT * FROM TMTask WHERE type = 0 AND (project = ?${hIds.length ? ` OR heading IN (${ph})` : ""})`,
+      )
+      .all(projectUuid, ...hIds) as Record<string, unknown>[];
+    return { headings, todos };
+  };
+  const count = (sql: string): number => (fixture.db.prepare(sql).get() as { n: number }).n;
+  const checklistTitlesOf = (taskUuid: string): string[] =>
+    (
+      fixture.db
+        .prepare(`SELECT title FROM TMChecklistItem WHERE task = ? ORDER BY "index"`)
+        .all(taskUuid) as { title: string }[]
+    ).map((r) => r.title);
+  const tagsOf = (taskUuid: string): string[] =>
+    (
+      fixture.db.prepare("SELECT tags FROM TMTaskTag WHERE tasks = ?").all(taskUuid) as {
+        tags: string;
+      }[]
+    ).map((r) => r.tags);
+
+  it("project.make-repeating FIXED (RSIM-P P1): children deep-duplicated, source subtree deleted, copies plain", async () => {
+    const area = seedArea(fixture.db, "Zone A");
+    const tag = seedTag(fixture.db, "AlphaTag");
+    const proj = seedProject(fixture.db, { title: "Proj Alpha", area, start: "active" });
+    const head = seedHeading(fixture.db, { title: "Phase 1", project: proj, index: 0 });
+    const taskA1 = seedTodo(fixture.db, { title: "Task A1", heading: head, index: 0 });
+    fixture.db.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(taskA1, tag);
+    seedChecklistItem(fixture.db, taskA1, "Sub 1", { index: 0 });
+    seedChecklistItem(fixture.db, taskA1, "Sub 2", { index: 1 });
+    const taskA2 = seedTodo(fixture.db, { title: "Task A2", project: proj, index: 1 });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+
+    // Source project AND every descendant hard-DELETED.
+    for (const uuid of [proj, head, taskA1, taskA2]) {
+      expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(uuid)).toBeUndefined();
+    }
+
+    // Template project (RSIM6 shape) + exactly ONE instance PROJECT.
+    const tmpl = res.uuid;
+    expect(row(tmpl)["type"]).toBe(1);
+    expect(row(tmpl)["area"]).toBe(area);
+    expect(row(tmpl)["start"]).toBe(2);
+    expect(row(tmpl)["rt1_instanceCreationCount"]).toBe(1);
+    expect(row(tmpl)["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+    const projInstances = fixture.db
+      .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND rt1_repeatingTemplate = ?")
+      .all(tmpl) as { uuid: string }[];
+    expect(projInstances).toHaveLength(1);
+    const instProj = projInstances[0]!.uuid;
+    expect(row(instProj)["startDate"]).toBe(encodePackedDate("2026-07-05"));
+
+    // Two mirrored 4-row subtrees (heading + Task A1 + Task A2, per side).
+    for (const side of [tmpl, instProj]) {
+      const sub = subtreeOf(side);
+      expect(sub.headings).toHaveLength(1);
+      expect(sub.todos).toHaveLength(2);
+      const h = sub.headings[0]!;
+      expect(h["title"]).toBe("Phase 1");
+      expect(h["start"]).toBe(1); // RSIM-P P1: children are start=1
+      // Template-side (and fixed instance-side) children are COMPLETELY PLAIN.
+      expect(h["rt1_recurrenceRule"]).toBeNull();
+      expect(h["rt1_repeatingTemplate"]).toBeNull();
+
+      const a1 = sub.todos.find((t) => t["title"] === "Task A1")!;
+      // Headed child: project NULL, heading points at the COPIED heading.
+      expect(a1["project"]).toBeNull();
+      expect(a1["heading"]).toBe(h["uuid"]);
+      expect(a1["start"]).toBe(1);
+      expect(a1["rt1_recurrenceRule"]).toBeNull();
+      expect(a1["rt1_repeatingTemplate"]).toBeNull();
+      expect(tagsOf(a1["uuid"] as string)).toEqual([tag]);
+      expect(checklistTitlesOf(a1["uuid"] as string)).toEqual(["Sub 1", "Sub 2"]);
+
+      const a2 = sub.todos.find((t) => t["title"] === "Task A2")!;
+      // Direct child: project points at the new project, no heading.
+      expect(a2["project"]).toBe(side);
+      expect(a2["heading"]).toBeNull();
+      expect(a2["rt1_repeatingTemplate"]).toBeNull();
+    }
+
+    // Tags + checklist duplicated per copy: 2 Task A1 copies → 2 tag rows, 4 items.
+    expect(count("SELECT COUNT(*) AS n FROM TMTaskTag")).toBe(2);
+    expect(count("SELECT COUNT(*) AS n FROM TMChecklistItem")).toBe(4);
+  });
+
+  it("project.make-repeating AFTER-COMPLETION (RSIM-P P4): source deleted, per-child instance→template links", async () => {
+    const area = seedArea(fixture.db, "Zone B");
+    const proj = seedProject(fixture.db, {
+      title: "Beta Proj",
+      area,
+      start: "active",
+      startDate: "2026-07-05",
+    });
+    const b1 = seedTodo(fixture.db, { title: "Task B1", project: proj, index: 0 });
+    const b2 = seedTodo(fixture.db, { title: "Task B2", project: proj, index: 1 });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1, afterCompletion: true },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+
+    // Source deleted (contrast the after-completion TO-DO, which is preserved).
+    for (const uuid of [proj, b1, b2]) {
+      expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(uuid)).toBeUndefined();
+    }
+
+    // Template: tp=1 after-completion rule, icCount=1, NO next/reference dates.
+    const tmpl = res.uuid;
+    expect(decodeTemplate(tmpl)).toMatchObject({ type: "after-completion", unit: "weekly" });
+    expect(row(tmpl)["start"]).toBe(2);
+    expect(row(tmpl)["rt1_instanceCreationCount"]).toBe(1); // RSIM-P P4
+    expect(row(tmpl)["rt1_nextInstanceStartDate"]).toBeNull();
+    expect(row(tmpl)["rt1_afterCompletionReferenceDate"]).toBeNull();
+
+    // Exactly one instance PROJECT, its own startDate = the source's.
+    const projInstances = fixture.db
+      .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND rt1_repeatingTemplate = ?")
+      .all(tmpl) as { uuid: string }[];
+    expect(projInstances).toHaveLength(1);
+    const instProj = projInstances[0]!.uuid;
+    expect(row(instProj)["startDate"]).toBe(encodePackedDate("2026-07-05"));
+
+    // Template-side children are PLAIN; instance-side children each carry a
+    // per-child link to their TEMPLATE-side sibling (matched by title).
+    const tmplKids = subtreeOf(tmpl).todos;
+    const instKids = subtreeOf(instProj).todos;
+    expect(tmplKids).toHaveLength(2);
+    expect(instKids).toHaveLength(2);
+    for (const k of tmplKids) expect(k["rt1_repeatingTemplate"]).toBeNull();
+    for (const title of ["Task B1", "Task B2"]) {
+      const instKid = instKids.find((t) => t["title"] === title)!;
+      const tmplKid = tmplKids.find((t) => t["title"] === title)!;
+      expect(instKid["rt1_repeatingTemplate"]).toBe(tmplKid["uuid"]);
+    }
+    // 6 inserted rows total (template + 2 kids, instance + 2 kids).
+    expect(count("SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 0")).toBe(6);
+  });
+
+  it("project.complete (RSIM-P P2): cascades to HEADING rows, promotes instance start 2→1", async () => {
+    const template = seedProject(fixture.db, {
+      title: "Repeating Ops",
+      start: "someday",
+      recurrenceRule: true,
+    });
+    const instProj = seedProject(fixture.db, {
+      title: "Repeating Ops",
+      start: "someday",
+      repeatingTemplate: template,
+    });
+    const head = seedHeading(fixture.db, { title: "Phase 1", project: instProj });
+    const headed = seedTodo(fixture.db, { title: "under heading", heading: head });
+    const direct = seedTodo(fixture.db, { title: "direct child", project: instProj });
+
+    const res = await runMutation(deps(vector), "project.complete", {
+      uuid: instProj,
+      children: "auto-complete",
+    });
+    expect(res.kind).toBe("ok");
+
+    // Heading row (type=2) cascaded to completed — the RSIM-P P2 fix.
+    expect(row(head)["status"]).toBe(3);
+    expect(row(headed)["status"]).toBe(3);
+    expect(row(direct)["status"]).toBe(3);
+    // Instance project completed AND promoted start 2→1.
+    expect(row(instProj)["status"]).toBe(3);
+    expect(row(instProj)["start"]).toBe(1);
+    // The template row is untouched (only the instance was completed).
+    expect(row(template)["status"]).toBe(0);
+    expect(row(template)["start"]).toBe(2);
+  });
+
+  it("project.complete on a PLAIN project leaves its start untouched (promotion is instance-only)", async () => {
+    const proj = seedProject(fixture.db, { title: "One-off", start: "someday" });
+    const res = await runMutation(deps(vector), "project.complete", {
+      uuid: proj,
+      children: "auto-complete",
+    });
+    expect(res.kind).toBe("ok");
+    expect(row(proj)["status"]).toBe(3);
+    expect(row(proj)["start"]).toBe(2); // RSIM-P P2 promotion does NOT fire for non-instances
+  });
+
   it("reschedule-repeat refuses a non-template target", async () => {
     const plain = seedTodo(fixture.db, { title: "not repeating", start: "active" });
     const res = await runMutation(

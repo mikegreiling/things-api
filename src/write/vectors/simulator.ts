@@ -572,11 +572,222 @@ function loadRepeatSource(
   };
 }
 
+// ------------------------------------------------- project subtree copy
+//
+// RSIM-P (docs/lab/rsim-results.md §RSIM-P): making a PROJECT repeat
+// deep-duplicates its entire child subtree. A project make-repeating (fixed OR
+// after-completion) HARD-DELETES the source project and every descendant
+// (headings + to-dos + those to-dos' tags + checklist items) and mints TWO
+// independent plain copies of the whole subtree — one under the hidden template
+// project, one under the instance project. The helpers below read the source
+// subtree ONCE (before deletion), materialize a plain copy under a new project,
+// and delete the source subtree.
+
+interface SubtreeChecklistItem {
+  title: string;
+  status: number;
+  index: number;
+}
+interface SubtreeTodo {
+  uuid: string;
+  title: string;
+  notes: string;
+  status: number;
+  stopDate: number | null;
+  deadline: number | null;
+  index: number;
+  /** Source heading uuid for a headed to-do; null for a direct child. */
+  headingUuid: string | null;
+  tags: string[];
+  checklist: SubtreeChecklistItem[];
+}
+interface SubtreeHeading {
+  uuid: string;
+  title: string;
+  notes: string;
+  status: number;
+  stopDate: number | null;
+  index: number;
+}
+interface ProjectSubtree {
+  headings: SubtreeHeading[];
+  todos: SubtreeTodo[];
+}
+
+/** Read a project's full containment subtree (headings + direct/headed to-dos, with tags + checklist) before any mutation. */
+function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubtree {
+  const headingRows = sim
+    .prepare(
+      `SELECT uuid, title, notes, status, stopDate, "index" AS idx
+         FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+    )
+    .all(projectUuid) as {
+    uuid: string;
+    title: string | null;
+    notes: string | null;
+    status: number;
+    stopDate: number | null;
+    idx: number;
+  }[];
+  const headings: SubtreeHeading[] = headingRows.map((h) => ({
+    uuid: h.uuid,
+    title: h.title ?? "",
+    notes: h.notes ?? "",
+    status: h.status,
+    stopDate: h.stopDate,
+    index: h.idx,
+  }));
+  const headingUuids = headings.map((h) => h.uuid);
+  // A direct child has project=<projectUuid>; a headed child has project=NULL
+  // and heading=<one of this project's headings> — this union captures both.
+  const placeholders = headingUuids.map(() => "?").join(", ");
+  const todoRows = sim
+    .prepare(
+      `SELECT uuid, title, notes, status, stopDate, deadline, heading, "index" AS idx
+         FROM TMTask WHERE type = 0 AND trashed = 0
+           AND (project = ?${headingUuids.length > 0 ? ` OR heading IN (${placeholders})` : ""})
+         ORDER BY "index"`,
+    )
+    .all(projectUuid, ...headingUuids) as {
+    uuid: string;
+    title: string | null;
+    notes: string | null;
+    status: number;
+    stopDate: number | null;
+    deadline: number | null;
+    heading: string | null;
+    idx: number;
+  }[];
+  const todos: SubtreeTodo[] = todoRows.map((t) => ({
+    uuid: t.uuid,
+    title: t.title ?? "",
+    notes: t.notes ?? "",
+    status: t.status,
+    stopDate: t.stopDate,
+    deadline: t.deadline,
+    index: t.idx,
+    headingUuid: t.heading,
+    tags: (
+      sim.prepare("SELECT tags FROM TMTaskTag WHERE tasks = ?").all(t.uuid) as { tags: string }[]
+    ).map((r) => r.tags),
+    checklist: (
+      sim
+        .prepare(
+          `SELECT title, status, "index" AS idx FROM TMChecklistItem WHERE task = ? ORDER BY "index"`,
+        )
+        .all(t.uuid) as { title: string | null; status: number; idx: number }[]
+    ).map((c) => ({ title: c.title ?? "", status: c.status, index: c.idx })),
+  }));
+  return { headings, todos };
+}
+
+/** UPDATE a row's list index (insertTask hardcodes 0; the copy preserves source order). */
+function setRowIndex(sim: DatabaseSync, uuid: string, index: number): void {
+  sim.prepare(`UPDATE TMTask SET "index" = ? WHERE uuid = ?`).run(index, uuid);
+}
+
+/**
+ * Materialize a PLAIN copy of `subtree` under `newProjectUuid` (fresh uuids for
+ * every heading/to-do; tags + checklist duplicated; index order + heading
+ * membership preserved; children `start=1`, `rt1_recurrenceRule`/
+ * `rt1_repeatingTemplate` NULL). Returns a source-uuid → copy-uuid map.
+ *
+ * RSIM-P P4 (after-completion only): pass the template side's map as `linkMap`
+ * and each copied TO-DO's `rt1_repeatingTemplate` is set to its template-side
+ * sibling. The FIXED case passes `null` (instance-side children stay plain).
+ */
+function materializeSubtreeCopy(
+  sim: DatabaseSync,
+  ctx: ApplyCtx,
+  subtree: ProjectSubtree,
+  newProjectUuid: string,
+  linkMap: Map<string, string> | null,
+): Map<string, string> {
+  const copyMap = new Map<string, string>();
+  const headingIdMap = new Map<string, string>();
+  for (const h of subtree.headings) {
+    const newUuid = genUuid();
+    insertTask(sim, 2, ctx, {
+      uuid: newUuid,
+      title: h.title,
+      notes: h.notes,
+      start: START.active, // RSIM-P P1: copied children are start=1
+      project: newProjectUuid,
+    });
+    setRowIndex(sim, newUuid, h.index);
+    if (h.status !== STATUS.open)
+      setStatus(sim, newUuid, h.status, h.stopDate ?? ctx.nowEpoch, ctx);
+    headingIdMap.set(h.uuid, newUuid);
+    copyMap.set(h.uuid, newUuid);
+  }
+  for (const t of subtree.todos) {
+    const newUuid = genUuid();
+    // Preserve the containment invariant: a headed child points at the COPIED
+    // heading with project NULL; a direct child points at the new project.
+    const heading = t.headingUuid !== null ? (headingIdMap.get(t.headingUuid) ?? null) : null;
+    const project = heading !== null ? null : newProjectUuid;
+    const openChecklist = t.checklist.filter((c) => c.status === STATUS.open).length;
+    insertTask(sim, 0, ctx, {
+      uuid: newUuid,
+      title: t.title,
+      notes: t.notes,
+      start: START.active, // RSIM-P P1: start=1
+      startDate: null,
+      deadline: t.deadline,
+      project,
+      heading,
+      checklistItemsCount: t.checklist.length,
+      openChecklistItemsCount: openChecklist,
+    });
+    setRowIndex(sim, newUuid, t.index);
+    if (t.status !== STATUS.open)
+      setStatus(sim, newUuid, t.status, t.stopDate ?? ctx.nowEpoch, ctx);
+    for (const tag of t.tags) {
+      sim.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(newUuid, tag);
+    }
+    for (const c of t.checklist) {
+      sim
+        .prepare(
+          `INSERT INTO TMChecklistItem (uuid, userModificationDate, creationDate, title, status, stopDate, "index", task, leavesTombstone)
+             VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 0)`,
+        )
+        .run(genUuid(), ctx.nowEpoch, ctx.nowEpoch, c.title, c.status, c.index, newUuid);
+    }
+    // RSIM-P P4: after-completion instance-side TO-DO children carry a per-child
+    // rt1_repeatingTemplate = their template-side sibling (fixed passes null).
+    if (linkMap !== null) {
+      const tmplChild = linkMap.get(t.uuid);
+      if (tmplChild !== undefined) {
+        sim
+          .prepare("UPDATE TMTask SET rt1_repeatingTemplate = ? WHERE uuid = ?")
+          .run(tmplChild, newUuid);
+      }
+    }
+    copyMap.set(t.uuid, newUuid);
+  }
+  return copyMap;
+}
+
+/** Hard-DELETE a source subtree: each to-do's tags + checklist + row, then the heading rows. */
+function deleteProjectSubtree(sim: DatabaseSync, subtree: ProjectSubtree): void {
+  for (const t of subtree.todos) {
+    sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(t.uuid);
+    sim.prepare("DELETE FROM TMChecklistItem WHERE task = ?").run(t.uuid);
+    sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(t.uuid);
+  }
+  for (const h of subtree.headings) {
+    sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(h.uuid);
+    sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(h.uuid);
+  }
+}
+
 /**
  * FIXED make-repeating (RSIM1 to-do / RSIM6 project / RSIM3 create leg): the
  * source is DESTROYED (identity replacement) and replaced by a hidden template
  * (start=someday, rule tp=0, next-occurrence dates) plus EXACTLY ONE instance
- * dated at the current occurrence. Area/title/notes/tags copy to both.
+ * dated at the current occurrence. Area/title/notes/tags copy to both. For a
+ * PROJECT (type=1) with children, the source subtree is hard-deleted and a plain
+ * copy is minted under BOTH new projects (RSIM-P P1).
  */
 function applyMakeRepeatingFixed(
   sim: DatabaseSync,
@@ -585,6 +796,9 @@ function applyMakeRepeatingFixed(
   ctx: ApplyCtx,
 ): void {
   const src = loadRepeatSource(sim, params.uuid);
+  // RSIM-P P1: a project's child subtree is captured BEFORE any mutation so the
+  // hidden template and the instance each receive a plain copy. To-dos have none.
+  const subtree = type === 1 ? readProjectSubtree(sim, params.uuid) : null;
   const todayIso = ctx.todayIso;
   const nextIso = addUnitsIso(todayIso, params.frequency, params.interval);
   const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
@@ -608,6 +822,8 @@ function applyMakeRepeatingFixed(
     nextInstanceStartDate: encodePackedDate(nextIso),
   });
   copyTaskTags(sim, params.uuid, templateUuid);
+  // RSIM-P P1: template-side children are completely PLAIN (no per-child link).
+  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, templateUuid, null);
 
   // ONE instance at the current occurrence (start=someday pending maintenance
   // promotion). A deadlined series dates the instance's deadline at the
@@ -626,16 +842,27 @@ function applyMakeRepeatingFixed(
     repeatingTemplate: templateUuid,
   });
   copyTaskTags(sim, params.uuid, instanceUuid);
+  // RSIM-P P1: FIXED instance-side children are ALSO plain — no per-child link.
+  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, instanceUuid, null);
 
+  // RSIM-P P1: hard-delete the whole source subtree, then the source project.
+  if (subtree !== null) deleteProjectSubtree(sim, subtree);
   sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(params.uuid);
   sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(params.uuid);
 }
 
 /**
- * AFTER-COMPLETION make-repeating (RSIM2): the source is PRESERVED and relinked
- * as the sole first instance (identity kept — §8g: identity replacement is
- * fixed-only). A new tp=1 template is created with NO next/reference dates
- * (unknown until a completion). No fresh instance row is minted.
+ * AFTER-COMPLETION make-repeating.
+ *
+ * TO-DO (type=0, RSIM2): the source is PRESERVED and relinked as the sole first
+ * instance (identity kept — §8g: identity replacement is fixed-only). A new tp=1
+ * template is created with NO next/reference dates (unknown until a completion).
+ * No fresh instance row is minted.
+ *
+ * PROJECT (type=1, RSIM-P P4): the type-0 path does NOT hold — the source is
+ * DELETED (like the fixed case) and BOTH a template and a fresh instance are
+ * minted, each with a full plain child copy, and each instance-side to-do child
+ * carries a per-child rt1_repeatingTemplate. Split out to a dedicated applier.
  */
 function applyMakeRepeatingAfterCompletion(
   sim: DatabaseSync,
@@ -643,6 +870,11 @@ function applyMakeRepeatingAfterCompletion(
   params: RepeatRuleParams,
   ctx: ApplyCtx,
 ): void {
+  // RSIM-P P4: the after-completion PROJECT path is NOT the to-do path.
+  if (type === 1) {
+    applyMakeRepeatingAfterCompletionProject(sim, params, ctx);
+    return;
+  }
   const src = loadRepeatSource(sim, params.uuid);
   const refIso = decodePackedDate(src.startDate) ?? ctx.todayIso;
   const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
@@ -667,6 +899,74 @@ function applyMakeRepeatingAfterCompletion(
   sim
     .prepare("UPDATE TMTask SET rt1_repeatingTemplate = ?, userModificationDate = ? WHERE uuid = ?")
     .run(templateUuid, ctx.nowEpoch, params.uuid);
+}
+
+/**
+ * AFTER-COMPLETION make-repeating for a PROJECT (RSIM-P P4). Unlike the to-do
+ * path (RSIM2, source preserved), the source project is DELETED and both a
+ * template and a fresh instance are minted — the same delete+duplicate shape as
+ * the fixed project case, but with:
+ *   - a tp=1 (after-completion) rule and NO next/reference dates
+ *     (`rt1_nextInstanceStartDate` / `rt1_afterCompletionReferenceDate` NULL);
+ *   - the template's `rt1_instanceCreationCount` = 1 (P4 observed, vs 0 for the
+ *     after-completion TO-DO template);
+ *   - the instance's `startDate` = the SOURCE project's startDate (not the
+ *     current occurrence used by the fixed case);
+ *   - each instance-side TO-DO child carrying `rt1_repeatingTemplate` = its
+ *     corresponding template-side sibling (the per-child link the fixed case
+ *     does NOT create).
+ */
+function applyMakeRepeatingAfterCompletionProject(
+  sim: DatabaseSync,
+  params: RepeatRuleParams,
+  ctx: ApplyCtx,
+): void {
+  const src = loadRepeatSource(sim, params.uuid);
+  const subtree = readProjectSubtree(sim, params.uuid);
+  const refIso = decodePackedDate(src.startDate) ?? ctx.todayIso;
+  const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
+  const spec = composeRepeatRuleSpec(params, refIso, epochOfIso(refIso));
+  const templateUuid = genUuid();
+  const instanceUuid = genUuid();
+
+  // Template: tp=1 rule, hidden, icCount=1, NO next/reference dates (P4).
+  insertRecurrenceRow(sim, ctx, {
+    uuid: templateUuid,
+    type: 1,
+    title: src.title,
+    notes: src.notes,
+    area: src.area,
+    start: START.someday,
+    startDate: null,
+    deadline: deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null,
+    recurrenceRuleXml: ruleXml(spec),
+    instanceCreationCount: 1, // RSIM-P P4
+  });
+  copyTaskTags(sim, params.uuid, templateUuid);
+  // Template-side children are PLAIN; keep the source→copy map to link instances.
+  const templateMap = materializeSubtreeCopy(sim, ctx, subtree, templateUuid, null);
+
+  // Instance: fresh row (source is deleted, unlike the to-do path), tmpl link,
+  // startDate = the SOURCE project's startDate (P4).
+  insertRecurrenceRow(sim, ctx, {
+    uuid: instanceUuid,
+    type: 1,
+    title: src.title,
+    notes: src.notes,
+    area: src.area,
+    start: START.someday,
+    startDate: src.startDate,
+    deadline: null,
+    repeatingTemplate: templateUuid,
+  });
+  copyTaskTags(sim, params.uuid, instanceUuid);
+  // RSIM-P P4: instance-side to-do children carry a per-child template link.
+  materializeSubtreeCopy(sim, ctx, subtree, instanceUuid, templateMap);
+
+  // Hard-delete the source subtree + the source project (P4 deletes the source).
+  deleteProjectSubtree(sim, subtree);
+  sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(params.uuid);
+  sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(params.uuid);
 }
 
 /** Route a make-repeating to the fixed or after-completion applier by rule type. */
@@ -931,14 +1231,24 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
 
   "project.complete": op<"project.complete">((sim, params, ctx) => {
     // Cascade open children to completed; canceled children are untouched (T08).
+    // RSIM-P P2: completion also flips the containing HEADING rows (type=2)
+    // status 0→3, not just the to-dos (type=0).
     const children = sim
       .prepare(
-        `SELECT uuid FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0
-         AND (project = ? OR heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?))`,
+        `SELECT uuid FROM TMTask WHERE trashed = 0 AND status = 0
+         AND (
+           (type = 0 AND (project = ? OR heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?)))
+           OR (type = 2 AND project = ?)
+         )`,
       )
-      .all(params.uuid, params.uuid) as { uuid: string }[];
+      .all(params.uuid, params.uuid, params.uuid) as { uuid: string }[];
     for (const c of children) setStatus(sim, c.uuid, STATUS.completed, ctx.nowEpoch, ctx);
     setStatus(sim, params.uuid, STATUS.completed, ctx.nowEpoch, ctx);
+    // RSIM-P P2: completing an INSTANCE project also promotes its own start 2→1
+    // (observed only for instance projects — a plain project is left untouched).
+    sim
+      .prepare("UPDATE TMTask SET start = 1 WHERE uuid = ? AND rt1_repeatingTemplate IS NOT NULL")
+      .run(params.uuid);
   }),
 
   "area.add": op<"area.add">((sim, params) => {
