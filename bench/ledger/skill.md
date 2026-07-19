@@ -62,3 +62,21 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **debrief:** attribution — The explicit one-action-per-invocation rule and ordered example most likely reduced checklist-command misuse: targeted evaluations improved in success or friction, while unchanged outcomes and large unrelated swings—especially zero-token runs—suggest residual task difficulty and benchmark variance rather than broad patch effects.; lesson — Document verified command atomicity with a dependency-ordered example, and judge impact primarily on targeted evaluations while discounting unrelated or zero-token anomalies.; confidence — high
 - **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-r2); checkpoint: bench/artifacts/loop-skill-r2/checkpoint.md
 
+<!-- ledger-entry id="loop-skill-r3-skill-iter1" lesson="State the invocation preconditions (required flags, gating flags, the add-then-convert chain) at the verb's entry point — capability facts alone don't execute; contracts do." -->
+### 2026-07-18 · skill · iter 1 (batch loop-skill-r3) · **ACCEPTED — RECONSTRUCTED**
+
+- **provenance:** batch crashed at iteration 3 when the runner's token cap (exit 8) surfaced as an unhandled subprocess error instead of the loop's clean budget abort (bug queued); ledger written post-hoc from loop-state.json. The accept decision and commit (9d6dd7c) are the loop's own, gated normally. No debrief exists.
+- **change:** one line in references/recurrence.md — `--interval` marked required (`--interval 1` for every unit), `--allow-disruptive` requirement surfaced (incl. dry runs), and a worked add-then-make-repeating chain with comma-separated multi-weekday in ONE rule. Files: skills/things-cli/references/recurrence.md, +1/-1.
+- **measured deltas (before → after):**
+  - dev: success 52/63 → 59/63; friction 0.90 → 0.83; median tokIn 19.5k → 19.7k
+  - validation: success 15/24 → 20/24; friction 1.13 → 0.90
+  - recurrence detail: multi-weekday 1/3 → 3/3 (decomposition failure mode eliminated); weekly/after-completion held 3/3; marquee held 2/3 (the curated v1 reference had already lifted it from 1/9).
+- **debrief:** (lost to the crash — see provenance)
+- **artifacts:** bench/artifacts/loop-skill-r3/ (no checkpoint; sweeps 1–4 present), loop-state.json batch loop-skill-r3.
+
+<!-- ledger-entry id="loop-skill-r3-skill-iter2" lesson="Read-contract clarifications bundled with unrelated parsing guidance keep failing validation — the dense-bundle lesson holds even at two sentences." -->
+### 2026-07-18 · skill · iter 2 (batch loop-skill-r3) · **REVERTED — RECONSTRUCTED**
+
+- **provenance:** as above; reconstructed from loop-state.json, no debrief.
+- **change:** read-contract clarification (overdue miss + grouped-Today parsing) — reverted on validation regression.
+- **measured deltas:** validation success regressed vs the post-iter-1 level; details in loop-state.json.
