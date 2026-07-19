@@ -254,6 +254,12 @@ const todoAdd: CommandSpec<"todo.add"> = {
     "H-REMINDER-SCOPE",
   ],
   preRead(db, params) {
+    if (containerGiven(params.project) && containerGiven(params.area)) {
+      throw new RangeError("project and area are exclusive destinations");
+    }
+    if (params.heading !== undefined && !containerGiven(params.project)) {
+      throw new RangeError("heading requires a project destination");
+    }
     const pre = emptyPreState();
     if (containerGiven(params.project)) {
       pre.destProject = resolveProject(db, params.project as ContainerRef);
@@ -468,6 +474,12 @@ const todoMove: CommandSpec<"todo.move"> = {
     }
     if (params.detach === true && container) {
       throw new RangeError("detach is exclusive with project/area/heading destinations");
+    }
+    if (containerGiven(params.project) && containerGiven(params.area)) {
+      throw new RangeError("project and area are exclusive destinations");
+    }
+    if (params.heading !== undefined && !containerGiven(params.project)) {
+      throw new RangeError("heading requires a project destination");
     }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
