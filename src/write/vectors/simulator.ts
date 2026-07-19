@@ -598,6 +598,10 @@ interface SubtreeTodo {
   index: number;
   /** Source heading uuid for a headed to-do; null for a direct child. */
   headingUuid: string | null;
+  /** RSIM-R: rt1_recurrenceRule — non-null marks a NESTED template (repeater). */
+  recurrenceRule: unknown;
+  /** RSIM-R: rt1_repeatingTemplate — non-null marks a NESTED repeater instance. */
+  repeatingTemplate: string | null;
   tags: string[];
   checklist: SubtreeChecklistItem[];
 }
@@ -643,7 +647,9 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
   const placeholders = headingUuids.map(() => "?").join(", ");
   const todoRows = sim
     .prepare(
-      `SELECT uuid, title, notes, status, stopDate, deadline, heading, "index" AS idx
+      `SELECT uuid, title, notes, status, stopDate, deadline, heading,
+              rt1_recurrenceRule AS recurrenceRule, rt1_repeatingTemplate AS repeatingTemplate,
+              "index" AS idx
          FROM TMTask WHERE type = 0 AND trashed = 0
            AND (project = ?${headingUuids.length > 0 ? ` OR heading IN (${placeholders})` : ""})
          ORDER BY "index"`,
@@ -656,6 +662,8 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     stopDate: number | null;
     deadline: number | null;
     heading: string | null;
+    recurrenceRule: unknown;
+    repeatingTemplate: string | null;
     idx: number;
   }[];
   const todos: SubtreeTodo[] = todoRows.map((t) => ({
@@ -667,6 +675,8 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     deadline: t.deadline,
     index: t.idx,
     headingUuid: t.heading,
+    recurrenceRule: t.recurrenceRule,
+    repeatingTemplate: t.repeatingTemplate,
     tags: (
       sim.prepare("SELECT tags FROM TMTaskTag WHERE tasks = ?").all(t.uuid) as { tags: string }[]
     ).map((r) => r.tags),
@@ -690,20 +700,18 @@ function setRowIndex(sim: DatabaseSync, uuid: string, index: number): void {
  * Materialize a PLAIN copy of `subtree` under `newProjectUuid` (fresh uuids for
  * every heading/to-do; tags + checklist duplicated; index order + heading
  * membership preserved; children `start=1`, `rt1_recurrenceRule`/
- * `rt1_repeatingTemplate` NULL). Returns a source-uuid → copy-uuid map.
+ * `rt1_repeatingTemplate` NULL).
  *
- * RSIM-P P4 (after-completion only): pass the template side's map as `linkMap`
- * and each copied TO-DO's `rt1_repeatingTemplate` is set to its template-side
- * sibling. The FIXED case passes `null` (instance-side children stay plain).
+ * RSIM-R: copied children are ALWAYS plain — both fixed and after-completion
+ * instance/template sides. (RSIM-P P4's per-child instance→template links are a
+ * non-reproducible anomaly; A5/R7/R8 = 3/3 plain — so no linkMap parameter.)
  */
 function materializeSubtreeCopy(
   sim: DatabaseSync,
   ctx: ApplyCtx,
   subtree: ProjectSubtree,
   newProjectUuid: string,
-  linkMap: Map<string, string> | null,
-): Map<string, string> {
-  const copyMap = new Map<string, string>();
+): void {
   const headingIdMap = new Map<string, string>();
   for (const h of subtree.headings) {
     const newUuid = genUuid();
@@ -718,7 +726,6 @@ function materializeSubtreeCopy(
     if (h.status !== STATUS.open)
       setStatus(sim, newUuid, h.status, h.stopDate ?? ctx.nowEpoch, ctx);
     headingIdMap.set(h.uuid, newUuid);
-    copyMap.set(h.uuid, newUuid);
   }
   for (const t of subtree.todos) {
     const newUuid = genUuid();
@@ -753,19 +760,7 @@ function materializeSubtreeCopy(
         )
         .run(genUuid(), ctx.nowEpoch, ctx.nowEpoch, c.title, c.status, c.index, newUuid);
     }
-    // RSIM-P P4: after-completion instance-side TO-DO children carry a per-child
-    // rt1_repeatingTemplate = their template-side sibling (fixed passes null).
-    if (linkMap !== null) {
-      const tmplChild = linkMap.get(t.uuid);
-      if (tmplChild !== undefined) {
-        sim
-          .prepare("UPDATE TMTask SET rt1_repeatingTemplate = ? WHERE uuid = ?")
-          .run(tmplChild, newUuid);
-      }
-    }
-    copyMap.set(t.uuid, newUuid);
   }
-  return copyMap;
 }
 
 /** Hard-DELETE a source subtree: each to-do's tags + checklist + row, then the heading rows. */
@@ -782,12 +777,31 @@ function deleteProjectSubtree(sim: DatabaseSync, subtree: ProjectSubtree): void 
 }
 
 /**
+ * RSIM-R: a NESTED repeater in a project's subtree is a to-do carrying either
+ * `rt1_recurrenceRule` (the nested hidden template) or `rt1_repeatingTemplate`
+ * (the nested repeater's instance). Its presence flips the fixed project
+ * make-repeating from delete-and-mint-both to the source-preserving flatten path.
+ */
+function subtreeHasNestedRepeater(subtree: ProjectSubtree): boolean {
+  return subtree.todos.some((t) => t.recurrenceRule !== null || t.repeatingTemplate !== null);
+}
+
+/**
  * FIXED make-repeating (RSIM1 to-do / RSIM6 project / RSIM3 create leg): the
  * source is DESTROYED (identity replacement) and replaced by a hidden template
  * (start=someday, rule tp=0, next-occurrence dates) plus EXACTLY ONE instance
  * dated at the current occurrence. Area/title/notes/tags copy to both. For a
  * PROJECT (type=1) with children, the source subtree is hard-deleted and a plain
  * copy is minted under BOTH new projects (RSIM-P P1).
+ *
+ * RSIM-R exception (fixed PROJECT only): if the source project's subtree contains
+ * a NESTED repeater, the source is instead PRESERVED and relinked as the current-
+ * occurrence instance, the nested repeater is FLATTENED in place, and ONLY the
+ * hidden template project is minted (no separate instance project). See
+ * `applyMakeRepeatingFixedProjectFlatten`. Area/When are irrelevant; the sole
+ * discriminator is the nested repeater. The to-do fixed-preserve anomaly (a
+ * content-rich to-do; §RSIM-R parked, unisolated trigger) is deliberately
+ * UNMODELED — to-dos always delete here.
  */
 function applyMakeRepeatingFixed(
   sim: DatabaseSync,
@@ -805,8 +819,8 @@ function applyMakeRepeatingFixed(
   const startEarlier = params.startDaysEarlier ?? 0;
   const spec = composeRepeatRuleSpec(params, todayIso, epochOfIso(nextIso));
   const templateUuid = genUuid();
-  const instanceUuid = genUuid();
 
+  // The hidden template row is identical in both fixed-project fates.
   insertRecurrenceRow(sim, ctx, {
     uuid: templateUuid,
     type,
@@ -822,14 +836,31 @@ function applyMakeRepeatingFixed(
     nextInstanceStartDate: encodePackedDate(nextIso),
   });
   copyTaskTags(sim, params.uuid, templateUuid);
+
+  // The current occurrence's start (deadlined series back off `startDaysEarlier`;
+  // decode identity deadline = startDate − ts; deadlined creation is not itself
+  // RSIM-drive-proven).
+  const instStartIso = deadlined ? addDaysIso(todayIso, -startEarlier) : todayIso;
+
+  // RSIM-R: fixed PROJECT with a nested repeater PRESERVES the source (flatten path).
+  if (subtree !== null && subtreeHasNestedRepeater(subtree)) {
+    applyMakeRepeatingFixedProjectFlatten(
+      sim,
+      ctx,
+      params.uuid,
+      subtree,
+      templateUuid,
+      instStartIso,
+    );
+    return;
+  }
+
   // RSIM-P P1: template-side children are completely PLAIN (no per-child link).
-  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, templateUuid, null);
+  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, templateUuid);
 
   // ONE instance at the current occurrence (start=someday pending maintenance
-  // promotion). A deadlined series dates the instance's deadline at the
-  // occurrence and starts it `startDaysEarlier` before that (decode identity
-  // deadline = startDate − ts; deadlined creation is not itself RSIM-drive-proven).
-  const instStartIso = deadlined ? addDaysIso(todayIso, -startEarlier) : todayIso;
+  // promotion). A deadlined series dates the instance's deadline at the occurrence.
+  const instanceUuid = genUuid();
   insertRecurrenceRow(sim, ctx, {
     uuid: instanceUuid,
     type,
@@ -843,12 +874,64 @@ function applyMakeRepeatingFixed(
   });
   copyTaskTags(sim, params.uuid, instanceUuid);
   // RSIM-P P1: FIXED instance-side children are ALSO plain — no per-child link.
-  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, instanceUuid, null);
+  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, instanceUuid);
 
   // RSIM-P P1: hard-delete the whole source subtree, then the source project.
   if (subtree !== null) deleteProjectSubtree(sim, subtree);
   sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(params.uuid);
   sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(params.uuid);
+}
+
+/**
+ * RSIM-R (fixed PROJECT whose subtree contains a nested repeater — A1/A2/A3/S2/
+ * S2b): the source project is PRESERVED and relinked as the current-occurrence
+ * instance rather than deleted; the nested repeater is FLATTENED in place; and
+ * only the (already-minted) hidden template project is populated — there is NO
+ * separate instance project. Row-level shape (S2, re-derived uuid-by-uuid):
+ *   - source project CHANGED: `start → 2` (someday), `startDate → currentOccurrence`,
+ *     `rt1_repeatingTemplate → template`. All other source columns (title, notes,
+ *     area, deadline) are left untouched.
+ *   - nested template row hard-deleted; nested instance demoted to PLAIN
+ *     (`rt1_repeatingTemplate → NULL`).
+ *   - the template project receives a PLAIN copy of the FLATTENED subtree (the
+ *     nested template rows excluded; the demoted instance copied as a plain to-do).
+ */
+function applyMakeRepeatingFixedProjectFlatten(
+  sim: DatabaseSync,
+  ctx: ApplyCtx,
+  sourceUuid: string,
+  subtree: ProjectSubtree,
+  templateUuid: string,
+  instStartIso: string,
+): void {
+  // The template project gets a plain copy of the FLATTENED subtree — nested
+  // template rows are dropped; every surviving to-do copies plain via
+  // materializeSubtreeCopy (start=1, no recurrence/template links).
+  const flattened: ProjectSubtree = {
+    headings: subtree.headings,
+    todos: subtree.todos.filter((t) => t.recurrenceRule === null),
+  };
+  materializeSubtreeCopy(sim, ctx, flattened, templateUuid);
+
+  // Flatten the nested repeater IN the preserved source subtree.
+  for (const t of subtree.todos) {
+    if (t.recurrenceRule !== null) {
+      // Nested hidden template: hard-delete its tags + checklist + row.
+      sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(t.uuid);
+      sim.prepare("DELETE FROM TMChecklistItem WHERE task = ?").run(t.uuid);
+      sim.prepare("DELETE FROM TMTask WHERE uuid = ?").run(t.uuid);
+    } else if (t.repeatingTemplate !== null) {
+      // Nested instance: demote to a plain to-do.
+      sim.prepare("UPDATE TMTask SET rt1_repeatingTemplate = NULL WHERE uuid = ?").run(t.uuid);
+    }
+  }
+
+  // Preserve the source project AS the current-occurrence instance.
+  sim
+    .prepare(
+      `UPDATE TMTask SET start = ?, startDate = ?, rt1_repeatingTemplate = ?, userModificationDate = ? WHERE uuid = ?`,
+    )
+    .run(START.someday, encodePackedDate(instStartIso), templateUuid, ctx.nowEpoch, sourceUuid);
 }
 
 /**
@@ -911,10 +994,12 @@ function applyMakeRepeatingAfterCompletion(
  *   - the template's `rt1_instanceCreationCount` = 1 (P4 observed, vs 0 for the
  *     after-completion TO-DO template);
  *   - the instance's `startDate` = the SOURCE project's startDate (not the
- *     current occurrence used by the fixed case);
- *   - each instance-side TO-DO child carrying `rt1_repeatingTemplate` = its
- *     corresponding template-side sibling (the per-child link the fixed case
- *     does NOT create).
+ *     current occurrence used by the fixed case).
+ *
+ * RSIM-R: instance-side children (to-dos AND headings) are PLAIN — no per-child
+ * `rt1_repeatingTemplate` link. RSIM-P P4's per-child links are a NON-reproducible
+ * anomaly (A5/R7/R8 = 3/3 plain); only the project row carries the instance→
+ * template link.
  */
 function applyMakeRepeatingAfterCompletionProject(
   sim: DatabaseSync,
@@ -943,8 +1028,8 @@ function applyMakeRepeatingAfterCompletionProject(
     instanceCreationCount: 1, // RSIM-P P4
   });
   copyTaskTags(sim, params.uuid, templateUuid);
-  // Template-side children are PLAIN; keep the source→copy map to link instances.
-  const templateMap = materializeSubtreeCopy(sim, ctx, subtree, templateUuid, null);
+  // Template-side children are PLAIN.
+  materializeSubtreeCopy(sim, ctx, subtree, templateUuid);
 
   // Instance: fresh row (source is deleted, unlike the to-do path), tmpl link,
   // startDate = the SOURCE project's startDate (P4).
@@ -960,8 +1045,9 @@ function applyMakeRepeatingAfterCompletionProject(
     repeatingTemplate: templateUuid,
   });
   copyTaskTags(sim, params.uuid, instanceUuid);
-  // RSIM-P P4: instance-side to-do children carry a per-child template link.
-  materializeSubtreeCopy(sim, ctx, subtree, instanceUuid, templateMap);
+  // RSIM-R: instance-side children are PLAIN — no per-child template link
+  // (P4's links do not reproduce; pass null exactly as the fixed case does).
+  materializeSubtreeCopy(sim, ctx, subtree, instanceUuid);
 
   // Hard-delete the source subtree + the source project (P4 deletes the source).
   deleteProjectSubtree(sim, subtree);
