@@ -760,11 +760,16 @@ describe("simulator write vector — covered operations", () => {
     });
   });
 
-  // ------------------------------------------------ project subtree (RSIM-P)
-  // These reproduce the RSIM-P verdicts (docs/lab/rsim-results.md §RSIM-P):
-  // making a PROJECT repeat deep-duplicates its whole child subtree under BOTH
-  // the hidden template and the instance, hard-deletes the source subtree, and
-  // (after-completion) links each instance-side child to its template sibling.
+  // ------------------------------------------------ project subtree (RSIM-P / RSIM-R)
+  // These reproduce the RSIM-P verdicts (docs/lab/rsim-results.md §RSIM-P) as
+  // RECONCILED by §RSIM-R: making a plain-subtree PROJECT repeat deep-duplicates
+  // its whole child subtree under BOTH the hidden template and the instance and
+  // hard-deletes the source subtree. Two §RSIM-R corrections apply here:
+  //   - after-completion instance-side children are PLAIN (no per-child link —
+  //     P4's links do not reproduce; A5/R7/R8 = 3/3 plain);
+  //   - a FIXED project whose subtree contains a NESTED repeater PRESERVES the
+  //     source (relinked as the instance) and FLATTENS the nested repeater in
+  //     place, minting ONLY the template project (no separate instance project).
 
   /** The heading + to-do rows currently hanging (directly or via a heading) off a project. */
   const subtreeOf = (
@@ -869,7 +874,7 @@ describe("simulator write vector — covered operations", () => {
     expect(count("SELECT COUNT(*) AS n FROM TMChecklistItem")).toBe(4);
   });
 
-  it("project.make-repeating AFTER-COMPLETION (RSIM-P P4): source deleted, per-child instance→template links", async () => {
+  it("project.make-repeating AFTER-COMPLETION (RSIM-R, was P4): source deleted, instance-side children PLAIN", async () => {
     const area = seedArea(fixture.db, "Zone B");
     const proj = seedProject(fixture.db, {
       title: "Beta Proj",
@@ -910,20 +915,105 @@ describe("simulator write vector — covered operations", () => {
     const instProj = projInstances[0]!.uuid;
     expect(row(instProj)["startDate"]).toBe(encodePackedDate("2026-07-05"));
 
-    // Template-side children are PLAIN; instance-side children each carry a
-    // per-child link to their TEMPLATE-side sibling (matched by title).
+    // RSIM-R: BOTH sides' children are PLAIN — no per-child instance→template
+    // link (P4's links do not reproduce; only the project row carries the link).
     const tmplKids = subtreeOf(tmpl).todos;
     const instKids = subtreeOf(instProj).todos;
     expect(tmplKids).toHaveLength(2);
     expect(instKids).toHaveLength(2);
-    for (const k of tmplKids) expect(k["rt1_repeatingTemplate"]).toBeNull();
-    for (const title of ["Task B1", "Task B2"]) {
-      const instKid = instKids.find((t) => t["title"] === title)!;
-      const tmplKid = tmplKids.find((t) => t["title"] === title)!;
-      expect(instKid["rt1_repeatingTemplate"]).toBe(tmplKid["uuid"]);
+    for (const k of [...tmplKids, ...instKids]) {
+      expect(k["rt1_repeatingTemplate"]).toBeNull();
+      expect(k["rt1_recurrenceRule"]).toBeNull();
     }
     // 6 inserted rows total (template + 2 kids, instance + 2 kids).
     expect(count("SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 0")).toBe(6);
+  });
+
+  it("project.make-repeating FIXED with a NESTED repeater (RSIM-R flatten): source PRESERVED, nested repeater flattened, only the template minted", async () => {
+    const tag = seedTag(fixture.db, "GammaTag");
+    // Someday (area-less) renders a selectable row, so the pure-AX drive applies
+    // directly (an area-less Anytime project would refuse, UIC4-d).
+    const proj = seedProject(fixture.db, { title: "Gamma Proj", start: "someday" });
+    // A plain sibling to-do (survives as a plain copy on the template side).
+    const plain = seedTodo(fixture.db, { title: "Plain Task", project: proj, index: 0 });
+    fixture.db.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(plain, tag);
+    // A NESTED repeater living inside the project: a hidden template child plus
+    // its instance child. Its presence flips make-repeating to the flatten path.
+    const nestedTmpl = seedTodo(fixture.db, {
+      title: "Nested Repeater",
+      project: proj,
+      index: 1,
+      start: "someday",
+      recurrenceRule: true,
+    });
+    const nestedInst = seedTodo(fixture.db, {
+      title: "Nested Repeater",
+      project: proj,
+      index: 2,
+      startDate: "2026-07-05",
+      repeatingTemplate: nestedTmpl,
+    });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+    const tmpl = res.uuid;
+
+    // Source project PRESERVED and relinked as the current-occurrence instance.
+    const src = row(proj);
+    expect(src["start"]).toBe(2); // someday
+    expect(src["startDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(src["rt1_repeatingTemplate"]).toBe(tmpl);
+
+    // Exactly ONE new project row — the template. No separate instance project.
+    const projRows = fixture.db.prepare("SELECT uuid FROM TMTask WHERE type = 1").all() as {
+      uuid: string;
+    }[];
+    expect(projRows.map((r) => r.uuid).toSorted()).toEqual([proj, tmpl].toSorted());
+    // No project instance was minted OTHER than the preserved source.
+    const projInstances = fixture.db
+      .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND rt1_repeatingTemplate = ?")
+      .all(tmpl) as { uuid: string }[];
+    expect(projInstances.map((r) => r.uuid)).toEqual([proj]);
+
+    // Nested repeater FLATTENED in the preserved source: the hidden template
+    // child is hard-deleted; the instance child is demoted to a plain to-do.
+    expect(
+      fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(nestedTmpl),
+    ).toBeUndefined();
+    const demoted = row(nestedInst);
+    expect(demoted["rt1_repeatingTemplate"]).toBeNull();
+    expect(demoted["rt1_recurrenceRule"]).toBeNull();
+
+    // Source subtree now: the plain sibling + the demoted (flattened) instance.
+    const srcKids = subtreeOf(proj).todos;
+    expect(srcKids.map((t) => t["title"]).toSorted()).toEqual(["Nested Repeater", "Plain Task"]);
+
+    // Template project holds a PLAIN copy of the FLATTENED subtree (2 to-dos,
+    // both plain — the nested hidden template row is NOT copied).
+    const tmplKids = subtreeOf(tmpl).todos;
+    expect(tmplKids).toHaveLength(2);
+    expect(tmplKids.map((t) => t["title"]).toSorted()).toEqual(["Nested Repeater", "Plain Task"]);
+    for (const k of tmplKids) {
+      expect(k["start"]).toBe(1);
+      expect(k["rt1_recurrenceRule"]).toBeNull();
+      expect(k["rt1_repeatingTemplate"]).toBeNull();
+      expect(k["project"]).toBe(tmpl);
+    }
+    // The plain sibling's tag is duplicated onto its template-side copy.
+    const tmplPlain = tmplKids.find((t) => t["title"] === "Plain Task")!;
+    expect(tagsOf(tmplPlain["uuid"] as string)).toEqual([tag]);
+
+    // Template row is the RSIM6 fixed shape.
+    expect(row(tmpl)["type"]).toBe(1);
+    expect(row(tmpl)["start"]).toBe(2);
+    expect(row(tmpl)["rt1_instanceCreationCount"]).toBe(1);
+    expect(row(tmpl)["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
   });
 
   it("project.complete (RSIM-P P2): cascades to HEADING rows, promotes instance start 2→1", async () => {
