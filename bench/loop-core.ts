@@ -549,7 +549,13 @@ export function buildCharter(arm: Arm, priorLessons: string[] = []): string {
         "this loop CANNOT verify. You may COMPRESS or RELOCATE those facts, but you may " +
         "NEVER add, remove, or alter their semantics. If your patch changes gui.md " +
         "semantics in any way, you MUST set `guiSemanticChange` to true so a human reviews it.\n"
-      : "";
+      : arm === "cli"
+        ? "- FORMAT GATES: help-index one-liners (INDEX in src/cli/help.ts) are hard-capped at " +
+          "58 characters by a contract test — a longer line fails the gate and wastes the " +
+          "iteration. For anything that cannot fit a one-liner, use the `help <topic>` system " +
+          "(TOPICS in the same file): topics are opt-in, cost zero context until requested, " +
+          "and are the right home for multi-line contracts.\n"
+        : "";
   return [
     "You are the AGENTBENCH surface refiner. You improve ONE consumer surface so that a",
     "zero-context, non-frontier agent understands and operates Things correctly. You never",

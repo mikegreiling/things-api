@@ -1367,5 +1367,215 @@
       }
     },
     "metricsAfter": null
+  },
+  {
+    "timestamp": "2026-07-19T01:24:45.298Z",
+    "arm": "cli",
+    "iteration": 1,
+    "digestHash": "183af8f8b9f7",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The dominant cross-family failure is attempting bare mutation verbs before discovering that writes are namespaced. The smallest generalizable fix makes that grammar explicit at the top-level write discovery point without adding workflow advice or changing behavior.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Guessed heading argument order and supplied an unsupported relative deadline."
+      },
+      {
+        "taskId": "gui-complete-locate",
+        "class": "a",
+        "note": "Looked for a bare complete command and never reached the namespaced to-do mutation."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "d",
+        "note": "Passed the unsupported value 'tonight' instead of the documented 'evening' value."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "a",
+        "note": "Looked for abandon as a bare and to-do verb before discovering the namespaced cancel command."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "a",
+        "note": "Initially searched for generic done/add commands instead of the namespaced checklist operation."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "c",
+        "note": "Misread the grouped anytime JSON payload and manually derived overdue state instead of using the built-in scope."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Treated search result tags as effective tags and omitted inherited container tags."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "a",
+        "note": "Spent discovery calls on generic edit/complete commands before locating the namespaced repeat operation."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "d",
+        "note": "Required repeated attempts to construct the namespaced repeating-series mutation."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "a",
+        "note": "Searched for bare add/edit commands before discovering the namespaced repeat operation."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "b",
+        "note": "Misunderstood Inbox as a destination container rather than the default location for an uncontained new to-do."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Passed a weekday name where --when requires a supported keyword or ISO date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 54,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.0185185185185186,
+        "medianTokensInOnSuccesses": 13140
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 15,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 10937
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 50,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.08,
+        "medianTokensInOnSuccesses": 15984
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 15,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.1333333333333333,
+        "medianTokensInOnSuccesses": 13014
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-19T01:45:42.040Z",
+    "arm": "cli",
+    "iteration": 2,
+    "digestHash": "183af8f8b9f7",
+    "patchSummary": "1 file(s) [src/cli/help.ts], +1/-1",
+    "rationale": "The top-level discovery surface currently hides several canonical todo verbs that repeatedly caused agents to probe nonexistent synonyms. Naming the registered verbs directly is the smallest generalizable change: it routes completion, cancellation, checklist, and recurrence tasks to `things todo --help` without adding workflow advice or changing behavior.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "f",
+        "note": "The newly created project's returned UUID was immediately rejected as an unknown project destination; this suggests a write/result or freshness defect, not missing help."
+      },
+      {
+        "taskId": "gui-complete-locate",
+        "class": "a",
+        "note": "The agent did not discover and invoke the namespaced todo complete command."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "b",
+        "note": "The agent assumed natural-language 'tonight' was accepted where the command requires 'evening'."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "a",
+        "note": "The agent searched for abandon rather than discovering the canonical todo cancel verb."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "a",
+        "note": "The checklist mutation was only found after probing unrelated top-level verbs."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "a",
+        "note": "The agent missed the built-in --overdue filter and attempted error-prone manual JSON filtering."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "The agent treated direct search-result tags as effective tags and omitted inherited container tags."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "d",
+        "note": "The repeating operation was discovered, but the required after-completion rule was not successfully constructed."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "d",
+        "note": "The agent incurred repeated attempts while constructing a weekly rule with multiple weekdays."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "d",
+        "note": "The agent had difficulty selecting and constructing the make-repeating operation for a plain to-do."
+      },
+      {
+        "taskId": "writes-add-inbox-todo",
+        "class": "c",
+        "note": "The agent misunderstood Inbox as a destination container rather than the default for an otherwise uncontained, unscheduled to-do."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "b",
+        "note": "The agent assumed weekday names were accepted by --when despite its fixed date vocabulary."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 54,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.0185185185185186,
+        "medianTokensInOnSuccesses": 13140
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 15,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 10937
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 56,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7678571428571429,
+        "medianTokensInOnSuccesses": 15180.5
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 14,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.0714285714285714,
+        "medianTokensInOnSuccesses": 12286
+      }
+    }
   }
 ]
