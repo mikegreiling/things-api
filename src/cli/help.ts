@@ -176,7 +176,7 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   lines.push(
     "Most commands take a ref (uuid, prefix, share link, or name) — see `things help ids`.",
   );
-  lines.push("Guides: `things help <topic>` — agent, filters, ids, output, writes.");
+  lines.push("Guides: `things help <topic>` — agent, filters, ids, output, repeating, writes.");
   lines.push("New to Things? Start with `things help agent`.");
   return lines.join("\n");
 }
@@ -337,10 +337,47 @@ cancel, move, …) is not a command — it points you at the typed form
 
 Discover every operation and the flags it needs: \`things capabilities\`.
 A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,
+
+  repeating: `REPEATING — rules for recurring to-dos and projects
+
+Verbs: \`things todo|project make-repeating <ref>\` (turn an existing item into a
+repeater), \`things project create-repeating "<title>"\`, \`… reschedule-repeat <ref>\`
+(change a rule in place). Every rule takes \`--frequency <daily|weekly|monthly|yearly>\`
+and a required \`--interval <n>\` (\`--interval 1\` = every unit). Repeating operations
+require \`--allow-disruptive\`, including \`--dry-run\` previews.
+
+Two modes:
+  fixed (default)      occurrences land on calendar dates. NOTE: this REPLACES the
+                       item — its uuid changes; re-find it by title afterwards.
+  --after-completion   next occurrence lands N units after you complete the current
+                       one. The item keeps its uuid.
+
+Shaping the rule (compose with the frequency):
+  --weekdays mon,thu,fri      weekly: MULTIPLE days in ONE rule — never make two
+                              repeaters for "every Thursday and Friday"
+  --on-day <1-31|last>        monthly/yearly: a date anchor
+  --on-weekday <day> --on-ordinal <1-5|last>   nth-weekday anchor; yearly adds
+  --yearly-month <1-12>       e.g. last Sunday of December, every year:
+                              --frequency yearly --yearly-month 12
+                              --on-weekday sunday --on-ordinal last
+  --ends-after <n> | --ends-on YYYY-MM-DD      stop bounds
+  --reminder HH:mm · --deadline · --start-days-earlier <n>
+
+Only the CURRENT occurrence is a visible to-do. \`things show <ref> --json\` on an
+occurrence carries \`repeating.templateUuid\` — use that as the <ref> for
+\`reschedule-repeat\`. Typical chain: \`things todo add "<title>" --json\`, then
+\`things todo make-repeating <returned-uuid> --frequency … --allow-disruptive\`.`,
 };
 
 /** The valid topic names, in the order the "unknown topic" hint lists them. */
-export const TOPIC_NAMES: readonly string[] = ["agent", "filters", "ids", "output", "writes"];
+export const TOPIC_NAMES: readonly string[] = [
+  "agent",
+  "filters",
+  "ids",
+  "output",
+  "repeating",
+  "writes",
+];
 
 /** Render one topic to `width`, or null when `name` is not a topic. */
 export function renderTopic(name: string, width: number): string | null {
