@@ -1040,7 +1040,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Create a to-do and return its uuid. Optionally schedule it, set a reminder or " +
         "deadline, tag it, give it a checklist, and place it in a project or area " +
-        "(optionally under an existing heading). A reminder " +
+        "(optionally under a heading within that project). A reminder " +
         "requires when = today, evening, or a date. Adding into a completed or canceled " +
         "project reopens that project — pass acknowledge_project_reopen to confirm.",
       inputSchema: {
@@ -1329,7 +1329,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "move_todo",
     {
       description:
-        "Move a to-do. Pass exactly one destination: a project and/or area (optionally an " +
+        "Move a to-do. Pass exactly one destination: a project or area (optionally an " +
         "existing heading within the project), to_inbox, or detach. Moving to the Inbox " +
         "removes any schedule; detach removes the project/area/heading assignment while " +
         "keeping the schedule. Moving into a completed or canceled project reopens that " +

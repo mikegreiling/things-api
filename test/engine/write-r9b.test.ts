@@ -380,6 +380,50 @@ describe("move to inbox / duplicate / entity updates", () => {
   });
 });
 
+describe("destination exclusivity guards", () => {
+  it("todo.add rejects project + area together", async () => {
+    seedProject(fixture.db, { title: "P" });
+    seedArea(fixture.db, "A");
+    const { vector } = fakeVector("url-scheme", URL_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "todo.add", {
+        title: "n",
+        project: { title: "P" },
+        area: { title: "A" },
+      }),
+    ).rejects.toThrow(/exclusive/);
+  });
+
+  it("todo.move rejects project + area together", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Mv" });
+    seedProject(fixture.db, { title: "P" });
+    seedArea(fixture.db, "A");
+    const { vector } = fakeVector("applescript", AS_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "todo.move", {
+        uuid,
+        project: { title: "P" },
+        area: { title: "A" },
+      }),
+    ).rejects.toThrow(/exclusive/);
+  });
+
+  it("todo.add rejects --heading without a project destination", async () => {
+    const { vector } = fakeVector("url-scheme", URL_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "todo.add", { title: "n", heading: "Later" }),
+    ).rejects.toThrow(/heading requires a project/);
+  });
+
+  it("todo.move rejects --heading without a project destination", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Mv" });
+    const { vector } = fakeVector("applescript", AS_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "todo.move", { uuid, heading: "Later" }),
+    ).rejects.toThrow(/heading requires a project/);
+  });
+});
+
 describe("dated reminders (Phase 12b, R17–R21)", () => {
   it("todo.add with a dated reminder compiles when=DATE@token and verifies", async () => {
     const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
