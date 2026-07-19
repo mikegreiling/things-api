@@ -864,7 +864,7 @@ const projectMove: CommandSpec<"project.move"> = {
 
 const todoRestore: CommandSpec<"todo.restore"> = {
   op: "todo.restore",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-TEMPLATE-CHILD-RESTORE", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);

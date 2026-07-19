@@ -9,6 +9,7 @@ import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 
 export const HAZARD_IDS = [
   "H-REPEAT-SCHEDULE",
+  "H-TEMPLATE-CHILD-RESTORE",
   "H-PROJECT-COMPLETE-CHILDREN",
   "H-CHECKLIST-REPLACE",
   "H-REOPEN-RESOLVED-PROJECT",
@@ -73,6 +74,27 @@ const GUARDS: Record<HazardId, GuardFn> = {
       remediation:
         "edit the repeat rule in the Things app; title/notes updates and checklist " +
         "replacement remain allowed on templates",
+    };
+  },
+  "H-TEMPLATE-CHILD-RESTORE": ({ op, pre }) => {
+    // A trashed to-do that lives under a repeating-template project cannot be
+    // restored: our restore moves the item to the Inbox, and the app refuses to
+    // move a template child out to a list (S-R3). Fail before the write so the
+    // caller gets the fact and the working alternative, not a raw move failure.
+    if (op !== "todo.restore") return null;
+    const target = pre.target;
+    if (target === null || target.type !== "to-do") return null;
+    const container = target.project ?? target.headingProject ?? null;
+    if (container?.isRepeatingTemplate !== true) return null;
+    return {
+      hazard: "H-TEMPLATE-CHILD-RESTORE",
+      detail:
+        "this to-do is a child of a repeating template — the Things app does not support " +
+        "restoring it from the Trash (a template child cannot be moved back out to a list)",
+      remediation:
+        "recreate the to-do inside the template project — adding to-dos there, and editing " +
+        "their title and notes, do take effect (each new occurrence copies the template's " +
+        "current children)",
     };
   },
   "H-PROJECT-COMPLETE-CHILDREN": ({ op, params, pre }) => {

@@ -596,6 +596,8 @@ interface SubtreeTodo {
   stopDate: number | null;
   deadline: number | null;
   index: number;
+  /** RSIM-S S-R1: trashed rows ride along for DELETION but are excluded from COPIES. */
+  trashed: boolean;
   /** Source heading uuid for a headed to-do; null for a direct child. */
   headingUuid: string | null;
   /** RSIM-R: rt1_recurrenceRule — non-null marks a NESTED template (repeater). */
@@ -612,18 +614,29 @@ interface SubtreeHeading {
   status: number;
   stopDate: number | null;
   index: number;
+  /** RSIM-S S-R1: trashed rows ride along for DELETION but are excluded from COPIES. */
+  trashed: boolean;
 }
 interface ProjectSubtree {
   headings: SubtreeHeading[];
   todos: SubtreeTodo[];
 }
 
-/** Read a project's full containment subtree (headings + direct/headed to-dos, with tags + checklist) before any mutation. */
+/**
+ * Read a project's full containment subtree (headings + direct/headed to-dos,
+ * with tags + checklist) before any mutation.
+ *
+ * RSIM-S (§RSIM-S S-R1): trashed rows are INCLUDED (each tagged `trashed`) so a
+ * source-DELETE conversion can hard-delete the WHOLE subtree — reality destroys
+ * a pre-trashed child along with the source, leaving no orphan. Copy paths
+ * (`materializeSubtreeCopy`) filter these back out — a spawned/template copy
+ * never carries trashed rows (RSIM-P2 A3, probe-verified).
+ */
 function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubtree {
   const headingRows = sim
     .prepare(
-      `SELECT uuid, title, notes, status, stopDate, "index" AS idx
-         FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+      `SELECT uuid, title, notes, status, stopDate, trashed, "index" AS idx
+         FROM TMTask WHERE type = 2 AND project = ? ORDER BY "index"`,
     )
     .all(projectUuid) as {
     uuid: string;
@@ -631,6 +644,7 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     notes: string | null;
     status: number;
     stopDate: number | null;
+    trashed: number;
     idx: number;
   }[];
   const headings: SubtreeHeading[] = headingRows.map((h) => ({
@@ -640,6 +654,7 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     status: h.status,
     stopDate: h.stopDate,
     index: h.idx,
+    trashed: h.trashed === 1,
   }));
   const headingUuids = headings.map((h) => h.uuid);
   // A direct child has project=<projectUuid>; a headed child has project=NULL
@@ -647,10 +662,10 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
   const placeholders = headingUuids.map(() => "?").join(", ");
   const todoRows = sim
     .prepare(
-      `SELECT uuid, title, notes, status, stopDate, deadline, heading,
+      `SELECT uuid, title, notes, status, stopDate, deadline, heading, trashed,
               rt1_recurrenceRule AS recurrenceRule, rt1_repeatingTemplate AS repeatingTemplate,
               "index" AS idx
-         FROM TMTask WHERE type = 0 AND trashed = 0
+         FROM TMTask WHERE type = 0
            AND (project = ?${headingUuids.length > 0 ? ` OR heading IN (${placeholders})` : ""})
          ORDER BY "index"`,
     )
@@ -662,6 +677,7 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     stopDate: number | null;
     deadline: number | null;
     heading: string | null;
+    trashed: number;
     recurrenceRule: unknown;
     repeatingTemplate: string | null;
     idx: number;
@@ -674,6 +690,7 @@ function readProjectSubtree(sim: DatabaseSync, projectUuid: string): ProjectSubt
     stopDate: t.stopDate,
     deadline: t.deadline,
     index: t.idx,
+    trashed: t.trashed === 1,
     headingUuid: t.heading,
     recurrenceRule: t.recurrenceRule,
     repeatingTemplate: t.repeatingTemplate,
@@ -714,6 +731,7 @@ function materializeSubtreeCopy(
 ): void {
   const headingIdMap = new Map<string, string>();
   for (const h of subtree.headings) {
+    if (h.trashed) continue; // RSIM-S S-R1: copies exclude trashed rows (RSIM-P2 A3).
     const newUuid = genUuid();
     insertTask(sim, 2, ctx, {
       uuid: newUuid,
@@ -728,6 +746,7 @@ function materializeSubtreeCopy(
     headingIdMap.set(h.uuid, newUuid);
   }
   for (const t of subtree.todos) {
+    if (t.trashed) continue; // RSIM-S S-R1: copies exclude trashed rows (RSIM-P2 A3).
     const newUuid = genUuid();
     // Preserve the containment invariant: a headed child points at the COPIED
     // heading with project NULL; a direct child points at the new project.
@@ -763,7 +782,15 @@ function materializeSubtreeCopy(
   }
 }
 
-/** Hard-DELETE a source subtree: each to-do's tags + checklist + row, then the heading rows. */
+/**
+ * Hard-DELETE a source subtree: each to-do's tags + checklist + row, then the
+ * heading rows.
+ *
+ * RSIM-S (§RSIM-S S-R1): the subtree includes already-trashed rows, and they are
+ * destroyed here too — a source-DELETE conversion hard-deletes the WHOLE source
+ * subtree, so a pre-trashed child does NOT survive as a dangling row pointing at
+ * the deleted source (it is neither copied nor left in the Trash).
+ */
 function deleteProjectSubtree(sim: DatabaseSync, subtree: ProjectSubtree): void {
   for (const t of subtree.todos) {
     sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(t.uuid);
@@ -783,7 +810,11 @@ function deleteProjectSubtree(sim: DatabaseSync, subtree: ProjectSubtree): void 
  * make-repeating from delete-and-mint-both to the source-preserving flatten path.
  */
 function subtreeHasNestedRepeater(subtree: ProjectSubtree): boolean {
-  return subtree.todos.some((t) => t.recurrenceRule !== null || t.repeatingTemplate !== null);
+  // RSIM-S S-R1: consider only live rows — a trashed nested repeater does not
+  // flip source-fate (a trashed child alone leaves the delete-default intact).
+  return subtree.todos.some(
+    (t) => !t.trashed && (t.recurrenceRule !== null || t.repeatingTemplate !== null),
+  );
 }
 
 /**
@@ -907,14 +938,18 @@ function applyMakeRepeatingFixedProjectFlatten(
   // The template project gets a plain copy of the FLATTENED subtree — nested
   // template rows are dropped; every surviving to-do copies plain via
   // materializeSubtreeCopy (start=1, no recurrence/template links).
+  // RSIM-S S-R1: the copy excludes trashed rows; materializeSubtreeCopy also
+  // skips them, but keep the flattened set clean for clarity.
   const flattened: ProjectSubtree = {
-    headings: subtree.headings,
-    todos: subtree.todos.filter((t) => t.recurrenceRule === null),
+    headings: subtree.headings.filter((h) => !h.trashed),
+    todos: subtree.todos.filter((t) => t.recurrenceRule === null && !t.trashed),
   };
   materializeSubtreeCopy(sim, ctx, flattened, templateUuid);
 
-  // Flatten the nested repeater IN the preserved source subtree.
+  // Flatten the nested repeater IN the preserved source subtree. Trashed rows
+  // ride along untouched under the preserved source (RSIM-S S-R2, inferred).
   for (const t of subtree.todos) {
+    if (t.trashed) continue;
     if (t.recurrenceRule !== null) {
       // Nested hidden template: hard-delete its tags + checklist + row.
       sim.prepare("DELETE FROM TMTaskTag WHERE tasks = ?").run(t.uuid);
