@@ -4,7 +4,7 @@ Verbs: `things todo make-repeating <ref>` / `things project make-repeating <ref>
 
 ## The two repeat modes
 
-- **Fixed schedule** (default): occurrences land on calendar dates regardless of when you finish. NOTE: making an item fixed-repeating REPLACES it — the original becomes a hidden template plus a fresh first occurrence, so its UUID changes; re-find the item by title afterward rather than reusing the old UUID.
+- **Fixed schedule** (default): occurrences land on calendar dates regardless of when you finish. NOTE: making an item fixed-repeating REPLACES it — the original becomes a hidden template plus a fresh first occurrence, so its UUID changes. The response returns a `repeating` block with the new UUIDs: `instanceUuid` (the visible current occurrence — use it to reach the item), `templateUuid` (the recurring rule — use it for `reschedule-repeat`), and `replacedUuid` (the original when it was replaced). Use those rather than re-finding the item by title.
 - **`--after-completion`**: the next occurrence is scheduled N units after you complete the current one. The item keeps its UUID.
 
 ## Rule vocabulary (compose with frequency)

@@ -9,7 +9,7 @@
  *   only tripwire moved  → timeout    (something happened, not what we asked)
  *   nothing moved        → silent-noop
  */
-import type { DeltaEvaluation } from "./delta.ts";
+import type { DeltaEvaluation, RepeatingDiscovery } from "./delta.ts";
 
 export interface PollOutcome {
   kind: "ok" | "timeout" | "mismatch" | "silent-noop";
@@ -17,6 +17,12 @@ export interface PollOutcome {
   elapsedMs: number;
   observed: Record<string, unknown> | null;
   discoveredUuid?: string;
+  /** Make-repeating: the enriched template/instance/replaced block. */
+  repeating?: RepeatingDiscovery;
+  /** Make-repeating: advisory notes from the repeating derivation. */
+  repeatingWarnings?: string[];
+  /** A distinct failure detail from a terminal evaluation (overrides the generic one). */
+  detail?: string;
 }
 
 export interface PollerDeps {
@@ -46,12 +52,31 @@ export async function pollUntilVerified(
         elapsedMs: now() - started,
         observed: last.observed,
         ...(last.discoveredUuid !== undefined && { discoveredUuid: last.discoveredUuid }),
+        ...(last.repeating !== undefined && { repeating: last.repeating }),
+        ...(last.repeatingWarnings !== undefined && { repeatingWarnings: last.repeatingWarnings }),
+      };
+    }
+    // A terminal evaluation (e.g. an unbreakable template ambiguity) will never
+    // resolve by waiting — fail fast as a mismatch with its distinct detail.
+    if (last.terminal === true) {
+      return {
+        kind: "mismatch",
+        attempts,
+        elapsedMs: now() - started,
+        observed: last.observed,
+        ...(last.detail !== undefined && { detail: last.detail }),
       };
     }
     const elapsed = now() - started;
     if (now() >= deadline) {
       const kind = last.assertedMovement ? "mismatch" : last.movement ? "timeout" : "silent-noop";
-      return { kind, attempts, elapsedMs: elapsed, observed: last.observed };
+      return {
+        kind,
+        attempts,
+        elapsedMs: elapsed,
+        observed: last.observed,
+        ...(last.detail !== undefined && { detail: last.detail }),
+      };
     }
     // poll retries are inherently sequential: each attempt must observe the DB state left by the previous wait, never overlap
     await sleep(elapsed < 2000 ? 100 : 300);

@@ -32,6 +32,7 @@ import {
   loadTarget,
   projectChildren,
   projectStatus,
+  projectSubtreeUuids,
   resolveArea,
   resolveHeading,
   resolveProject,
@@ -60,7 +61,7 @@ import {
 } from "./vectors/ui-recipes.ts";
 import type { SidebarPlacement } from "./vectors/ui-drag.ts";
 import type { CompiledInvocation, UiRecipe, VectorId } from "./vectors/types.ts";
-import type { DeltaSpec, FieldAssertion } from "./verify/delta.ts";
+import { buildRepeatingFingerprint, type DeltaSpec, type FieldAssertion } from "./verify/delta.ts";
 
 export interface CompileCtx {
   token: string | null;
@@ -1731,11 +1732,13 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
-    // Identity REPLACEMENT (UI2-a): the original to-do uuid dies; a NEW
-    // template row (type=0 with a recurrence rule) is born alongside a spawned
-    // instance sharing its title. Discover the template with the create probe,
-    // excluding the pre-existing same-title rows (incl. the dying original), and
-    // pick the template (not the spawned instance) by asserting it IS one.
+    // Identity REPLACEMENT or preserve-as-instance (UI2-a / RSIM-R): a NEW
+    // template row (type=0 with a recurrence rule) is born; the original uuid is
+    // EITHER destroyed OR relinked as the current-occurrence instance. Discover
+    // the template with the create probe (excluding the pre-existing same-title
+    // rows), pick it by asserting it IS a template, then the `repeating` context
+    // hardens discovery (restored time-bound, source-fingerprint tiebreak) and
+    // derives instance + source fate for the enriched result.
     return {
       mode: "create",
       probe: {
@@ -1743,6 +1746,12 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
         type: "to-do",
         sinceEpoch: ctx.nowEpoch - 2,
         excludeUuids: pre.sameTitleUuids,
+        ...(pre.target !== null && {
+          repeating: {
+            sourceUuid: pre.target.uuid,
+            fingerprint: buildRepeatingFingerprint(pre.target),
+          },
+        }),
       },
       assert: [{ field: "repeating.isTemplate", equals: true }],
     };
@@ -1931,14 +1940,16 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     pre.target = loadTarget(db, params.uuid);
     pre.projectRepeat = classifyProjectRepeat(db, pre.target);
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "project");
+    if (pre.target !== null) pre.repeatSubtreeUuids = projectSubtreeUuids(db, pre.target.uuid);
     return pre;
   },
   expectedDelta(pre, _params, ctx) {
-    // Identity REPLACEMENT (UIC4-b): the original project uuid dies; a NEW
-    // template project (with a recurrence rule) is born alongside a spawned
-    // instance sharing its title. Pick the TEMPLATE by asserting it IS one
-    // (area preserved), excluding the pre-existing same-title rows so discovery
-    // cannot bind to the spawned instance or the dying original.
+    // Identity REPLACEMENT or preserve-as-instance (UIC4-b / RSIM-R): a NEW
+    // template project (with a recurrence rule) is born; the source project is
+    // EITHER destroyed OR (when its subtree holds a nested repeater) relinked as
+    // the current-occurrence instance. Pick the TEMPLATE by asserting it IS one,
+    // excluding pre-existing same-title rows; the `repeating` context hardens
+    // discovery and derives instance + source fate + childrenReplaced.
     return {
       mode: "create",
       probe: {
@@ -1946,6 +1957,13 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
         type: "project",
         sinceEpoch: ctx.nowEpoch - 2,
         excludeUuids: pre.sameTitleUuids,
+        ...(pre.target !== null && {
+          repeating: {
+            sourceUuid: pre.target.uuid,
+            fingerprint: buildRepeatingFingerprint(pre.target),
+            subtreeUuids: pre.repeatSubtreeUuids ?? [],
+          },
+        }),
       },
       assert: [{ field: "repeating.isTemplate", equals: true }],
     };

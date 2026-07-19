@@ -1862,7 +1862,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "interface — every action needs dangerously_drive_gui. action start: turn a plain item " +
         "into a repeating one — this REPLACES it with a new series and cannot be undone (give " +
         "frequency + interval and optionally the weekday set, monthly/yearly day, end bound, " +
-        "reminder, or per-occurrence deadline); returns the new item's uuid. action reschedule: " +
+        "reminder, or per-occurrence deadline); returns a repeating block with instanceUuid (the " +
+        "visible occurrence), templateUuid (the rule), and replacedUuid. action reschedule: " +
         "change a repeating item's rule in place, keeping the same item (undoable — it restores " +
         "the previous rule). action pause/resume: stop or restart its new occurrences, keeping " +
         "the rule. action create (scope project only): create a project and make it repeating in " +

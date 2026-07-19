@@ -348,7 +348,7 @@ require \`--allow-disruptive\`, including \`--dry-run\` previews.
 
 Two modes:
   fixed (default)      occurrences land on calendar dates. NOTE: this REPLACES the
-                       item — its uuid changes; re-find it by title afterwards.
+                       item — the response returns the new uuids (see below).
   --after-completion   next occurrence lands N units after you complete the current
                        one. The item keeps its uuid.
 
@@ -363,9 +363,10 @@ Shaping the rule (compose with the frequency):
   --ends-after <n> | --ends-on YYYY-MM-DD      stop bounds
   --reminder HH:mm · --deadline · --start-days-earlier <n>
 
-Only the CURRENT occurrence is a visible to-do. \`things show <ref> --json\` on an
-occurrence carries \`repeating.templateUuid\` — use that as the <ref> for
-\`reschedule-repeat\`. Typical chain: \`things todo add "<title>" --json\`, then
+make-repeating returns a \`repeating\` block: \`instanceUuid\` is the visible current
+occurrence (use it to reach the item), \`templateUuid\` the recurring rule (use it as
+the <ref> for \`reschedule-repeat\`), and \`replacedUuid\` the original when it was
+replaced. Typical chain: \`things todo add "<title>" --json\`, then
 \`things todo make-repeating <returned-uuid> --frequency … --allow-disruptive\`.`,
 };
 
