@@ -36,6 +36,7 @@ import { acquireMutationLock, MutationLockError } from "./lock.ts";
 import type { Acknowledgements, OperationKind, OperationParamsMap } from "./operations.ts";
 import { planVector } from "./planner.ts";
 import type { PreState } from "./pre-state.ts";
+import { REVERSIBILITY } from "./reversibility.ts";
 import { certificationOf } from "./vectors/ui-certification.ts";
 import type { CompiledInvocation, VectorId, WriteVector } from "./vectors/types.ts";
 import {
@@ -44,6 +45,7 @@ import {
   getField,
   type DeltaSpec,
   type PreModDates,
+  type RepeatingDiscovery,
 } from "./verify/delta.ts";
 import { pollUntilVerified, type PollerDeps } from "./verify/poller.ts";
 
@@ -111,6 +113,15 @@ export type MutationResult =
        * unaffected by any other mutations made in between.
        */
       undoToken?: string;
+      /**
+       * Make-repeating conversions (todo/project make-repeating, and
+       * project.create-repeating via its promote leg): the discovered template
+       * uuid, the FK-derived current-occurrence instance (use this for the
+       * VISIBLE item), and the replaced original uuid — plus `childrenReplaced`
+       * for project conversions. `uuid` still equals `templateUuid` (use it to
+       * reschedule the repeat). Absent for every other op.
+       */
+      repeating?: RepeatingDiscovery;
       /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
       warnings?: string[];
     }
@@ -701,9 +712,10 @@ export async function runMutation<K extends OperationKind>(
       }
       // The undo token identifies THIS record on the trail (see undoToken); a
       // leg's token would be its shared txn id, but legs are never undone
-      // directly, so we only surface it for non-leg writes.
+      // directly, so we only surface it for non-leg writes. Irreversible ops get
+      // NO token: `undo --txn` can only refuse it, so emitting one is misleading.
       const resultToken =
-        options.txn?.role === "leg"
+        options.txn?.role === "leg" || REVERSIBILITY[op].class === "irreversible"
           ? undefined
           : undoToken({
               ts: startedAt.toISOString(),
@@ -714,6 +726,7 @@ export async function runMutation<K extends OperationKind>(
               ...(options.txn !== undefined && { txn: options.txn }),
             });
       const warnings: string[] = [];
+      if (outcome.repeatingWarnings !== undefined) warnings.push(...outcome.repeatingWarnings);
       if (vector.id === "ui") {
         warnings.push(
           "this change was applied by driving the local Things app through the Accessibility API",
@@ -746,6 +759,7 @@ export async function runMutation<K extends OperationKind>(
         vector: vector.id,
         tier: effectiveTier,
         ...(resultToken !== undefined && { undoToken: resultToken }),
+        ...(outcome.repeating !== undefined && { repeating: outcome.repeating }),
         ...(warnings.length > 0 && { warnings }),
       };
     }
@@ -759,11 +773,12 @@ export async function runMutation<K extends OperationKind>(
         expected: delta,
         observed: outcome.observed,
         detail:
-          outcome.kind === "silent-noop"
+          outcome.detail ??
+          (outcome.kind === "silent-noop"
             ? "no observable change in the database (the app accepted the command but did nothing)"
             : outcome.kind === "timeout"
               ? "something moved but the expected state never appeared within the timeout"
-              : "the database reached a state contradicting the expected delta",
+              : "the database reached a state contradicting the expected delta"),
       },
       classifyVerifyFailure({
         reason: outcome.kind,
