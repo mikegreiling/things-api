@@ -15,7 +15,8 @@
  */
 import type { Command } from "commander";
 
-import { ExitCode, PKG_VERSION } from "../index.ts";
+import { CLI_VERSION } from "./version.ts";
+import { ExitCode } from "../index.ts";
 
 /** One command's index line: its argument sketch and its ≤58-char descriptor. */
 interface IndexEntry {
@@ -169,7 +170,7 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   );
   lines.push(`${"  --db <path>".padEnd(col)}read from an explicit database path`);
   lines.push(`${"  -h, --help".padEnd(col)}help for things, or for any <command>`);
-  lines.push(`${"  -V, --version".padEnd(col)}print the version (${PKG_VERSION})`);
+  lines.push(`${"  -V, --version".padEnd(col)}print the version (${CLI_VERSION})`);
   lines.push("");
 
   lines.push("Run `things <command> --help` for the behavior and options of any command.");

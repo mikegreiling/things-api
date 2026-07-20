@@ -24,14 +24,15 @@ import { resolveInvocation } from "./resolve-invocation.ts";
 import { runVerbHint } from "./verb-hint.ts";
 import { setRenderClock } from "./clock.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
-import { ExitCode, PKG_VERSION, resolveClock } from "../index.ts";
+import { CLI_VERSION } from "./version.ts";
+import { ExitCode, resolveClock } from "../index.ts";
 
 export function buildProgram(): Command {
   const program = new Command();
   program
     .name("things")
     .description("Programmatic interface to Things 3 (Cultured Code)")
-    .version(PKG_VERSION)
+    .version(CLI_VERSION)
     // Unknown-command typos are answered with "did you mean …" (default on;
     // stated for the record — most top-level typos route through the bare-noun
     // did-you-mean instead, this covers the subcommand groups).
