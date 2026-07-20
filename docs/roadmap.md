@@ -144,7 +144,11 @@ The parked HELPBENCH sketch grew into **AGENTBENCH**, a self-contained mini-proj
 
 Authoritative docs (living, in-repo): [bench/CONSTITUTION.md](../bench/CONSTITUTION.md) (invariants — changes are Mike-decisions), [bench/ROADMAP.md](../bench/ROADMAP.md) (state + resume pointer + round history). Approved plan of record from the 2026-07-17 session: session "things-skill-loop".
 
-Status: **Phase 0 (harness) in progress on `mg/bench-harness`.**
+Status: **rounds 1–2 + recurrence campaign COMPLETE and merged (#196–#230); SIMFID recurrence-semantics arc merged (#231–#240).** Current state and next candidates live in [bench/ROADMAP.md](../bench/ROADMAP.md)'s resume header.
+
+## §N. Skill distribution & CLI↔skill version ratchet — PLANNED 2026-07-20, gated on skill-v2
+
+Decided-but-unbuilt: ship the agent skill in the npm package with a self-maintaining install/update story — `things install-skill` shelling out to the `skills` CLI (vercel-labs, local-path source, always `--copy`), a passive CLI-side drift notice (never agent-side version math), and a version-tolerant skill that routes around stale binaries via `npx -y things-api@latest`. Prerequisite: the skill-v2 demarcation experiment (skill = slow-moving concepts/contracts/GUI; `--help` topics = fast-moving mechanics), validated by a paired bench sweep. Full research, decisions, phases, and open questions: [design/skill-distribution.md](design/skill-distribution.md).
 
 ## §L. `--overdue` convenience filter — SHIPPED (2026-07-16)
 
