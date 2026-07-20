@@ -27,15 +27,17 @@ import { shellQuote, usageError } from "./read-driver.ts";
 /** Commander repeatable-collect: accumulate each `--tag` value. */
 export const collectRef = (value: string, previous: string[]): string[] => [...previous, value];
 
-/** Help copy for the tag-filter flags (shared verbatim across every view). */
+/**
+ * Help copy for the tag-filter flags (shared verbatim across every view). Kept
+ * to a one-liner: the full inheritance/descendant model — the two axes and how
+ * they differ between flat and container views — lives in `things help filters`.
+ */
 export const TAG_DESC =
-  "filter by tag (uuid or unique name), repeatable — several tags AND together; " +
-  "matches direct, container-inherited, or descendant-tagged items (in a container " +
-  "view — project/area/projects — the container's own inherited tags are ignored)";
+  "filter by tag (uuid or unique name), repeatable — several AND together; " +
+  "see `things help filters`";
 export const EXACT_TAG_DESC = "match the named tag(s) only — exclude hierarchy descendants";
 export const UNTAGGED_DESC =
-  'only items with no tag, direct or inherited — the app\'s "No Tag" filter (in a ' +
-  "container view: no tag on the item itself, ignoring the container's inherited tags)";
+  'only items with no tag — the app\'s "No Tag" filter; see `things help filters`';
 
 /**
  * The `--help` footer appended to the container views (`project show`,

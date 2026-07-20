@@ -243,7 +243,7 @@ export function registerProjectCommands(program: Command): void {
   const projectShow = project
     .command("show <ref>")
     .description(
-      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. --tag / --untagged filter the child to-dos by a tag carried directly on the to-do — tags inherited from this project are ignored (every child inherits them). Target by uuid or unique name.",
+      "Composite project view mirroring the native UI: active items and headings. --show-later adds scheduled/repeating/someday rows inline under their headings; --show-logged adds the full logbook. Target by uuid or unique name.",
     )
     .option("--show-later", "include scheduled, repeating, and someday rows")
     .option("--show-logged [n]", "include logged items (bare flag = all; pass a count to cap)")
@@ -260,7 +260,7 @@ export function registerProjectCommands(program: Command): void {
   project
     .command("open <ref>")
     .description(
-      "Open the project in the Things app — foregrounds the GUI on this Mac (NOT headless). Errors when the reference is not a project.",
+      "Open the project in the Things app on this Mac (brings the window forward). Errors if the reference is not a project.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")

@@ -236,8 +236,8 @@ export function registerShowCommands(program: Command): void {
   program
     .command("open <ref>")
     .description(
-      "Open the referenced resource in the Things app — foregrounds the GUI on this Mac " +
-        "(NOT headless). Resolves references exactly like `things show` (a heading " +
+      "Open the referenced resource in the Things app on this Mac (brings the window " +
+        "forward). Resolves references exactly like `things show` (a heading " +
         "reference opens its containing project), and the view keywords " +
         "(inbox, today, anytime, upcoming, someday, logbook, trash) open that view — a " +
         "keyword wins over a same-named project or area (open those by uuid). The app " +

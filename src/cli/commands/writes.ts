@@ -103,8 +103,7 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
 function addCreateTagsFlag(cmd: Command): Command {
   return cmd.option(
     "--create-tags",
-    "create any named tag that does not exist yet (nesting parent/child) before applying, " +
-      "instead of stopping on an unknown tag",
+    "create any missing tag (nesting parent/child) instead of failing on an unknown tag",
   );
 }
 
@@ -117,9 +116,8 @@ function createTagsExtra(opts: Record<string, unknown>): Partial<WriteOptions> {
 function addDriveGuiFlag(cmd: Command): Command {
   return cmd.option(
     "--dangerously-drive-gui",
-    "required: this drives the local Things app through its accessibility interface to make a " +
-      "change the app offers nowhere else; also needs `things config set ui-enabled true`. " +
-      "Intended for a dedicated always-on Mac.",
+    "required: visibly drives the Things app to make a change it offers nowhere else; " +
+      "also needs `things config set ui-enabled true`",
   );
 }
 
@@ -598,12 +596,10 @@ export function registerWriteCommands(program: Command): void {
       .description(
         "Edit a to-do's checklist. WHOLESALE: --item (repeatable) replaces the whole list, " +
           "discarding the existing items and their checked states — requires " +
-          "--acknowledge-checklist-reset when items exist. GRANULAR (one per call): " +
-          "--add/--remove/--check/--uncheck/--rename+--to/--move-item+--to-position change " +
-          "a single item with every other item's checked state PRESERVED (no reset flag " +
-          "needed). Target an item by title or by --index (1-based); duplicate titles are " +
-          "resolved best-effort (check → first unchecked, etc.). Checklist item uuids are " +
-          "internal and never exposed.",
+          "--acknowledge-checklist-reset when items exist. GRANULAR (one action per call): " +
+          "the flags below add, remove, check, uncheck, rename, or move a single item, with " +
+          "every other item's checked state PRESERVED. Target an item by title or by --index " +
+          "(1-based); duplicate titles resolve best-effort. Checklist items have no exposed uuid.",
       )
       .option("--item <text>", "wholesale: checklist item in order (repeatable)", collect, [])
       .option("--acknowledge-checklist-reset", "accept wholesale replacement of existing items")
@@ -714,12 +710,10 @@ export function registerWriteCommands(program: Command): void {
     todo
       .command("clear-reminder <uuid>")
       .description(
-        "Clear a to-do's time-of-day reminder while keeping its scheduled date. When the " +
-          "Things proxy shortcuts are installed (`things setup shortcuts`) this happens in " +
-          "place, and it is the only way for a repeating to-do; otherwise a non-repeating " +
-          "date-scheduled to-do falls back to a URL re-schedule that briefly moves it to Today " +
-          "and back. Reversible with `things undo`. Force a delivery path with --vector " +
-          "shortcuts|url-scheme.",
+        "Clear a to-do's time-of-day reminder, keeping its scheduled date. With the proxy " +
+          "shortcuts installed (`things setup shortcuts`) this is in place, and is the only " +
+          "way for a repeating to-do; otherwise a date-scheduled to-do is cleared by a brief " +
+          "re-schedule through Today. Reversible with `things undo`.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.clearReminder(uuid, writeOptionsFrom(opts)));
@@ -786,15 +780,14 @@ export function registerWriteCommands(program: Command): void {
       "todo.make-repeating",
       "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new repeating " +
         "series — the original disappears and a fresh recurring item takes its place " +
-        "(cannot be undone). Set the frequency and interval, and optionally the weekday set, " +
-        "monthly/yearly day, end bound, reminders, or deadline.",
+        "(cannot be undone). Set the rule with the flags below; see `things help repeating`.",
     ],
     [
       "reschedule-repeat",
       "todo.reschedule-repeat",
       "Change an existing repeating to-do's rule in place (the item keeps its identity). Set the " +
-        "frequency and interval, and optionally the weekday set, monthly/yearly day, end bound, " +
-        "reminders, or deadline. `things undo` restores the previous rule.",
+        "new rule with the flags below; see `things help repeating`. `things undo` restores the " +
+        "previous rule.",
     ],
   ] as const) {
     addDriveGuiFlag(
@@ -957,9 +950,8 @@ export function registerWriteCommands(program: Command): void {
           .command("reschedule-repeat <ref>")
           .description(
             "Change an existing repeating project's rule in place (target by uuid or unique name; " +
-              "the project keeps its identity). " +
-              "Set the frequency and interval, and optionally the weekday set, monthly/yearly day, " +
-              "end bound, reminders, or deadline. `things undo` restores the previous rule.",
+              "the project keeps its identity). Set the new rule with the flags below; see " +
+              "`things help repeating`. `things undo` restores the previous rule.",
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -1010,9 +1002,8 @@ export function registerWriteCommands(program: Command): void {
             "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
               "series — the original disappears and a fresh recurring project takes its place (its " +
               "area is kept; cannot be undone). An Anytime project with no area is moved to Someday " +
-              "first (a cleanup-free intermediate step, shown in --dry-run). Set the frequency and " +
-              "interval, and optionally the weekday set, monthly/yearly day, end bound, reminders, " +
-              "or deadline.",
+              "first (a cleanup-free intermediate step, shown in --dry-run). Set the rule with the " +
+              "flags below; see `things help repeating`.",
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -1402,9 +1393,8 @@ export function registerWriteCommands(program: Command): void {
         .description(
           "Move an area to a new position in the area order (target by uuid or unique name). " +
             "Pass exactly one destination: --before/--after another area, or --first/--last. " +
-            "This drives the Things window with the pointer — the app comes to the front and " +
-            "the sidebar may scroll while the area is moved; the area's projects and to-dos " +
-            "are untouched.",
+            "This visibly drives the Things app (the window comes forward and the sidebar may " +
+            "scroll); the area's projects and to-dos are untouched.",
         )
         .option("--before <area>", "place it immediately above this area (uuid or unique name)")
         .option("--after <area>", "place it immediately below this area (uuid or unique name)")

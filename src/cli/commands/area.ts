@@ -303,10 +303,8 @@ export function registerAreaCommands(program: Command): void {
     .description(
       "Composite area view mirroring the native UI: active projects first, then the " +
         "area's direct to-dos. --show-later adds the Upcoming (date-ordered) and " +
-        "Someday sections; --show-logged adds the full logbook. --tag / --untagged filter " +
-        "the rows by a tag carried directly on the row — tags inherited from this area are " +
-        "ignored (every row inherits them); no descent into project contents. Target by " +
-        "uuid or unique name.",
+        "Someday sections; --show-logged adds the full logbook. Tag filters match rows " +
+        "directly and never descend into project contents. Target by uuid or unique name.",
     )
     .option("--show-later", "include Upcoming and Someday sections")
     .option(
@@ -326,7 +324,7 @@ export function registerAreaCommands(program: Command): void {
   area
     .command("open <ref>")
     .description(
-      "Open the area in the Things app — foregrounds the GUI on this Mac (NOT headless). Errors when the reference is not an area.",
+      "Open the area in the Things app on this Mac (brings the window forward). Errors if the reference is not an area.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
