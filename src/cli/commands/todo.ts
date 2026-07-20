@@ -156,7 +156,7 @@ export function registerTodoCommands(program: Command): void {
   todo
     .command("open <ref>")
     .description(
-      "Open the to-do in the Things app — foregrounds the GUI on this Mac (NOT headless). Errors when the reference is not a to-do.",
+      "Open the to-do in the Things app on this Mac (brings the window forward). Errors if the reference is not a to-do.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
