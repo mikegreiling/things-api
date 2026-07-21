@@ -5,7 +5,13 @@ description: Read and manage a user's tasks in the Things 3 app (macOS) through 
 
 # Things CLI
 
-`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Every command supports `--help`; `things --help` is a one-screen index and `things help <topic>` has guides (`filters`, `ids`, `output`, `writes`).
+`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land.
+
+**Invoking it:** use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` for `things` in every command below (identical subcommands and flags).
+
+**Discovering commands:** `things --help` is the one-screen index. `things <group> --help` lists a group's verbs and their flags (the up-to-date mechanics for the binary you actually invoke). `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.
+
+This skill carries the slow-moving truth — the data model, how to refer to items, and the stable contracts. Verbs, flags, and per-operation details live in `--help` and the topics above, so they stay correct even when the binary is newer than this skill.
 
 ## Data model (read this first)
 
@@ -19,28 +25,31 @@ description: Read and manage a user's tasks in the Things 3 app (macOS) through 
 
 ## Referring to items
 
-Commands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output.
+Commands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).
+
+## Stable contracts
+
+These hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.
+
+- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding "no match" or "that's everything". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.
+- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed (the change did NOT stick). A nonzero exit means the write did not silently take — read the message, it usually names the fix; you are not stuck.
+- **Previews & reversal**: `--dry-run` shows the exact plan for any write without executing it; `things undo` reverses recent changes made through this tool.
+- **Disruptive gate**: repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.
+- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.
+- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.
+- **View reasoning from JSON**: `start:"inbox"`→Inbox, `start:"someday"`→Someday, `start:"active"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.
+- If the user requests a JSON reply schema, return exactly that object after the read or verified write.
 
 ## Reading
 
-`things today` / `inbox` / `upcoming` / `anytime` / `someday` / `logbook` / `trash`; `things show <ref>` (details incl. notes + checklist), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <when>`. Common filters: `--tag <name>`, `--untagged`, `--overdue`, `--limit N`. Always prefer `--json` when you will act on the output.
-
-JSON read results are in `.data` (usually `.data[]`), never `.items`; check `meta.truncation` before concluding no match exists. Search/list rows are summaries: their `tags` field is not necessarily the complete effective tag set, so use `things show <ref> --json` when notes, checklist, placement, or inherited tags matter. For view reasoning, `start: "inbox"` means Inbox, `start: "someday"` means Someday, and `start: "active"` with no `startDate` means Anytime; a dated open item belongs to Today when dated for `meta.clock.today`, otherwise Upcoming when future-dated. `todaySection` only describes Today-section placement and is not evidence that an undated item is in Today. Completed or canceled items belong in Logbook and trashed items in Trash, regardless of a stale-looking `logged` field. If the user requests a JSON reply schema, return exactly that object after the read or verified write.
+Views and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).
 
 ## Writing
 
-Namespaced verbs: `things todo add|update|complete|cancel|reopen|move|delete|restore|tags|checklist ...`, `things project add|update|complete ...`, `things area ...`, `things tag ...`, `things heading add ...`, plus `things batch` (many changes from JSONL), `things undo`, `things reorder`. Rules that matter:
-
-- Referenced containers/tags must already exist (create them first, or pass `--create-tags` where offered).
-- `--dry-run` on any write shows the exact plan without executing — use it when unsure.
-- Writes are verified; a nonzero exit means the change did NOT stick (exit 2 = usage error, exit 3 = verify failed). Read the error: it usually names the fix.
-- `things capabilities` lists what each operation supports; `things undo` reverses recent changes made through this tool.
+Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`. The gating model, scheduling parameters, and per-verb preconditions are in `things help writes`, `things help repeating`, and [references/contracts.md](references/contracts.md).
 
 ## Going deeper
 
-- [references/data-model.md](references/data-model.md) — the full model and relationships
-- [references/reads.md](references/reads.md) — views, filters, JSON output
-- [references/writes.md](references/writes.md) — operation patterns, scheduling, tags, checklists
-- [references/recurrence.md](references/recurrence.md) — repeating to-dos and projects, incl. multi-rule patterns
-- [references/safety-and-recovery.md](references/safety-and-recovery.md) — dry-run, undo, errors, ambiguity
-- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show)
+- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.
+- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.
+- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).

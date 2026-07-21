@@ -1,0 +1,81 @@
+{
+  "experiment": "skill-v2 demarcation — paired validation sweep",
+  "date": "2026-07-21",
+  "subject": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "corpus": "v3 (33 tasks)",
+  "reps": 3,
+  "splits": "all",
+  "runsPerConfig": 99,
+  "serialized": true,
+  "configs": {
+    "control": {
+      "arm": "skill",
+      "skill": "v0.2 (origin/main via BENCH_SKILL_DIR)",
+      "dev": "55/63",
+      "validation": "15/24",
+      "holdout": "11/12",
+      "overall": "81/99",
+      "safety": "clean",
+      "frictionOk": 0.79,
+      "staticTok": 4553,
+      "dynamicTok": 6255,
+      "medTokIn": 20002
+    },
+    "v2": {
+      "arm": "skill",
+      "skill": "v2 (this branch)",
+      "dev": "55/63",
+      "validation": "19/24",
+      "holdout": "11/12",
+      "overall": "85/99",
+      "safety": "clean",
+      "frictionOk": 1.09,
+      "staticTok": 4494,
+      "dynamicTok": 7068,
+      "medTokIn": 22225
+    },
+    "cli": {
+      "arm": "cli",
+      "skill": "n/a (post-#244 help)",
+      "dev": "53/63",
+      "validation": "18/24",
+      "holdout": "8/12",
+      "overall": "79/99",
+      "safety": "clean",
+      "frictionOk": 0.9,
+      "staticTok": 280,
+      "dynamicTok": 5403,
+      "medTokIn": 13586
+    }
+  },
+  "staticNuance": "The bench counts ALL reference files as static (4553 vs 4494 ~flat). A real skill always-loads only SKILL.md; references are progressive-disclosure. SKILL.md-only grew v0.2 5457 B -> v2 6746 B (+24%) because the demarcation lifted contracts into SKILL.md.",
+  "ladder": {
+    "safety": "clean all three arms",
+    "success": "v2 vs control: dev tied 55/55, validation +4 (15->19), holdout tied 11/12 — non-inferior-or-better on validation AND holdout; passes success gate",
+    "friction": "v2 WORSE 0.79->1.09 — the 'friction not-worse' bet failed",
+    "context": "bench static ~flat; bench dynamic UP 6255->7068; always-loaded SKILL.md UP +24% — the 'context down' bet failed on every measure",
+    "verdict": "v2 passes the constitution success gate but fails its own efficiency bet; at N=3 this is DIRECTIONAL, not a promotion decision (>=10 reps required to promote)."
+  },
+  "perTaskDelta": {
+    "gains": {
+      "recurrence-project [val]": "1/3->3/3",
+      "recurrence-multi-weekday [dev]": "2/3->3/3",
+      "recurrence-after-completion [dev]": "1/3->2/3",
+      "validation-reads-deadlines [val]": "2/3->3/3",
+      "validation-reasoning-heading-inheritance [val]": "1/3->2/3",
+      "longtail-tag-nesting [dev]": "2/3->3/3",
+      "gui-placement-room214 [val]": "0/3->1/3"
+    },
+    "losses": {
+      "compound-garden-shed [dev]": "3/3->1/3 (highest-variance 17-tool task)",
+      "recurrence-weekly-fixed [dev]": "2/3->1/3",
+      "validation-compound-trip-checklist [val]": "3/3->2/3"
+    }
+  },
+  "cliPost244Delta": {
+    "baseline": "corpus-v3 cli-r4 pre-#244 (2026-07-19): dev 54/63, validation 15/24, friction 1.02",
+    "post244": "dev 53/63, validation 18/24, friction 0.90",
+    "reading": "#244 help trims did NOT regress cli; validation rose, friction fell. cli overall 79/99 is at near-parity with the v0.2 skill control (81/99) — demarcation-feasibility evidence."
+  }
+}
