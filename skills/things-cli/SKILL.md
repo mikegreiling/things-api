@@ -5,13 +5,9 @@ description: Read and manage a user's tasks in the Things 3 app (macOS) through 
 
 # Things CLI
 
-`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land.
+`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).
 
-**Invoking it:** use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` for `things` in every command below (identical subcommands and flags).
-
-**Discovering commands:** `things --help` is the one-screen index. `things <group> --help` lists a group's verbs and their flags (the up-to-date mechanics for the binary you actually invoke). `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.
-
-This skill carries the slow-moving truth — the data model, how to refer to items, and the stable contracts. Verbs, flags, and per-operation details live in `--help` and the topics above, so they stay correct even when the binary is newer than this skill.
+`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.
 
 ## Data model (read this first)
 
@@ -32,9 +28,8 @@ Commands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambi
 These hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.
 
 - **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding "no match" or "that's everything". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.
-- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed (the change did NOT stick). A nonzero exit means the write did not silently take — read the message, it usually names the fix; you are not stuck.
-- **Previews & reversal**: `--dry-run` shows the exact plan for any write without executing it; `things undo` reverses recent changes made through this tool.
-- **Disruptive gate**: repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.
+- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.
+- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.
 - **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.
 - **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.
 - **View reasoning from JSON**: `start:"inbox"`→Inbox, `start:"someday"`→Someday, `start:"active"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.
@@ -46,7 +41,9 @@ Views and lookups — pass `--json` whenever you will act on the output: `things
 
 ## Writing
 
-Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`. The gating model, scheduling parameters, and per-verb preconditions are in `things help writes`, `things help repeating`, and [references/contracts.md](references/contracts.md).
+Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.
+
+**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).
 
 ## Going deeper
 
