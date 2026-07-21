@@ -22,6 +22,7 @@ import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
 import { runVerbHint } from "./verb-hint.ts";
+import { detectMoveHint, runMoveHint } from "./move-hint.ts";
 import { setRenderClock } from "./clock.ts";
 import { resolveWidth, setFitWidth } from "./width.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -91,6 +92,15 @@ export function runCli(): void {
   // show-sugar's confusing usage error (docs/design/cli-grammar.md).
   if (resolved.form === "verb-hint") {
     runVerbHint(program, resolved.argv);
+    return;
+  }
+  // A namespaced `move` carrying scheduling intent (`todo move X --when today`,
+  // `todo move X someday`) is answered with the command that actually schedules
+  // an item, instead of a bare unknown-option / excess-argument usage error
+  // (docs/design/cli-grammar.md). Never fires on a valid container move.
+  const moveHint = detectMoveHint(program, resolved.argv);
+  if (moveHint !== null) {
+    runMoveHint(moveHint);
     return;
   }
   program.parse(resolved.argv, { from: "user" });
