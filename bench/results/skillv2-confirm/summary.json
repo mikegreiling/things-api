@@ -1,0 +1,114 @@
+{
+  "experiment": "skill-v2 refinement round + promotion-grade confirmation",
+  "date": "2026-07-21",
+  "subject": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "refiner": "gpt-5.6-sol",
+  "corpus": "v3 (33 tasks)",
+  "loop": {
+    "batch": "loop-skill-v2r",
+    "tokenBudget": "24M",
+    "baselineInSession": {
+      "dev": "60/63",
+      "validation": "20/24",
+      "friction": { "dev": 1.05, "validation": 0.95 }
+    },
+    "iterations": [
+      {
+        "iter": 1,
+        "decision": "revert",
+        "reason": "validation success regressed",
+        "patch": "skills/things-cli/SKILL.md +1/-1 (compound-write hierarchy / immediate-parent / UUID-chain at the precondition entry point)",
+        "deltas": { "dev": "60->58/63", "validation": "20->19/24", "frictionVal": "0.95->1.32" }
+      },
+      {
+        "iter": 2,
+        "decision": "revert",
+        "reason": "validation success regressed",
+        "patch": "skills/things-cli/SKILL.md +2/-0 (executable outside-in dependency-ordered write pattern)",
+        "deltas": { "dev": "60->56/63", "validation": "20->17/24", "frictionVal": "0.95->1.65" }
+      }
+    ],
+    "outcome": "0 accepted / 2 reverted; clean 2-consecutive-no-accept stop. Both refiner attempts chased the remaining graded success failure (compound-garden-shed) rather than compressing SKILL.md (the ladder ranks success above friction/context), and both regressed validation. NO compression/repositioning patch survived, so friction and context were NOT recovered; the final v2 skill content is byte-identical to c50cc67 (PR #246 head).",
+    "finalHoldout": "11/12"
+  },
+  "confirmation": {
+    "design": "paired, 10 reps, validation+holdout splits only (12 tasks), 120 runs/config, serialized, world-seed 1",
+    "v2final": {
+      "skill": "v2 (in-tree, c50cc67 — unchanged by the loop)",
+      "validation": {
+        "success": "63/80",
+        "friction": 1.14,
+        "medStaticTok": 4494,
+        "medDynTok": 7079,
+        "medTokIn": 22694
+      },
+      "holdout": {
+        "success": "32/40",
+        "friction": 1.22,
+        "medStaticTok": 4494,
+        "medDynTok": 8777,
+        "medTokIn": 30124
+      },
+      "combined": {
+        "success": "95/120 (79.2%)",
+        "friction": 1.17,
+        "medDynTok": 7682,
+        "medTokIn": 24542
+      },
+      "safety": "clean",
+      "skillMdBytes": 6746
+    },
+    "control": {
+      "skill": "v0.2 (origin/main via BENCH_SKILL_DIR)",
+      "validation": {
+        "success": "54/80",
+        "friction": 0.91,
+        "medStaticTok": 4553,
+        "medDynTok": 5957,
+        "medTokIn": 18928
+      },
+      "holdout": {
+        "success": "38/40",
+        "friction": 0.89,
+        "medStaticTok": 4553,
+        "medDynTok": 6969,
+        "medTokIn": 25272
+      },
+      "combined": {
+        "success": "92/120 (76.7%)",
+        "friction": 0.9,
+        "medDynTok": 6156,
+        "medTokIn": 21123
+      },
+      "safety": "clean",
+      "skillMdBytes": 5457
+    },
+    "perTaskDelta": {
+      "validation": {
+        "v2 gains": {
+          "recurrence-marquee-yearly": "10/10 vs 5/10 (+5)",
+          "recurrence-project": "10/10 vs 6/10 (+4)"
+        },
+        "ties": "recovery-missing-area 10/10, validation-reads-deadlines 10/10, validation-writes-set-deadline 10/10, validation-compound-trip-checklist 6/6-of-10, validation-reasoning-heading-inheritance 6/6-of-10, gui-placement-room214 1/10 (both)"
+      },
+      "holdout": {
+        "v2 losses": {
+          "writes-someday-holdout": "5/10 vs 10/10 (-5) — the decisive regression",
+          "compound-tag-sweep-holdout": "9/10 vs 10/10 (-1, noise)",
+          "recurrence-reschedule-holdout": "9/10 vs 10/10 (-1, noise)"
+        },
+        "v2 gains": { "gui-upcoming-locate-holdout": "9/10 vs 8/10 (+1, noise)" }
+      }
+    },
+    "somedayRegression": "writes-someday-holdout ('Move X to Someday, no date') requires `things todo update <ref> --when someday` (start=2, startDate NULL). The prompt verb 'Move' traps agents onto the `todo move` verb (which takes --area/--project/--heading). Control v0.2 surfaces `--when someday` on the write path directly, so its agents reliably reach `update --when someday` (10/10). v2 defers scheduling parameters to `things help writes` and separates the when-vocabulary from the verb list, so v2 agents more often guess unsupported move flags (--to someday, --inbox, --detach) and never reach update --when someday (5/10). Copy-attributable, not fixture flake (paired, same world-seed, control 10/10 proves satisfiable)."
+  },
+  "verdict": {
+    "safety": "clean both configs",
+    "successGate": "FAILS. Non-inferiority required on BOTH splits. Validation: v2 63/80 > control 54/80 (BETTER, +9, entirely recurrence: marquee +5, project +4). Holdout: v2 32/40 < control 38/40 (INFERIOR, -6, driven entirely by writes-someday-holdout 5/10 vs 10/10). Holdout non-inferiority is not met.",
+    "friction": "v2 WORSE (1.17 vs 0.90) — unrecovered by the loop.",
+    "context": "v2 WORSE — dynamic 7682 vs 6156 (+25%); always-loaded SKILL.md 6746 vs 5457 B (+24%) — unrecovered by the loop.",
+    "decision": "DO NOT PROMOTE v2 as a wholesale replacement of v0.2 at 10 reps. It fails the success gate (holdout-inferior) and is worse on friction and context. The N=3 sweep's tied holdout (11/12 both) was masking variance — 10 reps exposes the someday-write regression, vindicating the >=10-rep promotion rule.",
+    "recommendationForMike": "The recurrence-family win (marquee, project) is real, large, and isolatable. Options: (1) cherry-pick the recurrence contract lift into v0.2 WITHOUT the full demarcation (keep v0.2 someday/writes copy) and re-confirm; (2) fix the v2 someday-write regression (restore explicit 'to schedule/park use update --when someday; move takes --area/--project/--heading only' on the write path) and re-confirm holdout; (3) keep v0.2. A CLI-side hint on `todo move` for scheduling intents (--to someday etc.) is a separate oddity candidate."
+  }
+}
