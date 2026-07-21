@@ -283,6 +283,15 @@ A bare `things <verb> …` whose first token is a write verb — every registere
 
 This makes those verbs **RESERVED WORDS** in bare-noun sugar position: an area literally named "update" can no longer be shown via bare `things update` (the full `things area show update` is unaffected) — a Mike-accepted trade-off, the write-side twin of the precedence-1 command reservation. Exit class is **Usage** (exit 2), consistent with the other resolver errors; under `--json` the suggestion(s) ride `error.details.suggestions` (additive, the did-you-mean `details` shape).
 
+### Scheduling intent on `move` is redirected to `update --when`
+
+`things todo move <ref>` and `things project move <ref>` change an item's **container** (`--area`/`--project`/`--heading`; a to-do also `--inbox`/`--detach`) — they never change its **schedule**. An agent that means "move X to Someday" reaches for spellings `move` does not accept and would otherwise get a bare unknown-option / excess-argument usage error that never names the command which actually schedules an item. So, BEFORE commander parses (like the bare-verb hint above), a `move` invocation carrying scheduling vocabulary is answered with the concrete working command:
+
+- a scheduling **flag** (`--to`, `--when`, `--someday`, `--today`, `--evening`, `--anytime`, `--date`, `--schedule`) or a bare **positional** term (`someday`, `today`, `evening`, `anytime`, a `YYYY-MM-DD` date) → `things <group> update <ref> --when <value>` (the recognized term, else `someday` — the park default);
+- a bare **`inbox`** positional on `todo move` → `things todo move <ref> --inbox` (the real Inbox-return; `--when inbox` is not a value). A project has no Inbox, so `project move … inbox` is left to commander.
+
+It **never fires on a valid move**: every trapped spelling is already a usage error, so the accepted grammar is unchanged. `--inbox` and `--detach` stay genuine `move` flags (never trapped), and a value flag whose value merely looks like a term (`--heading someday`, an area literally named `today`) is left alone — the known value flags are skipped before the positional scan. Exit class is **Usage** (exit 2); under `--json` the suggestion rides `error.details.suggestions`. (`src/cli/move-hint.ts`.)
+
 ## Non-goals (with reasoning)
 
 - **No sentence-like write grammar.** Writes stay one rigid `things <type> <verb> … --flags` form. A flexible, natural-language-ish parser in front of the mutation pipeline is a misparse risk exactly where the stakes are highest, and agents *prefer* one rigid, predictable form over a forgiving one. Sugar is a read-side convenience only.
