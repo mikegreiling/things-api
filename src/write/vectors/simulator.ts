@@ -557,11 +557,23 @@ function copyTaskTags(sim: DatabaseSync, fromUuid: string, toUuid: string): void
 function loadRepeatSource(
   sim: DatabaseSync,
   uuid: string,
-): { title: string; notes: string; area: string | null; startDate: number | null } {
+): {
+  title: string;
+  notes: string;
+  area: string | null;
+  startDate: number | null;
+  deadline: number | null;
+} {
   const src = sim
-    .prepare("SELECT title, notes, area, startDate FROM TMTask WHERE uuid = ?")
+    .prepare("SELECT title, notes, area, startDate, deadline FROM TMTask WHERE uuid = ?")
     .get(uuid) as
-    | { title: string | null; notes: string | null; area: string | null; startDate: number | null }
+    | {
+        title: string | null;
+        notes: string | null;
+        area: string | null;
+        startDate: number | null;
+        deadline: number | null;
+      }
     | undefined;
   if (src === undefined) throw new Error("simulator: make-repeating target not found");
   return {
@@ -569,6 +581,8 @@ function loadRepeatSource(
     notes: src.notes ?? "",
     area: src.area,
     startDate: src.startDate,
+    // §RSIM-T: a non-NULL source deadline is the sole to-do fixed-preserve trigger.
+    deadline: src.deadline,
   };
 }
 
@@ -804,10 +818,10 @@ function deleteProjectSubtree(sim: DatabaseSync, subtree: ProjectSubtree): void 
 }
 
 /**
- * RSIM-R: a NESTED repeater in a project's subtree is a to-do carrying either
+ * RSIM-R C1: a NESTED repeater in a project's subtree is a to-do carrying either
  * `rt1_recurrenceRule` (the nested hidden template) or `rt1_repeatingTemplate`
  * (the nested repeater's instance). Its presence flips the fixed project
- * make-repeating from delete-and-mint-both to the source-preserving flatten path.
+ * make-repeating from delete-and-mint-both to the source-preserving path.
  */
 function subtreeHasNestedRepeater(subtree: ProjectSubtree): boolean {
   // RSIM-S S-R1: consider only live rows — a trashed nested repeater does not
@@ -818,6 +832,32 @@ function subtreeHasNestedRepeater(subtree: ProjectSubtree): boolean {
 }
 
 /**
+ * RSIM-U (2026-07-22): the SECOND fixed-project source-preserve trigger — a plain
+ * project (no nested repeater) PRESERVES its source when EVERY live child to-do is
+ * TERMINAL (completed/canceled); a single OPEN child DELETES it (U-open). An empty
+ * subtree also deletes (needs ≥1 terminal child). Trashed children do not count —
+ * a trashed child alone leaves the delete-default intact (RSIM-S SR Proj). Headed
+ * children ride in `subtree.todos`, so headed terminal children count too.
+ */
+function subtreeAllChildrenTerminal(subtree: ProjectSubtree): boolean {
+  const live = subtree.todos.filter((t) => !t.trashed);
+  return (
+    live.length > 0 &&
+    live.every((t) => t.status === STATUS.completed || t.status === STATUS.canceled)
+  );
+}
+
+/**
+ * The two INDEPENDENT fixed-project source-PRESERVE triggers (RSIM-R C1 + RSIM-U):
+ * a nested repeater in the subtree, OR every child terminal (no open child).
+ * Either one preserves the source (relink in place, mint only the template);
+ * otherwise the source is deleted and both template + instance are minted fresh.
+ */
+function fixedProjectPreservesSource(subtree: ProjectSubtree): boolean {
+  return subtreeHasNestedRepeater(subtree) || subtreeAllChildrenTerminal(subtree);
+}
+
+/**
  * FIXED make-repeating (RSIM1 to-do / RSIM6 project / RSIM3 create leg): the
  * source is DESTROYED (identity replacement) and replaced by a hidden template
  * (start=someday, rule tp=0, next-occurrence dates) plus EXACTLY ONE instance
@@ -825,14 +865,17 @@ function subtreeHasNestedRepeater(subtree: ProjectSubtree): boolean {
  * PROJECT (type=1) with children, the source subtree is hard-deleted and a plain
  * copy is minted under BOTH new projects (RSIM-P P1).
  *
- * RSIM-R exception (fixed PROJECT only): if the source project's subtree contains
- * a NESTED repeater, the source is instead PRESERVED and relinked as the current-
- * occurrence instance, the nested repeater is FLATTENED in place, and ONLY the
- * hidden template project is minted (no separate instance project). See
- * `applyMakeRepeatingFixedProjectFlatten`. Area/When are irrelevant; the sole
- * discriminator is the nested repeater. The to-do fixed-preserve anomaly (a
- * content-rich to-do; §RSIM-R parked, unisolated trigger) is deliberately
- * UNMODELED — to-dos always delete here.
+ * Source-PRESERVE branches (probe-verified — the source is relinked in place as the
+ * current-occurrence instance and ONLY the hidden template is minted, no separate
+ * instance):
+ *   - TO-DO (type=0, §RSIM-T): preserve IFF the source carries a non-NULL `deadline`
+ *     (deadline-only preserved 1/1; bare/notes-only/tag-only/checklist-only each
+ *     DELETE 4/4). The preserved source keeps its own deadline; the template drops it.
+ *   - PROJECT (type=1, §RSIM-R C1 + §RSIM-U): preserve IFF the subtree contains a
+ *     NESTED repeater (flatten path) OR every child is TERMINAL (completed/canceled,
+ *     no open child). An open child, an empty subtree, plain-open children, area, and
+ *     schedule all DELETE. See `applyMakeRepeatingFixedProjectPreserve`.
+ * Every other case deletes-and-remints (identity replacement).
  */
 function applyMakeRepeatingFixed(
   sim: DatabaseSync,
@@ -873,9 +916,22 @@ function applyMakeRepeatingFixed(
   // RSIM-drive-proven).
   const instStartIso = deadlined ? addDaysIso(todayIso, -startEarlier) : todayIso;
 
-  // RSIM-R: fixed PROJECT with a nested repeater PRESERVES the source (flatten path).
-  if (subtree !== null && subtreeHasNestedRepeater(subtree)) {
-    applyMakeRepeatingFixedProjectFlatten(
+  // §RSIM-T: a fixed TO-DO carrying a deadline PRESERVES its source — relink it in
+  // place as the current-occurrence instance; only the template was minted above.
+  // The source keeps its own deadline (the template row already dropped it).
+  if (type === 0 && src.deadline !== null) {
+    sim
+      .prepare(
+        `UPDATE TMTask SET start = ?, startDate = ?, rt1_repeatingTemplate = ?, userModificationDate = ? WHERE uuid = ?`,
+      )
+      .run(START.someday, encodePackedDate(instStartIso), templateUuid, ctx.nowEpoch, params.uuid);
+    return;
+  }
+
+  // RSIM-R C1 + RSIM-U: a fixed PROJECT with a nested repeater OR all-terminal
+  // children PRESERVES the source (relink in place; flatten any nested repeater).
+  if (subtree !== null && fixedProjectPreservesSource(subtree)) {
+    applyMakeRepeatingFixedProjectPreserve(
       sim,
       ctx,
       params.uuid,
@@ -914,20 +970,24 @@ function applyMakeRepeatingFixed(
 }
 
 /**
- * RSIM-R (fixed PROJECT whose subtree contains a nested repeater — A1/A2/A3/S2/
- * S2b): the source project is PRESERVED and relinked as the current-occurrence
- * instance rather than deleted; the nested repeater is FLATTENED in place; and
- * only the (already-minted) hidden template project is populated — there is NO
- * separate instance project. Row-level shape (S2, re-derived uuid-by-uuid):
+ * Fixed PROJECT source-PRESERVE path — either trigger (RSIM-R C1 nested repeater,
+ * A1/A2/A3/S2/S2b; or RSIM-U all-terminal children, U-comp/U-canc/U-both). The
+ * source project is PRESERVED and relinked as the current-occurrence instance
+ * rather than deleted; any nested repeater is FLATTENED in place (a no-op for the
+ * all-terminal trigger, which has none); and only the (already-minted) hidden
+ * template project is populated — there is NO separate instance project. Row-level
+ * shape (S2/U-comp, re-derived uuid-by-uuid):
  *   - source project CHANGED: `start → 2` (someday), `startDate → currentOccurrence`,
  *     `rt1_repeatingTemplate → template`. All other source columns (title, notes,
- *     area, deadline) are left untouched.
+ *     area, deadline) are left untouched, and the source's children ride along
+ *     UNCHANGED under the preserved instance (RSIM-U: childrenReplaced=0).
  *   - nested template row hard-deleted; nested instance demoted to PLAIN
  *     (`rt1_repeatingTemplate → NULL`).
  *   - the template project receives a PLAIN copy of the FLATTENED subtree (the
- *     nested template rows excluded; the demoted instance copied as a plain to-do).
+ *     nested template rows excluded; the demoted instance copied as a plain to-do;
+ *     terminal children copy with their status preserved).
  */
-function applyMakeRepeatingFixedProjectFlatten(
+function applyMakeRepeatingFixedProjectPreserve(
   sim: DatabaseSync,
   ctx: ApplyCtx,
   sourceUuid: string,
