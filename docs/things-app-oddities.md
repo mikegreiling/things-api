@@ -341,6 +341,17 @@ Next-occurrence SPAWN and the mutability of template-side children, closed with 
 - **The per-child instance→template `rt1_repeatingTemplate` link is NONDETERMINISTIC** — across three consecutive spawns of ONE series a different subset of children lacked the back-link (6/7, 5/7, 6/6; headings never carry it). This is the direct proof behind RSIM-R's C2 nondeterminism finding: derive an instance's identity via the PROJECT-level FK only, never a child link.
 - **Quick Find surfaces the HIDDEN template.** Searching a template-only child title returns it; searching the project name returns the template project too — even though `start=2` makes the template invisible in every LIST view (§5e). The "templates are invisible" rule is a list/AppleScript filter, not a search filter, and search results carry no template/instance marker at all.
 
+### 8o. Quick Find returns hidden-template content INDISTINGUISHABLE from live items — no marker, real consequences for picking the wrong one (RSIM-P/RSIM-S, 2026-07-19, Things 3.22.11)
+
+The user-facing bug distilled from §8n's last bullet plus §8g/RSIM-P identity mechanics, filed for the Cultured Code report:
+
+- After any project is made repeating, every child title exists **twice** — once under the hidden template (`start=2`, absent from all list views) and once under the visible current occurrence. **Quick Find returns both**, rendered identically: same title, same project name shown, no template/instance badge, no ordering cue. Nothing in the UI tells the user which result is which.
+- The two results are NOT interchangeable: opening/editing the **occurrence** copy affects this occurrence only, while editing the **template** copy silently rewrites every FUTURE occurrence (§8n: spawns copy the template's live titles/notes/tags/checklists) and its status/schedule controls silently no-op (§8n immutability). A user who searches, opens the wrong twin, and edits has no feedback that they just changed the blueprint — or that their "complete" did nothing.
+- Compounding it, the template project row itself also appears in Quick Find under the same name as its occurrence project — two identically-named projects, one of which is unreachable from any list view once the search sheet closes.
+- Suggested fix (for the report): either exclude template-side rows from Quick Find (matching the list-view invisibility rule) or badge them with the repeat glyph the way template to-dos are badged in Upcoming. Evidence: [lab/rsim-results.md](lab/rsim-results.md) §RSIM-S Q2 (AX dumps + screenshots of unmarked twin results, gitignored `lab/artifacts/rsim-s-lab/ax/`).
+
+(Our own surfaces resolve this divergence in favor of information: `things search` keeps template children findable for GUI parity but marks the container — `(↻ Project)` glyph + `isRepeatingTemplate` in JSON.)
+
 ## 9. Sidebar AX mirror drops or blanks row elements after drag/scroll churn — until relaunch (AXDRAG2, 2026-07-15, Things 3.22.11)
 
 With a long sidebar (25 areas ≈ 2.3 viewports), the sidebar `AXTable`'s accessibility mirror goes **incoherent** after in-session churn — synthesized drags plus scrolling, with a held-drag scroll of ≳1.5 viewport heights the strongest single trigger, and window resizes a contributing one:
@@ -375,3 +386,5 @@ Related (TAGW1-c/-d, recorded here as taxonomy facts, not bugs): `make new tag` 
 ## Suggested report to Cultured Code
 
 Item 1 is the actionable bug: **"URL-scheme `when` update on a repeating to-do crashes Things 3.22.11 (both MAS and direct builds), while the same operation via AppleScript is correctly rejected with error 302 — the URL handler appears to skip the repeating-item validation."** Attach: repro steps above, a crash report from `~/Library/Logs/DiagnosticReports` (the lab harness collects the fresh `.ips` under `lab/artifacts/<runId>/guest-run/crash/` on every `lab:regress` run), and optionally items 2a–2c + 3 as related robustness feedback on the URL scheme's silent-failure modes.
+
+Item 2 is the UX bug: **"Quick Find surfaces hidden repeating-template projects and their child to-dos with no marker, indistinguishable from the current occurrence's items (§8o) — editing the wrong twin silently rewrites all future occurrences, and status/schedule changes on template children silently no-op (§8n)."** Suggested remedies in §8o (exclude from search like list views, or badge with the repeat glyph); attach the §RSIM-S Q2 screenshots.
