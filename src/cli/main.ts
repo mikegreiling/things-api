@@ -16,6 +16,7 @@ import { registerAreaCommands } from "./commands/area.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { registerReadCommands } from "./commands/reads.ts";
 import { registerSetup } from "./commands/setup.ts";
+import { registerInstallSkill } from "./commands/install-skill.ts";
 import { registerShowCommands } from "./commands/show.ts";
 import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
@@ -46,6 +47,7 @@ export function buildProgram(): Command {
   registerTodoCommands(program);
   registerWriteCommands(program);
   registerSetup(program);
+  registerInstallSkill(program);
   registerSnapshot(program);
   registerMcp(program);
   // The signpost index + `help [topic]` replace the multi-scroll epilog; the

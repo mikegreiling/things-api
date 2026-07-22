@@ -9,7 +9,8 @@
   "files": [
     "bin",
     "dist",
-    "shortcuts"
+    "shortcuts",
+    "skills"
   ],
   "type": "module",
   "exports": {
