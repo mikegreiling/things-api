@@ -22,7 +22,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "prepublishOnly": "npm run check && npm run build",
+    "prepublishOnly": "npm run check && npm run build && node scripts/stamp-skill.mjs",
     "smoke:pack": "bash scripts/pack-smoke.sh",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",

@@ -210,6 +210,7 @@ const AGENT_NOTE_BULLETS: readonly string[] = [
   "Symbols & colors in list output: run `things legend` (add --json for the table).",
   "Every write supports --dry-run: preview the planned change and its expected effect without executing anything.",
   "Failures are loud: a change that does not take effect exits 3; refused changes exit 4 with machine-readable remediation.",
+  "An agent skill is available: `things install-skill`. On human output the tool reads your installed skill under ~/.agents and ~/.claude and notes (once, on stderr) when it is well behind this binary; silence it with THINGS_API_NO_SKILL_CHECK=1.",
 ];
 
 function renderAgentTopic(width: number): string {
