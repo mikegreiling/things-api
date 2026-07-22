@@ -375,3 +375,80 @@ A dedicated second clone `rsim-sr-lab` ([`lab/scripts/research-rsim-sr.sh`](../.
 - **The clock technique that worked (headline):** pin 2026-07-05, do ALL setup while pinned, then `settle` (clean AppleScript quit) → `sudo date MMDDhhmmYYYY` **+1 day** → `warm` (relaunch + `AXEnhancedUserInterface=false`) → `nudge` (open Upcoming then Today to prod maintenance) → `settle` → snapshot. Repeatable: 07-06, 07-07, 07-08 all spawned cleanly. **Do NOT jump multiple days at once** — that is the RSIM-P2 A4 / RSIM-R wedge (`-128` + reboot clearing `/tmp`).
 - **Two robustness upgrades over RSIM-P2 that paid off:** (1) guest helpers in `~/things-lab/helpers/` not `/tmp` — survive any reboot from a clock jump; (2) an `alive`/`uptime` check after each advance to detect a reboot (none occurred). A transient `Permission denied` SSH auth-flap appeared once at the third advance and the `lab_ssh` 255-retry recovered it — NOT a wedge (uptime stayed continuous).
 - **S4 discovery was load-bearing for the design:** the brief asked to prepare completed/canceled/someday/scheduled/deadline template children via the CLI, but the app blocks those states on template children — so S2 had to establish them on a plain project *before* conversion. The block is itself the answer to "is a completed template child skipped at spawn?" — you cannot make a template child completed in the first place; the occurrence is pristine by construction.
+
+---
+
+# RSIM-T — ISOLATING the to-do fixed-conversion content preserve-trigger
+
+**Verdict (2026-07-22): a fixed `todo make-repeating` PRESERVES its source (relinks it in place as the instance) IFF the source to-do carries a DEADLINE — notes, a tag, and a checklist each fail to preserve.** This closes RSIM-R's parked to-do follow-up ("isolate the content preserve-trigger; deadline the leading candidate") and resolves RSIM-P2 B3 (a rich to-do — notes+tag+deadline+checklist — that preserved): the responsible axis is **deadline alone**. Four single-axis variants + a bare control, each seeded via the URL scheme then converted fixed-weekly through the **production CLI** (ui vector, tier 3), `SOURCE-FATE` re-read uuid-by-uuid from the raw before/after snapshots. ONE disposable clone `parked-probes-lab` of `things-lab-golden-v1` (golden untouched; airgapped; clock pinned **2026-07-05 12:00**; Things **3.22.11 / macOS 15.7.7 / DB v26**; **tart 2.34.0**; Accessibility via the AXVM1 rung-b grant). Branch `mg/parked-probes`, on **main @ 4802588**. Script: [`lab/scripts/research-parked.sh`](../../lab/scripts/research-parked.sh). Fixtures fully synthetic. Artifacts (gitignored): `lab/artifacts/parked-probes-lab/` (`report.txt`, `snaps/*.json`, `drive-t-*.log`, `diff_snaps.py`).
+
+## Executed verdicts (2026-07-22)
+
+| Cell | source content (else bare) | source fate | delta shape | CLI `repeating.replacedUuid` |
+|---|---|---|---|---|
+| **T-bare** | none | **DELETE** | INSERT 2 (template + instance) / DELETE 1 (source `Foqy4Pty`) | `Foqy4PtyoC2ctp22N5no4T` (source gone) |
+| **T-deadline** | deadline 2026-08-01 | **PRESERVE** | INSERT 1 (template `9AP1LUkL`) / CHANGE (source `6D6YX7ZC` → instance) | **`null`** (source relinked) |
+| **T-notes** | notes | **DELETE** | INSERT 2 / DELETE 1 (source `WYgAc5hM`) | `WYgAc5hMtMTt7G3RPJPmcb` |
+| **T-tag** | 1 tag | **DELETE** | INSERT 2 / DELETE 1 (source `WLpmC6Uf`) | `WLpmC6UfRGstrZiDRaZNAZ` |
+| **T-checklist** | 2-item checklist | **DELETE** | INSERT 2 / DELETE 1 (source `2sQ7Zu1T`) | `2sQ7Zu1TKepjXRW7LLBgZo` |
+
+`SOURCE-FATE` line, deadline cell: `src=6D6YX7ZCd6hqLxy7ugUjYp [exists|tmpl|start|startDate|hasRule] = 1|9AP1LUkL853p7zjd5nBEBe|start=2|startDate=132805248|hasRule=0` — the source SURVIVES with `rt1_repeatingTemplate` set (it became the instance). Every other cell: `exists=0` (source hard-deleted, replaced by a fresh instance uuid). So **notes, tag, and checklist are each EXCLUDED** as triggers (T-checklist re-confirms RSIM-R S3); **deadline is the SINGLE isolated preserve axis**, cleanly 1/1 preserve vs 4/4 delete on the other axes.
+
+## Row-level evidence — T-deadline (the lone preserve)
+
+Seed `6D6YX7ZC` fixed-weekly convert delta **INSERT 1 / CHANGE 2**:
+```
++ INSERT 9AP1LUkL853p7zjd5nBEBe  "PT-Deadline"  type=0 start=2 startDate=NULL deadline=NULL
+    rule(628B){tp=0, fu=256, fa=1, of=[{wd:0}], ts=0, ed=64092211200.0, …}  icCount=1 next=2026-07-12   ← fresh TEMPLATE
+~ CHANGE 6D6YX7ZCd6hqLxy7ugUjYp  "PT-Deadline"   ← SOURCE becomes the INSTANCE
+    start 0→2 · startDate None→2026-07-05 · rt1_repeatingTemplate None→PT-Deadline[9AP1LUkL]
+~ CHANGE BEDQ346J4z39cZMCFy1Zen  (prior T-bare instance — todayIndex churn only)
+```
+The template row carries `deadline=NULL` while the preserved source-instance RETAINS its deadline (`132808832` = 2026-08-01) — matching RSIM-P2 B3's asymmetry (**template drops the deadline; instance keeps it**), so a source-fingerprint must not compare deadline. The four DELETE cells are the canonical fixed shape: source gone, fresh template (`start=2`, rule, `icCount=1`, `next=2026-07-12`) + fresh instance (`tmpl=template`, `startDate=2026-07-05`).
+
+## Reconciled to-do source-fate law (supersedes the "unisolated trigger" caveat in §RSIM-R)
+
+A fixed `todo make-repeating`:
+- **DELETES** the source (identity replacement, fresh template + instance) when the source is **bare, notes-only, tag-only, or checklist-only** (RSIM1/R5/R6/S3 + T-bare/T-notes/T-tag/T-checklist).
+- **PRESERVES** the source (relinks it in place as the instance; mints only the template) when the source carries a **deadline** (RSIM-P2 B3, isolated here as T-deadline).
+
+**SIMFID:** this makes the to-do source-fate a MODELLABLE branch, not merely a tolerance — `applyMakeRepeatingFixed` (to-do) may preserve-source iff the pre-read source has a non-NULL `deadline`, else delete. (The bench simulator's always-delete stays correct for bare/checklist bench items; the deadline branch is the added fidelity if repeat-with-deadline corpora are introduced.) Untested edge: a deadline COMBINED with a checklist/notes/tag — B3 (all four) preserved, consistent with deadline dominating; no cell here sets deadline alongside another axis, so "deadline overrides" is inferred, not proven.
+
+---
+
+# RSIM-U — a completed/canceled child is a SECOND project fixed-conversion preserve-trigger
+
+**Verdict (2026-07-22): a fixed `project make-repeating` on a plain project (NO nested repeater) PRESERVES its source when the project's children are all in a TERMINAL state (completed and/or canceled) — an OPEN child instead DELETES it.** This resolves the RSIM-S RS2 residual (a plain project with a completed+canceled child that PRESERVED, flagged as either a second preserve-trigger or residual nondeterminism): it is a **real, deterministic second preserve-trigger**, not nondeterminism. Combined with RSIM-R C1 (nested-repeater preserve), a fixed project conversion now has **two** independent preserve conditions. Four plain area-less projects, each given a child-state set **while still plain** (the only time those states are settable — §8n / S4), then converted fixed-weekly through the production CLI; `SOURCE-FATE` re-read from raw. Same rig/clone as RSIM-T (`parked-probes-lab`, tart 2.34.0, `mg/parked-probes` on main @ 4802588, script [`lab/scripts/research-parked.sh`](../../lab/scripts/research-parked.sh)). Artifacts: `lab/artifacts/parked-probes-lab/` (`drive-u-*.log`, `snaps/`).
+
+## Executed verdicts (2026-07-22)
+
+| Cell | child state(s) (set while plain) | source fate | CLI `repeating` block | delta shape |
+|---|---|---|---|---|
+| **U-open** | 1 OPEN (`status=0`) | **DELETE** | `replacedUuid=XdesrnCf childrenReplaced=1` | INSERT 4 (template+child, instance+child) / DELETE 2 (source `XdesrnCf` + its child) |
+| **U-comp** | 1 COMPLETED (`status=3`) | **PRESERVE** | `replacedUuid=null childrenReplaced=0` | INSERT 2 (template + fresh template-side child) / CHANGE (source `99GXBnQh` → instance) |
+| **U-canc** | 1 CANCELED (`status=2`) | **PRESERVE** | `replacedUuid=null childrenReplaced=0` | INSERT 2 / CHANGE (source `CoQsW3cw` → instance) |
+| **U-both** | 1 COMPLETED + 1 CANCELED | **PRESERVE** | `replacedUuid=null childrenReplaced=0` | INSERT 3 (template + 2 template-side children) / CHANGE (source `2xy7YMHt` → instance) |
+
+`SOURCE-FATE`, U-open: `src=XdesrnCfXazNivWRv2sY2F … = 0|NULL|…` (source hard-deleted, fresh instance `5VTAzrgs` minted, its open child re-copied — `childrenReplaced=1`). U-comp/canc/both: `exists=1`, `rt1_repeatingTemplate=<newTemplate>`, `start=2`, `startDate=132805248` — the source PERSISTS as the instance (`childrenReplaced=0`, the terminal child rides along on the preserved instance side; the app mints only the template + a fresh open copy of the child on the template side).
+
+## Row-level evidence — U-comp (the isolating pair vs U-open)
+
+U-comp (completed child) delta **INSERT 2 / CHANGE 2**:
+```
++ INSERT FtdV5THcQSz6pBK9RwUs5R  "PU-Comp"  type=1 start=2 rule(fu=256,tp=0) icCount=1 next=2026-07-12  ← TEMPLATE
++ INSERT KDuuYterPW5nAbvn4eqb9c  "PU-C-child"  project=PU-Comp[FtdV5THc]  (fresh template-side copy)
+~ CHANGE 99GXBnQh7LW6YRohV6o14a  "PU-Comp"   start 1→2 · startDate None→2026-07-05 · rt1_repeatingTemplate None→PU-Comp[FtdV5THc]  ← SOURCE → INSTANCE
+```
+U-open (open child), by contrast, DELETES the source + its child and mints a **separate** instance project (`5VTAzrgs`) with its own child — the classic delete-remint. The ONLY structural difference across the four cells is the child's status, so status is the isolated axis.
+
+## Reconciled project source-fate law (extends §RSIM-R C1)
+
+A fixed `project make-repeating` **PRESERVES** the source project (relinks it in place as the instance; mints only the template) when EITHER:
+1. the subtree contains a **nested repeating to-do** (flatten path — RSIM-R C1: A1/A2/A3/S2/S2b), OR
+2. **every child is terminal-state** (completed/canceled) — no open child (RSIM-U: U-comp/U-canc/U-both; explains RSIM-S RS2).
+
+Otherwise (empty; ≥1 open child; plain-open children ± heading; area'd; scheduled) it **DELETES** the source and mints template + instance fresh (RSIM-R: R1/R3/R4/S1/P1/RSIM6; RSIM-S RS Daily; U-open). Area and When remain irrelevant.
+
+**Unisolated cell (flagged, not chased):** every RSIM-U preserve case had **zero** open children — so the axis proven is "an open child present → DELETE; all children terminal → PRESERVE." Whether a SINGLE terminal child *among open siblings* suffices to flip the fate is untested (a mixed open+terminal subtree). A 2-cell follow-up (one open + one completed child, vs two open children) would close it.
+
+**SIMFID:** `applyMakeRepeatingFixed` (project) must preserve-source when the pre-read subtree has a nested repeater **OR** no open child (all children `status IN (2,3)`), else delete — extends §RSIM-R simulator verdict #1 (the nested-repeater-only preserve condition was incomplete).

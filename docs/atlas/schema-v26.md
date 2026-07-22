@@ -121,12 +121,12 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 |---|---|---|
 | Epoch REAL | `creationDate`, `userModificationDate`, `stopDate`, `lastReminderInteractionDate`, `usedDate`, `deletionDate`, `manualLogDate`, `repeaterMigrationDate` | Unix seconds (fractional). |
 | Packed date int | `startDate`, `deadline`, `deadlineSuppressionDate`, `todayIndexReferenceDate`, `rt1_*StartDate/*ReferenceDate` | `y<<16 \| m<<12 \| d<<7`; low 7 bits observed 0. Decode: `y = v>>16`, `m = (v>>12)&0xF`, `d = (v>>7)&0x1F`. |
-| Packed time int | `reminderTime` | TBD (Phase-1 codec test; hour/minute in high bits). |
+| Packed time int | `reminderTime` | **`hour<<26 \| minute<<20`** (i.e. `(hour*64 + minute) << 20`). Verified: R-suite (13 known-time samples, 2026-07-04) + independently re-derived 4/4 in the parked-probe campaign (2026-07-22, `when=@HH:MM` fixtures: 09:00→603979776, 14:30→970981376, 00:15→15728640, 18:07→1215299584). |
 | Plist BLOBs | `Meta.value`, `rt1_recurrenceRule`, `repeater`, `definition`, `experimental`, `cachedTags` | Parse only `Meta.databaseVersion` (extract the `<integer>`); treat the rest as opaque. |
 
 ## Open questions (lab probe backlog)
 
-1. `reminderTime` bit layout (safe to derive from fixtures: set reminders at known times in the lab VM, read back).
+1. ~~`reminderTime` bit layout~~ **ANSWERED — `reminderTime = hour<<26 | minute<<20`** (R-suite 2026-07-04, 13 samples; re-derived 4/4 in the parked-probe campaign 2026-07-22 via `when=@HH:MM` fixtures — see the Scheduling table `reminderTime` row + the Encodings table). No sign/overflow surprises across 00:00–23:59.
 2. ~~`repeater` BLOB vs `rt1_recurrenceRule`~~ **ANSWERED (lab, 2026-07-03): 3.22.11 authors `rt1_recurrenceRule`; `repeater` stays NULL.**
 3. Heading `status` semantics when a heading is archived in UI — **PARTIALLY ANSWERED (2026-07-17, aggregate-only production shape survey for the bench world profile): non-open headings DO occur in the wild (two `type=2` rows with `status=3` observed), so archived/completed headings take completed status.** Remaining: whether UI "archive heading" is what writes `status=3` (vs project completion cascading) — lab probe still wanted.
 4. ~~`TMAreaTag` population conditions~~ **PARTIALLY ANSWERED (lab): AppleScript `set tag names of area` populates `TMAreaTag` immediately. Why Mike's production table is empty despite historical area-tag use remains a curiosity.**
