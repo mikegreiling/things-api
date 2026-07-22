@@ -1,6 +1,7 @@
 ---
 name: things-cli
 description: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.
+version: 0.0.0-dev
 ---
 
 # Things CLI

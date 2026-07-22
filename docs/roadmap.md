@@ -146,9 +146,9 @@ Authoritative docs (living, in-repo): [bench/CONSTITUTION.md](../bench/CONSTITUT
 
 Status: **rounds 1–2 + recurrence campaign COMPLETE and merged (#196–#230); SIMFID recurrence-semantics arc merged (#231–#240).** Current state and next candidates live in [bench/ROADMAP.md](../bench/ROADMAP.md)'s resume header.
 
-## §N. Skill distribution & CLI↔skill version ratchet — PLANNED 2026-07-20, gated on skill-v2
+## §N. Skill distribution & CLI↔skill version ratchet — EXECUTING (skill-v2 shipped #246)
 
-Decided-but-unbuilt: ship the agent skill in the npm package with a self-maintaining install/update story — `things install-skill` shelling out to the `skills` CLI (vercel-labs, local-path source, always `--copy`), a passive CLI-side drift notice (never agent-side version math), and a version-tolerant skill that routes around stale binaries via `npx -y things-api@latest`. Prerequisite: the skill-v2 demarcation experiment (skill = slow-moving concepts/contracts/GUI; `--help` topics = fast-moving mechanics), validated by a paired bench sweep. Full research, decisions, phases, and open questions: [design/skill-distribution.md](design/skill-distribution.md).
+Ship the agent skill in the npm package with a self-maintaining install/update story — `things install-skill` shelling out to the `skills` CLI (vercel-labs, local-path source, their **default** materialization — the `--copy` idea was dropped once the sandbox probe proved the canonical copy is always physical), a passive CLI-side drift notice (never agent-side version math), and a version-tolerant skill that routes around stale binaries via `npx -y things-api@latest`. Prerequisite skill-v2 demarcation (skill = slow-moving concepts/contracts/GUI; `--help` topics = fast-moving mechanics) shipped in #246. Phase 2 (distribution: `install-skill` + help footer + README + `skills/` in the npm `files` list) landed; phase 3 (publish-time stamp + CLI drift check) follows. Full research, decisions, phases, and open questions: [design/skill-distribution.md](design/skill-distribution.md).
 
 ## §L. `--overdue` convenience filter — SHIPPED (2026-07-16)
 

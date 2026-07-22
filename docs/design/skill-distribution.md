@@ -1,6 +1,6 @@
 # Skill distribution & the CLI↔skill version ratchet
 
-Status: **TENTATIVE PLAN** (decided 2026-07-20, Mike + session "things-skill-loop"). Execution is gated on the skill-v2 demarcation experiment (below); revisit this doc after that experiment reports. Bench context in `bench/ROADMAP.md`; the refinement evidence cited here lives in `bench/results/` and `bench/ledger/`.
+Status: **EXECUTING** (skill-v2 shipped #246; distribution phase 2 landing now). Decided 2026-07-20, Mike + session "things-skill-loop". Phase progress: phase 1 (skill-v2 demarcation) **DONE** (#246, paired sweep validated); phase 2 (distribution — `install-skill`, help footer, README, `skills/` in `files`) **DONE**; phase 3 (ratchet — publish-time stamp, CLI drift notice) **NEXT**. Bench context in `bench/ROADMAP.md`; the refinement evidence cited here lives in `bench/results/` and `bench/ledger/`.
 
 ## Goal
 
@@ -57,7 +57,8 @@ Principle: **never spend agent reasoning on version math** — bench data says s
 
 ## Open questions (resolve during phase 2 build)
 
-- ~~Verify `skills add <local-path>` layout semantics~~ **ANSWERED 2026-07-20 (sandbox probe, v1.5.19)**: canonical is a real copy of the source, `--copy` governs only the agent-dir hop — see research section. Still open from that probe: re-add behavior (clean overwrite vs error — decides whether `install-skill` needs a `remove` first) and the agent-dir symlink-vs-copy variance across adapters (claude-code copied even by default). Build a small integration test around the shell-out either way.
+- ~~Verify `skills add <local-path>` layout semantics~~ **ANSWERED 2026-07-20 (sandbox probe, v1.5.19)**: canonical is a real copy of the source, `--copy` governs only the agent-dir hop — see research section.
+- ~~Re-add behavior (clean overwrite vs error — decides whether `install-skill` needs a `remove` first)~~ **ANSWERED 2026-07-21 (fake-HOME re-add probe, v1.5.19)**: re-add is a **clean, non-interactive overwrite** — the canonical `~/.agents/skills/things-cli/` directory is replaced **wholesale** (an appended sentinel line in the installed SKILL.md and an added orphan file were both gone after the second `skills add … -y`), and re-add exits 0 rather than erroring. So **`install-skill` needs no `remove` first**; re-running it IS the update. (The agent-dir hop reports `overwrites: <agents>` and proceeds under `-y`.) Our built-in copy fallback matches this by replacing the destination directory wholesale (`rm -rf` + copy). A note also fell out of the probe: the skills CLI only materializes into agent dirs it **detects** — a fake HOME with no `~/.claude` got only the canonical `~/.agents` copy, confirming the drift check must stat the canonical root first and treat agent-specific dirs as optional.
 - The CLI drift check should stat the CANONICAL `~/.agents/skills/things-cli/` first (agent dirs may be symlinks to it), falling back to agent-specific dirs for skills installed by other means.
 - Whether `install-skill` defaults to `-g` (probably yes; `--project` opt-in for repo-local installs).
 - Whether `skills update` records a local-path source usefully for our copies, or whether our re-run-install-skill story fully supersedes it (likely the latter; if so say so in README to avoid two competing update paths).

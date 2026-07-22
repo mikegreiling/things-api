@@ -42,7 +42,16 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
   },
   {
     title: "Setup & diagnostics",
-    commands: ["config", "doctor", "capabilities", "setup", "mcp", "snapshot", "legend"],
+    commands: [
+      "config",
+      "doctor",
+      "capabilities",
+      "setup",
+      "install-skill",
+      "mcp",
+      "snapshot",
+      "legend",
+    ],
   },
 ];
 
@@ -82,6 +91,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   doctor: { args: "", desc: "check environment health and pending setup" },
   capabilities: { args: "", desc: "what each write operation supports" },
   setup: { args: "<verb>", desc: "one-time setup (install the Shortcuts)" },
+  "install-skill": { args: "", desc: "install the agent skill for coding agents" },
   mcp: { args: "", desc: "serve the Model Context Protocol server on stdio" },
   snapshot: { args: "", desc: "full normalized dump of every record" },
   legend: { args: "", desc: "the symbols and colors list output uses" },
@@ -179,6 +189,7 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   );
   lines.push("Guides: `things help <topic>` — agent, filters, ids, output, repeating, writes.");
   lines.push("New to Things? Start with `things help agent`.");
+  lines.push("Agent skill available: run `things install-skill`.");
   return lines.join("\n");
 }
 

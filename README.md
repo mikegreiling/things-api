@@ -84,6 +84,28 @@ things undo                                    # execute it — verified like an
 
 Failure modes are first-class: a `verify-failed:silent-noop` means the app accepted the command and did nothing (a real Things behavior the guards mostly prevent — see [docs/things-app-oddities.md](docs/things-app-oddities.md)); `blocked:*` responses include machine-readable remediation.
 
+## Agent skill
+
+An [agent skill](skills/things-cli/SKILL.md) ships in the package: a compact orientation an agent loads once — the data model, how to refer to items, and the stable machine contracts — pointing at `things --help` and `things help <topic>` for the fast-moving mechanics. **Install the skill and the rest self-maintains:** CLI access is via whatever `things` (or `npx`) resolves, mechanics come from that binary's own help, and version nudges flow both ways.
+
+Install (or update) it with one command:
+
+```sh
+things install-skill          # global: covers every agent harness the skills CLI detects
+things install-skill --project   # into the current project's .agents instead
+things install-skill --check     # compare installed vs bundled version, write nothing
+```
+
+Under the hood it hands the bundled skill to the [`skills` CLI](https://github.com/vercel-labs/skills) (`npx -y skills add …`), which keeps one canonical copy under `~/.agents/skills/` and materializes it into each detected agent's directory (`~/.claude/skills/`, `~/.codex/skills/`, …). When that tool or the network is unavailable it falls back to a plain copy into `~/.agents` and `~/.claude`. **Re-running `things install-skill` IS the update** — it replaces the skill wholesale — so prefer it over a generic `skills update` for this skill (a single, unambiguous update path).
+
+Three entry angles, all converging on the same working setup:
+
+- **CLI installed** (`npm i -g things-api`) → `things --help` suggests `things install-skill`.
+- **No install** → `npx things-api install-skill` places the skill; the skill itself falls back to `npx -y things-api@latest` for every command, so it works with no global binary on PATH.
+- **Skill first, zero npm knowledge** → `npx skills add mikegreiling/things-api` pulls the skill straight from GitHub (whatever `skills/things-cli/` currently holds).
+
+To keep the two sides from drifting, the `things` binary carries a version-stamped copy of the skill and (on human/`--help` output only, never `--json`) notes when the installed skill is well behind it. That notice reads the well-known skill directories under `~/.agents` and `~/.claude`; disable it with `THINGS_API_NO_SKILL_CHECK=1`.
+
 ## Architecture: one library, thin surfaces
 
 The TypeScript library (`import { openThings } from "things-api"`) is the product; the CLI and the MCP server are thin presentation layers over the same `ThingsClient` — every read view and every verified mutation is a client method first. Shared machine contracts (JSON envelope, exit codes) live in the core (`contracts.ts`), and `diagnose()` / `capabilitiesTable()` are library functions the surfaces merely render.
