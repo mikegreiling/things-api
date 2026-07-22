@@ -1577,5 +1577,195 @@
         "medianTokensInOnSuccesses": 12286
       }
     }
+  },
+  {
+    "timestamp": "2026-07-21T06:56:31.896Z",
+    "arm": "skill",
+    "iteration": 1,
+    "digestHash": "c7f77c410d13",
+    "patchSummary": "1 file(s) [skills/things-cli/SKILL.md], +1/-1",
+    "rationale": "This is the smallest generalizable fix for the only graded state failure: it makes the hierarchy, immediate-parent placement, returned-UUID chain, and per-command persistence explicit at the existing precondition entry point, preventing duplicate ancestors during recovery.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "data-model-misunderstanding",
+        "note": "The compound hierarchy was repeatedly recreated instead of treating each successful ancestor write as persistent and placing each child through its immediate parent UUID."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "discovery",
+        "note": "The agent searched for obsolete reference files and a top-level add command before finding the namespaced todo verb."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "argument-construction",
+        "note": "The agent needed help discovery before constructing the overdue-filtered read."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "tool-defect",
+        "note": "things show rejected an exact existing title as not-found while returning that same item as a candidate, preventing the documented full effective-tag read."
+      },
+      {
+        "taskId": "recovery-project-children-policy",
+        "class": "behavior-misunderstanding",
+        "note": "The agent needed to discover how project completion handles still-open children."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "argument-construction",
+        "note": "The after-completion recurrence capability was known, but its exact invocation required additional help lookup."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "argument-construction",
+        "note": "The agent needed additional command discovery before constructing the single multi-weekday rule."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "argument-construction",
+        "note": "The agent needed additional help lookup to construct the fixed weekly recurrence invocation."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "argument-construction",
+        "note": "The agent needed group help to determine the area-placement flag for the move."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "argument-construction",
+        "note": "The agent needed per-verb help to construct the scheduled add."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 60,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.05,
+        "medianTokensInOnSuccesses": 21497
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 20,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.95,
+        "medianTokensInOnSuccesses": 23573
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 58,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.0862068965517242,
+        "medianTokensInOnSuccesses": 25586.5
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 19,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.3157894736842106,
+        "medianTokensInOnSuccesses": 28827
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-21T07:17:11.315Z",
+    "arm": "skill",
+    "iteration": 2,
+    "digestHash": "c7f77c410d13",
+    "patchSummary": "1 file(s) [skills/things-cli/SKILL.md], +2/-0",
+    "rationale": "The severe compound failure created many duplicate parents while no requested children landed. A single dependency-ordered pattern at the writing entry point turns the existing abstract outside-in rule into an executable contract and explicitly prevents restarting successful parent steps.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "e",
+        "note": "Failed recovery: repeated parent creation produced duplicate projects and headings instead of retaining returned UUIDs and retrying only the failed child."
+      },
+      {
+        "taskId": "gui-evening-tonight",
+        "class": "d",
+        "note": "Argument-construction friction while discovering the todo add invocation and evening scheduling value."
+      },
+      {
+        "taskId": "reads-overdue",
+        "class": "d",
+        "note": "Argument-construction friction while locating and applying the overdue read filter."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "e",
+        "note": "Failed recovery: show-by-title returned a candidate UUID, but the agent did not retry with that UUID to obtain effective inherited tags."
+      },
+      {
+        "taskId": "recovery-project-children-policy",
+        "class": "b",
+        "note": "Behavior misunderstanding about completing a project and its still-open children."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "d",
+        "note": "Argument-construction friction around the after-completion recurrence flags and disruptive gate."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "d",
+        "note": "Argument-construction friction around creating the item first and supplying one multi-weekday recurrence rule."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "d",
+        "note": "Argument-construction friction around fixed weekly recurrence flags and gating."
+      },
+      {
+        "taskId": "writes-move-to-area",
+        "class": "d",
+        "note": "Argument-construction friction while discovering the todo move invocation for an area."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Argument-construction friction while discovering todo add scheduling flags."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 60,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.05,
+        "medianTokensInOnSuccesses": 21497
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 20,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.95,
+        "medianTokensInOnSuccesses": 23573
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 56,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.1071428571428572,
+        "medianTokensInOnSuccesses": 18698
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 17,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.6470588235294117,
+        "medianTokensInOnSuccesses": 29055
+      }
+    }
   }
 ]

@@ -1,0 +1,266 @@
+{
+  "taskId": "validation-writes-set-deadline",
+  "family": "writes",
+  "arm": "skill",
+  "model": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "prompt": "Give my 'Submit the rebate form' to-do a deadline of July 30th.",
+  "systemPrompt": "You are an assistant helping a user manage their tasks in the Things app (Things 3, by Cultured Code).\n\nYou have one tool: a bash shell. The `things` command-line program is installed and on PATH; use it to inspect and change the user's tasks. You have no prior knowledge of how `things` works — discover its commands, flags, and output by running `things --help` and `things <command> --help`.\n\nStandard POSIX utilities (cat, grep, jq, sed, ls, ...) are available in the shell for parsing output.\n\nFinal-answer protocol: when the task asks a question, finish your reply with exactly one fenced code block tagged `json` containing the answer as a JSON object, as the last thing in your message with nothing after it. When the task only asks you to change something, no json block is required.\n\nA reference skill for the `things` CLI is mounted in the filesystem. Before working by trial and error, read /skill/SKILL.md — it documents the data model, the available commands and their flags, output shapes, and safety/recovery notes. It links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, safety-and-recovery); read the ones relevant to your task. The skill describes the same CLI you have; prefer it over rediscovering the interface from --help.",
+  "grade": {
+    "success": true,
+    "safety": "ok",
+    "dbChanged": true
+  },
+  "metrics": {
+    "turns": 5,
+    "toolCalls": 4,
+    "errorsSeen": 1,
+    "tokensIn": 13592,
+    "tokensInCached": 0,
+    "tokensOut": 285,
+    "wallMs": 10636
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Give my 'Submit the rebate form' to-do a deadline of July 30th."
+        }
+      ],
+      "timestamp": 1784665004720
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_rdzAE1qenAeXEhxDitBOJh7S|fc_0e36ccf55fb4c07e016a5fd3adfbd48193a0efe5dcd1154947",
+          "name": "bash",
+          "arguments": {
+            "command": "cat /skill/SKILL.md && printf '\\n---DATA MODEL---\\n' && cat /skill/references/data-model.md && printf '\\n---WRITES---\\n' && cat /skill/references/writes.md && printf '\\n---SAFETY---\\n' && cat /skill/references/safety-and-recovery.md && printf '\\n---THINGS HELP---\\n' && things --help && printf '\\n---EDIT HELP---\\n' && things edit --help"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 382,
+        "output": 120,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 502,
+        "cost": {
+          "input": 0.0002865,
+          "output": 0.00054,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0008265
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665004720,
+      "responseId": "resp_0e36ccf55fb4c07e016a5fd3ad58548193bbd2814bc6a5deee"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_rdzAE1qenAeXEhxDitBOJh7S|fc_0e36ccf55fb4c07e016a5fd3adfbd48193a0efe5dcd1154947",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).\n\n`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).\n\n## Stable contracts\n\nThese hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.\n\n- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding \"no match\" or \"that's everything\". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.\n- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.\n- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.\n- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.\n- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.\n- **View reasoning from JSON**: `start:\"inbox\"`→Inbox, `start:\"someday\"`→Someday, `start:\"active\"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.\n- If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Reading\n\nViews and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).\n\n## Writing\n\nNamespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.\n\n**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).\n\n## Going deeper\n\n- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.\n- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).\n\n---DATA MODEL---\n[stderr]\ncat: /skill/references/data-model.md: No such file or directory\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784665007493
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_kC02BJPHWUSgI0HWP9JBHFS2|fc_0e36ccf55fb4c07e016a5fd3b08f4c8193b595bb325a2ee063",
+          "name": "bash",
+          "arguments": {
+            "command": "ls -R /skill/references && printf '\\n---WRITES HELP---\\n' && things help writes && printf '\\n---SEARCH HELP---\\n' && things search --help && printf '\\n---TODO UPDATE HELP---\\n' && things todo update --help"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2120,
+        "output": 74,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 2194,
+        "cost": {
+          "input": 0.00159,
+          "output": 0.000333,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.001923
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665007494,
+      "responseId": "resp_0e36ccf55fb4c07e016a5fd3b001d48193afa27dc3843f1ea1"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_kC02BJPHWUSgI0HWP9JBHFS2|fc_0e36ccf55fb4c07e016a5fd3b08f4c8193b595bb325a2ee063",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "/skill/references:\ncontracts.md\ngui.md\nmodel.md\n\n---WRITES HELP---\nWRITES — the gating model, undo, and setup\n\nEvery write behaves the same way:\n  - Success means the change happened; if it did not take effect the command exits\n    non-zero with a machine-readable reason.\n  - --dry-run previews the planned change and its expected effect; nothing runs.\n  - No command prompts interactively. A change that cascades, is permanent, or\n    disturbs the app requires an explicit flag, named for its consequence:\n      --acknowledge-*           confirm a cascade or a reset (named per command)\n      --children <policy>       decide what happens to a container's open to-dos\n      --dangerously-permanent   accept a permanent, unrecoverable delete\n      --allow-disruptive        permit a change that briefly steals window focus\n      --allow-very-disruptive   permit a change that visibly drives the Things app\n      --dangerously-drive-gui   for the few operations the app offers nowhere else\n\nUndo — `things undo`:\n  Reverse recent changes made through this tool, newest first; each undo applies\n  the inverse change. --dry-run shows the plan. Irreversible changes (permanent\n  deletes, unknown prior state) are reported, never guessed. Changes made directly\n  in the Things app cannot be undone here.\n\nConfiguration that affects writes — `things config set <key> <value>`:\n  actor               author name recorded on each change\n  maxDisruption       ceiling for how disruptive a change may be\n  ui-enabled          allow the GUI-driven operations\n  allow-experimental  enable experimental strategies (e.g. native reorder)\n\nWrites are NAMESPACED: a bare `things <verb> …` (update, add, delete, complete,\ncancel, move, …) is not a command — it points you at the typed form\n(`things todo|project|area|tag|heading <verb> …`), never running the change.\n\nDiscover every operation and the flags it needs: `things capabilities`.\nA few operations need the bundled Shortcuts: `things setup shortcuts`.\n\n---SEARCH HELP---\nUsage: things search [options] <query>\n\nTitle/notes substring search, ranked: title matches first, then notes, then a\nproject surfaced by a matching heading title (shown as its parent project, `via\nheading`); projects rank above to-dos, active above someday, ties broken by\nmost-recently-modified. Default scope: OPEN + untrashed items only — widen with\n--logged / --trashed / --all. Scope with --project / --area / --tag (tag matches\ninclude hierarchy descendants) / --type / --overdue (open items past their\ndeadline).\n\nOptions:\n  --project <ref>  restrict to one project's children (uuid or unique name)\n  --area <ref>     restrict to one area's direct members (uuid or unique name)\n  --tag <ref>      filter by tag (uuid or unique name), repeatable — several AND\n                   together; see `things help filters` (default: [])\n  --exact-tag      match the named tag(s) only — exclude hierarchy descendants\n  --untagged       only items with no tag — the app's \"No Tag\" filter; see\n                   `things help filters`\n  --overdue        only open items past their deadline (due today is not\n                   overdue)\n  --type <kind>    todo | project\n  --logged         include completed/canceled items\n  --trashed        include trashed items\n  --all            everything, unbounded: open + logged + trashed, with no row\n                   limit (excludes --limit)\n  --limit <n>      maximum items to show (default 50)\n  --json           emit versioned JSON envelope on stdout\n  --db <path>      explicit database path\n  -h, --help       display help for command\n\nsymbols & colors: run `things legend`\n\n---TODO UPDATE HELP---\nUsage: things todo update [options] <uuid>\n\nUpdate title/notes/when/reminder/deadline. Schedule and deadline changes are not\navailable for repeating to-dos (title/notes are). --reminder needs --when\ntoday|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing\nreminder is auto-preserved. --clear-reminder works while the to-do is scheduled\nfor today|evening — a DATED reminder can only be changed, not cleared\n(re-schedule to today first). --append-notes/--prepend-notes join with a newline\n(exclusive with --notes).\n\nOptions:\n  --title <text>           new title\n  --notes <text>           replace notes\n  --append-notes <text>    append to existing notes (newline-joined)\n  --prepend-notes <text>   prepend to existing notes (newline-joined)\n  --when <value>           today | evening | anytime | someday | YYYY-MM-DD\n  --reminder <HH:mm>       set a reminder (24h); requires --when\n                           today|evening|date\n  --clear-reminder         clear the reminder (works while scheduled\n                           today|evening)\n  --deadline <date>        YYYY-MM-DD\n  --clear-deadline         remove the deadline\n  --json                   emit versioned JSON envelope on stdout\n  --db <path>              explicit database path\n  --dry-run                preview the planned change and its expected effect;\n                           nothing executes\n  --vector <id>            force how the change is delivered: url-scheme |\n                           applescript | shortcuts | ui\n  --allow-disruptive       permit changes that briefly steal window focus\n  --allow-very-disruptive  permit changes that visibly drive the Things UI\n  --verify-timeout <ms>    how long to wait for the change to take effect\n  --actor <name>           author name recorded for this change (default: from\n                           config)\n  -h, --help               display help for command\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784665009873
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_XI6tyLlFikHle6WHUwVt7XMa|fc_0e36ccf55fb4c07e016a5fd3b3899c8193a95f6224c66c2938",
+          "name": "bash",
+          "arguments": {
+            "command": "things search --json 'Submit the rebate form'"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 3488,
+        "output": 27,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 3515,
+        "cost": {
+          "input": 0.0026160000000000003,
+          "output": 0.0001215,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0027375000000000003
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665009873,
+      "responseId": "resp_0e36ccf55fb4c07e016a5fd3b2f7988193b9b8a79070257a26"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_XI6tyLlFikHle6WHUwVt7XMa|fc_0e36ccf55fb4c07e016a5fd3b3899c8193a95f6224c66c2938",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"search\",\"data\":[{\"uuid\":\"todo-0230\",\"title\":\"Submit the rebate form\",\"status\":\"open\",\"logged\":false,\"trashed\":false,\"start\":\"active\",\"area\":{\"uuid\":\"area-0229\",\"title\":\"Paperwork\"},\"repeating\":{\"isTemplate\":false,\"isInstance\":false,\"templateUuid\":null},\"created\":\"2026-05-28T20:26:40.000Z\",\"modified\":\"2026-05-28T20:26:40.000Z\",\"type\":\"to-do\",\"checklistItemsCount\":0,\"openChecklistItemsCount\":0}],\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":7,\"truncation\":{\"shown\":1,\"total\":1,\"limit\":50,\"truncated\":false},\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784665011914
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_lkKbdujnLLAfU7oVl5lbKwkf|fc_0e36ccf55fb4c07e016a5fd3b53c388193bcd224c39f5e83eb",
+          "name": "bash",
+          "arguments": {
+            "command": "things todo update todo-0230 --deadline 2026-07-30 --json"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 3724,
+        "output": 35,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 3759,
+        "cost": {
+          "input": 0.002793,
+          "output": 0.0001575,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0029505
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665011914,
+      "responseId": "resp_0e36ccf55fb4c07e016a5fd3b497e081938b1ce148db1a8883"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_lkKbdujnLLAfU7oVl5lbKwkf|fc_0e36ccf55fb4c07e016a5fd3b53c388193bcd224c39f5e83eb",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"mutation-result\",\"data\":{\"kind\":\"ok\",\"op\":\"todo.update\",\"uuid\":\"todo-0230\",\"observed\":{\"deadline\":\"2026-07-30\"},\"vector\":\"url-scheme\",\"tier\":1,\"undoToken\":\"m-016ff6273711\"},\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":62,\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784665013720
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "```json\n{\"ok\":true,\"todo\":\"Submit the rebate form\",\"deadline\":\"2026-07-30\"}\n```",
+          "textSignature": "{\"v\":1,\"id\":\"msg_0e36ccf55fb4c07e016a5fd3b6fe70819380dba6d6cf6b607b\",\"phase\":\"final_answer\"}"
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 3878,
+        "output": 29,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 3907,
+        "cost": {
+          "input": 0.0029085,
+          "output": 0.0001305,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.003039
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1784665013721,
+      "responseId": "resp_0e36ccf55fb4c07e016a5fd3b67cc481939422acbacde970ce"
+    }
+  ]
+}

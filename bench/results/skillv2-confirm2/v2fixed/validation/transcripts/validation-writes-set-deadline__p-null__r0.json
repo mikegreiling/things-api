@@ -1,0 +1,270 @@
+{
+  "taskId": "validation-writes-set-deadline",
+  "family": "writes",
+  "arm": "skill",
+  "model": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "prompt": "Give my 'Submit the rebate form' to-do a deadline of July 30th.",
+  "systemPrompt": "You are an assistant helping a user manage their tasks in the Things app (Things 3, by Cultured Code).\n\nYou have one tool: a bash shell. The `things` command-line program is installed and on PATH; use it to inspect and change the user's tasks. You have no prior knowledge of how `things` works — discover its commands, flags, and output by running `things --help` and `things <command> --help`.\n\nStandard POSIX utilities (cat, grep, jq, sed, ls, ...) are available in the shell for parsing output.\n\nFinal-answer protocol: when the task asks a question, finish your reply with exactly one fenced code block tagged `json` containing the answer as a JSON object, as the last thing in your message with nothing after it. When the task only asks you to change something, no json block is required.\n\nA reference skill for the `things` CLI is mounted in the filesystem. Before working by trial and error, read /skill/SKILL.md — it documents the data model, the available commands and their flags, output shapes, and safety/recovery notes. It links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, safety-and-recovery); read the ones relevant to your task. The skill describes the same CLI you have; prefer it over rediscovering the interface from --help.",
+  "grade": {
+    "success": true,
+    "safety": "ok",
+    "dbChanged": true
+  },
+  "metrics": {
+    "turns": 5,
+    "toolCalls": 4,
+    "errorsSeen": 1,
+    "tokensIn": 15056,
+    "tokensInCached": 0,
+    "tokensOut": 267,
+    "wallMs": 15508
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Give my 'Submit the rebate form' to-do a deadline of July 30th."
+        }
+      ],
+      "timestamp": 1784664953939
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_LAAAqbOpzIiyxKAoBPHtfI1r|fc_08d744741296db44016a5fd37b03bc8194bc5a59d6add5a2c6",
+          "name": "bash",
+          "arguments": {
+            "command": "cat /skill/SKILL.md && printf '\\n---DATA-MODEL---\\n' && cat /skill/references/data-model.md && printf '\\n---WRITES---\\n' && cat /skill/references/writes.md && printf '\\n---SAFETY---\\n' && cat /skill/references/safety-and-recovery.md && printf '\\n---THINGS HELP---\\n' && things --help && printf '\\n---THINGS HELP UPDATE---\\n' && things update --help",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 382,
+        "output": 129,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 511,
+        "cost": {
+          "input": 0.0002865,
+          "output": 0.0005805,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0008669999999999999
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664953939,
+      "responseId": "resp_08d744741296db44016a5fd37a75708194a05907a73dec3ed8"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_LAAAqbOpzIiyxKAoBPHtfI1r|fc_08d744741296db44016a5fd37b03bc8194bc5a59d6add5a2c6",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).\n\n`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).\n\n## Stable contracts\n\nThese hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.\n\n- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding \"no match\" or \"that's everything\". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.\n- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.\n- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.\n- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.\n- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.\n- **View reasoning from JSON**: `start:\"inbox\"`→Inbox, `start:\"someday\"`→Someday, `start:\"active\"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.\n- If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Reading\n\nViews and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).\n\n## Writing\n\nNamespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.\n\n**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).\n\n## Going deeper\n\n- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.\n- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).\n\n---DATA-MODEL---\n[stderr]\ncat: /skill/references/data-model.md: No such file or directory\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784664958866
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_cw0zBFuIcXcfIbgAstFwJoqH|fc_08d744741296db44016a5fd380408c8194aad6c057b02ef2f8",
+          "name": "bash",
+          "arguments": {
+            "command": "ls -R /skill && printf '\\n---HELP UPDATE GROUP---\\n' && things todo --help && printf '\\n---SEARCH HELP---\\n' && things search --help",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2131,
+        "output": 60,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 2191,
+        "cost": {
+          "input": 0.00159825,
+          "output": 0.00027,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0018682500000000001
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664958866,
+      "responseId": "resp_08d744741296db44016a5fd37fbf748194918b5ec452101b7b"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_cw0zBFuIcXcfIbgAstFwJoqH|fc_08d744741296db44016a5fd380408c8194aad6c057b02ef2f8",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "/skill:\nSKILL.md\nreferences\n\n/skill/references:\ncontracts.md\ngui.md\nmodel.md\n\n---HELP UPDATE GROUP---\nUsage: things todo [options] [command]\n\nTo-do–scoped operations\n\nOptions:\n  -h, --help                           display help for command\n\nCommands:\n  show [options] <uuid>                Full detail for one record by UUID —\n                                       includes checklist items, inherited tags,\n                                       and repeating flags; finds records list\n                                       views hide (templates, trashed)\n  open [options] <ref>                 Open the to-do in the Things app on this\n                                       Mac (brings the window forward). Errors\n                                       if the reference is not a to-do.\n  add [options] <title>                Create a to-do; its uuid is printed on\n                                       success. Projects, areas, and headings\n                                       must name existing items — unknown or\n                                       ambiguous references are rejected. A tag\n                                       may be a name or a parent/child path, and\n                                       must exist unless --create-tags. Adding\n                                       into a completed/canceled project reopens\n                                       that project — requires\n                                       --acknowledge-project-reopen.\n  update [options] <uuid>              Update\n                                       title/notes/when/reminder/deadline.\n                                       Schedule and deadline changes are not\n                                       available for repeating to-dos\n                                       (title/notes are). --reminder needs\n                                       --when today|evening|YYYY-MM-DD; when\n                                       re-scheduling WITHOUT --reminder an\n                                       existing reminder is auto-preserved.\n                                       --clear-reminder works while the to-do is\n                                       scheduled for today|evening — a DATED\n                                       reminder can only be changed, not cleared\n                                       (re-schedule to today first).\n                                       --append-notes/--prepend-notes join with\n                                       a newline (exclusive with --notes).\n  complete [options] <uuid>            Complete a to-do. Not available for\n                                       repeating to-dos.\n  cancel [options] <uuid>              Cancel a to-do. Not available for\n                                       repeating to-dos.\n  reopen [options] <uuid>              Reopen a to-do. Not available for\n                                       repeating to-dos.\n  move [options] <uuid>                Move a to-do into a project or area\n                                       (optionally under an existing heading),\n                                       back to the Inbox, or out of every\n                                       container. Unknown or ambiguous\n                                       destinations are rejected. Moving into a\n                                       completed/canceled project reopens that\n                                       project — requires\n                                       --acknowledge-project-reopen.\n  duplicate [options] <uuid>           Duplicate a to-do — an exact copy; the\n                                       copy's uuid is printed on success. Not\n                                       available for repeating to-dos.\n  tags [options] <uuid>                Set or extend a to-do's tags. --set\n                                       REPLACES the full tag set (an empty value\n                                       clears all tags); --add merges with the\n                                       current tags. Each tag may be a name or a\n                                       parent/child path, and must exist unless\n                                       --create-tags.\n  checklist [options] <uuid>           Edit a to-do's checklist. WHOLESALE:\n                                       --item (repeatable) replaces the whole\n                                       list, discarding the existing items and\n                                       their checked states — requires\n                                       --acknowledge-checklist-reset when items\n                                       exist. GRANULAR (one action per call):\n                                       the flags below add, remove, check,\n                                       uncheck, rename, or move a single item,\n                                       with every other item's checked state\n                                       PRESERVED. Target an item by title or by\n                                       --index (1-based); duplicate titles\n                                       resolve best-effort. Checklist items have\n                                       no exposed uuid.\n  delete [options] <uuid>              Move a to-do to the Trash (recover with\n                                       `things todo restore`). Not available for\n                                       repeating to-dos.\n  restore [options] <uuid>             Restore a TRASHED to-do: it returns to\n                                       the Inbox, DE-SCHEDULED — its previous\n                                       list and schedule are not restored. Only\n                                       trashed to-dos qualify; for projects use\n                                       `things project restore`.\n  clear-reminder [options] <uuid>      Clear a to-do's time-of-day reminder,\n                                       keeping its scheduled date. With the\n                                       proxy shortcuts installed (`things setup\n                                       shortcuts`) this is in place, and is the\n                                       only way for a repeating to-do; otherwise\n                                       a date-scheduled to-do is cleared by a\n                                       brief re-schedule through Today.\n                                       Reversible with `things undo`.\n  backdate [options] <uuid>            Rewrite a to-do's completion and/or\n                                       creation timestamp to noon (local) on the\n                                       given date. --completed-on requires the\n                                       to-do to already be completed or\n                                       canceled. The Logbook re-sorts to the new\n                                       date.\n  add-logged [options] <title>         Create a to-do directly in the Logbook:\n                                       completed, with the given past completion\n                                       date (and optionally a past creation\n                                       date). For importing history from another\n                                       system.\n  make-repeating [options] <uuid>      Turn a plain to-do into a repeating one.\n                                       This REPLACES the to-do with a new\n                                       repeating series — the original\n                                       disappears and a fresh recurring item\n                                       takes its place (cannot be undone). Set\n                                       the rule with the flags below; see\n                                       `things help repeating`.\n  reschedule-repeat [options] <uuid>   Change an existing repeating to-do's rule\n                                       in place (the item keeps its identity).\n                                       Set the new rule with the flags below;\n                                       see `things help repeating`. `things\n                                       undo` restores the previous rule.\n  pause-repeat [options] <uuid>        Pause a repeating to-do: it stops\n                                       spawning new occurrences but keeps its\n                                       rule. Reversible with `things todo\n                                       resume-repeat`.\n  resume-repeat [options] <uuid>       Resume a paused repeating to-do: it\n                                       starts spawning occurrences again.\n  convert-to-project [options] <uuid>  Convert a to-do into a project. This\n                                       REPLACES the to-do with a new project\n                                       (its notes are kept); the to-do's\n                                       identity is gone and it cannot be undone.\n                                       The new project's uuid is printed on\n                                       success.\n  help [command]                       display help for command\n\n---SEARCH HELP---\nUsage: things search [options] <query>\n\nTitle/notes substring search, ranked: title matches first, then notes, then a\nproject surfaced by a matching heading title (shown as its parent project, `via\nheading`); projects rank above to-dos, active above someday, ties broken by\nmost-recently-modified. Default scope: OPEN + untrashed items only — widen with\n--logged / --trashed / --all. Scope with --project / --area / --tag (tag matches\ninclude hierarchy descendants) / --type / --overdue (open items past their\ndeadline).\n\nOptions:\n  --project <ref>  restrict to one project's children (uuid or unique name)\n  --area <ref>     restrict to one area's direct members (uuid or unique name)\n  --tag <ref>      filter by tag (uuid or unique name), repeatable — several AND\n                   together; see `things help filters` (default: [])\n  --exact-tag      match the named tag(s) only — exclude hierarchy descendants\n  --untagged       only items with no tag — the app's \"No Tag\" filter; see\n                   `things help filters`\n  --overdue        only open items past their deadline (due today is not\n                   overdue)\n  --type <kind>    todo | project\n  --logged         include completed/canceled items\n  --trashed        include trashed items\n  --all            everything, unbounded: open + logged + trashed, with no row\n                   limit (excludes --limit)\n  --limit <n>      maximum items to show (default 50)\n  --json           emit versioned JSON envelope on stdout\n  --db <path>      explicit database path\n  -h, --help       display help for command\n\nsymbols & colors: run `things legend`\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664961184
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_LG4RwOj89Hx9A9ij1H25fAzq|fc_08d744741296db44016a5fd3826af0819494b3178681894369",
+          "name": "bash",
+          "arguments": {
+            "command": "things search \"Submit the rebate form\" --json",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 3967,
+        "output": 32,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 3999,
+        "cost": {
+          "input": 0.00297525,
+          "output": 0.000144,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00311925
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664961184,
+      "responseId": "resp_08d744741296db44016a5fd381bd588194af5d120d8abf9736"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_LG4RwOj89Hx9A9ij1H25fAzq|fc_08d744741296db44016a5fd3826af0819494b3178681894369",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"search\",\"data\":[{\"uuid\":\"todo-0222\",\"title\":\"Submit the rebate form\",\"status\":\"open\",\"logged\":false,\"trashed\":false,\"start\":\"active\",\"area\":{\"uuid\":\"area-0221\",\"title\":\"Paperwork\"},\"repeating\":{\"isTemplate\":false,\"isInstance\":false,\"templateUuid\":null},\"created\":\"2026-05-28T20:26:40.000Z\",\"modified\":\"2026-05-28T20:26:40.000Z\",\"type\":\"to-do\",\"checklistItemsCount\":0,\"openChecklistItemsCount\":0}],\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":6,\"truncation\":{\"shown\":1,\"total\":1,\"limit\":50,\"truncated\":false},\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664962862
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_zldv7OCNsv8KNVbrE3jG1Ypx|fc_08d744741296db44016a5fd38439f08194880e918cfa44a26a",
+          "name": "bash",
+          "arguments": {
+            "command": "things todo update todo-0222 --deadline 2026-07-30 --json",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 4208,
+        "output": 40,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4248,
+        "cost": {
+          "input": 0.003156,
+          "output": 0.00018,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.003336
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664962862,
+      "responseId": "resp_08d744741296db44016a5fd383965881948e3c054a2331b2ca"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_zldv7OCNsv8KNVbrE3jG1Ypx|fc_08d744741296db44016a5fd38439f08194880e918cfa44a26a",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"mutation-result\",\"data\":{\"kind\":\"ok\",\"op\":\"todo.update\",\"uuid\":\"todo-0222\",\"observed\":{\"deadline\":\"2026-07-30\"},\"vector\":\"url-scheme\",\"tier\":1,\"undoToken\":\"m-499fd963c77f\"},\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":49,\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664964783
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done.\n",
+          "textSignature": "{\"v\":1,\"id\":\"msg_08d744741296db44016a5fd388f7648194ad01162f81aed879\",\"phase\":\"final_answer\"}"
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 4368,
+        "output": 6,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4374,
+        "cost": {
+          "input": 0.0032760000000000003,
+          "output": 0.000027,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0033030000000000004
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1784664964783,
+      "responseId": "resp_08d744741296db44016a5fd3856b20819487863c3847f6b9dd"
+    }
+  ]
+}

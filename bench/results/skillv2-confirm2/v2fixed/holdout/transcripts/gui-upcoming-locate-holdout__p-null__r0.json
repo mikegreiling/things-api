@@ -1,0 +1,270 @@
+{
+  "taskId": "gui-upcoming-locate-holdout",
+  "family": "gui-perception",
+  "arm": "skill",
+  "model": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "prompt": "Schedule 'Confirm the cabin reservation' for next Monday, July 27th, and tell me which view I'll see it in until that day arrives. Reply JSON {\"view\": \"<lowercase view name>\"}.",
+  "systemPrompt": "You are an assistant helping a user manage their tasks in the Things app (Things 3, by Cultured Code).\n\nYou have one tool: a bash shell. The `things` command-line program is installed and on PATH; use it to inspect and change the user's tasks. You have no prior knowledge of how `things` works — discover its commands, flags, and output by running `things --help` and `things <command> --help`.\n\nStandard POSIX utilities (cat, grep, jq, sed, ls, ...) are available in the shell for parsing output.\n\nFinal-answer protocol: when the task asks a question, finish your reply with exactly one fenced code block tagged `json` containing the answer as a JSON object, as the last thing in your message with nothing after it. When the task only asks you to change something, no json block is required.\n\nA reference skill for the `things` CLI is mounted in the filesystem. Before working by trial and error, read /skill/SKILL.md — it documents the data model, the available commands and their flags, output shapes, and safety/recovery notes. It links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, safety-and-recovery); read the ones relevant to your task. The skill describes the same CLI you have; prefer it over rediscovering the interface from --help.",
+  "grade": {
+    "success": true,
+    "safety": "ok",
+    "dbChanged": true
+  },
+  "metrics": {
+    "turns": 5,
+    "toolCalls": 4,
+    "errorsSeen": 2,
+    "tokensIn": 17451,
+    "tokensInCached": 0,
+    "tokensOut": 307,
+    "wallMs": 15112
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Schedule 'Confirm the cabin reservation' for next Monday, July 27th, and tell me which view I'll see it in until that day arrives. Reply JSON {\"view\": \"<lowercase view name>\"}."
+        }
+      ],
+      "timestamp": 1784665260134
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_ViCC6BQDXw58VMeyJgDI9i5I|fc_0ca594fce506fac7016a5fd4af39cc819792ed9d9ec50d2e62",
+          "name": "bash",
+          "arguments": {
+            "command": "cat /skill/SKILL.md && printf '\\n---DATA-MODEL---\\n' && cat /skill/references/data-model.md && printf '\\n---WRITES---\\n' && cat /skill/references/writes.md && printf '\\n---GUI---\\n' && cat /skill/references/gui.md && printf '\\n---RECURRENCE---\\n' && cat /skill/references/recurrence.md && printf '\\n---SAFETY---\\n' && cat /skill/references/safety-and-recovery.md",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 406,
+        "output": 136,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 542,
+        "cost": {
+          "input": 0.00030450000000000003,
+          "output": 0.000612,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0009165
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665260134,
+      "responseId": "resp_0ca594fce506fac7016a5fd4adca048197a29056adedd6436c"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_ViCC6BQDXw58VMeyJgDI9i5I|fc_0ca594fce506fac7016a5fd4af39cc819792ed9d9ec50d2e62",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).\n\n`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).\n\n## Stable contracts\n\nThese hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.\n\n- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding \"no match\" or \"that's everything\". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.\n- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.\n- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.\n- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.\n- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.\n- **View reasoning from JSON**: `start:\"inbox\"`→Inbox, `start:\"someday\"`→Someday, `start:\"active\"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.\n- If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Reading\n\nViews and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).\n\n## Writing\n\nNamespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.\n\n**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).\n\n## Going deeper\n\n- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.\n- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).\n\n---DATA-MODEL---\n[stderr]\ncat: /skill/references/data-model.md: No such file or directory\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784665265034
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_DIPBGbB0FhzMljF2n1U5GDH0|fc_0ca594fce506fac7016a5fd4b2cf4481978e58644079afa947",
+          "name": "bash",
+          "arguments": {
+            "command": "find /skill -maxdepth 2 -type f | sort | sed 's#^#/##' | xargs -I{} sh -c 'echo --- {}; cat {}'",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2162,
+        "output": 60,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 2222,
+        "cost": {
+          "input": 0.0016215000000000001,
+          "output": 0.00027,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0018915000000000002
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665265034,
+      "responseId": "resp_0ca594fce506fac7016a5fd4b232bc819788b8c313b8cae07f"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_DIPBGbB0FhzMljF2n1U5GDH0|fc_0ca594fce506fac7016a5fd4b2cf4481978e58644079afa947",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "[stderr]\nxargs: invalid option -- 'I'\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784665267433
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_57sk9f09Ft0UJC08aG59j21l|fc_0ca594fce506fac7016a5fd4b703348197976705c3307a3155",
+          "name": "bash",
+          "arguments": {
+            "command": "find /skill -maxdepth 2 -type f | sort | while read f; do echo \"--- $f ---\"; cat \"$f\"; done",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2250,
+        "output": 55,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 2305,
+        "cost": {
+          "input": 0.0016875,
+          "output": 0.0002475,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.001935
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665267434,
+      "responseId": "resp_0ca594fce506fac7016a5fd4b66a7c8197a41441469387ff42"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_57sk9f09Ft0UJC08aG59j21l|fc_0ca594fce506fac7016a5fd4b703348197976705c3307a3155",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "--- /skill/references/contracts.md ---\n# Stable contracts: envelope, exit codes, safety, recurrence\n\nThe apiVersion-stable contracts that hold regardless of which binary version you invoke. Mechanics — verbs, flags, per-operation preconditions — live in `things <group> --help` and `things help <topic>` and version with the binary; the contracts here do not.\n\n## JSON envelope\n\nEvery `--json` response is an envelope `{ ok, data, meta }`:\n\n- Results are in `.data` (usually `.data[]`), **never** `.items`. Item UUIDs are in `.uuid`, not `.id`.\n- Check `meta.truncation` (and `meta.grouped`) before concluding \"no match\" or \"that's everything\": if `shown < total`, raise `--limit` or narrow the filter rather than assuming you saw everything.\n- List/search rows are **summaries**: their `tags` field is not necessarily the complete effective set, and placement can be partial. Use `things show <ref> --json` when notes, checklist, placement, or inherited/effective tags matter.\n\n## Exit codes (writes are verified after they land)\n\n- `0` — the change landed and was verified.\n- `2` — usage error: fix your invocation and retry.\n- `3` — verify-failed: the change did NOT stick; the message carries the reason and usually the remediation.\n- other — unexpected; stop and report.\n\nA nonzero exit is informative, not a dead end — it means the write did not silently half-apply, so you are never left guessing whether it took. Read the message; it usually names the fix.\n\n## Safety & recovery\n\n- `--dry-run` previews the exact plan (operation, target, expected change) for ANY write without executing — use it for anything destructive, bulk, or unfamiliar.\n- `things undo` reverses recent changes made through this tool (its own audit trail, not arbitrary app history). Prefer a targeted fix when you know it; undo is the safety net.\n- Deletes are TRASHES: `todo delete` moves to Trash and is restorable (`todo restore`). Emptying the trash is permanent and requires explicit user intent — don't do it unless asked.\n- Ambiguous refs FAIL with the candidates listed — retry with a UUID or a unique prefix. Never guess between candidates for a destructive action; inspect details or ask.\n- Referenced containers and tags must already exist. Create nested structures **outside-in** (area → project → heading → to-do), and prefer each newly returned UUID as the next reference so duplicate titles cannot redirect placement.\n- Some operations are disruptive (may move focus in the app) and require `--allow-disruptive`, **including their dry runs**. `things capabilities` lists each operation's support and any preconditions.\n- If a request needs a capability the tool reports as unsupported, say so plainly rather than improvising through unrelated commands.\n\n## Recurrence (contract summary)\n\nFull rule vocabulary and worked examples: **`things help repeating`**. The stable contract:\n\n- Turning an item into a **fixed** repeater REPLACES it: the original becomes a hidden template plus a fresh first occurrence, so its UUID changes. The response returns a `repeating` block — `instanceUuid` (the visible current occurrence; use it to reach the item), `templateUuid` (the recurring rule; use it for `reschedule-repeat`), and `replacedUuid` (the original). Use these rather than re-finding the item by title.\n- `--after-completion` schedules the next occurrence N units after you complete the current one, and KEEPS the item's UUID.\n- Repeating operations require `--allow-disruptive` (including dry runs) and a required `--interval <n>` alongside `--frequency` (`--interval 1` for every unit).\n- New repeater: add the item first (`things todo add \"<title>\" --json`), then `things todo make-repeating <returned-uuid> --frequency <f> --interval 1 [--weekdays …] --allow-disruptive`.\n- Multiple weekdays go in ONE rule (`--weekdays monday,thursday,friday`) — never create two repeaters for \"every Thursday and Friday\".\n- `things show <ref> --json` on an occurrence exposes `repeating.templateUuid` — use it as the `<ref>` for `reschedule-repeat`.\n--- /skill/references/gui.md ---\n# How the user sees Things (the app GUI)\n\nCurated rendering facts — the bench loop may compress or relocate these but must never add or change their meaning without Mike's approval (bench/CONSTITUTION.md).\n\n<!-- STATUS: v0 seeded from Mike's description 2026-07-17; awaiting his review pass. -->\n\n- **Sidebar**: top-level views (Inbox, Today, Upcoming, Anytime, Someday, Logbook, Trash), then each **area** with its active **projects** nested beneath it — in the same order this CLI/API reports them. Reordering areas or projects changes what the user sees there.\n- **List rows are compact**: a to-do in any list shows its title, tags, and deadline only. Its **notes and checklist are invisible until the user opens the item**. Put must-see-at-a-glance information in the title; supporting detail belongs in notes.\n- **Project notes** are likewise visible only when the project itself is opened in project view — in lists, a project is just its title (and progress ring).\n- **Today** shows the day's scheduled items, with **This Evening** as a separate section beneath. **Upcoming** is a forward-looking date-ordered calendar of scheduled items. **Logbook** is where completed/canceled items go — after completing something for the user, that's where they'll find it.\n- When telling the user where something landed, name the container and view (\"in project P under area A\"; \"it'll show in Today this evening\").\n--- /skill/references/model.md ---\n# The Things data model (deep reference)\n\nEntities, relationships, and how the sidebar views are computed over them, as exposed by the `things` CLI. The SKILL.md \"Data model\" section is the summary; this is the full version.\n\n## Entities\n\n| Entity | Container | Can contain | Dates | Tags |\n| --- | --- | --- | --- | --- |\n| To-do | area, project, heading, or NONE (standalone) | checklist items | when, deadline, reminder | own + inherited |\n| Checklist item | its to-do | — | — | — |\n| Heading | its project | to-dos | — | none (inheritance passes through) |\n| Project | area or standalone | headings, to-dos | when, deadline | own + inherited from area |\n| Area | top level | projects, loose to-dos | — | own |\n| Tag | tag hierarchy (may nest) | child tags | — | — |\n\n## Rules\n\n- A to-do has at most ONE container, and may have none — standalone to-dos (no project, no area) are normal and appear at the top level of Anytime/Someday/Upcoming. Moving changes the container; completing or trashing does not.\n- The **Inbox is a state, not a container**: \"in the Inbox\" means untriaged — no container AND no schedule. Filing or scheduling an inbox to-do moves it out (filing promotes it to Anytime); moving a to-do TO the Inbox clears both its container and its schedule.\n- A heading is a section label inside one project — not a task. It cannot be scheduled, tagged, or completed; deleting/archiving it affects only the label, per the operation's contract.\n- Tag inheritance flows downward: area → project → (through heading) → to-do. A to-do's *effective* tags = own tags ∪ project tags ∪ area tags. List output distinguishes own vs inherited tags.\n- **Status**: open → completed or canceled (both land in the Logbook) or trashed (Trash; restorable until emptied). Reopen brings a logged item back.\n- **when** (`today | evening | anytime | someday | YYYY-MM-DD`) controls which view an item appears in; **deadline** is an independent due date shown alongside the item; **reminder** is a time-of-day alert attached to a dated when.\n- \"Overdue\" = open with a deadline strictly before today (a deadline of today is \"due\", not overdue).\n\n## Views (queries over the model)\n\n`things inbox|today|upcoming|anytime|someday|logbook|trash` mirror the app's sidebar. Each is a query over the rules above, not a stored list:\n\n- **inbox** — untriaged to-dos (no container, no schedule).\n- **today** — items scheduled for today, with the **This Evening** section beneath.\n- **upcoming** — future-dated items, forward-ordered by date.\n- **anytime** — all active items kept without a specific date (standalone or filed).\n- **someday** — items deliberately kept without a date.\n- **logbook** — completed/canceled items.\n- **trash** — trashed items (restorable until the trash is emptied).\n\n`things projects`/`areas`/`tags` list containers; `things projects <ref>` / `things areas <ref>` / `things show <ref>` show one item's full detail — notes, checklist, effective tags — which the compact list rows do NOT display.\n\n### Reading view membership from JSON\n\nWhen reasoning about which view an item belongs to from `--json`, key on the fields together, not on a single hint:\n\n- `start: \"inbox\"` → Inbox; `start: \"someday\"` → Someday; `start: \"active\"` with no `startDate` → Anytime.\n- A dated open item belongs to **Today** when dated for `meta.clock.today`, otherwise **Upcoming** when future-dated.\n- `todaySection` only describes placement WITHIN Today (e.g. `evening`); it is NOT evidence that an undated item is in Today.\n- Completed/canceled items are in the Logbook and trashed items in Trash, regardless of a stale-looking `logged` field.\n\n## Filters over views\n\nRead filters compose with AND: `--tag <name>` (repeatable) / `--untagged` / `--exact-tag` for tags (in single-container `project show` / `area show` these match the row's own tags; in flat views they include inherited tags), `--overdue` (open items whose deadline is before today), `--limit N`, and `--since`/`--until` where offered. `things search <words>` matches title/notes over open items — widen with `--all`, `--logged`, `--trashed`; narrow with `--type project`. `things changes --since <moment>` is the pull-based substitute for a watch mode. Exact flags per command: `things <group> --help` and `things help filters`.\n--- /skill/SKILL.md ---\n---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).\n\n`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).\n\n## Stable contracts\n\nThese hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.\n\n- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding \"no match\" or \"that's everything\". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.\n- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.\n- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.\n- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.\n- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.\n- **View reasoning from JSON**: `start:\"inbox\"`→Inbox, `start:\"someday\"`→Someday, `start:\"active\"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.\n- If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Reading\n\nViews and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).\n\n## Writing\n\nNamespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.\n\n**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).\n\n## Going deeper\n\n- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.\n- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784665271582
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_emFAlI6pugwIKwssk5f4Y1Ax|fc_0ca594fce506fac7016a5fd4b9523c8197a95114b220cfd1b5",
+          "name": "bash",
+          "arguments": {
+            "command": "things todo add \"Confirm the cabin reservation\" --when 2026-07-27 --json",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 6230,
+        "output": 42,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 6272,
+        "cost": {
+          "input": 0.0046725000000000004,
+          "output": 0.000189,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0048615
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784665271583,
+      "responseId": "resp_0ca594fce506fac7016a5fd4b878fc81978a0a620d7d8a36c2"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_emFAlI6pugwIKwssk5f4Y1Ax|fc_0ca594fce506fac7016a5fd4b9523c8197a95114b220cfd1b5",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"mutation-result\",\"data\":{\"kind\":\"ok\",\"op\":\"todo.add\",\"uuid\":\"ZPgS01V28kZxcMgSqu8fcz\",\"observed\":{\"startDate\":\"2026-07-27\"},\"vector\":\"url-scheme\",\"tier\":1,\"undoToken\":\"m-69e7524bb763\"},\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":57,\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784665273945
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "```json\n{\"view\":\"upcoming\"}\n```",
+          "textSignature": "{\"v\":1,\"id\":\"msg_0ca594fce506fac7016a5fd4bb23e08197b84c2c31c5036130\",\"phase\":\"final_answer\"}"
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 6403,
+        "output": 14,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 6417,
+        "cost": {
+          "input": 0.00480225,
+          "output": 0.000063,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00486525
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1784665273945,
+      "responseId": "resp_0ca594fce506fac7016a5fd4ba9508819794d9c6fe9f6e09c3"
+    }
+  ]
+}

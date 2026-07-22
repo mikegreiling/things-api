@@ -49,7 +49,10 @@ import type { Arm, Assertion, Clock, RunRecord, Split, TaskSpec } from "./types.
 const BENCH_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(BENCH_DIR, "..");
 const BIN_PATH = join(REPO_ROOT, "bin", "things.js");
-const SKILL_DIR = join(REPO_ROOT, "skills", "things-cli");
+// Skill content mount. Defaults to the in-tree skill; BENCH_SKILL_DIR overrides
+// it so a paired A/B sweep can point the skill arm at an alternate skill build
+// (e.g. a prior version materialized into a temp dir) without editing the tree.
+const SKILL_DIR = process.env["BENCH_SKILL_DIR"] ?? join(REPO_ROOT, "skills", "things-cli");
 
 interface RunnerOptions {
   arm: Arm;

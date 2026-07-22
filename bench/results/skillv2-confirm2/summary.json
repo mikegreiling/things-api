@@ -1,0 +1,108 @@
+{
+  "experiment": "skill-v2 RE-confirmation of the FIXED skill (confirm2)",
+  "date": "2026-07-21",
+  "subject": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "corpus": "v3 (validation+holdout only, 12 tasks)",
+  "gitSha": "4c49dc08b4b949a35e185af6d91ee0dc94721a01",
+  "whatChangedSinceConfirm1": [
+    "SKILL.md restored the 'scheduling is an update, not a move' mapping line (update --when today|evening|anytime|someday|YYYY-MM-DD schedules/parks; move changes CONTAINER only, --area/--project/--heading) — the absence of which drove writes-someday-holdout 5/10 in confirm1; plus preamble/contracts compression (6746 -> 6488 B).",
+    "Binary (#247): `todo move` with scheduling intent now errors with a hint naming `update --when`. Both configs run the same worktree binary, so both benefit."
+  ],
+  "design": "paired, 10 reps, validation+holdout splits only (12 tasks), 120 runs/config, serialized, world-seed 1, ~6M cap/config (4M validation + 2M holdout)",
+  "v2fixed": {
+    "skill": "v2 FIXED (in-tree, 4c49dc0; SKILL.md 6488 B)",
+    "validation": {
+      "success": "66/80",
+      "friction": 1.23,
+      "medStaticTok": 4430,
+      "medDynTok": 6924.5,
+      "medTokIn": 21258
+    },
+    "holdout": {
+      "success": "36/40",
+      "friction": 1.13,
+      "medStaticTok": 4430,
+      "medDynTok": 7311.5,
+      "medTokIn": 22804.5
+    },
+    "combined": {
+      "success": "102/120 (85.0%)",
+      "friction": 1.19,
+      "medDynTok": 6989.5,
+      "medTokIn": 21889
+    },
+    "safety": "clean",
+    "skillMdBytes": 6488
+  },
+  "control": {
+    "skill": "v0.2 (origin/main via BENCH_SKILL_DIR; SKILL.md 5457 B)",
+    "validation": {
+      "success": "50/80",
+      "friction": 0.75,
+      "medStaticTok": 4553,
+      "medDynTok": 6035.5,
+      "medTokIn": 19770
+    },
+    "holdout": {
+      "success": "36/40",
+      "friction": 0.7,
+      "medStaticTok": 4553,
+      "medDynTok": 6189,
+      "medTokIn": 21959
+    },
+    "combined": {
+      "success": "86/120 (71.7%)",
+      "friction": 0.73,
+      "medDynTok": 6079,
+      "medTokIn": 20568
+    },
+    "safety": "clean",
+    "skillMdBytes": 5457
+  },
+  "perTaskDelta": {
+    "validation": {
+      "gui-placement-room214": "5/10 vs 1/10 (+4)",
+      "recovery-missing-area": "10/10 vs 10/10 (tie)",
+      "recurrence-marquee-yearly": "10/10 vs 8/10 (+2)",
+      "recurrence-project": "8/10 vs 4/10 (+4)",
+      "validation-compound-trip-checklist": "6/10 vs 8/10 (-2)",
+      "validation-reads-deadlines": "10/10 vs 9/10 (+1)",
+      "validation-reasoning-heading-inheritance": "7/10 vs 0/10 (+7, high-variance task — control was 6/10 in confirm1)",
+      "validation-writes-set-deadline": "10/10 vs 10/10 (tie)"
+    },
+    "holdout": {
+      "writes-someday-holdout": "10/10 vs 10/10 (TIE — THE FIX; v2 was 5/10 in confirm1, now recovered to 10/10)",
+      "compound-tag-sweep-holdout": "10/10 vs 10/10 (tie)",
+      "gui-upcoming-locate-holdout": "9/10 vs 7/10 (+2)",
+      "recurrence-reschedule-holdout": "7/10 vs 9/10 (-2, noise)"
+    }
+  },
+  "somedayFixConfirmed": "writes-someday-holdout ('Move X to Someday, no date') is now 10/10 for v2fixed (all reps PASS, errors 0-2, tools 3-5), up from 5/10 in confirm1. The restored scheduling-mapping line points agents from the trap verb `move` to `update --when someday`, and the #247 binary hint reinforces it on the error path. Holdout is now a clean TIE (36/40 both) instead of confirm1's INFERIOR (32 vs 38).",
+  "comparisonVsConfirm1": {
+    "v2": {
+      "validation": "63/80 -> 66/80",
+      "holdout": "32/40 -> 36/40",
+      "combined": "95/120 -> 102/120",
+      "friction": "1.17 -> 1.19",
+      "medDynTok": "7682 -> 6990",
+      "skillMdBytes": "6746 -> 6488",
+      "writesSomedayHoldout": "5/10 -> 10/10"
+    },
+    "control": {
+      "validation": "54/80 -> 50/80",
+      "holdout": "38/40 -> 36/40",
+      "combined": "92/120 -> 86/120",
+      "friction": "0.90 -> 0.73",
+      "note": "control drifted down ~6 combined on codex sampling variance; largest single swing is validation-reasoning-heading-inheritance 6/10 -> 0/10 (high-variance task)."
+    }
+  },
+  "verdict": {
+    "safety": "clean both configs",
+    "successGate": "PASSES. Non-inferiority required on BOTH splits. Validation: v2 66/80 > control 50/80 (BETTER, +16). Holdout: v2 36/40 == control 36/40 (TIED, non-inferior). This CLEARS the hard gate that confirm1 FAILED (confirm1 holdout was 32 < 38, INFERIOR). The someday-write regression is fixed (writes-someday-holdout 5/10 -> 10/10).",
+    "friction": "v2 WORSE (1.19 vs 0.73) — a ladder TIEBREAKER, unrecovered by the loop.",
+    "context": "v2 WORSE on the real cost surface — always-loaded SKILL.md 6488 vs 5457 B (+19%); median dynamic 6990 vs 6079 (+15%). Bench static is ~flat/slightly LOWER (4430 vs 4553) because the bench counts all reference files and v2 folded 6 refs -> 3; the real always-loaded cost is SKILL.md only, which is larger.",
+    "decision": "SUCCESS GATE PASSES this time (validation better, holdout tied) — the fix removed the confirm1 blocker. Under the constitution's strict lexicographic ladder, success outranks friction/context and v2 is non-inferior-or-better on both splits, so v2 is PROMOTABLE. The residual cost is the friction (+63%) and context (+15-19%) regression, which the refinement loop could not recover; these are ladder tiebreakers that only bind at a success tie. Holdout success is itself a tie, and on that split alone the tiebreakers favor control. PROMOTION IS MIKE'S CALL — do NOT merge.",
+    "recommendationForMike": "The confirm1 blocker is gone: holdout is no longer inferior and the recurrence + reasoning-heading validation wins are real and directionally consistent across both confirmations. What remains is the friction/context tax the loop couldn't shed. Options: (1) promote v2 as-is, accepting the friction/context tax for the validation-success gain; (2) cherry-pick the recurrence contract lift into v0.2 WITHOUT the full demarcation to capture the win without the SKILL.md growth, and re-confirm; (3) keep v0.2. The someday-write fix should be preserved in whichever path ships."
+  }
+}

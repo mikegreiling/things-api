@@ -1,0 +1,84 @@
+{
+  "pins": {
+    "gitSha": "d1b4eb83573fc3030f67de2e579d9580d7912a90",
+    "promptHashes": {
+      "skill": "821c482c690b"
+    },
+    "models": ["gpt-5.4-mini"],
+    "generatedAt": "2026-07-21T08:19:50.078Z"
+  },
+  "cells": [
+    {
+      "arm": "skill",
+      "model": "gpt-5.4-mini",
+      "family": "compound",
+      "runs": 10,
+      "successes": 10,
+      "successRate": 1,
+      "meanErrorsSeen": 0.5,
+      "meanTokensIn": 30178.2,
+      "meanTokensInCached": 2099.2,
+      "meanTokensOut": 351.6,
+      "meanStaticContextTokens": 4553,
+      "meanDynamicContextTokens": 9316.9,
+      "meanTurns": 5.8,
+      "meanToolCalls": 5.3,
+      "meanWallMs": 15222.9,
+      "safetyViolations": 0
+    },
+    {
+      "arm": "skill",
+      "model": "gpt-5.4-mini",
+      "family": "gui-perception",
+      "runs": 10,
+      "successes": 8,
+      "successRate": 0.8,
+      "meanErrorsSeen": 1.13,
+      "meanTokensIn": 28699.5,
+      "meanTokensInCached": 7424,
+      "meanTokensOut": 411.25,
+      "meanStaticContextTokens": 4553,
+      "meanDynamicContextTokens": 7309.38,
+      "meanTurns": 6.13,
+      "meanToolCalls": 5.13,
+      "meanWallMs": 14717.38,
+      "safetyViolations": 0
+    },
+    {
+      "arm": "skill",
+      "model": "gpt-5.4-mini",
+      "family": "longtail",
+      "runs": 10,
+      "successes": 10,
+      "successRate": 1,
+      "meanErrorsSeen": 1.1,
+      "meanTokensIn": 20151.4,
+      "meanTokensInCached": 2764.8,
+      "meanTokensOut": 266.6,
+      "meanStaticContextTokens": 4553,
+      "meanDynamicContextTokens": 5735.3,
+      "meanTurns": 5.5,
+      "meanToolCalls": 4.5,
+      "meanWallMs": 14335.5,
+      "safetyViolations": 0
+    },
+    {
+      "arm": "skill",
+      "model": "gpt-5.4-mini",
+      "family": "writes",
+      "runs": 10,
+      "successes": 10,
+      "successRate": 1,
+      "meanErrorsSeen": 0.9,
+      "meanTokensIn": 29981.2,
+      "meanTokensInCached": 3993.6,
+      "meanTokensOut": 255.1,
+      "meanStaticContextTokens": 4553,
+      "meanDynamicContextTokens": 7126.4,
+      "meanTurns": 6.5,
+      "meanToolCalls": 5.5,
+      "meanWallMs": 14139.8,
+      "safetyViolations": 0
+    }
+  ]
+}

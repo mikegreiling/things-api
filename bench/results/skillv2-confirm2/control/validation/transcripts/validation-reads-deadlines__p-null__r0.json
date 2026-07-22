@@ -1,0 +1,270 @@
+{
+  "taskId": "validation-reads-deadlines",
+  "family": "reads",
+  "arm": "skill",
+  "model": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "prompt": "Which open to-dos in my Kitchen redo project have a deadline? Reply with JSON {\"titles\": [...], \"count\": N, \"soonest\": \"<title of the one due first>\"}.",
+  "systemPrompt": "You are an assistant helping a user manage their tasks in the Things app (Things 3, by Cultured Code).\n\nYou have one tool: a bash shell. The `things` command-line program is installed and on PATH; use it to inspect and change the user's tasks. You have no prior knowledge of how `things` works — discover its commands, flags, and output by running `things --help` and `things <command> --help`.\n\nStandard POSIX utilities (cat, grep, jq, sed, ls, ...) are available in the shell for parsing output.\n\nFinal-answer protocol: when the task asks a question, finish your reply with exactly one fenced code block tagged `json` containing the answer as a JSON object, as the last thing in your message with nothing after it. When the task only asks you to change something, no json block is required.\n\nA reference skill for the `things` CLI is mounted in the filesystem. Before working by trial and error, read /skill/SKILL.md — it documents the data model, the available commands and their flags, output shapes, and safety/recovery notes. It links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, safety-and-recovery); read the ones relevant to your task. The skill describes the same CLI you have; prefer it over rediscovering the interface from --help.",
+  "grade": {
+    "success": true,
+    "safety": "ok",
+    "dbChanged": false
+  },
+  "metrics": {
+    "turns": 5,
+    "toolCalls": 4,
+    "errorsSeen": 0,
+    "tokensIn": 20396,
+    "tokensInCached": 4096,
+    "tokensOut": 371,
+    "wallMs": 15157
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Which open to-dos in my Kitchen redo project have a deadline? Reply with JSON {\"titles\": [...], \"count\": N, \"soonest\": \"<title of the one due first>\"}."
+        }
+      ],
+      "timestamp": 1784666413227
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_XLyASAa4dsMKNEGHx4WrVD1n|fc_0bc31ca4629dcab2016a5fd92e8e4c819389ec66f78ea93b09",
+          "name": "bash",
+          "arguments": {
+            "command": "cat /skill/SKILL.md && printf '\\n---DATA MODEL---\\n' && cat /skill/references/data-model.md && printf '\\n---READS---\\n' && cat /skill/references/reads.md && printf '\\n---SAFETY---\\n' && cat /skill/references/safety-and-recovery.md && printf '\\n---HELP---\\n' && things --help && printf '\\n---LIST HELP---\\n' && things list --help && printf '\\n---SHOW HELP---\\n' && things show --help",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 404,
+        "output": 139,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 543,
+        "cost": {
+          "input": 0.000303,
+          "output": 0.0006255,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0009285
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784666413227,
+      "responseId": "resp_0bc31ca4629dcab2016a5fd92df1b481938ab02501e910fe1f"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_XLyASAa4dsMKNEGHx4WrVD1n|fc_0bc31ca4629dcab2016a5fd92e8e4c819389ec66f78ea93b09",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Every command supports `--help`; `things --help` is a one-screen index and `things help <topic>` has guides (`filters`, `ids`, `output`, `writes`).\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output.\n\n## Reading\n\n`things today` / `inbox` / `upcoming` / `anytime` / `someday` / `logbook` / `trash`; `things show <ref>` (details incl. notes + checklist), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <when>`. Common filters: `--tag <name>`, `--untagged`, `--overdue`, `--limit N`. Always prefer `--json` when you will act on the output.\n\nJSON read results are in `.data` (usually `.data[]`), never `.items`; check `meta.truncation` before concluding no match exists. Search/list rows are summaries: their `tags` field is not necessarily the complete effective tag set, so use `things show <ref> --json` when notes, checklist, placement, or inherited tags matter. For view reasoning, `start: \"inbox\"` means Inbox, `start: \"someday\"` means Someday, and `start: \"active\"` with no `startDate` means Anytime; a dated open item belongs to Today when dated for `meta.clock.today`, otherwise Upcoming when future-dated. `todaySection` only describes Today-section placement and is not evidence that an undated item is in Today. Completed or canceled items belong in Logbook and trashed items in Trash, regardless of a stale-looking `logged` field. If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Writing\n\nNamespaced verbs: `things todo add|update|complete|cancel|reopen|move|delete|restore|tags|checklist ...`, `things project add|update|complete ...`, `things area ...`, `things tag ...`, `things heading add ...`, plus `things batch` (many changes from JSONL), `things undo`, `things reorder`. Rules that matter:\n\n- Referenced containers/tags must already exist (create them first, or pass `--create-tags` where offered).\n- `--dry-run` on any write shows the exact plan without executing — use it when unsure.\n- Writes are verified; a nonzero exit means the change did NOT stick (exit 2 = usage error, exit 3 = verify failed). Read the error: it usually names the fix.\n- `things capabilities` lists what each operation supports; `things undo` reverses recent changes made through this tool.\n\n## Going deeper\n\n- [references/data-model.md](references/data-model.md) — the full model and relationships\n- [references/reads.md](references/reads.md) — views, filters, JSON output\n- [references/writes.md](references/writes.md) — operation patterns, scheduling, tags, checklists\n- [references/recurrence.md](references/recurrence.md) — repeating to-dos and projects, incl. multi-rule patterns\n- [references/safety-and-recovery.md](references/safety-and-recovery.md) — dry-run, undo, errors, ambiguity\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show)\n\n---DATA MODEL---\n# The Things data model\n\nEntities and relationships, as exposed by the `things` CLI.\n\n## Entities\n\n| Entity | Container | Can contain | Dates | Tags |\n| --- | --- | --- | --- | --- |\n| To-do | area, project, heading, or NONE (standalone) | checklist items | when, deadline, reminder | own + inherited |\n| Checklist item | its to-do | — | — | — |\n| Heading | its project | to-dos | — | none (inheritance passes through) |\n| Project | area or standalone | headings, to-dos | when, deadline | own + inherited from area |\n| Area | top level | projects, loose to-dos | — | own |\n| Tag | tag hierarchy (may nest) | child tags | — | — |\n\n## Rules\n\n- A to-do has at most ONE container, and may have none — standalone to-dos (no project, no area) are normal and appear at the top level of Anytime/Someday/Upcoming. Moving changes the container; completing or trashing does not.\n- The **Inbox is a state, not a container**: \"in the Inbox\" means untriaged — no container AND no schedule. Filing or scheduling an inbox to-do moves it out (filing promotes it to Anytime); moving a to-do TO the Inbox clears both its container and its schedule.\n- A heading is a section label inside one project — not a task. It cannot be scheduled, tagged, or completed; deleting/archiving it affects only the label, per the operation's contract.\n- Tag inheritance flows downward: area → project → (through heading) → to-do. A to-do's *effective* tags = own tags ∪ project tags ∪ area tags. List output distinguishes own vs inherited tags.\n- **Status**: open → completed or canceled (both land in the Logbook) or trashed (Trash; restorable until emptied). Reopen brings a logged item back.\n- **when** (`today | evening | anytime | someday | YYYY-MM-DD`) controls which view an item appears in; **deadline** is an independent due date shown alongside the item; **reminder** is a time-of-day alert attached to a dated when.\n- \"Overdue\" = open with a deadline strictly before today (a deadline of today is \"due\", not overdue).\n\nSee [reads.md](reads.md) for how views map onto these rules and [writes.md](writes.md) for changing them.\n\n---READS---\n# Reading: views, filters, output\n\n## Views\n\n`things inbox|today|upcoming|anytime|someday|logbook|trash` mirror the app's sidebar views (see [data-model.md](data-model.md) for what qualifies for each). `things today` includes the This Evening section. `things projects`/`areas`/`tags` list containers; `things projects <ref>` / `things areas <ref>` / `things show <ref>` show one item's full detail — notes, checklist, effective tags — which list rows do NOT display.\n\n## Filters (compose with AND)\n\n- `--tag <name>` (repeatable), `--untagged`, `--exact-tag` — tag matching; in single-container views (`project show` / `area show`) `--tag` matches the row's own tags, in flat views it includes inherited tags.\n- `--overdue` — open items whose deadline is before today.\n- `--limit N`, `--since/--until` where offered.\n\n## Search & change tracking\n\n- `things search <words>` — title/notes match over open items; widen with `--all`, `--logged`, `--trashed`; narrow with `--type project` etc.\n- `things changes --since <moment>` — what was created/changed since then (the pull-based substitute for a watch mode).\n\n## Output\n\nHuman output is a formatted list (symbols legend: `things legend`). For machine use ALWAYS pass `--json`: a stable envelope `{ ok, data, meta }` with truncation metadata (`meta.truncation` / `meta.grouped`) — if `shown < total`, there are more rows; raise `--limit` or narrow the filter rather than assuming you saw everything.\n\n---SAFETY---\n# Safety, errors, and recovery\n\n- **Preview before risky writes**: `--dry-run` prints the exact plan (operation, target, expected change) without executing. Use it for anything destructive, bulk, or unfamiliar.\n- **Undo**: `things undo` reverses recent changes made through this tool (its own audit trail — not arbitrary app history). Prefer targeted fixes when you know them; undo is the safety net.\n- **Deletes are trashes**: `todo delete` moves to Trash and is restorable (`todo restore`). Emptying the trash is permanent and requires explicit intent — don't do it unless the user asked.\n- **Ambiguous refs**: when a name matches several items, the command fails and lists candidates with UUIDs — retry with the UUID (or a unique prefix). Never guess between candidates for a destructive action; ask the user or pick by inspecting details.\n- **Exit codes**: 0 verified success · 2 usage error (your invocation — read the message, fix, retry) · 3 verify-failed (the app did not apply the change; the message carries the reason and remediation) · others: unexpected — stop and report.\n- **Truncation**: JSON output marks `shown < total`; retrieve the rest before summarizing \"everything\".\n- **Refusals**: if the user's request would require a capability the tool reports as unsupported (`things capabilities`), say so plainly rather than improvising through unrelated commands.\n\n---HELP---\nthings — a programmatic interface to Things 3 (Cultured Code).\nUsage: things <command> [arguments] [options]\n\nViews — the app's built-in lists\n  inbox           captured, still-unsorted to-dos\n  today           what's scheduled for today, plus This Evening\n  upcoming        future-scheduled items, in date order\n  anytime         all active items, grouped by area and project\n  someday         incubating items kept without a date\n  logbook         completed and canceled items, newest first\n  trash           trashed items (empty it with `trash empty`)\n\nBrowse & search\n  show <ref>      show a to-do, project, or area by id or name\n  open <ref>      reveal an item in the Things app on this Mac\n  search <query>  find items by words in their title or notes\n  projects [ref]  list projects, or show one\n  areas [ref]     list areas, or show one\n  tags            list the tag hierarchy\n  changes         items created or changed since a moment (--since)\n\nWrite — create and change items\n  todo <verb>     add, edit, schedule, complete, move to-dos\n  project <verb>  add, edit, complete, move projects\n  area <verb>     add, rename, retag, reorder, delete areas\n  tag <verb>      add, rename, nest, delete tags\n  heading <verb>  add, rename, archive headings in a project\n  batch [file]    run many changes from a JSONL script\n  undo            reverse recent changes made through this tool\n  reorder <ids…>  reorder items within a list or container\n\nSetup & diagnostics\n  config <verb>   show or set configuration keys\n  doctor          check environment health and pending setup\n  capabilities    what each write operation supports\n  setup <verb>    one-time setup (install the Shortcuts)\n  mcp             serve the Model Context Protocol server on stdio\n  snapshot        full normalized dump of every record\n  legend          the symbols and colors list output uses\n\nGlobal options (accepted by most commands)\n  --json          emit {apiVersion, ok, kind, data, meta}; payload=.data; entity id=.uuid (not .id)\n  --db <path>     read from an explicit database path\n  -h, --help      help for things, or for any <command>\n  -V, --version   print the version (0.10.0-dev)\n\nRun `things <command> --help` for the behavior and options of any command.\nMost commands take a ref (uuid, prefix, share link, or name) — see `things help ids`.\nGuides: `things help <topic>` — agent, filters, ids, output, repeating, writes.\nNew to Things? Start with `things help agent`.\n\n---LIST HELP---\nUsage: things show [options] <ref>\n\nRender whatever the reference points at: a to-do, a project (a heading reference\nshows its containing project), or an area. Accepts a uuid, a >=6-char uuid\nprefix (as printed in every list view), a things:/// share link, or an area\nname. Tags and checklist items have no show view. The word `show` may be\nomitted: `things <ref>` works whenever <ref> is not a command name (command\nnames always win — `things area show <name>` targets an item that shares a\nview's name). A list-view name is that view: `things show\ninbox|today|anytime|upcoming|someday|logbook|trash|projects|areas|tags` IS the\nmatching list command.\n\nOptions:\n  --show-later         projects/areas: include scheduled, repeating, and someday\n                       rows\n  --show-logged [n]    projects/areas: include logged items (optionally capped\n                       at n)\n  --project-limit <n>  areas: maximum project rows to show (default 30)\n  --area-limit <n>     areas: maximum direct to-dos to show (default 30)\n  --all                areas: show every item in every group (no per-block caps)\n  --overdue            projects/areas: only items whose own deadline is past\n                       (due today is not overdue)\n  --tag <ref>          filter by tag (uuid or unique name), repeatable — several\n                       AND together; see `things help filters` (default: [])\n  --exact-tag          match the named tag(s) only — exclude hierarchy\n                       descendants\n  --untagged           only items with no tag — the app's \"No Tag\" filter; see\n                       `things help filters`\n  --json               emit versioned JSON envelope on stdout\n  --db <path>          explicit database path\n  -h, --help           display help for command\n\n---SHOW HELP---\nUsage: things show [options] <ref>\n\nRender whatever the reference points at: a to-do, a project (a heading reference\nshows its containing project), or an area. Accepts a uuid, a >=6-char uuid\nprefix (as printed in every list view), a things:/// share link, or an area\nname. Tags and checklist items have no show view. The word `show` may be\nomitted: `things <ref>` works whenever <ref> is not a command name (command\nnames always win — `things area show <name>` targets an item that shares a\nview's name). A list-view name is that view: `things show\ninbox|today|anytime|upcoming|someday|logbook|trash|projects|areas|tags` IS the\nmatching list command.\n\nOptions:\n  --show-later         projects/areas: include scheduled, repeating, and someday\n                       rows\n  --show-logged [n]    projects/areas: include logged items (optionally capped\n                       at n)\n  --project-limit <n>  areas: maximum project rows to show (default 30)\n  --area-limit <n>     areas: maximum direct to-dos to show (default 30)\n  --all                areas: show every item in every group (no per-block caps)\n  --overdue            projects/areas: only items whose own deadline is past\n                       (due today is not overdue)\n  --tag <ref>          filter by tag (uuid or unique name), repeatable — several\n                       AND together; see `things help filters` (default: [])\n  --exact-tag          match the named tag(s) only — exclude hierarchy\n                       descendants\n  --untagged           only items with no tag — the app's \"No Tag\" filter; see\n                       `things help filters`\n  --json               emit versioned JSON envelope on stdout\n  --db <path>          explicit database path\n  -h, --help           display help for command\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784666418554
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_ibDhE8kXVlmJ2X9yURFQ8mlH|fc_0bc31ca4629dcab2016a5fd933e23081939dceeabbfd1f6fdd",
+          "name": "bash",
+          "arguments": {
+            "command": "things projects --json | jq -r '.data[] | select(.title|test(\"Kitchen redo\";\"i\")) | [.title,.uuid] | @tsv' && printf '\\n---SHOW MATCHES---\\n' && things search \"Kitchen redo\" --json | jq -r '.data[] | [.title,.uuid,.type] | @tsv'",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 4561,
+        "output": 100,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4661,
+        "cost": {
+          "input": 0.00342075,
+          "output": 0.00045,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00387075
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784666418554,
+      "responseId": "resp_0bc31ca4629dcab2016a5fd9335208819398d3078fdc046f80"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_ibDhE8kXVlmJ2X9yURFQ8mlH|fc_0bc31ca4629dcab2016a5fd933e23081939dceeabbfd1f6fdd",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "Kitchen redo\tproj-0082\n\n---SHOW MATCHES---\nKitchen redo\tproj-0082\tproject\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784666421402
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_g18ZaUiGXbFo90ZKLffMS1Ck|fc_0bc31ca4629dcab2016a5fd9376d8c8193877be9360c62d45e",
+          "name": "bash",
+          "arguments": {
+            "command": "things show proj-0082 --json | jq -r '.data | {title, openTodos: [.todos[]? | select(.status==\"open\" and (.deadline!=null)) | {title, deadline}]}'",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 603,
+        "output": 68,
+        "cacheRead": 4096,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4767,
+        "cost": {
+          "input": 0.00045225,
+          "output": 0.000306,
+          "cacheRead": 0.0003072,
+          "cacheWrite": 0,
+          "total": 0.00106545
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784666421402,
+      "responseId": "resp_0bc31ca4629dcab2016a5fd936973c819394915721c3f18b4d"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_g18ZaUiGXbFo90ZKLffMS1Ck|fc_0bc31ca4629dcab2016a5fd9376d8c8193877be9360c62d45e",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"title\": null,\n  \"openTodos\": []\n}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784666424314
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_KuXDXNkb39iVuAa1onYKCDxH|fc_0bc31ca4629dcab2016a5fd93a96b481939d9e10f3f2d88cf4",
+          "name": "bash",
+          "arguments": {
+            "command": "things show proj-0082 --json | jq '.data'",
+            "timeout": 120000
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 4797,
+        "output": 35,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4832,
+        "cost": {
+          "input": 0.0035977500000000003,
+          "output": 0.0001575,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0037552500000000003
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784666424314,
+      "responseId": "resp_0bc31ca4629dcab2016a5fd939149c8193bc0f56dacf2c4d0b"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_KuXDXNkb39iVuAa1onYKCDxH|fc_0bc31ca4629dcab2016a5fd93a96b481939d9e10f3f2d88cf4",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"type\": \"project\",\n  \"view\": {\n    \"project\": {\n      \"uuid\": \"proj-0082\",\n      \"title\": \"Kitchen redo\",\n      \"status\": \"open\",\n      \"logged\": false,\n      \"trashed\": false,\n      \"start\": \"active\",\n      \"area\": {\n        \"uuid\": \"area-0081\",\n        \"title\": \"House projects\"\n      },\n      \"repeating\": {\n        \"isTemplate\": false,\n        \"isInstance\": false,\n        \"templateUuid\": null\n      },\n      \"created\": \"2026-05-28T20:26:40.000Z\",\n      \"modified\": \"2026-05-28T20:26:40.000Z\",\n      \"type\": \"project\",\n      \"untrashedLeafActionsCount\": 4,\n      \"openUntrashedLeafActionsCount\": 3\n    },\n    \"active\": [\n      {\n        \"uuid\": \"todo-0083\",\n        \"title\": \"Order countertop\",\n        \"status\": \"open\",\n        \"logged\": false,\n        \"trashed\": false,\n        \"start\": \"active\",\n        \"deadline\": \"2026-07-24\",\n        \"area\": {\n          \"uuid\": \"area-0081\",\n          \"title\": \"House projects\"\n        },\n        \"repeating\": {\n          \"isTemplate\": false,\n          \"isInstance\": false,\n          \"templateUuid\": null\n        },\n        \"created\": \"2026-05-28T20:26:40.000Z\",\n        \"modified\": \"2026-05-28T20:26:40.000Z\",\n        \"type\": \"to-do\",\n        \"project\": {\n          \"uuid\": \"proj-0082\",\n          \"title\": \"Kitchen redo\"\n        },\n        \"checklistItemsCount\": 0,\n        \"openChecklistItemsCount\": 0\n      },\n      {\n        \"uuid\": \"todo-0084\",\n        \"title\": \"Return tile samples\",\n        \"status\": \"open\",\n        \"logged\": false,\n        \"trashed\": false,\n        \"start\": \"active\",\n        \"deadline\": \"2026-07-30\",\n        \"area\": {\n          \"uuid\": \"area-0081\",\n          \"title\": \"House projects\"\n        },\n        \"repeating\": {\n          \"isTemplate\": false,\n          \"isInstance\": false,\n          \"templateUuid\": null\n        },\n        \"created\": \"2026-05-28T20:26:40.000Z\",\n        \"modified\": \"2026-05-28T20:26:40.000Z\",\n        \"type\": \"to-do\",\n        \"project\": {\n          \"uuid\": \"proj-0082\",\n          \"title\": \"Kitchen redo\"\n        },\n        \"checklistItemsCount\": 0,\n        \"openChecklistItemsCount\": 0\n      },\n      {\n        \"uuid\": \"todo-0085\",\n        \"title\": \"Pick grout color\",\n        \"status\": \"open\",\n        \"logged\": false,\n        \"trashed\": false,\n        \"start\": \"active\",\n        \"area\": {\n          \"uuid\": \"area-0081\",\n          \"title\": \"House projects\"\n        },\n        \"repeating\": {\n          \"isTemplate\": false,\n          \"isInstance\": false,\n          \"templateUuid\": null\n        },\n        \"created\": \"2026-05-28T20:26:40.000Z\",\n        \"modified\": \"2026-05-28T20:26:40.000Z\",\n        \"type\": \"to-do\",\n        \"project\": {\n          \"uuid\": \"proj-0082\",\n          \"title\": \"Kitchen redo\"\n        },\n        \"checklistItemsCount\": 0,\n        \"openChecklistItemsCount\": 0\n      },\n      {\n        \"uuid\": \"todo-0086\",\n        \"title\": \"Measure the alcove\",\n        \"status\": \"completed\",\n        \"logged\": false,\n        \"trashed\": false,\n        \"start\": \"active\",\n        \"deadline\": \"2026-07-15\",\n        \"area\": {\n          \"uuid\": \"area-0081\",\n          \"title\": \"House projects\"\n        },\n        \"repeating\": {\n          \"isTemplate\": false,\n          \"isInstance\": false,\n          \"templateUuid\": null\n        },\n        \"created\": \"2026-05-28T20:26:40.000Z\",\n        \"modified\": \"2026-05-28T20:26:40.000Z\",\n        \"type\": \"to-do\",\n        \"project\": {\n          \"uuid\": \"proj-0082\",\n          \"title\": \"Kitchen redo\"\n        },\n        \"checklistItemsCount\": 0,\n        \"openChecklistItemsCount\": 0\n      }\n    ],\n    \"headings\": [],\n    \"later\": {\n      \"scheduled\": [],\n      \"repeating\": [],\n      \"someday\": []\n    },\n    \"logged\": [],\n    \"trashed\": [],\n    \"openChildrenWhileResolved\": 0\n  }\n}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784666427050
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "```json\n{\"titles\":[\"Order countertop\",\"Return tile samples\"],\"count\":2,\"soonest\":\"Order countertop\"}\n```",
+          "textSignature": "{\"v\":1,\"id\":\"msg_0bc31ca4629dcab2016a5fd93c15f481938005d6a38a782106\",\"phase\":\"final_answer\"}"
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 5935,
+        "output": 29,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 5964,
+        "cost": {
+          "input": 0.00445125,
+          "output": 0.0001305,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.004581750000000001
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1784666427051,
+      "responseId": "resp_0bc31ca4629dcab2016a5fd93b95c481939d6d362ed136042a"
+    }
+  ]
+}

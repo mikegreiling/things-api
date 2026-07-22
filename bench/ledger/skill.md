@@ -80,3 +80,27 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **provenance:** as above; reconstructed from loop-state.json, no debrief.
 - **change:** read-contract clarification (overdue miss + grouped-Today parsing) — reverted on validation regression.
 - **measured deltas:** validation success regressed vs the post-iter-1 level; details in loop-state.json.
+<!-- ledger-entry id="loop-skill-v2r-skill-iter1" lesson="Keep new guidance concise and retain it only when repeated evaluations show a consistent targeted gain without broad friction or token regressions." -->
+### 2026-07-21 · skill · iter 1 · **REVERTED**
+
+- **change:** This is the smallest generalizable fix for the only graded state failure: it makes the hierarchy, immediate-parent place — files: skills/things-cli/SKILL.md; diff 1 file(s) [skills/things-cli/SKILL.md], +1/-1
+- **pre-hoc hypothesis:** This is the smallest generalizable fix for the only graded state failure: it makes the hierarchy, immediate-parent placement, returned-UUID chain, and per-command persistence explicit at the existing precondition entry point, preventing duplicate ancestors during recovery.
+- **predicted blast radius:** Should improve compound area/project/heading/to-do creation and any recovery after a downstream child-write error. It may also reduce ambiguous-title failures by encouraging UUID reuse. Risk is limited to added static tokens; no safety or GUI semantics change.
+- **measured deltas (before → after):**
+  - dev: success 60/63 → 58/63; friction 1.05 → 1.09; median tokIn 21497 → 25587
+  - validation: success 20/24 → 19/24; friction 0.95 → 1.32; median tokIn 23573 → 28827
+- **debrief:** attribution — The patch produced no targeted success gain on compound creation and coincided with a small overall success decline plus higher friction; because regressions span unrelated operations and one validation task recorded zero input tokens, the most likely explanation is run variance or harness instability, with the added prescriptive detail possibly increasing deliberation rather than improving recovery.; lesson — Keep new guidance concise and retain it only when repeated evaluations show a consistent targeted gain without broad friction or token regressions.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-v2r); checkpoint: bench/artifacts/loop-skill-v2r/checkpoint.md
+
+<!-- ledger-entry id="loop-skill-v2r-skill-iter2" lesson="Validate procedural guidance across multiple directly affected tasks and repeated runs, optimizing for success and recovery behavior rather than token reduction alone." -->
+### 2026-07-21 · skill · iter 2 · **REVERTED**
+
+- **change:** The severe compound failure created many duplicate parents while no requested children landed. A single dependency-order — files: skills/things-cli/SKILL.md; diff 1 file(s) [skills/things-cli/SKILL.md], +2/-0
+- **pre-hoc hypothesis:** The severe compound failure created many duplicate parents while no requested children landed. A single dependency-ordered pattern at the writing entry point turns the existing abstract outside-in rule into an executable contract and explicitly prevents restarting successful parent steps.
+- **predicted blast radius:** Primarily improves compound project/heading/to-do setup and other nested writes, reducing duplicate state and recovery errors. It may also reduce help calls for these operations. Risk is limited to the documented add verbs and placement flags; unrelated reads, recurrence, and GUI semantics are unchanged.
+- **measured deltas (before → after):**
+  - dev: success 60/63 → 56/63; friction 1.05 → 1.11; median tokIn 21497 → 18698
+  - validation: success 20/24 → 17/24; friction 0.95 → 1.65; median tokIn 23573 → 29055
+- **debrief:** attribution — The explicit UUID-chaining guidance likely shortened execution on the targeted compound dev task, but it did not improve its success or friction; the analogous validation task retained success while becoming substantially more expensive and error-prone. Large, inconsistent changes on unrelated tasks—including zero-token failures—indicate substantial run noise or infrastructure effects, so recurrence and GUI regressions cannot credibly be attributed to this narrowly scoped documentation change.; lesson — Validate procedural guidance across multiple directly affected tasks and repeated runs, optimizing for success and recovery behavior rather than token reduction alone.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-v2r); checkpoint: bench/artifacts/loop-skill-v2r/checkpoint.md
+
