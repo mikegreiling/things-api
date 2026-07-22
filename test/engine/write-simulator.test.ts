@@ -579,6 +579,81 @@ describe("simulator write vector — covered operations", () => {
     }
   });
 
+  it("todo.make-repeating FIXED with a DEADLINE (RSIM-T): source PRESERVED as the instance, only the template minted", async () => {
+    const tag = seedTag(fixture.db, "billing");
+    // A deadline is the SOLE to-do fixed-preserve trigger (RSIM-T: deadline 1/1
+    // preserve vs bare/notes/tag/checklist 4/4 delete).
+    const src = seedTodo(fixture.db, {
+      title: "File the quarterly report",
+      start: "active",
+      startDate: "2026-07-01",
+      deadline: "2026-08-01",
+    });
+    fixture.db.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(src, tag);
+
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Source-fate resolves generically from the FK: PRESERVED → replacedUuid null.
+    expect(res.repeating?.replacedUuid).toBeNull();
+    expect(res.repeating?.instanceUuid).toBe(src);
+    expect(res.repeating?.templateUuid).toBe(res.uuid);
+
+    // Source PRESERVED and relinked in place as the current-occurrence instance.
+    const preserved = row(src);
+    expect(preserved["rt1_repeatingTemplate"]).toBe(res.uuid);
+    expect(preserved["start"]).toBe(2); // someday, pending maintenance promotion
+    expect(preserved["startDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(preserved["rt1_recurrenceRule"]).toBeNull();
+    // The preserved source-instance KEEPS its own deadline (the template drops it).
+    expect(preserved["deadline"]).toBe(encodePackedDate("2026-08-01"));
+
+    // Template only: RSIM6 fixed shape, deadline dropped, next occurrence 2026-07-12.
+    const tmpl = row(res.uuid);
+    expect(tmpl["type"]).toBe(0);
+    expect(tmpl["start"]).toBe(2);
+    expect(tmpl["startDate"]).toBeNull();
+    expect(tmpl["deadline"]).toBeNull();
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(1);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+    expect(decodeTemplate(res.uuid)).toMatchObject({ type: "fixed", unit: "weekly", interval: 1 });
+
+    // NO fresh instance minted — the preserved source is the only instance.
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["uuid"]).toBe(src);
+    // Template inherited the tag; the source keeps its own.
+    expect(tagsOf(res.uuid)).toEqual([tag]);
+    expect(tagsOf(src)).toEqual([tag]);
+  });
+
+  it("todo.make-repeating FIXED bare (RSIM-T control): NO deadline → source DELETED, replacedUuid = source", async () => {
+    // Bare (deadline-less) is the delete-default; the deadline branch must not fire.
+    const src = seedTodo(fixture.db, { title: "Take out the recycling", start: "active" });
+
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Source DELETED (identity replacement); the FK-derived fate reports it replaced.
+    expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(src)).toBeUndefined();
+    expect(res.repeating?.replacedUuid).toBe(src);
+    expect(res.repeating?.instanceUuid).not.toBe(src);
+    // A fresh instance was minted (not the source).
+    expect(instancesOf(res.uuid)).toHaveLength(1);
+  });
+
   it("todo.make-repeating AFTER-COMPLETION weekly (RSIM2): source preserved as the sole instance", async () => {
     const src = seedTodo(fixture.db, {
       title: "Refill the water filter",
@@ -1053,6 +1128,116 @@ describe("simulator write vector — covered operations", () => {
     expect(row(tmpl)["start"]).toBe(2);
     expect(row(tmpl)["rt1_instanceCreationCount"]).toBe(1);
     expect(row(tmpl)["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-12"));
+  });
+
+  it("project.make-repeating FIXED with ALL-TERMINAL children (RSIM-U): source PRESERVED, children ride along, only the template minted", async () => {
+    const tag = seedTag(fixture.db, "DeltaTag");
+    // A plain project (no nested repeater) whose every child is terminal
+    // (completed and/or canceled) preserves its source (RSIM-U: U-both).
+    const proj = seedProject(fixture.db, { title: "Delta Proj", start: "someday" });
+    const doneKid = seedTodo(fixture.db, {
+      title: "Completed Child",
+      project: proj,
+      index: 0,
+      status: "completed",
+    });
+    fixture.db.prepare("INSERT INTO TMTaskTag (tasks, tags) VALUES (?, ?)").run(doneKid, tag);
+    const cancKid = seedTodo(fixture.db, {
+      title: "Canceled Child",
+      project: proj,
+      index: 1,
+      status: "canceled",
+    });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+    const tmpl = res.uuid;
+
+    // Source-fate resolves from the FK: PRESERVED → replacedUuid null,
+    // childrenReplaced 0 (the terminal children ride along under the instance).
+    expect(res.repeating?.replacedUuid).toBeNull();
+    expect(res.repeating?.instanceUuid).toBe(proj);
+    expect(res.repeating?.childrenReplaced).toBe(0);
+
+    // Source project PRESERVED and relinked as the current-occurrence instance.
+    const src = row(proj);
+    expect(src["start"]).toBe(2); // someday
+    expect(src["startDate"]).toBe(encodePackedDate("2026-07-05"));
+    expect(src["rt1_repeatingTemplate"]).toBe(tmpl);
+
+    // Exactly ONE new project row — the template. No separate instance project.
+    const projRows = fixture.db.prepare("SELECT uuid FROM TMTask WHERE type = 1").all() as {
+      uuid: string;
+    }[];
+    expect(projRows.map((r) => r.uuid).toSorted()).toEqual([proj, tmpl].toSorted());
+
+    // The ORIGINAL terminal children ride along UNCHANGED under the preserved
+    // instance (still present, same uuids, terminal status intact).
+    expect(row(doneKid)["status"]).toBe(3);
+    expect(row(cancKid)["status"]).toBe(2);
+    const srcKids = subtreeOf(proj).todos;
+    expect(srcKids.map((t) => t["uuid"]).toSorted()).toEqual([doneKid, cancKid].toSorted());
+
+    // Template project holds a fresh PLAIN copy of both children (status preserved).
+    const tmplKids = subtreeOf(tmpl).todos;
+    expect(tmplKids).toHaveLength(2);
+    expect(tmplKids.map((t) => t["title"]).toSorted()).toEqual([
+      "Canceled Child",
+      "Completed Child",
+    ]);
+    for (const k of tmplKids) {
+      expect(k["project"]).toBe(tmpl);
+      expect(k["rt1_repeatingTemplate"]).toBeNull();
+      expect(k["uuid"]).not.toBe(doneKid);
+      expect(k["uuid"]).not.toBe(cancKid);
+    }
+    // Template row is the RSIM6 fixed shape.
+    expect(row(tmpl)["type"]).toBe(1);
+    expect(row(tmpl)["start"]).toBe(2);
+    expect(row(tmpl)["rt1_instanceCreationCount"]).toBe(1);
+  });
+
+  it("project.make-repeating FIXED with an OPEN child (RSIM-U control): source DELETED, replacedUuid = source, childrenReplaced counts it", async () => {
+    // A single OPEN child keeps the delete-default (U-open) — the all-terminal
+    // preserve trigger must not fire.
+    const proj = seedProject(fixture.db, { title: "Epsilon Proj", start: "someday" });
+    const openKid = seedTodo(fixture.db, { title: "Open Child", project: proj, index: 0 });
+    const doneKid = seedTodo(fixture.db, {
+      title: "Done Child",
+      project: proj,
+      index: 1,
+      status: "completed",
+    });
+
+    const res = await runMutation(
+      deps(vector),
+      "project.make-repeating",
+      { uuid: proj, frequency: "weekly", interval: 1 },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
+    const tmpl = res.uuid;
+
+    // Source + its whole subtree hard-DELETED; the FK-derived fate reports it replaced.
+    for (const uuid of [proj, openKid, doneKid]) {
+      expect(fixture.db.prepare("SELECT 1 FROM TMTask WHERE uuid = ?").get(uuid)).toBeUndefined();
+    }
+    expect(res.repeating?.replacedUuid).toBe(proj);
+    expect(res.repeating?.childrenReplaced).toBe(2);
+
+    // A SEPARATE instance project was minted (not the source).
+    const projInstances = fixture.db
+      .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND rt1_repeatingTemplate = ?")
+      .all(tmpl) as { uuid: string }[];
+    expect(projInstances).toHaveLength(1);
+    expect(projInstances[0]!.uuid).not.toBe(proj);
   });
 
   it("project.complete (RSIM-P P2): cascades to HEADING rows, promotes instance start 2→1", async () => {

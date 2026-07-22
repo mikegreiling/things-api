@@ -347,6 +347,25 @@ export const SIMFID_CASES: SimfidCase[] = [
     },
   },
   {
+    id: "todo-make-repeating-deadline-preserve",
+    op: "todo.make-repeating",
+    family: "recurrence",
+    title:
+      "todo.make-repeating FIXED with a DEADLINE (RSIM-T) — source PRESERVED as instance, only the template minted",
+    evidence: "RSIM-T (docs/lab/rsim-results.md §RSIM-T)",
+    seed(db) {
+      // A deadline is the SOLE to-do fixed-preserve trigger (RSIM-T: deadline 1/1
+      // preserve vs bare/notes/tag/checklist 4/4 delete).
+      const src = seedTodo(db, {
+        title: "SF File Report",
+        start: "active",
+        startDate: "2026-07-01",
+        deadline: "2026-08-01",
+      });
+      return { params: { uuid: src, frequency: "weekly", interval: 1 }, opts: GUI };
+    },
+  },
+  {
     id: "todo-make-repeating-after-completion",
     op: "todo.make-repeating",
     family: "recurrence",
@@ -502,6 +521,23 @@ export const SIMFID_CASES: SimfidCase[] = [
         startDate: "2026-07-05",
         repeatingTemplate: nestedTmpl,
       });
+      return { params: { uuid: proj, frequency: "weekly", interval: 1 }, opts: GUI };
+    },
+  },
+  {
+    id: "project-make-repeating-terminal-children-preserve",
+    op: "project.make-repeating",
+    family: "subtree",
+    title:
+      "project.make-repeating FIXED with ALL-TERMINAL children (RSIM-U) — source PRESERVED, children ride along, only the template minted",
+    evidence: "RSIM-U (docs/lab/rsim-results.md §RSIM-U)",
+    seed(db) {
+      // The SECOND fixed-project preserve trigger (RSIM-U: every child terminal —
+      // no open child). Someday + area-less so the pure-AX drive can select it
+      // (mirrors the nested-flatten case's UIC4-d constraint).
+      const proj = seedProject(db, { title: "SF Delta Proj", start: "someday" });
+      seedTodo(db, { title: "SF Done Child", project: proj, index: 0, status: "completed" });
+      seedTodo(db, { title: "SF Canceled Child", project: proj, index: 1, status: "canceled" });
       return { params: { uuid: proj, frequency: "weekly", interval: 1 }, opts: GUI };
     },
   },
