@@ -13,7 +13,12 @@
  * skills/things-cli/SKILL.md` if you publish by hand).
  *
  * Idempotent: re-stamping an already-stamped file just rewrites the same line.
- * `things install-skill` then copies whatever stamp the bundled SKILL.md carries.
+ * This keeps the PUBLISHED tarball's `SKILL.md` in agreement with the version
+ * the published binary reports (`CLI_VERSION`). `things install-skill` does not
+ * rely on this stamp, though: it re-stamps a temp copy with the running binary's
+ * version at install time (see src/cli/commands/install-skill.ts) — so a dev
+ * checkout, where this script never runs and the repo copy stays `0.0.0-dev`,
+ * still installs a correctly-stamped copy.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
