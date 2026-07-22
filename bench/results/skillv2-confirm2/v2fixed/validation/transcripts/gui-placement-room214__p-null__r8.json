@@ -1,0 +1,316 @@
+{
+  "taskId": "gui-placement-room214",
+  "family": "gui-perception",
+  "arm": "skill",
+  "model": "gpt-5.4-mini",
+  "provider": "openai-codex",
+  "prompt": "Add a to-do for tomorrow reminding me to bring the projector to the staff meeting. The meeting is in room 214 and I need to see that room number at a glance when I scan my list without opening anything. Also, facilities asked us to log any AV issues afterward — keep that with the item as supporting detail.",
+  "systemPrompt": "You are an assistant helping a user manage their tasks in the Things app (Things 3, by Cultured Code).\n\nYou have one tool: a bash shell. The `things` command-line program is installed and on PATH; use it to inspect and change the user's tasks. You have no prior knowledge of how `things` works — discover its commands, flags, and output by running `things --help` and `things <command> --help`.\n\nStandard POSIX utilities (cat, grep, jq, sed, ls, ...) are available in the shell for parsing output.\n\nFinal-answer protocol: when the task asks a question, finish your reply with exactly one fenced code block tagged `json` containing the answer as a JSON object, as the last thing in your message with nothing after it. When the task only asks you to change something, no json block is required.\n\nA reference skill for the `things` CLI is mounted in the filesystem. Before working by trial and error, read /skill/SKILL.md — it documents the data model, the available commands and their flags, output shapes, and safety/recovery notes. It links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, safety-and-recovery); read the ones relevant to your task. The skill describes the same CLI you have; prefer it over rediscovering the interface from --help.",
+  "grade": {
+    "success": true,
+    "safety": "ok",
+    "dbChanged": true
+  },
+  "metrics": {
+    "turns": 6,
+    "toolCalls": 5,
+    "errorsSeen": 2,
+    "tokensIn": 22664,
+    "tokensInCached": 6656,
+    "tokensOut": 378,
+    "wallMs": 13903
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Add a to-do for tomorrow reminding me to bring the projector to the staff meeting. The meeting is in room 214 and I need to see that room number at a glance when I scan my list without opening anything. Also, facilities asked us to log any AV issues afterward — keep that with the item as supporting detail."
+        }
+      ],
+      "timestamp": 1784664136655
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_mdtheNZalHZ6SmDvKazuspbJ|fc_0c16ecef0c7fdfe9016a5fd04a05b88195b508e4a9b8f4c600",
+          "name": "bash",
+          "arguments": {
+            "command": "cat /skill/SKILL.md && printf '\\n---DATA MODEL---\\n' && cat /skill/references/data-model.md && printf '\\n---WRITES---\\n' && cat /skill/references/writes.md && printf '\\n---RECURRENCE---\\n' && cat /skill/references/recurrence.md && printf '\\n---SAFETY---\\n' && cat /skill/references/safety-and-recovery.md && printf '\\n---GUI---\\n' && cat /skill/references/gui.md"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 429,
+        "output": 129,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 558,
+        "cost": {
+          "input": 0.00032175,
+          "output": 0.0005805,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.00090225
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664136655,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd0496d98819593f0c10f89f15f58"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_mdtheNZalHZ6SmDvKazuspbJ|fc_0c16ecef0c7fdfe9016a5fd04a05b88195b508e4a9b8f4c600",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "---\nname: things-cli\ndescription: Read and manage a user's tasks in the Things 3 app (macOS) through the `things` CLI — list views like Today/Inbox/Upcoming, search, and create, edit, schedule, complete, move, or organize to-dos, projects, areas, headings, and tags. Use whenever the user asks about their tasks, to-dos, projects, or anything in Things.\n---\n\n# Things CLI\n\n`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are verified after they land. Use `things` when it is on your PATH; otherwise substitute `npx -y things-api@latest` in every command (identical subcommands and flags).\n\n`things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `output`, `repeating`, `writes`.\n\n## Data model (read this first)\n\n- **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).\n- **Inbox** — not a container but the *untriaged state*: an inbox to-do has no container and no schedule. Filing it into a container or scheduling it moves it out of the Inbox; moving something back TO the Inbox un-files AND un-schedules it.\n- **Project** — a goal-sized container of to-dos, optionally divided by **headings** (section labels; a heading belongs to one project and cannot hold projects). Projects live in an area or stand alone. Projects can also have their own notes, tags, schedule, and deadline.\n- **Area** — a top-level bucket (e.g. a sphere of responsibility) holding projects and loose to-dos. Areas have tags but no dates.\n- **Tags** — form a hierarchy, and are **inherited downward**: a to-do effectively carries its own tags plus those of its project and area. Headings carry no tags, but inheritance flows through them from project to to-do.\n- **Views** are queries over this model, matching the app's sidebar: `inbox` (unsorted), `today` (scheduled for today, incl. This Evening), `upcoming` (future-dated), `anytime` (all active), `someday` (kept without a date), `logbook` (completed/canceled), `trash`.\n- **Scheduling vocabulary**: an item's *when* is `today | evening | anytime | someday | YYYY-MM-DD` — where the item sits/starts. A **deadline** is a separate due date. A **reminder** is a separate time-of-day alert parameter — never write `date@time` into *when*.\n\n## Referring to items\n\nCommands take a `<ref>`: a UUID, a unique UUID prefix, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry. Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`).\n\n## Stable contracts\n\nThese hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.\n\n- **JSON envelope**: every `--json` response is `{ ok, data, meta }`. Read results from `.data` (usually `.data[]`), never `.items`; UUIDs are `.uuid`, not `.id`. Check `meta.truncation` before concluding \"no match\" or \"that's everything\". List/search rows are summaries whose `tags` may be incomplete — use `things show <ref> --json` for effective tags, checklist, and placement.\n- **Exit codes**: `0` landed and verified · `2` usage error · `3` verify-failed. Nonzero means the change did NOT stick; the message names the fix.\n- **Previews, undo & gates**: `--dry-run` shows any write's exact plan without executing; `things undo` reverses recent changes made through this tool; repeating and other disruptive operations require `--allow-disruptive`, INCLUDING their dry runs.\n- **Preconditions**: referenced containers and tags must already exist — create nested structures outside-in and reuse each returned UUID.\n- **Recurrence**: converting to a *fixed* repeater REPLACES the item, returning a `repeating` block — use `instanceUuid` to reach the visible occurrence and `templateUuid` for `reschedule-repeat`. Full vocabulary: `things help repeating`.\n- **View reasoning from JSON**: `start:\"inbox\"`→Inbox, `start:\"someday\"`→Someday, `start:\"active\"` with no `startDate`→Anytime; a dated open item is Today when dated for `meta.clock.today`, else Upcoming. `todaySection` only marks placement within Today and is NOT evidence an undated item is in Today. Completed/canceled → Logbook, trashed → Trash, regardless of a stale `logged` field.\n- If the user requests a JSON reply schema, return exactly that object after the read or verified write.\n\n## Reading\n\nViews and lookups — pass `--json` whenever you will act on the output: `things today | inbox | upcoming | anytime | someday | logbook | trash`, `things show <ref>` (full detail incl. notes + checklist + effective tags), `things projects [ref]`, `things areas [ref]`, `things tags`, `things search <words>`, `things changes --since <moment>`. Filters (`--tag`, `--untagged`, `--overdue`, `--limit N`, …) compose with AND — see `things help filters` and [references/model.md](references/model.md).\n\n## Writing\n\nNamespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes), `things undo`, and `things reorder`.\n\n**Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).\n\n## Going deeper\n\n- [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.\n- [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/ambiguity recovery, and the recurrence contract.\n- [references/gui.md](references/gui.md) — how the user sees Things in the app (where results appear, what list rows show).\n\n---DATA MODEL---\n[stderr]\ncat: /skill/references/data-model.md: No such file or directory\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784664139635
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_3mZ5IjOuMuNl2RaPqjXy9nJo|fc_0c16ecef0c7fdfe9016a5fd04d0fe48195819b2d51865515ad",
+          "name": "bash",
+          "arguments": {
+            "command": "ls -R /skill/references && printf '\\n---HELP---\\n' && things --help && printf '\\n---TODO HELP---\\n' && things todo --help && printf '\\n---UPDATE HELP---\\n' && things todo update --help"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2176,
+        "output": 71,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 2247,
+        "cost": {
+          "input": 0.001632,
+          "output": 0.0003195,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0019515000000000001
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664139635,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd04c6fe881958247e97923b5165f"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_3mZ5IjOuMuNl2RaPqjXy9nJo|fc_0c16ecef0c7fdfe9016a5fd04d0fe48195819b2d51865515ad",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "/skill/references:\ncontracts.md\ngui.md\nmodel.md\n\n---HELP---\nthings — a programmatic interface to Things 3 (Cultured Code).\nUsage: things <command> [arguments] [options]\n\nViews — the app's built-in lists\n  inbox           captured, still-unsorted to-dos\n  today           what's scheduled for today, plus This Evening\n  upcoming        future-scheduled items, in date order\n  anytime         all active items, grouped by area and project\n  someday         incubating items kept without a date\n  logbook         completed and canceled items, newest first\n  trash           trashed items (empty it with `trash empty`)\n\nBrowse & search\n  show <ref>      show a to-do, project, or area by id or name\n  open <ref>      reveal an item in the Things app on this Mac\n  search <query>  find items by words in their title or notes\n  projects [ref]  list projects, or show one\n  areas [ref]     list areas, or show one\n  tags            list the tag hierarchy\n  changes         items created or changed since a moment (--since)\n\nWrite — create and change items\n  todo <verb>     add, edit, schedule, complete, move to-dos\n  project <verb>  add, edit, complete, move projects\n  area <verb>     add, rename, retag, reorder, delete areas\n  tag <verb>      add, rename, nest, delete tags\n  heading <verb>  add, rename, archive headings in a project\n  batch [file]    run many changes from a JSONL script\n  undo            reverse recent changes made through this tool\n  reorder <ids…>  reorder items within a list or container\n\nSetup & diagnostics\n  config <verb>   show or set configuration keys\n  doctor          check environment health and pending setup\n  capabilities    what each write operation supports\n  setup <verb>    one-time setup (install the Shortcuts)\n  mcp             serve the Model Context Protocol server on stdio\n  snapshot        full normalized dump of every record\n  legend          the symbols and colors list output uses\n\nGlobal options (accepted by most commands)\n  --json          emit {apiVersion, ok, kind, data, meta}; payload=.data; entity id=.uuid (not .id)\n  --db <path>     read from an explicit database path\n  -h, --help      help for things, or for any <command>\n  -V, --version   print the version (0.10.0-dev)\n\nRun `things <command> --help` for the behavior and options of any command.\nMost commands take a ref (uuid, prefix, share link, or name) — see `things help ids`.\nGuides: `things help <topic>` — agent, filters, ids, output, repeating, writes.\nNew to Things? Start with `things help agent`.\n\n---TODO HELP---\nUsage: things todo [options] [command]\n\nTo-do–scoped operations\n\nOptions:\n  -h, --help                           display help for command\n\nCommands:\n  show [options] <uuid>                Full detail for one record by UUID —\n                                       includes checklist items, inherited tags,\n                                       and repeating flags; finds records list\n                                       views hide (templates, trashed)\n  open [options] <ref>                 Open the to-do in the Things app on this\n                                       Mac (brings the window forward). Errors\n                                       if the reference is not a to-do.\n  add [options] <title>                Create a to-do; its uuid is printed on\n                                       success. Projects, areas, and headings\n                                       must name existing items — unknown or\n                                       ambiguous references are rejected. A tag\n                                       may be a name or a parent/child path, and\n                                       must exist unless --create-tags. Adding\n                                       into a completed/canceled project reopens\n                                       that project — requires\n                                       --acknowledge-project-reopen.\n  update [options] <uuid>              Update\n                                       title/notes/when/reminder/deadline.\n                                       Schedule and deadline changes are not\n                                       available for repeating to-dos\n                                       (title/notes are). --reminder needs\n                                       --when today|evening|YYYY-MM-DD; when\n                                       re-scheduling WITHOUT --reminder an\n                                       existing reminder is auto-preserved.\n                                       --clear-reminder works while the to-do is\n                                       scheduled for today|evening — a DATED\n                                       reminder can only be changed, not cleared\n                                       (re-schedule to today first).\n                                       --append-notes/--prepend-notes join with\n                                       a newline (exclusive with --notes).\n  complete [options] <uuid>            Complete a to-do. Not available for\n                                       repeating to-dos.\n  cancel [options] <uuid>              Cancel a to-do. Not available for\n                                       repeating to-dos.\n  reopen [options] <uuid>              Reopen a to-do. Not available for\n                                       repeating to-dos.\n  move [options] <uuid>                Move a to-do into a project or area\n                                       (optionally under an existing heading),\n                                       back to the Inbox, or out of every\n                                       container. Unknown or ambiguous\n                                       destinations are rejected. Moving into a\n                                       completed/canceled project reopens that\n                                       project — requires\n                                       --acknowledge-project-reopen.\n  duplicate [options] <uuid>           Duplicate a to-do — an exact copy; the\n                                       copy's uuid is printed on success. Not\n                                       available for repeating to-dos.\n  tags [options] <uuid>                Set or extend a to-do's tags. --set\n                                       REPLACES the full tag set (an empty value\n                                       clears all tags); --add merges with the\n                                       current tags. Each tag may be a name or a\n                                       parent/child path, and must exist unless\n                                       --create-tags.\n  checklist [options] <uuid>           Edit a to-do's checklist. WHOLESALE:\n                                       --item (repeatable) replaces the whole\n                                       list, discarding the existing items and\n                                       their checked states — requires\n                                       --acknowledge-checklist-reset when items\n                                       exist. GRANULAR (one action per call):\n                                       the flags below add, remove, check,\n                                       uncheck, rename, or move a single item,\n                                       with every other item's checked state\n                                       PRESERVED. Target an item by title or by\n                                       --index (1-based); duplicate titles\n                                       resolve best-effort. Checklist items have\n                                       no exposed uuid.\n  delete [options] <uuid>              Move a to-do to the Trash (recover with\n                                       `things todo restore`). Not available for\n                                       repeating to-dos.\n  restore [options] <uuid>             Restore a TRASHED to-do: it returns to\n                                       the Inbox, DE-SCHEDULED — its previous\n                                       list and schedule are not restored. Only\n                                       trashed to-dos qualify; for projects use\n                                       `things project restore`.\n  clear-reminder [options] <uuid>      Clear a to-do's time-of-day reminder,\n                                       keeping its scheduled date. With the\n                                       proxy shortcuts installed (`things setup\n                                       shortcuts`) this is in place, and is the\n                                       only way for a repeating to-do; otherwise\n                                       a date-scheduled to-do is cleared by a\n                                       brief re-schedule through Today.\n                                       Reversible with `things undo`.\n  backdate [options] <uuid>            Rewrite a to-do's completion and/or\n                                       creation timestamp to noon (local) on the\n                                       given date. --completed-on requires the\n                                       to-do to already be completed or\n                                       canceled. The Logbook re-sorts to the new\n                                       date.\n  add-logged [options] <title>         Create a to-do directly in the Logbook:\n                                       completed, with the given past completion\n                                       date (and optionally a past creation\n                                       date). For importing history from another\n                                       system.\n  make-repeating [options] <uuid>      Turn a plain to-do into a repeating one.\n                                       This REPLACES the to-do with a new\n                                       repeating series — the original\n                                       disappears and a fresh recurring item\n                                       takes its place (cannot be undone). Set\n                                       the rule with the flags below; see\n                                       `things help repeating`.\n  reschedule-repeat [options] <uuid>   Change an existing repeating to-do's rule\n                                       in place (the item keeps its identity).\n                                       Set the new rule with the flags below;\n                                       see `things help repeating`. `things\n                                       undo` restores the previous rule.\n  pause-repeat [options] <uuid>        Pause a repeating to-do: it stops\n                                       spawning new occurrences but keeps its\n                                       rule. Reversible with `things todo\n                                       resume-repeat`.\n  resume-repeat [options] <uuid>       Resume a paused repeating to-do: it\n                                       starts spawning occurrences again.\n  convert-to-project [options] <uuid>  Convert a to-do into a project. This\n                                       REPLACES the to-do with a new project\n                                       (its notes are kept); the to-do's\n                                       identity is gone and it cannot be undone.\n                                       The new project's uuid is printed on\n                                       success.\n  help [command]                       display help for command\n\n---UPDATE HELP---\nUsage: things todo update [options] <uuid>\n\nUpdate title/notes/when/reminder/deadline. Schedule and deadline changes are not\navailable for repeating to-dos (title/notes are). --reminder needs --when\ntoday|evening|YYYY-MM-DD; when re-scheduling WITHOUT --reminder an existing\nreminder is auto-preserved. --clear-reminder works while the to-do is scheduled\nfor today|evening — a DATED reminder can only be changed, not cleared\n(re-schedule to today first). --append-notes/--prepend-notes join with a newline\n(exclusive with --notes).\n\nOptions:\n  --title <text>           new title\n  --notes <text>           replace notes\n  --append-notes <text>    append to existing notes (newline-joined)\n  --prepend-notes <text>   prepend to existing notes (newline-joined)\n  --when <value>           today | evening | anytime | someday | YYYY-MM-DD\n  --reminder <HH:mm>       set a reminder (24h); requires --when\n                           today|evening|date\n  --clear-reminder         clear the reminder (works while scheduled\n                           today|evening)\n  --deadline <date>        YYYY-MM-DD\n  --clear-deadline         remove the deadline\n  --json                   emit versioned JSON envelope on stdout\n  --db <path>              explicit database path\n  --dry-run                preview the planned change and its expected effect;\n                           nothing executes\n  --vector <id>            force how the change is delivered: url-scheme |\n                           applescript | shortcuts | ui\n  --allow-disruptive       permit changes that briefly steal window focus\n  --allow-very-disruptive  permit changes that visibly drive the Things UI\n  --verify-timeout <ms>    how long to wait for the change to take effect\n  --actor <name>           author name recorded for this change (default: from\n                           config)\n  -h, --help               display help for command\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664142342
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_mTxTSARPxIhFXac1OxKtotoQ|fc_0c16ecef0c7fdfe9016a5fd04fdccc8195a98e6f213c75b121",
+          "name": "bash",
+          "arguments": {
+            "command": "things search \"projector\" --json && printf '\\n---TODAY---\\n' && things today --json | jq '.data[] | {uuid,title,notes,when,deadline,reminder}' | head -n 20"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 2619,
+        "output": 66,
+        "cacheRead": 2048,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 4733,
+        "cost": {
+          "input": 0.00196425,
+          "output": 0.000297,
+          "cacheRead": 0.0001536,
+          "cacheWrite": 0,
+          "total": 0.0024148499999999996
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664142342,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd04f0bdc819584a3d00f8a9cf2d5"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_mTxTSARPxIhFXac1OxKtotoQ|fc_0c16ecef0c7fdfe9016a5fd04fdccc8195a98e6f213c75b121",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"search\",\"data\":[{\"uuid\":\"WWgPdPqA9WULFvyt32oF9O\",\"title\":\"Gift idea: star projector for the kids' room\",\"status\":\"open\",\"logged\":false,\"trashed\":false,\"start\":\"inbox\",\"repeating\":{\"isTemplate\":false,\"isInstance\":false,\"templateUuid\":null},\"created\":\"2025-12-04T14:00:00.000Z\",\"modified\":\"2025-12-04T14:00:00.000Z\",\"type\":\"to-do\",\"checklistItemsCount\":0,\"openChecklistItemsCount\":0}],\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":6,\"truncation\":{\"shown\":1,\"total\":1,\"limit\":50,\"truncated\":false},\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n\n---TODAY---\n[stderr]\njq: parse error: Cannot index array with string \"uuid\"\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664144989
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_EeK8IJA5j4SVx4nYdxp15FLV|fc_0c16ecef0c7fdfe9016a5fd0526a208195a4cd0056deafcc96",
+          "name": "bash",
+          "arguments": {
+            "command": "things todo add \"Bring projector for staff meeting (Room 214)\" --notes \"Facilities asked us to log any AV issues afterward.\" --when tomorrow --json"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 4967,
+        "output": 50,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 5017,
+        "cost": {
+          "input": 0.0037252500000000003,
+          "output": 0.000225,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.003950250000000001
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664144990,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd051bc3c819587e811bd34bd6abe"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_EeK8IJA5j4SVx4nYdxp15FLV|fc_0c16ecef0c7fdfe9016a5fd0526a208195a4cd0056deafcc96",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":false,\"kind\":\"error\",\"error\":{\"code\":\"unexpected\",\"message\":\"invalid when \\\"tomorrow\\\" — expected today | evening | anytime | someday | YYYY-MM-DD\"},\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":30,\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 1]"
+        }
+      ],
+      "details": {
+        "exitCode": 1
+      },
+      "isError": false,
+      "timestamp": 1784664147108
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "call_TVq02LG2gQRkGIURNJYWEcts|fc_0c16ecef0c7fdfe9016a5fd054662081958df3c18920db0878",
+          "name": "bash",
+          "arguments": {
+            "command": "things todo add \"Bring projector for staff meeting (Room 214)\" --notes \"Facilities asked us to log any AV issues afterward.\" --when 2026-07-21 --json"
+          }
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 503,
+        "output": 56,
+        "cacheRead": 4608,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 5167,
+        "cost": {
+          "input": 0.00037725000000000004,
+          "output": 0.000252,
+          "cacheRead": 0.0003456,
+          "cacheWrite": 0,
+          "total": 0.00097485
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1784664147108,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd053c63c8195ae5e3bbea3dd861c"
+    },
+    {
+      "role": "toolResult",
+      "toolCallId": "call_TVq02LG2gQRkGIURNJYWEcts|fc_0c16ecef0c7fdfe9016a5fd054662081958df3c18920db0878",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"apiVersion\":1,\"ok\":true,\"kind\":\"mutation-result\",\"data\":{\"kind\":\"ok\",\"op\":\"todo.add\",\"uuid\":\"iLdWc2UfZfGxjvQC1K0EQv\",\"observed\":{\"notes\":\"Facilities asked us to log any AV issues afterward.\",\"startDate\":\"2026-07-21\"},\"vector\":\"url-scheme\",\"tier\":1,\"undoToken\":\"m-41cfe1334636\"},\"meta\":{\"dbVersion\":26,\"fingerprint\":\"ok\",\"elapsedMs\":52,\"clock\":{\"timezone\":\"America/Chicago\",\"today\":\"2026-07-20\"}}}\n[exit 0]"
+        }
+      ],
+      "details": {
+        "exitCode": 0
+      },
+      "isError": false,
+      "timestamp": 1784664149197
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done.",
+          "textSignature": "{\"v\":1,\"id\":\"msg_0c16ecef0c7fdfe9016a5fd056889c819589f0cf0d52fb2c0d\",\"phase\":\"final_answer\"}"
+        }
+      ],
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "model": "gpt-5.4-mini",
+      "usage": {
+        "input": 5314,
+        "output": 6,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 5320,
+        "cost": {
+          "input": 0.0039855,
+          "output": 0.000027,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0.0040125000000000004
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1784664149198,
+      "responseId": "resp_0c16ecef0c7fdfe9016a5fd05600f88195ae073a7e21c560dc"
+    }
+  ]
+}
