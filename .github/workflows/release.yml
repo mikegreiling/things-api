@@ -30,6 +30,11 @@ jobs:
           fi
       - run: npm run check
       - run: npm run build
+      # Stamp the bundled agent skill with this release's version, so the
+      # published tarball's SKILL.md carries a real `version:` (the repo copy
+      # stays 0.0.0-dev). Visible in logs and survives a prepublishOnly edit;
+      # prepublishOnly re-runs it as a belt-and-suspenders (idempotent).
+      - run: node scripts/stamp-skill.mjs
       # Trusted publishing: add this repo + workflow as a Trusted Publisher in
       # the package's settings on npmjs.com (Settings → Publishing access) —
       # then no token exists to leak. Until that's configured, create a

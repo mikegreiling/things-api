@@ -78,6 +78,22 @@ export function parseSkillVersion(md: string): string | null {
   return null;
 }
 
+/**
+ * Rewrite the `version:` line in a SKILL.md's frontmatter to `version`. Pure
+ * string transform used by the publish-time stamp (scripts/stamp-skill.mjs).
+ * Throws when there is no frontmatter or no `version:` key — the source file is
+ * expected to carry the `0.0.0-dev` slot.
+ */
+export function stampSkillVersion(md: string, version: string): string {
+  const end = md.indexOf("\n---", 3);
+  if (!md.startsWith("---") || end === -1) throw new Error("SKILL.md has no frontmatter");
+  const front = md.slice(0, end);
+  const rest = md.slice(end);
+  if (!/^version:\s*.+$/m.test(front))
+    throw new Error("SKILL.md frontmatter has no 'version:' key");
+  return front.replace(/^version:\s*.+$/m, `version: ${version}`) + rest;
+}
+
 /** Read the version stamp from a SKILL.md file, or null if absent/unreadable. */
 export function readSkillVersion(skillMdPath: string): string | null {
   try {
@@ -123,4 +139,18 @@ export function compareSemver(a: string | null, b: string | null): number | null
   if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
   if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
   return 0;
+}
+
+/**
+ * True when `installed` is a MINOR version or more behind `bundled` — i.e. their
+ * `(major, minor)` differs and bundled is the newer pair. Patch-only drift is
+ * NOT behind (too small to nudge). False when either is not a `X.Y.Z` stamp, so
+ * a dev build (`0.0.0-dev` → 0.0.0) never flags anything as behind.
+ */
+export function isMinorBehind(installed: string | null, bundled: string | null): boolean {
+  const pi = parseSemver(installed);
+  const pb = parseSemver(bundled);
+  if (pi === null || pb === null) return false;
+  if (pb.major !== pi.major) return pb.major > pi.major;
+  return pb.minor > pi.minor;
 }
