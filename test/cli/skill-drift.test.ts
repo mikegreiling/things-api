@@ -16,6 +16,7 @@ import {
   resetSkillDriftCheck,
 } from "../../src/cli/skill-check.ts";
 import {
+  isLegacyDevStamp,
   isMinorBehind,
   parseSkillVersion,
   skillLocations,
@@ -55,6 +56,16 @@ describe("isMinorBehind", () => {
   });
 });
 
+describe("isLegacyDevStamp", () => {
+  it("flags the pre-ratchet placeholder, nothing real", () => {
+    expect(isLegacyDevStamp("0.0.0-dev")).toBe(true);
+    expect(isLegacyDevStamp("0.0.0")).toBe(true);
+    expect(isLegacyDevStamp("0.11.0")).toBe(false);
+    expect(isLegacyDevStamp("0.11.0-dev")).toBe(false);
+    expect(isLegacyDevStamp(null)).toBe(false);
+  });
+});
+
 describe("computeSkillDriftNote", () => {
   it("returns the note when the canonical skill is a minor behind", () => {
     const h = newHome();
@@ -63,6 +74,23 @@ describe("computeSkillDriftNote", () => {
     expect(note).toContain("v0.10.0");
     expect(note).toContain("v0.11.0");
     expect(note).toContain("things install-skill");
+  });
+
+  it("reads a legacy 0.0.0-dev copy as unstamped/refresh, not scary drift math", () => {
+    const h = newHome();
+    installStamp(h, 0, "0.0.0-dev");
+    // Binary is a real 0.11.0-dev; the legacy copy must NOT read as ~11 behind.
+    const note = computeSkillDriftNote("0.11.0-dev", h);
+    expect(note).toContain("unstamped/legacy");
+    expect(note).toContain("v0.0.0-dev");
+    expect(note).not.toContain("predates");
+    expect(note).toContain("things install-skill");
+  });
+
+  it("a dev binary does not nag when the installed version matches (suffix stripped)", () => {
+    const h = newHome();
+    installStamp(h, 0, "0.11.0"); // no -dev suffix
+    expect(computeSkillDriftNote("0.11.0-dev", h)).toBeNull();
   });
 
   it("stays silent when the canonical skill is current (patch or ahead)", () => {
@@ -103,7 +131,7 @@ function capture(argv: string[], env: NodeJS.ProcessEnv, h: string): string {
   maybeEmitSkillDriftNote({
     argv,
     env,
-    bundledVersion: "0.11.0",
+    binaryVersion: "0.11.0",
     home: h,
     write: (s) => void (out += s),
   });
@@ -148,7 +176,7 @@ describe("maybeEmitSkillDriftNote gating", () => {
     maybeEmitSkillDriftNote({
       argv: ["inbox"],
       env: {},
-      bundledVersion: "0.11.0",
+      binaryVersion: "0.11.0",
       home: h,
       write: (s) => void (out += s),
     });

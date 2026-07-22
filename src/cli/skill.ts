@@ -115,6 +115,17 @@ export function installedSkillVersion(dir: string): string | null {
   return readSkillVersion(md);
 }
 
+/**
+ * True for the pre-ratchet placeholder stamp a legacy install copied verbatim
+ * (`0.0.0-dev`, or a bare `0.0.0`). Before this fix `install-skill` copied the
+ * repo's unstamped `SKILL.md` as-is, so copies from that era carry `0.0.0-dev`.
+ * They are not "a hundred minor versions behind" — they are simply unstamped, so
+ * callers treat them as legacy (refresh) rather than feeding them to drift math.
+ */
+export function isLegacyDevStamp(v: string | null): boolean {
+  return v === "0.0.0-dev" || v === "0.0.0";
+}
+
 /** A parsed `major.minor.patch`, ignoring any `-dev`/prerelease suffix. */
 export interface Semver {
   major: number;

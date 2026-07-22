@@ -3,8 +3,8 @@
  * side effects injected, so no test touches the network or a real HOME. Covers
  * the built-in copy fallback, the clean-overwrite re-add semantics (probe-
  * confirmed 2026-07-21), the skills-CLI success path, the simulated bench fence,
- * and --check per-location reporting. Companion unit assertions for the shared
- * version helpers live alongside.
+ * the binary-version stamp on install, and --check per-location reporting.
+ * Companion unit assertions for the shared version helpers live alongside.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -27,6 +27,13 @@ import {
   skillLocations,
 } from "../../src/cli/skill.ts";
 
+/**
+ * A fixed stand-in for the running binary's version (`CLI_VERSION`). Kept
+ * distinct from the repo SKILL.md placeholder (`0.0.0-dev`) so the tests prove
+ * installs carry the BINARY version, not the frontmatter placeholder.
+ */
+const BIN = "1.2.3-dev";
+
 let home: string | null = null;
 afterEach(() => {
   if (home !== null) rmSync(home, { recursive: true, force: true });
@@ -42,6 +49,7 @@ function newHome(): string {
 function fallbackDeps(h: string): InstallSkillDeps {
   return {
     home: h,
+    binaryVersion: BIN,
     simulated: false,
     runSkillsCli: () => false,
     copyInto: defaultCopyInto,
@@ -49,21 +57,31 @@ function fallbackDeps(h: string): InstallSkillDeps {
 }
 
 describe("install-skill: built-in copy fallback", () => {
-  it("copies the skill into both known roots when the skills CLI is unavailable", () => {
+  it("copies the skill into both known roots, stamped with the binary version", () => {
     const h = newHome();
     const { data, exitCode } = installSkill({}, fallbackDeps(h));
     expect(exitCode).toBe(0);
     expect(data.path).toBe("builtin-copy");
-    const bundled = bundledSkillVersion();
+    expect(data.binaryVersion).toBe(BIN);
+    // The repo placeholder is NOT what lands — the running binary's version is.
+    expect(bundledSkillVersion()).not.toBe(BIN);
     for (const loc of skillLocations(h)) {
       const md = join(loc.dir, "SKILL.md");
       expect(existsSync(md), loc.label).toBe(true);
       // References travel too (recursive copy).
       expect(existsSync(join(loc.dir, "references", "contracts.md")), loc.label).toBe(true);
-      expect(installedSkillVersion(loc.dir)).toBe(bundled);
+      expect(installedSkillVersion(loc.dir), loc.label).toBe(BIN);
     }
     // The report names both destinations as written.
     expect(data.locations.map((r) => r.status)).toEqual(["written", "written"]);
+  });
+
+  it("never modifies the repo's own SKILL.md (stamps only the copy)", () => {
+    const h = newHome();
+    const before = bundledSkillVersion();
+    installSkill({}, fallbackDeps(h));
+    expect(bundledSkillVersion()).toBe(before); // repo placeholder untouched
+    expect(before).toBe("0.0.0-dev");
   });
 
   it("re-add cleanly overwrites: stale content and orphan files are removed", () => {
@@ -79,7 +97,7 @@ describe("install-skill: built-in copy fallback", () => {
     expect(existsSync(join(canonical, "ORPHAN.txt"))).toBe(false);
     const md = readFileSync(join(canonical, "SKILL.md"), "utf8");
     expect(md).not.toContain("STALE");
-    expect(installedSkillVersion(canonical)).toBe(bundledSkillVersion());
+    expect(installedSkillVersion(canonical)).toBe(BIN);
   });
 });
 
@@ -91,6 +109,7 @@ describe("install-skill: skills-CLI success path", () => {
       {},
       {
         home: h,
+        binaryVersion: BIN,
         simulated: false,
         runSkillsCli: () => true,
         copyInto: () => {
@@ -103,6 +122,52 @@ describe("install-skill: skills-CLI success path", () => {
     expect(copied, "must not fall back to a copy when the CLI succeeds").toBe(false);
   });
 
+  it("hands the skills CLI a stamped copy named things-cli (so every agent dir inherits the stamp)", () => {
+    const h = newHome();
+    let handedBasename: string | null = null;
+    let handedVersion: string | null = null;
+    installSkill(
+      {},
+      {
+        home: h,
+        binaryVersion: BIN,
+        simulated: false,
+        // Read the handed dir WHILE it still exists — it is a temp copy that
+        // withStampedSkillDir cleans up as soon as installSkill returns.
+        runSkillsCli: (dir) => {
+          handedBasename = dir.split("/").at(-1) ?? null;
+          handedVersion = installedSkillVersion(dir);
+          return true;
+        },
+        copyInto: () => {},
+      },
+    );
+    // The canonical basename survives so `skills add <dir>` registers the right id.
+    expect(handedBasename).toBe("things-cli");
+    // The handed dir carries the BINARY stamp, not the repo placeholder.
+    expect(handedVersion).toBe(BIN);
+  });
+
+  it("cleans up the stamped temp dir after the shell-out", () => {
+    const h = newHome();
+    let handed: string | null = null;
+    installSkill(
+      {},
+      {
+        home: h,
+        binaryVersion: BIN,
+        simulated: false,
+        runSkillsCli: (dir) => {
+          handed = dir;
+          return true;
+        },
+        copyInto: () => {},
+      },
+    );
+    expect(handed).not.toBeNull();
+    expect(existsSync(handed!), "temp stamped dir must be removed").toBe(false);
+  });
+
   it("--project drops the global flag passed to the skills CLI", () => {
     const h = newHome();
     let sawGlobal: boolean | null = null;
@@ -110,6 +175,7 @@ describe("install-skill: skills-CLI success path", () => {
       { project: true },
       {
         home: h,
+        binaryVersion: BIN,
         simulated: false,
         runSkillsCli: (_dir, global) => {
           sawGlobal = global;
@@ -130,6 +196,7 @@ describe("install-skill: bench fence", () => {
       {},
       {
         home: h,
+        binaryVersion: BIN,
         simulated: true,
         runSkillsCli: () => {
           touched = true;
@@ -158,14 +225,53 @@ describe("install-skill: --check reports per location without writing", () => {
     expect(existsSync(skillLocations(h)[0]!.dir)).toBe(false);
   });
 
-  it("canonical up to date → exit 0", () => {
+  it("compares against the binary version, not the bundled placeholder", () => {
+    // --check reports the RUNNING BINARY's version, never the repo's 0.0.0-dev.
+    const h = newHome();
+    const { data } = installSkill({ check: true }, fallbackDeps(h));
+    expect(data.binaryVersion).toBe(BIN);
+  });
+
+  it("canonical matching the binary version → up-to-date, exit 0", () => {
     const h = newHome();
     const canonical = skillLocations(h)[0]!.dir;
     mkdirSync(canonical, { recursive: true });
-    writeFileSync(join(canonical, "SKILL.md"), `---\nversion: ${bundledSkillVersion()}\n---\n`);
+    writeFileSync(join(canonical, "SKILL.md"), `---\nversion: ${BIN}\n---\n`);
     const { data, exitCode } = installSkill({ check: true }, fallbackDeps(h));
     expect(exitCode).toBe(0);
     expect(data.locations[0]!.status).toBe("up-to-date");
+  });
+
+  it("a same-version stamp without the -dev suffix still reads up-to-date", () => {
+    // The binary is 1.2.3-dev; an installed 1.2.3 stamp differs only by suffix.
+    const h = newHome();
+    const canonical = skillLocations(h)[0]!.dir;
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(join(canonical, "SKILL.md"), "---\nversion: 1.2.3\n---\n");
+    const { data, exitCode } = installSkill({ check: true }, fallbackDeps(h));
+    expect(exitCode).toBe(0);
+    expect(data.locations[0]!.status).toBe("up-to-date");
+  });
+
+  it("a legacy 0.0.0-dev copy reads as legacy (refresh), exit 7", () => {
+    const h = newHome();
+    const canonical = skillLocations(h)[0]!.dir;
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(join(canonical, "SKILL.md"), "---\nversion: 0.0.0-dev\n---\n");
+    const { data, exitCode } = installSkill({ check: true }, fallbackDeps(h));
+    expect(exitCode).toBe(7);
+    expect(data.locations[0]!.installedVersion).toBe("0.0.0-dev");
+    expect(data.locations[0]!.status).toBe("legacy");
+  });
+
+  it("an older stamp reads as behind, exit 7", () => {
+    const h = newHome();
+    const canonical = skillLocations(h)[0]!.dir;
+    mkdirSync(canonical, { recursive: true });
+    writeFileSync(join(canonical, "SKILL.md"), "---\nversion: 1.1.0\n---\n");
+    const { data, exitCode } = installSkill({ check: true }, fallbackDeps(h));
+    expect(exitCode).toBe(7);
+    expect(data.locations[0]!.status).toBe("behind");
   });
 
   it("canonical carries a different (ahead) version → differs, exit 7", () => {

@@ -93,7 +93,7 @@ Install (or update) it with one command:
 ```sh
 things install-skill          # global: covers every agent harness the skills CLI detects
 things install-skill --project   # into the current project's .agents instead
-things install-skill --check     # compare installed vs bundled version, write nothing
+things install-skill --check     # compare installed vs this binary's version, write nothing
 ```
 
 Under the hood it hands the bundled skill to the [`skills` CLI](https://github.com/vercel-labs/skills) (`npx -y skills add …`), which keeps one canonical copy under `~/.agents/skills/` and materializes it into each detected agent's directory (`~/.claude/skills/`, `~/.codex/skills/`, …). When that tool or the network is unavailable it falls back to a plain copy into `~/.agents` and `~/.claude`. **Re-running `things install-skill` IS the update** — it replaces the skill wholesale — so prefer it over a generic `skills update` for this skill (a single, unambiguous update path).
@@ -104,7 +104,7 @@ Three entry angles, all converging on the same working setup:
 - **No install** → `npx things-api install-skill` places the skill; the skill itself falls back to `npx -y things-api@latest` for every command, so it works with no global binary on PATH.
 - **Skill first, zero npm knowledge** → `npx skills add mikegreiling/things-api` pulls the skill straight from GitHub (whatever `skills/things-cli/` currently holds).
 
-To keep the two sides from drifting, the `things` binary carries a version-stamped copy of the skill and (on human/`--help` output only, never `--json`) notes when the installed skill is well behind it. That notice reads the well-known skill directories under `~/.agents` and `~/.claude`; disable it with `THINGS_API_NO_SKILL_CHECK=1`.
+To keep the two sides from drifting, `install-skill` stamps the copy it places with the running binary's own version, and (on human/`--help` output only, never `--json`) the binary notes when the installed skill is well behind that version. That notice reads the well-known skill directories under `~/.agents` and `~/.claude`; disable it with `THINGS_API_NO_SKILL_CHECK=1`.
 
 ## Architecture: one library, thin surfaces
 

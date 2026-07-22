@@ -83,7 +83,7 @@ export function runCli(): void {
     // handled by the command path (openThings → runRead/runWrite usage error)
   }
   // Passive skill-drift notice: one stderr line when the installed agent skill
-  // is well behind this binary's bundled copy (human paths only, never --json /
+  // is well behind this binary's own version (human paths only, never --json /
   // mcp; kill switch THINGS_API_NO_SKILL_CHECK=1). Silent on any error/absence.
   maybeEmitSkillDriftNote({ argv: process.argv.slice(2), env: process.env });
   const program = buildProgram();
