@@ -2,7 +2,15 @@
   "name": "things-api",
   "version": "0.11.0",
   "description": "Typed TypeScript library + CLI for Things 3 (Cultured Code) — verified writes, audit trail, schema-drift detection",
+  "homepage": "https://github.com/mikegreiling/things-api#readme",
+  "bugs": {
+    "url": "https://github.com/mikegreiling/things-api/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikegreiling/things-api.git"
+  },
   "bin": {
     "things": "bin/things.js"
   },
