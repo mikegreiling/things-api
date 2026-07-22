@@ -26,6 +26,7 @@ import {
   decisionLabel,
   diffStat,
   estimateBatchTokens,
+  exceedsByteGrowth,
   extractLessons,
   filesInPatch,
   filesOutsideAllowlist,
@@ -36,6 +37,9 @@ import {
   matchesAllowlist,
   maxTotalTokensArgs,
   medianRunTokens,
+  missionFenceBlock,
+  SKILL_BYTE_GROWTH_LIMIT,
+  totalArmBytes,
   pairMetrics,
   parseSweepRuns,
   planEdits,
@@ -1293,5 +1297,117 @@ describe("parseSweepRuns", () => {
     expect(m.successes).toBe(0);
     expect(m.medianTokensInOnSuccesses).toBe(0);
     expect(m.frictionOnSuccesses).toBe(0);
+  });
+});
+
+// --- mission fence (friction / compression rounds) -------------------------
+
+describe("mission fence charter + byte helpers", () => {
+  it("buildCharter injects the mission fence for a friction round", () => {
+    const charter = buildCharter("skill", [], "friction");
+    expect(charter).toContain("MISSION FENCE");
+    expect(charter).toContain("FORBIDDEN");
+    // The success-chasing prohibition is stated verbatim so the refiner can't miss it.
+    expect(charter).toContain("this fixes/recovers task X");
+    expect(charter).toContain("compression and repositioning");
+    // The byte rule names the exact cap the gate enforces.
+    expect(charter).toContain(`+${SKILL_BYTE_GROWTH_LIMIT} B`);
+  });
+
+  it("buildCharter omits the mission fence for the default round", () => {
+    expect(buildCharter("skill", [])).not.toContain("MISSION FENCE");
+    expect(buildCharter("skill", [], "default")).not.toContain("MISSION FENCE");
+  });
+
+  it("missionFenceBlock is empty for default and populated for friction", () => {
+    expect(missionFenceBlock("default")).toBe("");
+    expect(missionFenceBlock("friction")).toContain("COMPRESSION ROUND");
+  });
+
+  it("totalArmBytes sums UTF-8 byte lengths, not UTF-16 code units", () => {
+    // "é" is length 1 as a code unit but 2 bytes in UTF-8.
+    expect(totalArmBytes({ a: "abc", b: "dé" })).toBe(3 + 3);
+    expect(totalArmBytes({})).toBe(0);
+  });
+
+  it("exceedsByteGrowth fires only strictly above the cap", () => {
+    expect(exceedsByteGrowth(1000, 1000 + SKILL_BYTE_GROWTH_LIMIT)).toBe(false); // exactly at cap
+    expect(exceedsByteGrowth(1000, 1000 + SKILL_BYTE_GROWTH_LIMIT + 1)).toBe(true); // 1 over
+    expect(exceedsByteGrowth(1000, 900)).toBe(false); // shrank
+    expect(exceedsByteGrowth(1000, 1050)).toBe(false); // grew, under cap
+  });
+});
+
+describe("runIteration byte-gate (friction mission)", () => {
+  // readArmFiles returns the pre-apply body on the first call (targetFiles) and the
+  // post-apply body afterward — the seam the byte gate measures the candidate through.
+  function bytesDeps(
+    beforeBody: string,
+    afterBody: string,
+    over: Partial<IterationDeps> = {},
+  ): { deps: IterationDeps; calls: Calls } {
+    let call = 0;
+    return makeDeps(refinerOutput({ edits: [editFor("skills/things-cli/SKILL.md")] }), {
+      readArmFiles: () => {
+        call++;
+        return { "skills/things-cli/SKILL.md": call === 1 ? beforeBody : afterBody };
+      },
+      ...over,
+    });
+  }
+
+  it("rejects (before re-benching) a friction candidate that grows the surface past the cap", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const big = "x".repeat(SKILL_BYTE_GROWTH_LIMIT + 5);
+    // No benchSplits override → makeDeps' counting default; calls.benchSplits==0 then
+    // proves the gate rejected BEFORE any re-bench (no tokens spent on an off-mission
+    // additive patch).
+    const { deps, calls } = bytesDeps("base", `base${big}`);
+    const result = await runIteration(deps, {
+      arm: "skill",
+      prevMetrics: before,
+      ...emptyParams(),
+      mission: "friction",
+    });
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toContain("byte-gate failed");
+    expect(result.afterRuns).toBeNull(); // no re-bench happened
+    expect(calls.runGate).toBe(1); // fmt/check ran first
+    expect(calls.benchSplits).toBe(0); // rejected BEFORE spending any re-bench tokens
+    expect(calls.commit).toHaveLength(0);
+    expect(calls.revert).toEqual([{ modified: ["skills/things-cli/SKILL.md"], created: [] }]);
+  });
+
+  it("passes the byte gate when a friction candidate shrinks the surface, then decides on metrics", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const { deps, calls } = bytesDeps("base plus lots of filler text", "base", {
+      benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, {
+      arm: "skill",
+      prevMetrics: before,
+      ...emptyParams(),
+      mission: "friction",
+    });
+    expect(result.accepted).toBe(true); // dev success ↑ and the byte gate passed
+    expect(result.afterRuns).not.toBeNull(); // the re-bench ran (byte gate did not block it)
+    expect(calls.commit).toHaveLength(1);
+  });
+
+  it("does NOT apply the byte gate on the default mission (a growing patch still re-benches)", async () => {
+    const before = metrics(runsWith(1, 3), runsWith(2, 2));
+    const big = "x".repeat(SKILL_BYTE_GROWTH_LIMIT + 100);
+    const { deps, calls } = bytesDeps("base", `base${big}`, {
+      benchSplits: (): PairRuns => ({ dev: runsWith(2, 3), validation: runsWith(2, 2) }),
+    });
+    const result = await runIteration(deps, {
+      arm: "skill",
+      prevMetrics: before,
+      ...emptyParams(),
+      // no mission → default → byte gate is inert even for a large addition
+    });
+    expect(result.accepted).toBe(true);
+    expect(result.afterRuns).not.toBeNull(); // re-bench ran despite the +100 B growth
+    expect(calls.commit).toHaveLength(1);
   });
 });

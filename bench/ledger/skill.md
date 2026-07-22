@@ -104,3 +104,27 @@ Append-only. One entry per candidate (accepted, reverted, or parked). See
 - **debrief:** attribution — The explicit UUID-chaining guidance likely shortened execution on the targeted compound dev task, but it did not improve its success or friction; the analogous validation task retained success while becoming substantially more expensive and error-prone. Large, inconsistent changes on unrelated tasks—including zero-token failures—indicate substantial run noise or infrastructure effects, so recurrence and GUI regressions cannot credibly be attributed to this narrowly scoped documentation change.; lesson — Validate procedural guidance across multiple directly affected tasks and repeated runs, optimizing for success and recovery behavior rather than token reduction alone.; confidence — medium
 - **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-v2r); checkpoint: bench/artifacts/loop-skill-v2r/checkpoint.md
 
+<!-- ledger-entry id="loop-skill-friction-skill-iter1" lesson="When clarifying an exhaustive reference inventory, preserve enough semantic detail in each entry to route agents reliably rather than optimizing only for brevity." -->
+### 2026-07-22 · skill · iter 1 · **REVERTED**
+
+- **change:** Make the reference inventory explicitly exhaustive while shortening it. This targets the repeated friction pattern of pr — files: skills/things-cli/SKILL.md; diff 1 file(s) [skills/things-cli/SKILL.md], +4/-4
+- **pre-hoc hypothesis:** Make the reference inventory explicitly exhaustive while shortening it. This targets the repeated friction pattern of probing guessed or obsolete filenames without adding procedural guidance or surface bytes.
+- **predicted blast radius:** Should reduce failed reads for data-model.md, reads.md, writes.md, recurrence.md, and safety-and-recovery.md across read and write tasks. No command or data semantics change; risk is limited to slightly less descriptive link summaries.
+- **measured deltas (before → after):**
+  - dev: success 57/63 → 57/63; friction 1.09 → 1.14; median tokIn 21606 → 20709
+  - validation: success 19/24 → 19/24; friction 1.32 → 1.16; median tokIn 22347 → 20901
+- **debrief:** attribution — The exhaustive inventory likely reduced filename guessing, reflected in broadly lower friction and token use, but it produced no net success gain; shortening the link descriptions plausibly weakened reference routing, especially for recurrence-related cases, causing offsetting regressions.; lesson — When clarifying an exhaustive reference inventory, preserve enough semantic detail in each entry to route agents reliably rather than optimizing only for brevity.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-friction); checkpoint: bench/artifacts/loop-skill-friction/checkpoint.md
+
+<!-- ledger-entry id="loop-skill-friction-skill-iter2" lesson="Make authoritative resource inventories complete, concise, and visible at the first decision point to reduce exploratory tool use without expanding always-loaded guidance." -->
+### 2026-07-22 · skill · iter 2 · **REVERTED**
+
+- **change:** Relocate and compress the existing reference inventory near the help entry point, explicitly marking it complete. This t — files: skills/things-cli/SKILL.md; diff 1 file(s) [skills/things-cli/SKILL.md], +2/-6
+- **pre-hoc hypothesis:** Relocate and compress the existing reference inventory near the help entry point, explicitly marking it complete. This targets repeated friction from guessed nonexistent reference paths while reducing always-loaded SKILL.md bytes and changing no command or data semantics.
+- **predicted blast radius:** Should reduce failed file-read calls across tasks that inspect documentation before reading or writing. The only risk is losing the longer per-reference descriptions, but each linked filename remains labeled and the surrounding skill already summarizes its contents.
+- **measured deltas (before → after):**
+  - dev: success 57/63 → 57/63; friction 1.09 → 0.77; median tokIn 21606 → 20318
+  - validation: success 19/24 → 18/24; friction 1.32 → 1.00; median tokIn 22347 → 19140
+- **debrief:** attribution — Placing a clearly complete reference inventory beside the help entry point most likely reduced unnecessary documentation searches and guessed file reads, reflected in broadly lower friction and token use. Success remained roughly flat with scattered regressions, including a zero-token validation anomaly, so there is little evidence of a semantic improvement or systematic harm from removing the descriptions.; lesson — Make authoritative resource inventories complete, concise, and visible at the first decision point to reduce exploratory tool use without expanding always-loaded guidance.; confidence — medium
+- **artifacts:** loop-state: bench/loop-state.json (batch loop-skill-friction); checkpoint: bench/artifacts/loop-skill-friction/checkpoint.md
+

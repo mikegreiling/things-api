@@ -1767,5 +1767,195 @@
         "medianTokensInOnSuccesses": 29055
       }
     }
+  },
+  {
+    "timestamp": "2026-07-22T07:16:31.098Z",
+    "arm": "skill",
+    "iteration": 1,
+    "digestHash": "3b0d4ac16a7a",
+    "patchSummary": "1 file(s) [skills/things-cli/SKILL.md], +4/-4",
+    "rationale": "Make the reference inventory explicitly exhaustive while shortening it. This targets the repeated friction pattern of probing guessed or obsolete filenames without adding procedural guidance or surface bytes.",
+    "decision": "revert",
+    "reason": "no dev improvement",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Argument-construction errors occurred while discovering dependency-ordered write syntax."
+      },
+      {
+        "taskId": "discovery-today",
+        "class": "a",
+        "note": "Probed nonexistent reference filenames before finding the documented model file."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "a",
+        "note": "Probed several nonexistent reference filenames before using command help."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "a",
+        "note": "Repeated attempts to read nonexistent reference files added friction."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "a",
+        "note": "Assumed obsolete reference filenames and needed filesystem discovery."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Effective-tag semantics were misunderstood after initial nonexistent-file probes."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "d",
+        "note": "The after-completion recurrence invocation was constructed incorrectly."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "d",
+        "note": "The multi-weekday recurrence invocation required command-contract discovery."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "d",
+        "note": "An abbreviated weekday value violated the command contract."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "The requested relative date was converted to the wrong concrete date."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 57,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.087719298245614,
+        "medianTokensInOnSuccesses": 21606
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 19,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.3157894736842106,
+        "medianTokensInOnSuccesses": 22347
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 57,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.1403508771929824,
+        "medianTokensInOnSuccesses": 20709
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 19,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.1578947368421053,
+        "medianTokensInOnSuccesses": 20901
+      }
+    }
+  },
+  {
+    "timestamp": "2026-07-22T07:38:26.199Z",
+    "arm": "skill",
+    "iteration": 2,
+    "digestHash": "3b0d4ac16a7a",
+    "patchSummary": "1 file(s) [skills/things-cli/SKILL.md], +2/-6",
+    "rationale": "Relocate and compress the existing reference inventory near the help entry point, explicitly marking it complete. This targets repeated friction from guessed nonexistent reference paths while reducing always-loaded SKILL.md bytes and changing no command or data semantics.",
+    "decision": "revert",
+    "reason": "validation success regressed",
+    "guiSemanticChange": false,
+    "classifications": [
+      {
+        "taskId": "compound-garden-shed",
+        "class": "d",
+        "note": "Argument-construction friction included requesting the nonexistent help topic `writing` instead of the advertised `writes`."
+      },
+      {
+        "taskId": "discovery-today",
+        "class": "a",
+        "note": "Guessed nonexistent reference filenames before discovering the actual bundled files."
+      },
+      {
+        "taskId": "longtail-cancel-not-complete",
+        "class": "a",
+        "note": "Repeated attempts to open nonexistent split reference files increased friction."
+      },
+      {
+        "taskId": "longtail-checklist-edit",
+        "class": "a",
+        "note": "Searched for nonexistent reads, writes, and data-model reference files before using available help."
+      },
+      {
+        "taskId": "longtail-tag-nesting",
+        "class": "a",
+        "note": "Guessed obsolete reference paths before enumerating the actual reference inventory."
+      },
+      {
+        "taskId": "reasoning-effective-tags",
+        "class": "c",
+        "note": "Misinterpreted effective-tag data despite the documented inheritance model."
+      },
+      {
+        "taskId": "recurrence-after-completion",
+        "class": "d",
+        "note": "The after-completion recurrence invocation was constructed incorrectly."
+      },
+      {
+        "taskId": "recurrence-multi-weekday",
+        "class": "d",
+        "note": "Recurring-rule argument construction caused errors before success."
+      },
+      {
+        "taskId": "recurrence-weekly-fixed",
+        "class": "d",
+        "note": "Used an unsupported weekday abbreviation instead of the required full weekday name."
+      },
+      {
+        "taskId": "writes-schedule-wednesday",
+        "class": "d",
+        "note": "Date calculation selected the wrong calendar date even though the write syntax was accepted."
+      }
+    ],
+    "metricsBefore": {
+      "dev": {
+        "runs": 63,
+        "successes": 57,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.087719298245614,
+        "medianTokensInOnSuccesses": 21606
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 19,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1.3157894736842106,
+        "medianTokensInOnSuccesses": 22347
+      }
+    },
+    "metricsAfter": {
+      "dev": {
+        "runs": 63,
+        "successes": 57,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 0.7719298245614035,
+        "medianTokensInOnSuccesses": 20318
+      },
+      "validation": {
+        "runs": 24,
+        "successes": 18,
+        "safetyViolations": 0,
+        "frictionOnSuccesses": 1,
+        "medianTokensInOnSuccesses": 19139.5
+      }
+    }
   }
 ]
