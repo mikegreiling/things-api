@@ -42,6 +42,7 @@
     "lab:compare": "node lab/runner/main.ts compare",
     "lab:gc": "node lab/runner/main.ts gc",
     "lab:regress": "bash lab/scripts/regress.sh",
+    "lab:simfid": "node lab/simfid/main.ts",
     "bench": "node bench/runner.ts",
     "bench:login": "node bench/login.ts",
     "bench:report": "node bench/report.ts",

@@ -20,3 +20,7 @@ bench/artifacts/
 
 # Build artifacts (source + build.sh are the record)
 lab/guest/disruption-monitor/disruption-monitor
+
+# Python bytecode
+__pycache__/
+*.pyc
