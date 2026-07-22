@@ -11,6 +11,9 @@ vendor/*
 # Lab artifacts (evidence records, screenshots, guest DB copies)
 lab/artifacts/
 
+# Cached guest payloads (self-contained node tarball for the SIMFID clone drive)
+lab/cache/
+
 # Bench raw runs + transcripts (accepted scorecards are committed under bench/results/)
 bench/artifacts/
 

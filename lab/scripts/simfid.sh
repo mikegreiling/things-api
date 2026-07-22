@@ -58,10 +58,41 @@ trap cleanup EXIT
 
 echo "[simfid] building dist…"
 npm run build >/dev/null
+
+# The guest needs a SELF-CONTAINED node. A homebrew node dynamically links ~20
+# dylibs under /opt/homebrew/opt/* (icu4c, openssl, libuv, ada-url, …) that do
+# NOT exist on the vanilla guest, so it aborts with SIGABRT (exit -6) the instant
+# it is invoked — every seed/op fails and the drive captures nothing. (The old
+# "a homebrew node is self-contained enough" assumption was never exercised until
+# the first real clone drive, 2026-07-22, which is exactly where it broke.)
+# Prefer the on-PATH node IF it happens to be self-contained (only /usr/lib +
+# /System deps); otherwise fetch a pinned OFFICIAL build, whose binaries link
+# only against system libraries. This runs on the HOST (network up) before the
+# guest is airgapped, so it never touches the airgap.
+GUEST_NODE_VERSION="v24.18.0"  # LTS Krypton; satisfies package.json engines >=24
+node_self_contained() {
+  # self-contained ⇔ every linked lib resolves under /usr/lib or /System
+  # (no /opt/* homebrew libs, no @rpath/@loader_path/@executable_path indirection)
+  ! otool -L "$1" 2>/dev/null | tail -n +2 | grep -Eq '/opt/|@rpath|@loader_path|@executable_path'
+}
 NODE_BIN=$(node -e 'console.log(process.execPath)')
-case "$NODE_BIN" in
-  /opt/homebrew/*) : ;;  # a homebrew node is self-contained enough for the guest
-esac
+if node_self_contained "$NODE_BIN"; then
+  echo "[simfid] guest node: on-PATH node is self-contained ($NODE_BIN)"
+else
+  ARCH="darwin-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')"
+  PKG="node-$GUEST_NODE_VERSION-$ARCH"
+  NODE_BIN="$PWD/lab/cache/$PKG/bin/node"
+  if [ ! -x "$NODE_BIN" ]; then
+    echo "[simfid] guest node: on-PATH node links non-system dylibs; fetching self-contained $PKG"
+    mkdir -p lab/cache
+    curl -sSL -o "lab/cache/$PKG.tar.gz" "https://nodejs.org/dist/$GUEST_NODE_VERSION/$PKG.tar.gz" \
+      || { echo "[simfid] ABORT: could not download $PKG" >&2; exit 1; }
+    tar xzf "lab/cache/$PKG.tar.gz" -C lab/cache
+  fi
+  node_self_contained "$NODE_BIN" \
+    || { echo "[simfid] ABORT: fetched guest node is not self-contained" >&2; exit 1; }
+  echo "[simfid] guest node: $NODE_BIN ($GUEST_NODE_VERSION, self-contained)"
+fi
 
 echo "[simfid] cloning golden -> $VM"
 if ! tart clone things-lab-golden-v1 "$VM" 2>"$ARTIFACTS/clone.err"; then
