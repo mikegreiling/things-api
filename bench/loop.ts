@@ -34,7 +34,9 @@ import {
   isLedgerCandidate,
   isProviderError,
   ledgerFileName,
+  LOOP_MISSIONS,
   LoopAbort,
+  type LoopMission,
   maxTotalTokensArgs,
   pairMetrics,
   parseSweepRuns,
@@ -75,6 +77,8 @@ interface LoopOptions {
   worldSeed: number;
   /** Cumulative tokensIn+tokensOut ceiling across all bench + refiner calls this run. */
   tokenBudget: number;
+  /** Round mission — "friction" fences the charter off success-chasing + gates byte growth. */
+  mission: LoopMission;
   outDir: string;
 }
 
@@ -389,7 +393,7 @@ async function runLoop(opts: LoopOptions): Promise<void> {
 
   try {
     log(
-      `baseline bench (dev + validation), arm=${opts.arm}, ` +
+      `baseline bench (dev + validation), arm=${opts.arm}, mission=${opts.mission}, ` +
         `allowlist=${ARM_ALLOWLISTS[opts.arm].join(", ")}, budget=${budget.limit} tokens`,
     );
     let prevRuns = benchSplits();
@@ -420,6 +424,7 @@ async function runLoop(opts: LoopOptions): Promise<void> {
         tasks,
         budget,
         priorLessons,
+        mission: opts.mission,
       });
       results.push(result);
       appendLoopState(STATE_PATH, toStateEntry(result, ts()));
@@ -475,6 +480,11 @@ async function main(): Promise<void> {
     .option("--max-iterations <n>", "max refinement iterations", "5")
     .option("--world-seed <n>", "evergreen world profile PRNG seed", "1")
     .option(
+      "--mission <name>",
+      "round mission: default | friction (friction fences off success-chasing + gates byte growth)",
+      "default",
+    )
+    .option(
       "--token-budget <n>",
       "cumulative tokensIn+tokensOut ceiling (bench + refiner) before a clean abort",
       String(TOKEN_BUDGET_DEFAULT),
@@ -493,6 +503,12 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      const mission = raw["mission"] as LoopMission;
+      if (!LOOP_MISSIONS.includes(mission)) {
+        process.stderr.write(`invalid --mission "${mission}" (${LOOP_MISSIONS.join(" | ")})\n`);
+        process.exitCode = 1;
+        return;
+      }
       const outDir = isAbsolute(raw["out"] as string)
         ? (raw["out"] as string)
         : resolve(process.cwd(), raw["out"] as string);
@@ -507,6 +523,7 @@ async function main(): Promise<void> {
         maxIterations: Math.max(1, Number(raw["maxIterations"])),
         worldSeed: Math.max(0, Number(raw["worldSeed"]) || 1),
         tokenBudget: Math.max(1, Number(raw["tokenBudget"]) || TOKEN_BUDGET_DEFAULT),
+        mission,
         outDir,
       };
 

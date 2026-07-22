@@ -506,6 +506,43 @@ export function projectBudget(
   };
 }
 
+// --- mission fence (compression rounds) ------------------------------------
+
+/**
+ * A refinement round's MISSION. "default" is the normal ladder-driven round; "friction"
+ * is a compression/repositioning round that fences the refiner off success-chasing and
+ * mechanically gates byte growth (the loop-skill-v2r lesson: a mission-scoped round must
+ * forbid chasing a graded success failure with additive patches).
+ */
+export type LoopMission = "default" | "friction";
+
+/** The set of valid `--mission` values. */
+export const LOOP_MISSIONS: readonly LoopMission[] = ["default", "friction"];
+
+/**
+ * Hard byte-growth cap for a friction round. A candidate that grows the arm's total
+ * surface bytes by MORE than this is rejected mechanically (before re-benching), the
+ * gate the charter's "net-negative or neutral unless repositioning" rule promises. A
+ * small headroom (repositioning a fact rarely lands byte-for-byte) rather than zero.
+ */
+export const SKILL_BYTE_GROWTH_LIMIT = 80;
+
+/** Total UTF-8 byte size of an arm's target files ({ path: body }). */
+export function totalArmBytes(files: Record<string, string>): number {
+  let total = 0;
+  for (const body of Object.values(files)) total += Buffer.byteLength(body, "utf8");
+  return total;
+}
+
+/** True iff the candidate grows total surface bytes by MORE than `limit` (strictly). */
+export function exceedsByteGrowth(
+  beforeBytes: number,
+  afterBytes: number,
+  limit = SKILL_BYTE_GROWTH_LIMIT,
+): boolean {
+  return afterBytes - beforeBytes > limit;
+}
+
 // --- surface-improvement charter (refiner system prompt) -------------------
 
 /** The CONSTITUTION metric ladder, sliced verbatim from CONSTITUTION.md (with a fallback). */
@@ -536,12 +573,45 @@ function priorLessonsBlock(lessons: string[]): string {
 }
 
 /**
- * The refiner's system prompt: the metric ladder (verbatim), the non-opinionated and
- * smallest-generalizable-change doctrines, the arm scope + exact file list, the GUI
- * rule (skill arm only), prior lessons for this arm (fed forward from the ledger), and
- * the strict output contract.
+ * The mission fence: for a "friction" round, an explicit, prominent block that (1) states
+ * the mission (reduce friction + SKILL.md/context size), (2) FORBIDS success-chasing
+ * patches (success failures in the digest are context, not targets — the ladder protects
+ * success automatically), and (3) states the byte rule the gate enforces mechanically.
+ * "" for the default round.
  */
-export function buildCharter(arm: Arm, priorLessons: string[] = []): string {
+export function missionFenceBlock(mission: LoopMission): string {
+  if (mission !== "friction") return "";
+  return [
+    "",
+    "=== MISSION FENCE — THIS IS A FRICTION / COMPRESSION ROUND (read before anything else) ===",
+    "- MISSION: reduce FRICTION (the count of error responses the agent sees en route) and the",
+    "  SKILL.md / always-loaded CONTEXT SIZE. Task success is already at/near ceiling and the",
+    "  validation gate protects it automatically — your job is to make the winning surface",
+    "  CHEAPER and CLEANER, never to win more tasks.",
+    "- FORBIDDEN — DO NOT propose a patch whose rationale is fixing a task-SUCCESS failure.",
+    "  Success failures in the digest are CONTEXT, not targets; the ladder protects success",
+    "  automatically — your job is compression and repositioning. Any candidate justified by",
+    '  "this fixes/recovers task X" is off-mission and will be rejected.',
+    "- BYTE RULE (hard — the gate checks it mechanically): every edit must be net-NEGATIVE or",
+    "  NEUTRAL in bytes UNLESS it merely REPOSITIONS an existing fact to a better home. A",
+    `  candidate that grows total surface bytes by more than +${SKILL_BYTE_GROWTH_LIMIT} B is`,
+    "  rejected before re-benching. Prefer deletion, consolidation, and relocation over addition;",
+    "  the strongest friction/context patch removes or moves text rather than adding it.",
+    "=== END MISSION FENCE ===",
+  ].join("\n");
+}
+
+/**
+ * The refiner's system prompt: the metric ladder (verbatim), the non-opinionated and
+ * smallest-generalizable-change doctrines, the optional MISSION FENCE (friction rounds),
+ * the arm scope + exact file list, the GUI rule (skill arm only), prior lessons for this
+ * arm (fed forward from the ledger), and the strict output contract.
+ */
+export function buildCharter(
+  arm: Arm,
+  priorLessons: string[] = [],
+  mission: LoopMission = "default",
+): string {
   const files = ARM_ALLOWLISTS[arm];
   const guiRule =
     arm === "skill"
@@ -565,6 +635,7 @@ export function buildCharter(arm: Arm, priorLessons: string[] = []): string {
     "OPTIMIZE STRICTLY BY THIS LEXICOGRAPHIC LADDER (a lower rung never trades for a higher):",
     "",
     metricLadderText(),
+    missionFenceBlock(mission),
     "",
     "DOCTRINE:",
     "- NON-OPINIONATED: surfaces teach capabilities and structure — the data model, what a",
@@ -1015,6 +1086,8 @@ export interface IterationParams {
   budget: Budget;
   /** Prior lessons for THIS arm (from the ledger), fed into the refiner charter. */
   priorLessons?: string[];
+  /** The round's mission — "friction" fences off success-chasing + gates byte growth. */
+  mission?: LoopMission;
 }
 
 /** The post-hoc debrief distilled for one candidate. */
@@ -1107,11 +1180,12 @@ export async function runIteration(
   params: IterationParams,
 ): Promise<IterationResult> {
   const { arm, iteration, prevMetrics, budget } = params;
+  const mission: LoopMission = params.mission ?? "default";
   const prevRuns = params.prevRuns;
   const digest = buildDigest(prevRuns.dev, params.tasks, deps.loadTranscript);
   const targetFiles = deps.readArmFiles();
 
-  const charter = buildCharter(arm, params.priorLessons ?? []);
+  const charter = buildCharter(arm, params.priorLessons ?? [], mission);
   const baseUserContent = renderUserContent(arm, targetFiles, digest.text);
 
   // One refiner call: budget-gated, usage-accounted. Throws ProviderError/LoopAbort.
@@ -1230,6 +1304,27 @@ export async function runIteration(
     deps.revert(apply.modifiedFiles, apply.createdFiles);
     deps.log(`iter ${iteration}: gate failed — reverted`);
     return { ...base, reason: "gate failed (fmt/check)" };
+  }
+
+  // Byte-growth gate (friction mission only): the mechanical enforcement of the charter's
+  // "net-negative or neutral unless repositioning" rule. Measured post-fmt (targetFiles is
+  // the pre-apply committed-clean state; re-reading now gives the fmt'd candidate). A
+  // candidate that grows the surface by more than the cap is rejected BEFORE re-benching —
+  // no tokens spent proving an off-mission additive patch.
+  if (mission === "friction") {
+    const beforeBytes = totalArmBytes(targetFiles);
+    const afterBytes = totalArmBytes(deps.readArmFiles());
+    if (exceedsByteGrowth(beforeBytes, afterBytes)) {
+      deps.revert(apply.modifiedFiles, apply.createdFiles);
+      const grew = afterBytes - beforeBytes;
+      deps.log(
+        `iter ${iteration}: byte-gate failed (+${grew} B > ${SKILL_BYTE_GROWTH_LIMIT} B) — reverted`,
+      );
+      return {
+        ...base,
+        reason: `byte-gate failed: candidate grew surface by +${grew} B (> +${SKILL_BYTE_GROWTH_LIMIT} B friction cap)`,
+      };
+    }
   }
 
   // GUI-semantic guard: never auto-accept; park the applied diff for Mike, revert.
