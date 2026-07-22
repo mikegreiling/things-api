@@ -117,7 +117,18 @@ export const SIMFID_CASES: SimfidCase[] = [
     title: "todo.reopen (clears stopDate)",
     evidence: "u-suite",
     seed(db) {
-      return { params: { uuid: seedTodo(db, { title: "SF Reopen", status: "completed" }) } };
+      // A REAL completed row always carries a stopDate (the app stamps it on
+      // completion); the reopen applier clears it (stopDate → null). Seed one on
+      // the pinned RSIM day (2026-07-05) so the sim delta actually exercises the
+      // stopDate-clearing transition and matches the app's fresh clone capture —
+      // omitting it (insertTask defaults stopDate null) left nothing to clear and
+      // masked the transition behind wallclock-bucket (see simfid-results §finding).
+      const uuid = seedTodo(db, {
+        title: "SF Reopen",
+        status: "completed",
+        stopDate: Math.floor(Date.UTC(2026, 6, 5, 9, 0, 0) / 1000),
+      });
+      return { params: { uuid } };
     },
   },
   {

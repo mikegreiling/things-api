@@ -30,6 +30,16 @@ export interface Tolerance {
 const isTemplatePlaceholder = (v: CellValue | "—"): boolean =>
   typeof v === "string" && (v.startsWith("project:") || v.startsWith("todo:"));
 
+/**
+ * Whether a normalized wall-clock cell actually CARRIES a timestamp. Wall-clock
+ * columns normalize to either `date:<iso>` (present) or `null` (absent); a field
+ * changed on one side only surfaces as `"—"` (absent). Only a value-vs-value
+ * bucket difference is clock jitter — a present-vs-absent difference is
+ * structural and must NOT be tolerated.
+ */
+const isTimestampPresent = (v: CellValue | "—"): boolean =>
+  typeof v === "string" && v.startsWith("date:");
+
 /** Whether the row is an INSTANCE (carries a template back-link) — not a plain child. */
 const rowIsInstance = (f: Record<string, CellValue>): boolean =>
   f["rt1_repeatingTemplate"] !== null && f["rt1_repeatingTemplate"] !== undefined;
@@ -84,15 +94,19 @@ export const TOLERANCES: Tolerance[] = [
     // Creation/modification/stop timestamps are bucketed to the local date, not
     // compared exactly (the app backdates a minted instance to occurrence
     // midnight; the simulator stamps write-time — same pinned day, different
-    // seconds). Absorb any residual bucket difference.
+    // seconds). Absorb a residual bucket difference ONLY when BOTH sides carry a
+    // timestamp — a present-vs-absent difference (one side has a stop/creation
+    // date the other lacks) is a STRUCTURAL fidelity fact the suite must report,
+    // not clock jitter (e.g. a completed pre-state whose stopDate one side never
+    // clears — see simfid-results §finding).
     name: "wallclock-bucket",
-    evidence: "SIMFID spec (timestamps bucketed, not exact)",
+    evidence: "SIMFID spec (timestamp bucket jitter, present-on-both-sides only)",
     applies(ctx) {
-      return (
+      const isWallclock =
         ctx.field === "creationDate" ||
         ctx.field === "userModificationDate" ||
-        ctx.field === "stopDate"
-      );
+        ctx.field === "stopDate";
+      return isWallclock && isTimestampPresent(ctx.sim) && isTimestampPresent(ctx.app);
     },
   },
 ];
