@@ -1,0 +1,44 @@
+{
+  "_comment": "SIMFID clone-drive manifest — the headless-drivable subset of SIMFID_CASES (lab/simfid/cases.ts). Each case's `id` MUST match a case id there so its fresh app delta OVERRIDES the banked-evidence golden. This starter set is the most pre-state-immune cases (single-row status/trash flips + pure inserts); the first successful clone drive validates the harness end-to-end, after which the CRUD cases with subtler pre-states (inbox-promotion start values, tag/checklist joins) are added with confirmed CLI seeding. The recurrence family stays on RSIM evidence-derived goldens (tier-3 ui-vector — needs the AXVM1 Accessibility grant, out of scope for this headless driver).",
+  "cases": [
+    {
+      "id": "todo-complete",
+      "titles": ["SF Done"],
+      "seed": [{ "args": ["todo", "add", "SF Done", "--when", "anytime"], "as": "T" }],
+      "op": ["todo", "complete", "{T}"]
+    },
+    {
+      "id": "todo-cancel",
+      "titles": ["SF Cancel"],
+      "seed": [{ "args": ["todo", "add", "SF Cancel", "--when", "anytime"], "as": "T" }],
+      "op": ["todo", "cancel", "{T}"]
+    },
+    {
+      "id": "todo-reopen",
+      "titles": ["SF Reopen"],
+      "seed": [
+        { "args": ["todo", "add", "SF Reopen", "--when", "anytime"], "as": "T" },
+        { "args": ["todo", "complete", "{T}"] }
+      ],
+      "op": ["todo", "reopen", "{T}"]
+    },
+    {
+      "id": "todo-delete",
+      "titles": ["SF Trash"],
+      "seed": [{ "args": ["todo", "add", "SF Trash", "--when", "anytime"], "as": "T" }],
+      "op": ["todo", "delete", "{T}"]
+    },
+    {
+      "id": "tag-add-root",
+      "titles": ["SF Home Tag"],
+      "seed": [],
+      "op": ["tag", "add", "SF Home Tag"]
+    },
+    {
+      "id": "project-update",
+      "titles": ["SF Launch", "SF Launch v2"],
+      "seed": [{ "args": ["project", "add", "SF Launch"], "as": "P" }],
+      "op": ["project", "update", "{P}", "--title", "SF Launch v2"]
+    }
+  ]
+}
