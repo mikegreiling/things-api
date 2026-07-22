@@ -206,6 +206,63 @@ describe("compareDeltas", () => {
     expect(v.tolerances).toContain("wallclock-bucket");
   });
 
+  it("TOLERATED(wallclock-bucket): value-vs-value stopDate bucket jitter (both present)", () => {
+    const sim = insertedRow("todo:W#0", { type: 0, stopDate: "date:2026-07-05" });
+    const app = insertedRow("todo:W#0", { type: 0, stopDate: "date:2026-07-06" });
+    const v = compareDeltas(sim, app);
+    expect(v.verdict).toBe("TOLERATED");
+    expect(v.tolerances).toContain("wallclock-bucket");
+  });
+
+  it("DIVERGENT: a present-vs-null stopDate is structural, NOT tolerated bucket jitter", () => {
+    // The exact shape the reopen fixture gap produced: one side clears/omits
+    // stopDate, the other carries a real timestamp. wallclock-bucket must NOT
+    // absorb this — it is a fidelity fact the suite reports.
+    const sim = insertedRow("todo:W#0", { type: 0, stopDate: null });
+    const app = insertedRow("todo:W#0", { type: 0, stopDate: "date:2026-07-05" });
+    const v = compareDeltas(sim, app);
+    expect(v.verdict).toBe("DIVERGENT");
+    expect(v.summary).toContain("stopDate");
+    expect(v.differences.some((d) => d.field === "stopDate" && d.tolerated === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("DIVERGENT: a stopDate changed on ONE side only (present-vs-absent) is not tolerated", () => {
+    // A changed row where only the app clears stopDate → sim side surfaces as
+    // "—" (absent). Presence-vs-absence must read DIVERGENT, not TOLERATED.
+    const sim: NormalizedDelta = {
+      inserted: [],
+      deleted: [],
+      changed: [
+        {
+          placeholder: "todo:R#0",
+          table: "TMTask",
+          fields: [{ field: "status", before: 3, after: 0 }],
+        },
+      ],
+    };
+    const app: NormalizedDelta = {
+      inserted: [],
+      deleted: [],
+      changed: [
+        {
+          placeholder: "todo:R#0",
+          table: "TMTask",
+          fields: [
+            { field: "status", before: 3, after: 0 },
+            { field: "stopDate", before: "date:2026-07-05", after: null },
+          ],
+        },
+      ],
+    };
+    const v = compareDeltas(sim, app);
+    expect(v.verdict).toBe("DIVERGENT");
+    expect(v.differences.some((d) => d.field === "stopDate" && d.tolerated === undefined)).toBe(
+      true,
+    );
+  });
+
   it("a mix of tolerated + untolerated differences is DIVERGENT (untolerated wins)", () => {
     const sim = insertedRow("todo:M#1", {
       type: 0,
