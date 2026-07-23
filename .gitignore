@@ -27,3 +27,4 @@ lab/guest/disruption-monitor/disruption-monitor
 # Python bytecode
 __pycache__/
 *.pyc
+lab/vncvenv/
