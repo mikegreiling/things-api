@@ -149,6 +149,13 @@ export interface EnvelopeMeta {
    * host clock, so the wire shape is unchanged for ordinary consumers.
    */
   clock?: { timezone: string; today: string };
+  /**
+   * The active content filter this response was scoped to (ADDITIVE). Present
+   * ONLY when a scope was applied — currently `area` (the `--area` view filter),
+   * carrying the resolved area's uuid + title; ABSENT otherwise, so the wire
+   * shape is unchanged for unscoped reads (the `meta.clock` precedent).
+   */
+  filter?: { area: { uuid: string; title: string } };
 }
 
 export interface OkEnvelope<T> {

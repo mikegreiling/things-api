@@ -152,6 +152,22 @@ function clockOf(result: unknown): { timezone: string; today: string } | undefin
   return undefined;
 }
 
+/** The meta.filter block appended to a read result, if any. */
+function filterOf(result: unknown): { area: { uuid: string; title: string } } | undefined {
+  const content = (result as { content: { text: string }[] }).content;
+  for (const block of content) {
+    try {
+      const parsed = JSON.parse(block.text) as {
+        meta?: { filter?: { area: { uuid: string; title: string } } };
+      };
+      if (parsed.meta?.filter !== undefined) return parsed.meta.filter;
+    } catch {
+      // non-JSON block: skip
+    }
+  }
+  return undefined;
+}
+
 /** Collect every property name at any depth of a JSON-schema object (arg names). */
 function schemaArgNames(schema: unknown): string[] {
   const names: string[] = [];
@@ -265,6 +281,60 @@ describe("things MCP server", () => {
     const view = textOf(result) as { today: { title: string }[]; evening: unknown[] };
     expect(view.today.map((i) => i.title)).toContain("MCP-Today");
     expect(result.isError ?? false).toBe(false);
+  });
+
+  describe("read_view area filter", () => {
+    it("scopes anytime to the target area and reports meta.filter", async () => {
+      const alpha = seedArea(fixture.db, "Alpha", 0);
+      const beta = seedArea(fixture.db, "Beta", 1);
+      const pAlpha = seedProject(fixture.db, { title: "p-alpha", area: alpha });
+      seedTodo(fixture.db, { title: "a-loose", area: alpha });
+      seedTodo(fixture.db, { title: "p-alpha-child", project: pAlpha });
+      seedTodo(fixture.db, { title: "b-loose", area: beta });
+      seedTodo(fixture.db, { title: "orphan" });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "anytime", area: "Alpha" },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const sections = textOf(result) as Array<{ items: { title: string }[] }>;
+      expect(sections.flatMap((s) => s.items.map((i) => i.title)).toSorted()).toEqual([
+        "a-loose",
+        "p-alpha",
+        "p-alpha-child",
+      ]);
+      expect(filterOf(result)).toEqual({ area: { uuid: alpha, title: "Alpha" } });
+    });
+
+    it("emits no meta.filter when unscoped", async () => {
+      seedArea(fixture.db, "Alpha", 0);
+      seedTodo(fixture.db, { title: "x", startDate: "2026-07-05" });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({ name: "read_view", arguments: { view: "anytime" } });
+      expect(filterOf(result)).toBeUndefined();
+    });
+
+    it("fails closed on an unresolvable area ref", async () => {
+      seedArea(fixture.db, "Alpha", 0);
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "anytime", area: "Nope" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatchObject({ code: "not-found" });
+    });
+
+    it("rejects area on a view it does not apply to (inbox)", async () => {
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "inbox", area: "Alpha" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatchObject({ code: "usage" });
+    });
   });
 
   describe("consumer timezone (per-call tz)", () => {

@@ -147,6 +147,10 @@ export {
 } from "./read/area-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
 
+// The `--area` view filter (post-filter on the shaped view): its option type,
+// the resolved-target/annotation types the surfaces echo as `meta.filter`.
+export type { AreaFilterTarget, AreaScopedRead, ViewFilterMeta } from "./read/area-filter.ts";
+
 // Reference resolution: the stable public error a uuid/partial-uuid/name raises
 // when it resolves to zero or several entities, carrying the machine shape the
 // CLI --json envelope and MCP tool errors surface (code + candidates).
