@@ -128,3 +128,97 @@ export function saveConfigKey(
   }
   writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`);
 }
+
+/**
+ * One config key's effective value and where it came from. `key` is the
+ * `things config set` / `things config get` spelling; `value` is the effective
+ * value after env override → stored file → built-in default; `source` says which
+ * of those three supplied it.
+ */
+export interface ConfigKeyView {
+  key: string;
+  value: string | number | boolean | null;
+  source: "env" | "stored" | "default";
+}
+
+function readConfigFile(env: NodeJS.ProcessEnv): ConfigFile {
+  const path = configFilePath(env);
+  if (existsSync(path)) {
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as ConfigFile;
+    } catch {
+      // Malformed config → treated as no stored keys (doctor reports it).
+    }
+  }
+  return {};
+}
+
+/**
+ * The effective value + provenance of every config key, in a stable order —
+ * backing `things config get`. Env/stored/default detection mirrors
+ * {@link loadConfig} exactly, so a key reads `env` only when an env var actually
+ * overrode it (a THINGS_API_* value that loadConfig honors), `stored` when the
+ * on-disk config supplied it, and `default` otherwise.
+ */
+function configKeyView(
+  key: string,
+  value: string | number | boolean | null,
+  stored: boolean,
+  fromEnv: boolean,
+): ConfigKeyView {
+  return { key, value, source: fromEnv ? "env" : stored ? "stored" : "default" };
+}
+
+export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyView[] {
+  const file = readConfigFile(env);
+  const cfg = loadConfig(env);
+  const envTier = env["THINGS_API_MAX_DISRUPTION"];
+  const view = configKeyView;
+  return [
+    view(
+      "profile",
+      cfg.profile,
+      file.profile !== undefined,
+      env["THINGS_API_PROFILE"] === "dedicated-server",
+    ),
+    view(
+      "maxDisruption",
+      cfg.maxDisruption,
+      file.maxDisruption !== undefined,
+      envTier !== undefined && /^[0-3]$/.test(envTier),
+    ),
+    view("actor", cfg.actor, file.actor !== undefined, env["THINGS_API_ACTOR"] !== undefined),
+    view(
+      "auditEnabled",
+      cfg.auditEnabled,
+      file.auditEnabled !== undefined,
+      env["THINGS_API_AUDIT"] === "off",
+    ),
+    view(
+      "accepted-fingerprint",
+      cfg.acceptedFingerprint,
+      file.acceptedFingerprint !== undefined,
+      false,
+    ),
+    view(
+      "allow-experimental",
+      cfg.allowExperimental,
+      file.allowExperimental !== undefined,
+      env["THINGS_API_ALLOW_EXPERIMENTAL"] === "true",
+    ),
+    view(
+      "ui-enabled",
+      cfg.ui.enabled,
+      file.uiEnabled !== undefined,
+      env["THINGS_API_UI_ENABLED"] === "true",
+    ),
+  ];
+}
+
+/** One key's effective view, or undefined for an unknown key (`config get <key>`). */
+export function getConfigKey(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ConfigKeyView | undefined {
+  return describeConfig(env).find((v) => v.key === key);
+}

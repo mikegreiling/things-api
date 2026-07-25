@@ -39,7 +39,8 @@ export type {
 export type { FailureHint, LikelyCause } from "./write/failure-hints.ts";
 export { capabilitiesTable } from "./write/capabilities.ts";
 export type { CapabilityEntry } from "./write/capabilities.ts";
-export { saveConfigKey } from "./config.ts";
+export { describeConfig, getConfigKey, saveConfigKey } from "./config.ts";
+export type { ConfigKeyView } from "./config.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
 export type { BatchItemResult, BatchOp, BatchOptions } from "./write/batch.ts";
 export type { ReorderResult } from "./write/reorder.ts";

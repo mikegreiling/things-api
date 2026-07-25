@@ -87,7 +87,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   undo: { args: "", desc: "reverse recent changes made through this tool" },
   reorder: { args: "<ids…>", desc: "reorder items within a list or container" },
   // Setup & diagnostics
-  config: { args: "<verb>", desc: "show or set configuration keys" },
+  config: { args: "<verb>", desc: "show, get, or set configuration keys" },
   doctor: { args: "", desc: "check environment health and pending setup" },
   capabilities: { args: "", desc: "what each write operation supports" },
   setup: { args: "<verb>", desc: "one-time setup (install the Shortcuts)" },
@@ -338,7 +338,8 @@ Undo — \`things undo\`:
   deletes, unknown prior state) are reported, never guessed. Changes made directly
   in the Things app cannot be undone here.
 
-Configuration that affects writes — \`things config set <key> <value>\`:
+Configuration that affects writes — \`things config set <key> <value>\`
+(read one back with \`things config get <key>\`, or all with \`things config get\`):
   actor               author name recorded on each change
   maxDisruption       ceiling for how disruptive a change may be
   ui-enabled          allow the GUI-driven operations

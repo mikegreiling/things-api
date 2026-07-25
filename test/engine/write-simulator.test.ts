@@ -195,6 +195,29 @@ describe("simulator write vector — covered operations", () => {
     expect(row(reop)["stopDate"]).toBeNull();
   });
 
+  it("complete/cancel (and the single-item family) echo the mutated item's title (additive)", async () => {
+    const done = seedTodo(fixture.db, { title: "Ship the release" });
+    const canc = seedTodo(fixture.db, { title: "Abandoned idea" });
+    const upd = seedTodo(fixture.db, { title: "Rename me", start: "active" });
+
+    const completed = await runMutation(deps(vector), "todo.complete", { uuid: done });
+    expect(completed.kind).toBe("ok");
+    if (completed.kind === "ok") expect(completed.title).toBe("Ship the release");
+
+    const canceled = await runMutation(deps(vector), "todo.cancel", { uuid: canc });
+    expect(canceled.kind).toBe("ok");
+    if (canceled.kind === "ok") expect(canceled.title).toBe("Abandoned idea");
+
+    // The echo is uniform across the single-item family — here, a plain update —
+    // and carries the PRE-write title (captured before the change is applied).
+    const updated = await runMutation(deps(vector), "todo.update", {
+      uuid: upd,
+      title: "Renamed",
+    });
+    expect(updated.kind).toBe("ok");
+    if (updated.kind === "ok") expect(updated.title).toBe("Rename me");
+  });
+
   it("todo.delete (trash) and todo.restore", async () => {
     const uuid = seedTodo(fixture.db, { title: "T", start: "active" });
     expect((await runMutation(deps(vector), "todo.delete", { uuid })).kind).toBe("ok");
