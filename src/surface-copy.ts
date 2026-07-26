@@ -50,6 +50,9 @@ export const PROJECT_LIMIT_DESC = `items shown per project block before truncati
 /** `--all`/`all` description for the grouped views (lift every per-block cap). */
 export const GROUPED_ALL_DESC = "show every item in every group (no per-block caps)";
 
+/** Shared `--area`/`area` view-filter description (restrict a view to one area). */
+export const AREA_FILTER_DESC = `restrict to one area: its direct items and its projects' children (${REF_FORMAT})`;
+
 /**
  * The omit-empty result note appended to every read tool description: optional
  * fields are dropped from the JSON when empty, so a consumer reads an absent

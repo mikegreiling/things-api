@@ -25,6 +25,7 @@ import {
   type GroupedTruncation,
   type ThingsClient,
   type Truncation,
+  type ViewFilterMeta,
 } from "../index.ts";
 
 export interface GlobalReadOpts {
@@ -64,6 +65,8 @@ export interface PagedResult<T> {
   truncation?: Truncation;
   /** Grouped-view (anytime/someday) per-block truncation — carried into meta. */
   grouped?: GroupedTruncation;
+  /** Active content filter (the `--area` scope) — carried into `meta.filter`. */
+  filter?: ViewFilterMeta;
   /**
    * Precomputed human lines. Grouped views render inside `fn` (where the full
    * per-block totals live) and hand the finished lines back here; when absent,
@@ -102,7 +105,7 @@ export function runRead<T>(
     // Reads never block on a schema change — they warn (design decision). The
     // note reuses the same cached fingerprint the write path gates on.
     const warnings = schemaWarnings(client.schemaStatus());
-    const { data, truncation, grouped, lines: precomputed } = fn(client);
+    const { data, truncation, grouped, filter, lines: precomputed } = fn(client);
     // The canonical command a sugar invocation normalized to — known now that
     // `fn` has resolved any reference. Present only for the routing sugars
     // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
@@ -119,6 +122,7 @@ export function runRead<T>(
       ...(resolvedCommand !== null && { resolvedCommand }),
       ...(warnings.length > 0 && { warnings }),
       ...(clock !== undefined && { clock }),
+      ...(filter !== undefined && { filter }),
     };
     // Human output gets the note once on STDERR (never mixed into the piped
     // stdout rows); the --json envelope carries it in meta.warnings instead.

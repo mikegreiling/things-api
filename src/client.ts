@@ -59,6 +59,15 @@ import {
   truncateList,
   truncateToday,
 } from "./read/truncation.ts";
+import {
+  filterListByArea,
+  filterSectionsByArea,
+  filterTodayByArea,
+  resolveAreaFilter,
+  type AreaScopedRead,
+  type ViewFilterMeta,
+} from "./read/area-filter.ts";
+import { localToday } from "./model/dates.ts";
 import type { GroupedLimits } from "./read/sections.ts";
 import { resolveCap } from "./read/caps.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "./surface-copy.ts";
@@ -181,6 +190,8 @@ export interface GroupedBound {
 export interface BoundedList<T> {
   items: T[];
   truncation: Truncation;
+  /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
+  filter?: ViewFilterMeta;
 }
 
 /**
@@ -191,6 +202,8 @@ export interface BoundedList<T> {
 export interface BoundedTodayView {
   view: TodayView;
   truncation: Truncation;
+  /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
+  filter?: ViewFilterMeta;
 }
 
 /**
@@ -201,6 +214,8 @@ export interface BoundedTodayView {
 export interface BoundedSectionsView {
   view: SidebarSection[];
   grouped: GroupedTruncation;
+  /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
+  filter?: ViewFilterMeta;
 }
 
 /** A bounded composite area card: the per-section-capped view and the per-block counts. */
@@ -258,23 +273,31 @@ export interface ThingsClient {
      * first, then This Evening. `all`/`limit: null` returns every row; the
      * `truncation` metadata carries the per-section (`today`/`evening`) counts.
      */
-    today(options?: TodayFilter & ListBound & ClockScopedRead): BoundedTodayView;
+    today(options?: TodayFilter & ListBound & ClockScopedRead & AreaScopedRead): BoundedTodayView;
     /** Inbox captures, bounded (default 50). */
     inbox(options?: InboxFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
     /**
      * Anytime catalogue: every area header and project row is always present;
      * `areaLimit` (default 30) caps each area/loose block, `projectLimit`
-     * (default 3) each project block. `all` lifts both.
+     * (default 3) each project block. `all` lifts both. `area` restricts the
+     * catalogue to one area (its rows survive; the rest drop).
      */
-    anytime(options?: ViewFilter & GroupedBound & ClockScopedRead): BoundedSectionsView;
+    anytime(
+      options?: ViewFilter & GroupedBound & ClockScopedRead & AreaScopedRead,
+    ): BoundedSectionsView;
     /** Future-scheduled items in date order, bounded (default 50). */
-    upcoming(options?: UpcomingFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
+    upcoming(
+      options?: UpcomingFilter & ListBound & ClockScopedRead & AreaScopedRead,
+    ): BoundedList<ListItem>;
     /**
      * Someday catalogue: `areaLimit` (default 30) caps each group; with
      * `activeProjectItems`, `projectLimit` (default: every item) caps each
-     * active project's trailing child list. `all` lifts both.
+     * active project's trailing child list. `all` lifts both. `area` restricts
+     * the catalogue to one area.
      */
-    someday(options?: SomedayFilter & GroupedBound & ClockScopedRead): BoundedSectionsView;
+    someday(
+      options?: SomedayFilter & GroupedBound & ClockScopedRead & AreaScopedRead,
+    ): BoundedSectionsView;
     /** Logbook entries (most recent first), bounded (default 50). */
     logbook(
       options?: Omit<LogbookFilter, "limit"> & ListBound & ClockScopedRead,
@@ -645,12 +668,20 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       // move the CLI/MCP surfaces used to make. The bounded shape carries the
       // capped view plus the truncation/grouped metadata (the human renderers
       // derive their hidden-count hints from that metadata alone).
+      // The `area` filter (when present) is a pure POST-FILTER applied to the
+      // shaped view BEFORE the row cap / per-block preview, so `limit` (and the
+      // grouped caps) size the FILTERED result. The resolved area rides back as
+      // the additive `filter` field (surfaced as `meta.filter`).
       today: (o) => {
-        const { data, truncation } = truncateToday(
-          todayView(conn.db, now(), o, zoneOf(o)),
-          listCap(o),
-        );
-        return { view: data, truncation };
+        let view = todayView(conn.db, now(), o, zoneOf(o));
+        let filter: ViewFilterMeta | undefined;
+        if (o?.area !== undefined) {
+          const target = resolveAreaFilter(conn.db, o.area);
+          view = filterTodayByArea(view, target.uuid, localToday(now(), zoneOf(o)));
+          filter = { area: target };
+        }
+        const { data, truncation } = truncateToday(view, listCap(o));
+        return { view: data, truncation, ...(filter !== undefined && { filter }) };
       },
       inbox: (o) => {
         const { data, truncation } = truncateList(
@@ -660,25 +691,43 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         return { items: data, truncation };
       },
       anytime: (o) => {
+        let sections = anytimeView(conn.db, now(), o, zoneOf(o));
+        let filter: ViewFilterMeta | undefined;
+        if (o?.area !== undefined) {
+          const target = resolveAreaFilter(conn.db, o.area);
+          sections = filterSectionsByArea(sections, target.uuid);
+          filter = { area: target };
+        }
         const { data, grouped } = previewSections(
-          anytimeView(conn.db, now(), o, zoneOf(o)),
+          sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, PROJECT_PREVIEW_LIMIT),
         );
-        return { view: data, grouped };
+        return { view: data, grouped, ...(filter !== undefined && { filter }) };
       },
       upcoming: (o) => {
-        const { data, truncation } = truncateList(
-          upcomingView(conn.db, now(), o, zoneOf(o)),
-          listCap(o),
-        );
-        return { items: data, truncation };
+        let items = upcomingView(conn.db, now(), o, zoneOf(o));
+        let filter: ViewFilterMeta | undefined;
+        if (o?.area !== undefined) {
+          const target = resolveAreaFilter(conn.db, o.area);
+          items = filterListByArea(items, target.uuid);
+          filter = { area: target };
+        }
+        const { data, truncation } = truncateList(items, listCap(o));
+        return { items: data, truncation, ...(filter !== undefined && { filter }) };
       },
       someday: (o) => {
+        let sections = somedayView(conn.db, now(), o, zoneOf(o));
+        let filter: ViewFilterMeta | undefined;
+        if (o?.area !== undefined) {
+          const target = resolveAreaFilter(conn.db, o.area);
+          sections = filterSectionsByArea(sections, target.uuid);
+          filter = { area: target };
+        }
         const { data, grouped } = previewSomedaySections(
-          somedayView(conn.db, now(), o, zoneOf(o)),
+          sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, null),
         );
-        return { view: data, grouped };
+        return { view: data, grouped, ...(filter !== undefined && { filter }) };
       },
       logbook: (o) => {
         // The bound is the truncation cap; the underlying query stays unbounded
@@ -688,7 +737,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           logbookView(conn.db, now(), { ...filter, limit: null }, zoneOf(o)),
           listCap(o),
         );
-        return { items: data, truncation };
+        // Logbook scopes to an area NATIVELY at the query level (its `area`
+        // predicate implements the identical effective-area keep-rule); this
+        // only resolves the target for the additive `filter` annotation so the
+        // meta shape matches the post-filtered views.
+        const areaFilter =
+          o?.area !== undefined ? { area: resolveAreaFilter(conn.db, o.area) } : undefined;
+        return { items: data, truncation, ...(areaFilter !== undefined && { filter: areaFilter }) };
       },
       trash: (o) => {
         const { data, truncation } = truncateList(
