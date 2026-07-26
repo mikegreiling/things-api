@@ -16,6 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   ALL_DESC,
+  AREA_FILTER_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
   blockedCode,
@@ -61,6 +62,7 @@ import {
   type TagPresence,
   type ThingsClient,
   type Truncation,
+  type ViewFilterMeta,
   type ViewName,
   type Weekday,
   type WriteOptions,
@@ -532,6 +534,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   const readGuard = async (
     fn: () => Promise<ToolResult> | ToolResult,
     tz?: string,
+    extraMeta?: () => Record<string, unknown> | undefined,
   ): Promise<ToolResult> => {
     const result = await guard(fn);
     if (result.isError === true) return result;
@@ -547,9 +550,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     } catch {
       warnings = [];
     }
+    // Extra additive meta the handler resolved during the read (e.g. the active
+    // `area` filter) — evaluated AFTER fn ran, so a value it populated is seen.
+    const extra = extraMeta?.() ?? {};
     const meta = {
       ...(warnings.length > 0 && { warnings }),
       ...(clock !== undefined && { clock }),
+      ...extra,
     };
     if (Object.keys(meta).length === 0) return result;
     return {
@@ -591,6 +598,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
         ...tzShape,
+        area: z
+          .string()
+          .optional()
+          .describe(`today/anytime/someday/upcoming/logbook only: ${AREA_FILTER_DESC}`),
         evening: z.boolean().optional().describe("today only: show only the This Evening section"),
         show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
@@ -638,116 +649,172 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       },
       annotations: READ_ONLY,
     },
-    async (args) =>
-      readGuard(() => {
-        const badZone = badTz(args.tz);
-        if (badZone !== null) return badZone;
-        // Tag-conflict AND overdue-applicability both derive from the shared
-        // contract: read_view honors overdue only on today/inbox/anytime/someday
-        // (the current-work views), matching FILTER_CONTRACT.
-        const validated = validateViewArgs(
-          args.view as ViewName,
-          { ...tagPresence(args), overdue: args.overdue },
-          {
-            untaggedConflict: MCP_UNTAGGED_CONFLICT,
-            overdueRejected: `overdue applies to today/inbox/anytime/someday, not ${args.view}`,
-            overdueStatusWiden: "",
-          },
-        );
-        if (!validated.ok) return usage(validated.message);
-        // show_active_project_items is the preferred name; active_project_items
-        // stays accepted as a compatibility alias.
-        const showActiveProjectItems = args.show_active_project_items ?? args.active_project_items;
-        const isGrouped = args.view === "anytime" || args.view === "someday";
-        if (isGrouped && args.limit !== undefined) {
-          return usage(
-            `limit does not apply to ${args.view} — cap blocks with area_limit` +
-              `${args.view === "anytime" ? "/project_limit" : ""}, or pass all: true`,
+    async (args) => {
+      // The active `area` scope, resolved during the read and surfaced as the
+      // additive `meta.filter` (the readGuard extra-meta thunk reads it after fn).
+      let filterMeta: ViewFilterMeta | undefined;
+      return readGuard(
+        () => {
+          const badZone = badTz(args.tz);
+          if (badZone !== null) return badZone;
+          // Tag-conflict AND overdue-applicability both derive from the shared
+          // contract: read_view honors overdue only on today/inbox/anytime/someday
+          // (the current-work views), matching FILTER_CONTRACT.
+          const validated = validateViewArgs(
+            args.view as ViewName,
+            { ...tagPresence(args), overdue: args.overdue },
+            {
+              untaggedConflict: MCP_UNTAGGED_CONFLICT,
+              overdueRejected: `overdue applies to today/inbox/anytime/someday, not ${args.view}`,
+              overdueStatusWiden: "",
+            },
           );
-        }
-        if (!isGrouped && (args.area_limit !== undefined || args.project_limit !== undefined)) {
-          return usage(`area_limit/project_limit apply only to anytime/someday, not ${args.view}`);
-        }
-        if (args.view !== "someday" && showActiveProjectItems !== undefined) {
-          return usage("show_active_project_items applies only to someday");
-        }
-        if (args.view !== "today" && args.evening === true) {
-          return usage(`evening applies only to today, not ${args.view}`);
-        }
-        if (args.view === "someday" && args.project_limit !== undefined) {
-          return usage(
-            "project_limit does not apply to someday — pass a number as show_active_project_items " +
-              "to cap that section's project lists",
-          );
-        }
-        const limit = resolveLimit(args);
-        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
-        const projectLimit = resolveCap(args.project_limit, args.all, PROJECT_PREVIEW_LIMIT);
-        if (areaLimit === "conflict" || projectLimit === "conflict") {
-          return usage("pass at most one of area_limit/project_limit / all");
-        }
-        const c = getClient();
-        const filter = validated.filter;
-        const zone = args.tz !== undefined ? { zone: args.tz } : {};
-        switch (args.view) {
-          case "today": {
-            const { view, truncation } = c.read.today({
-              ...filter,
-              ...zone,
-              ...(args.evening === true && { eveningOnly: true }),
-              limit,
-            });
-            return truncatedResult(view, truncation);
+          if (!validated.ok) return usage(validated.message);
+          // show_active_project_items is the preferred name; active_project_items
+          // stays accepted as a compatibility alias.
+          const showActiveProjectItems =
+            args.show_active_project_items ?? args.active_project_items;
+          const isGrouped = args.view === "anytime" || args.view === "someday";
+          if (isGrouped && args.limit !== undefined) {
+            return usage(
+              `limit does not apply to ${args.view} — cap blocks with area_limit` +
+                `${args.view === "anytime" ? "/project_limit" : ""}, or pass all: true`,
+            );
           }
-          case "inbox": {
-            const { items, truncation } = c.read.inbox({ ...filter, ...zone, limit });
-            return truncatedResult(items, truncation);
+          if (!isGrouped && (args.area_limit !== undefined || args.project_limit !== undefined)) {
+            return usage(
+              `area_limit/project_limit apply only to anytime/someday, not ${args.view}`,
+            );
           }
-          case "anytime": {
-            const { view, grouped } = c.read.anytime({
-              ...filter,
-              ...zone,
-              areaLimit,
-              projectLimit,
-            });
-            return groupedResult(view, grouped);
+          if (args.view !== "someday" && showActiveProjectItems !== undefined) {
+            return usage("show_active_project_items applies only to someday");
           }
-          case "upcoming": {
-            const { items, truncation } = c.read.upcoming({
-              ...filter,
-              ...zone,
-              ...(args.horizon !== undefined && { horizon: args.horizon }),
-              limit,
-            });
-            return truncatedResult(items, truncation);
+          if (args.view !== "today" && args.evening === true) {
+            return usage(`evening applies only to today, not ${args.view}`);
           }
-          case "someday": {
-            const active = showActiveProjectItems;
-            if (typeof active === "number" && args.all === true) {
-              return usage("pass at most one of a numeric show_active_project_items / all");
+          // The `area` filter applies to the area-carrying views only; inbox
+          // (area-less captures) and trash have no area to scope by.
+          if ((args.view === "inbox" || args.view === "trash") && args.area !== undefined) {
+            return usage(
+              `area applies to today/anytime/someday/upcoming/logbook, not ${args.view}`,
+            );
+          }
+          if (args.view === "someday" && args.project_limit !== undefined) {
+            return usage(
+              "project_limit does not apply to someday — pass a number as show_active_project_items " +
+                "to cap that section's project lists",
+            );
+          }
+          const limit = resolveLimit(args);
+          const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+          const projectLimit = resolveCap(args.project_limit, args.all, PROJECT_PREVIEW_LIMIT);
+          if (areaLimit === "conflict" || projectLimit === "conflict") {
+            return usage("pass at most one of area_limit/project_limit / all");
+          }
+          const c = getClient();
+          const filter = validated.filter;
+          const zone = args.tz !== undefined ? { zone: args.tz } : {};
+          // The `area` scope, threaded into the area-carrying views; the client
+          // resolves it, applies the post-filter, and hands back the target for
+          // the `meta.filter` annotation (captured into `filterMeta`).
+          const area = args.area !== undefined ? { area: args.area } : {};
+          switch (args.view) {
+            case "today": {
+              const {
+                view,
+                truncation,
+                filter: fm,
+              } = c.read.today({
+                ...filter,
+                ...zone,
+                ...area,
+                ...(args.evening === true && { eveningOnly: true }),
+                limit,
+              });
+              filterMeta = fm;
+              return truncatedResult(view, truncation);
             }
-            const { view, grouped } = c.read.someday({
-              ...filter,
-              ...zone,
-              ...((active === true || typeof active === "number") && {
-                activeProjectItems: true,
-              }),
-              areaLimit,
-              // true = every item per project; a number caps each list.
-              projectLimit: typeof active === "number" ? active : null,
-            });
-            return groupedResult(view, grouped);
+            case "inbox": {
+              const { items, truncation } = c.read.inbox({ ...filter, ...zone, limit });
+              return truncatedResult(items, truncation);
+            }
+            case "anytime": {
+              const {
+                view,
+                grouped,
+                filter: fm,
+              } = c.read.anytime({
+                ...filter,
+                ...zone,
+                ...area,
+                areaLimit,
+                projectLimit,
+              });
+              filterMeta = fm;
+              return groupedResult(view, grouped);
+            }
+            case "upcoming": {
+              const {
+                items,
+                truncation,
+                filter: fm,
+              } = c.read.upcoming({
+                ...filter,
+                ...zone,
+                ...area,
+                ...(args.horizon !== undefined && { horizon: args.horizon }),
+                limit,
+              });
+              filterMeta = fm;
+              return truncatedResult(items, truncation);
+            }
+            case "someday": {
+              const active = showActiveProjectItems;
+              if (typeof active === "number" && args.all === true) {
+                return usage("pass at most one of a numeric show_active_project_items / all");
+              }
+              const {
+                view,
+                grouped,
+                filter: fm,
+              } = c.read.someday({
+                ...filter,
+                ...zone,
+                ...area,
+                ...((active === true || typeof active === "number") && {
+                  activeProjectItems: true,
+                }),
+                areaLimit,
+                // true = every item per project; a number caps each list.
+                projectLimit: typeof active === "number" ? active : null,
+              });
+              filterMeta = fm;
+              return groupedResult(view, grouped);
+            }
+            case "logbook": {
+              const {
+                items,
+                truncation,
+                filter: fm,
+              } = c.read.logbook({
+                ...filter,
+                ...zone,
+                ...area,
+                limit,
+              });
+              filterMeta = fm;
+              return truncatedResult(items, truncation);
+            }
+            case "trash": {
+              const { items, truncation } = c.read.trash({ ...zone, limit });
+              return truncatedResult(items, truncation);
+            }
           }
-          case "logbook": {
-            const { items, truncation } = c.read.logbook({ ...filter, ...zone, limit });
-            return truncatedResult(items, truncation);
-          }
-          case "trash": {
-            const { items, truncation } = c.read.trash({ ...zone, limit });
-            return truncatedResult(items, truncation);
-          }
-        }
-      }, args.tz),
+        },
+        args.tz,
+        () => (filterMeta !== undefined ? { filter: filterMeta } : undefined),
+      );
+    },
   );
 
   server.registerTool(

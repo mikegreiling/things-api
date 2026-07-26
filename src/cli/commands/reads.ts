@@ -58,6 +58,7 @@ import {
 import { doublePeriod, parsePeriodEnd, parsePeriodStart } from "../period.ts";
 import {
   ALL_DESC,
+  AREA_FILTER_DESC,
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
   ExitCode,
@@ -158,6 +159,7 @@ export function registerReadCommands(program: Command): void {
     .option("--untagged", UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
     .option("--evening", "show only the This Evening section")
+    .option("--area <ref>", AREA_FILTER_DESC)
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -170,6 +172,7 @@ export function registerReadCommands(program: Command): void {
           untagged?: boolean;
           overdue?: boolean;
           evening?: boolean;
+          area?: string;
           limit?: string;
           all?: boolean;
         },
@@ -182,23 +185,33 @@ export function registerReadCommands(program: Command): void {
           ...tagInvocationParts(opts),
           opts.overdue === true && "--overdue",
           eveningOnly && "--evening",
+          opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
         ]);
         const filter = {
           ...tagFilterFields(opts),
           ...(opts.overdue === true && { overdue: true }),
           ...(eveningOnly && { eveningOnly: true }),
+          ...(opts.area !== undefined && { area: opts.area }),
         };
         runRead(
           opts,
           "today",
           (c) => {
-            const { view, truncation } = c.read.today({ ...filter, limit: lim.limit });
+            const {
+              view,
+              truncation,
+              filter: areaFilter,
+            } = c.read.today({
+              ...filter,
+              limit: lim.limit,
+            });
             // The renderer keeps This Evening honest under truncation from the
             // metadata's per-section counts; the lines are precomputed here and
             // the global footer (whole-view remainder) is appended by the driver.
             return {
               data: view,
               truncation,
+              ...(areaFilter !== undefined && { filter: areaFilter }),
               lines: renderToday(view, truncation.sections, base, { eveningOnly }),
             };
           },
@@ -333,6 +346,7 @@ export function registerReadCommands(program: Command): void {
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
+    .option("--area <ref>", AREA_FILTER_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option("--project-limit <n>", PROJECT_LIMIT_DESC)
     .option("--all", GROUPED_ALL_DESC)
@@ -346,6 +360,7 @@ export function registerReadCommands(program: Command): void {
           exactTag?: boolean;
           untagged?: boolean;
           overdue?: boolean;
+          area?: string;
           areaLimit?: string;
           projectLimit?: string;
           all?: boolean;
@@ -380,6 +395,7 @@ export function registerReadCommands(program: Command): void {
         const base = invocation("anytime", [
           ...tagInvocationParts(opts),
           opts.overdue === true && "--overdue",
+          opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
         ]);
         // Content scopes compose (AND): --overdue narrows a tagged/untagged
         // set, so the filter is built additively rather than one-or-the-other.
@@ -391,14 +407,20 @@ export function registerReadCommands(program: Command): void {
           opts,
           "anytime",
           (c) => {
-            const { view, grouped } = c.read.anytime({
+            const {
+              view,
+              grouped,
+              filter: areaFilter,
+            } = c.read.anytime({
               ...filter,
+              ...(opts.area !== undefined && { area: opts.area }),
               areaLimit: area.limit,
               projectLimit: project.limit,
             });
             return {
               data: view,
               grouped,
+              ...(areaFilter !== undefined && { filter: areaFilter }),
               lines: renderAnytimePreview(view, grouped, limits, base),
             };
           },
@@ -426,6 +448,7 @@ export function registerReadCommands(program: Command): void {
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
     .option("--overdue", OVERDUE_DESC)
+    .option("--area <ref>", AREA_FILTER_DESC)
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option(
       "--show-active-project-items [n]",
@@ -443,6 +466,7 @@ export function registerReadCommands(program: Command): void {
           exactTag?: boolean;
           untagged?: boolean;
           overdue?: boolean;
+          area?: string;
           areaLimit?: string;
           showActiveProjectItems?: boolean | string;
           all?: boolean;
@@ -482,16 +506,22 @@ export function registerReadCommands(program: Command): void {
         const filter = {
           ...tagFilterFields(opts),
           ...(opts.overdue === true && { overdue: true }),
+          ...(opts.area !== undefined && { area: opts.area }),
         };
         const base = invocation("someday", [
           ...tagInvocationParts(opts),
           opts.overdue === true && "--overdue",
+          opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
         ]);
         runRead(
           opts,
           "someday",
           (c) => {
-            const { view, grouped } = c.read.someday({
+            const {
+              view,
+              grouped,
+              filter: areaFilter,
+            } = c.read.someday({
               ...filter,
               ...(showActive && { activeProjectItems: true }),
               areaLimit: area.limit,
@@ -518,6 +548,7 @@ export function registerReadCommands(program: Command): void {
             return {
               data: view,
               grouped,
+              ...(areaFilter !== undefined && { filter: areaFilter }),
               lines: renderSomedayPreview(
                 view,
                 grouped,
@@ -560,6 +591,7 @@ export function registerReadCommands(program: Command): void {
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
     .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
+    .option("--area <ref>", AREA_FILTER_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -573,6 +605,7 @@ export function registerReadCommands(program: Command): void {
           exactTag?: boolean;
           untagged?: boolean;
           horizon?: string;
+          area?: string;
         },
         command: Command,
       ) => {
@@ -620,16 +653,22 @@ export function registerReadCommands(program: Command): void {
           sinceGiven && `--since ${shellQuote(opts.since as string)}`,
           ...tagInvocationParts(opts),
           opts.horizon !== undefined && `--horizon ${shellQuote(opts.horizon)}`,
+          opts.area !== undefined && `--area ${shellQuote(opts.area)}`,
         ]);
         runRead(
           opts,
           "upcoming",
           (c) => {
-            const { items: data, truncation } = c.read.upcoming({
+            const {
+              items: data,
+              truncation,
+              filter: areaFilter,
+            } = c.read.upcoming({
               ...(until !== undefined && { until }),
               ...(since !== undefined && { since }),
               ...tagFilterFields(opts),
               ...(opts.horizon !== undefined && { horizon: Number(opts.horizon) }),
+              ...(opts.area !== undefined && { area: opts.area }),
               limit: effectiveLimit,
             });
             const lines = renderUpcoming(data);
@@ -675,7 +714,12 @@ export function registerReadCommands(program: Command): void {
                 ),
               );
             }
-            return { data, truncation, lines };
+            return {
+              data,
+              truncation,
+              ...(areaFilter !== undefined && { filter: areaFilter }),
+              lines,
+            };
           },
           (items: ListItem[]) => renderUpcoming(items),
           undefined,
@@ -694,7 +738,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
-    .option("--area <ref>", "restrict to an area: direct items plus its projects' children")
+    .option("--area <ref>", AREA_FILTER_DESC)
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option("--since <when>", `only entries logged on/after this bound: ${PERIOD_SINCE}`)
     .option("--until <when>", `only entries logged on/before this bound: ${PERIOD_UNTIL}`)
@@ -754,7 +798,11 @@ export function registerReadCommands(program: Command): void {
           opts,
           "logbook",
           (c) => {
-            const { items, truncation } = c.read.logbook({
+            const {
+              items,
+              truncation,
+              filter: areaFilter,
+            } = c.read.logbook({
               ...(opts.area !== undefined && { area: opts.area }),
               ...(opts.project !== undefined && { project: opts.project }),
               ...(since !== undefined && { since }),
@@ -762,7 +810,11 @@ export function registerReadCommands(program: Command): void {
               ...tagFilterFields(opts),
               limit: effectiveLimit,
             });
-            return { data: items, truncation };
+            return {
+              data: items,
+              truncation,
+              ...(areaFilter !== undefined && { filter: areaFilter }),
+            };
           },
           (items: ListItem[]) => renderLogbook(items),
           base,
