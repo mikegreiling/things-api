@@ -471,79 +471,20 @@ function pickInstance(fkInstances: string[], warnings: string[]): string | null 
 }
 
 /**
- * Resolve a make-repeating create-probe once at least one same-title template
- * has passed the `isTemplate` assertion: disambiguate by source fingerprint,
- * derive the spawned instance via the template FK, and resolve the source fate.
+ * Derive the full make-repeating discovery for a chosen template: the spawned
+ * instance (via the template FK) and the source fate (replaced vs preserved-as-
+ * instance), plus `childrenReplaced` for project conversions. Shared by the
+ * SUCCESS path and the rule-MISMATCH failure path — because the source uuid is
+ * already destroyed by the time a mismatch is detected, so a mismatch verdict
+ * must still hand back the new template's uuid (+ instance/replaced) for cleanup
+ * (reschedule it to the intended rule, or delete it).
  */
-function evaluateRepeatingCreate(
+function deriveRepeatingDiscovery(
   spec: Extract<DeltaSpec, { mode: "create" }>,
-  passing: AnyTask[],
+  template: AnyTask,
   probe: RepeatingProbe,
   reader: VerifyReader,
-): DeltaEvaluation {
-  // 1. Disambiguate the template when more than one same-title template survives.
-  let template = passing[0];
-  if (passing.length > 1) {
-    const matches = passing.filter((c) => matchesFingerprint(c, probe.fingerprint));
-    if (matches.length === 1) {
-      template = matches[0];
-    } else {
-      return {
-        satisfied: false,
-        movement: true,
-        assertedMovement: true,
-        observed: template ? checkAssertions(template, spec.assert).observed : null,
-        terminal: true,
-        detail:
-          `discovery found ${passing.length} same-title repeating templates in the write window and ` +
-          `${matches.length} of them match the source fingerprint (notes/tags/container/checklist) — ` +
-          "refusing to guess which one the app just created",
-      };
-    }
-  }
-  if (template === undefined) {
-    return { satisfied: false, movement: false, assertedMovement: false, observed: null };
-  }
-
-  // 1b. Verify the LANDED rule matches the REQUESTED rule (type/unit/interval)
-  // when it is decodable. A drive can create the template but mis-commit the
-  // interval/frequency — the interval-field re-layout race (oddities §8l) reverts
-  // the interval to 1 — and that must be a verify-failed:mismatch, never a silent
-  // ok. Skipped when the rule cannot be decoded (a future Things rule format):
-  // discovery still succeeds and doctor counts the undecodable template, matching
-  // the read-side decoder's fail-soft. Discovery above is `isTemplate`-only, so
-  // an unreadable-rule template is still found; only this verification is skipped.
-  if (probe.expectedRule !== undefined) {
-    const landedType = getField(template, "repeating.rule.type");
-    if (landedType !== undefined) {
-      const landedUnit = getField(template, "repeating.rule.unit");
-      const landedInterval = getField(template, "repeating.rule.interval");
-      const want = probe.expectedRule;
-      if (
-        landedType !== want.type ||
-        landedUnit !== want.unit ||
-        landedInterval !== want.interval
-      ) {
-        return {
-          satisfied: false,
-          movement: true,
-          assertedMovement: true,
-          observed: {
-            "repeating.rule.type": landedType,
-            "repeating.rule.unit": landedUnit,
-            "repeating.rule.interval": landedInterval,
-          },
-          detail:
-            "the repeating template was created but its rule does not match the request " +
-            `(expected ${want.type}/${want.unit}/interval ${want.interval}, got ` +
-            `${String(landedType)}/${String(landedUnit)}/interval ${String(landedInterval)}) — the ` +
-            "frequency or interval may not have committed to the dialog (oddities §8l)",
-        };
-      }
-    }
-  }
-
-  // 2. Derive the instance via the template FK + resolve the source fate.
+): { repeating: RepeatingDiscovery; warnings: string[] } {
   const dbType = dbTypeOf(spec.probe.type);
   const fkInstances = reader.instancesOfTemplate(template.uuid, dbType);
   const fate = reader.repeatingSourceFate(probe.sourceUuid);
@@ -580,6 +521,102 @@ function evaluateRepeatingCreate(
       childrenReplaced: reader.countAbsent(probe.subtreeUuids),
     }),
   };
+  return { repeating, warnings };
+}
+
+/**
+ * Resolve a make-repeating create-probe once at least one same-title template
+ * has passed the `isTemplate` assertion: disambiguate by source fingerprint,
+ * derive the spawned instance via the template FK, and resolve the source fate.
+ */
+function evaluateRepeatingCreate(
+  spec: Extract<DeltaSpec, { mode: "create" }>,
+  passing: AnyTask[],
+  probe: RepeatingProbe,
+  reader: VerifyReader,
+): DeltaEvaluation {
+  // 1. Disambiguate the template when more than one same-title template survives.
+  let template = passing[0];
+  if (passing.length > 1) {
+    const matches = passing.filter((c) => matchesFingerprint(c, probe.fingerprint));
+    if (matches.length === 1) {
+      template = matches[0];
+    } else {
+      // Cannot disambiguate — but the caller still deserves the candidate list
+      // (all same-title templates found in the write window) for inspection and
+      // cleanup, even though we refuse to guess which one the app just created.
+      // The uuids ride `observed` → the CLI/MCP error envelope's `detail.observed`.
+      return {
+        satisfied: false,
+        movement: true,
+        assertedMovement: true,
+        observed: {
+          ...(template ? checkAssertions(template, spec.assert).observed : {}),
+          "repeating.candidateTemplateUuids": passing.map((c) => c.uuid),
+        },
+        terminal: true,
+        detail:
+          `discovery found ${passing.length} same-title repeating templates in the write window and ` +
+          `${matches.length} of them match the source fingerprint (notes/tags/container/checklist) — ` +
+          "refusing to guess which one the app just created; the candidate template uuids are " +
+          "included for inspection/cleanup",
+      };
+    }
+  }
+  if (template === undefined) {
+    return { satisfied: false, movement: false, assertedMovement: false, observed: null };
+  }
+
+  // 1b. Verify the LANDED rule matches the REQUESTED rule (type/unit/interval)
+  // when it is decodable. A drive can create the template but mis-commit the
+  // interval/frequency — the interval-field re-layout race (oddities §8l) reverts
+  // the interval to 1 — and that must be a verify-failed:mismatch, never a silent
+  // ok. Skipped when the rule cannot be decoded (a future Things rule format):
+  // discovery still succeeds and doctor counts the undecodable template, matching
+  // the read-side decoder's fail-soft. Discovery above is `isTemplate`-only, so
+  // an unreadable-rule template is still found; only this verification is skipped.
+  if (probe.expectedRule !== undefined) {
+    const landedType = getField(template, "repeating.rule.type");
+    if (landedType !== undefined) {
+      const landedUnit = getField(template, "repeating.rule.unit");
+      const landedInterval = getField(template, "repeating.rule.interval");
+      const want = probe.expectedRule;
+      if (
+        landedType !== want.type ||
+        landedUnit !== want.unit ||
+        landedInterval !== want.interval
+      ) {
+        // The template WAS created — derive its full discovery so the mismatch
+        // verdict hands the caller the successor uuid(s) for cleanup (the source
+        // uuid is already destroyed by now). The uuids ride `observed`, which the
+        // CLI/MCP surface as the error envelope's `detail.observed`.
+        const { repeating } = deriveRepeatingDiscovery(spec, template, probe, reader);
+        return {
+          satisfied: false,
+          movement: true,
+          assertedMovement: true,
+          observed: {
+            "repeating.rule.type": landedType,
+            "repeating.rule.unit": landedUnit,
+            "repeating.rule.interval": landedInterval,
+            "repeating.templateUuid": repeating.templateUuid,
+            "repeating.instanceUuid": repeating.instanceUuid,
+            "repeating.replacedUuid": repeating.replacedUuid,
+          },
+          detail:
+            "the repeating template was created but its rule does not match the request " +
+            `(expected ${want.type}/${want.unit}/interval ${want.interval}, got ` +
+            `${String(landedType)}/${String(landedUnit)}/interval ${String(landedInterval)}) — the ` +
+            "frequency or interval may not have committed to the dialog (oddities §8l). The template " +
+            `WAS created (uuid ${repeating.templateUuid}) and its uuid is included for cleanup: ` +
+            "reschedule-repeat it to the intended rule, or delete it.",
+        };
+      }
+    }
+  }
+
+  // 2. Derive the instance via the template FK + resolve the source fate.
+  const { repeating, warnings } = deriveRepeatingDiscovery(spec, template, probe, reader);
   return {
     satisfied: true,
     movement: true,
@@ -608,6 +645,11 @@ export function evaluateDelta(
   switch (spec.mode) {
     case "update":
     case "state": {
+      // A reschedule-repeat mismatch needs NO successor discovery: reschedule is
+      // identity-PRESERVED (the rule mutates in place on the same uuid), so the
+      // caller already holds the target uuid (spec.uuid) for any cleanup/retry —
+      // unlike make-repeating (create mode), where the source uuid is destroyed
+      // and the new template uuid must be handed back on mismatch.
       const entity = reader.taskByUuid(spec.uuid);
       const { pass, observed } = checkAssertions(entity, spec.assert);
       let satisfied = entity !== null && pass;
