@@ -113,6 +113,9 @@ export function runRead<T>(
     // The clock honesty field: present only when a consumer zone / pinned now
     // is in effect (absent = host clock, so the wire shape is unchanged).
     const clock = client.clockMeta();
+    // The active container scope (additive): present only when the client is
+    // jailed, so an agent knows its own jail (not an oracle for what's outside).
+    const scope = client.scope;
     const meta: EnvelopeMeta = {
       dbVersion: fp.observation.databaseVersion,
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
@@ -123,6 +126,7 @@ export function runRead<T>(
       ...(warnings.length > 0 && { warnings }),
       ...(clock !== undefined && { clock }),
       ...(filter !== undefined && { filter }),
+      ...(scope !== undefined && { scope }),
     };
     // Human output gets the note once on STDERR (never mixed into the piped
     // stdout rows); the --json envelope carries it in meta.warnings instead.
@@ -150,10 +154,18 @@ export function runRead<T>(
       // sugar invocation resolved to, adjacent to the header. Same gates as the
       // preamble (TTY-only, never in --json) — canonical invocations echo
       // nothing because `resolvedCommand` is null for them.
-      const out =
+      // The scope banner: one dim line naming the active jail, so a scoped
+      // read is never silently partial (TTY-only, never in --json). A
+      // stored-config scope must not be a mystery jail.
+      const scopeBanner =
+        scope !== undefined && process.stdout.isTTY === true
+          ? [dim(`scoped to ${scope.kind} "${scope.title}"`)]
+          : [];
+      const normalized =
         resolvedCommand !== null && process.stdout.isTTY === true
-          ? [dim(`≡ ${resolvedCommand}`), ...withHeader]
-          : withHeader;
+          ? [dim(`≡ ${resolvedCommand}`)]
+          : [];
+      const out = [...scopeBanner, ...normalized, ...withHeader];
       process.stdout.write(`${out.join("\n")}\n`);
     }
     process.exitCode = ExitCode.Ok;

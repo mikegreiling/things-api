@@ -158,6 +158,12 @@ export type { AreaFilterTarget, AreaScopedRead, ViewFilterMeta } from "./read/ar
 export { ReferenceResolutionError } from "./read/queries.ts";
 export type { RefCandidate } from "./read/queries.ts";
 
+// Container-scoped sandbox: the pinned-scope shape (surfaced as `meta.scope` and
+// `client.scope`) and the fail-closed error a bad `--scope` raises. See
+// docs/design/container-scope.md.
+export { ScopeResolutionError } from "./read/scope.ts";
+export type { ResolvedScope, ScopeMeta, ScopeSource } from "./read/scope.ts";
+
 // The shared `<when>@<time>` scheduling sugar parser (CLI + MCP).
 export { splitWhenSugar, CLI_WHEN_LABELS, MCP_WHEN_LABELS } from "./model/when-sugar.ts";
 export type { WhenSugar, WhenSugarLabels } from "./model/when-sugar.ts";

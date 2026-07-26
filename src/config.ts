@@ -37,6 +37,17 @@ export interface ThingsApiConfig {
    * always-on Mac ("closet mini") kept unlocked; see docs/design/ui-vector.md.
    */
   ui: { enabled: boolean };
+  /**
+   * Container-scoped sandbox: a raw ref (uuid / uuid-prefix / unique area or
+   * project name) plus where it came from, resolved to a pinned container at
+   * `openThings()`. Null when unscoped. A stored `scope` jails EVERY process on
+   * this host — including the owner's own terminal — so per-process scoping
+   * belongs on `THINGS_API_SCOPE` / the MCP `--scope` flag, not here (see
+   * docs/design/container-scope.md, Trust model). The MCP flag outranks env,
+   * which outranks this stored key. Optional in the type (a hand-built config
+   * omits it = unscoped); {@link loadConfig} always populates it.
+   */
+  scope?: { ref: string; source: "env" | "config" } | null;
   host: string;
 }
 
@@ -82,6 +93,7 @@ interface ConfigFile {
   acceptedFingerprint?: string;
   allowExperimental?: boolean;
   uiEnabled?: boolean;
+  scope?: string;
 }
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
@@ -120,6 +132,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
   const experimentalEnv = boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false");
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
 
+  // Scope precedence within the config layer: THINGS_API_SCOPE env > stored
+  // `scope` key. The MCP `--scope` flag outranks BOTH and is applied above this
+  // layer, at openThings(). Fail-closed resolution to a container happens there.
+  const scopeEnv = env["THINGS_API_SCOPE"];
+  const scope: ThingsApiConfig["scope"] =
+    scopeEnv !== undefined && scopeEnv !== ""
+      ? { ref: scopeEnv, source: "env" }
+      : file.scope !== undefined && file.scope !== ""
+        ? { ref: file.scope, source: "config" }
+        : null;
+
   return {
     profile,
     maxDisruption,
@@ -128,6 +151,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     acceptedFingerprint: file.acceptedFingerprint ?? null,
     allowExperimental: experimentalEnv ?? file.allowExperimental ?? false,
     ui: { enabled: uiEnv ?? file.uiEnabled ?? false },
+    scope,
     host: hostname(),
   };
 }
@@ -246,6 +270,15 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       cfg.ui.enabled,
       file.uiEnabled !== undefined,
       boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false") !== undefined,
+    ),
+    // The container scope's RAW ref (resolved to a container at open); env >
+    // stored. A stored value jails every process on this host — see the
+    // trust-model note in docs/design/container-scope.md.
+    view(
+      "scope",
+      cfg.scope?.ref ?? null,
+      file.scope !== undefined,
+      env["THINGS_API_SCOPE"] !== undefined && env["THINGS_API_SCOPE"] !== "",
     ),
     // Read-only, computed from the environment; not settable via `config set`.
     { key: "host", value: cfg.host, source: "derived" },

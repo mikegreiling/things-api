@@ -22,8 +22,20 @@ export function registerMcp(program: Command): void {
     .option("--db <path>", "explicit database path")
     .option("--allow-disruptive", "permit changes that briefly steal window focus")
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
+    .option(
+      "--scope <ref>",
+      "limit the whole server to one area or project (uuid or unique name): only items within " +
+        "it are readable, every change is confined to it, and references outside it return " +
+        "not-found. Set at launch by whoever controls this server; no tool can widen it. " +
+        "Outranks the THINGS_API_SCOPE environment variable.",
+    )
     .action(
-      async (opts: { db?: string; allowDisruptive?: boolean; allowVeryDisruptive?: boolean }) => {
+      async (opts: {
+        db?: string;
+        allowDisruptive?: boolean;
+        allowVeryDisruptive?: boolean;
+        scope?: string;
+      }) => {
         // LAZY imports: the MCP SDK + zod load only when `things mcp` actually
         // runs. Every other CLI command must work in environments that ship a
         // minimal dependency set (the guest e2e bundle carries only commander).
@@ -44,9 +56,14 @@ export function registerMcp(program: Command): void {
         const server = createThingsMcpServer({
           ...(opts.db !== undefined && { dbPath: opts.db }),
           ...(maxDisruption !== undefined && { maxDisruption }),
+          ...(opts.scope !== undefined && { scope: opts.scope }),
         });
         const transport = new StdioServerTransport();
         await server.connect(transport);
+        // Log the active scope loudly at startup so the jail is never silently on.
+        if (opts.scope !== undefined) {
+          process.stderr.write(`things-api MCP server scoped to "${opts.scope}"\n`);
+        }
         process.stderr.write("things-api MCP server listening on stdio\n");
         // The transport keeps the process alive; exit cleanly when it closes.
         // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Transport exposes an onclose property, not an EventTarget

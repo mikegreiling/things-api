@@ -20,7 +20,7 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
-import { resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
+import { resolveAreaUuid, resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
@@ -67,6 +67,19 @@ import {
   type AreaScopedRead,
   type ViewFilterMeta,
 } from "./read/area-filter.ts";
+import {
+  filterListByScope,
+  filterSectionsByScope,
+  filterTodayByScope,
+  inScopeItem,
+  namedAreaClause,
+  namedProjectClause,
+  resolveScope,
+  scopeMeta,
+  taskMembershipClause,
+  type ResolvedScope,
+  type ScopeMeta,
+} from "./read/scope.ts";
 import { localToday } from "./model/dates.ts";
 import type { GroupedLimits } from "./read/sections.ts";
 import { resolveCap } from "./read/caps.ts";
@@ -143,6 +156,16 @@ export interface OpenOptions {
   vectors?: WriteVector[];
   /** Env for config/state-dir resolution (tests). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Container scope: a ref (uuid / uuid-prefix / unique area or project name)
+   * that jails this client to one container — reads see only in-scope rows,
+   * writes are refused (or redirected) outside it, and out-of-scope refs are
+   * indistinguishable from nonexistent ones. This is the MCP `--scope` flag's
+   * entry point and OUTRANKS `THINGS_API_SCOPE` / the stored `scope` config
+   * (the launcher's boundary must not be agent-overridable). Unresolvable →
+   * fail closed (ScopeResolutionError). See docs/design/container-scope.md.
+   */
+  scope?: string;
   /** Test seams for the mutation pipeline. */
   writeOverrides?: {
     ensureRunning?: (alreadyRunning: boolean) => Promise<boolean>;
@@ -251,6 +274,12 @@ function groupedCaps(
 export interface ThingsClient {
   dbPath: string;
   config: ThingsApiConfig;
+  /**
+   * The active container scope (pinned at open), or undefined when unscoped.
+   * The consumer surfaces surface it as the additive `meta.scope` and the
+   * one-line "scoped to …" banner so the jail is never silently on.
+   */
+  scope?: ScopeMeta;
   fingerprint(): FingerprintStatus;
   /**
    * The read-path schema check: the cached fingerprint comparison reduced to a
@@ -585,6 +614,35 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
   const defaultZone = clock.zone;
   const zoneOf = (o?: { zone?: string }): string | undefined => o?.zone ?? defaultZone;
   const config = loadConfig(env);
+  // Resolve the container scope ONCE (pinned for the client's life). Precedence:
+  // the explicit OpenOptions.scope (the MCP --scope flag) OUTRANKS the config
+  // layer's THINGS_API_SCOPE env / stored `scope`. Fail closed — an unresolvable
+  // requested scope throws ScopeResolutionError here (the daemon won't start).
+  const scopeRequest =
+    options.scope !== undefined ? { ref: options.scope, source: "flag" as const } : config.scope;
+  const scope: ResolvedScope | undefined =
+    scopeRequest !== null && scopeRequest !== undefined
+      ? resolveScope(conn.db, scopeRequest.ref, scopeRequest.source)
+      : undefined;
+  // Precomputed clauses for the scope-aware read resolvers (built once).
+  const scopeClauses =
+    scope !== undefined
+      ? {
+          task: taskMembershipClause(scope),
+          namedProject: namedProjectClause(scope),
+          namedArea: namedAreaClause(scope),
+        }
+      : undefined;
+  /** Resolve an `--area` filter ref scope-aware: an out-of-scope area is not-found (parity). */
+  const areaFilterTarget = (ref: string): ReturnType<typeof resolveAreaFilter> => {
+    if (scopeClauses !== undefined) {
+      resolveAreaUuid(conn.db, ref, {
+        scopeWhere: scopeClauses.namedArea.where,
+        scopeBinds: scopeClauses.namedArea.binds,
+      });
+    }
+    return resolveAreaFilter(conn.db, ref);
+  };
   let cachedStatus: FingerprintStatus | null = null;
   const fingerprint = (): FingerprintStatus => {
     cachedStatus ??= compareToBaseline(observeSchema(conn.db), BASELINES);
@@ -611,6 +669,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     // The consumer zone normalizes clock-relative `when` tokens (today/evening)
     // to explicit dates before dispatch; a per-write `zone` overrides it.
     ...(defaultZone !== undefined && { zone: defaultZone }),
+    // The pinned container scope: makes uuid targets resolve scope-aware and
+    // runs the universal scope gate for every write.
+    ...(scope !== undefined && { scope }),
     ...(options.writeOverrides?.ensureRunning !== undefined && {
       ensureRunning: options.writeOverrides.ensureRunning,
     }),
@@ -659,6 +720,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
   return {
     dbPath: located.path,
     config,
+    ...(scope !== undefined && { scope: scopeMeta(scope) }),
     fingerprint,
     schemaStatus: () => toSchemaStatus(fingerprint()),
     clockMeta: (zoneOverride) => buildClockMeta(clock, zoneOverride),
@@ -674,9 +736,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       // the additive `filter` field (surfaced as `meta.filter`).
       today: (o) => {
         let view = todayView(conn.db, now(), o, zoneOf(o));
+        // Scope filter first (the jail), then the per-call --area filter
+        // (an intersection); both size the survivors before the row cap.
+        if (scope !== undefined)
+          view = filterTodayByScope(view, scope, localToday(now(), zoneOf(o)));
         let filter: ViewFilterMeta | undefined;
         if (o?.area !== undefined) {
-          const target = resolveAreaFilter(conn.db, o.area);
+          const target = areaFilterTarget(o.area);
           view = filterTodayByArea(view, target.uuid, localToday(now(), zoneOf(o)));
           filter = { area: target };
         }
@@ -684,17 +750,19 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         return { view: data, truncation, ...(filter !== undefined && { filter }) };
       },
       inbox: (o) => {
-        const { data, truncation } = truncateList(
-          inboxView(conn.db, now(), o, zoneOf(o)),
-          listCap(o),
-        );
+        let items = inboxView(conn.db, now(), o, zoneOf(o));
+        // The Inbox is outside every container (captures have no area/project),
+        // so it is legitimately always empty under a scope — see the add-redirect.
+        if (scope !== undefined) items = filterListByScope(items, scope);
+        const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };
       },
       anytime: (o) => {
         let sections = anytimeView(conn.db, now(), o, zoneOf(o));
+        if (scope !== undefined) sections = filterSectionsByScope(sections, scope);
         let filter: ViewFilterMeta | undefined;
         if (o?.area !== undefined) {
-          const target = resolveAreaFilter(conn.db, o.area);
+          const target = areaFilterTarget(o.area);
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
@@ -706,9 +774,10 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       },
       upcoming: (o) => {
         let items = upcomingView(conn.db, now(), o, zoneOf(o));
+        if (scope !== undefined) items = filterListByScope(items, scope);
         let filter: ViewFilterMeta | undefined;
         if (o?.area !== undefined) {
-          const target = resolveAreaFilter(conn.db, o.area);
+          const target = areaFilterTarget(o.area);
           items = filterListByArea(items, target.uuid);
           filter = { area: target };
         }
@@ -717,9 +786,10 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       },
       someday: (o) => {
         let sections = somedayView(conn.db, now(), o, zoneOf(o));
+        if (scope !== undefined) sections = filterSectionsByScope(sections, scope);
         let filter: ViewFilterMeta | undefined;
         if (o?.area !== undefined) {
-          const target = resolveAreaFilter(conn.db, o.area);
+          const target = areaFilterTarget(o.area);
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
@@ -733,40 +803,67 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         // The bound is the truncation cap; the underlying query stays unbounded
         // (limit: null) so the exact total behind the cut is honest.
         const { limit: _limit, all: _all, ...filter } = o ?? {};
-        const { data, truncation } = truncateList(
-          logbookView(conn.db, now(), { ...filter, limit: null }, zoneOf(o)),
-          listCap(o),
-        );
+        let items = logbookView(conn.db, now(), { ...filter, limit: null }, zoneOf(o));
+        // Post-filter to in-scope logged/resolved rows (their area/project
+        // linkage survives logging, so inScopeItem resolves).
+        if (scope !== undefined) items = filterListByScope(items, scope);
+        const { data, truncation } = truncateList(items, listCap(o));
         // Logbook scopes to an area NATIVELY at the query level (its `area`
         // predicate implements the identical effective-area keep-rule); this
         // only resolves the target for the additive `filter` annotation so the
         // meta shape matches the post-filtered views.
-        const areaFilter =
-          o?.area !== undefined ? { area: resolveAreaFilter(conn.db, o.area) } : undefined;
+        const areaFilter = o?.area !== undefined ? { area: areaFilterTarget(o.area) } : undefined;
         return { items: data, truncation, ...(areaFilter !== undefined && { filter: areaFilter }) };
       },
       trash: (o) => {
-        const { data, truncation } = truncateList(
-          trashView(conn.db, now(), { limit: null }, zoneOf(o)),
-          listCap(o),
-        );
+        let items = trashView(conn.db, now(), { limit: null }, zoneOf(o));
+        // A trashed row keeps its area/project linkage until emptied, so
+        // inScopeItem still resolves — out-of-scope trash is invisible.
+        if (scope !== undefined) items = filterListByScope(items, scope);
+        const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };
       },
       // Thread the injected clock so `--overdue`'s (and later's) today boundary
       // rides the same clock as every other view — never a hardcoded date.
       projects: (o) => {
         const zone = zoneOf(o);
-        return projectsView(conn.db, { ...o, now: now(), ...(zone !== undefined && { zone }) });
+        const projects = projectsView(conn.db, {
+          ...o,
+          now: now(),
+          ...(zone !== undefined && { zone }),
+        });
+        // Area scope → projects in the area; project scope → the one scope project.
+        return scope !== undefined ? projects.filter((p) => inScopeItem(p, scope)) : projects;
       },
       projectView: (ref, o) =>
         projectView(
           conn.db,
-          resolveProjectUuid(conn.db, ref, { trashed: true }),
+          // Scope-aware resolve: an out-of-scope project ref is not-found (parity
+          // with a nonexistent one). Project scope → only the scope project;
+          // area scope → in-area projects; all children are in-scope by construction.
+          resolveProjectUuid(conn.db, ref, {
+            trashed: true,
+            ...(scopeClauses !== undefined && {
+              scopeWhere: scopeClauses.namedProject.where,
+              scopeBinds: scopeClauses.namedProject.binds,
+            }),
+          }),
           now(),
           o ?? {},
           zoneOf(o),
         ),
       areaView: (ref, o) => {
+        // Area scope → only the scope area is viewable; project scope → an area
+        // is broader than the jail, so ANY areaView is not-found. Resolve
+        // scope-aware first so an out-of-scope area throws the same not-found a
+        // nonexistent one does.
+        if (scope !== undefined) {
+          const clause =
+            scope.kind === "area"
+              ? scopeClauses!.namedArea
+              : { where: "0", binds: [] as (string | number)[] };
+          resolveAreaUuid(conn.db, ref, { scopeWhere: clause.where, scopeBinds: clause.binds });
+        }
         const { data, grouped } = capAreaSections(
           areaView(conn.db, ref, now(), o ?? {}, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
@@ -775,37 +872,71 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         );
         return { view: data, grouped };
       },
-      areas: () => areasView(conn.db),
+      areas: () => {
+        const areas = areasView(conn.db);
+        // Area scope → the one scope area; project scope → the project's own
+        // area only (its own context, not an oracle for sibling containers).
+        if (scope === undefined) return areas;
+        const keep = scope.kind === "area" ? scope.uuid : scope.areaUuid;
+        return areas.filter((a) => a.uuid === keep);
+      },
       tags: () => tagsView(conn.db),
       search: (query, o) => {
         const { limit: _limit, ...rest } = o ?? {};
-        const { data, truncation } = truncateList(
-          searchView(conn.db, query, { ...rest, limit: null }, now(), zoneOf(o)),
-          listCap(o),
-        );
+        let items = searchView(conn.db, query, { ...rest, limit: null }, now(), zoneOf(o));
+        // A title search is the classic oracle — post-filter to in-scope rows and
+        // recompute the truncation total over survivors (truncateList does this).
+        if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
+        const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };
       },
-      liteTitleSearch: (query, o) => liteTitleSearch(conn.db, query, o, now(), defaultZone),
+      liteTitleSearch: (query, o) => {
+        const result = liteTitleSearch(conn.db, query, o, now(), defaultZone);
+        if (scope === undefined) return result;
+        // Did-you-mean candidates are a title-match leak — keep only in-scope
+        // tasks; areas keep only the scope's own area context.
+        const keepArea = scope.kind === "area" ? scope.uuid : scope.areaUuid;
+        const candidates = result.candidates.filter((c) =>
+          c.kind === "area" ? c.area.uuid === keepArea : inScopeItem(c.task, scope),
+        );
+        return { ...result, candidates };
+      },
       changes: (o) => {
-        const { data, truncation } = truncateList(
-          changesView(conn.db, now(), { since: o.since, limit: null }, zoneOf(o)),
-          listCap(o),
-        );
+        let items = changesView(conn.db, now(), { since: o.since, limit: null }, zoneOf(o));
+        // No out-of-scope uuid may leak into the delta feed (rows are live
+        // TMTask, so the effective container resolves).
+        if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
+        const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };
       },
-      showTarget: (ref) => classifyShowTarget(conn.db, ref),
+      showTarget: (ref) => classifyShowTarget(conn.db, ref, scope),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
         // The injected clock gates `todaySection` to Today members under the
-        // consumer's own today (a pinned-clock/lab run reads honestly).
+        // consumer's own today (a pinned-clock/lab run reads honestly). Under a
+        // scope, an out-of-scope uuid resolves to not-found → null (parity).
         try {
-          return byUuid(conn.db, resolveTaskUuidPrefix(conn.db, uuid), now(), defaultZone);
+          return byUuid(
+            conn.db,
+            resolveTaskUuidPrefix(conn.db, uuid, "to-do", scopeClauses?.task),
+            now(),
+            defaultZone,
+          );
         } catch (err) {
           if (err instanceof RangeError && !err.message.includes("ambiguous")) return null;
           throw err;
         }
       },
-      snapshot: () => snapshotView(conn.db, now(), defaultZone),
+      snapshot: () => {
+        // A snapshot is a whole-library dump; a silently partial one under a
+        // scope is misleading. Refuse (a scoped-dump variant is deferred).
+        if (scope !== undefined) {
+          throw new RangeError(
+            "snapshot is a whole-library dump and is not available under an active container scope",
+          );
+        }
+        return snapshotView(conn.db, now(), defaultZone);
+      },
     },
     write: {
       run,
