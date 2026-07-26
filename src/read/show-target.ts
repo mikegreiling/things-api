@@ -23,6 +23,12 @@ import {
   resolveTaskUuidPrefix,
   stripThingsUri,
 } from "./queries.ts";
+import {
+  namedAreaClause,
+  namedProjectClause,
+  taskMembershipClause,
+  type ResolvedScope,
+} from "./scope.ts";
 
 export interface ShowTarget {
   kind: "to-do" | "project" | "area";
@@ -31,10 +37,30 @@ export interface ShowTarget {
   viaHeading?: boolean;
 }
 
-export function classifyShowTarget(db: DatabaseSync, ref: string): ShowTarget {
+/**
+ * Classify a loose show ref. Under an active container `scope`, every tier
+ * resolves scope-aware: an out-of-scope task/project/area is invisible, so it
+ * falls through to the SAME "no to-do, project, or area matches" not-found a
+ * nonexistent ref throws (no oracle). Under a PROJECT scope an area is never
+ * showable (broader than the jail), so area resolution is suppressed.
+ */
+export function classifyShowTarget(
+  db: DatabaseSync,
+  ref: string,
+  scope?: ResolvedScope,
+): ShowTarget {
   const stripped = stripThingsUri(ref);
+  const taskClause = scope !== undefined ? taskMembershipClause(scope) : undefined;
+  const projectClause = scope !== undefined ? namedProjectClause(scope) : undefined;
+  // Area scope → only the scope area; project scope → no area is showable.
+  const areaClause =
+    scope === undefined
+      ? undefined
+      : scope.kind === "area"
+        ? namedAreaClause(scope)
+        : { where: "0", binds: [] as (string | number)[] };
   try {
-    const uuid = resolveTaskUuidPrefix(db, stripped);
+    const uuid = resolveTaskUuidPrefix(db, stripped, "to-do", taskClause);
     const row = db.prepare("SELECT type, project FROM TMTask WHERE uuid = ?").get(uuid) as {
       type: number;
       project: string | null;
@@ -54,12 +80,30 @@ export function classifyShowTarget(db: DatabaseSync, ref: string): ShowTarget {
     if (!(err instanceof RangeError)) throw err;
   }
   try {
-    return { kind: "area", uuid: resolveAreaUuid(db, stripped, { prefixTier: false }) };
+    return {
+      kind: "area",
+      uuid: resolveAreaUuid(db, stripped, {
+        prefixTier: false,
+        ...(areaClause !== undefined && {
+          scopeWhere: areaClause.where,
+          scopeBinds: areaClause.binds,
+        }),
+      }),
+    };
   } catch {
     // fall through to project-name resolution
   }
   try {
-    return { kind: "project", uuid: resolveProjectUuid(db, stripped, { prefixTier: false }) };
+    return {
+      kind: "project",
+      uuid: resolveProjectUuid(db, stripped, {
+        prefixTier: false,
+        ...(projectClause !== undefined && {
+          scopeWhere: projectClause.where,
+          scopeBinds: projectClause.binds,
+        }),
+      }),
+    };
   } catch (err) {
     // An ambiguous project name lists its candidates — surface that verbatim.
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;

@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 
 import { loadConfig } from "./config.ts";
+import { resolveScope } from "./read/scope.ts";
 import { auditDir } from "./paths.ts";
 import { readAuditRecords, scanAuditIntegrity } from "./write/undo.ts";
 import { decodeRecurrenceRule } from "./model/recurrence.ts";
@@ -107,6 +108,19 @@ export interface DiagnoseReport {
   writes: {
     enabled: boolean;
     reason: string;
+  };
+  /**
+   * The active container scope (from THINGS_API_SCOPE / the stored `scope` key),
+   * so the jail is never silently on. `requested` is the raw ref (null when
+   * unscoped); `resolved` names the container it pins to (null when the ref no
+   * longer resolves — a fail-closed empty jail). The MCP `--scope` flag is
+   * per-process and not visible here.
+   */
+  scope: {
+    requested: string | null;
+    source: "env" | "config" | null;
+    resolved: { kind: "area" | "project"; uuid: string; title: string } | null;
+    detail: string;
   };
   experimental: {
     /** config allowExperimental (opt-in for private-surface capabilities). */
@@ -290,6 +304,32 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
     for (const t of observation.tables) {
       if (t.extraColumns.length > 0) extraColumns[t.table] = t.extraColumns;
     }
+    // Resolve the ambient scope (env / stored) for the report — the MCP flag is
+    // per-process and not visible here. A stored ref that no longer resolves is
+    // a fail-closed empty jail (reads empty, writes refused), reported as such.
+    const scopeReport: DiagnoseReport["scope"] = (() => {
+      if (config.scope == null) {
+        return { requested: null, source: null, resolved: null, detail: "unscoped" };
+      }
+      try {
+        const s = resolveScope(conn.db, config.scope.ref, config.scope.source);
+        return {
+          requested: config.scope.ref,
+          source: config.scope.source,
+          resolved: { kind: s.kind, uuid: s.uuid, title: s.title },
+          detail: `scoped to ${s.kind} "${s.title}" (source: ${config.scope.source})`,
+        };
+      } catch {
+        return {
+          requested: config.scope.ref,
+          source: config.scope.source,
+          resolved: null,
+          detail:
+            `scope "${config.scope.ref}" (source: ${config.scope.source}) resolves to no ` +
+            "container — a fail-closed empty jail (reads empty, writes refused). Clear or fix it.",
+        };
+      }
+    })();
     const report: DiagnoseReport = {
       db: {
         path: located.path,
@@ -316,6 +356,7 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
               ? "schema fingerprint deviates from baseline — writes disabled until revalidated"
               : "unknown databaseVersion — update things-api or revalidate",
       },
+      scope: scopeReport,
       experimental: {
         enabled: config.allowExperimental,
         sdefDeclaresReorder: sdefCanary,

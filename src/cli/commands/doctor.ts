@@ -107,6 +107,7 @@ export function registerDoctor(program: Command): void {
             ...report.fingerprint.detail.map((d) => `  drift: ${d}`),
             `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
             `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
+            `scope:       ${report.scope.detail}`,
             `experimental: ${report.experimental.reason}`,
             `environment: ${environmentLine(report.environment)}`,
             `automation:  ${report.automation.status}${

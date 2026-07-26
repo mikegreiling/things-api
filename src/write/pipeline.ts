@@ -16,6 +16,8 @@ import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
+import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "../read/scope.ts";
+import { evaluateScope } from "./scope-guard.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
 import { COMMANDS, type CommandSpec } from "./commands.ts";
 import {
@@ -146,7 +148,7 @@ export type MutationResult =
   | {
       kind: "blocked";
       op: OperationKind;
-      reason: "hazard" | "disruption-tier" | "drift" | "lock" | "environment" | "clock";
+      reason: "hazard" | "disruption-tier" | "drift" | "lock" | "environment" | "clock" | "scope";
       hazard?: HazardId;
       detail: string;
       remediation: string;
@@ -180,6 +182,12 @@ export interface WriteDeps {
   now?: () => Date;
   /** Default consumer IANA zone (client-resolved from THINGS_TZ); normalizes consumer `when` tokens. */
   zone?: string;
+  /**
+   * The active container scope (pinned at openThings). When set: uuid targets
+   * resolve scope-aware (out-of-scope == not-found parity), and the universal
+   * scope gate (evaluateScope) runs before the hazard guards. Absent = unscoped.
+   */
+  scope?: ResolvedScope;
   poller?: PollerDeps;
   pkgVersion?: string;
 }
@@ -337,17 +345,35 @@ export async function runMutation<K extends OperationKind>(
   // targets additionally accept a unique NAME (project titles are addressed
   // like areas/tags); to-do and heading targets stay uuid-only, differing only
   // in the entity noun their not-found copy names.
+  // Container scope (when active) makes target resolution scope-aware: an
+  // out-of-scope uuid/name resolves to "not found" through the IDENTICAL code
+  // path a nonexistent one does, so the two are byte-indistinguishable (the
+  // no-oracle guarantee — parity fires HERE, before pre-read/guards). Tag reads
+  // are exempt, but no write op resolves a tag through `uuid`.
+  const scope = deps.scope;
+  const taskScope = scope !== undefined ? taskMembershipClause(scope) : undefined;
   const p = params as Record<string, unknown>;
   if (typeof p["uuid"] === "string") {
     const uuid = op.startsWith("project.")
-      ? resolveProjectWriteTarget(deps.db, p["uuid"])
-      : resolveTaskUuidPrefix(deps.db, p["uuid"], op.startsWith("heading.") ? "heading" : "to-do");
+      ? resolveProjectWriteTarget(
+          deps.db,
+          p["uuid"],
+          scope !== undefined ? { task: taskScope!, named: namedProjectClause(scope) } : undefined,
+        )
+      : resolveTaskUuidPrefix(
+          deps.db,
+          p["uuid"],
+          op.startsWith("heading.") ? "heading" : "to-do",
+          taskScope,
+        );
     params = { ...params, uuid };
   }
   if (Array.isArray(p["uuids"])) {
     params = {
       ...params,
-      uuids: (p["uuids"] as string[]).map((u) => resolveTaskUuidPrefix(deps.db, u, "item")),
+      uuids: (p["uuids"] as string[]).map((u) =>
+        resolveTaskUuidPrefix(deps.db, u, "item", taskScope),
+      ),
     };
   }
   const spec = COMMANDS[op] as CommandSpec<K>;
@@ -429,8 +455,29 @@ export async function runMutation<K extends OperationKind>(
   }
 
   try {
-    // 3. Pre-read + guards.
+    // 3. Pre-read.
     const pre = spec.preRead(deps.db, params, deps.now?.() ?? new Date());
+
+    // 3a. Universal container-scope gate — runs for EVERY op (unlike hazards),
+    // BEFORE evaluateGuards so a scope refusal precedes any hazard copy. It may
+    // rewrite `pre` (add-redirect defaulting; nullifying an out-of-scope
+    // destination so H-UNKNOWN-DESTINATION fires with parity). Target-in-scope
+    // parity already fired at resolution above.
+    if (scope !== undefined) {
+      const decision = evaluateScope(deps.db, op, params as Record<string, unknown>, pre, scope);
+      if (decision.kind === "blocked") {
+        audit({ result: blockedCode({ reason: "scope" }) });
+        return {
+          kind: "blocked",
+          op,
+          reason: "scope",
+          detail: decision.detail,
+          remediation: decision.remediation,
+        };
+      }
+    }
+
+    // 3b. Guards.
     const acks: Acknowledgements = {
       ...(options.acknowledgeChecklistReset !== undefined && {
         acknowledgeChecklistReset: options.acknowledgeChecklistReset,
