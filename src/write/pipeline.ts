@@ -47,7 +47,14 @@ import {
   type PreModDates,
   type RepeatingDiscovery,
 } from "./verify/delta.ts";
-import { pollUntilVerified, type PollerDeps } from "./verify/poller.ts";
+import { pollUntilVerified, type PollerDeps, type PollOutcome } from "./verify/poller.ts";
+
+/**
+ * Bounded backoff for the post-transport-failure re-verify (0½ defect (a)): a
+ * GUI drive can abort part-way yet still have LANDED the change, so a nonzero
+ * transport exit is re-verified over ~2s before the write is declared lost.
+ */
+const RECOVERY_VERIFY_TIMEOUT_MS = 2000;
 
 export interface WriteOptions extends Acknowledgements {
   /** Caps vector selection; defaults from the config profile. */
@@ -582,6 +589,50 @@ export async function runMutation<K extends OperationKind>(
       };
     }
 
+    // Capture the pre-read once — reused by the pre-drive idempotency check
+    // below, the M3 intent record, and the post-verify movement classification.
+    const preCapture = capturePre(delta, deps, pre);
+
+    // 5a½. Pre-drive idempotency (ui vector, update/state deltas): the GUI drive
+    // is the most disruptive vector (tier 3, foregrounds the app). Before
+    // driving, check whether the requested end-state ALREADY holds — a
+    // reschedule to the rule the template already carries, a pause of an
+    // already-paused repeat. If it does, succeed as a no-op with the observed
+    // state and NO GUI drive (0½ defect (a): idempotency-aware, pre-drive
+    // direction). This reads the DB only; the app is never launched. Scoped to
+    // update/state deltas so a create-mode probe (make-repeating / convert)
+    // never short-circuits on a coincidental recent row.
+    if (vector.id === "ui" && (delta.mode === "update" || delta.mode === "state")) {
+      const preReader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
+      const preEval = evaluateDelta(delta, preReader, preCapture);
+      if (preEval.satisfied) {
+        const uuid = delta.uuid;
+        audit({
+          result: "ok",
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+          pre: flattenPreFields(preCapture.fields),
+          observed: preEval.observed,
+          verify: { attempts: 0, elapsedMs: 0 },
+          uuid,
+        });
+        return {
+          kind: "ok",
+          op,
+          uuid,
+          ...(pre.target !== null && { title: pre.target.title }),
+          observed: preEval.observed,
+          vector: vector.id,
+          tier: effectiveTier,
+          // No undoToken: nothing changed, so there is nothing to invert.
+          warnings: [
+            "the item was already in the requested state — no GUI drive was performed (idempotent no-op)",
+          ],
+        };
+      }
+    }
+
     // 5b. Shortcuts availability gate: the proxy the invocation names must be
     // installed. A missing proxy is a setup problem, not a failed write — the
     // app is never touched. (Skipped for dry-run above, which only compiles.)
@@ -632,8 +683,6 @@ export async function runMutation<K extends OperationKind>(
         ? diffEnvironment(deps.environment.load(), deps.environment.capture())
         : [];
 
-    const preCapture = capturePre(delta, deps, pre);
-
     // M3 durability: record the INTENT to mutate BEFORE the app is touched.
     // The guards have passed and the invocation is compiled, so this carries
     // op/uuid/actor/redacted invocation/startedAt (+ the captured pre-state).
@@ -658,31 +707,6 @@ export async function runMutation<K extends OperationKind>(
     });
 
     const executeResult = await vector.execute(invocation);
-    if (executeResult.exitCode !== 0 || executeResult.timedOut === true) {
-      audit({
-        result: verifyFailedCode({ reason: "silent-noop" }),
-        vector: vector.id,
-        disruption: effectiveTier,
-        invocation: invocation.redactedPayload,
-        pre: flattenPreFields(preCapture.fields),
-      });
-      return withHint(
-        {
-          kind: "verify-failed" as const,
-          op,
-          reason: "silent-noop" as const,
-          expected: delta,
-          observed: null,
-          detail: `transport failed (exit ${executeResult.exitCode ?? "?"}${executeResult.timedOut === true ? ", timed out" : ""}): ${executeResult.stderr.trim()}`,
-        },
-        classifyTransportFailure({
-          vector: vector.id,
-          stderr: executeResult.stderr,
-          timedOut: executeResult.timedOut === true,
-          environmentChanges: envChanges,
-        }),
-      );
-    }
 
     // Verify under the injected clock (deps.now/deps.zone), never the wall
     // clock: an `evening`/`today` write dated pinned-today must read back IN
@@ -690,11 +714,63 @@ export async function runMutation<K extends OperationKind>(
     // pinned THINGS_NOW (bench-caught #211 regression).
     const reader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
     const timeoutMs = options.verifyTimeoutMs ?? (appRunning ? 6000 : 10_000);
-    const outcome = await pollUntilVerified(
-      () => evaluateDelta(delta, reader, preCapture),
-      timeoutMs,
-      deps.poller ?? {},
-    );
+
+    let outcome: PollOutcome;
+    // Whether a nonzero-transport drive was RESCUED by the recovery re-verify —
+    // the change landed despite the reported failure (surfaced as a loud warning
+    // on the ok result so the caller does NOT retry and clobber it).
+    let transportRecovered = false;
+    if (executeResult.exitCode !== 0 || executeResult.timedOut === true) {
+      // The transport reported failure (nonzero exit / deadline kill). A GUI
+      // drive can abort PART-WAY yet still have LANDED the change — the
+      // field-report incident (0½ (a)): the after-completion unit step errored on
+      // a pluralized menu item, but the dialog had already inherited the correct
+      // unit/interval, so the rule was applied before the abort. Rather than
+      // declaring the write lost (and inviting a clobbering retry), RE-VERIFY
+      // with bounded backoff and treat a landed target state as SUCCESS.
+      const recovery = await pollUntilVerified(
+        () => evaluateDelta(delta, reader, preCapture),
+        RECOVERY_VERIFY_TIMEOUT_MS,
+        deps.poller ?? {},
+      );
+      if (recovery.kind !== "ok") {
+        audit({
+          result: verifyFailedCode({ reason: "silent-noop" }),
+          vector: vector.id,
+          disruption: effectiveTier,
+          invocation: invocation.redactedPayload,
+          pre: flattenPreFields(preCapture.fields),
+          observed: recovery.observed,
+        });
+        return withHint(
+          {
+            kind: "verify-failed" as const,
+            op,
+            reason: "silent-noop" as const,
+            expected: delta,
+            observed: recovery.observed,
+            detail:
+              `transport failed (exit ${executeResult.exitCode ?? "?"}${executeResult.timedOut === true ? ", timed out" : ""})` +
+              `${executeResult.stderr.trim() !== "" ? `: ${executeResult.stderr.trim()}` : ""}` +
+              " — and a follow-up re-read found no landed change",
+          },
+          classifyTransportFailure({
+            vector: vector.id,
+            stderr: executeResult.stderr,
+            timedOut: executeResult.timedOut === true,
+            environmentChanges: envChanges,
+          }),
+        );
+      }
+      outcome = recovery;
+      transportRecovered = true;
+    } else {
+      outcome = await pollUntilVerified(
+        () => evaluateDelta(delta, reader, preCapture),
+        timeoutMs,
+        deps.poller ?? {},
+      );
+    }
 
     const auditCommon = {
       vector: vector.id,
@@ -733,6 +809,12 @@ export async function runMutation<K extends OperationKind>(
               ...(options.txn !== undefined && { txn: options.txn }),
             });
       const warnings: string[] = [];
+      if (transportRecovered) {
+        warnings.push(
+          "the GUI drive reported a transport error, but a follow-up re-read confirmed the " +
+            "requested change DID land — no retry is needed (retrying could overwrite it)",
+        );
+      }
       if (outcome.repeatingWarnings !== undefined) warnings.push(...outcome.repeatingWarnings);
       if (vector.id === "ui") {
         warnings.push(

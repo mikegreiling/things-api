@@ -49,14 +49,21 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
     status: "lab-certified",
     evidence: ["UI1", "UI2-a", "UIC1-a", "UIC6-a"],
   },
-  "todo.reschedule-repeat": { status: "lab-certified", evidence: ["UI2-b", "UIC1-a", "UIC6-k"] },
+  "todo.reschedule-repeat": {
+    status: "lab-certified",
+    // UIC7-b: the fixed→after-completion CONVERSION (0½ item 1) drives + verifies
+    // + reports success live; caveat: a →fixed reschedule with interval > 1 hits
+    // the interval-field re-layout race (oddities §8l addendum) and fail-closes
+    // honestly (verify-failed:mismatch, observed interval 1).
+    evidence: ["UI2-b", "UIC1-a", "UIC6-k", "UIC7-b"],
+  },
   "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },

@@ -143,6 +143,9 @@ describe("ui driver — fail-closed", () => {
       ],
     };
     const { run, commands } = mockRunner((c) => {
+      // The sheet-open probe (a resolve carrying the sheetOpen script) reports the
+      // sheet GONE after the abort — so the report may claim a confirmed dismissal.
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
       if (c.primitive === "resolve") return ok("true"); // canary passes
       if (c.primitive === "wait") return ok("false"); // dialog never appears
       return ok();
@@ -151,11 +154,83 @@ describe("ui driver — fail-closed", () => {
     const res = await vector.execute(invocation(recipe));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("stopped at");
-    expect(res.stderr).toContain("dismissed (Escape)");
+    // (d) The dismissal was VERIFIED gone before it was claimed.
+    expect(res.stderr).toContain("dismissed (Escape, confirmed gone)");
     // The Escape abort keystroke was sent (key code 53).
     expect(commands.some((c) => c.primitive === "key" && c.script?.includes("key code 53"))).toBe(
       true,
     );
+  });
+
+  it("(d) warns the sheet MAY REMAIN OPEN when Escape does not dismiss it (fail-closed honesty)", async () => {
+    const recipe: UiRecipe = {
+      op: "todo.make-repeating",
+      targetUuid: "TODO-1",
+      steps: [
+        {
+          primitive: "press",
+          label: "open the dialog",
+          path: `menu item "Repeat…" of menu "Items" of menu bar 1`,
+          addressing: "title",
+        },
+        {
+          primitive: "wait",
+          label: "the Repeat dialog",
+          path: `sheet 1`,
+          timeoutMs: 1,
+          dynamic: true,
+        },
+      ],
+    };
+    // The sheet-open probe keeps reporting the sheet PRESENT after both Escapes.
+    const { run, commands } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("true");
+      if (c.primitive === "resolve") return ok("true");
+      if (c.primitive === "wait") return ok("false");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(recipe));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("may still be open");
+    expect(res.stderr).not.toContain("confirmed gone");
+    // Escape was retried ONCE (two key-code-53 sends).
+    const escapes = commands.filter(
+      (c) => c.primitive === "key" && c.script?.includes("key code 53"),
+    );
+    expect(escapes.length).toBe(2);
+  });
+
+  it("(e) blames a leftover OPEN SHEET first when the canary cannot resolve the menu path", async () => {
+    // The canary miss is really a modal sheet from an earlier aborted drive
+    // disabling the menu bar — diagnose THAT, not a Things-update/language guess.
+    const { run } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("true");
+      if (c.primitive === "resolve") return ok("false"); // canary element never resolves
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("preflight refused");
+    expect(res.stderr).toContain("modal sheet");
+    expect(res.stderr).toContain("Dismiss the open sheet");
+    // It must NOT fall back to the generic guesses when a sheet is detected.
+    expect(res.stderr).not.toContain("may not be in English");
+  });
+
+  it("(e) falls back to the generic canary guesses when NO sheet is open", async () => {
+    const { run } = mockRunner((c) => {
+      if (c.primitive === "resolve" && c.script?.includes("sheetOpen") === true) return ok("false");
+      if (c.primitive === "resolve") return ok("false");
+      return ok();
+    });
+    const vector = createUiVector(config(true), run);
+    const res = await vector.execute(invocation(pauseRepeatRecipe("TODO-1")));
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain("preflight refused");
+    expect(res.stderr).toContain("may not be in English");
+    expect(res.stderr).not.toContain("modal sheet");
   });
 });
 
@@ -258,6 +333,127 @@ describe("ui vector — two-key gating", () => {
     );
     expect(res.kind).toBe("verify-failed");
     if (res.kind === "verify-failed") expect(res.reason).toBe("silent-noop");
+  });
+});
+
+// ---- defect (a): idempotency + transport-failure recovery -----------------
+
+/** A weekly / interval-2 recurrence rule blob, fixed OR after-completion (tp). */
+function ruleXml(type: "fixed" | "after-completion"): string {
+  return (
+    `<?xml version="1.0"?><plist version="1.0"><dict>` +
+    `<key>tp</key><integer>${type === "fixed" ? 0 : 1}</integer>` +
+    `<key>fu</key><integer>256</integer><key>fa</key><integer>2</integer>` +
+    `<key>ts</key><integer>0</integer><key>rc</key><integer>0</integer>` +
+    `<key>rrv</key><integer>4</integer>` +
+    `<key>of</key><array><dict><key>wd</key><integer>1</integer></dict></array>` +
+    `</dict></plist>`
+  );
+}
+
+/** A ui vector with a custom execute() — records whether it ran + optional DB effect. */
+function scriptedUiVector(execute: () => Promise<{ exitCode: number; effect?: () => void }>): {
+  vector: WriteVector;
+  ran: () => boolean;
+} {
+  let didRun = false;
+  const base = createUiVector(config(true), async () => ok("true"));
+  return {
+    ran: () => didRun,
+    vector: {
+      id: "ui",
+      matrix: base.matrix,
+      async execute() {
+        didRun = true;
+        const r = await execute();
+        r.effect?.();
+        return { exitCode: r.exitCode, stdout: "", stderr: r.exitCode === 0 ? "" : "aborted" };
+      },
+    },
+  };
+}
+
+describe("ui vector — idempotency + transport recovery (defect (a))", () => {
+  it("pre-drive idempotency: the rule already equals the target → ok no-op, NO GUI drive", async () => {
+    const uuid = seedTodo(fixture.db, {
+      title: "R",
+      recurrenceRuleXml: ruleXml("after-completion"),
+    });
+    const scripted = scriptedUiVector(async () => ({ exitCode: 0 }));
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, frequency: "weekly", interval: 2, afterCompletion: true },
+      { dangerouslyDriveGui: true },
+    );
+    expect(res.kind).toBe("ok");
+    expect(scripted.ran()).toBe(false); // the app was never driven
+    if (res.kind === "ok") {
+      expect((res.warnings ?? []).join(" ")).toContain("already in the requested state");
+      expect(res.undoToken).toBeUndefined(); // nothing changed → nothing to undo
+    }
+  });
+
+  it("post-drive-failure recovery: transport aborts but the conversion landed → ok, DID-land warning", async () => {
+    // The incident's exact shape: a fixed→after-completion reschedule whose drive
+    // aborts on the pluralized unit pop-up, yet the rule was applied by inheritance
+    // before the abort. Transport exit 1, but the after-completion rule is in the DB.
+    const uuid = seedTodo(fixture.db, { title: "R", recurrenceRuleXml: ruleXml("fixed") });
+    const scripted = scriptedUiVector(async () => ({
+      exitCode: 1, // aborted mid-drive
+      effect: () => {
+        fixture.db
+          .prepare(
+            "UPDATE TMTask SET rt1_recurrenceRule = ?, userModificationDate = ? WHERE uuid = ?",
+          )
+          .run(
+            new TextEncoder().encode(ruleXml("after-completion")),
+            Math.floor(NOW.getTime() / 1000) + 1,
+            uuid,
+          );
+      },
+    }));
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, frequency: "weekly", interval: 2, afterCompletion: true },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 500 },
+    );
+    expect(res.kind).toBe("ok"); // NOT a false failure
+    if (res.kind === "ok") {
+      expect((res.warnings ?? []).join(" ")).toContain("DID land");
+    }
+  });
+
+  it("post-drive-failure with NO landed change → verify-failed silent-noop (honest failure)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "R", recurrenceRuleXml: ruleXml("fixed") });
+    const scripted = scriptedUiVector(async () => ({ exitCode: 1 })); // aborts, changes nothing
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, frequency: "weekly", interval: 2, afterCompletion: true },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 300 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    if (res.kind === "verify-failed") {
+      expect(res.reason).toBe("silent-noop");
+      expect(res.detail).toContain("no landed change");
+    }
+  });
+
+  it("type-conversion is VERIFIABLE: fixed→after-completion asserts the rule type flipped", async () => {
+    // Both rules are weekly/interval-2 — only the type changes. Without the type
+    // assertion a botched drive that stayed fixed would falsely verify-pass.
+    const uuid = seedTodo(fixture.db, { title: "R", recurrenceRuleXml: ruleXml("fixed") });
+    const scripted = scriptedUiVector(async () => ({ exitCode: 0 })); // "succeeds" but changes nothing
+    const res = await runMutation(
+      deps(scripted.vector, config(true)),
+      "todo.reschedule-repeat",
+      { uuid, frequency: "weekly", interval: 2, afterCompletion: true },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 300 },
+    );
+    // The rule is still fixed → the type assertion catches the no-op.
+    expect(res.kind).toBe("verify-failed");
   });
 });
 
