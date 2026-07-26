@@ -142,6 +142,11 @@ describe("template disambiguation — source fingerprint tiebreak", () => {
       expect(evaluation.terminal).toBe(true);
       expect(evaluation.detail).toContain("refusing to guess");
       expect(evaluation.repeating).toBeUndefined();
+      // The caller still gets the CANDIDATE template uuids for inspection/cleanup.
+      expect(evaluation.observed?.["repeating.candidateTemplateUuids"]).toEqual(
+        expect.arrayContaining(["TMPL-A", "TMPL-B"]),
+      );
+      expect(evaluation.detail).toContain("candidate template uuids");
     });
   });
 });
@@ -264,6 +269,39 @@ describe("make-repeating rule verification — the interval-field race guard (od
     expect(evaluation.assertedMovement).toBe(true); // → poller returns "mismatch", not silent-noop
     expect(evaluation.detail).toContain("does not match the request");
     expect(evaluation.observed?.["repeating.rule.interval"]).toBe(1);
+  });
+
+  it("mismatch failure carries the SUCCESSOR discovery for cleanup (template + instance + fate)", () => {
+    // The source uuid is destroyed on an identity-replacement make-repeating, so
+    // the mismatch verdict must hand back the new template + FK instance + the
+    // replaced source so the caller can reschedule/delete the mis-configured one.
+    const evaluation = withDb((db) => {
+      const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
+      const params = { uuid: source, frequency: "weekly" as const, interval: 2 };
+      const pre = COMMANDS["todo.make-repeating"].preRead(db, params, NOW);
+      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source); // identity replacement
+      const template = seedTodo(db, {
+        uuid: "TMPL",
+        title: "Chores",
+        recurrenceRuleXml: weeklyRuleXml(1), // WRONG: interval 1, requested 2
+        creationDate: NOW_EPOCH,
+      });
+      seedTodo(db, {
+        uuid: "INST",
+        title: "Chores",
+        repeatingTemplate: template,
+        creationDate: NOW_EPOCH,
+      });
+      const spec = COMMANDS["todo.make-repeating"].expectedDelta(pre, params, CTX);
+      if (spec.mode !== "create") throw new Error("unreachable");
+      return { source, evaluation: evaluateDelta(spec, createDbReader(db, NOW), EMPTY_PRE) };
+    });
+    const o = evaluation.evaluation.observed;
+    expect(o?.["repeating.templateUuid"]).toBe("TMPL");
+    expect(o?.["repeating.instanceUuid"]).toBe("INST"); // derived via the template FK
+    expect(o?.["repeating.replacedUuid"]).toBe(evaluation.source); // the destroyed original
+    expect(evaluation.evaluation.detail).toContain("uuid TMPL");
+    expect(evaluation.evaluation.detail).toContain("included for cleanup");
   });
 
   it("CORRECT interval landed (2 requested, 2 minted) → satisfied", () => {
