@@ -150,20 +150,23 @@ The supported vocabulary:
 
 Explicitly **NOT settable** (permanently, until Cultured Code ships an API): the reminder time-of-day inside the repeat dialog — the `AXDateTimeArea` control ignores committed programmatic writes and both workarounds are proven dead (REM1); the dialog's no-reminder default stands.
 
-### MCP tools (6, per-intent)
+### MCP tools (multiplexers, per-intent)
 
-Grouped by intent like the existing `set_project_status`, not one-tool-per-op:
+The recurrence ops ship as ONE `repeat` multiplexer tool keyed on `scope` (`todo` \| `project`) + `action` (`start` \| `reschedule` \| `pause` \| `resume` \| `create`), not one-tool-per-op; convert-to-project is an `action` on the `heading` tool, and sidebar area reorder is `scope: areas` on the `reorder` tool:
 
-| MCP tool | Dispatches to | Extra params |
+| MCP call | Dispatches to | Extra params |
 |---|---|---|
-| `make_repeating` | `todo.make-repeating` | `frequency`, `interval` |
-| `reschedule_repeat` | `todo.reschedule-repeat` | `frequency`, `interval` |
-| `set_repeat_state` | `todo.pause-repeat` / `resume-repeat` | `state: pause \| resume` |
-| `reschedule_project_repeat` | `project.reschedule-repeat` | `frequency`, `interval` |
-| `set_project_repeat_state` | `project.pause-repeat` / `resume-repeat` | `state: pause \| resume` |
-| `convert_to_project` | `todo.convert-to-project` / `heading.convert-to-project` (dispatches on whether the uuid is a to-do or a heading) | — |
+| `repeat` `{scope: todo, action: start}` | `todo.make-repeating` | `frequency`, `interval` |
+| `repeat` `{scope: todo, action: reschedule}` | `todo.reschedule-repeat` | `frequency`, `interval` |
+| `repeat` `{scope: todo, action: pause \| resume}` | `todo.pause-repeat` / `resume-repeat` | (the `action` selects) |
+| `repeat` `{scope: project, action: start}` | `project.make-repeating` | `frequency`, `interval` |
+| `repeat` `{scope: project, action: reschedule}` | `project.reschedule-repeat` | `frequency`, `interval` |
+| `repeat` `{scope: project, action: pause \| resume}` | `project.pause-repeat` / `resume-repeat` | (the `action` selects) |
+| `repeat` `{scope: project, action: create}` | `project.create-repeating` composite | `title`, `frequency`, `interval`, optional `area` |
+| `heading` `{action: convert_to_project}` | `todo.convert-to-project` / `heading.convert-to-project` (dispatches on whether the uuid is a to-do or a heading) | — |
+| `reorder` `{scope: areas}` | `area.reorder` | `target`, one of `before`/`after`/`position` |
 
-Every ui MCP tool takes `dangerously_drive_gui` and `dry_run`; the two rule tools additionally take `frequency` + `interval`.
+Every ui MCP call takes `dangerously_drive_gui` and `dry_run`; the `start`/`reschedule`/`create` actions additionally take `frequency` + `interval`.
 
 ## Certification-status machinery
 

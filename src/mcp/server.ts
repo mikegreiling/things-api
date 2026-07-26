@@ -1837,7 +1837,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "friday",
     "saturday",
   ]);
-  // The base rule (also used by create_repeating_project, which stays minimal —
+  // The base rule (also used by the repeat tool's create action, which stays minimal —
   // its own `deadline` is the project's due DATE, not the repeat's Add-deadlines).
   const baseRepeatShape = {
     frequency: z.enum(["daily", "weekly", "monthly", "yearly"]).describe("How often it repeats"),

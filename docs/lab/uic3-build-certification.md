@@ -58,7 +58,7 @@ Semantics are identical to the to-do ops (shared recurrence codec + Repeat edito
 
 ## Stop family (build item 4) — dropped
 
-- **`todo.stop-repeat` removed** from the operation catalog / CLI (`things todo stop-repeat`) / MCP (`set_repeat_state` now `pause | resume` only) / certification manifest / reversibility + undo tables. It shipped blocked-uncertified in #137 and never worked: its Stop popover lives only on the open to-do **card**, reachable only by a mouse double-click, and UIC2-d re-confirmed no menu/AX surface exposes it.
+- **`todo.stop-repeat` removed** from the operation catalog / CLI (`things todo stop-repeat`) / MCP (the `repeat` tool's `action` enum now `pause | resume` only for the state toggle, no `stop`) / certification manifest / reversibility + undo tables. It shipped blocked-uncertified in #137 and never worked: its Stop popover lives only on the open to-do **card**, reachable only by a mouse double-click, and UIC2-d re-confirmed no menu/AX surface exposes it.
 - **No `project.stop-repeat` built.** The project Stop *works* (repeat bar ▸ Stop, an identity-replacement un-repeat), but **stopping then selecting the demoted project crashes Things** (CRASH1, reproduced 2/2 in UIC2-c → oddities §7 C5). Any future implementation must never auto-reveal the demoted result; it is parked, not shipped.
 
 ## Environment

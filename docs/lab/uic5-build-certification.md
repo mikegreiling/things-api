@@ -34,7 +34,7 @@ The coercion is **cleanup-free** (UIC4-c/d: make-repeating normalizes `start`=2 
 
 ### `project.create-repeating` composite (`runCreateRepeatingProject`)
 
-The roadmap two-step (ruling #2): `project.add` (url-scheme, seeded `when=someday` when no area is given, or into the target area — UIC4-f, so the promote lands directly on a pure-AX path) THEN promote via `runMakeRepeatingProject`. **Non-atomic**: the created project persists even if the promote refuses. Reversibility: **irreversible** (the promote destroys the created uuid). Exposed as CLI `things project create-repeating <title> …` and MCP `create_repeating_project`.
+The roadmap two-step (ruling #2): `project.add` (url-scheme, seeded `when=someday` when no area is given, or into the target area — UIC4-f, so the promote lands directly on a pure-AX path) THEN promote via `runMakeRepeatingProject`. **Non-atomic**: the created project persists even if the promote refuses. Reversibility: **irreversible** (the promote destroys the created uuid). Exposed as CLI `things project create-repeating <title> …` and MCP `repeat` with `{scope: project, action: create}`.
 
 ## UIC5 verdicts (executed 2026-07-15)
 
