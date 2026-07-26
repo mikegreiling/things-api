@@ -219,7 +219,7 @@ describe("namespace implied-show — `things <type> <subject>`", () => {
     }
   });
 
-  it("does not fire on config (a non-type group whose show takes no ref)", () => {
+  it("does not fire on config (a non-type group; its reader is config get)", () => {
     const r = resolve(["config", "foo"]);
     expect(r.form).toBe("canonical");
     expect(r.argv).toEqual(["config", "foo"]);

@@ -45,6 +45,35 @@ const PROFILE_DEFAULT_TIER: Record<Profile, DisruptionTier> = {
   "dedicated-server": 2,
 };
 
+/**
+ * A THINGS_API_* boolean override. Returns the forced value when the env var
+ * holds a recognized token, or undefined when unset/unrecognized (so the
+ * caller falls through to stored config, then the built-in default). The
+ * override is BIDIRECTIONAL — a recognized value always wins over stored
+ * config, so an env var can force a vector off as well as on. `trueToken` /
+ * `falseToken` let THINGS_API_AUDIT keep its legacy on/off vocabulary while
+ * the vectors use true/false.
+ */
+function boolEnvOverride(
+  raw: string | undefined,
+  trueToken: string,
+  falseToken: string,
+): boolean | undefined {
+  if (raw === trueToken) return true;
+  if (raw === falseToken) return false;
+  return undefined;
+}
+
+/** THINGS_API_PROFILE override, or undefined when unset/unrecognized. */
+function profileEnvOverride(raw: string | undefined): Profile | undefined {
+  return raw === "workstation" || raw === "dedicated-server" ? raw : undefined;
+}
+
+/** THINGS_API_MAX_DISRUPTION override, or undefined when unset/unrecognized. */
+function tierEnvOverride(raw: string | undefined): DisruptionTier | undefined {
+  return raw !== undefined && /^[0-3]$/.test(raw) ? (Number(raw) as DisruptionTier) : undefined;
+}
+
 interface ConfigFile {
   profile?: Profile;
   maxDisruption?: DisruptionTier;
@@ -70,17 +99,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     }
   }
 
+  // Precedence for every key: env > stored > default. A recognized env value
+  // always wins over stored config; an unset/unrecognized one falls through.
   const profile: Profile =
-    env["THINGS_API_PROFILE"] === "dedicated-server" || file.profile === "dedicated-server"
-      ? "dedicated-server"
-      : "workstation";
+    profileEnvOverride(env["THINGS_API_PROFILE"]) ?? file.profile ?? "workstation";
 
-  const envTier = env["THINGS_API_MAX_DISRUPTION"];
-  const maxDisruption = (
-    envTier !== undefined && /^[0-3]$/.test(envTier)
-      ? Number(envTier)
-      : (file.maxDisruption ?? PROFILE_DEFAULT_TIER[profile])
-  ) as DisruptionTier;
+  const maxDisruption: DisruptionTier =
+    tierEnvOverride(env["THINGS_API_MAX_DISRUPTION"]) ??
+    file.maxDisruption ??
+    PROFILE_DEFAULT_TIER[profile];
 
   let username = "unknown";
   try {
@@ -89,17 +116,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     // leave "unknown"
   }
 
+  const auditEnv = boolEnvOverride(env["THINGS_API_AUDIT"], "on", "off");
+  const experimentalEnv = boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false");
+  const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
+
   return {
     profile,
     maxDisruption,
     actor: env["THINGS_API_ACTOR"] ?? file.actor ?? `${username}@cli`,
-    auditEnabled: env["THINGS_API_AUDIT"] === "off" ? false : (file.auditEnabled ?? true),
+    auditEnabled: auditEnv ?? file.auditEnabled ?? true,
     acceptedFingerprint: file.acceptedFingerprint ?? null,
-    allowExperimental:
-      env["THINGS_API_ALLOW_EXPERIMENTAL"] === "true" || file.allowExperimental === true,
-    ui: {
-      enabled: env["THINGS_API_UI_ENABLED"] === "true" || file.uiEnabled === true,
-    },
+    allowExperimental: experimentalEnv ?? file.allowExperimental ?? false,
+    ui: { enabled: uiEnv ?? file.uiEnabled ?? false },
     host: hostname(),
   };
 }
@@ -133,12 +161,14 @@ export function saveConfigKey(
  * One config key's effective value and where it came from. `key` is the
  * `things config set` / `things config get` spelling; `value` is the effective
  * value after env override → stored file → built-in default; `source` says which
- * of those three supplied it.
+ * layer supplied it. `derived` marks a read-only value computed from the
+ * environment (`host`) or from another key (the profile-derived `maxDisruption`
+ * default) rather than settable directly.
  */
 export interface ConfigKeyView {
   key: string;
   value: string | number | boolean | null;
-  source: "env" | "stored" | "default";
+  source: "env" | "stored" | "default" | "derived";
 }
 
 function readConfigFile(env: NodeJS.ProcessEnv): ConfigFile {
@@ -158,7 +188,8 @@ function readConfigFile(env: NodeJS.ProcessEnv): ConfigFile {
  * backing `things config get`. Env/stored/default detection mirrors
  * {@link loadConfig} exactly, so a key reads `env` only when an env var actually
  * overrode it (a THINGS_API_* value that loadConfig honors), `stored` when the
- * on-disk config supplied it, and `default` otherwise.
+ * on-disk config supplied it, `derived` for a read-only value computed from the
+ * environment or another key, and `default` otherwise.
  */
 function configKeyView(
   key: string,
@@ -172,27 +203,31 @@ function configKeyView(
 export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyView[] {
   const file = readConfigFile(env);
   const cfg = loadConfig(env);
-  const envTier = env["THINGS_API_MAX_DISRUPTION"];
   const view = configKeyView;
+
+  const tierFromEnv = tierEnvOverride(env["THINGS_API_MAX_DISRUPTION"]) !== undefined;
+  const maxDisruption: ConfigKeyView = {
+    key: "maxDisruption",
+    value: cfg.maxDisruption,
+    // env > stored > profile-derived default (the built-in fallback is
+    // computed from `profile`, so it reports `derived`, not `default`).
+    source: tierFromEnv ? "env" : file.maxDisruption !== undefined ? "stored" : "derived",
+  };
+
   return [
     view(
       "profile",
       cfg.profile,
       file.profile !== undefined,
-      env["THINGS_API_PROFILE"] === "dedicated-server",
+      profileEnvOverride(env["THINGS_API_PROFILE"]) !== undefined,
     ),
-    view(
-      "maxDisruption",
-      cfg.maxDisruption,
-      file.maxDisruption !== undefined,
-      envTier !== undefined && /^[0-3]$/.test(envTier),
-    ),
+    maxDisruption,
     view("actor", cfg.actor, file.actor !== undefined, env["THINGS_API_ACTOR"] !== undefined),
     view(
       "auditEnabled",
       cfg.auditEnabled,
       file.auditEnabled !== undefined,
-      env["THINGS_API_AUDIT"] === "off",
+      boolEnvOverride(env["THINGS_API_AUDIT"], "on", "off") !== undefined,
     ),
     view(
       "accepted-fingerprint",
@@ -204,14 +239,16 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       "allow-experimental",
       cfg.allowExperimental,
       file.allowExperimental !== undefined,
-      env["THINGS_API_ALLOW_EXPERIMENTAL"] === "true",
+      boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false") !== undefined,
     ),
     view(
       "ui-enabled",
       cfg.ui.enabled,
       file.uiEnabled !== undefined,
-      env["THINGS_API_UI_ENABLED"] === "true",
+      boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false") !== undefined,
     ),
+    // Read-only, computed from the environment; not settable via `config set`.
+    { key: "host", value: cfg.host, source: "derived" },
   ];
 }
 

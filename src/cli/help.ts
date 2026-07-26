@@ -339,7 +339,9 @@ Undo — \`things undo\`:
   in the Things app cannot be undone here.
 
 Configuration that affects writes — \`things config set <key> <value>\`
-(read one back with \`things config get <key>\`, or all with \`things config get\`):
+(read one back with \`things config get <key>\`, or every effective value with
+\`things config get\`). Precedence: a THINGS_API_* env var overrides a stored value,
+which overrides the built-in default.
   actor               author name recorded on each change
   maxDisruption       ceiling for how disruptive a change may be
   ui-enabled          allow the GUI-driven operations

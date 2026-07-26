@@ -84,7 +84,7 @@ const emit = (r: BatchItemResult): void => {
 
 /**
  * One `config get` line: `key: value`, plus a dim provenance marker for a
- * default or env-sourced value (stored keys render bare).
+ * default, env-sourced, or derived value (stored keys render bare).
  */
 function configKeyLine(entry: ConfigKeyView): string {
   const marker = entry.source === "stored" ? "" : ` ${dim(`(${entry.source})`)}`;
@@ -1852,31 +1852,12 @@ export function registerWriteCommands(program: Command): void {
 
   const config = group(program, "config", "things-api configuration");
   config
-    .command("show")
-    .description("Show the effective configuration (profile, disruption policy, actor)")
-    .option("--json", "emit versioned JSON envelope on stdout")
-    .option("--db <path>", "explicit database path")
-    .action((opts: { json?: boolean; db?: string }) => {
-      const client = openThings(opts.db ? { dbPath: opts.db } : {});
-      try {
-        if (opts.json) {
-          const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
-          process.stdout.write(`${JSON.stringify(okEnvelope("config", client.config, meta))}\n`);
-        } else {
-          for (const [k, v] of Object.entries(client.config)) {
-            process.stdout.write(`${k}: ${String(v)}\n`);
-          }
-        }
-      } finally {
-        client.close();
-      }
-    });
-  config
     .command("get [key]")
     .description(
-      "Show one config key's effective value, or all keys with their values when no key is " +
-        "given. Keys still at a built-in default (or set from a THINGS_API_* env var) are " +
-        "marked. Unknown key is a usage error. --json emits a versioned envelope.",
+      "Show one config key's effective value, or every effective value when no key is given " +
+        "(including read-only derived values like host). Precedence is env > stored > default; " +
+        "each value is marked with the layer that supplied it. Unknown key is a usage error. " +
+        "--json emits a versioned envelope.",
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .action((key: string | undefined, opts: { json?: boolean }) => {

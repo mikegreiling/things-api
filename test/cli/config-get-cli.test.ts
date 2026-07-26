@@ -86,7 +86,25 @@ describe("config get <key>", () => {
     const data = env["data"] as Record<string, unknown>;
     expect(data["key"]).toBe("maxDisruption");
     expect(data["value"]).toBe(1); // workstation default tier
-    expect(data["source"]).toBe("default");
+    // The default comes from the profile, so it reports derived, not default.
+    expect(data["source"]).toBe("derived");
+  });
+
+  it("reports host as a derived read-only value", async () => {
+    await run(["config", "get", "host", "--json"]);
+    const data = lastJson()["data"] as Record<string, unknown>;
+    expect(data["key"]).toBe("host");
+    expect(data["source"]).toBe("derived");
+    expect(typeof data["value"]).toBe("string");
+  });
+
+  it("a recognized env value forces a stored vector off (bidirectional)", async () => {
+    await run(["config", "set", "ui-enabled", "true"]);
+    process.env["THINGS_API_UI_ENABLED"] = "false";
+    await run(["config", "get", "ui-enabled", "--json"]);
+    const data = lastJson()["data"] as Record<string, unknown>;
+    expect(data["value"]).toBe(false);
+    expect(data["source"]).toBe("env");
   });
 
   it("reads back a stored value (no marker) after config set", async () => {
@@ -119,7 +137,7 @@ describe("config get <key>", () => {
 });
 
 describe("config get (all keys)", () => {
-  it("lists every key, marking defaults", async () => {
+  it("lists every effective value, including derived read-only ones", async () => {
     await run(["config", "get"]);
     const out = stdout.join("");
     for (const key of [
@@ -130,10 +148,12 @@ describe("config get (all keys)", () => {
       "accepted-fingerprint",
       "allow-experimental",
       "ui-enabled",
+      "host",
     ]) {
       expect(out).toContain(`${key}:`);
     }
     expect(out).toContain("(default)");
+    expect(out).toContain("(derived)"); // host + profile-derived maxDisruption
   });
 
   it("--json: array of key/value/source entries", async () => {
@@ -142,18 +162,25 @@ describe("config get (all keys)", () => {
     expect(env["kind"]).toBe("config");
     const data = env["data"] as { key: string; source: string }[];
     expect(Array.isArray(data)).toBe(true);
-    expect(data).toHaveLength(7);
+    expect(data).toHaveLength(8);
     expect(data.map((e) => e.key)).toContain("ui-enabled");
-    // With no stored file and no env, every key is at its default.
-    expect(data.every((e) => e.source === "default")).toBe(true);
+    expect(data.map((e) => e.key)).toContain("host");
+    // With no stored file and no env: settable keys sit at their default,
+    // while host and the profile-derived maxDisruption report derived.
+    const byKey = Object.fromEntries(data.map((e) => [e.key, e.source]));
+    expect(byKey["actor"]).toBe("default");
+    expect(byKey["ui-enabled"]).toBe("default");
+    expect(byKey["host"]).toBe("derived");
+    expect(byKey["maxDisruption"]).toBe("derived");
   });
 
-  it("mixes stored and default sources", async () => {
+  it("mixes stored, default, and derived sources", async () => {
     await run(["config", "set", "profile", "dedicated-server"]);
     await run(["config", "get", "--json"]);
     const data = lastJson()["data"] as { key: string; source: string }[];
     const byKey = Object.fromEntries(data.map((e) => [e.key, e.source]));
     expect(byKey["profile"]).toBe("stored");
     expect(byKey["actor"]).toBe("default");
+    expect(byKey["host"]).toBe("derived");
   });
 });
