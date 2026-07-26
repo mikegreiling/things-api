@@ -5,7 +5,7 @@ The index over ALL evidence this project has produced (roadmap §F). The two **l
 - **[capability-matrix.md](../capability-matrix.md)** — the CRUD × vector wish-list/checklist (what works, where, with evidence ids)
 - **[things-app-oddities.md](../things-app-oddities.md)** — every app bug/quirk/hazard, report-ready for Cultured Code (incl. §7, the consolidated crash catalog)
 
-Companions in this directory: **[novel-paths.md](novel-paths.md)** (the surprising capabilities that work) and **[suite-audit.md](suite-audit.md)** (op catalog × recurring-coverage, with the open gaps).
+Companions in this directory: **[novel-paths.md](novel-paths.md)** (the surprising capabilities that work), **[suite-audit.md](suite-audit.md)** (op catalog × recurring-coverage, with the open gaps), and **[task-api-landscape.md](task-api-landscape.md)** (2026-07-25 comparative study of the Todoist / MS Graph To Do / TickTick APIs vs ours — the ratified primitive concordance table, borrow verdicts, compat-layer feasibility).
 
 ## How evidence ids work
 
