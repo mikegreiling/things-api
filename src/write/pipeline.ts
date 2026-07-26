@@ -104,6 +104,13 @@ export type MutationResult =
       kind: "ok";
       op: OperationKind;
       uuid: string | null;
+      /**
+       * The mutated item's title (ADDITIVE), when the op targets a single
+       * pre-existing item — its pre-write title, captured before the change.
+       * Lets a batch log confirm WHAT was mutated without a second read. Absent
+       * for create/reorder ops, which have no single pre-existing target.
+       */
+      title?: string;
       observed: Record<string, unknown> | null;
       vector: VectorId;
       tier: DisruptionTier;
@@ -755,6 +762,11 @@ export async function runMutation<K extends OperationKind>(
         kind: "ok",
         op,
         uuid,
+        // Echo the mutated item's title (ADDITIVE) whenever the op resolved a
+        // single pre-existing target — its pre-write title. Uniform across the
+        // whole single-item family (complete/cancel/reopen/update/move/…); absent
+        // for create/reorder ops, which have no such target.
+        ...(pre.target !== null && { title: pre.target.title }),
         observed: outcome.observed,
         vector: vector.id,
         tier: effectiveTier,

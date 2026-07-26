@@ -235,6 +235,30 @@ describe("ui vector — two-key gating", () => {
       expect((res.warnings ?? []).join(" ")).toContain("lab-certified");
     }
   });
+
+  it("drove cleanly (exit 0) but the app changed nothing → verify-failed:silent-noop", async () => {
+    // The transport SUCCEEDS (the GUI drive completes with no error), yet the
+    // app silently no-ops, so verification observes no movement. This is the
+    // "drove-then-verify-failed" path from the field report — it must produce a
+    // structured verify-failed result (which the CLI/MCP render as a single JSON
+    // error envelope), never diverge from the transport-refused (exit != 0) path.
+    const uuid = seedTodo(fixture.db, {
+      title: "R",
+      recurrenceRule: true,
+      instanceCreationPaused: false,
+    });
+    const vector = applyingUiVector(() => {
+      /* the drive "completes" but changes nothing observable in the DB */
+    });
+    const res = await runMutation(
+      deps(vector, config(true)),
+      "todo.pause-repeat",
+      { uuid },
+      { dangerouslyDriveGui: true, verifyTimeoutMs: 200 },
+    );
+    expect(res.kind).toBe("verify-failed");
+    if (res.kind === "verify-failed") expect(res.reason).toBe("silent-noop");
+  });
 });
 
 // A minimal mouse-hybrid recipe: reveal → activate → click a repeat bar

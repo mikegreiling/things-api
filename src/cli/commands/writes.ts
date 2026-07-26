@@ -16,8 +16,10 @@ import {
   BOUNCE_MAX_ITEMS,
   capabilitiesTable,
   ClockError,
+  describeConfig,
   errorEnvelope,
   ExitCode,
+  getConfigKey,
   okEnvelope,
   openThings,
   outcomeFailed,
@@ -29,6 +31,7 @@ import {
   verifyFailedCode,
   type BatchItemResult,
   type BatchOp,
+  type ConfigKeyView,
   type DisruptionTier,
   type EnvelopeMeta,
   type OperationKind,
@@ -42,6 +45,7 @@ import {
   type WriteOptions,
 } from "../../index.ts";
 import { usageError } from "../read-driver.ts";
+import { dim } from "../style.ts";
 
 interface WriteFlagOpts {
   json?: boolean;
@@ -77,6 +81,15 @@ const flagVal = (v: unknown): string | undefined => (typeof v === "string" ? v :
 const emit = (r: BatchItemResult): void => {
   process.stdout.write(`${JSON.stringify(r)}\n`);
 };
+
+/**
+ * One `config get` line: `key: value`, plus a dim provenance marker for a
+ * default, env-sourced, or derived value (stored keys render bare).
+ */
+function configKeyLine(entry: ConfigKeyView): string {
+  const marker = entry.source === "stored" ? "" : ` ${dim(`(${entry.source})`)}`;
+  return `${entry.key}: ${String(entry.value)}${marker}`;
+}
 
 function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}): WriteOptions {
   const maxDisruption: DisruptionTier | undefined = opts.allowVeryDisruptive
@@ -1839,23 +1852,37 @@ export function registerWriteCommands(program: Command): void {
 
   const config = group(program, "config", "things-api configuration");
   config
-    .command("show")
-    .description("Show the effective configuration (profile, disruption policy, actor)")
+    .command("get [key]")
+    .description(
+      "Show one config key's effective value, or every effective value when no key is given " +
+        "(including read-only derived values like host). Precedence is env > stored > default; " +
+        "each value is marked with the layer that supplied it. Unknown key is a usage error. " +
+        "--json emits a versioned envelope.",
+    )
     .option("--json", "emit versioned JSON envelope on stdout")
-    .option("--db <path>", "explicit database path")
-    .action((opts: { json?: boolean; db?: string }) => {
-      const client = openThings(opts.db ? { dbPath: opts.db } : {});
-      try {
-        if (opts.json) {
-          const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
-          process.stdout.write(`${JSON.stringify(okEnvelope("config", client.config, meta))}\n`);
-        } else {
-          for (const [k, v] of Object.entries(client.config)) {
-            process.stdout.write(`${k}: ${String(v)}\n`);
-          }
+    .action((key: string | undefined, opts: { json?: boolean }) => {
+      const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
+      if (key !== undefined) {
+        const entry = getConfigKey(key);
+        if (entry === undefined) {
+          process.stderr.write(`error: unknown config key "${key}"\n`);
+          process.exitCode = ExitCode.Usage;
+          return;
         }
-      } finally {
-        client.close();
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(okEnvelope("config", entry, meta))}\n`);
+        } else {
+          process.stdout.write(`${configKeyLine(entry)}\n`);
+        }
+        return;
+      }
+      const all = describeConfig();
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(okEnvelope("config", all, meta))}\n`);
+      } else {
+        for (const entry of all) {
+          process.stdout.write(`${configKeyLine(entry)}\n`);
+        }
       }
     });
   config

@@ -20,7 +20,7 @@ import { shellQuote } from "./shell-quote.ts";
 /**
  * The type namespaces whose `show` verb takes a reference and may be omitted:
  * `things area Hobbies` → `things area show Hobbies`. Restricted to the three
- * TYPE groups — `config show` also exists but takes no reference, so `config`
+ * TYPE groups — `config` has no `show` verb (its reader is `config get`), so it
  * is deliberately excluded. Registered subcommands (verbs) always win over
  * this sugar (the reserved-word rule).
  */
