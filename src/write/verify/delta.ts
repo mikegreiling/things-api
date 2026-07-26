@@ -61,6 +61,22 @@ export interface RepeatingProbe {
    * with their uuids). Absent (undefined) for to-do conversions.
    */
   subtreeUuids?: string[];
+  /**
+   * The rule the drive REQUESTED (type/unit/interval). When set, the discovered
+   * template's DECODED rule must match it — a template minted with the wrong
+   * frequency/interval is a `verify-failed:mismatch`, never a silent `ok`. This
+   * catches the interval-field re-layout race (oddities §8l) where the GUI drive
+   * creates the template but the interval reverts to 1. The check is SKIPPED
+   * when the rule cannot be decoded (a future Things rule format) — discovery
+   * still succeeds, consistent with the read-side decoder's fail-soft. It does
+   * NOT participate in candidate DISCOVERY (which stays `isTemplate`-only, so a
+   * template with an unreadable rule is still found).
+   */
+  expectedRule?: {
+    type: "fixed" | "after-completion";
+    unit: "daily" | "weekly" | "monthly" | "yearly";
+    interval: number;
+  };
 }
 
 /**
@@ -487,6 +503,44 @@ function evaluateRepeatingCreate(
   }
   if (template === undefined) {
     return { satisfied: false, movement: false, assertedMovement: false, observed: null };
+  }
+
+  // 1b. Verify the LANDED rule matches the REQUESTED rule (type/unit/interval)
+  // when it is decodable. A drive can create the template but mis-commit the
+  // interval/frequency — the interval-field re-layout race (oddities §8l) reverts
+  // the interval to 1 — and that must be a verify-failed:mismatch, never a silent
+  // ok. Skipped when the rule cannot be decoded (a future Things rule format):
+  // discovery still succeeds and doctor counts the undecodable template, matching
+  // the read-side decoder's fail-soft. Discovery above is `isTemplate`-only, so
+  // an unreadable-rule template is still found; only this verification is skipped.
+  if (probe.expectedRule !== undefined) {
+    const landedType = getField(template, "repeating.rule.type");
+    if (landedType !== undefined) {
+      const landedUnit = getField(template, "repeating.rule.unit");
+      const landedInterval = getField(template, "repeating.rule.interval");
+      const want = probe.expectedRule;
+      if (
+        landedType !== want.type ||
+        landedUnit !== want.unit ||
+        landedInterval !== want.interval
+      ) {
+        return {
+          satisfied: false,
+          movement: true,
+          assertedMovement: true,
+          observed: {
+            "repeating.rule.type": landedType,
+            "repeating.rule.unit": landedUnit,
+            "repeating.rule.interval": landedInterval,
+          },
+          detail:
+            "the repeating template was created but its rule does not match the request " +
+            `(expected ${want.type}/${want.unit}/interval ${want.interval}, got ` +
+            `${String(landedType)}/${String(landedUnit)}/interval ${String(landedInterval)}) — the ` +
+            "frequency or interval may not have committed to the dialog (oddities §8l)",
+        };
+      }
+    }
   }
 
   // 2. Derive the instance via the template FK + resolve the source fate.

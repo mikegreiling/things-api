@@ -1743,14 +1743,17 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "to-do");
     return pre;
   },
-  expectedDelta(pre, _params, ctx) {
+  expectedDelta(pre, params, ctx) {
     // Identity REPLACEMENT or preserve-as-instance (UI2-a / RSIM-R): a NEW
     // template row (type=0 with a recurrence rule) is born; the original uuid is
     // EITHER destroyed OR relinked as the current-occurrence instance. Discover
     // the template with the create probe (excluding the pre-existing same-title
     // rows), pick it by asserting it IS a template, then the `repeating` context
     // hardens discovery (restored time-bound, source-fingerprint tiebreak) and
-    // derives instance + source fate for the enriched result.
+    // derives instance + source fate for the enriched result. `expectedRule`
+    // makes the LANDED rule verifiable: a template minted with the wrong
+    // frequency/interval (the interval-field race, oddities §8l) becomes a
+    // verify-failed:mismatch instead of a silent ok.
     return {
       mode: "create",
       probe: {
@@ -1762,6 +1765,11 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
           repeating: {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
+            expectedRule: {
+              type: params.afterCompletion === true ? "after-completion" : "fixed",
+              unit: params.frequency,
+              interval: params.interval,
+            },
           },
         }),
       },
@@ -1971,13 +1979,14 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     if (pre.target !== null) pre.repeatSubtreeUuids = projectSubtreeUuids(db, pre.target.uuid);
     return pre;
   },
-  expectedDelta(pre, _params, ctx) {
+  expectedDelta(pre, params, ctx) {
     // Identity REPLACEMENT or preserve-as-instance (UIC4-b / RSIM-R): a NEW
     // template project (with a recurrence rule) is born; the source project is
     // EITHER destroyed OR (when its subtree holds a nested repeater) relinked as
     // the current-occurrence instance. Pick the TEMPLATE by asserting it IS one,
     // excluding pre-existing same-title rows; the `repeating` context hardens
     // discovery and derives instance + source fate + childrenReplaced.
+    // `expectedRule` makes the landed rule verifiable (interval-race guard, §8l).
     return {
       mode: "create",
       probe: {
@@ -1990,6 +1999,11 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
             subtreeUuids: pre.repeatSubtreeUuids ?? [],
+            expectedRule: {
+              type: params.afterCompletion === true ? "after-completion" : "fixed",
+              unit: params.frequency,
+              interval: params.interval,
+            },
           },
         }),
       },

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   axSelectPopupCandidatesScript,
   axSelectPopupScript,
+  axSetValueScript,
   axSheetOpenScript,
 } from "../../src/write/vectors/ui.ts";
 
@@ -41,6 +42,26 @@ describe("axSelectPopupCandidatesScript — plural-safe menu-item resolution (de
   it("escapes candidate labels", () => {
     const s = axSelectPopupCandidatesScript("pu", ['we"ek']);
     expect(s).toContain('we\\"ek');
+  });
+});
+
+describe("axSetValueScript — closed-loop read-back retry (interval-field race, §8l)", () => {
+  const script = axSetValueScript("text field 1 of group 1", "2");
+
+  it("types, Tab-commits, then READS THE FIELD BACK and returns OK only when it holds", () => {
+    expect(script).toContain('keystroke "2"');
+    expect(script).toContain("key code 48"); // Tab commit
+    expect(script).toContain('if ((value of tf) as text) is "2" then return "OK"');
+  });
+
+  it("retries a bounded number of times, then FAILS CLOSED (errors) if it never holds", () => {
+    expect(script).toContain("repeat 3 times"); // default attempts
+    expect(script).toContain("error");
+    expect(script).toContain("did not hold value");
+  });
+
+  it("honors a custom attempt count", () => {
+    expect(axSetValueScript("f", "5", 1)).toContain("repeat 1 times");
   });
 });
 

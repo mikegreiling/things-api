@@ -129,17 +129,33 @@ export function axPressScript(path: string): string {
  * moves focus. Foreground-bound (keystrokes reach the frontmost app) — the
  * reveal/activate preamble puts Things there. One stable command shape.
  */
-export function axSetValueScript(path: string, value: string): string {
+export function axSetValueScript(path: string, value: string, attempts = 3): string {
+  const v = escapeAppleScript(value);
+  const n = Math.max(1, Math.trunc(attempts));
+  // CLOSED-LOOP (determinism doctrine): type, Tab-commit, then READ THE FIELD
+  // BACK and retry if it did not hold — the interval field, when it is the first
+  // numeric field after a frequency/type switch, races the dialog's group
+  // re-layout and reverts to 1 (UIC7, oddities §8l). Re-focus + re-type after a
+  // settle lands it once the re-layout has finished. Fail-closed (an `error`,
+  // i.e. a transport failure the pipeline re-verifies) if it never holds — the
+  // create/reschedule delta's rule assertion is the final DB-level authority.
   return `${SE}
   set tf to (${path})
-  set focused of tf to true
-  delay 0.15
-  keystroke "a" using command down
-  delay 0.1
-  keystroke "${escapeAppleScript(value)}"
-  delay 0.1
-  key code 48
-  delay 0.2
+  repeat ${n} times
+    set focused of tf to true
+    delay 0.15
+    keystroke "a" using command down
+    delay 0.1
+    keystroke "${v}"
+    delay 0.1
+    key code 48
+    delay 0.2
+    try
+      if ((value of tf) as text) is "${v}" then return "OK"
+    end try
+    delay 0.3
+  end repeat
+  error "field did not hold value \\"${v}\\" after ${n} attempt(s); last shown: " & ((value of tf) as text)
 end tell`;
 }
 /**

@@ -75,7 +75,7 @@ the run log at `lab/artifacts/uic7-lab/report.txt`.
 |---|---|---|
 | **(a)** false-negative verify | ✅ **FIXED + validated** | The incident (UIC7-b) now returns `ok=true` with the correct landed rule `tp=1 fu=256 fa=2` (`resched-incident.json`, drove 8 steps). Pre-drive **idempotency** validated live (UIC7-c): rescheduling to the already-present rule returned `ok` with warning "the item was already in the requested state — no GUI drive was performed", **no drive** (elapsedMs 33 vs 4676; no `undoToken`, no "drove N steps"). The rule-**type** assertion makes the conversion verifiable (both rules weekly/2, only the type flipped). |
 | **(b)** `--json` on the real abort path | ✅ **validated** | EVERY drive emitted exactly one clean JSON envelope on stdout, including the two GENUINE failures — `resched-back` (verify-failed:mismatch, `ok=false`) and `resched-opensheet` (transport-failed → recovery re-verify → `ok=false`). No plain-text banner leaked onto stdout on any path. |
-| **(c)** unit-popup pluralization | ✅ **FIXED (fix in place; candidate mechanism validated live, plural label not force-exercised)** | The after-completion conversions drove the unit pop-up via the candidate list and succeeded (`resched-incident` weekly, `make-C` daily, `resched-monthly3` monthly). Every dialog this run opened at interval 1 (see the interval-race finding), so the SINGULAR candidate matched first and the PLURAL label was not itself clicked live; plural correctness rests on the unit tests + the field-report evidence. Fail-closed if neither label exists. |
+| **(c)** unit-popup pluralization | ✅ **FIXED + validated (incl. the PLURAL label live, UIC7b MR4b)** | The after-completion conversions drove the unit pop-up via the candidate list and succeeded (`resched-incident` weekly, `make-C` daily, `resched-monthly3` monthly — SINGULAR, since those dialogs opened at interval 1). **UIC7b MR4b then exercised the PLURAL label live:** rescheduling an interval-2 after-completion rule opens the dialog at interval 2, so the unit pop-up reads plural, and the `month`/`months` candidate list clicked `months` → landed `tp=1 fu=8 fa=3`. Fail-closed if neither label exists. |
 | **(d)** sheet-cleanup honesty | ✅ host-unit-validated | `verifiedAbort` + `axSheetOpenScript` (asserts the sheet gone, retries once, warns on failure). Unit-tested; not force-triggered in-VM (no drive aborted with a lingering sheet this run). |
 | **(e)** preflight open-sheet diagnosis | ✅ host-unit-validated; live test INCONCLUSIVE | Unit-tested. The live attempt (UIC7-h) was confounded: the drive's `things:///show` reveal preamble dismissed the hand-opened sheet before the canary ran, so the canary failed for a different reason (a template is not `show`-selectable) and reported the generic message — the open-sheet branch never engaged because no sheet was open at canary time. Re-probe needs a leftover **detached** editor window (which reveal does not dismiss) or an abort-left sheet from a real prior drive. |
 | **(f)** residual rule fields | ✅ **probed** (static residue captured; dynamic spawn NOT captured) | UIC7-g: fixed weekly/2 + deadline + start-3-earlier + Monday → after-completion weekly/2 gave `tp=1 fa=2 ts=-3 of=[{wd:0}] deadlineCol=<sentinel>`. **`ts=-3` and the deadline SURVIVE the conversion; the weekday `of` resets to the unit nominal `{wd:0}`.** Semantically meaningful (deadline = start − ts persists), not a stale skew. Oddities §8p; recurrence.ts caveat. The completion step to observe the next spawn's date did NOT fire (the harness passed `--dangerously-drive-gui` to `todo complete`, which rejects it) → dynamic spawn-cadence UNVALIDATED, follow-up noted. |
@@ -100,9 +100,40 @@ races the group re-layout and lands `1` instead of the typed value.**
   interval mis-committed. So it is specifically the first-numeric-field-after-a-
   mode-switch that is at risk.
 
-This is a **driver follow-up** (poll/verify-and-retry the interval field, or settle
-after the mode switch), tracked in up-next §0½. It is not a regression from this
-change — the interval race predates it; the type/interval assertion merely makes
-`reschedule-repeat` fail-closed about it instead of silently mis-landing. It does
-mean a fixed reschedule/make with interval > 1 currently under-applies the
-interval on this build.
+It is not a regression from this change — the interval race predates it; the
+type/interval assertion merely makes `reschedule-repeat` fail-closed about it
+instead of silently mis-landing.
+
+## Follow-up: make-repeating interval guard + driver mitigation (UIC7b, run `uic7b-lab`, 2026-07-26)
+
+The interval race made the **silent-wrong** case unacceptable for a shipped op:
+`make-repeating --interval N>1` (fixed) landed `fa=1` yet reported `ok`, because
+its create-probe asserted only `isTemplate`. Branch `mg/make-repeating-interval-guard`
+(stacked on this one) closes it with two layers:
+
+1. **Driver mitigation (closed-loop, determinism doctrine).** `axSetValueScript`
+   now types → Tab-commits → **reads the field back** → re-types on a bounded
+   retry (with an inter-attempt settle) if it did not hold, failing closed if it
+   never does. The interval field's post-switch reset happens once, so the second
+   attempt (after the settle) lands the value.
+2. **Verify guard.** The make-repeating create-probe carries the requested
+   `type`/`unit`/`interval`; once the template is discovered its DECODED rule is
+   asserted to match — a mismatch is `verify-failed:mismatch`, never silent `ok`
+   (skipped only when the rule is undecodable). Covers `todo.make-repeating`,
+   `project.make-repeating`, and the `project.create-repeating` promote leg.
+
+### Verdicts (invariant: zero silent-wrong)
+
+| Case | Requested | Landed | Verdict |
+|---|---|---|---|
+| MR1 make fixed weekly/1 | fu256 fa1 | fu256 fa1 | HONEST-SUCCESS |
+| MR2 make fixed weekly/2 | fu256 fa2 | **fu256 fa2** | HONEST-SUCCESS (was `fa1` in UIC7 — the mitigation lands it) |
+| MR3 make fixed monthly/3 | fu8 fa3 | **fu8 fa3** | HONEST-SUCCESS |
+| MR4a make after-completion weekly/2 | fu256 fa2 | fu256 fa2 | HONEST-SUCCESS |
+| MR4b reschedule AC weekly/2 → AC monthly/3 | fu8 fa3 | fu8 fa3 | HONEST-SUCCESS — dialog opened at interval 2, so the unit pop-up was PLURAL; the `month`/`months` candidate list clicked `months` **live**, closing the UIC7 (c) plural-label gap |
+
+**Zero `SILENT-WRONG` outcomes.** The mitigation WORKS live (the interval now
+lands past the re-layout reset); the verify guard is the safety net for any build
+where it does not. This also finally exercised the plural after-completion unit
+label live (MR4b), which UIC7 could not force. Evidence:
+`lab/artifacts/uic7b-lab/` (gitignored); script `lab/scripts/research-uic7b.sh`.
