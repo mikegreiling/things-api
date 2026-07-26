@@ -279,12 +279,21 @@ const DIALOG_ADD_REMINDERS = dualForm(`checkbox "Add reminders"`);
 const DIALOG_ADD_DEADLINES = dualForm(`checkbox "Add deadlines"`);
 const DIALOG_START_EARLIER = dualForm("text field 1");
 
-/** After-completion unit pop-up options are singular (`day`/`week`/…), not the frequency word. */
-const FREQ_TO_AC_UNIT: Record<RepeatFrequency, string> = {
-  daily: "day",
-  weekly: "week",
-  monthly: "month",
-  yearly: "year",
+/**
+ * After-completion cadence-unit pop-up labels. The options are NOT the frequency
+ * word (`weekly`) — they are the time unit, and the app PLURALIZES them by the
+ * interval: `week` at interval 1, `weeks` at interval > 1 (0½ defect (c)). The
+ * reschedule dialog opens pre-populated with the item's CURRENT interval, so a
+ * biweekly template's unit pop-up already reads the plural before the interval
+ * field is touched. Both labels are offered as select-popup candidates so the
+ * drive is plural-safe and order-independent (the driver clicks whichever
+ * exists). Singular first — the interval-1 case and the make-repeating default.
+ */
+const FREQ_TO_AC_UNIT: Record<RepeatFrequency, [string, string]> = {
+  daily: ["day", "days"],
+  weekly: ["week", "weeks"],
+  monthly: ["month", "months"],
+  yearly: ["year", "years"],
 };
 
 /** English display titles for the weekday / ordinal / month pop-ups (title-pinned, locale fail-closed). */
@@ -329,6 +338,24 @@ function selectPopup(label: string, pathCandidates: string[], value: string): Ui
     label,
     pathCandidates,
     value,
+    dynamic: true,
+    addressing: "title",
+  };
+}
+/**
+ * A select-popup that clicks the FIRST of several candidate menu-item LABELS
+ * that exists (the after-completion unit's singular/plural pair — defect (c)).
+ */
+function selectPopupAny(
+  label: string,
+  pathCandidates: string[],
+  valueCandidates: string[],
+): UiStep {
+  return {
+    primitive: "select-popup",
+    label,
+    pathCandidates,
+    valueCandidates,
     dynamic: true,
     addressing: "title",
   };
@@ -414,7 +441,7 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     // a secondary unit pop-up ("after completion, every N <unit>").
     steps.push(selectPopup("frequency = after completion", DIALOG_FREQUENCY, "after completion"));
     steps.push(
-      selectPopup(
+      selectPopupAny(
         `after-completion unit = ${rule.frequency}`,
         DIALOG_AC_UNIT,
         FREQ_TO_AC_UNIT[rule.frequency],

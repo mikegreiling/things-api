@@ -50,7 +50,14 @@ export interface RepeatRule {
   type: "fixed" | "after-completion";
   unit: "daily" | "weekly" | "monthly" | "yearly";
   interval: number;
-  /** Days the instance's start precedes its event date (≤ 0). */
+  /**
+   * Days the instance's start precedes its event date (≤ 0). CAVEAT (UIC7,
+   * oddities §8p): a GUI reschedule from a fixed to an after-completion rule
+   * PRESERVES this offset (and the deadline) from the old rule — an
+   * after-completion rule can therefore legitimately carry a non-zero `ts`
+   * (deadline = start − ts), so consumers must not assume after-completion ⇒
+   * ts=0. The calendar `offsets`, by contrast, reset to the unit nominal.
+   */
   startOffsetDays: number;
   offsets: RepeatOffset[];
   endDate: IsoDate | null;

@@ -219,6 +219,91 @@ describe("source-fate resolution (RSIM-R: absent OR relinked-as-instance)", () =
   });
 });
 
+/** A decodable weekly rule blob at the given interval + type. */
+function weeklyRuleXml(interval: number, type: "fixed" | "after-completion" = "fixed"): string {
+  return (
+    `<?xml version="1.0"?><plist version="1.0"><dict>` +
+    `<key>tp</key><integer>${type === "fixed" ? 0 : 1}</integer>` +
+    `<key>fu</key><integer>256</integer><key>fa</key><integer>${interval}</integer>` +
+    `<key>ts</key><integer>0</integer><key>rc</key><integer>0</integer>` +
+    `<key>rrv</key><integer>4</integer>` +
+    `<key>of</key><array><dict><key>wd</key><integer>1</integer></dict></array>` +
+    `</dict></plist>`
+  );
+}
+
+describe("make-repeating rule verification — the interval-field race guard (oddities §8l)", () => {
+  /** make-repeating requesting weekly/interval-N, minting a template with `landedInterval`. */
+  function evalInterval(requested: number, landedInterval: number) {
+    return withDb((db) => {
+      const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
+      const params = { uuid: source, frequency: "weekly" as const, interval: requested };
+      const pre = COMMANDS["todo.make-repeating"].preRead(db, params, NOW);
+      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+      const template = seedTodo(db, {
+        uuid: "TMPL",
+        title: "Chores",
+        recurrenceRuleXml: weeklyRuleXml(landedInterval),
+        creationDate: NOW_EPOCH,
+      });
+      seedTodo(db, {
+        uuid: "INST",
+        title: "Chores",
+        repeatingTemplate: template,
+        creationDate: NOW_EPOCH,
+      });
+      const spec = COMMANDS["todo.make-repeating"].expectedDelta(pre, params, CTX);
+      if (spec.mode !== "create") throw new Error("unreachable");
+      return evaluateDelta(spec, createDbReader(db, NOW), EMPTY_PRE);
+    });
+  }
+
+  it("WRONG interval landed (2 requested, 1 minted) → NOT satisfied, mismatch, honest detail", () => {
+    const evaluation = evalInterval(2, 1);
+    expect(evaluation.satisfied).toBe(false);
+    expect(evaluation.assertedMovement).toBe(true); // → poller returns "mismatch", not silent-noop
+    expect(evaluation.detail).toContain("does not match the request");
+    expect(evaluation.observed?.["repeating.rule.interval"]).toBe(1);
+  });
+
+  it("CORRECT interval landed (2 requested, 2 minted) → satisfied", () => {
+    const evaluation = evalInterval(2, 2);
+    expect(evaluation.satisfied).toBe(true);
+    expect(evaluation.repeating?.templateUuid).toBe("TMPL");
+  });
+
+  it("interval 1 requested + 1 landed → satisfied (the common base case)", () => {
+    expect(evalInterval(1, 1).satisfied).toBe(true);
+  });
+
+  it("an UNDECODABLE rule (future format) is NOT blocked — discovery still succeeds", () => {
+    // The `recurrenceRule: true` seed writes a non-plist blob that fails to
+    // decode; the rule check must be skipped, not treated as a mismatch.
+    const evaluation = withDb((db) => {
+      const source = seedTodo(db, { title: "Chores", creationDate: NOW_EPOCH - 10 });
+      const params = { uuid: source, frequency: "weekly" as const, interval: 2 };
+      const pre = COMMANDS["todo.make-repeating"].preRead(db, params, NOW);
+      db.prepare("DELETE FROM TMTask WHERE uuid = ?").run(source);
+      const template = seedTodo(db, {
+        uuid: "TMPL",
+        title: "Chores",
+        recurrenceRule: true, // undecodable "bp" blob
+        creationDate: NOW_EPOCH,
+      });
+      seedTodo(db, {
+        uuid: "INST",
+        title: "Chores",
+        repeatingTemplate: template,
+        creationDate: NOW_EPOCH,
+      });
+      const spec = COMMANDS["todo.make-repeating"].expectedDelta(pre, params, CTX);
+      if (spec.mode !== "create") throw new Error("unreachable");
+      return evaluateDelta(spec, createDbReader(db, NOW), EMPTY_PRE);
+    });
+    expect(evaluation.satisfied).toBe(true);
+  });
+});
+
 describe("project make-repeating — FK instance filtered by type + childrenReplaced", () => {
   it("DELETE-REMINT: every source subtree uuid is dead → childrenReplaced = full subtree", () => {
     withDb((db) => {

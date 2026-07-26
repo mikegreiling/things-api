@@ -49,14 +49,24 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
     status: "lab-certified",
-    evidence: ["UI1", "UI2-a", "UIC1-a", "UIC6-a"],
+    // UIC7b: interval > 1 across units now LANDS live (closed-loop interval
+    // read-back retry) and the create-probe verifies the decoded rule — no more
+    // silent-ok on a mis-committed interval (oddities §8l addendum, RESOLVED).
+    evidence: ["UI1", "UI2-a", "UIC1-a", "UIC6-a", "UIC7b"],
   },
-  "todo.reschedule-repeat": { status: "lab-certified", evidence: ["UI2-b", "UIC1-a", "UIC6-k"] },
+  "todo.reschedule-repeat": {
+    status: "lab-certified",
+    // UIC7-b: the fixed→after-completion CONVERSION (0½ item 1) drives + verifies
+    // + reports success live; caveat: a →fixed reschedule with interval > 1 hits
+    // the interval-field re-layout race (oddities §8l addendum) and fail-closes
+    // honestly (verify-failed:mismatch, observed interval 1).
+    evidence: ["UI2-b", "UIC1-a", "UIC6-k", "UIC7-b"],
+  },
   "todo.pause-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.resume-repeat": { status: "lab-certified", evidence: ["UI2-c", "UIC1-a"] },
   "todo.convert-to-project": { status: "lab-certified", evidence: ["UI2-d", "UIC1-a"] },
@@ -72,7 +82,9 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   },
   "project.make-repeating": {
     status: "lab-certified",
-    evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i"],
+    // UIC7b: create-probe now verifies the decoded rule (type/unit/interval) —
+    // the interval guard covers project make + the create-repeating promote leg.
+    evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i", "UIC7b"],
   },
   "heading.convert-to-project": {
     status: "lab-certified",

@@ -1743,14 +1743,17 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
     pre.sameTitleUuids = sameTitleTaskUuids(db, nonHeadingTitle(pre), "to-do");
     return pre;
   },
-  expectedDelta(pre, _params, ctx) {
+  expectedDelta(pre, params, ctx) {
     // Identity REPLACEMENT or preserve-as-instance (UI2-a / RSIM-R): a NEW
     // template row (type=0 with a recurrence rule) is born; the original uuid is
     // EITHER destroyed OR relinked as the current-occurrence instance. Discover
     // the template with the create probe (excluding the pre-existing same-title
     // rows), pick it by asserting it IS a template, then the `repeating` context
     // hardens discovery (restored time-bound, source-fingerprint tiebreak) and
-    // derives instance + source fate for the enriched result.
+    // derives instance + source fate for the enriched result. `expectedRule`
+    // makes the LANDED rule verifiable: a template minted with the wrong
+    // frequency/interval (the interval-field race, oddities §8l) becomes a
+    // verify-failed:mismatch instead of a silent ok.
     return {
       mode: "create",
       probe: {
@@ -1762,6 +1765,11 @@ const todoMakeRepeating: CommandSpec<"todo.make-repeating"> = {
           repeating: {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
+            expectedRule: {
+              type: params.afterCompletion === true ? "after-completion" : "fixed",
+              unit: params.frequency,
+              interval: params.interval,
+            },
           },
         }),
       },
@@ -1787,12 +1795,22 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
-    // place. Assert the decoded rule's frequency + interval; ALSO capture the
-    // whole prior rule (+ deadline flag) so the undo can re-drive it faithfully.
+    // place. Assert the decoded rule's TYPE + frequency + interval; ALSO capture
+    // the whole prior rule (+ deadline flag) so the undo can re-drive it
+    // faithfully. Asserting `type` (fixed vs after-completion) is what makes a
+    // fixed→after-completion conversion VERIFIABLE at all: in the field-report
+    // incident (0½ item 1) both rules were weekly/interval-2, so unit+interval
+    // never changed — only the type flipped, and without this assertion verify
+    // could neither confirm the conversion landed nor tell the pre-drive
+    // idempotency check that the target had not yet been reached.
     return {
       mode: "update",
       uuid: params.uuid,
       assert: [
+        {
+          field: "repeating.rule.type",
+          equals: params.afterCompletion === true ? "after-completion" : "fixed",
+        },
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
@@ -1869,11 +1887,17 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
-    // capture the prior rule (+ deadline flag) for the faithful undo.
+    // capture the prior rule (+ deadline flag) for the faithful undo. Assert the
+    // rule TYPE too (fixed vs after-completion) so a conversion that leaves
+    // unit+interval unchanged is still verifiable — see todo.reschedule-repeat.
     return {
       mode: "update",
       uuid: params.uuid,
       assert: [
+        {
+          field: "repeating.rule.type",
+          equals: params.afterCompletion === true ? "after-completion" : "fixed",
+        },
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
@@ -1955,13 +1979,14 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
     if (pre.target !== null) pre.repeatSubtreeUuids = projectSubtreeUuids(db, pre.target.uuid);
     return pre;
   },
-  expectedDelta(pre, _params, ctx) {
+  expectedDelta(pre, params, ctx) {
     // Identity REPLACEMENT or preserve-as-instance (UIC4-b / RSIM-R): a NEW
     // template project (with a recurrence rule) is born; the source project is
     // EITHER destroyed OR (when its subtree holds a nested repeater) relinked as
     // the current-occurrence instance. Pick the TEMPLATE by asserting it IS one,
     // excluding pre-existing same-title rows; the `repeating` context hardens
     // discovery and derives instance + source fate + childrenReplaced.
+    // `expectedRule` makes the landed rule verifiable (interval-race guard, §8l).
     return {
       mode: "create",
       probe: {
@@ -1974,6 +1999,11 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
             sourceUuid: pre.target.uuid,
             fingerprint: buildRepeatingFingerprint(pre.target),
             subtreeUuids: pre.repeatSubtreeUuids ?? [],
+            expectedRule: {
+              type: params.afterCompletion === true ? "after-completion" : "fixed",
+              unit: params.frequency,
+              interval: params.interval,
+            },
           },
         }),
       },

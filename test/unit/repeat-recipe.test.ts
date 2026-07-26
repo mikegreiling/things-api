@@ -94,13 +94,32 @@ describe("repeat dialog recipe — per-control drive", () => {
     expect(values).toContain("8th");
   });
 
-  it("after-completion: frequency = after completion + a SINGULAR unit pop-up", () => {
+  it("after-completion: frequency = after completion + a plural-safe unit pop-up (defect (c))", () => {
     const steps = dialogSteps({ afterCompletion: true });
-    const values = steps.filter((s) => s.primitive === "select-popup").map((s) => s.value);
-    expect(values).toContain("after completion");
-    // the unit pop-up options are singular (day/week/month/year), not the frequency word
-    expect(values).toContain("week");
-    expect(values).not.toContain("weekly");
+    const selects = steps.filter((s) => s.primitive === "select-popup");
+    expect(selects.map((s) => s.value)).toContain("after completion");
+    // The unit pop-up is driven by a CANDIDATE list (singular AND plural), not a
+    // single label: the app pluralizes by interval (week @1, weeks @>1) and a
+    // reschedule opens pre-populated with the current interval, so the singular
+    // form alone died in the field report (0½ (c)). Both must be offered.
+    const unit = selects.find((s) => s.valueCandidates !== undefined);
+    expect(unit?.valueCandidates).toEqual(["week", "weeks"]);
+    // it is NOT the frequency word
+    expect(unit?.valueCandidates).not.toContain("weekly");
+  });
+
+  it("after-completion unit candidates are singular+plural for every frequency", () => {
+    const cases: ["daily" | "weekly" | "monthly" | "yearly", [string, string]][] = [
+      ["daily", ["day", "days"]],
+      ["weekly", ["week", "weeks"]],
+      ["monthly", ["month", "months"]],
+      ["yearly", ["year", "years"]],
+    ];
+    for (const [freq, expected] of cases) {
+      const steps = dialogSteps({ afterCompletion: true }, freq);
+      const unit = steps.find((s) => s.valueCandidates !== undefined);
+      expect(unit?.valueCandidates).toEqual(expected);
+    }
   });
 
   it("ends after N: an ends pop-up + a count field", () => {
