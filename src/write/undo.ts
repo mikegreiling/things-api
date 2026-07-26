@@ -43,6 +43,8 @@ import { join } from "node:path";
 
 import { undoToken, type AuditRecord } from "../audit/schema.ts";
 import type { AnyTask } from "../model/entities.ts";
+import { isUuidInScope, type ResolvedScope } from "../read/scope.ts";
+import type { DatabaseSync } from "node:sqlite";
 import { localToday } from "../model/dates.ts";
 import { getField } from "./verify/delta.ts";
 import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
@@ -271,6 +273,34 @@ export function selectUndoTargets(
       ? undoable
       : undoable.filter((r) => r.actor === selector.by);
   return byActor.slice(-Math.max(1, selector.last ?? 1)).toReversed();
+}
+
+/**
+ * Container-scope selection filter (leak surface 7). When a scope is active, an
+ * audit record qualifies for undo — listing, selection, or result shaping — ONLY
+ * if its target uuid CURRENTLY resolves in scope (the same `inScopeItem` /
+ * `scopeMembershipSql` relation reads and writes share). Applied to the WHOLE
+ * trail before any selector runs, so:
+ *  - an out-of-scope record's title/uuid never surfaces in `--dry-run`/undo
+ *    output (it is invisible, exactly like a trail with no such record);
+ *  - a `--txn` token naming an out-of-scope record fails with the SAME error an
+ *    unknown token does (its inverse record is filtered too, so the
+ *    already-undone branch can't fire and expose an out-of-scope/undone leak).
+ *
+ * Rule (documented in docs/design/container-scope.md §5, leak surface 7):
+ * the target must currently resolve in scope; an UNRESOLVABLE target (uuid
+ * absent, or the row hard-deleted so membership can't be verified) is EXCLUDED
+ * under a scope — its record still carries out-of-scope titles, and fail-closed
+ * is the honest reading. The full (unfiltered) trail is still handed to
+ * `planUndo` for compound-leg / prior-rule reconstruction of the records that
+ * DID qualify.
+ */
+function filterRecordsByScope(
+  db: DatabaseSync,
+  scope: ResolvedScope,
+  records: AuditRecord[],
+): AuditRecord[] {
+  return records.filter((r) => r.uuid !== null && isUuidInScope(db, r.uuid, scope));
 }
 
 // -------------------------------------------------------------- plan builder
@@ -1634,11 +1664,18 @@ export async function runUndo(
   onItem?: (item: UndoItemResult) => void,
 ): Promise<UndoItemResult[]> {
   const records = readAuditRecords(auditDirPath);
+  // Container scope (leak surface 7): restrict the trail to in-scope records
+  // BEFORE any listing, selection, or the --txn parity checks — so an
+  // out-of-scope record never surfaces and an out-of-scope token is
+  // indistinguishable from an unknown one. planUndo still gets the FULL trail
+  // (compound-leg / prior-rule reconstruction) for the records that qualify.
+  const selectable =
+    deps.scope !== undefined ? filterRecordsByScope(deps.db, deps.scope, records) : records;
   // Exact-token selection is loud and specific: distinguish a token that was
   // already undone (an inverse for it is on the trail) from one that never
   // named an undoable mutation. Both are usage errors (RangeError → exit 2).
   if (options.txn !== undefined) {
-    const alreadyUndone = records.some(
+    const alreadyUndone = selectable.some(
       (r) => r.undoOf === options.txn && r.result === "ok" && r.actor.startsWith("undo:"),
     );
     if (alreadyUndone) {
@@ -1647,14 +1684,14 @@ export async function runUndo(
           "trail); there is nothing left to undo",
       );
     }
-    if (selectUndoTargets(records, { txn: options.txn }).length === 0) {
+    if (selectUndoTargets(selectable, { txn: options.txn }).length === 0) {
       throw new RangeError(
         `no undoable mutation has undo token "${options.txn}" — check the token from the ` +
           "mutation result, or run `things undo --dry-run` to list recent targets",
       );
     }
   }
-  const targets = selectUndoTargets(records, {
+  const targets = selectUndoTargets(selectable, {
     ...(options.last !== undefined && { last: options.last }),
     ...(options.by !== undefined && { by: options.by }),
     ...(options.txn !== undefined && { txn: options.txn }),

@@ -210,7 +210,7 @@ keyed to one.
 | `search` / `liteTitleSearch` | Post-filter; truncation total recomputed over survivors. |
 | `changes --since` | Filtered by `inScopeItem`. |
 | Counts / badges / truncation totals | Today badge recomputed over in-scope survivors; every total computed after the scope filter, before the cap. |
-| Undo trail | Every inverse runs through the gate (per-leg refusal). |
+| Undo trail (`runUndo`) | **Closed.** The selection path filters the WHOLE trail to in-scope records BEFORE any listing, selection, or `--txn` check (`filterRecordsByScope`). Rule: **a record qualifies only if its target uuid CURRENTLY resolves in scope** (the same `inScopeItem` / `scopeMembershipSql` relation); an UNRESOLVABLE target — uuid absent, or the row hard-deleted so membership can't be verified — is EXCLUDED under a scope (its record still carries out-of-scope titles; fail-closed is the honest reading). So default/`--by` selection never sees an out-of-scope record ("nothing to undo" when none qualify, identical to an empty trail), and a `--txn` token naming an out-of-scope record fails BYTE-IDENTICALLY to an unknown token (its inverse record is filtered too, so the already-undone branch can't fire and expose it). The full trail is still handed to `planUndo` for the qualifying records' compound-leg / prior-rule reconstruction. Every inverse ALSO runs through the write gate (per-leg refusal) — defense in depth. |
 | Audit records | The blocked *result* over the wire follows the parity rules; the host-side audit *file* (never agent-visible over MCP) may record the requested params — it is the owner's log. |
 | **9. MCP `buildInstructions()` inventory** | The instructions embed the live area/tag/project inventory. Because they are built via the SCOPED client, `areas()`/`projects()` are already filtered to in-scope containers — out-of-scope names are never embedded. A plain scope note states the bounds. |
 
@@ -296,5 +296,7 @@ scope must never be a mystery jail. MCP includes the scope in the (filtered)
 golden, candidate parity, add-redirect, project-scope refusals, duplicate,
 `--area` composition), `test/mcp/scope-instructions.test.ts` (the buildInstructions
 inventory assertion — out-of-scope names absent), `test/cli/scope-cli.test.ts`
-(`meta.scope` emission + hiding), `test/cli/config-get-cli.test.ts` (the `scope`
+(`meta.scope` emission + hiding), `test/engine/scope-undo.test.ts` (the undo
+trail filter — out-of-scope records invisible, the `--txn` parity golden incl.
+the already-undone case), `test/cli/config-get-cli.test.ts` (the `scope`
 config key).
