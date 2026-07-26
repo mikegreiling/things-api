@@ -237,11 +237,31 @@ export class ReferenceResolutionError extends RangeError {
   }
 }
 
-export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity = "to-do"): string {
+/**
+ * An optional membership clause (on alias `t`) restricting a resolver to
+ * in-scope rows — the container-scope no-oracle mechanism. When supplied, an
+ * out-of-scope row resolves to "not found" through the IDENTICAL code path a
+ * nonexistent one does, so the two are byte-indistinguishable. Built by
+ * `src/read/scope.ts`; queries.ts treats it as opaque SQL to avoid a runtime
+ * import cycle.
+ */
+export interface ScopeClause {
+  where: string;
+  binds: (string | number)[];
+}
+
+export function resolveTaskUuidPrefix(
+  db: DatabaseSync,
+  refRaw: string,
+  entity = "to-do",
+  scope?: ScopeClause,
+): string {
   const ref = stripThingsUri(refRaw);
-  const exact = db.prepare("SELECT uuid FROM TMTask WHERE uuid = ?").get(ref) as
-    | { uuid: string }
-    | undefined;
+  const scopeCond = scope !== undefined ? ` AND ${scope.where}` : "";
+  const scopeBinds = scope?.binds ?? [];
+  const exact = db
+    .prepare(`SELECT t.uuid FROM TMTask t WHERE t.uuid = ?${scopeCond}`)
+    .get(ref, ...scopeBinds) as { uuid: string } | undefined;
   if (exact !== undefined) return exact.uuid;
   if (ref.length < 6) {
     throw new RangeError(
@@ -250,8 +270,10 @@ export function resolveTaskUuidPrefix(db: DatabaseSync, refRaw: string, entity =
   }
   const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
   const rows = db
-    .prepare("SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ? LIMIT 6")
-    .all(ref, upper) as { uuid: string; title: string | null }[];
+    .prepare(
+      `SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ?${scopeCond} LIMIT 6`,
+    )
+    .all(ref, upper, ...scopeBinds) as { uuid: string; title: string | null }[];
   if (rows.length === 0) {
     throw new ReferenceResolutionError(noUuidMatch(entity, ref), { code: "not-found", ref });
   }
@@ -306,14 +328,19 @@ export function resolveNamedRef(
   extraWhere: string,
   extraBinds: (string | number)[],
   refRaw: string,
-  options?: { prefixTier?: boolean },
+  options?: { prefixTier?: boolean; scopeWhere?: string; scopeBinds?: (string | number)[] },
 ): NamedResolution {
   const ref = stripThingsUri(refRaw);
+  // Container scope: an extra UNqualified membership clause AND-ed into every
+  // tier, so an out-of-scope row is invisible to resolution — the same rows a
+  // nonexistent ref matches (none), keeping the not-found path byte-identical.
+  const scopeCond = options?.scopeWhere !== undefined ? ` AND ${options.scopeWhere}` : "";
+  const scopeBinds = options?.scopeBinds ?? [];
   type Row = { uuid: string; title: string };
   const sel = (cond: string, extra: (string | number)[] = []): Row[] =>
     db
-      .prepare(`SELECT uuid, title FROM ${table} WHERE ${extraWhere} AND ${cond}`)
-      .all(...extraBinds, ...extra) as unknown as Row[];
+      .prepare(`SELECT uuid, title FROM ${table} WHERE ${extraWhere} AND ${cond}${scopeCond}`)
+      .all(...extraBinds, ...extra, ...scopeBinds) as unknown as Row[];
 
   const byId = sel("uuid = ?", [ref]);
   if (byId.length === 1) return { resolved: byId[0] ?? null, matches: 1 };
@@ -357,7 +384,7 @@ function resolveUuidOrThrow(
   ref: string,
   kind: string,
   listCmd: string,
-  options?: { prefixTier?: boolean },
+  options?: { prefixTier?: boolean; scopeWhere?: string; scopeBinds?: (string | number)[] },
 ): string {
   const r = resolveNamedRef(db, table, extraWhere, [], ref, options);
   if (r.resolved !== null) return r.resolved.uuid;
@@ -392,16 +419,23 @@ function resolveUuidOrThrow(
  * closed with a candidate listing on an ambiguous name so a duplicated project
  * title is disambiguated by uuid rather than guessed.
  */
-export function resolveProjectWriteTarget(db: DatabaseSync, refRaw: string): string {
+export function resolveProjectWriteTarget(
+  db: DatabaseSync,
+  refRaw: string,
+  scope?: { task: ScopeClause; named: { where: string; binds: (string | number)[] } },
+): string {
   const ref = stripThingsUri(refRaw);
   try {
-    return resolveTaskUuidPrefix(db, ref, "project");
+    return resolveTaskUuidPrefix(db, ref, "project", scope?.task);
   } catch (err) {
     // An ambiguous uuid-prefix is a real conflict — surface it verbatim. A
     // plain not-found (or too-short) ref is not a uuid: fall to the name tiers.
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
   }
-  const r = resolveNamedRef(db, "TMTask", "type = 1", [], ref, { prefixTier: false });
+  const r = resolveNamedRef(db, "TMTask", "type = 1", [], ref, {
+    prefixTier: false,
+    ...(scope !== undefined && { scopeWhere: scope.named.where, scopeBinds: scope.named.binds }),
+  });
   if (r.resolved !== null) return r.resolved.uuid;
   if (r.matches === 0) {
     throw new ReferenceResolutionError(
@@ -448,7 +482,12 @@ export function resolveTagUuid(db: DatabaseSync, ref: string): string {
 export function resolveProjectUuid(
   db: DatabaseSync,
   ref: string,
-  options?: { trashed?: boolean; prefixTier?: boolean },
+  options?: {
+    trashed?: boolean;
+    prefixTier?: boolean;
+    scopeWhere?: string;
+    scopeBinds?: (string | number)[];
+  },
 ): string {
   return resolveUuidOrThrow(
     db,
@@ -464,7 +503,7 @@ export function resolveProjectUuid(
 export function resolveAreaUuid(
   db: DatabaseSync,
   ref: string,
-  options?: { prefixTier?: boolean },
+  options?: { prefixTier?: boolean; scopeWhere?: string; scopeBinds?: (string | number)[] },
 ): string {
   return resolveUuidOrThrow(db, "TMArea", "1=1", ref, "area", "things areas", options);
 }

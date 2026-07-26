@@ -346,6 +346,9 @@ which overrides the built-in default.
   maxDisruption       ceiling for how disruptive a change may be
   ui-enabled          allow the GUI-driven operations
   allow-experimental  enable experimental strategies (e.g. native reorder)
+  scope               limit this host to one area/project — jails EVERY command,
+                      your own terminal included, until \`config set scope ""\`; for
+                      one process prefer \`things mcp --scope\` / THINGS_API_SCOPE
 
 Writes are NAMESPACED: a bare \`things <verb> …\` (update, add, delete, complete,
 cancel, move, …) is not a command — it points you at the typed form

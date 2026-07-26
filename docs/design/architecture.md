@@ -380,6 +380,31 @@ Redaction is structural: the writer refuses to serialize any string matching the
 
 **P4 — Vector expansion (feeds from lab workstream).** AppleScript/Shortcuts matrices land as data; `open -g` tier-1 probe result folded in; Today/Evening synthetic reorder behind `experimental` config; MCP adapter as a separate thin package consuming the library; baseline additions for new Things versions.
 
+## 9. Container scope (sandbox)
+
+An optional process-level policy that jails a client to ONE container — an area
+or a project. Resolved once at `openThings()` (pinned on `client.scope`),
+precedence MCP `--scope` flag > `THINGS_API_SCOPE` env > stored `scope` config
+(the flag inverts the usual `env > stored` order — the launcher's boundary must
+not be agent-overridable). Enforcement lives ONCE in the library, so both
+consumer surfaces inherit it:
+
+- **Reads** apply a single membership relation (`src/read/scope.ts`:
+  `inScopeItem` / `scopeMembershipSql`, generalizing the `--area` post-filter's
+  `EFFECTIVE_AREA` chain) at every `client.read.*` seam — after the view is
+  shaped, before the row cap, so truncation totals stay honest.
+- **Writes** pass a universal gate in `runMutation` (`evaluateScope`,
+  `src/write/scope-guard.ts`) that runs for EVERY op before `evaluateGuards`,
+  plus scope-aware target resolution.
+
+The invariant is **no oracle**: an out-of-scope item is byte-indistinguishable
+from a nonexistent one (target resolution, `byUuid`, `show`, ref candidates,
+search, and error copy all answer "not found" identically). Scope is orthogonal
+to and composes with the two-key write gates and `maxDisruption` — it never
+weakens them. The MCP `--scope` flag is a genuine sandbox (no tool can unscope);
+env/config scope is advisory unless the harness pins the environment. Full
+design, trust model, and the per-op matrix: [container-scope.md](container-scope.md).
+
 ## References
 
 - Node.js SQLite docs (Stability 1.2 — Release candidate): https://nodejs.org/api/sqlite.html

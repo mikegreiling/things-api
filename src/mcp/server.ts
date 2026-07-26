@@ -79,6 +79,15 @@ export interface McpServerOptions {
    * Undefined leaves the config profile's default in force.
    */
   maxDisruption?: DisruptionTier;
+  /**
+   * Container scope for this server: a ref (uuid / uuid-prefix / unique area or
+   * project name) jailing EVERY tool call to one container. This is the real
+   * trust boundary — fixed at daemon spawn by whoever controls the launch, and
+   * no tool can unscope. It OUTRANKS `THINGS_API_SCOPE` (an agent that can set
+   * env must not override the launcher's flag). Unresolvable → the server
+   * refuses to start. See docs/design/container-scope.md.
+   */
+  scope?: string;
   /** Test seam: forwarded to openThings (fake vectors, pinned clock, env). */
   openOptions?: OpenOptions;
 }
@@ -396,6 +405,17 @@ function buildInstructions(getClient: () => ThingsClient): string {
   ];
   try {
     const c = getClient();
+    // Under a container scope the inventory below is already limited to in-scope
+    // containers (the client filters areas/projects), so out-of-scope names are
+    // never embedded here. State the scope plainly so the agent knows its bounds.
+    if (c.scope !== undefined) {
+      lines.push(
+        "",
+        `Scope: this server is limited to the ${c.scope.kind} "${c.scope.title}". Only items ` +
+          "within it are readable, and every change is confined to it; a reference naming anything " +
+          "outside it returns not-found, exactly as a nonexistent reference does.",
+      );
+    }
     const areas = c.read.areas();
     const tags = c.read.tags();
     const projects = c.read.projects();
@@ -472,6 +492,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   const getClient = (): ThingsClient => {
     client ??= openThings({
       ...(options.dbPath !== undefined && { dbPath: options.dbPath }),
+      ...(options.scope !== undefined && { scope: options.scope }),
       ...options.openOptions,
     });
     return client;

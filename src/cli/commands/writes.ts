@@ -1889,7 +1889,7 @@ export function registerWriteCommands(program: Command): void {
     .command("set <key> <value>")
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
-        "accepted-fingerprint | allow-experimental | ui-enabled",
+        "accepted-fingerprint | allow-experimental | ui-enabled | scope",
     )
     .action((key: string, value: string) => {
       const map: Record<string, string> = {
@@ -1900,6 +1900,7 @@ export function registerWriteCommands(program: Command): void {
         "accepted-fingerprint": "acceptedFingerprint",
         "allow-experimental": "allowExperimental",
         "ui-enabled": "uiEnabled",
+        scope: "scope",
       };
       const target = map[key];
       if (target === undefined) {
@@ -1915,5 +1916,16 @@ export function registerWriteCommands(program: Command): void {
             : value;
       saveConfigKey(target as never, parsed);
       process.stdout.write(`set ${key} = ${String(parsed)}\n`);
+      // A stored scope jails EVERY process on this host — including this
+      // terminal — until removed. Per-process scoping belongs on the
+      // THINGS_API_SCOPE env var or the `things mcp --scope` flag instead.
+      if (target === "scope") {
+        process.stderr.write(
+          "warning: a stored scope limits EVERY things-api process on this machine to " +
+            `"${value}" — including your own terminal — until you clear it with ` +
+            '`things config set scope ""`. For per-process limits (e.g. one MCP server), ' +
+            "prefer `things mcp --scope <ref>` or the THINGS_API_SCOPE environment variable.\n",
+        );
+      }
     });
 }

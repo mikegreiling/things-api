@@ -156,6 +156,20 @@ export interface EnvelopeMeta {
    * shape is unchanged for unscoped reads (the `meta.clock` precedent).
    */
   filter?: { area: { uuid: string; title: string } };
+  /**
+   * The active container scope this response was jailed to (ADDITIVE). Present
+   * ONLY when a scope is in force (the MCP `--scope` flag / `THINGS_API_SCOPE` /
+   * a stored `scope`), naming the container + where the scope came from; ABSENT
+   * otherwise, so the wire shape is unchanged for unscoped reads. Lets an agent
+   * know its own jail — which is not an oracle for what lies outside it (the
+   * `meta.clock` / `meta.filter` additive precedent).
+   */
+  scope?: {
+    kind: "area" | "project";
+    uuid: string;
+    title: string;
+    source: "flag" | "env" | "config";
+  };
 }
 
 export interface OkEnvelope<T> {
