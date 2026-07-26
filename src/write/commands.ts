@@ -1787,12 +1787,22 @@ const todoRescheduleRepeat: CommandSpec<"todo.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UI2-b): the same template uuid, rule mutated in
-    // place. Assert the decoded rule's frequency + interval; ALSO capture the
-    // whole prior rule (+ deadline flag) so the undo can re-drive it faithfully.
+    // place. Assert the decoded rule's TYPE + frequency + interval; ALSO capture
+    // the whole prior rule (+ deadline flag) so the undo can re-drive it
+    // faithfully. Asserting `type` (fixed vs after-completion) is what makes a
+    // fixed→after-completion conversion VERIFIABLE at all: in the field-report
+    // incident (0½ item 1) both rules were weekly/interval-2, so unit+interval
+    // never changed — only the type flipped, and without this assertion verify
+    // could neither confirm the conversion landed nor tell the pre-drive
+    // idempotency check that the target had not yet been reached.
     return {
       mode: "update",
       uuid: params.uuid,
       assert: [
+        {
+          field: "repeating.rule.type",
+          equals: params.afterCompletion === true ? "after-completion" : "fixed",
+        },
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],
@@ -1869,11 +1879,17 @@ const projectRescheduleRepeat: CommandSpec<"project.reschedule-repeat"> = {
   },
   expectedDelta(_pre, params) {
     // Identity PRESERVED (UIC2-a): same project uuid, rule mutated in place;
-    // capture the prior rule (+ deadline flag) for the faithful undo.
+    // capture the prior rule (+ deadline flag) for the faithful undo. Assert the
+    // rule TYPE too (fixed vs after-completion) so a conversion that leaves
+    // unit+interval unchanged is still verifiable — see todo.reschedule-repeat.
     return {
       mode: "update",
       uuid: params.uuid,
       assert: [
+        {
+          field: "repeating.rule.type",
+          equals: params.afterCompletion === true ? "after-completion" : "fixed",
+        },
         { field: "repeating.rule.unit", equals: params.frequency },
         { field: "repeating.rule.interval", equals: params.interval },
       ],

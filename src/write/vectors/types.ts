@@ -142,6 +142,17 @@ export interface UiStep {
   canaryPath?: string;
   /** set-value: the string typed into the field. */
   value?: string;
+  /**
+   * select-popup: alternative menu-item LABELS, tried in order — the driver
+   * clicks the FIRST that exists in the open pop-up (fail-closed if none do).
+   * Used where the same option carries more than one display label depending on
+   * dialog state: the after-completion cadence unit reads SINGULAR at interval 1
+   * (`week`) but PLURAL at interval > 1 (`weeks`), and the reschedule dialog
+   * opens pre-populated with the item's CURRENT interval — so a biweekly
+   * repeater's unit pop-up already reads `weeks` before the interval is touched
+   * (0½ defect (c)). Overrides `value` when present.
+   */
+  valueCandidates?: string[];
   /** key: a keyboard spec (e.g. "down down return" for a dropdown pick). */
   keys?: string;
   /** wait: how long to poll for the element before aborting. */

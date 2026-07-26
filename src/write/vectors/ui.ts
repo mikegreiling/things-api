@@ -154,6 +154,22 @@ end tell`;
  * stable command shape per primitive.
  */
 export function axSelectPopupScript(path: string, value: string): string {
+  return axSelectPopupCandidatesScript(path, [value]);
+}
+/**
+ * select-popup with a CANDIDATE LABEL LIST: open the pop-up (self-healing, as
+ * above), then click the FIRST candidate menu item that EXISTS, failing closed
+ * (an `error`, so the step reports transport failure) when none do. This is how
+ * the after-completion cadence unit is driven: its label is SINGULAR at interval
+ * 1 (`week`) but PLURAL at interval > 1 (`weeks`), and a reschedule opens the
+ * dialog pre-populated with the item's current interval — so a biweekly
+ * repeater's unit pop-up reads `weeks` before the interval field is ever touched
+ * (0½ defect (c): the field report's drive died on `menu item "week" not
+ * found`). Trying both labels makes the selection order-independent and
+ * plural-safe. One stable command shape per primitive.
+ */
+export function axSelectPopupCandidatesScript(path: string, values: string[]): string {
+  const list = values.map((v) => `"${escapeAppleScript(v)}"`).join(", ");
   return `${SE}
   set pu to (${path})
   repeat 20 times
@@ -161,7 +177,13 @@ export function axSelectPopupScript(path: string, value: string): string {
     click pu
     delay 0.3
   end repeat
-  click menu item "${escapeAppleScript(value)}" of menu 1 of pu
+  repeat with candidate in {${list}}
+    if (exists menu item candidate of menu 1 of pu) then
+      click menu item candidate of menu 1 of pu
+      return
+    end if
+  end repeat
+  error "none of the candidate menu items exist: " & {${list}}
 end tell`;
 }
 /**
@@ -257,6 +279,56 @@ export function axKeyScript(keys: string): string {
 /** The abort keystroke sent to dismiss a half-open sheet/popover on failure. */
 export function axAbortScript(): string {
   return `tell application "System Events" to key code 53`; // Escape
+}
+
+/**
+ * sheet-open probe: is a modal SHEET attached to the Things standard window, OR
+ * a detached repeat-editor / popover window (an `AXUnknown` that is not the
+ * 40×40 utility window) present right now? Returns "true"/"false". Used to (d)
+ * VERIFY an abort actually dismissed the sheet before claiming it did, and (e)
+ * DIAGNOSE a canary miss that is really a leftover sheet from an earlier aborted
+ * drive disabling the menu bar. Wrapped in `try` blocks so a missing standard
+ * window (a rare transient) reads as "no sheet" rather than erroring. One stable
+ * command shape.
+ */
+export function axSheetOpenScript(): string {
+  return `${SE}
+  set sheetOpen to false
+  try
+    if (exists sheet 1 of (first window whose subrole is "AXStandardWindow")) then set sheetOpen to true
+  end try
+  try
+    if ((count of (windows whose subrole is "AXUnknown" and size is not {40, 40})) > 0) then set sheetOpen to true
+  end try
+  return sheetOpen
+end tell`;
+}
+
+/** Is a modal sheet / detached editor currently open? Fail-closed: an errored probe reads as "still open". */
+async function sheetStillOpen(run: UiRunner): Promise<boolean> {
+  const res = await run(
+    { primitive: "resolve", label: "sheet-open probe", script: axSheetOpenScript() },
+    STEP_TIMEOUT_MS,
+  );
+  // Only a clean "false" clears the sheet; a probe error is treated as "may
+  // still be open" (fail-closed doctrine — never claim dismissal we can't see).
+  return !(res.ok && res.stdout.trim() === "false");
+}
+
+/**
+ * Send Escape and VERIFY the sheet/popover is gone (0½ defect (d): the abort
+ * must never claim dismissal it did not confirm). Retries Escape ONCE if the
+ * first is not honored. Returns whether dismissal was verified — the caller
+ * words its partial-state report accordingly (fail-closed: on an unverifiable
+ * dismissal it must warn the sheet may remain open).
+ */
+async function verifiedAbort(run: UiRunner): Promise<{ dismissed: boolean }> {
+  const escape = (): Promise<UiRunResult> =>
+    run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
+  await escape();
+  if (!(await sheetStillOpen(run))) return { dismissed: true };
+  await escape(); // one retry
+  return { dismissed: !(await sheetStillOpen(run)) };
 }
 
 /**
@@ -465,7 +537,10 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
       return {
         primitive: "select-popup",
         label: step.label,
-        script: axSelectPopupScript(step.path ?? "", step.value ?? ""),
+        script:
+          step.valueCandidates !== undefined
+            ? axSelectPopupCandidatesScript(step.path ?? "", step.valueCandidates)
+            : axSelectPopupScript(step.path ?? "", step.value ?? ""),
       };
     case "set-datetime":
       return {
@@ -567,13 +642,21 @@ async function driveClickElement(
 
 async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<ExecuteResult> {
   const done: string[] = [];
-  const abort = (): Promise<UiRunResult> =>
-    run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
-  const partial = (failed: string, why: string, dismissed = true): ExecuteResult =>
-    refusal(
-      `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.` +
-        (dismissed ? " The open sheet/popover was dismissed (Escape)." : ""),
-    );
+  // `dismissed`: true = abort verified the sheet gone; false = abort could NOT
+  // confirm dismissal (warn it may remain open — 0½ defect (d): never claim a
+  // dismissal we did not see); undefined = no sheet was opened / no abort ran.
+  const partial = (failed: string, why: string, dismissed?: boolean): ExecuteResult => {
+    const base = `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.`;
+    const cleanup =
+      dismissed === true
+        ? " The open sheet/popover was dismissed (Escape, confirmed gone)."
+        : dismissed === false
+          ? " WARNING: a sheet or popover may still be open in Things — Escape did not dismiss it." +
+            " Dismiss it manually before retrying (a leftover sheet disables the menu bar and will" +
+            " make the next drive's preflight fail)."
+          : "";
+    return refusal(base + cleanup);
+  };
 
   // 0. Run the leading reveal/activate preamble BEFORE the canary. The Items
   //    menu is context-dependent — its Repeat submenu (and the plain "Repeat…"
@@ -610,6 +693,21 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       STEP_TIMEOUT_MS,
     );
     if (!res.ok || res.stdout.trim() !== "true") {
+      // (e) A leftover modal sheet/popover from an earlier aborted drive disables
+      // the menu bar, so the Items ▸ Repeat path cannot resolve. Detect that
+      // FIRST and name it as the likely cause, ahead of the generic
+      // update/Accessibility/language guesses. Not auto-dismissed on a preflight:
+      // the leftover sheet may hold a half-entered rule, and this refusal already
+      // carries a clean remediation (the drive's own aborts DO dismiss+verify).
+      if (await sheetStillOpen(run)) {
+        return refusal(
+          `ui preflight refused: element for "${label}" did not resolve (${path}). A modal sheet ` +
+            "or popover is currently open in Things — most likely left over from an earlier drive " +
+            "that aborted without dismissing it. An open sheet disables the menu bar, so the Repeat " +
+            "menu path cannot resolve. Dismiss the open sheet in Things (Escape or Cancel), then " +
+            "retry. Nothing was pressed.",
+        );
+      }
       return refusal(
         `ui preflight refused: element for "${label}" did not resolve (${path}) — a Things ` +
           "update may have changed the menu, Accessibility may not be granted, Things may not " +
@@ -632,9 +730,13 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
         run,
       );
       if (!ok) {
-        // the abort keystroke must land before returning the partial-state report
-        await abort();
-        return partial(step.label, "the expected element never appeared within the timeout");
+        // the abort keystroke must land (and be verified) before returning the partial-state report
+        const { dismissed } = await verifiedAbort(run);
+        return partial(
+          step.label,
+          "the expected element never appeared within the timeout",
+          dismissed,
+        );
       }
       done.push(step.label);
       continue;
@@ -643,10 +745,11 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // The sidebar drag driver runs its own snapshot → scroll → drag →
       // DB-assert ladder (ui-drag.ts); every gesture anchors on frames it
       // resolves live, and a failed assert triggers a verified recovery drag.
-      if (step.drag === undefined) return partial(step.label, "no drag spec compiled", false);
+      // No sheet is involved in a drag, so no dismissal clause.
+      if (step.drag === undefined) return partial(step.label, "no drag spec compiled");
       // the drag ladder depends on the UI state the preamble produced
       const outcome = await driveSidebarAreaReorder(step.drag, run, aux);
-      if (!outcome.ok) return partial(step.label, outcome.detail, false);
+      if (!outcome.ok) return partial(step.label, outcome.detail);
       done.push(`${step.label} (${outcome.detail})`);
       continue;
     }
@@ -656,12 +759,13 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // the effective form must be resolved before this step can act on it
       const effective = await resolveStepPath(step, run);
       if (effective === null) {
-        // dismiss whatever opened before reporting
-        await abort();
+        // dismiss whatever opened (and verify) before reporting
+        const { dismissed } = await verifiedAbort(run);
         return partial(
           step.label,
           "none of its expected element shapes resolved (neither the attached sheet nor the " +
             "detached repeat editor window)",
+          dismissed,
         );
       }
       step = { ...step, path: effective };
@@ -674,8 +778,8 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // the selection must land before the menu that acts on it is pressed
       const res = await run(command, STEP_TIMEOUT_MS);
       if (!res.ok || res.stdout.trim() !== "OK") {
-        // clear any transient state before reporting
-        await abort();
+        // clear any transient state (and verify) before reporting
+        const { dismissed } = await verifiedAbort(run);
         const noMatch =
           step.primitive === "select-heading-row"
             ? "the project view exposed no selectable heading row at the target position — the " +
@@ -689,6 +793,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
             : res.timedOut === true
               ? "the row-selection step timed out"
               : res.stderr.trim() || "the row-selection step failed",
+          dismissed,
         );
       }
       done.push(step.label);
@@ -700,9 +805,10 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // the click depends on the UI state the previous step produced
       const outcome = await driveClickElement(step, run);
       if (!outcome.ok) {
-        // dismiss whatever the click opened before reporting
-        if (outcome.needsAbort === true) await abort();
-        return partial(step.label, outcome.why ?? "the click failed");
+        // dismiss whatever the click opened (and verify) before reporting
+        const dismissed =
+          outcome.needsAbort === true ? (await verifiedAbort(run)).dismissed : undefined;
+        return partial(step.label, outcome.why ?? "the click failed", dismissed);
       }
       done.push(step.label);
       continue;
@@ -710,11 +816,15 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     // each recipe step depends on the UI state the previous step produced; they cannot be parallelized
     const res = await run(command, STEP_TIMEOUT_MS);
     if (!res.ok) {
-      // dismiss the half-open sheet/popover before reporting partial state
-      if (step.primitive !== "reveal" && step.primitive !== "activate") await abort();
+      // dismiss the half-open sheet/popover (and verify) before reporting partial state
+      const dismissed =
+        step.primitive !== "reveal" && step.primitive !== "activate"
+          ? (await verifiedAbort(run)).dismissed
+          : undefined;
       return partial(
         step.label,
         res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
+        dismissed,
       );
     }
     done.push(step.label);
