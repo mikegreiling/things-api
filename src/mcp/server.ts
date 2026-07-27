@@ -2255,19 +2255,38 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Run several operations in order, each independently — there are no transactions, " +
         "and a failure does not roll back earlier operations. Per-operation results return " +
-        "in order; fail_fast skips the remainder after the first failure.",
+        "in order; fail_fast skips the remainder after the first failure. " +
+        "CHAINING: an operation that creates something may carry temp_id (a handle); a LATER " +
+        'operation references that new uuid as "$handle" in any id/container field (dotted ' +
+        '"$handle.instance"/"$handle.replaced" reach a repeating op\'s spawned instance / ' +
+        "replaced source). A temp_id is valid only on a creating operation (not tag.add — " +
+        "reference a tag by title) and unique per batch. IDEMPOTENCY: op_id makes resubmission " +
+        "safe — an operation matching an earlier success is reported already-applied, not " +
+        "re-created. The result adds temp_id_mapping (handle → uuid) and undo_token, which " +
+        "reverses the whole batch as one unit via the undo tool.",
       inputSchema: {
         ops: z
           .array(
             z.object({
               op: z.enum(OPERATION_KINDS as unknown as [string, ...string[]]),
               params: z.record(z.string(), z.unknown()),
+              temp_id: z
+                .string()
+                .optional()
+                .describe('Handle for this op\'s new uuid, referenced later as "$handle"'),
+              op_id: z
+                .string()
+                .optional()
+                .describe(
+                  "Idempotency id — a resubmitted op matching an earlier success is skipped",
+                ),
               options: z
                 .object({
                   acknowledge_checklist_reset: z.boolean().optional(),
                   acknowledge_project_reopen: z.boolean().optional(),
                   dangerously_permanent: z.boolean().optional(),
                   acknowledge_tag_subtree: z.boolean().optional(),
+                  dangerously_drive_gui: z.boolean().optional(),
                 })
                 .optional(),
             }),
@@ -2291,20 +2310,40 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(o?.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
             ...(o?.dangerously_permanent === true && { dangerouslyPermanent: true }),
             ...(o?.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+            ...(o?.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
             ...(ceiling !== undefined && { maxDisruption: ceiling }),
           };
           return {
             op: op.op as OperationKind,
             params: op.params,
+            ...(op.temp_id !== undefined && { tempId: op.temp_id }),
+            ...(op.op_id !== undefined && { opId: op.op_id }),
             ...(Object.keys(opts).length > 0 && { options: opts }),
           };
         });
-        const results = await getClient().write.batch(ops, {
+        const batchResult = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
           ...(args.fail_fast === true && { failFast: true }),
           actor: mcpActor(),
         });
-        return jsonResult(results);
+        // First block: the per-op results (existing shape, untouched). Second
+        // block (additive): the batch chaining/undo summary, present only when
+        // the batch minted a token or bound temp ids.
+        const hasSummary =
+          batchResult.undoToken !== undefined || Object.keys(batchResult.tempIdMapping).length > 0;
+        if (!hasSummary) return jsonResult(batchResult.results);
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(batchResult.results) },
+            {
+              type: "text",
+              text: JSON.stringify({
+                tempIdMapping: batchResult.tempIdMapping,
+                ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
+              }),
+            },
+          ],
+        };
       }),
   );
 

@@ -1640,6 +1640,56 @@ describe("things MCP server", () => {
       ) as { outcome: { kind: string } }[];
       expect(allowed[0]?.outcome.kind).toBe("dry-run");
     });
+
+    it("mirrors the op_id field and surfaces the batch summary block (undo_token)", async () => {
+      // A real (non-dry-run) leg the fake vector applies: completing a seeded
+      // to-do, carrying an op_id (temp_id needs a minting op — covered by the
+      // engine suite and the declaration test below).
+      const uuid = seedTodo(fixture.db, { title: "mirror me" });
+      await connect([
+        fakeVector((payload) => {
+          if (payload.includes(`id=${uuid}`)) {
+            fixture.db
+              .prepare("UPDATE TMTask SET status = 3, stopDate = 1783300000 WHERE uuid = ?")
+              .run(uuid);
+          }
+        }).vector,
+      ]);
+      const result = await client.callTool({
+        name: "batch",
+        arguments: {
+          ops: [{ op: "todo.complete", params: { uuid }, op_id: "mirror-1" }],
+        },
+      });
+      // First content block: the per-op results (existing array shape, plus the
+      // additive opId echo).
+      const results = textOf(result) as { outcome: { kind: string }; opId?: string }[];
+      expect(results[0]?.outcome.kind).toBe("ok");
+      expect(results[0]?.opId).toBe("mirror-1");
+      // Second content block: the batch summary additions (undo the whole batch).
+      const content = (result as { content: { text: string }[] }).content;
+      const summary = JSON.parse(content[1]?.text ?? "{}") as { undoToken?: string };
+      expect(typeof summary.undoToken).toBe("string");
+    });
+
+    it("mirrors temp-id declaration usage errors (duplicate temp_id rejects the whole batch)", async () => {
+      await connect([fakeVector(null).vector]);
+      const results = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              { op: "todo.add", params: { title: "A" }, temp_id: "x" },
+              { op: "todo.add", params: { title: "B" }, temp_id: "x" },
+            ],
+            dry_run: true,
+          },
+        }),
+      ) as { outcome: { kind: string; detail?: string } }[];
+      // The duplicate line is invalid; the first is skipped — nothing runs.
+      expect(results.map((r) => r.outcome.kind)).toEqual(["skipped", "invalid"]);
+      expect(results[1]?.outcome.detail).toMatch(/duplicate tempId "x"/);
+    });
   });
 
   describe("reorder — scope-specific validation", () => {

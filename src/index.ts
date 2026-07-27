@@ -42,7 +42,7 @@ export type { CapabilityEntry } from "./write/capabilities.ts";
 export { describeConfig, getConfigKey, saveConfigKey } from "./config.ts";
 export type { ConfigKeyView } from "./config.ts";
 export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/undo.ts";
-export type { BatchItemResult, BatchOp, BatchOptions } from "./write/batch.ts";
+export type { BatchItemResult, BatchOp, BatchOptions, BatchResult } from "./write/batch.ts";
 export type { ReorderResult } from "./write/reorder.ts";
 export type {
   SearchOptions,

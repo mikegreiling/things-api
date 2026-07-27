@@ -13,7 +13,7 @@ import { outcomeFailed, runBatch, type BatchOp } from "../../src/write/batch.ts"
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedTodo } from "../fixtures/seed.ts";
+import { seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -96,18 +96,18 @@ describe("runBatch", () => {
       { op: "nope.bogus" as never, params: {} }, // invalid: unknown op
       { op: "todo.update", params: { uuid: b, notes: "y", appendNotes: "z" } }, // throws: exclusive
     ];
-    const results = await runBatch(deps(vector), ops, {}, (r) => streamed.push(r.index));
+    const { results } = await runBatch(deps(vector), ops, {}, (r) => streamed.push(r.index));
     expect(streamed).toEqual([0, 1, 2, 3]);
     expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "blocked", "invalid", "invalid"]);
     expect(results[3]?.outcome.kind === "invalid" && results[3].outcome.detail).toMatch(
       /exclusive/,
     );
     // ok + blocked both audited (invalid ops never reach the pipeline); the ok
-    // op also records its pre-execute intent, excluded here.
-    expect(auditRecords.filter((r) => r.result !== "intent").map((r) => r.result)).toEqual([
-      "ok",
-      "blocked:H-PERMANENT-DELETE",
-    ]);
+    // op also records its pre-execute intent, excluded here. The batch summary
+    // record (op "batch") is excluded — its own coverage is in the undo tests.
+    expect(
+      auditRecords.filter((r) => r.result !== "intent" && r.op !== "batch").map((r) => r.result),
+    ).toEqual(["ok", "blocked:H-PERMANENT-DELETE"]);
   });
 
   it("failFast skips everything after the first failure", async () => {
@@ -117,7 +117,7 @@ describe("runBatch", () => {
       { op: "trash.empty", params: {} }, // blocked
       { op: "todo.complete", params: { uuid: a } },
     ];
-    const results = await runBatch(deps(vector), ops, { failFast: true });
+    const { results } = await runBatch(deps(vector), ops, { failFast: true });
     expect(results.map((r) => r.outcome.kind)).toEqual(["blocked", "skipped"]);
     expect(outcomeFailed(results[1]!.outcome)).toBe(true);
   });
@@ -133,7 +133,7 @@ describe("runBatch", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     };
-    const results = await runBatch(
+    const { results } = await runBatch(
       deps(vector),
       [
         { op: "todo.complete", params: { uuid: a } },
@@ -157,9 +157,109 @@ describe("runBatch", () => {
       ...vector,
       id: "applescript",
     };
-    const results = await runBatch(deps(asVector), [
+    const { results } = await runBatch(deps(asVector), [
       { op: "trash.empty", params: {}, options: { dangerouslyPermanent: true } },
     ]);
     expect(results[0]?.outcome.kind).toBe("ok");
+  });
+
+  it("declaration usage errors: duplicate tempId and tempId on tag.add reject the whole batch before any leg runs", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    let executed = 0;
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix: MATRIX,
+      async execute() {
+        executed++;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    // Duplicate tempId "p": the SECOND declaration is the invalid line; the
+    // whole batch is rejected pre-flight, so the (otherwise runnable) complete
+    // never executes.
+    const dup = await runBatch(deps(vector), [
+      { op: "project.add", params: { title: "P1" }, tempId: "p" },
+      { op: "project.add", params: { title: "P2" }, tempId: "p" },
+      { op: "todo.complete", params: { uuid: a } },
+    ]);
+    expect(dup.results.map((r) => r.outcome.kind)).toEqual(["skipped", "invalid", "skipped"]);
+    expect(dup.results[1]?.outcome.kind === "invalid" && dup.results[1].outcome.detail).toMatch(
+      /duplicate tempId "p"/,
+    );
+    expect(dup.undoToken).toBeUndefined();
+    expect(executed).toBe(0);
+    expect(auditRecords).toHaveLength(0);
+
+    // tempId on tag.add is a usage error (tags have no uuid).
+    const tag = await runBatch(deps(vector), [
+      { op: "tag.add" as never, params: { title: "focus" }, tempId: "t" },
+    ]);
+    expect(tag.results[0]?.outcome.kind).toBe("invalid");
+    expect(tag.results[0]?.outcome.kind === "invalid" && tag.results[0].outcome.detail).toMatch(
+      /tag\.add/,
+    );
+    expect(executed).toBe(0);
+  });
+
+  it("strict $-refs: unresolved and forward references fail their own line; independent legs still run", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    const vector = vectorApplying({
+      [`id=${a}`]: () => touch(a, "status = 3, stopDate = 1783300000"),
+    });
+    const { results } = await runBatch(deps(vector), [
+      // unresolved: "$ghost" names no declared tempId anywhere in the batch
+      { op: "todo.complete", params: { uuid: "$ghost" } },
+      // forward: "$later" IS declared, but on a LATER line
+      { op: "todo.complete", params: { uuid: "$later" } },
+      // an independent, valid leg — must still run despite the two failures above
+      { op: "todo.complete", params: { uuid: a } },
+      // declares "later" (so line 1 is a forward ref, not merely unresolved);
+      // project.add is out of this fake vector's matrix, so it is unsupported —
+      // the declaration is what matters for the forward-ref classification.
+      { op: "project.add", params: { title: "P" }, tempId: "later" },
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["invalid", "invalid", "ok", "unsupported"]);
+    expect(results[0]?.outcome.kind === "invalid" && results[0].outcome.detail).toMatch(
+      /unresolved-temp-ref/,
+    );
+    expect(results[1]?.outcome.kind === "invalid" && results[1].outcome.detail).toMatch(
+      /forward reference/,
+    );
+  });
+
+  it("tempId is valid on project.duplicate (a uuid-minting op) and binds the discovered copy", async () => {
+    // project.duplicate mints a new uuid, so it is tempId-eligible. Drive it
+    // through the create-probe: the source shares the copy's title (excluded),
+    // so discovery lands on the freshly-created copy.
+    const src = seedProject(fixture.db, {
+      title: "Dup",
+      notes: "BODY",
+      creationDate: NOW_EPOCH - 500,
+    });
+    const matrix = {
+      "project.duplicate": { support: "yes", disruption: 0, validation: "validated" },
+    } as VectorMatrix;
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix,
+      async execute(invocation) {
+        if (invocation.payload.includes("duplicate=true")) {
+          seedProject(fixture.db, {
+            uuid: "COPY-P",
+            title: "Dup",
+            notes: "BODY",
+            creationDate: NOW_EPOCH,
+          });
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const { results, tempIdMapping } = await runBatch(deps(vector), [
+      { op: "project.duplicate", params: { uuid: src }, tempId: "copy" },
+    ]);
+    expect(results[0]?.outcome.kind).toBe("ok");
+    expect(results[0]?.tempId).toBe("copy");
+    expect(results[0]?.boundUuid).toBe("COPY-P");
+    expect(tempIdMapping["copy"]).toBe("COPY-P");
   });
 });

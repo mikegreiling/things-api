@@ -29,6 +29,14 @@ A nonzero exit is informative, not a dead end — it means the write did not sil
 - Some operations are disruptive (may move focus in the app) and require `--allow-disruptive`, **including their dry runs**. `things capabilities` lists each operation's support and any preconditions.
 - If a request needs a capability the tool reports as unsupported, say so plainly rather than improvising through unrelated commands.
 
+## Batch (many changes at once)
+
+`things batch` runs a JSONL script (one `{"op","params",…}` per line) sequentially and independently — no transactions; a failure does not roll back earlier lines. Three fields make multi-step work reliable:
+
+- **`tempId` (chaining):** a line that CREATES something (a to-do, project, area, heading, repeater — never `tag.add`) can carry `"tempId":"proj1"`; a LATER line references that new uuid as `"$proj1"` in any id/container field. Dotted forms reach a repeater's parts: `"$proj1.instance"` (the visible occurrence), `"$proj1.replaced"` (the original). This is how you "create a project, then file to-dos into it" in one submission without knowing the uuid up front. Handles are `[A-Za-z0-9_-]{1,32}` and unique per batch; an unknown or forward `$ref` fails just that line.
+- **`opId` (safe retry):** carry a stable `"opId"` per line so resubmitting a batch after an ambiguous failure does not double-create — a line matching an earlier success is reported `already-applied`, not re-run.
+- **Undo the whole batch:** the trailing summary line returns `tempIdMapping` (handle → uuid) and `undoToken`; `things undo --txn <undoToken>` reverses the entire submission as one unit.
+
 ## Recurrence (contract summary)
 
 Full rule vocabulary and worked examples: **`things help repeating`**. The stable contract:
