@@ -54,12 +54,18 @@ import {
   type GroupedTruncation,
   type HeadingPlacement,
   type MonthlyAnchor,
+  type MovePosition,
+  type MoveResult,
   type MutationResult,
   type OpenOptions,
   type OperationKind,
+  type ProjectMoveDestination,
+  type ProjectMoveRequest,
   type RepeatFrequency,
   type RepeatRuleParams,
   type ReorderResult,
+  type TodoMoveDestination,
+  type TodoMoveRequest,
   type TagPresence,
   type ThingsClient,
   type Truncation,
@@ -256,6 +262,63 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
       });
   }
 }
+
+/** Map a move/reorder orchestrator outcome to an MCP result (spec §4/§7). */
+function moveResult(result: MoveResult): ToolResult {
+  switch (result.kind) {
+    case "move-ok":
+    case "move-dry-run":
+      return jsonResult(result);
+    case "move-refused":
+      return errorResult({
+        code: result.refusal,
+        message: result.detail,
+        ...(result.remediation !== undefined && { remediation: result.remediation }),
+        ...(result.candidates !== undefined && { details: { candidates: result.candidates } }),
+      });
+    case "move-leg-failed":
+      return errorResult({
+        code: "verify-failed",
+        message: result.detail,
+        remediation: `completed ${result.completed.length} leg(s) before the failure`,
+      });
+  }
+}
+
+/** Build a MovePosition from the shared MCP position args (null when none). */
+function movePositionArgs(args: {
+  first?: boolean | undefined;
+  last?: boolean | undefined;
+  before?: string | undefined;
+  after?: string | undefined;
+}): MovePosition | undefined | "conflict" {
+  const chosen = [
+    args.first === true,
+    args.last === true,
+    args.before !== undefined,
+    args.after !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (args.first === true) return { at: "first" };
+  if (args.last === true) return { at: "last" };
+  if (args.before !== undefined) return { before: args.before };
+  if (args.after !== undefined) return { after: args.after };
+  return undefined;
+}
+
+/** The shared position input schema for the move tools. */
+const positionShape = {
+  first: z.boolean().optional().describe("place the block at the top of its bucket"),
+  last: z.boolean().optional().describe("place the block at the bottom of its bucket"),
+  before: z
+    .string()
+    .optional()
+    .describe("place the block immediately before this item (same bucket)"),
+  after: z
+    .string()
+    .optional()
+    .describe("place the block immediately after this item (same bucket)"),
+};
 
 const READ_ONLY = { readOnlyHint: true } as const;
 const NON_DESTRUCTIVE = { destructiveHint: false } as const;
@@ -1419,21 +1482,39 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "move_todo",
     {
       description:
-        "Move a to-do. Pass exactly one destination: a project or area (optionally an " +
-        "existing heading within the project), to_inbox, or detach. Moving to the Inbox " +
-        "removes any schedule; detach removes the project/area/heading assignment while " +
-        "keeping the schedule. Moving into a completed or canceled project reopens that " +
-        "project — pass acknowledge_project_reopen to confirm.",
+        "Move one or more to-dos as an ordered block (spec §4). MOVE changes WHAT a to-do " +
+        "belongs to (membership somewhere); to REARRANGE to-dos that already share a container " +
+        "without changing membership, call this with a position (first/last/before/after) and " +
+        "NO destination — that is an in-place reorder, anchored at the earliest movee's slot, " +
+        "and unmentioned siblings keep their order. The uuids order is the order they land " +
+        "(name them backwards to reverse). Pass at most one destination: to_project, to_heading " +
+        "(within to_project, or the movees' shared project), to_area, no_heading (leave the " +
+        "heading, stay in the project), loose (leave heading, project, AND area), or to_inbox. " +
+        "An anchor (before/after) positions but never migrates — an anchor-only move that would " +
+        "cross containers is refused, as is a --before/--after whose movees span buckets. " +
+        "Membership always succeeds; top-of-bucket placement is guaranteed only where a reorder " +
+        "protocol exists (the result's placementClass states which). Moving into a " +
+        "completed/canceled project reopens it — pass acknowledge_project_reopen.",
       inputSchema: {
-        uuid: z.string(),
-        project: z.string().optional().describe(`Destination project (${REF_FORMAT})`),
-        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
-        heading: z.string().optional().describe("Existing heading in the destination project"),
-        to_inbox: z.boolean().optional().describe("Move back to the Inbox (removes any schedule)"),
-        detach: z
+        uuids: z.array(z.string()).describe("The to-dos to move, in the order they should land"),
+        to_project: z.string().optional().describe(`Destination project (${REF_FORMAT})`),
+        to_heading: z
+          .string()
+          .optional()
+          .describe(
+            "Destination heading (exact title or uuid; within to_project or the shared project)",
+          ),
+        to_area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
+        no_heading: z
           .boolean()
           .optional()
-          .describe("Remove the project/area/heading assignment, keeping the schedule"),
+          .describe("Leave the heading but stay in the current project (unheaded block)"),
+        loose: z
+          .boolean()
+          .optional()
+          .describe("Detach from heading, project, AND area, keeping the schedule"),
+        to_inbox: z.boolean().optional().describe("Move back to the Inbox (removes any schedule)"),
+        ...positionShape,
         acknowledge_project_reopen: z
           .boolean()
           .optional()
@@ -1444,28 +1525,34 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const dest =
-          args.project !== undefined || args.area !== undefined || args.heading !== undefined;
-        const modes = [dest, args.to_inbox === true, args.detach === true].filter(Boolean).length;
-        if (modes !== 1) {
-          return usage("pass exactly one destination: project/area/heading, to_inbox, or detach");
+        const dests: TodoMoveDestination[] = [];
+        if (args.to_heading !== undefined) {
+          dests.push({
+            kind: "heading",
+            sel: args.to_heading,
+            ...(args.to_project !== undefined && { project: containerRef(args.to_project) }),
+          });
+        } else if (args.to_project !== undefined) {
+          dests.push({ kind: "project", ref: containerRef(args.to_project) });
         }
-        return mutationResult(
-          await getClient().write.moveTodo(
-            args.uuid,
-            {
-              ...(args.project !== undefined && { project: containerRef(args.project) }),
-              ...(args.area !== undefined && { area: containerRef(args.area) }),
-              ...(args.heading !== undefined && { heading: args.heading }),
-              ...(args.to_inbox === true && { inbox: true }),
-              ...(args.detach === true && { detach: true }),
-            },
-            {
-              ...writeOptions(args),
-              ...(args.to_inbox === true && { vector: "applescript" as const }),
-            },
-          ),
-        );
+        if (args.to_area !== undefined)
+          dests.push({ kind: "area", ref: containerRef(args.to_area) });
+        if (args.no_heading === true) dests.push({ kind: "no-heading" });
+        if (args.loose === true) dests.push({ kind: "loose" });
+        if (args.to_inbox === true) dests.push({ kind: "inbox" });
+        if (dests.length > 1) {
+          return usage(
+            "pass at most one destination (to_project/to_heading/to_area/no_heading/loose/to_inbox)",
+          );
+        }
+        const position = movePositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of first/last/before/after");
+        const request: TodoMoveRequest = {
+          uuids: args.uuids,
+          ...(dests[0] !== undefined && { destination: dests[0] }),
+          ...(position !== undefined && { position }),
+        };
+        return moveResult(await getClient().write.moveTodos(request, writeOptions(args)));
       }),
   );
 
@@ -2235,31 +2322,36 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "move_project",
     {
       description:
-        "Move a project into an area, or detach it from its current area. Pass exactly " +
-        "one of area / detach. The project's status and schedule are unaffected.",
+        "Move one or more projects as an ordered block (spec §4/§5). Pass at most one " +
+        "destination: to_area, or no_area (leave the area — a project's complete detach). To " +
+        "REORDER projects among their siblings without changing area, pass a position " +
+        "(first/last/before/after) and NO destination. An anchor positions but never migrates. " +
+        "The project's status and schedule are unaffected; the result's placementClass states " +
+        "whether top-of-bucket placement was guaranteed.",
       inputSchema: {
-        uuid: z.string().describe(`The project to move (${REF_FORMAT})`),
-        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
-        detach: z.boolean().optional().describe("Remove the current area assignment"),
+        uuids: z.array(z.string()).describe(`The projects to move (${REF_FORMAT}), in order`),
+        to_area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
+        no_area: z.boolean().optional().describe("Leave the current area (a project's detach)"),
+        ...positionShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
-        if ((args.detach === true) === (args.area !== undefined)) {
-          return usage("pass exactly one of area / detach");
-        }
-        const c = getClient();
-        return mutationResult(
-          args.detach === true
-            ? await c.write.detachProject(args.uuid, writeOptions(args))
-            : await c.write.moveProject(
-                args.uuid,
-                containerRef(args.area as string),
-                writeOptions(args),
-              ),
-        );
+        const dests: ProjectMoveDestination[] = [];
+        if (args.to_area !== undefined)
+          dests.push({ kind: "area", ref: containerRef(args.to_area) });
+        if (args.no_area === true) dests.push({ kind: "no-area" });
+        if (dests.length > 1) return usage("pass at most one of to_area / no_area");
+        const position = movePositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of first/last/before/after");
+        const request: ProjectMoveRequest = {
+          uuids: args.uuids,
+          ...(dests[0] !== undefined && { destination: dests[0] }),
+          ...(position !== undefined && { position }),
+        };
+        return moveResult(await getClient().write.moveProjects(request, writeOptions(args)));
       }),
   );
 
@@ -2454,11 +2546,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
-        "area-less someday projects — one kind per call), a " +
+        "Reorder a whole LIST or container by scope: Today, This Evening, the Inbox, Someday " +
+        "(loose to-dos or area-less someday projects — one kind per call), a " +
         "project's to-dos, an area, or the top-level projects (scope=projects — " +
         "each project takes a brief someday/anytime round-trip) — the given uuids move " +
         "to the TOP in the given order; unlisted items keep their relative order below. " +
+        "To rearrange an arbitrary BLOCK of to-dos/projects in place (anchored at the earliest " +
+        "one's slot, partial-selection friendly, before/after an anchor), call move_todo / " +
+        "move_project with a position and no destination instead — MOVE changes membership, " +
+        "REORDER only arrangement. " +
         "To reorder a project's HEADINGS (children follow) use the heading tool's " +
         "move_heading action instead. " +
         "Today/inbox/someday/project/area ordering must first be enabled once " +

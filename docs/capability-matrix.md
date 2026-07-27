@@ -99,6 +99,8 @@ Doctrine — **DECIDED 2026-07-09 (roadmap §E / gaps §0): headings are always 
 
 ## Ordering
 
+The lab-locked scopes below are the wire protocols. The **`move`/`reorder` anchor vocabulary** (spec §4, Phase A — shipped) compiles ONTO them: `things todo move`/`todo reorder`/`project move` (variadic, `--first/--last/--before/--after`) issue membership legs plus a placement `reorder` leg. Top-of-bucket placement is GUARANTEED where a scope below exists (project-unheaded/area/inbox/today/evening/someday); a heading bucket, in-container someday, or future day bucket is app-default (the result payload states the class). No new wire protocol — the scopes themselves are unchanged.
+
 | Scope | Status | Notes |
 |---|---|---|
 | Today | ✅ native (experimental gate) or bounce ≤10 | |

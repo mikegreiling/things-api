@@ -144,16 +144,18 @@ export function evaluateScope(
   if (op === "todo.move") {
     const p = params as unknown as TodoMoveParams;
     if (p.inbox === true) return blocked("moving to the Inbox leaves the active scope");
-    if (p.detach === true)
-      return blocked("detaching strips the item's container, leaving the active scope");
+    if (p.loose === true)
+      return blocked("--loose strips the item's container, leaving the active scope");
+    // --no-heading keeps the to-do in its current project (in scope by
+    // construction) — allowed; falls through to the default gate.
   }
   if (op === "project.move") {
-    // Only an AREA scope reaches here (project scope refused above). Detaching
+    // Only an AREA scope reaches here (project scope refused above). --no-area
     // strips the area; moving to the scope area itself is idempotent (allowed
     // via the destination gate). Any other destination area is nullified below.
     const p = params as unknown as ProjectMoveParams;
-    if (p.detach === true)
-      return blocked("detaching a project strips its area, leaving the active scope");
+    if (p.noArea === true)
+      return blocked("--no-area strips a project's area, leaving the active scope");
   }
 
   // 5. Creates with no explicit destination → redirect into the container.

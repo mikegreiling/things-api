@@ -83,15 +83,16 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain(`delete to do id "${uuid}"`);
   });
 
-  it("project move --dry-run plans the URL area re-assignment (P23)", async () => {
+  it("project move --to-area --dry-run plans the membership + area placement (spec §4)", async () => {
     const area = seedArea(fixture.db, "Work");
     const proj = seedProject(fixture.db, { title: "Mover" });
-    await run(["project", "move", proj, "--area", "Work", "--dry-run", "--json"]);
+    await run(["project", "move", proj, "--to-area", "Work", "--dry-run", "--json"]);
     const env = envelope();
-    expect(env["kind"]).toBe("mutation-plan");
+    expect(env["kind"]).toBe("move-plan");
     const plan = env["data"] as Record<string, unknown>;
-    expect(plan["vector"]).toBe("url-scheme");
-    expect(String(plan["invocation"])).toContain(`update-project?id=${proj}&area-id=${area}`);
+    expect(String(plan["membership"])).toContain("membership leg");
+    expect(String(plan["placement"])).toContain("area");
+    expect(String(plan["placement"])).toContain(area);
   });
 
   it("project duplicate --dry-run plans the URL duplicate (E17)", async () => {

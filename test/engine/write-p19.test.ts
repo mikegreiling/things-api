@@ -255,7 +255,7 @@ describe("container detach (P21/P22/P24)", () => {
     const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => {
       touch(uuid, "area = NULL");
     });
-    const result = await runMutation(deps([vector]), "todo.move", { uuid, detach: true });
+    const result = await runMutation(deps([vector]), "todo.move", { uuid, loose: true });
     expect(result.kind).toBe("ok");
     expect(calls[0]).toMatch(new RegExp(`update\\?id=${uuid}&list-id=$`));
     if (result.kind === "ok") expect(result.observed?.["startDate"]).toBe("2026-07-09");
@@ -269,7 +269,7 @@ describe("container detach (P21/P22/P24)", () => {
     const result = await runMutation(
       deps([vector]),
       "todo.move",
-      { uuid, detach: true },
+      { uuid, loose: true },
       { verifyTimeoutMs: 300 },
     );
     expect(result.kind).toBe("verify-failed");
@@ -281,7 +281,7 @@ describe("container detach (P21/P22/P24)", () => {
     const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () =>
       touch(proj, "area = NULL"),
     );
-    const result = await runMutation(deps([vector]), "project.move", { uuid: proj, detach: true });
+    const result = await runMutation(deps([vector]), "project.move", { uuid: proj, noArea: true });
     expect(result.kind).toBe("ok");
     expect(calls[0]).toMatch(new RegExp(`update-project\\?id=${proj}&area-id=$`));
   });
@@ -292,7 +292,7 @@ describe("container detach (P21/P22/P24)", () => {
     await expect(
       runMutation(deps([vector]), "todo.move", {
         uuid,
-        detach: true,
+        loose: true,
         area: { title: "X" },
       }),
     ).rejects.toThrow(/exclusive/);
