@@ -212,6 +212,7 @@ function splitCsv(value: string | undefined): string[] | undefined {
 async function runWrite(
   opts: WriteFlagOpts,
   fn: (client: ThingsClient) => Promise<ReorderResult>,
+  emitFn: (result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta) => void = emitResult,
 ): Promise<void> {
   const started = Date.now();
   let client: ThingsClient | null = null;
@@ -231,7 +232,7 @@ async function runWrite(
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
     const result = await fn(client);
-    emitResult(result, opts, meta(client));
+    emitFn(result, opts, meta(client));
   } catch (err) {
     // An unresolved write target (uuid/partial-uuid/name that is ambiguous or
     // not-found) is a usage-class failure carrying machine-readable candidates
@@ -416,6 +417,99 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
   }
 }
 
+/** One TTY line for a bulk-add batch item (the human, non-JSON multi rendering). */
+function addResultLine(r: BatchItemResult): string {
+  const o = r.outcome;
+  switch (o.kind) {
+    case "ok":
+      return `ok todo.add uuid=${o.uuid ?? ""} (vector=${o.vector}, tier=${o.tier}, verified)\n`;
+    case "dry-run":
+      return `DRY RUN todo.add (vector=${o.plan.vector}, tier ${o.plan.tier}) ${o.plan.invocation}\n`;
+    case "already-applied":
+      return `already-applied todo.add uuid=${o.uuid}\n`;
+    case "skipped":
+      return `skipped todo.add: ${o.detail}\n`;
+    case "invalid":
+      return `FAILED todo.add: ${o.detail}\n`;
+    case "blocked":
+      return `BLOCKED todo.add (${o.hazard ?? o.reason}): ${o.detail}\n`;
+    case "verify-failed":
+      return `VERIFY FAILED todo.add (${o.reason}): ${o.detail}\n`;
+    case "unsupported":
+      return `UNSUPPORTED todo.add\n`;
+    default:
+      return `FAILED todo.add: ${JSON.stringify(o)}\n`;
+  }
+}
+
+/**
+ * Run a bulk `todo add` as ONE batch of `todo.add` legs (shared flags already
+ * compiled into every op's params). Streams per-line results and a trailing
+ * summary carrying the single `undoToken` that removes the whole skeleton —
+ * except under `--id-only`, where output is exactly one uuid per created item,
+ * in creation order, and nothing else. Exit code is the worst leg's failure.
+ */
+async function runBulkAdd(opts: WriteFlagOpts, ops: BatchOp[], idOnly: boolean): Promise<void> {
+  let client: ThingsClient | null = null;
+  try {
+    client = openThings(opts.db ? { dbPath: opts.db } : {});
+    const batchResult = await client.write.batch(
+      ops,
+      {
+        ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
+        ...(opts.actor !== undefined && { actor: opts.actor }),
+      },
+      (r) => {
+        if (idOnly) {
+          if (r.outcome.kind === "ok" && r.outcome.uuid !== null)
+            process.stdout.write(`${r.outcome.uuid}\n`);
+        } else if (opts.json) {
+          emit(r);
+        } else {
+          process.stdout.write(addResultLine(r));
+        }
+      },
+    );
+    const failed = batchResult.results.filter((r) => outcomeFailed(r.outcome));
+    if (!idOnly) {
+      const total = batchResult.results.length;
+      const okCount = total - failed.length;
+      if (opts.json) {
+        const summary = {
+          summary: {
+            total,
+            ok: okCount,
+            failed: failed.filter((r) => r.outcome.kind !== "skipped").length,
+            skipped: batchResult.results.filter((r) => r.outcome.kind === "skipped").length,
+            ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
+          },
+        };
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+      } else {
+        const undo =
+          batchResult.undoToken !== undefined
+            ? ` (undo all: things undo --txn ${batchResult.undoToken})`
+            : "";
+        process.stdout.write(`added ${okCount}/${total} to-dos${undo}\n`);
+      }
+    }
+    process.exitCode = aggregateExitCode(failed.map((r) => r.outcome));
+  } finally {
+    client?.close();
+  }
+}
+
+/** Read newline-delimited titles from stdin; blank lines (whitespace-only) skipped. */
+async function readStdinTitles(): Promise<string[]> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks)
+    .toString("utf8")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim() !== "");
+}
+
 function group(program: Command, name: string, description: string): Command {
   const existing = program.commands.find((c) => c.name() === name);
   if (existing !== undefined) return existing;
@@ -431,13 +525,16 @@ export function registerWriteCommands(program: Command): void {
   addCreateTagsFlag(
     addWriteFlags(
       todo
-        .command("add <title>")
+        .command("add [titles...]")
         .description(
-          "Create a to-do; its uuid is printed on success. Projects, areas, and headings " +
-            "must name existing items — unknown or ambiguous references are rejected. A tag " +
-            "may be a name or a parent/child path, and must exist unless " +
+          "Create one or more to-dos; each new uuid is printed on success. Pass several " +
+            "titles to create a quick skeleton in one call, or stream them with --stdin " +
+            "(one title per line); every shared flag below applies to each title. Projects, " +
+            "areas, and headings must name existing items — unknown or ambiguous references " +
+            "are rejected. A tag may be a name or a parent/child path, and must exist unless " +
             "--create-tags. Adding into a completed/canceled project reopens that project — " +
-            "requires --acknowledge-project-reopen.",
+            "requires --acknowledge-project-reopen. When several to-dos are created, one undo " +
+            "token removes the whole skeleton at once.",
         )
         .option("--notes <text>", "notes body")
         .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -454,36 +551,106 @@ export function registerWriteCommands(program: Command): void {
         .option("--project <ref>", "destination project (uuid or unique name)")
         .option("--area <ref>", "destination area (uuid or unique name)")
         .option("--heading <name>", "existing heading in the destination project")
-        .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project"),
+        .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project")
+        .option(
+          "--stdin",
+          "read newline-delimited titles from stdin (blank lines skipped); exclusive with title arguments",
+        )
+        .option(
+          "--id-only",
+          "print only the new uuid(s), one per line in creation order, and nothing else (exclusive with --json)",
+        ),
     ),
-  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+  ).action(async (titles: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const idOnly = opts["idOnly"] === true;
+    const useStdin = opts["stdin"] === true;
+    if (idOnly && opts.json === true) {
+      usageError(opts, "--id-only and --json are mutually exclusive");
+      return;
+    }
+    if (useStdin && titles.length > 0) {
+      usageError(opts, "--stdin is mutually exclusive with title arguments");
+      return;
+    }
+    const finalTitles = useStdin ? await readStdinTitles() : titles;
+    if (finalTitles.length === 0) {
+      usageError(
+        opts,
+        useStdin
+          ? "no titles: --stdin received no non-empty lines"
+          : "provide at least one title, or pass --stdin to read titles from stdin",
+      );
+      return;
+    }
     const checklist = opts["checklistItem"] as string[];
     const tags = splitCsv(opts["tags"] as string | undefined);
     const project = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
     if (!whenSugarOk(opts)) return;
-    await runWrite(opts, (c) =>
-      c.write.addTodo(
-        {
-          title,
-          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
-          ...(opts["when"] !== undefined && { when: opts["when"] as never }),
-          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
-          ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
-          ...(tags !== undefined && { tags }),
-          ...(checklist.length > 0 && { checklistItems: checklist }),
-          ...(project !== undefined && { project }),
-          ...(area !== undefined && { area }),
-          ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+    const buildParams = (title: string): Record<string, unknown> => ({
+      title,
+      ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+      ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+      ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
+      ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
+      ...(tags !== undefined && { tags }),
+      ...(checklist.length > 0 && { checklistItems: checklist }),
+      ...(project !== undefined && { project }),
+      ...(area !== undefined && { area }),
+      ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+    });
+    const ackReopen =
+      opts["acknowledgeProjectReopen"] !== undefined
+        ? { acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean }
+        : {};
+
+    // Single title (positional or a one-line stdin) keeps today's single
+    // mutation-result envelope exactly — unless --id-only, which prints just
+    // the new uuid. Multiple titles compile onto the batch machinery.
+    if (finalTitles.length === 1) {
+      const params = buildParams(finalTitles[0] as string);
+      const wopts = writeOptionsFrom(opts, { ...ackReopen, ...createTagsExtra(opts) });
+      if (!idOnly) {
+        await runWrite(opts, (c) => c.write.addTodo(params as never, wopts));
+        return;
+      }
+      await runWrite(
+        opts,
+        (c) => c.write.addTodo(params as never, wopts),
+        (result, o, meta) => {
+          if (result.kind === "ok") {
+            if (result.uuid !== null) process.stdout.write(`${result.uuid}\n`);
+            process.exitCode = ExitCode.Ok;
+          } else if (result.kind === "dry-run") {
+            // --id-only mints no uuid to print on a dry-run; stay silent.
+            process.exitCode = ExitCode.Ok;
+          } else {
+            emitResult(result, { ...o, json: false }, meta);
+          }
         },
-        writeOptionsFrom(opts, {
-          ...(opts["acknowledgeProjectReopen"] !== undefined && {
-            acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
-          }),
-          ...createTagsExtra(opts),
-        }),
-      ),
-    );
+      );
+      return;
+    }
+
+    // Multi-title: one batch of todo.add legs, shared flags applied to each.
+    const perOpOptions: NonNullable<BatchOp["options"]> = {
+      ...ackReopen,
+      ...(opts["createTags"] === true && { createTags: true }),
+      ...(opts.vector !== undefined && { vector: opts.vector as VectorId }),
+      ...(opts.allowVeryDisruptive === true
+        ? { maxDisruption: 3 as DisruptionTier }
+        : opts.allowDisruptive === true
+          ? { maxDisruption: 2 as DisruptionTier }
+          : {}),
+      ...(opts.verifyTimeout !== undefined && { verifyTimeoutMs: Number(opts.verifyTimeout) }),
+    };
+    const hasPerOpOptions = Object.keys(perOpOptions).length > 0;
+    const ops: BatchOp[] = finalTitles.map((title) => {
+      const op: BatchOp = { op: "todo.add" as OperationKind, params: buildParams(title) };
+      if (hasPerOpOptions) op.options = perOpOptions;
+      return op;
+    });
+    await runBulkAdd(opts, ops, idOnly);
   });
 
   addWriteFlags(
@@ -1192,12 +1359,21 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     project
       .command("add <title>")
-      .description("Create a project; its uuid is printed on success.")
+      .description(
+        "Create a project; its uuid is printed on success. Give --todo (repeatable) to " +
+          "seed it with child to-dos in the same call — the quick way to stand up a new " +
+          "project skeleton.",
+      )
       .option("--notes <text>", "notes body")
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--deadline <date>", "YYYY-MM-DD")
-      .option("--todo <title>", "initial child to-do (repeatable)", collect, []),
+      .option(
+        "--todo <title>",
+        "initial child to-do, repeatable (seeds the new project)",
+        collect,
+        [],
+      ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);

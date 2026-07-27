@@ -245,7 +245,7 @@ describe("help topics", () => {
 
   it("`things help <command>` still defers to that command's own --help", () => {
     const { stdout } = runCli(["help", "todo", "add"]);
-    expect(stdout).toContain("Create a to-do");
+    expect(stdout).toContain("Create one or more to-dos");
   });
 });
 
