@@ -1582,6 +1582,15 @@ export function registerWriteCommands(program: Command): void {
         "failure does not roll back earlier ops. Per-op results stream as JSONL. Per-op " +
         "options carry the confirmation flags (acknowledgeChecklistReset, " +
         "acknowledgeProjectReopen, dangerouslyPermanent, acknowledgeTagSubtree). " +
+        "CHAINING: an op that creates something may carry a `tempId` (a handle like " +
+        '"proj1"); a LATER op references that new uuid as "$proj1" in any id/container ' +
+        'param (dotted "$proj1.instance"/"$proj1.replaced" reach a repeating op\'s spawned ' +
+        "instance / replaced source). A tempId is valid only on a creating op (not tag.add — " +
+        "reference a tag by title) and unique per batch; an unresolved/forward $ref fails just " +
+        "that line. IDEMPOTENCY: a line's `opId` makes resubmission safe — a matching earlier " +
+        "success is reported already-applied, not re-created. The trailing summary line adds " +
+        "`tempIdMapping` (handle → uuid) and `undoToken` — undo the WHOLE batch with " +
+        "`things undo --txn <undoToken>`. " +
         "--dry-run plans everything without executing; --fail-fast skips the rest after " +
         "the first failure. Exit (worst failure wins): 0 all ok · 3 any verify-failed/invalid " +
         "· 4 any blocked · 5 any drift-blocked · 6 any unsupported.",
@@ -1623,7 +1632,7 @@ export function registerWriteCommands(program: Command): void {
       let client: ThingsClient | null = null;
       try {
         client = openThings(opts.db ? { dbPath: opts.db } : {});
-        const results = await client.write.batch(
+        const batchResult = await client.write.batch(
           ops,
           {
             ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
@@ -1635,14 +1644,21 @@ export function registerWriteCommands(program: Command): void {
             emit(pre ?? r);
           },
         );
-        const merged = results.map((r) => preInvalid.find((p) => p.index === r.index) ?? r);
+        const merged = batchResult.results.map(
+          (r) => preInvalid.find((p) => p.index === r.index) ?? r,
+        );
         const failed = merged.filter((r) => outcomeFailed(r.outcome));
+        const hasMapping = Object.keys(batchResult.tempIdMapping).length > 0;
         const summary = {
           summary: {
             total: merged.length,
             ok: merged.length - failed.length,
             failed: failed.filter((r) => r.outcome.kind !== "skipped").length,
             skipped: merged.filter((r) => r.outcome.kind === "skipped").length,
+            // ADDITIVE: the temp-id → uuid mapping and the batch undo token
+            // (undo the whole submission with `things undo --txn <token>`).
+            ...(hasMapping && { tempIdMapping: batchResult.tempIdMapping }),
+            ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
           },
         };
         process.stdout.write(`${JSON.stringify(summary)}\n`);

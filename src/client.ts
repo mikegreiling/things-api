@@ -114,7 +114,13 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./write/pipeline.ts";
-import { runBatch, type BatchItemResult, type BatchOp, type BatchOptions } from "./write/batch.ts";
+import {
+  runBatch,
+  type BatchItemResult,
+  type BatchOp,
+  type BatchOptions,
+  type BatchResult,
+} from "./write/batch.ts";
 import { planTagCreation } from "./write/tag-refs.ts";
 import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
 import {
@@ -568,13 +574,18 @@ export interface ThingsClient {
     reorder(params: ReorderParams, options?: WriteOptions): Promise<ReorderResult>;
     /**
      * Run N ops sequentially and independently — no transactions, a failure
-     * does not roll back earlier ops. Per-op results.
+     * does not roll back earlier ops. Per-op results stream through `onResult`;
+     * the resolved {@link BatchResult} adds the temp-id → uuid mapping and the
+     * batch-level undo token (undo the whole submission as one unit). An op may
+     * carry a `tempId` (a handle bound to its created uuid, referenceable as
+     * `"$name"` by a later op) and/or an `opId` (idempotency id — a resubmitted
+     * op with a matching applied id is skipped, not re-created).
      */
     batch(
       ops: BatchOp[],
       options?: BatchOptions,
       onResult?: (result: BatchItemResult) => void,
-    ): Promise<BatchItemResult[]>;
+    ): Promise<BatchResult>;
     /**
      * Undo changes made through this client, newest first, by applying the
      * inverse change. Selection: `last` trailing changes (default 1), narrowed
@@ -665,6 +676,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     audit,
     fingerprint,
     lockPath: mutationLockPath(env),
+    // Read by runBatch for the opId idempotency lookback (same trail undo reads).
+    auditDirPath: auditDir(env),
     now,
     // The consumer zone normalizes clock-relative `when` tokens (today/evening)
     // to explicit dates before dispatch; a per-write `zone` overrides it.
