@@ -114,7 +114,7 @@ export function evaluateScope(
           REFUSE_UNDER_PROJECT,
         );
       case "project.make-repeating":
-      case "project.create-repeating":
+      case "project.add-repeating":
         return blocked(
           "making the project repeating replaces it with a new one the scope would no longer recognize",
           REFUSE_UNDER_PROJECT,

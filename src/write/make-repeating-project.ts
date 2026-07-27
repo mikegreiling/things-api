@@ -1,5 +1,5 @@
 /**
- * project.make-repeating + project.create-repeating orchestrators (UIC4).
+ * project.make-repeating + project.add-repeating orchestrators (UIC4).
  *
  * make-repeating drives a project into a repeating series purely via AX: the
  * project is selected as a content-table ROW (settable AXSelectedRows, UIC4-a),
@@ -11,7 +11,7 @@
  * then delegates to the pure-AX drive. The area / someday cases need no coercion
  * and delegate directly.
  *
- * create-repeating is the two-step composite (UIC4-f roadmap ruling #2): create
+ * add-repeating is the two-step composite (UIC4-f roadmap ruling #2): create
  * the project seeded into a pure-AX taxonomy (an area, or Someday), THEN promote
  * it with make-repeating. The two legs are NOT atomic — the created project
  * persists even if the promote refuses.
@@ -19,7 +19,7 @@
 import type { AuditRecord } from "../audit/schema.ts";
 import { resolveProjectWriteTarget } from "../read/queries.ts";
 import { assertRepeatRule } from "./commands.ts";
-import type { ProjectCreateRepeatingParams, RepeatRuleParams } from "./operations.ts";
+import type { ProjectAddRepeatingParams, RepeatRuleParams } from "./operations.ts";
 import { classifyProjectRepeat, loadTarget, type ProjectRepeatTaxonomy } from "./pre-state.ts";
 import {
   fingerprintLabel,
@@ -30,7 +30,7 @@ import {
 } from "./pipeline.ts";
 
 /** The two-key GUI-drive block, shared by both orchestrators (mirrors H-UI-DRIVE). */
-function blockedUiDrive(op: "project.make-repeating" | "project.create-repeating"): MutationResult {
+function blockedUiDrive(op: "project.make-repeating" | "project.add-repeating"): MutationResult {
   return {
     kind: "blocked",
     op,
@@ -211,18 +211,18 @@ export async function runMakeRepeatingProject(
   return { ...drive, ...(drive.warnings !== undefined && { warnings: drive.warnings }) };
 }
 
-export async function runCreateRepeatingProject(
+export async function runAddRepeatingProject(
   deps: WriteDeps,
-  params: ProjectCreateRepeatingParams,
+  params: ProjectAddRepeatingParams,
   options: WriteOptions = {},
 ): Promise<MutationResult> {
-  // create-repeating carries only the base rule vocabulary (the promote can be
+  // add-repeating carries only the base rule vocabulary (the promote can be
   // followed by a reschedule for a richer rule); validate just that.
   assertRepeatRule({ frequency: params.frequency, interval: params.interval });
 
   // The promote drives the GUI — block before creating anything if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
-    return blockedUiDrive("project.create-repeating");
+    return blockedUiDrive("project.add-repeating");
   }
 
   // Seed a pure-AX taxonomy: an area lands a selectable AREA-view row; otherwise
@@ -233,9 +233,9 @@ export async function runCreateRepeatingProject(
     const where = params.area !== undefined ? "the target area (Anytime)" : "Someday";
     return {
       kind: "dry-run",
-      op: "project.create-repeating",
+      op: "project.add-repeating",
       plan: {
-        op: "project.create-repeating",
+        op: "project.add-repeating",
         vector: "ui",
         tier: 3,
         invocation:
@@ -271,7 +271,7 @@ export async function runCreateRepeatingProject(
     return add.kind === "ok"
       ? {
           kind: "verify-failed",
-          op: "project.create-repeating",
+          op: "project.add-repeating",
           reason: "mismatch",
           expected: {
             mode: "create",
@@ -299,10 +299,10 @@ export async function runCreateRepeatingProject(
     startedAt,
     uuid: promote.uuid,
     txnId,
-    op: "project.create-repeating",
-    invocation: `create-repeating project "${params.title}" → template ${promote.uuid ?? "?"}`,
+    op: "project.add-repeating",
+    invocation: `add-repeating project "${params.title}" → template ${promote.uuid ?? "?"}`,
   });
-  return { ...promote, op: "project.create-repeating" };
+  return { ...promote, op: "project.add-repeating" };
 }
 
 // --------------------------------------------------------------------- audit
@@ -313,7 +313,7 @@ function appendSummary(
     startedAt: Date;
     uuid: string | null;
     txnId: string;
-    op?: "project.make-repeating" | "project.create-repeating";
+    op?: "project.make-repeating" | "project.add-repeating";
     invocation: string;
   },
 ): void {

@@ -92,16 +92,16 @@ describe("H-TEMPLATE-CHILD-RESTORE", () => {
   });
 });
 
-describe("H-UNKNOWN-DESTINATION (heading.create project resolution)", () => {
+describe("H-UNKNOWN-DESTINATION (heading.add project resolution)", () => {
   it("blocks when the destination project does not resolve", () => {
-    expect(check("heading.create", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
+    expect(check("heading.add", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
       "H-UNKNOWN-DESTINATION",
     );
   });
 
   it("passes when the project resolves", () => {
     seedProject(fixture.db, { title: "Real" });
-    expect(check("heading.create", { project: { title: "Real" }, title: "H" })).toBeNull();
+    expect(check("heading.add", { project: { title: "Real" }, title: "H" })).toBeNull();
   });
 });
 

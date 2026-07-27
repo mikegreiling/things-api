@@ -1,5 +1,5 @@
 /**
- * project.make-repeating + project.create-repeating (UIC4). Covers the
+ * project.make-repeating + project.add-repeating (UIC4). Covers the
  * row-selection TAXONOMY, the orchestrator's refusals / GUI-drive gating /
  * Someday coercion / composite, the pure-AX select-row driver primitive and its
  * readback verification, and the dual-form (sheet vs detached window) dialog
@@ -16,7 +16,7 @@ import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import { classifyProjectRepeat } from "../../src/write/pre-state.ts";
 import {
-  runCreateRepeatingProject,
+  runAddRepeatingProject,
   runMakeRepeatingProject,
 } from "../../src/write/make-repeating-project.ts";
 import type { WriteDeps, WriteOptions } from "../../src/write/pipeline.ts";
@@ -412,12 +412,12 @@ describe("runMakeRepeatingProject — drives", () => {
 
 // -------------------------------------------------- composite: create + promote
 
-describe("runCreateRepeatingProject — composite", () => {
+describe("runAddRepeatingProject — composite", () => {
   it("blocks before creating anything when the GUI-drive ack is missing", async () => {
     const url = urlVector(() => {
       throw new Error("must not create");
     });
-    const res = await runCreateRepeatingProject(deps([url.vector]), {
+    const res = await runAddRepeatingProject(deps([url.vector]), {
       title: "New",
       frequency: "weekly",
       interval: 1,
@@ -437,13 +437,13 @@ describe("runCreateRepeatingProject — composite", () => {
       });
     });
     const ui = promotingUiVector("New", () => created);
-    const res = await runCreateRepeatingProject(
+    const res = await runAddRepeatingProject(
       deps([url.vector, ui.vector]),
       { title: "New", frequency: "monthly", interval: 1 },
       GUI,
     );
     expect(res.kind).toBe("ok");
-    if (res.kind === "ok") expect(res.op).toBe("project.create-repeating");
+    if (res.kind === "ok") expect(res.op).toBe("project.add-repeating");
     expect(url.calls.length).toBe(1); // the create leg
     expect(ui.calls).toBe(1); // the promote leg
   });
@@ -452,7 +452,7 @@ describe("runCreateRepeatingProject — composite", () => {
     const url = urlVector(() => {
       throw new Error("must not create");
     });
-    const res = await runCreateRepeatingProject(
+    const res = await runAddRepeatingProject(
       deps([url.vector]),
       { title: "New", frequency: "weekly", interval: 1 },
       { dryRun: true },

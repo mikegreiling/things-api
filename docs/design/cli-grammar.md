@@ -309,6 +309,6 @@ things project <ref> add-todo <title>
 
 Fixed slots: **position 2 = the resource ref**, **position 3 = a verb from a closed enum** (`add-heading`, `add-todo`, …), everything else via flags. The closed enum is the key discipline — it keeps this from drifting into the free-form write grammar ruled out above, and the fixed ref slot means no ambiguity about what the action targets.
 
-This is where heading creation *belongs* ergonomically: headings are subordinate resources of a project, so `things project <ref> add-heading` reads correctly. The type-consistent `things heading create` stays (so heading is a first-class type like every other), but the scoped verb is the natural way to reach it.
+This is where heading creation *belongs* ergonomically: headings are subordinate resources of a project, so `things project <ref> add-heading` reads correctly. The type-consistent `things heading add` stays (so heading is a first-class type like every other), but the scoped verb is the natural way to reach it.
 
 Not built here. This document specifies the shape so the Phase-2 implementation has a target.

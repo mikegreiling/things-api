@@ -1624,8 +1624,8 @@ const headingUnarchive: CommandSpec<"heading.unarchive"> = {
   },
 };
 
-const headingCreate: CommandSpec<"heading.create"> = {
-  op: "heading.create",
+const headingAdd: CommandSpec<"heading.add"> = {
+  op: "heading.add",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -2032,25 +2032,25 @@ const projectMakeRepeating: CommandSpec<"project.make-repeating"> = {
   },
 };
 
-// project.create-repeating is delivered by the runCreateRepeatingProject
+// project.add-repeating is delivered by the runAddRepeatingProject
 // orchestrator (project.add THEN project.make-repeating); it has no single
 // atomic surface and is never dispatched directly through the pipeline.
-const CREATE_REPEATING_ORCHESTRATED =
-  "project.create-repeating is delivered by the runCreateRepeatingProject orchestrator (create " +
+const ADD_REPEATING_ORCHESTRATED =
+  "project.add-repeating is delivered by the runAddRepeatingProject orchestrator (create " +
   "the project, then promote it to a repeating series); it has no atomic surface and is never " +
   "dispatched directly through the pipeline";
 
-const projectCreateRepeating: CommandSpec<"project.create-repeating"> = {
-  op: "project.create-repeating",
+const projectAddRepeating: CommandSpec<"project.add-repeating"> = {
+  op: "project.add-repeating",
   hazards: [],
   preRead() {
     return emptyPreState();
   },
   expectedDelta() {
-    throw new Error(CREATE_REPEATING_ORCHESTRATED);
+    throw new Error(ADD_REPEATING_ORCHESTRATED);
   },
   compile() {
-    throw new Error(CREATE_REPEATING_ORCHESTRATED);
+    throw new Error(ADD_REPEATING_ORCHESTRATED);
   },
 };
 
@@ -2291,7 +2291,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "heading.rename": headingRename,
   "heading.archive": headingArchive,
   "heading.unarchive": headingUnarchive,
-  "heading.create": headingCreate,
+  "heading.add": headingAdd,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,
@@ -2304,5 +2304,5 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.resume-repeat": projectResumeRepeat,
   "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
-  "project.create-repeating": projectCreateRepeating,
+  "project.add-repeating": projectAddRepeating,
 };

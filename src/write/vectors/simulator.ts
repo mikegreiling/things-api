@@ -1473,14 +1473,14 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       .run(genUuid(), params.title, parent);
   }),
 
-  "heading.create": op<"heading.create">((sim, params, ctx) => {
+  "heading.add": op<"heading.add">((sim, params, ctx) => {
     const projUuid = containerUuid(sim, params.project, "project");
-    if (projUuid === null) throw new Error("simulator: heading.create needs a project");
+    if (projUuid === null) throw new Error("simulator: heading.add needs a project");
     insertTask(sim, 2, ctx, { uuid: genUuid(), title: params.title, project: projUuid });
   }),
 
-  // Recurrence ops (RSIM1–6). project.create-repeating is delivered by the
-  // runCreateRepeatingProject orchestrator over project.add + project.make-repeating
+  // Recurrence ops (RSIM1–6). project.add-repeating is delivered by the
+  // runAddRepeatingProject orchestrator over project.add + project.make-repeating
   // (both covered here), so it needs no direct applier. pause/resume/stop-repeat
   // are deliberately OMITTED — no RSIM shape proves their delta, and unsupported
   // beats guessed.

@@ -142,6 +142,26 @@ export interface UndoOptions {
 
 // -------------------------------------------------------------- audit reads
 
+/**
+ * Legacy op-kind aliases (the verb-harmonization rename): audit records written
+ * before the rename carry the OLD op-kind strings, and they must stay undoable
+ * and listable FOREVER. `readAuditRecords` is the single normalization point the
+ * whole undo / doctor / list path flows through, so every record's `op` is mapped
+ * to its canonical name on read — downstream (selectUndoTargets, planUndo,
+ * IRREVERSIBLE, the reversibility matrix, undoToken) only ever sees the new names.
+ * New records are written under the canonical names only (the operation catalog
+ * no longer emits the old spellings), so this map is read-only history.
+ */
+export const LEGACY_OP_ALIASES: Readonly<Record<string, OperationKind>> = {
+  "heading.create": "heading.add",
+  "project.create-repeating": "project.add-repeating",
+};
+
+/** Canonicalize a (possibly legacy) op-kind string. Unknown strings pass through. */
+export function normalizeOpKind(op: string): string {
+  return LEGACY_OP_ALIASES[op] ?? op;
+}
+
 /** Parse every audit record from the monthly JSONL files, oldest first. */
 export function readAuditRecords(dir: string): AuditRecord[] {
   let files: string[];
@@ -165,7 +185,13 @@ export function readAuditRecords(dir: string): AuditRecord[] {
       if (line.trim() === "") continue;
       try {
         const parsed = JSON.parse(line) as AuditRecord;
-        if (parsed.v === 1 && typeof parsed.op === "string") records.push(parsed);
+        if (parsed.v === 1 && typeof parsed.op === "string") {
+          // Normalize legacy op-kind aliases to their canonical names at the
+          // single read choke point (see LEGACY_OP_ALIASES) so old records stay
+          // undoable/listable under the new undo logic.
+          parsed.op = normalizeOpKind(parsed.op);
+          records.push(parsed);
+        }
       } catch {
         // tolerate a torn/corrupt line — append-only files can hold a partial
         // trailing write — but make it VISIBLE rather than silently dropping it.
@@ -315,7 +341,7 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
-  "heading.create":
+  "heading.add":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",
   "todo.make-repeating":
@@ -327,7 +353,7 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "project.make-repeating":
     "making a project repeat is an identity replacement (UIC4-b): the original project uuid is " +
     "destroyed and a new template project is born — there is no un-repeat that restores the original",
-  "project.create-repeating":
+  "project.add-repeating":
     "the composite creates a project then promotes it (identity replacement, UIC4-b): the " +
     "created uuid is destroyed by the promote and a new repeating template is born — delete the " +
     "resulting repeating project in the app",

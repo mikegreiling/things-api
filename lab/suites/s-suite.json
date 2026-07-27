@@ -24,7 +24,7 @@
       "id": "S02",
       "title": "HEADING CREATE in an existing project — WORKS (L5 S02): Create Heading makes a type=2 row with project=<project uuid>; the one surface dead on URL (T09/U09) and AppleScript (A31)",
       "vector": "shortcuts",
-      "operation": "heading.create",
+      "operation": "heading.add",
       "appState": "running-background",
       "setup": [
         { "openUrl": "things:///add-project?title=S02-PROJ" },

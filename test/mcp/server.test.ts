@@ -1726,27 +1726,27 @@ describe("things MCP server", () => {
   });
 
   describe("heading tool (action-parameterized)", () => {
-    it("action create plans through the proxy (dry-run), rejects an unknown project, and needs project + title", async () => {
+    it("action add plans through the proxy (dry-run), rejects an unknown project, and needs project + title", async () => {
       const project = seedProject(fixture.db, { title: "H-Proj" });
-      await connect([fakeVector(null, { id: "shortcuts", ops: ["heading.create"] }).vector]);
+      await connect([fakeVector(null, { id: "shortcuts", ops: ["heading.add"] }).vector]);
       const outcome = textOf(
         await client.callTool({
           name: "heading",
-          arguments: { action: "create", project, title: "Phase 1", dry_run: true },
+          arguments: { action: "add", project, title: "Phase 1", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("heading.create");
+      expect(outcome.op).toBe("heading.add");
 
       const unknown = await client.callTool({
         name: "heading",
-        arguments: { action: "create", project: "ghost-project", title: "x", dry_run: true },
+        arguments: { action: "add", project: "ghost-project", title: "x", dry_run: true },
       });
       expect(unknown.isError).toBe(true);
 
       const missing = await client.callTool({
         name: "heading",
-        arguments: { action: "create", project, dry_run: true },
+        arguments: { action: "add", project, dry_run: true },
       });
       expect(missing.isError).toBe(true);
       expect((textOf(missing) as { code: string }).code).toBe("usage");
@@ -2013,13 +2013,13 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.make-repeating");
     });
 
-    it("scope project action create blocks before creating, plans with the ack, and requires scope project (was create_repeating_project)", async () => {
+    it("scope project action add blocks before creating, plans with the ack, and requires scope project (was create_repeating_project)", async () => {
       await connect([fakeVector(null).vector]);
       const blocked = await client.callTool({
         name: "repeat",
         arguments: {
           scope: "project",
-          action: "create",
+          action: "add",
           title: "Weekly review",
           frequency: "weekly",
           interval: 1,
@@ -2032,7 +2032,7 @@ describe("things MCP server", () => {
           name: "repeat",
           arguments: {
             scope: "project",
-            action: "create",
+            action: "add",
             title: "Weekly review",
             frequency: "weekly",
             interval: 1,
@@ -2042,13 +2042,13 @@ describe("things MCP server", () => {
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("project.create-repeating");
+      expect(outcome.op).toBe("project.add-repeating");
 
       const wrongScope = await client.callTool({
         name: "repeat",
         arguments: {
           scope: "todo",
-          action: "create",
+          action: "add",
           title: "x",
           frequency: "weekly",
           interval: 1,

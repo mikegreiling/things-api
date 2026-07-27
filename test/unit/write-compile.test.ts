@@ -361,10 +361,10 @@ describe("heading op goldens (P10/P11)", () => {
 });
 
 describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
-  it("heading.create pipes {title, project:<uuid>} to things-proxy-create-heading", () => {
+  it("heading.add pipes {title, project:<uuid>} to things-proxy-create-heading", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-9", title: "My Project" }, matches: 1 };
-    const inv = COMMANDS["heading.create"].compile(
+    const inv = COMMANDS["heading.add"].compile(
       { project: { title: "My Project" }, title: "Phase Å" },
       "shortcuts",
       pre,
@@ -392,7 +392,7 @@ describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
 
   it("both ops refuse a non-shortcuts vector (planner-bug guard)", () => {
     expect(() =>
-      COMMANDS["heading.create"].compile(
+      COMMANDS["heading.add"].compile(
         { project: { uuid: "P" }, title: "x" },
         "url-scheme",
         emptyPreState(),

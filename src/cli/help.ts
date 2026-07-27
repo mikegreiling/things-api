@@ -360,7 +360,7 @@ A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,
   repeating: `REPEATING — rules for recurring to-dos and projects
 
 Verbs: \`things todo|project make-repeating <ref>\` (turn an existing item into a
-repeater), \`things project create-repeating "<title>"\`, \`… reschedule-repeat <ref>\`
+repeater), \`things project add-repeating "<title>"\`, \`… reschedule-repeat <ref>\`
 (change a rule in place). Every rule takes \`--frequency <daily|weekly|monthly|yearly>\`
 and a required \`--interval <n>\` (\`--interval 1\` = every unit). Repeating operations
 require \`--allow-disruptive\`, including \`--dry-run\` previews.

@@ -183,7 +183,7 @@ leak without threading scope through every command's `preRead`.
   re-nest / cascade are library-wide shared-state mutations). Tag reads exempt.
 - **Identity-replacement:** `todo.make-repeating` — area scope keeps the area,
   project scope keeps the project → allowed iff target in scope.
-  `project.make-repeating` / `project.create-repeating` / `todo.convert-to-project`
+  `project.make-repeating` / `project.add-repeating` / `todo.convert-to-project`
   / `heading.convert-to-project` under a **project scope** → refuse (the successor
   gets a new uuid the pinned scope won't recognize, or becomes a project that
   can't live in a project jail). Under an **area scope** → allowed (the successor

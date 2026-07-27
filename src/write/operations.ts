@@ -41,7 +41,7 @@ export const OPERATION_KINDS = [
   "heading.rename",
   "heading.archive",
   "heading.unarchive",
-  "heading.create",
+  "heading.add",
   "todo.clear-dated-reminder",
   "todo.make-repeating",
   "todo.reschedule-repeat",
@@ -54,7 +54,7 @@ export const OPERATION_KINDS = [
   "project.resume-repeat",
   "area.reorder",
   "project.make-repeating",
-  "project.create-repeating",
+  "project.add-repeating",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -141,7 +141,7 @@ export interface UuidParams {
   uuid: string;
 }
 
-export interface HeadingCreateParams {
+export interface HeadingAddParams {
   /** Existing project to create the heading in (uuid or unique, case-insensitive title). */
   project: ContainerRef;
   title: string;
@@ -511,7 +511,7 @@ export interface RepeatRuleParams {
  * created in Someday — so the promote never needs a coercion. The two legs are
  * NOT atomic: the created project persists even if the promote refuses.
  */
-export interface ProjectCreateRepeatingParams {
+export interface ProjectAddRepeatingParams {
   title: string;
   notes?: string;
   /** Destination area (uuid or unique name); when omitted the project is created in Someday. */
@@ -559,7 +559,7 @@ export interface OperationParamsMap {
   "heading.rename": HeadingRenameParams;
   "heading.archive": HeadingArchiveParams;
   "heading.unarchive": HeadingUnarchiveParams;
-  "heading.create": HeadingCreateParams;
+  "heading.add": HeadingAddParams;
   "todo.clear-dated-reminder": UuidParams;
   "todo.make-repeating": RepeatRuleParams;
   "todo.reschedule-repeat": RepeatRuleParams;
@@ -572,7 +572,7 @@ export interface OperationParamsMap {
   "project.resume-repeat": UuidParams;
   "area.reorder": AreaReorderParams;
   "project.make-repeating": RepeatRuleParams;
-  "project.create-repeating": ProjectCreateRepeatingParams;
+  "project.add-repeating": ProjectAddRepeatingParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */

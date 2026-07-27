@@ -93,7 +93,7 @@ import type {
   OperationParamsMap,
   ProjectAddParams,
   ProjectCompleteParams,
-  ProjectCreateRepeatingParams,
+  ProjectAddRepeatingParams,
   ProjectUpdateParams,
   RepeatRuleParams,
   ReorderParams,
@@ -125,10 +125,7 @@ import {
 } from "./write/heading.ts";
 import { runClearReminder } from "./write/clear-reminder.ts";
 import { runEditChecklist } from "./write/edit-checklist.ts";
-import {
-  runCreateRepeatingProject,
-  runMakeRepeatingProject,
-} from "./write/make-repeating-project.ts";
+import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
@@ -449,7 +446,7 @@ export interface ThingsClient {
      * on the result. Delivered through the Things proxy shortcuts (run
      * `things setup shortcuts` once first).
      */
-    createHeading(
+    addHeading(
       project: ContainerRef,
       title: string,
       options?: WriteOptions,
@@ -538,8 +535,8 @@ export interface ThingsClient {
      * two-key gated, same as makeRepeatingProject). Give an `area` to place it,
      * or omit it to create in Someday. The new template's uuid is on the result.
      */
-    createRepeatingProject(
-      params: ProjectCreateRepeatingParams,
+    addRepeatingProject(
+      params: ProjectAddRepeatingParams,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /** Replace a project's full tag set (an empty list clears all tags). */
@@ -960,7 +957,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
-      createHeading: (project, title, o) => run("heading.create", { project, title }, o),
+      addHeading: (project, title, o) => run("heading.add", { project, title }, o),
       renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
       clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
@@ -983,7 +980,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
       makeRepeatingProject: (uuid, rule, o) =>
         runMakeRepeatingProject(writeDeps, { uuid, ...rule }, o ?? {}),
-      createRepeatingProject: (params, o) => runCreateRepeatingProject(writeDeps, params, o ?? {}),
+      addRepeatingProject: (params, o) => runAddRepeatingProject(writeDeps, params, o ?? {}),
       setProjectTags: (uuid, tags, o) => run("project.set-tags", { uuid, tags }, o),
       addProjectTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);
