@@ -13,7 +13,7 @@ import { outcomeFailed, runBatch, type BatchOp } from "../../src/write/batch.ts"
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import type { VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
-import { seedTodo } from "../fixtures/seed.ts";
+import { seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
@@ -225,5 +225,41 @@ describe("runBatch", () => {
     expect(results[1]?.outcome.kind === "invalid" && results[1].outcome.detail).toMatch(
       /forward reference/,
     );
+  });
+
+  it("tempId is valid on project.duplicate (a uuid-minting op) and binds the discovered copy", async () => {
+    // project.duplicate mints a new uuid, so it is tempId-eligible. Drive it
+    // through the create-probe: the source shares the copy's title (excluded),
+    // so discovery lands on the freshly-created copy.
+    const src = seedProject(fixture.db, {
+      title: "Dup",
+      notes: "BODY",
+      creationDate: NOW_EPOCH - 500,
+    });
+    const matrix = {
+      "project.duplicate": { support: "yes", disruption: 0, validation: "validated" },
+    } as VectorMatrix;
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix,
+      async execute(invocation) {
+        if (invocation.payload.includes("duplicate=true")) {
+          seedProject(fixture.db, {
+            uuid: "COPY-P",
+            title: "Dup",
+            notes: "BODY",
+            creationDate: NOW_EPOCH,
+          });
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const { results, tempIdMapping } = await runBatch(deps(vector), [
+      { op: "project.duplicate", params: { uuid: src }, tempId: "copy" },
+    ]);
+    expect(results[0]?.outcome.kind).toBe("ok");
+    expect(results[0]?.tempId).toBe("copy");
+    expect(results[0]?.boundUuid).toBe("COPY-P");
+    expect(tempIdMapping["copy"]).toBe("COPY-P");
   });
 });

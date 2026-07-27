@@ -116,10 +116,9 @@ export interface BatchOptions {
 const KNOWN_OPS = new Set<string>(OPERATION_KINDS);
 
 /**
- * Ops that MINT a uuid, so may declare a `tempId`. Exactly the ratified set.
- * NB: `tag.add` is deliberately absent (tags have no uuid — identity is the
- * title); `project.duplicate` is absent per the ratified list even though it
- * mints (flagged for confirmation).
+ * Ops that MINT a uuid, so may declare a `tempId` — the ratified rule is
+ * "anything that creates a new uuid". NB: `tag.add` is deliberately absent (tags
+ * have no uuid — identity is the title).
  */
 const UUID_MINTING_OPS = new Set<string>([
   "todo.add",
@@ -129,6 +128,7 @@ const UUID_MINTING_OPS = new Set<string>([
   "area.add",
   "heading.create",
   "todo.duplicate",
+  "project.duplicate",
   "todo.make-repeating",
   "project.make-repeating",
   "todo.convert-to-project",
