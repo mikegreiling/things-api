@@ -16,7 +16,7 @@
    - area delete → **row hard-deleted** (A25); contained to-dos get `trashed=1` (A25B)
    - tag delete → row hard-deleted, TMTaskTag assignments cascade (A26)
    - empty trash → all `trashed=1` rows hard-deleted (A27)
-   - **No TMTombstone rows are written for any of these** — with Things Cloud disconnected, tombstones (a sync artifact) never appear. Untestable in the airgapped lab; flagged for the (out-of-scope) sync validation track.
+   - **No TMTombstone rows are written for any of these** — every target here is an ordinary `leavesTombstone=0` row. **Now fully mapped (TOMB1, 2026-07-26, [tomb1-results.md](tomb1-results.md)):** a `TMTombstone` row is written iff the deleted row carried **`leavesTombstone=1`** — a flag set ONLY on repeating-template lineage, NEVER on ordinary to-dos/projects/checklist items, and unchanged by attaching an account. So ordinary deletions leave no tombstone whether sync is off, on-and-local, or applied as a remote delete on another device (all proven); only repeating-lineage deletions tombstone, carrying a trustworthy `deletionDate` (deleter's wall-clock). `TMTombstone` is therefore not a general deletion log.
 6. **Repeating templates are invisible to AppleScript list reads but directly addressable** (A12): `to dos of list "Someday"` omits the template (same blind spot as things.py); `to do id "<uuid>"` fetches it fine — and A51's private json exposes its recurrence config.
 7. **Tag reads return direct tags only** (A13) — inherited area/project tags are not materialized, consistent with the DB model (U18).
 8. **`to dos of project` includes heading-contained children** (A11) — AppleScript flattens headings (which don't exist in its object model; A31 errors as expected, as does checklist access, A30).
