@@ -24,7 +24,7 @@
       "id": "S02",
       "title": "HEADING CREATE in an existing project — WORKS (L5 S02): Create Heading makes a type=2 row with project=<project uuid>; the one surface dead on URL (T09/U09) and AppleScript (A31)",
       "vector": "shortcuts",
-      "operation": "heading.add",
+      "operation": "project.add-heading",
       "appState": "running-background",
       "setup": [
         { "openUrl": "things:///add-project?title=S02-PROJ" },
@@ -56,7 +56,7 @@
       "id": "S03",
       "title": "HEADING RENAME — WORKS (L5 S03): Edit Items -> Set Title renames the type=2 row in place (heading seeded via create-heading in setup)",
       "vector": "shortcuts",
-      "operation": "heading.rename",
+      "operation": "project.rename-heading",
       "appState": "running-background",
       "setup": [
         { "openUrl": "things:///add-project?title=S03-PROJ" },

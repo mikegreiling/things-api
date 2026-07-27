@@ -1732,11 +1732,21 @@ describe("--json error-path universality", () => {
 
   it("flag-combination usage error honors --json (envelope on stdout, not prose on stderr)", () => {
     fx = buildFixtureDb();
-    const { stdout, exitCode } = runCli(["project", "move", "whatever", "--json", "--db", fx.path]);
+    const { stdout, exitCode } = runCli([
+      "project",
+      "move",
+      "whatever",
+      "--to-area",
+      "X",
+      "--no-area",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
     expect(exitCode).toBe(2);
     const env = JSON.parse(stdout);
     expect(env.error.code).toBe("usage");
-    expect(env.error.message).toContain("--area");
+    expect(env.error.message).toContain("--to-area");
   });
 
   it("bad --limit honors --json (usage envelope)", () => {

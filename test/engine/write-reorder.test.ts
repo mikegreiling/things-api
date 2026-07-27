@@ -632,47 +632,9 @@ function projectBounceVector() {
   return { vector, calls };
 }
 
-describe("headings scope (scf P1)", () => {
-  it("reorders a project's heading rows with a project specifier; children rejected", () => {
-    const project = seedProject(fixture.db, { title: "P" });
-    const h1 = seedHeading(fixture.db, { title: "Alpha", project, index: 1 });
-    const h2 = seedHeading(fixture.db, { title: "Beta", project, index: 2 });
-    seedTodo(fixture.db, { title: "child", heading: h1, index: 3 });
-
-    const pre = computeReorderPre(
-      fixture.db,
-      { scope: "headings", container: { uuid: project }, uuids: [h2, h1] },
-      project,
-      NOW,
-    );
-    expect(pre.members.map((m) => m.uuid)).toEqual([h1, h2]);
-    expect(pre.key).toBe("index");
-
-    const { vector, calls } = nativeVector(`"index"`);
-    return runReorder(deps([vector]), {
-      scope: "headings",
-      container: { uuid: project },
-      uuids: [h2, h1],
-    }).then((result) => {
-      expect(result.kind).toBe("ok");
-      expect(calls[0]).toContain(`project id "${project}"`);
-      expect(calls[0]).toContain(`with ids "${h2},${h1}"`);
-    });
-  });
-
-  it("rejects a to-do uuid in headings scope", async () => {
-    const project = seedProject(fixture.db, { title: "P" });
-    seedHeading(fixture.db, { title: "Alpha", project, index: 1 });
-    const child = seedTodo(fixture.db, { title: "plain", project, index: 2 });
-    const { vector } = nativeVector(`"index"`);
-    const result = await runReorder(deps([vector]), {
-      scope: "headings",
-      container: { uuid: project },
-      uuids: [child],
-    });
-    expect(result.kind).toBe("blocked");
-  });
-});
+// Heading reordering moved from `reorder --scope headings` to the
+// project.move-heading verb (spec §2) — its coverage lives in
+// test/engine/write-move-heading.test.ts.
 
 describe("someday scope (P8b two-call anchor protocol)", () => {
   it("realizes the exact requested order against anchor-stack semantics", async () => {

@@ -135,14 +135,14 @@ describe("project move scheduling-intent hint", () => {
 
 describe("valid moves are never intercepted", () => {
   it.each([
-    ["container area move", ["todo", "move", "todo-1", "--area", "Errands"]],
-    ["container project move", ["todo", "move", "todo-1", "--project", "Kitchen"]],
+    ["container area move", ["todo", "move", "todo-1", "--to-area", "Errands"]],
+    ["container project move", ["todo", "move", "todo-1", "--to-project", "Kitchen"]],
     ["real --inbox flag", ["todo", "move", "todo-1", "--inbox"]],
-    ["real --detach flag", ["todo", "move", "todo-1", "--detach"]],
-    ["a heading literally named 'someday'", ["todo", "move", "todo-1", "--heading", "someday"]],
-    ["an area literally named 'today'", ["todo", "move", "todo-1", "--area", "today"]],
+    ["the --loose detach flag", ["todo", "move", "todo-1", "--loose"]],
+    ["a heading literally named 'someday'", ["todo", "move", "todo-1", "--to-heading", "someday"]],
+    ["an area literally named 'today'", ["todo", "move", "todo-1", "--to-area", "today"]],
     ["a plain ref with no destination", ["todo", "move", "todo-1"]],
-    ["project area move", ["project", "move", "proj-1", "--area", "Work"]],
+    ["project area move", ["project", "move", "proj-1", "--to-area", "Work"]],
     ["a non-move todo subcommand", ["todo", "update", "todo-1", "--when", "someday"]],
   ])("%s → not trapped (falls through to commander)", (_label, argv) => {
     const hint = dispatch(argv);

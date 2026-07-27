@@ -45,6 +45,20 @@ export type { UndoItemResult, UndoOptions, UndoPlan, UndoStep } from "./write/un
 export type { BatchItemResult, BatchOp, BatchOptions, BatchResult } from "./write/batch.ts";
 export type { ReorderResult } from "./write/reorder.ts";
 export type {
+  MoveResult,
+  MoveOk,
+  MoveRefused,
+  MoveLegFailed,
+  MoveDryRun,
+  MovePosition,
+  PlacementClass,
+  ProjectMoveDestination,
+  ProjectMoveRequest,
+  ReorderRequest,
+  TodoMoveDestination,
+  TodoMoveRequest,
+} from "./write/move.ts";
+export type {
   SearchOptions,
   SomedayFilter,
   UpcomingFilter,
@@ -77,6 +91,8 @@ export type {
   Acknowledgements,
   AreaAddParams,
   ContainerRef,
+  HeadingPlacement,
+  MoveHeadingParams,
   OperationKind,
   OperationParamsMap,
   ProjectAddParams,

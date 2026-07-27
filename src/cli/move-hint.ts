@@ -1,7 +1,8 @@
 /**
  * The scheduling-intent hint for a namespaced `move` (docs/design/cli-grammar.md).
- * `things todo move <ref>` and `things project move <ref>` take CONTAINER
- * destinations only (--area/--project/--heading; todo also --inbox/--detach).
+ * `things todo move <refs…>` and `things project move <refs…>` take CONTAINER
+ * destinations only (--to-area/--to-project/--to-heading/--no-heading/--loose;
+ * todo also --inbox) plus positions (--first/--last/--before/--after).
  * An agent carrying scheduling intent ("move X to Someday") reaches for
  * spellings `move` does not accept — `--to someday`, `--when today`,
  * `--someday`, or a bare `someday` positional — and would otherwise land on a
@@ -226,7 +227,7 @@ function renderHuman(hint: MoveHint): string {
   return [
     leadLine(hint),
     actionLine(hint),
-    `move changes containers (--area/--project/--heading).`,
+    `move changes containers (--to-area/--to-project/--to-heading/--no-heading/--loose).`,
   ].join("\n");
 }
 

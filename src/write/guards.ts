@@ -4,7 +4,13 @@
  * result means the app was never touched.
  */
 import { noUuidMatch } from "../read/queries.ts";
-import { isUiDriveOp, type Acknowledgements, type OperationKind } from "./operations.ts";
+import {
+  isHeadingOp,
+  isHeadingTargetOp,
+  isUiDriveOp,
+  type Acknowledgements,
+  type OperationKind,
+} from "./operations.ts";
 import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 
 export const HAZARD_IDS = [
@@ -22,6 +28,7 @@ export const HAZARD_IDS = [
   "H-TAG-SUBTREE-DELETE",
   "H-BACKDATE-OPEN",
   "H-HEADING-CHILDREN",
+  "H-HEADING-ORDER",
   "H-NO-REMINDER",
   "H-UI-DRIVE",
   "H-PROJECT-REPEAT",
@@ -168,7 +175,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
       op !== "project.add" &&
       pre.target === null;
     if (needsTarget) {
-      const entity = op.startsWith("heading.")
+      const entity = isHeadingTargetOp(op)
         ? "heading"
         : op.startsWith("project.")
           ? "project"
@@ -180,7 +187,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
       // case: URL writes silently no-op on type=2 rows (P10b/c), and an
       // AppleScript `schedule` on one is a SUSPECTED APP CRASH (P10b-b5,
       // connection died -609). Projects have their own commands.
-      if (op.startsWith("heading.") && pre.target.type !== "heading") {
+      if (isHeadingTargetOp(op) && pre.target.type !== "heading") {
         problems.push(`target ${String(params["uuid"])} is a ${pre.target.type}, not a heading`);
       }
       if (op.startsWith("todo.") && op !== "todo.add" && pre.target.type !== "to-do") {
@@ -196,13 +203,18 @@ const GUARDS: Record<HazardId, GuardFn> = {
       // otherwise compile a `project id` / update-project specifier around a
       // to-do or heading — undefined app behavior, and a heading in a
       // schedule-class specifier CRASHES Things (P11e). Guarded, not probed.
-      if (op.startsWith("project.") && op !== "project.add" && pre.target.type !== "project") {
+      if (
+        op.startsWith("project.") &&
+        !isHeadingOp(op) &&
+        op !== "project.add" &&
+        pre.target.type !== "project"
+      ) {
         problems.push(
           `target ${String(params["uuid"])} is a ${pre.target.type}, not a project` +
             (pre.target.type === "to-do"
               ? " — use the `things todo` commands"
               : pre.target.type === "heading"
-                ? " — use the `things heading` commands"
+                ? " — use the `things project …-heading` commands"
                 : ""),
         );
       }
@@ -299,7 +311,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
     };
   },
   "H-HEADING-CHILDREN": ({ op, params, pre }) => {
-    if (op !== "heading.archive" || pre.openChildren.length === 0) return null;
+    if (op !== "project.archive-heading" || pre.openChildren.length === 0) return null;
     const policy = params["children"];
     if (policy === "complete" || policy === "cancel") return null;
     if (policy === "reparent") {
@@ -311,7 +323,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
           `the heading still has ${pre.openChildren.length} open child(ren) — the reparent ` +
           "policy is served by the heading-archive orchestrator, which moves them to the " +
           "project root first",
-        remediation: "use write.archiveHeading / `things heading archive` (not a raw run)",
+        remediation: "use write.archiveHeading / `things project archive-heading` (not a raw run)",
       };
     }
     return {
@@ -323,6 +335,18 @@ const GUARDS: Record<HazardId, GuardFn> = {
         "pass children: complete (cascade completes them), cancel (the app's " +
         "cancel-cascade marks them canceled), or reparent (move them to the project root " +
         "first, keeping them open)",
+    };
+  },
+  "H-HEADING-ORDER": ({ op, pre }) => {
+    if (op !== "project.move-heading" || pre.headingMove === null) return null;
+    if (pre.headingMove.problems.length === 0) return null;
+    return {
+      hazard: "H-HEADING-ORDER",
+      detail: `heading move rejected: ${pre.headingMove.problems.join("; ")}`,
+      remediation:
+        "every heading must be one of this project's headings (list them with " +
+        "`things project-view <project>`), named at most once, and the anchor must be a " +
+        "different heading in the same project",
     };
   },
   "H-NO-REMINDER": ({ op, pre }) => {
@@ -374,7 +398,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
         params["scope"] === "projects") &&
       params["container"] !== undefined
     ) {
-      problems.push("container is only valid for project/area/headings scopes");
+      problems.push("container is only valid for the project/area scopes");
     }
     const uuids = params["uuids"];
     if (!Array.isArray(uuids) || uuids.length === 0) {

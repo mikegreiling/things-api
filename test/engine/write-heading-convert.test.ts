@@ -85,7 +85,7 @@ describe("classifyHeadingConvert (HEADCERT1)", () => {
 describe("headingConvertToProjectRecipe — shape (HEADCERT1)", () => {
   it("reveals the project, selects the heading row by ordinal, then Convert + confirm", () => {
     const recipe = headingConvertToProjectRecipe("PROJ-1", 1);
-    expect(recipe.op).toBe("heading.convert-to-project");
+    expect(recipe.op).toBe("project.promote-heading");
     expect(recipe.targetUuid).toBe("PROJ-1");
     const reveal = recipe.steps[0];
     expect(reveal?.primitive).toBe("reveal");

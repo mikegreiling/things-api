@@ -274,7 +274,7 @@ describe("simulator write vector — covered operations", () => {
       start: "active",
       startDate: "2026-07-09",
     });
-    const res = await runMutation(deps(vector), "todo.move", { uuid: t, detach: true });
+    const res = await runMutation(deps(vector), "todo.move", { uuid: t, loose: true });
     expect(res.kind).toBe("ok");
     const r = row(t);
     expect(r["project"]).toBeNull();
@@ -472,9 +472,9 @@ describe("simulator write vector — covered operations", () => {
     expect(kitchen.parent).toBe(home.uuid);
   });
 
-  it("heading.add", async () => {
+  it("project.add-heading", async () => {
     const proj = seedProject(fixture.db, { title: "Book" });
-    const res = await runMutation(deps(vector), "heading.add", {
+    const res = await runMutation(deps(vector), "project.add-heading", {
       project: { uuid: proj },
       title: "Chapter 1",
     });
@@ -488,7 +488,7 @@ describe("simulator write vector — covered operations", () => {
   it("multi-step: project → heading → to-do under heading → complete (read-back consistent)", async () => {
     const proj = await runMutation(deps(vector), "project.add", { title: "MS Project" });
     expect(proj.kind).toBe("ok");
-    const head = await runMutation(deps(vector), "heading.add", {
+    const head = await runMutation(deps(vector), "project.add-heading", {
       project: { title: "MS Project" },
       title: "Phase A",
     });

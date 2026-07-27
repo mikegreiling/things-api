@@ -165,14 +165,14 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
       "`set completion date` / `set creation date` property writes — the ONLY surface " +
       "that rewrites these timestamps on an existing item",
   },
-  "heading.rename": {
+  "project.rename-heading": {
     support: "yes",
     disruption: 0,
     validation: "validated",
     evidence: ["P10d", "P10b:b6"],
     notes: "`set name of to do id` — heading rows are id-addressable (enumeration hides them)",
   },
-  "heading.archive": {
+  "project.archive-heading": {
     support: "yes",
     disruption: 0,
     validation: "validated",
@@ -181,12 +181,22 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
       "`set status of to do id` completed/canceled — the UI's Archive; open children " +
       "cascade per the status (completed vs CANCELED), pre-resolved children untouched",
   },
-  "heading.unarchive": {
+  "project.unarchive-heading": {
     support: "yes",
     disruption: 0,
     validation: "validated",
     evidence: ["P10b:b2"],
     notes: "`set status … to open` — reopens the heading only; children stay resolved",
+  },
+  "project.move-heading": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["scf:P1", "O06"],
+    experimental: true,
+    notes:
+      "`_private_experimental_ reorder` on the project's heading rows (scf P1 — children " +
+      "follow their heading); the full computed order is sent as the wire list",
   },
   reorder: {
     support: "partial",
@@ -211,10 +221,10 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     experimental: true,
     notes:
       "`_private_experimental_ reorder to dos in` — today (bucket-0 members), project/area " +
-      "(un-headed children only, O06), inbox (unscheduled to-dos, A6/P8a), headings (a " +
-      "project's heading rows, scf P1 — children follow), someday (loose someday to-dos, " +
-      "two-call anchor protocol, P8b); area also reorders PROJECTS (O14, same-type " +
-      "requests only); evening and top-level projects are bounce-only (O03, P8e)",
+      "(un-headed children only, O06), inbox (unscheduled to-dos, A6/P8a), someday (loose " +
+      "someday to-dos, two-call anchor protocol, P8b); area also reorders PROJECTS (O14, " +
+      "same-type requests only); evening and top-level projects are bounce-only (O03, P8e). " +
+      "A project's heading rows reorder via `project move-heading`",
   },
 };
 

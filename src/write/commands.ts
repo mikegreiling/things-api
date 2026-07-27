@@ -27,6 +27,7 @@ import {
   childTagTitles,
   classifyHeadingConvert,
   classifyProjectRepeat,
+  computeHeadingMovePre,
   computeReorderPre,
   emptyPreState,
   loadTarget,
@@ -469,11 +470,15 @@ const todoMove: CommandSpec<"todo.move"> = {
   preRead(db, params) {
     const container =
       containerGiven(params.project) || containerGiven(params.area) || params.heading !== undefined;
-    if (params.inbox === true && (container || params.detach === true)) {
-      throw new RangeError("inbox is exclusive with project/area/heading/detach");
+    const detachFamily = params.loose === true || params.noHeading === true;
+    if (params.inbox === true && (container || detachFamily)) {
+      throw new RangeError("inbox is exclusive with project/area/heading and --no-heading/--loose");
     }
-    if (params.detach === true && container) {
-      throw new RangeError("detach is exclusive with project/area/heading destinations");
+    if (params.loose === true && (container || params.noHeading === true)) {
+      throw new RangeError("--loose is exclusive with project/area/heading and --no-heading");
+    }
+    if (params.noHeading === true && container) {
+      throw new RangeError("--no-heading is exclusive with project/area/heading destinations");
     }
     if (containerGiven(params.project) && containerGiven(params.area)) {
       throw new RangeError("project and area are exclusive destinations");
@@ -492,6 +497,17 @@ const todoMove: CommandSpec<"todo.move"> = {
         }
       }
     }
+    // --no-heading re-asserts the CURRENT project as the container: resolve the
+    // target's own project (direct or via its heading) so compile/delta pin it.
+    if (params.noHeading === true) {
+      const t = pre.target;
+      const current =
+        t !== null && t.type === "to-do" ? (t.project ?? t.headingProject ?? null) : null;
+      if (current !== null) {
+        pre.destProject = { resolved: { uuid: current.uuid, title: current.title }, matches: 1 };
+        pre.destProjectStatus = projectStatus(db, current.uuid);
+      }
+    }
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
     return pre;
   },
@@ -502,7 +518,7 @@ const todoMove: CommandSpec<"todo.move"> = {
       assert.push({ field: "start", equals: "inbox" }, { field: "startDate", equals: null });
       return { mode: "update", uuid: params.uuid, assert };
     }
-    if (params.detach === true) {
+    if (params.loose === true) {
       // P21/P22: empty list-id strips every container link; the schedule is
       // untouched (pin it — a silent de-schedule would be a contrary write).
       const target = pre.target;
@@ -514,6 +530,16 @@ const todoMove: CommandSpec<"todo.move"> = {
         { field: "heading", equals: null },
         { field: "startDate", equals: startDate },
       );
+      return { mode: "update", uuid: params.uuid, assert };
+    }
+    if (params.noHeading === true) {
+      // Leave the heading, keep the project: re-assert the current project as
+      // the container with no heading (lands in the unheaded block).
+      const project = pre.destProject?.resolved;
+      assert.push({ field: "heading", equals: null });
+      if (project !== undefined && project !== null) {
+        assert.push({ field: "project.uuid", equals: project.uuid });
+      }
       return { mode: "update", uuid: params.uuid, assert };
     }
     const heading = pre.destHeading?.resolved;
@@ -536,11 +562,21 @@ const todoMove: CommandSpec<"todo.move"> = {
       if (vector !== "applescript") unsupportedVector(this.op, vector);
       return osa(`move to do id ${q(params.uuid)} to list "Inbox"`);
     }
-    if (params.detach === true) {
+    if (params.loose === true) {
       // Empty list-id = clear the container (P21/P22) — URL only; the other
       // vectors reject or silently ignore container removal (P10/P11, P26).
       if (vector !== "url-scheme") unsupportedVector(this.op, vector);
       return thingsUrl("update", { id: params.uuid, "list-id": "" }, ctx.token);
+    }
+    if (params.noHeading === true) {
+      // Re-assert the CURRENT project as the list with no heading param — the
+      // to-do drops its heading FK and lands in the project's unheaded block.
+      if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+      return thingsUrl(
+        "update",
+        { id: params.uuid, "list-id": pre.destProject?.resolved?.uuid ?? "" },
+        ctx.token,
+      );
     }
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
@@ -820,8 +856,8 @@ const projectMove: CommandSpec<"project.move"> = {
   op: "project.move",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
-    if ((params.detach === true) === containerGiven(params.area)) {
-      throw new RangeError("project.move needs exactly one of area / detach");
+    if ((params.noArea === true) === containerGiven(params.area)) {
+      throw new RangeError("project.move needs exactly one of area / --no-area");
     }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
@@ -835,7 +871,7 @@ const projectMove: CommandSpec<"project.move"> = {
       mode: "update",
       uuid: params.uuid,
       assert: [
-        params.detach === true
+        params.noArea === true
           ? { field: "area", equals: null }
           : { field: "area.uuid", equals: pre.destArea?.resolved?.uuid ?? "" },
       ],
@@ -843,18 +879,18 @@ const projectMove: CommandSpec<"project.move"> = {
   },
   compile(params, vector, pre, ctx) {
     if (vector === "url-scheme") {
-      // P23 (move) / P24 (empty area-id = detach — URL is the ONLY detach
+      // P23 (move) / P24 (empty area-id = leave the area — URL is the ONLY
       // surface: AppleScript rejects missing value/"" and json-null no-ops).
       return thingsUrl(
         "update-project",
         {
           id: params.uuid,
-          "area-id": params.detach === true ? "" : (pre.destArea?.resolved?.uuid ?? ""),
+          "area-id": params.noArea === true ? "" : (pre.destArea?.resolved?.uuid ?? ""),
         },
         ctx.token,
       );
     }
-    if (params.detach === true) unsupportedVector(this.op, vector);
+    if (params.noArea === true) unsupportedVector(this.op, vector);
     return osa(
       `set area of project id ${q(params.uuid)} to area id ` +
         q(pre.destArea?.resolved?.uuid ?? ""),
@@ -1335,7 +1371,7 @@ const reorder: CommandSpec<"reorder"> = {
   preRead(db, params, now) {
     const pre = emptyPreState();
     let containerUuid: string | null = null;
-    if (params.scope === "project" || params.scope === "headings") {
+    if (params.scope === "project") {
       pre.destProject = resolveProject(db, params.container ?? {});
       containerUuid = pre.destProject.resolved?.uuid ?? null;
     }
@@ -1361,7 +1397,7 @@ const reorder: CommandSpec<"reorder"> = {
   compile(params, vector, pre) {
     if (vector !== "applescript") unsupportedVector(this.op, vector);
     const specifier =
-      params.scope === "project" || params.scope === "headings"
+      params.scope === "project"
         ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
         : params.scope === "area"
           ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
@@ -1527,8 +1563,8 @@ function headingChildren(db: DatabaseSync, headingUuid: string): Todo[] {
   return todos;
 }
 
-const headingRename: CommandSpec<"heading.rename"> = {
-  op: "heading.rename",
+const headingRename: CommandSpec<"project.rename-heading"> = {
+  op: "project.rename-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1550,8 +1586,8 @@ const headingRename: CommandSpec<"heading.rename"> = {
   },
 };
 
-const headingArchive: CommandSpec<"heading.archive"> = {
-  op: "heading.archive",
+const headingArchive: CommandSpec<"project.archive-heading"> = {
+  op: "project.archive-heading",
   hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-CHILDREN"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1603,8 +1639,8 @@ const headingArchive: CommandSpec<"heading.archive"> = {
   },
 };
 
-const headingUnarchive: CommandSpec<"heading.unarchive"> = {
-  op: "heading.unarchive",
+const headingUnarchive: CommandSpec<"project.unarchive-heading"> = {
+  op: "project.unarchive-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1624,8 +1660,8 @@ const headingUnarchive: CommandSpec<"heading.unarchive"> = {
   },
 };
 
-const headingAdd: CommandSpec<"heading.add"> = {
-  op: "heading.add",
+const headingAdd: CommandSpec<"project.add-heading"> = {
+  op: "project.add-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1658,6 +1694,34 @@ const headingAdd: CommandSpec<"heading.add"> = {
       title: params.title,
       project: pre.destProject?.resolved?.uuid ?? "",
     });
+  },
+};
+
+const projectMoveHeading: CommandSpec<"project.move-heading"> = {
+  op: "project.move-heading",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-ORDER"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.destProject = resolveProject(db, params.project);
+    pre.headingMove = computeHeadingMovePre(db, pre.destProject, params.headings, params.placement);
+    return pre;
+  },
+  expectedDelta(pre) {
+    // The reorder wire re-ranks the FULL heading list; verify the whole target
+    // order (strictly ascending "index"). Children follow their heading (scf
+    // P1), so no per-child assertion is needed.
+    return { mode: "ordering", key: "index", sequence: pre.headingMove?.targetOrder ?? [] };
+  },
+  compile(_params, vector, pre) {
+    // The same native private-reorder wire the old `reorder --scope headings`
+    // used (experimental — gated by allow-experimental + the sdef canary),
+    // fed the computed full order.
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const order = pre.headingMove?.targetOrder ?? [];
+    return osa(
+      `${PRIVATE_REORDER_COMMAND} project id ${q(pre.destProject?.resolved?.uuid ?? "")} ` +
+        `with ids ${q(order.join(","))}`,
+    );
   },
 };
 
@@ -2087,8 +2151,8 @@ const todoConvertToProject: CommandSpec<"todo.convert-to-project"> = {
   },
 };
 
-const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
-  op: "heading.convert-to-project",
+const headingConvertToProject: CommandSpec<"project.promote-heading"> = {
+  op: "project.promote-heading",
   hazards: UI_HAZARDS,
   preRead(db, params) {
     const pre = emptyPreState();
@@ -2126,7 +2190,7 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
       // refuse here means a parentless heading (or one absent from its project's
       // heading set) slipped past — fail loud rather than drive the wrong row.
       throw new Error(
-        `heading.convert-to-project: ${tax?.kind === "refuse" ? tax.detail : "no heading taxonomy resolved (guard bypassed?)"}`,
+        `project.promote-heading: ${tax?.kind === "refuse" ? tax.detail : "no heading taxonomy resolved (guard bypassed?)"}`,
       );
     }
     return uiDrive(headingConvertToProjectRecipe(tax.projectReveal, tax.ordinal));
@@ -2288,17 +2352,18 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.set-tags": projectSetTags,
   "todo.backdate": todoBackdate,
   "todo.add-logged": todoAddLogged,
-  "heading.rename": headingRename,
-  "heading.archive": headingArchive,
-  "heading.unarchive": headingUnarchive,
-  "heading.add": headingAdd,
+  "project.add-heading": headingAdd,
+  "project.rename-heading": headingRename,
+  "project.archive-heading": headingArchive,
+  "project.unarchive-heading": headingUnarchive,
+  "project.promote-heading": headingConvertToProject,
+  "project.move-heading": projectMoveHeading,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,
   "todo.pause-repeat": todoPauseRepeat,
   "todo.resume-repeat": todoResumeRepeat,
   "todo.convert-to-project": todoConvertToProject,
-  "heading.convert-to-project": headingConvertToProject,
   "project.reschedule-repeat": projectRescheduleRepeat,
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,

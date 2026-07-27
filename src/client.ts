@@ -20,7 +20,12 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
-import { resolveAreaUuid, resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
+import {
+  resolveAreaUuid,
+  resolveHeadingUuid,
+  resolveProjectUuid,
+  resolveTaskUuidPrefix,
+} from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
@@ -101,6 +106,7 @@ import type {
   TagUpdateParams,
   HeadingArchiveParams,
   HeadingUnarchiveParams,
+  HeadingPlacement,
   TodoAddLoggedParams,
   TodoAddParams,
   TodoBackdateParams,
@@ -124,6 +130,7 @@ import {
 import { planTagCreation } from "./write/tag-refs.ts";
 import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
 import {
+  runAddHeading,
   runHeadingArchive,
   runHeadingUnarchive,
   type HeadingArchiveResult,
@@ -134,6 +141,15 @@ import { runEditChecklist } from "./write/edit-checklist.ts";
 import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
+import {
+  runInPlaceReorder,
+  runProjectMove,
+  runTodoMove,
+  type MoveResult,
+  type ProjectMoveRequest,
+  type ReorderRequest,
+  type TodoMoveRequest,
+} from "./write/move.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
   runProjectReopen,
@@ -298,6 +314,17 @@ export interface ThingsClient {
    * `tz` argument) so the reported `today` matches what that read computed.
    */
   clockMeta(zoneOverride?: string): ClockMeta | undefined;
+  /**
+   * Reference resolvers the consumer surfaces (CLI/MCP) call to turn a project
+   * ref + heading selector into uuids before invoking a heading verb. Both
+   * throw {@link ReferenceResolutionError} (uuid candidates on ambiguity),
+   * scope-aware when a container scope is active. `heading` shares the one
+   * heading-selector core (title | uuid | empty-string literal; no ordinal).
+   */
+  resolve: {
+    project(ref: string): { uuid: string; title: string };
+    heading(projectUuid: string, sel: string): { uuid: string; title: string };
+  };
   read: {
     /**
      * The Today list (Today + This Evening split) with the sidebar badge,
@@ -410,6 +437,23 @@ export interface ThingsClient {
       dest: Omit<TodoMoveParams, "uuid">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
+    /**
+     * Move one or more to-dos as an ordered block (spec §4). Give a destination
+     * (--to-project / --to-heading / --to-area / --no-heading / --loose) and an
+     * optional position (first/last/before/after), or a position alone to
+     * reposition items already sharing a container. Membership always succeeds;
+     * placement is guaranteed top-of-bucket only where a reorder protocol exists
+     * (the result states the placement class). Compiles onto the todo.move +
+     * reorder wire primitives — no new op kind.
+     */
+    moveTodos(request: TodoMoveRequest, options?: WriteOptions): Promise<MoveResult>;
+    /**
+     * Reorder to-dos IN PLACE within their shared container+bucket (spec §4).
+     * Bare (no position) assembles the movees as a contiguous block at the
+     * earliest movee's current slot, in argument order. Cross-container operands
+     * fail closed.
+     */
+    reorderTodos(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Replace the full tag set (an empty list clears all tags). */
     setTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     /** Merge: current direct tags + new ones, then replace. */
@@ -450,15 +494,31 @@ export interface ThingsClient {
     /**
      * Create a heading inside an EXISTING project; the new heading's uuid is
      * on the result. Delivered through the Things proxy shortcuts (run
-     * `things setup shortcuts` once first).
+     * `things setup shortcuts` once first). A `placement` positions the new
+     * heading among the project's headings via a native `move-heading` leg
+     * (requires allow-experimental); omitted, it appends. Anchor uuids in the
+     * placement are resolved by the caller.
      */
     addHeading(
       project: ContainerRef,
       title: string,
+      placement?: HeadingPlacement,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /** Rename a heading in place (works on archived headings too). */
     renameHeading(uuid: string, title: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Reposition one or more of a project's headings as an ordered block
+     * (selection order = resulting order; children follow). `headings` and the
+     * placement anchors are resolved heading uuids. Native reorder wire
+     * (requires allow-experimental).
+     */
+    moveHeading(
+      project: ContainerRef,
+      headings: string[],
+      placement: HeadingPlacement,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     /**
      * Archive a heading (the UI's Archive — it leaves the active project
      * view, reversibly). With open children the policy is mandatory:
@@ -504,6 +564,14 @@ export interface ThingsClient {
     moveProject(uuid: string, area: ContainerRef, options?: WriteOptions): Promise<MutationResult>;
     /** Detach a project from its current area. */
     detachProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Move one or more projects as an ordered block (spec §4/§5): --to-area, or
+     * --no-area to leave the area, plus an optional position — or a position
+     * alone to reorder them among their siblings.
+     */
+    moveProjects(request: ProjectMoveRequest, options?: WriteOptions): Promise<MoveResult>;
+    /** Reorder projects IN PLACE among their siblings (spec §4). */
+    reorderProjects(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Cancel a project — open children are canceled with it, so the children policy is mandatory. */
     cancelProject(
       uuid: string,
@@ -734,6 +802,23 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     fingerprint,
     schemaStatus: () => toSchemaStatus(fingerprint()),
     clockMeta: (zoneOverride) => buildClockMeta(clock, zoneOverride),
+    resolve: {
+      project: (ref) => {
+        const uuid = resolveProjectUuid(conn.db, ref, {
+          ...(scopeClauses !== undefined && {
+            scopeWhere: scopeClauses.namedProject.where,
+            scopeBinds: scopeClauses.namedProject.binds,
+          }),
+        });
+        const row = conn.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as
+          | { title: string | null }
+          | undefined;
+        return { uuid, title: row?.title ?? "" };
+      },
+      // Headings inside a scoped project are in-scope by construction (the
+      // project ref was scope-checked), so no extra clause is threaded here.
+      heading: (projectUuid, sel) => resolveHeadingUuid(conn.db, projectUuid, sel),
+    },
     read: {
       // The list views own their bounding: run the full filtered query, then
       // truncate to the resolved cap (default 50 / per-block 30·3) — the exact
@@ -956,6 +1041,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       cancelTodo: (uuid, o) => run("todo.cancel", { uuid }, o),
       reopenTodo: (uuid, o) => run("todo.reopen", { uuid }, o),
       moveTodo: (uuid, dest, o) => run("todo.move", { uuid, ...dest }, o),
+      moveTodos: (request, o) => runTodoMove(writeDeps, request, o ?? {}),
+      reorderTodos: (request, o) => runInPlaceReorder(writeDeps, "todo.move", request, o ?? {}),
       setTags: (uuid, tags, o) => run("todo.set-tags", { uuid, tags }, o),
       addTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);
@@ -970,21 +1057,27 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
-      addHeading: (project, title, o) => run("heading.add", { project, title }, o),
-      renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
+      addHeading: (project, title, placement, o) =>
+        runAddHeading(writeDeps, project, title, placement, o ?? {}),
+      renameHeading: (uuid, title, o) => run("project.rename-heading", { uuid, title }, o),
+      moveHeading: (project, headings, placement, o) =>
+        run("project.move-heading", { project, headings, placement }, o),
       clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
       unarchiveHeading: (uuid, policy, o) =>
         runHeadingUnarchive(writeDeps, { uuid, ...policy }, o ?? {}),
-      detachTodo: (uuid, o) => run("todo.move", { uuid, detach: true }, o),
+      detachTodo: (uuid, o) => run("todo.move", { uuid, loose: true }, o),
       editChecklist: (uuid, edit, o) => runEditChecklist(writeDeps, uuid, edit, o ?? {}),
       addProject: (params, o) => run("project.add", params, o),
       updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
       completeProject: (uuid, policy, o) =>
         run("project.complete", { uuid, children: policy.children }, o),
       moveProject: (uuid, area, o) => run("project.move", { uuid, area }, o),
-      detachProject: (uuid, o) => run("project.move", { uuid, detach: true }, o),
+      detachProject: (uuid, o) => run("project.move", { uuid, noArea: true }, o),
+      moveProjects: (request, o) => runProjectMove(writeDeps, request, o ?? {}),
+      reorderProjects: (request, o) =>
+        runInPlaceReorder(writeDeps, "project.move", request, o ?? {}),
       cancelProject: (uuid, policy, o) =>
         run("project.cancel", { uuid, children: policy.children }, o),
       reopenProject: (uuid, o) => runProjectReopen(writeDeps, uuid, o ?? {}),

@@ -29,6 +29,13 @@ A nonzero exit is informative, not a dead end — it means the write did not sil
 - Some operations are disruptive (may move focus in the app) and require `--allow-disruptive`, **including their dry runs**. `things capabilities` lists each operation's support and any preconditions.
 - If a request needs a capability the tool reports as unsupported, say so plainly rather than improvising through unrelated commands.
 
+## Bulk creation (contract summary)
+
+- **Several to-dos at once**: `things todo add "T1" "T2" "T3" [shared flags]`. Every shared flag (`--project`/`--area`/`--heading`/`--when`/`--tags`/`--deadline`/…) applies to each title; titles land in argument order. `--stdin` reads newline-delimited titles from stdin (blank lines skipped) instead of positional args (the two are mutually exclusive). `--id-only` prints exactly one uuid per line in creation order — pipe it to chain follow-up commands (mutually exclusive with `--json`).
+- **One undo for the whole set**: a multi-title add runs as one unit. `--json` streams a per-line result plus a trailing `summary` line carrying a single `undoToken`; `things undo --txn <undoToken>` removes the whole skeleton at once. A single-title `add` is unchanged — it still returns the ordinary single mutation-result envelope.
+- **New project with children**: `things project add "<title>" --todo "T1" --todo "T2" …` (`--todo` repeatable) seeds a project skeleton in one call.
+- **Richer batches**: for per-item metadata that differs, or cross-item references (`tempId`/`$ref`), use `things batch` (JSONL) — same one-`undoToken` undo semantics.
+
 ## Batch (many changes at once)
 
 `things batch` runs a JSONL script (one `{"op","params",…}` per line) sequentially and independently — no transactions; a failure does not roll back earlier lines. Three fields make multi-step work reliable:

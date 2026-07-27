@@ -20,6 +20,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import type {
+  MoveHeadingParams,
   OperationKind,
   ProjectMoveParams,
   ReorderParams,
@@ -108,7 +109,7 @@ export function evaluateScope(
           REFUSE_UNDER_PROJECT,
         );
       case "todo.convert-to-project":
-      case "heading.convert-to-project":
+      case "project.promote-heading":
         return blocked(
           "the result is a project, which cannot live inside a project scope",
           REFUSE_UNDER_PROJECT,
@@ -130,20 +131,31 @@ export function evaluateScope(
     return evaluateReorderScope(db, params as unknown as ReorderParams, scope);
   }
 
+  // Heading reorder: allowed iff the headings' project is in scope.
+  if (op === "project.move-heading") {
+    const r = resolveProject(db, (params as unknown as MoveHeadingParams).project);
+    if (r.resolved === null) return { kind: "allow" }; // unknown project — normal error path
+    return isUuidInScope(db, r.resolved.uuid, scope)
+      ? { kind: "allow" }
+      : blocked("the heading's project is outside the active scope");
+  }
+
   // 4. Moves that strip the container or target the Inbox leave scope.
   if (op === "todo.move") {
     const p = params as unknown as TodoMoveParams;
     if (p.inbox === true) return blocked("moving to the Inbox leaves the active scope");
-    if (p.detach === true)
-      return blocked("detaching strips the item's container, leaving the active scope");
+    if (p.loose === true)
+      return blocked("--loose strips the item's container, leaving the active scope");
+    // --no-heading keeps the to-do in its current project (in scope by
+    // construction) — allowed; falls through to the default gate.
   }
   if (op === "project.move") {
-    // Only an AREA scope reaches here (project scope refused above). Detaching
+    // Only an AREA scope reaches here (project scope refused above). --no-area
     // strips the area; moving to the scope area itself is idempotent (allowed
     // via the destination gate). Any other destination area is nullified below.
     const p = params as unknown as ProjectMoveParams;
-    if (p.detach === true)
-      return blocked("detaching a project strips its area, leaving the active scope");
+    if (p.noArea === true)
+      return blocked("--no-area strips a project's area, leaving the active scope");
   }
 
   // 5. Creates with no explicit destination → redirect into the container.
@@ -190,8 +202,8 @@ function applyAddRedirect(db: DatabaseSync, pre: PreState, scope: ResolvedScope)
 /**
  * Reorder scope gate: `today`/`evening`/`inbox`/`someday`/`projects` reorder a
  * cross-container list (the anchor-stack/bounce wire protocols cannot be
- * container-filtered) — refuse. `project`/`area`/`headings` are allowed when the
- * named container is in scope.
+ * container-filtered) — refuse. `project`/`area` are allowed when the named
+ * container is in scope.
  */
 function evaluateReorderScope(
   db: DatabaseSync,
@@ -213,7 +225,7 @@ function evaluateReorderScope(
       ? { kind: "allow" }
       : blocked("the reorder container is outside the active scope");
   }
-  // project / headings: the container is a project.
+  // project scope: the container is a project.
   const r = resolveProject(db, container);
   if (r.resolved === null) return { kind: "allow" };
   return isUuidInScope(db, r.resolved.uuid, scope)

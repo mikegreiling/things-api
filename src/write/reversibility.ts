@@ -137,7 +137,7 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "reversible",
     note: "inverse restores the captured pre-op title/parent/shortcut (irreversible only if none were captured)",
   },
-  "heading.rename": {
+  "project.rename-heading": {
     class: "reversible",
     note: "inverse renames the heading back to the captured pre-op title",
   },
@@ -179,13 +179,17 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   },
 
   // ---- headings -----------------------------------------------------------
-  "heading.archive": {
+  "project.archive-heading": {
     class: "reversible-with-loss",
     note: "inverse unarchives and reopens exactly the cascade-resolved children (someday survives, P11a); reparented children return matched BY heading name, and their in-heading order is not guaranteed",
   },
-  "heading.unarchive": {
+  "project.unarchive-heading": {
     class: "reversible",
     note: "inverse re-archives (children: complete) — children the unarchive reopened re-resolve via the cascade",
+  },
+  "project.move-heading": {
+    class: "conditional",
+    note: "invertible when pre-move heading ranks were captured — the inverse restores the prior heading order (children follow); irreversible when the project's headings were still unranked before the move",
   },
 
   // ---- clear dated reminder (orchestrated) --------------------------------
@@ -207,7 +211,7 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "emptying the Trash hard-deletes every row — nothing to restore (A27)",
   },
-  "heading.add": {
+  "project.add-heading": {
     class: "irreversible",
     note: "a created heading has no headless delete surface (heading delete is interactive-only) — archive it in the app instead",
   },
@@ -227,9 +231,9 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "the composite CREATES a project then promotes it (identity replacement, UIC4-b): the created uuid is destroyed by the promote and a new repeating template is born — no automated inverse captures it; delete the resulting repeating project in the app",
   },
-  "heading.convert-to-project": {
+  "project.promote-heading": {
     class: "irreversible",
-    note: "converting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",
+    note: "promoting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",
   },
   "todo.reschedule-repeat": {
     class: "conditional",

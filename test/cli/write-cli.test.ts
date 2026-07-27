@@ -83,15 +83,16 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain(`delete to do id "${uuid}"`);
   });
 
-  it("project move --dry-run plans the URL area re-assignment (P23)", async () => {
+  it("project move --to-area --dry-run plans the membership + area placement (spec §4)", async () => {
     const area = seedArea(fixture.db, "Work");
     const proj = seedProject(fixture.db, { title: "Mover" });
-    await run(["project", "move", proj, "--area", "Work", "--dry-run", "--json"]);
+    await run(["project", "move", proj, "--to-area", "Work", "--dry-run", "--json"]);
     const env = envelope();
-    expect(env["kind"]).toBe("mutation-plan");
+    expect(env["kind"]).toBe("move-plan");
     const plan = env["data"] as Record<string, unknown>;
-    expect(plan["vector"]).toBe("url-scheme");
-    expect(String(plan["invocation"])).toContain(`update-project?id=${proj}&area-id=${area}`);
+    expect(String(plan["membership"])).toContain("membership leg");
+    expect(String(plan["placement"])).toContain("area");
+    expect(String(plan["placement"])).toContain(area);
   });
 
   it("project duplicate --dry-run plans the URL duplicate (E17)", async () => {
@@ -113,9 +114,9 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain(`move to do id "${uuid}" to list "Inbox"`);
   });
 
-  it("heading add --dry-run plans the create-heading proxy on the shortcuts vector", async () => {
+  it("project add-heading --dry-run plans the create-heading proxy on the shortcuts vector", async () => {
     const proj = seedProject(fixture.db, { title: "Dest" });
-    await run(["heading", "add", "Dest", "Phase 2", "--dry-run", "--json"]);
+    await run(["project", "add-heading", "Dest", "Phase 2", "--dry-run", "--json"]);
     const env = envelope();
     expect(env["kind"]).toBe("mutation-plan");
     const plan = env["data"] as Record<string, unknown>;
@@ -137,6 +138,76 @@ describe("dry-run plans", () => {
     expect(plan["vector"]).toBe("shortcuts");
     expect(String(plan["invocation"])).toContain("things-proxy-set-detail");
     expect(String(plan["invocation"])).toContain("Reminder Time");
+  });
+});
+
+describe("bulk todo add: variadic / --stdin / --id-only", () => {
+  it("variadic add compiles one todo.add leg per title, in order, with the shared flag on each (dry-run)", async () => {
+    await run([
+      "todo",
+      "add",
+      "First",
+      "Second",
+      "Third",
+      "--when",
+      "today",
+      "--dry-run",
+      "--json",
+    ]);
+    const parsed = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    // three per-line dry-run plans + one summary line
+    expect(parsed.slice(0, 3).map((r) => r.outcome.kind)).toEqual([
+      "dry-run",
+      "dry-run",
+      "dry-run",
+    ]);
+    const invs = parsed.slice(0, 3).map((r) => String(r.outcome.plan.invocation));
+    expect(invs[0]).toContain("title=First");
+    expect(invs[1]).toContain("title=Second");
+    expect(invs[2]).toContain("title=Third");
+    // the shared --when flag is applied to EACH title
+    for (const inv of invs) expect(inv).toContain("when=today");
+    const summary = parsed[3].summary;
+    expect(summary.total).toBe(3);
+    // a dry-run mints nothing, so there is no undo token
+    expect(summary.undoToken).toBeUndefined();
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("a single title keeps the single mutation-plan envelope (not a batch stream)", async () => {
+    await run(["todo", "add", "Solo", "--dry-run", "--json"]);
+    const out = stdout.join("").trim().split("\n");
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0] ?? "{}")["kind"]).toBe("mutation-plan");
+  });
+
+  it("--stdin is mutually exclusive with positional titles (usage error, exit 2)", async () => {
+    await run(["todo", "add", "X", "--stdin"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("--stdin is mutually exclusive");
+  });
+
+  it("--id-only and --json are mutually exclusive (usage error, exit 2)", async () => {
+    await run(["todo", "add", "X", "--id-only", "--json"]);
+    expect(process.exitCode).toBe(2);
+    // --json routes the usage error to a JSON envelope on stdout.
+    expect(stdout.join("") + stderr.join("")).toContain("mutually exclusive");
+  });
+
+  it("no titles fails closed (usage error, exit 2)", async () => {
+    await run(["todo", "add"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("provide at least one title");
+  });
+
+  it("--id-only suppresses all chrome — a single dry-run prints nothing", async () => {
+    await run(["todo", "add", "Solo", "--id-only", "--dry-run"]);
+    expect(stdout.join("")).toBe("");
+    expect(process.exitCode).toBe(0);
   });
 });
 
@@ -167,11 +238,13 @@ describe("blocked paths (exit 4, nothing executed)", () => {
     expect(process.exitCode).toBe(4);
   });
 
-  it("heading add into an unknown project is rejected", async () => {
-    await run(["heading", "add", "ghost-project", "New Phase", "--json"]);
+  it("project add-heading into an unknown project is rejected (unresolved ref, usage)", async () => {
+    await run(["project", "add-heading", "ghost-project", "New Phase", "--json"]);
     const env = envelope();
-    expect((env["error"] as Record<string, unknown>)["code"]).toBe("blocked:H-UNKNOWN-DESTINATION");
-    expect(process.exitCode).toBe(4);
+    // The project ref is resolved at the consumer boundary (like every other
+    // project verb), so an unknown project is a not-found resolution error.
+    expect((env["error"] as Record<string, unknown>)["code"]).toBe("not-found");
+    expect(process.exitCode).toBe(2);
   });
 
   it("todo clear-reminder on a to-do with no reminder is rejected", async () => {
@@ -256,12 +329,16 @@ describe("project write targets accept names (Part 1)", () => {
     );
   });
 
-  it("heading write targets stay uuid-only (Part 2 entity noun)", async () => {
-    await run(["heading", "rename", "Sometitle", "New Name", "--json"]);
+  it("project rename-heading resolves the heading selector within the project", async () => {
+    seedProject(fixture.db, { title: "Proj" });
+    await run(["project", "rename-heading", "Proj", "Ghost", "--to", "New Name", "--json"]);
     const env = envelope();
+    // The heading selector (title or uuid) resolves inside the named project;
+    // an unknown one is a not-found resolution error.
     expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
-      'no heading matching uuid or partial-uuid "Sometitle"',
+      "no heading matching",
     );
+    expect(process.exitCode).toBe(2);
   });
 });
 

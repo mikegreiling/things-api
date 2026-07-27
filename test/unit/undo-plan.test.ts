@@ -139,7 +139,7 @@ describe("selectUndoTargets", () => {
   it("--txn matches a compound summary by its txn id", () => {
     const summary = record({
       ts: "2026-07-05T09:00:00Z",
-      op: "heading.archive",
+      op: "project.archive-heading",
       uuid: "H1",
       txn: { id: "txn-abc", role: "summary" },
     });
@@ -719,14 +719,14 @@ describe("transactional undo (compound operations)", () => {
       record({ op: "todo.move", uuid: "C1", txn: { id: "t1", role: "leg" } }),
       record({ op: "todo.move", uuid: "C2", txn: { id: "t1", role: "leg" } }),
       record({
-        op: "heading.archive",
+        op: "project.archive-heading",
         uuid: "H1",
         txn: { id: "t1", role: "summary" },
         pre: { status: "open" },
       }),
     ];
     const targets = selectUndoTargets(records, { last: 3 });
-    expect(targets.map((r) => r.op)).toEqual(["heading.archive"]);
+    expect(targets.map((r) => r.op)).toEqual(["project.archive-heading"]);
   });
 
   it("heading.archive summary replays reparent-leg inverses in reverse order", () => {
@@ -747,7 +747,7 @@ describe("transactional undo (compound operations)", () => {
       }),
     ];
     const summary = record({
-      op: "heading.archive",
+      op: "project.archive-heading",
       uuid: "H1",
       txn: { id: "t1", role: "summary" },
       pre: { status: "open", title: "Phase 1" },
@@ -756,7 +756,7 @@ describe("transactional undo (compound operations)", () => {
     expect(plan.kind).toBe("invertible");
     if (plan.kind === "invertible") {
       expect(plan.steps[0]).toEqual({
-        op: "heading.unarchive",
+        op: "project.unarchive-heading",
         params: { uuid: "H1" },
         options: { guardFields: ["status"] },
       });
@@ -770,7 +770,7 @@ describe("transactional undo (compound operations)", () => {
 
   it("heading.archive cascade capture reopens the children that were open", () => {
     const summary = record({
-      op: "heading.archive",
+      op: "project.archive-heading",
       uuid: "H1",
       pre: {
         "C-open": { status: "open" },

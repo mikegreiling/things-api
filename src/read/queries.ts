@@ -509,6 +509,67 @@ export function resolveAreaUuid(
 }
 
 /**
+ * Resolve a HEADING SELECTOR (spec §2) inside one project through the SAME
+ * tiered core every other ref uses: exact title, or uuid (partial-uuid too).
+ * There is deliberately NO index/ordinal form — the "reindex hazard" makes an
+ * ordinal silently re-target a different heading after any reorder. An
+ * empty-string selector is a legal literal query (the app creates titleless
+ * headings); duplicates (or several titleless headings) are a resolution
+ * PRECONDITION, not an invariant, so ambiguity fails closed with uuid-bearing
+ * candidates (the H-DUPLICATE-TAG precedent). Shared by `todo add/move
+ * --heading` (via {@link resolveHeadingRef} → the H-AMBIGUOUS-HEADING guard)
+ * and by every project heading verb (via the thrower below).
+ */
+export function resolveHeadingRef(
+  db: DatabaseSync,
+  projectUuid: string,
+  refRaw: string,
+): NamedResolution {
+  return resolveNamedRef(
+    db,
+    "TMTask",
+    "type = 2 AND trashed = 0 AND project = ?",
+    [projectUuid],
+    refRaw,
+  );
+}
+
+/** Render a heading selector for an error (the empty title reads as a phrase). */
+function headingSelLabel(ref: string): string {
+  return ref === "" ? "the empty-title heading" : `"${ref}"`;
+}
+
+/**
+ * Resolve a heading selector to its uuid+title within a project, throwing a
+ * {@link ReferenceResolutionError} (with uuid candidates on ambiguity) the
+ * consumer surfaces render as a usage error. The project-scoped heading verbs
+ * and the MCP heading tool resolve through this.
+ */
+export function resolveHeadingUuid(
+  db: DatabaseSync,
+  projectUuid: string,
+  refRaw: string,
+): { uuid: string; title: string } {
+  const r = resolveHeadingRef(db, projectUuid, refRaw);
+  if (r.resolved !== null) return r.resolved;
+  const label = headingSelLabel(refRaw);
+  if (r.matches === 0) {
+    throw new ReferenceResolutionError(
+      `no heading matching ${label} in this project — a heading selector is an exact title or a uuid (list them with \`things project-view <project>\`)`,
+      { code: "not-found", ref: refRaw },
+    );
+  }
+  throw new ReferenceResolutionError(
+    `${label} matches ${r.matches} headings in this project — disambiguate with a uuid`,
+    {
+      code: "ambiguous",
+      ref: refRaw,
+      candidates: (r.candidates ?? []).map((c) => ({ uuid: c.uuid, title: c.title })),
+    },
+  );
+}
+
+/**
  * A row's EFFECTIVE area: its own `area` link, else the area of its project,
  * else the area of its heading's project. To-dos nested in a project (or under a
  * heading) carry `area = NULL` in the DB — the area lives on the container — so

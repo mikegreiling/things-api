@@ -52,13 +52,20 @@ import {
   type ChecklistEdit,
   type DisruptionTier,
   type GroupedTruncation,
+  type HeadingPlacement,
   type MonthlyAnchor,
+  type MovePosition,
+  type MoveResult,
   type MutationResult,
   type OpenOptions,
   type OperationKind,
+  type ProjectMoveDestination,
+  type ProjectMoveRequest,
   type RepeatFrequency,
   type RepeatRuleParams,
   type ReorderResult,
+  type TodoMoveDestination,
+  type TodoMoveRequest,
   type TagPresence,
   type ThingsClient,
   type Truncation,
@@ -256,6 +263,63 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
   }
 }
 
+/** Map a move/reorder orchestrator outcome to an MCP result (spec §4/§7). */
+function moveResult(result: MoveResult): ToolResult {
+  switch (result.kind) {
+    case "move-ok":
+    case "move-dry-run":
+      return jsonResult(result);
+    case "move-refused":
+      return errorResult({
+        code: result.refusal,
+        message: result.detail,
+        ...(result.remediation !== undefined && { remediation: result.remediation }),
+        ...(result.candidates !== undefined && { details: { candidates: result.candidates } }),
+      });
+    case "move-leg-failed":
+      return errorResult({
+        code: "verify-failed",
+        message: result.detail,
+        remediation: `completed ${result.completed.length} leg(s) before the failure`,
+      });
+  }
+}
+
+/** Build a MovePosition from the shared MCP position args (null when none). */
+function movePositionArgs(args: {
+  first?: boolean | undefined;
+  last?: boolean | undefined;
+  before?: string | undefined;
+  after?: string | undefined;
+}): MovePosition | undefined | "conflict" {
+  const chosen = [
+    args.first === true,
+    args.last === true,
+    args.before !== undefined,
+    args.after !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (args.first === true) return { at: "first" };
+  if (args.last === true) return { at: "last" };
+  if (args.before !== undefined) return { before: args.before };
+  if (args.after !== undefined) return { after: args.after };
+  return undefined;
+}
+
+/** The shared position input schema for the move tools. */
+const positionShape = {
+  first: z.boolean().optional().describe("place the block at the top of its bucket"),
+  last: z.boolean().optional().describe("place the block at the bottom of its bucket"),
+  before: z
+    .string()
+    .optional()
+    .describe("place the block immediately before this item (same bucket)"),
+  after: z
+    .string()
+    .optional()
+    .describe("place the block immediately after this item (same bucket)"),
+};
+
 const READ_ONLY = { readOnlyHint: true } as const;
 const NON_DESTRUCTIVE = { destructiveHint: false } as const;
 const DESTRUCTIVE = { destructiveHint: true } as const;
@@ -331,7 +395,8 @@ const dryRunShape = {
 /**
  * The per-call opt-in for the tools that reach a change only by driving the
  * local Things app's accessibility interface. Shared by `repeat`, the
- * `convert_to_project` heading action, and the `areas` reorder scope.
+ * `convert_to_project` tool, the heading tool's `promote_heading` action, and
+ * the `areas` reorder scope.
  */
 const driveGuiShape = {
   dangerously_drive_gui: z
@@ -1417,21 +1482,39 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "move_todo",
     {
       description:
-        "Move a to-do. Pass exactly one destination: a project or area (optionally an " +
-        "existing heading within the project), to_inbox, or detach. Moving to the Inbox " +
-        "removes any schedule; detach removes the project/area/heading assignment while " +
-        "keeping the schedule. Moving into a completed or canceled project reopens that " +
-        "project — pass acknowledge_project_reopen to confirm.",
+        "Move one or more to-dos as an ordered block (spec §4). MOVE changes WHAT a to-do " +
+        "belongs to (membership somewhere); to REARRANGE to-dos that already share a container " +
+        "without changing membership, call this with a position (first/last/before/after) and " +
+        "NO destination — that is an in-place reorder, anchored at the earliest movee's slot, " +
+        "and unmentioned siblings keep their order. The uuids order is the order they land " +
+        "(name them backwards to reverse). Pass at most one destination: to_project, to_heading " +
+        "(within to_project, or the movees' shared project), to_area, no_heading (leave the " +
+        "heading, stay in the project), loose (leave heading, project, AND area), or to_inbox. " +
+        "An anchor (before/after) positions but never migrates — an anchor-only move that would " +
+        "cross containers is refused, as is a --before/--after whose movees span buckets. " +
+        "Membership always succeeds; top-of-bucket placement is guaranteed only where a reorder " +
+        "protocol exists (the result's placementClass states which). Moving into a " +
+        "completed/canceled project reopens it — pass acknowledge_project_reopen.",
       inputSchema: {
-        uuid: z.string(),
-        project: z.string().optional().describe(`Destination project (${REF_FORMAT})`),
-        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
-        heading: z.string().optional().describe("Existing heading in the destination project"),
-        to_inbox: z.boolean().optional().describe("Move back to the Inbox (removes any schedule)"),
-        detach: z
+        uuids: z.array(z.string()).describe("The to-dos to move, in the order they should land"),
+        to_project: z.string().optional().describe(`Destination project (${REF_FORMAT})`),
+        to_heading: z
+          .string()
+          .optional()
+          .describe(
+            "Destination heading (exact title or uuid; within to_project or the shared project)",
+          ),
+        to_area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
+        no_heading: z
           .boolean()
           .optional()
-          .describe("Remove the project/area/heading assignment, keeping the schedule"),
+          .describe("Leave the heading but stay in the current project (unheaded block)"),
+        loose: z
+          .boolean()
+          .optional()
+          .describe("Detach from heading, project, AND area, keeping the schedule"),
+        to_inbox: z.boolean().optional().describe("Move back to the Inbox (removes any schedule)"),
+        ...positionShape,
         acknowledge_project_reopen: z
           .boolean()
           .optional()
@@ -1442,28 +1525,34 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const dest =
-          args.project !== undefined || args.area !== undefined || args.heading !== undefined;
-        const modes = [dest, args.to_inbox === true, args.detach === true].filter(Boolean).length;
-        if (modes !== 1) {
-          return usage("pass exactly one destination: project/area/heading, to_inbox, or detach");
+        const dests: TodoMoveDestination[] = [];
+        if (args.to_heading !== undefined) {
+          dests.push({
+            kind: "heading",
+            sel: args.to_heading,
+            ...(args.to_project !== undefined && { project: containerRef(args.to_project) }),
+          });
+        } else if (args.to_project !== undefined) {
+          dests.push({ kind: "project", ref: containerRef(args.to_project) });
         }
-        return mutationResult(
-          await getClient().write.moveTodo(
-            args.uuid,
-            {
-              ...(args.project !== undefined && { project: containerRef(args.project) }),
-              ...(args.area !== undefined && { area: containerRef(args.area) }),
-              ...(args.heading !== undefined && { heading: args.heading }),
-              ...(args.to_inbox === true && { inbox: true }),
-              ...(args.detach === true && { detach: true }),
-            },
-            {
-              ...writeOptions(args),
-              ...(args.to_inbox === true && { vector: "applescript" as const }),
-            },
-          ),
-        );
+        if (args.to_area !== undefined)
+          dests.push({ kind: "area", ref: containerRef(args.to_area) });
+        if (args.no_heading === true) dests.push({ kind: "no-heading" });
+        if (args.loose === true) dests.push({ kind: "loose" });
+        if (args.to_inbox === true) dests.push({ kind: "inbox" });
+        if (dests.length > 1) {
+          return usage(
+            "pass at most one destination (to_project/to_heading/to_area/no_heading/loose/to_inbox)",
+          );
+        }
+        const position = movePositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of first/last/before/after");
+        const request: TodoMoveRequest = {
+          uuids: args.uuids,
+          ...(dests[0] !== undefined && { destination: dests[0] }),
+          ...(position !== undefined && { position }),
+        };
+        return moveResult(await getClient().write.moveTodos(request, writeOptions(args)));
       }),
   );
 
@@ -1745,33 +1834,63 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "heading",
     {
       description:
-        "Manage a project heading — action selects which. add: a new heading in an existing " +
-        "project (project + title; returns its uuid; uses the Things proxy shortcuts, set up " +
-        "once with `things setup shortcuts`). rename: rename in place (uuid + title; works on " +
-        "archived headings). archive: retire a heading so it leaves the active project view " +
-        "(reversible with action unarchive); with open children pass children — complete or " +
-        "cancel resolve them with the heading in one cascade, reparent moves them to the project " +
-        "root keeping them open. unarchive: bring an archived heading back; restore_children also " +
-        "reopens the children the archive resolved with it. convert_to_project: promote a to-do " +
-        "or heading into a new project — this REPLACES the original and cannot be undone (a " +
-        "converted heading's to-dos move under the new project), and requires " +
-        "dangerously_drive_gui.",
+        "Manage a project's headings — action selects which; project is always required, and a " +
+        "heading is selected by its exact title or its uuid (never an ordinal). add_heading: a " +
+        "new heading in the project (project + title; returns its uuid; uses the Things proxy " +
+        "shortcuts, set up once with `things setup shortcuts`); a placement flag positions it, " +
+        "else it appends. rename_heading: rename in place (project + heading + title; works on " +
+        "archived headings). archive_heading: retire a heading so it leaves the active project " +
+        "view (reversible with unarchive_heading); with open children pass children — complete " +
+        "or cancel resolve them with the heading in one cascade, reparent moves them to the " +
+        "project root keeping them open. unarchive_heading: bring an archived heading back; " +
+        "restore_children also reopens the children the archive resolved with it. " +
+        "promote_heading: promote a heading into a new project — this REPLACES the heading and " +
+        "cannot be undone (its to-dos move under the new project), and requires " +
+        "dangerously_drive_gui. move_heading: reposition headings as an ordered block (children " +
+        "follow); pass exactly one placement flag. Reordering headings needs allow-experimental.",
       inputSchema: {
-        action: z.enum(["add", "rename", "archive", "unarchive", "convert_to_project"]),
-        project: z.string().optional().describe(`add: existing project (${REF_FORMAT})`),
-        uuid: z
+        action: z.enum([
+          "add_heading",
+          "rename_heading",
+          "archive_heading",
+          "unarchive_heading",
+          "promote_heading",
+          "move_heading",
+        ]),
+        project: z.string().describe(`the heading's project (${REF_FORMAT})`),
+        heading: z
           .string()
           .optional()
-          .describe("rename/archive/unarchive/convert_to_project: the target's uuid"),
-        title: z.string().optional().describe("add: the new heading; rename: the new title"),
+          .describe("rename/archive/unarchive/promote: the heading selector (exact title or uuid)"),
+        headings: z
+          .array(z.string())
+          .optional()
+          .describe("move_heading: heading selectors in the order they should land"),
+        title: z
+          .string()
+          .optional()
+          .describe("add_heading: the new heading; rename_heading: the new title"),
         children: z
           .enum(["complete", "cancel", "reparent"])
           .optional()
-          .describe("archive: required when the heading has open children"),
+          .describe("archive_heading: required when the heading has open children"),
         restore_children: z
           .boolean()
           .optional()
-          .describe("unarchive: also reopen the children archived with the heading"),
+          .describe("unarchive_heading: also reopen the children archived with the heading"),
+        first: z
+          .boolean()
+          .optional()
+          .describe("add/move: place first among the project's headings"),
+        last: z.boolean().optional().describe("add/move: place last among the project's headings"),
+        before_heading: z
+          .string()
+          .optional()
+          .describe("add/move: place immediately before this heading (title or uuid)"),
+        after_heading: z
+          .string()
+          .optional()
+          .describe("add/move: place immediately after this heading (title or uuid)"),
         ...driveGuiShape,
         ...dryRunShape,
       },
@@ -1781,23 +1900,47 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       guard(async () => {
         const c = getClient();
         const opts = writeOptions(args);
+        const proj = c.resolve.project(args.project);
+        const placementCount = [
+          args.first === true,
+          args.last === true,
+          args.before_heading !== undefined,
+          args.after_heading !== undefined,
+        ].filter(Boolean).length;
+        const placement = (): HeadingPlacement | undefined => {
+          if (args.first === true) return { position: "first" };
+          if (args.last === true) return { position: "last" };
+          if (args.before_heading !== undefined) {
+            return { before: c.resolve.heading(proj.uuid, args.before_heading).uuid };
+          }
+          if (args.after_heading !== undefined) {
+            return { after: c.resolve.heading(proj.uuid, args.after_heading).uuid };
+          }
+          return undefined;
+        };
         switch (args.action) {
-          case "add":
-            if (args.project === undefined || args.title === undefined) {
-              return usage('action "add" requires project and title');
+          case "add_heading": {
+            if (args.title === undefined) return usage('action "add_heading" requires title');
+            if (placementCount > 1) {
+              return usage("pass at most one of first/last/before_heading/after_heading");
             }
             return mutationResult(
-              await c.write.addHeading(containerRef(args.project), args.title, opts),
+              await c.write.addHeading({ uuid: proj.uuid }, args.title, placement(), opts),
             );
-          case "rename":
-            if (args.uuid === undefined || args.title === undefined) {
-              return usage('action "rename" requires uuid and title');
+          }
+          case "rename_heading": {
+            if (args.heading === undefined || args.title === undefined) {
+              return usage('action "rename_heading" requires heading and title');
             }
-            return mutationResult(await c.write.renameHeading(args.uuid, args.title, opts));
-          case "archive": {
-            if (args.uuid === undefined) return usage('action "archive" requires uuid');
+            const h = c.resolve.heading(proj.uuid, args.heading);
+            return mutationResult(await c.write.renameHeading(h.uuid, args.title, opts));
+          }
+          case "archive_heading": {
+            if (args.heading === undefined)
+              return usage('action "archive_heading" requires heading');
+            const h = c.resolve.heading(proj.uuid, args.heading);
             const r = await c.write.archiveHeading(
-              args.uuid,
+              h.uuid,
               args.children !== undefined ? { children: args.children } : {},
               opts,
             );
@@ -1805,10 +1948,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ? jsonResult(r)
               : mutationResult(r.heading);
           }
-          case "unarchive": {
-            if (args.uuid === undefined) return usage('action "unarchive" requires uuid');
+          case "unarchive_heading": {
+            if (args.heading === undefined) {
+              return usage('action "unarchive_heading" requires heading');
+            }
+            const h = c.resolve.heading(proj.uuid, args.heading);
             const r = await c.write.unarchiveHeading(
-              args.uuid,
+              h.uuid,
               args.restore_children === true ? { restoreChildren: true } : {},
               opts,
             );
@@ -1816,18 +1962,62 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ? jsonResult(r)
               : mutationResult(r.heading);
           }
-          case "convert_to_project": {
-            if (args.uuid === undefined) {
-              return usage('action "convert_to_project" requires uuid');
+          case "promote_heading": {
+            if (args.heading === undefined)
+              return usage('action "promote_heading" requires heading');
+            const h = c.resolve.heading(proj.uuid, args.heading);
+            return mutationResult(
+              await c.write.run("project.promote-heading", { uuid: h.uuid }, opts),
+            );
+          }
+          case "move_heading": {
+            if (args.headings === undefined || args.headings.length === 0) {
+              return usage('action "move_heading" requires headings');
             }
-            const item = c.read.byUuid(args.uuid);
-            if (item === null) throw new RangeError(`no item with uuid ${args.uuid}`);
-            const op =
-              item.type === "heading" ? "heading.convert-to-project" : "todo.convert-to-project";
-            return mutationResult(await c.write.run(op, { uuid: args.uuid }, opts));
+            if (placementCount !== 1) {
+              return usage(
+                "move_heading requires exactly one of first/last/before_heading/after_heading",
+              );
+            }
+            const headings = args.headings.map((s) => c.resolve.heading(proj.uuid, s).uuid);
+            return mutationResult(
+              await c.write.moveHeading(
+                { uuid: proj.uuid },
+                headings,
+                placement() as HeadingPlacement,
+                opts,
+              ),
+            );
           }
         }
       }),
+  );
+
+  server.registerTool(
+    "convert_to_project",
+    {
+      description:
+        "Promote a to-do into a project. This REPLACES the to-do with a new project (its notes " +
+        "are kept); the to-do's identity is gone and it cannot be undone. Requires " +
+        "dangerously_drive_gui. The new project's uuid is on the result. (To promote a HEADING, " +
+        "use the heading tool's promote_heading action.)",
+      inputSchema: {
+        uuid: z.string().describe("the to-do's uuid"),
+        ...driveGuiShape,
+        ...dryRunShape,
+      },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () =>
+        mutationResult(
+          await getClient().write.run(
+            "todo.convert-to-project",
+            { uuid: args.uuid },
+            writeOptions(args),
+          ),
+        ),
+      ),
   );
 
   server.registerTool(
@@ -2132,31 +2322,36 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "move_project",
     {
       description:
-        "Move a project into an area, or detach it from its current area. Pass exactly " +
-        "one of area / detach. The project's status and schedule are unaffected.",
+        "Move one or more projects as an ordered block (spec §4/§5). Pass at most one " +
+        "destination: to_area, or no_area (leave the area — a project's complete detach). To " +
+        "REORDER projects among their siblings without changing area, pass a position " +
+        "(first/last/before/after) and NO destination. An anchor positions but never migrates. " +
+        "The project's status and schedule are unaffected; the result's placementClass states " +
+        "whether top-of-bucket placement was guaranteed.",
       inputSchema: {
-        uuid: z.string().describe(`The project to move (${REF_FORMAT})`),
-        area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
-        detach: z.boolean().optional().describe("Remove the current area assignment"),
+        uuids: z.array(z.string()).describe(`The projects to move (${REF_FORMAT}), in order`),
+        to_area: z.string().optional().describe(`Destination area (${REF_FORMAT})`),
+        no_area: z.boolean().optional().describe("Leave the current area (a project's detach)"),
+        ...positionShape,
         ...dryRunShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
       guard(async () => {
-        if ((args.detach === true) === (args.area !== undefined)) {
-          return usage("pass exactly one of area / detach");
-        }
-        const c = getClient();
-        return mutationResult(
-          args.detach === true
-            ? await c.write.detachProject(args.uuid, writeOptions(args))
-            : await c.write.moveProject(
-                args.uuid,
-                containerRef(args.area as string),
-                writeOptions(args),
-              ),
-        );
+        const dests: ProjectMoveDestination[] = [];
+        if (args.to_area !== undefined)
+          dests.push({ kind: "area", ref: containerRef(args.to_area) });
+        if (args.no_area === true) dests.push({ kind: "no-area" });
+        if (dests.length > 1) return usage("pass at most one of to_area / no_area");
+        const position = movePositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of first/last/before/after");
+        const request: ProjectMoveRequest = {
+          uuids: args.uuids,
+          ...(dests[0] !== undefined && { destination: dests[0] }),
+          ...(position !== undefined && { position }),
+        };
+        return moveResult(await getClient().write.moveProjects(request, writeOptions(args)));
       }),
   );
 
@@ -2351,13 +2546,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
-        "area-less someday projects — one kind per call), a " +
-        "project's to-dos, a project's headings (scope=headings — children move with " +
-        "their heading), an area, or the top-level projects (scope=projects — " +
+        "Reorder a whole LIST or container by scope: Today, This Evening, the Inbox, Someday " +
+        "(loose to-dos or area-less someday projects — one kind per call), a " +
+        "project's to-dos, an area, or the top-level projects (scope=projects — " +
         "each project takes a brief someday/anytime round-trip) — the given uuids move " +
         "to the TOP in the given order; unlisted items keep their relative order below. " +
-        "Today/inbox/someday/project/headings/area ordering must first be enabled once " +
+        "To rearrange an arbitrary BLOCK of to-dos/projects in place (anchored at the earliest " +
+        "one's slot, partial-selection friendly, before/after an anchor), call move_todo / " +
+        "move_project with a position and no destination instead — MOVE changes membership, " +
+        "REORDER only arrangement. " +
+        "To reorder a project's HEADINGS (children follow) use the heading tool's " +
+        "move_heading action instead. " +
+        "Today/inbox/someday/project/area ordering must first be enabled once " +
         "via `things config set allow-experimental true`. This Evening and " +
         `scope=projects handle at most ${BOUNCE_MAX_ITEMS} items per call. An area's ` +
         "to-dos and projects are ordered separately — one kind per call. " +
@@ -2371,7 +2571,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           "inbox",
           "someday",
           "project",
-          "headings",
           "area",
           "projects",
           "areas",

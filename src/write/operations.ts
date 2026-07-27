@@ -38,17 +38,18 @@ export const OPERATION_KINDS = [
   "project.set-tags",
   "todo.backdate",
   "todo.add-logged",
-  "heading.rename",
-  "heading.archive",
-  "heading.unarchive",
-  "heading.add",
+  "project.add-heading",
+  "project.rename-heading",
+  "project.archive-heading",
+  "project.unarchive-heading",
+  "project.promote-heading",
+  "project.move-heading",
   "todo.clear-dated-reminder",
   "todo.make-repeating",
   "todo.reschedule-repeat",
   "todo.pause-repeat",
   "todo.resume-repeat",
   "todo.convert-to-project",
-  "heading.convert-to-project",
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
@@ -72,7 +73,7 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   "todo.pause-repeat",
   "todo.resume-repeat",
   "todo.convert-to-project",
-  "heading.convert-to-project",
+  "project.promote-heading",
   "project.reschedule-repeat",
   "project.pause-repeat",
   "project.resume-repeat",
@@ -87,6 +88,52 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
 export function isUiDriveOp(op: OperationKind): boolean {
   return UI_DRIVE_OPS.includes(op);
 }
+
+/**
+ * The project-scoped heading verbs (spec §2). Every one addresses a heading
+ * inside a project; none is a plain `project.*` op even though it shares the
+ * `project.` namespace, so guards/resolvers that key off the namespace must
+ * special-case them.
+ */
+export const HEADING_OPS: readonly OperationKind[] = [
+  "project.add-heading",
+  "project.rename-heading",
+  "project.archive-heading",
+  "project.unarchive-heading",
+  "project.promote-heading",
+  "project.move-heading",
+] as const;
+
+export function isHeadingOp(op: OperationKind): boolean {
+  return HEADING_OPS.includes(op);
+}
+
+/**
+ * Heading verbs whose `uuid` param addresses a HEADING row (not a project) —
+ * the pipeline resolves their target as a heading, and H-UNKNOWN-DESTINATION
+ * requires the target BE a heading. add-heading (project + title) and
+ * move-heading (project + heading list) carry no single heading `uuid`.
+ */
+export const HEADING_TARGET_OPS: readonly OperationKind[] = [
+  "project.rename-heading",
+  "project.archive-heading",
+  "project.unarchive-heading",
+  "project.promote-heading",
+] as const;
+
+export function isHeadingTargetOp(op: OperationKind): boolean {
+  return HEADING_TARGET_OPS.includes(op);
+}
+
+/**
+ * Placement of a heading among its project's headings (spec §2). Anchors are
+ * resolved heading uuids (the consumer resolves the `--before-heading` /
+ * `--after-heading` selector before the op runs).
+ */
+export type HeadingPlacement =
+  | { position: "first" | "last" }
+  | { before: string }
+  | { after: string };
 
 /** Recurrence frequency the minimal v1 GUI rule vocabulary supports. */
 export type RepeatFrequency = "daily" | "weekly" | "monthly" | "yearly";
@@ -145,6 +192,18 @@ export interface HeadingAddParams {
   /** Existing project to create the heading in (uuid or unique, case-insensitive title). */
   project: ContainerRef;
   title: string;
+}
+
+/**
+ * project.move-heading — reposition one or more of a project's headings as an
+ * ordered block (spec §2/§4). `headings` are resolved heading uuids in the
+ * order they should land (selection order = resulting order); their children
+ * follow. Anchors in `placement` are resolved heading uuids too.
+ */
+export interface MoveHeadingParams {
+  project: ContainerRef;
+  headings: string[];
+  placement: HeadingPlacement;
 }
 
 export interface HeadingRenameParams {
@@ -206,10 +265,18 @@ export interface TodoMoveParams {
   /** Move back to the Inbox — removes any schedule. Exclusive with the others. */
   inbox?: boolean;
   /**
-   * Detach from the current project/area/heading, keeping the schedule and
-   * everything else. Exclusive with the others.
+   * `--no-heading` (spec §5): leave the heading but STAY in the current
+   * project — the to-do lands in the project's unheaded block. Exclusive with
+   * the others. Wire: re-assert the current project as the container with no
+   * heading param.
    */
-  detach?: boolean;
+  noHeading?: boolean;
+  /**
+   * `--loose` (spec §5): the total sever — leave heading, project, AND area,
+   * keeping the schedule. Exclusive with the others. (This is what the removed
+   * `--detach` did; the detach family renames it.)
+   */
+  loose?: boolean;
 }
 
 export interface TodoSetTagsParams {
@@ -297,8 +364,12 @@ export interface ProjectMoveParams {
   uuid: string;
   /** Destination area (uuid or unique name). */
   area?: ContainerRef;
-  /** Detach from the current area. Exclusive with area. */
-  detach?: boolean;
+  /**
+   * `--no-area` (spec §5): leave the current area — a project's complete
+   * (single-level) detach. Exclusive with area. (Replaces the removed
+   * `--detach`.)
+   */
+  noArea?: boolean;
 }
 
 export interface ProjectCompleteParams {
@@ -363,7 +434,6 @@ export type ReorderScope =
   | "project"
   | "area"
   | "inbox"
-  | "headings"
   | "someday"
   | "projects";
 export type ReorderStrategy = "native" | "bounce";
@@ -371,8 +441,7 @@ export type ReorderStrategy = "native" | "bounce";
 export interface ReorderParams {
   scope: ReorderScope;
   /**
-   * Required for project/area/headings scopes (headings: the project whose
-   * heading rows are being reordered); must be omitted for
+   * Required for the project/area scopes; must be omitted for
    * today/evening/inbox/someday/projects.
    */
   container?: ContainerRef;
@@ -384,7 +453,7 @@ export interface ReorderParams {
   uuids: string[];
   /**
    * Omit for the default per scope: native for today/project/area/inbox/
-   * headings/someday (requires allowExperimental), bounce for evening and
+   * someday (requires allowExperimental), bounce for evening and
    * projects. Today accepts an explicit "bounce" fallback; evening is
    * bounce-only; "projects" (top-level sidebar order) is bounce-only — each
    * project takes a when=someday -> when=anytime round-trip, which
@@ -556,17 +625,18 @@ export interface OperationParamsMap {
   "project.set-tags": ProjectSetTagsParams;
   "todo.backdate": TodoBackdateParams;
   "todo.add-logged": TodoAddLoggedParams;
-  "heading.rename": HeadingRenameParams;
-  "heading.archive": HeadingArchiveParams;
-  "heading.unarchive": HeadingUnarchiveParams;
-  "heading.add": HeadingAddParams;
+  "project.add-heading": HeadingAddParams;
+  "project.rename-heading": HeadingRenameParams;
+  "project.archive-heading": HeadingArchiveParams;
+  "project.unarchive-heading": HeadingUnarchiveParams;
+  "project.promote-heading": UuidParams;
+  "project.move-heading": MoveHeadingParams;
   "todo.clear-dated-reminder": UuidParams;
   "todo.make-repeating": RepeatRuleParams;
   "todo.reschedule-repeat": RepeatRuleParams;
   "todo.pause-repeat": UuidParams;
   "todo.resume-repeat": UuidParams;
   "todo.convert-to-project": UuidParams;
-  "heading.convert-to-project": UuidParams;
   "project.reschedule-repeat": RepeatRuleParams;
   "project.pause-repeat": UuidParams;
   "project.resume-repeat": UuidParams;

@@ -34,12 +34,20 @@ import {
   type ConfigKeyView,
   type DisruptionTier,
   type EnvelopeMeta,
+  type HeadingPlacement,
+  type MovePosition,
+  type MoveResult,
   type OperationKind,
+  type ProjectMoveDestination,
+  type ProjectMoveRequest,
+  type ReorderRequest,
   type ReorderResult,
   type ReorderScope,
   type ReorderStrategy,
   type RepeatFrequency,
   type ThingsClient,
+  type TodoMoveDestination,
+  type TodoMoveRequest,
   type UndoItemResult,
   type VectorId,
   type WriteOptions,
@@ -125,6 +133,44 @@ function createTagsExtra(opts: Record<string, unknown>): Partial<WriteOptions> {
   return opts["createTags"] === true ? { createTags: true } : {};
 }
 
+/** Heading selector help string (exact title or uuid — never an ordinal). */
+const HEADING_SEL_HELP = "heading selector: exact title or uuid";
+
+/** The four heading-placement flags (spec §2), shared by add/move-heading. */
+function addPlacementFlags(cmd: Command): Command {
+  return cmd
+    .option("--first", "place it first among the project's headings")
+    .option("--last", "place it last among the project's headings")
+    .option("--before-heading <sel>", "place it immediately before this heading (title or uuid)")
+    .option("--after-heading <sel>", "place it immediately after this heading (title or uuid)");
+}
+
+function countPlacementFlags(opts: Record<string, unknown>): number {
+  return [
+    opts["first"] === true,
+    opts["last"] === true,
+    opts["beforeHeading"] !== undefined,
+    opts["afterHeading"] !== undefined,
+  ].filter(Boolean).length;
+}
+
+/** Build the resolved placement from the flags, resolving anchor selectors. */
+function headingPlacement(
+  c: ThingsClient,
+  projectUuid: string,
+  opts: Record<string, unknown>,
+): HeadingPlacement | undefined {
+  if (opts["first"] === true) return { position: "first" };
+  if (opts["last"] === true) return { position: "last" };
+  if (opts["beforeHeading"] !== undefined) {
+    return { before: c.resolve.heading(projectUuid, opts["beforeHeading"] as string).uuid };
+  }
+  if (opts["afterHeading"] !== undefined) {
+    return { after: c.resolve.heading(projectUuid, opts["afterHeading"] as string).uuid };
+  }
+  return undefined;
+}
+
 /** Add the mandatory GUI-drive acknowledgement to a ui-vector command. */
 function addDriveGuiFlag(cmd: Command): Command {
   return cmd.option(
@@ -173,6 +219,7 @@ function splitCsv(value: string | undefined): string[] | undefined {
 async function runWrite(
   opts: WriteFlagOpts,
   fn: (client: ThingsClient) => Promise<ReorderResult>,
+  emitFn: (result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta) => void = emitResult,
 ): Promise<void> {
   const started = Date.now();
   let client: ThingsClient | null = null;
@@ -192,7 +239,7 @@ async function runWrite(
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
     const result = await fn(client);
-    emitResult(result, opts, meta(client));
+    emitFn(result, opts, meta(client));
   } catch (err) {
     // An unresolved write target (uuid/partial-uuid/name that is ambiguous or
     // not-found) is a usage-class failure carrying machine-readable candidates
@@ -377,6 +424,294 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
   }
 }
 
+// -------------------------------------------------- move / reorder (spec §4)
+
+/** Open the client, run a MoveResult-returning fn, and render it. */
+async function runMoveCmd(
+  opts: WriteFlagOpts,
+  fn: (client: ThingsClient) => Promise<MoveResult>,
+): Promise<void> {
+  const started = Date.now();
+  let client: ThingsClient | null = null;
+  const meta = (): EnvelopeMeta => {
+    let dbVersion: number | null = null;
+    let fingerprint: EnvelopeMeta["fingerprint"] = "unknown";
+    if (client !== null) {
+      const fp = client.fingerprint();
+      dbVersion = fp.observation.databaseVersion;
+      fingerprint = fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown";
+    }
+    return { dbVersion, fingerprint, elapsedMs: Date.now() - started };
+  };
+  try {
+    client = openThings(opts.db ? { dbPath: opts.db } : {});
+    emitMoveResult(await fn(client), opts, meta());
+  } catch (err) {
+    if (err instanceof ReferenceResolutionError) {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(errorEnvelope({ code: err.code, message: err.message, details: { candidates: err.candidates } }, meta()))}\n`,
+        );
+      } else {
+        process.stderr.write(`error: ${err.message}\n`);
+      }
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (opts.json) {
+      process.stdout.write(
+        `${JSON.stringify(errorEnvelope({ code: "unexpected", message }, meta()))}\n`,
+      );
+    } else {
+      process.stderr.write(`error: ${message}\n`);
+    }
+    process.exitCode = ExitCode.Unexpected;
+  } finally {
+    client?.close();
+  }
+}
+
+function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
+  switch (result.kind) {
+    case "move-ok": {
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(okEnvelope("move-result", result, meta))}\n`);
+      } else {
+        const who = result.movees.map((m) => m.title ?? m.uuid).join(", ");
+        process.stdout.write(
+          `ok ${result.op}: moved ${result.movees.length} item(s) — ${who}\n` +
+            `  placement: ${result.placementClass} — ${result.note}\n`,
+        );
+      }
+      process.exitCode = ExitCode.Ok;
+      return;
+    }
+    case "move-dry-run": {
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(okEnvelope("move-plan", result.plan, meta))}\n`);
+      } else {
+        process.stdout.write(
+          [
+            `DRY RUN ${result.op}`,
+            `  movees: ${result.plan.movees.join(", ")}`,
+            `  membership: ${result.plan.membership}`,
+            `  placement: ${result.plan.placement} (${result.plan.placementClass})`,
+            `  ${result.plan.note}`,
+            "",
+          ].join("\n"),
+        );
+      }
+      process.exitCode = ExitCode.Ok;
+      return;
+    }
+    case "move-refused": {
+      const code =
+        result.refusal === "usage"
+          ? ExitCode.Usage
+          : result.refusal === "unsupported"
+            ? ExitCode.Unsupported
+            : ExitCode.Blocked;
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: result.refusal,
+                message: result.detail,
+                ...(result.remediation !== undefined && { remediation: result.remediation }),
+                ...(result.candidates !== undefined && {
+                  details: { candidates: result.candidates },
+                }),
+              },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(
+          `${result.refusal === "usage" ? "error" : result.refusal.toUpperCase()}: ${result.detail}\n` +
+            (result.remediation !== undefined ? `  remediation: ${result.remediation}\n` : ""),
+        );
+      }
+      process.exitCode = code;
+      return;
+    }
+    case "move-leg-failed": {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(errorEnvelope({ code: "verify-failed", message: result.detail, detail: { failed: result.failed, completed: result.completed } }, meta))}\n`,
+        );
+      } else {
+        process.stderr.write(`MOVE FAILED: ${result.detail}\n`);
+      }
+      process.exitCode = ExitCode.VerifyFailed;
+      return;
+    }
+  }
+}
+
+/** Build a MovePosition from the shared --first/--last/--before/--after flags. */
+function movePosition(opts: Record<string, unknown>): MovePosition | undefined | "conflict" {
+  const chosen = [
+    opts["first"] === true,
+    opts["last"] === true,
+    opts["before"] !== undefined,
+    opts["after"] !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (opts["first"] === true) return { at: "first" };
+  if (opts["last"] === true) return { at: "last" };
+  if (opts["before"] !== undefined) return { before: opts["before"] as string };
+  if (opts["after"] !== undefined) return { after: opts["after"] as string };
+  return undefined;
+}
+
+/** Build a to-do move destination; "conflict" when more than one is named. */
+function todoDestination(
+  opts: Record<string, unknown>,
+): TodoMoveDestination | undefined | "conflict" {
+  const dests: TodoMoveDestination[] = [];
+  const toProject = opts["toProject"] as string | undefined;
+  const toHeading = opts["toHeading"] as string | undefined;
+  if (toHeading !== undefined) {
+    dests.push({
+      kind: "heading",
+      sel: toHeading,
+      ...(toProject !== undefined && { project: { uuid: toProject, title: toProject } }),
+    });
+  } else if (toProject !== undefined) {
+    dests.push({ kind: "project", ref: { uuid: toProject, title: toProject } });
+  }
+  const toArea = opts["toArea"] as string | undefined;
+  if (toArea !== undefined) dests.push({ kind: "area", ref: { uuid: toArea, title: toArea } });
+  // Commander maps `--no-heading`/`--no-area` onto the base key as `false`.
+  if (opts["heading"] === false) dests.push({ kind: "no-heading" });
+  if (opts["loose"] === true) dests.push({ kind: "loose" });
+  if (opts["inbox"] === true) dests.push({ kind: "inbox" });
+  if (opts["area"] === false) dests.push({ kind: "no-area" });
+  if (opts["detach"] === true) dests.push({ kind: "detach" });
+  if (dests.length > 1) return "conflict";
+  return dests[0];
+}
+
+/** Build a project move destination; "conflict" when more than one is named. */
+function projectDestination(
+  opts: Record<string, unknown>,
+): ProjectMoveDestination | undefined | "conflict" {
+  const dests: ProjectMoveDestination[] = [];
+  const toArea = opts["toArea"] as string | undefined;
+  if (toArea !== undefined) dests.push({ kind: "area", ref: { uuid: toArea, title: toArea } });
+  // Commander maps `--no-area` onto the base key `area` as `false`.
+  if (opts["area"] === false) dests.push({ kind: "no-area" });
+  if (opts["loose"] === true) dests.push({ kind: "loose" });
+  if (opts["detach"] === true) dests.push({ kind: "detach" });
+  if (dests.length > 1) return "conflict";
+  return dests[0];
+}
+
+/** The shared position flags (--first/--last/--before/--after) for move/reorder. */
+function addPositionFlags(cmd: Command): Command {
+  return cmd
+    .option("--first", "place the block at the top of its bucket")
+    .option("--last", "place the block at the bottom of its bucket")
+    .option("--before <ref>", "place the block immediately before this item (same bucket)")
+    .option("--after <ref>", "place the block immediately after this item (same bucket)");
+}
+
+/** One TTY line for a bulk-add batch item (the human, non-JSON multi rendering). */
+function addResultLine(r: BatchItemResult): string {
+  const o = r.outcome;
+  switch (o.kind) {
+    case "ok":
+      return `ok todo.add uuid=${o.uuid ?? ""} (vector=${o.vector}, tier=${o.tier}, verified)\n`;
+    case "dry-run":
+      return `DRY RUN todo.add (vector=${o.plan.vector}, tier ${o.plan.tier}) ${o.plan.invocation}\n`;
+    case "already-applied":
+      return `already-applied todo.add uuid=${o.uuid}\n`;
+    case "skipped":
+      return `skipped todo.add: ${o.detail}\n`;
+    case "invalid":
+      return `FAILED todo.add: ${o.detail}\n`;
+    case "blocked":
+      return `BLOCKED todo.add (${o.hazard ?? o.reason}): ${o.detail}\n`;
+    case "verify-failed":
+      return `VERIFY FAILED todo.add (${o.reason}): ${o.detail}\n`;
+    case "unsupported":
+      return `UNSUPPORTED todo.add\n`;
+    default:
+      return `FAILED todo.add: ${JSON.stringify(o)}\n`;
+  }
+}
+
+/**
+ * Run a bulk `todo add` as ONE batch of `todo.add` legs (shared flags already
+ * compiled into every op's params). Streams per-line results and a trailing
+ * summary carrying the single `undoToken` that removes the whole skeleton —
+ * except under `--id-only`, where output is exactly one uuid per created item,
+ * in creation order, and nothing else. Exit code is the worst leg's failure.
+ */
+async function runBulkAdd(opts: WriteFlagOpts, ops: BatchOp[], idOnly: boolean): Promise<void> {
+  let client: ThingsClient | null = null;
+  try {
+    client = openThings(opts.db ? { dbPath: opts.db } : {});
+    const batchResult = await client.write.batch(
+      ops,
+      {
+        ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
+        ...(opts.actor !== undefined && { actor: opts.actor }),
+      },
+      (r) => {
+        if (idOnly) {
+          if (r.outcome.kind === "ok" && r.outcome.uuid !== null)
+            process.stdout.write(`${r.outcome.uuid}\n`);
+        } else if (opts.json) {
+          emit(r);
+        } else {
+          process.stdout.write(addResultLine(r));
+        }
+      },
+    );
+    const failed = batchResult.results.filter((r) => outcomeFailed(r.outcome));
+    if (!idOnly) {
+      const total = batchResult.results.length;
+      const okCount = total - failed.length;
+      if (opts.json) {
+        const summary = {
+          summary: {
+            total,
+            ok: okCount,
+            failed: failed.filter((r) => r.outcome.kind !== "skipped").length,
+            skipped: batchResult.results.filter((r) => r.outcome.kind === "skipped").length,
+            ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
+          },
+        };
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+      } else {
+        const undo =
+          batchResult.undoToken !== undefined
+            ? ` (undo all: things undo --txn ${batchResult.undoToken})`
+            : "";
+        process.stdout.write(`added ${okCount}/${total} to-dos${undo}\n`);
+      }
+    }
+    process.exitCode = aggregateExitCode(failed.map((r) => r.outcome));
+  } finally {
+    client?.close();
+  }
+}
+
+/** Read newline-delimited titles from stdin; blank lines (whitespace-only) skipped. */
+async function readStdinTitles(): Promise<string[]> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks)
+    .toString("utf8")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim() !== "");
+}
+
 function group(program: Command, name: string, description: string): Command {
   const existing = program.commands.find((c) => c.name() === name);
   if (existing !== undefined) return existing;
@@ -392,13 +727,16 @@ export function registerWriteCommands(program: Command): void {
   addCreateTagsFlag(
     addWriteFlags(
       todo
-        .command("add <title>")
+        .command("add [titles...]")
         .description(
-          "Create a to-do; its uuid is printed on success. Projects, areas, and headings " +
-            "must name existing items — unknown or ambiguous references are rejected. A tag " +
-            "may be a name or a parent/child path, and must exist unless " +
+          "Create one or more to-dos; each new uuid is printed on success. Pass several " +
+            "titles to create a quick skeleton in one call, or stream them with --stdin " +
+            "(one title per line); every shared flag below applies to each title. Projects, " +
+            "areas, and headings must name existing items — unknown or ambiguous references " +
+            "are rejected. A tag may be a name or a parent/child path, and must exist unless " +
             "--create-tags. Adding into a completed/canceled project reopens that project — " +
-            "requires --acknowledge-project-reopen.",
+            "requires --acknowledge-project-reopen. When several to-dos are created, one undo " +
+            "token removes the whole skeleton at once.",
         )
         .option("--notes <text>", "notes body")
         .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
@@ -415,36 +753,106 @@ export function registerWriteCommands(program: Command): void {
         .option("--project <ref>", "destination project (uuid or unique name)")
         .option("--area <ref>", "destination area (uuid or unique name)")
         .option("--heading <name>", "existing heading in the destination project")
-        .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project"),
+        .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project")
+        .option(
+          "--stdin",
+          "read newline-delimited titles from stdin (blank lines skipped); exclusive with title arguments",
+        )
+        .option(
+          "--id-only",
+          "print only the new uuid(s), one per line in creation order, and nothing else (exclusive with --json)",
+        ),
     ),
-  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+  ).action(async (titles: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const idOnly = opts["idOnly"] === true;
+    const useStdin = opts["stdin"] === true;
+    if (idOnly && opts.json === true) {
+      usageError(opts, "--id-only and --json are mutually exclusive");
+      return;
+    }
+    if (useStdin && titles.length > 0) {
+      usageError(opts, "--stdin is mutually exclusive with title arguments");
+      return;
+    }
+    const finalTitles = useStdin ? await readStdinTitles() : titles;
+    if (finalTitles.length === 0) {
+      usageError(
+        opts,
+        useStdin
+          ? "no titles: --stdin received no non-empty lines"
+          : "provide at least one title, or pass --stdin to read titles from stdin",
+      );
+      return;
+    }
     const checklist = opts["checklistItem"] as string[];
     const tags = splitCsv(opts["tags"] as string | undefined);
     const project = containerRef(opts["project"] as string | undefined);
     const area = containerRef(opts["area"] as string | undefined);
     if (!whenSugarOk(opts)) return;
-    await runWrite(opts, (c) =>
-      c.write.addTodo(
-        {
-          title,
-          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
-          ...(opts["when"] !== undefined && { when: opts["when"] as never }),
-          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
-          ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
-          ...(tags !== undefined && { tags }),
-          ...(checklist.length > 0 && { checklistItems: checklist }),
-          ...(project !== undefined && { project }),
-          ...(area !== undefined && { area }),
-          ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+    const buildParams = (title: string): Record<string, unknown> => ({
+      title,
+      ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+      ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+      ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as string }),
+      ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
+      ...(tags !== undefined && { tags }),
+      ...(checklist.length > 0 && { checklistItems: checklist }),
+      ...(project !== undefined && { project }),
+      ...(area !== undefined && { area }),
+      ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+    });
+    const ackReopen =
+      opts["acknowledgeProjectReopen"] !== undefined
+        ? { acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean }
+        : {};
+
+    // Single title (positional or a one-line stdin) keeps today's single
+    // mutation-result envelope exactly — unless --id-only, which prints just
+    // the new uuid. Multiple titles compile onto the batch machinery.
+    if (finalTitles.length === 1) {
+      const params = buildParams(finalTitles[0] as string);
+      const wopts = writeOptionsFrom(opts, { ...ackReopen, ...createTagsExtra(opts) });
+      if (!idOnly) {
+        await runWrite(opts, (c) => c.write.addTodo(params as never, wopts));
+        return;
+      }
+      await runWrite(
+        opts,
+        (c) => c.write.addTodo(params as never, wopts),
+        (result, o, meta) => {
+          if (result.kind === "ok") {
+            if (result.uuid !== null) process.stdout.write(`${result.uuid}\n`);
+            process.exitCode = ExitCode.Ok;
+          } else if (result.kind === "dry-run") {
+            // --id-only mints no uuid to print on a dry-run; stay silent.
+            process.exitCode = ExitCode.Ok;
+          } else {
+            emitResult(result, { ...o, json: false }, meta);
+          }
         },
-        writeOptionsFrom(opts, {
-          ...(opts["acknowledgeProjectReopen"] !== undefined && {
-            acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
-          }),
-          ...createTagsExtra(opts),
-        }),
-      ),
-    );
+      );
+      return;
+    }
+
+    // Multi-title: one batch of todo.add legs, shared flags applied to each.
+    const perOpOptions: NonNullable<BatchOp["options"]> = {
+      ...ackReopen,
+      ...(opts["createTags"] === true && { createTags: true }),
+      ...(opts.vector !== undefined && { vector: opts.vector as VectorId }),
+      ...(opts.allowVeryDisruptive === true
+        ? { maxDisruption: 3 as DisruptionTier }
+        : opts.allowDisruptive === true
+          ? { maxDisruption: 2 as DisruptionTier }
+          : {}),
+      ...(opts.verifyTimeout !== undefined && { verifyTimeoutMs: Number(opts.verifyTimeout) }),
+    };
+    const hasPerOpOptions = Object.keys(perOpOptions).length > 0;
+    const ops: BatchOp[] = finalTitles.map((title) => {
+      const op: BatchOp = { op: "todo.add" as OperationKind, params: buildParams(title) };
+      if (hasPerOpOptions) op.options = perOpOptions;
+      return op;
+    });
+    await runBulkAdd(opts, ops, idOnly);
   });
 
   addWriteFlags(
@@ -518,52 +926,93 @@ export function registerWriteCommands(program: Command): void {
     });
   }
 
-  addWriteFlags(
-    todo
-      .command("move <uuid>")
-      .description(
-        "Move a to-do into a project or area (optionally under an existing heading), back " +
-          "to the Inbox, or out of every container. Unknown or ambiguous destinations are " +
-          "rejected. Moving into a completed/canceled project reopens that project — " +
-          "requires --acknowledge-project-reopen.",
-      )
-      .option("--project <ref>", "destination project (uuid or unique name)")
-      .option("--area <ref>", "destination area (uuid or unique name)")
-      .option("--heading <name>", "existing heading in the destination project")
-      .option("--inbox", "move back to the Inbox — removes any schedule")
-      .option("--detach", "remove ALL container links (project/area/heading) keeping the schedule")
-      .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const project = containerRef(opts["project"] as string | undefined);
-    const area = containerRef(opts["area"] as string | undefined);
-    const inbox = opts["inbox"] === true;
-    const detach = opts["detach"] === true;
-    const dest = project !== undefined || area !== undefined || opts["heading"] !== undefined;
-    if ((inbox && (dest || detach)) || (detach && dest)) {
+  addPositionFlags(
+    addWriteFlags(
+      todo
+        .command("move <refs...>")
+        .description(
+          "Move one or more to-dos as an ordered block (the argument order is the order they " +
+            "land — name them backwards to reverse). MOVE changes WHAT a to-do belongs to; to " +
+            "rearrange to-dos that already share a container use `things todo reorder`. Pass one " +
+            "destination: --to-project / --to-heading / --to-area, or the detach family " +
+            "--no-heading (leave the heading, stay in the project) / --loose (leave heading, " +
+            "project, AND area). --inbox files back to the Inbox. Position with " +
+            "--first/--last/--before/--after (an anchor positions but never migrates — an " +
+            "anchor-only move that would cross containers is refused). Membership always " +
+            "succeeds; top-of-bucket placement is guaranteed only where a reorder protocol " +
+            "exists (the result states the placement class). Moving into a completed/canceled " +
+            "project reopens it — requires --acknowledge-project-reopen.",
+        )
+        .option("--to-project <ref>", "destination project (uuid or unique name)")
+        .option(
+          "--to-heading <sel>",
+          "destination heading (exact title or uuid; within --to-project)",
+        )
+        .option("--to-area <ref>", "destination area (uuid or unique name)")
+        .option(
+          "--no-heading",
+          "leave the heading but stay in the current project (unheaded block)",
+        )
+        .option("--loose", "detach from heading, project, AND area (keeping the schedule)")
+        .option("--inbox", "move back to the Inbox — removes any schedule")
+        .option("--no-area", "(not a to-do flag — teaches the correct spelling)")
+        .option("--detach", "(removed — teaches the replacement family)")
+        .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const dest = todoDestination(opts);
+    if (dest === "conflict") {
       usageError(
         opts,
-        "--inbox/--detach are exclusive with each other and with --project/--area/--heading",
+        "pass at most one destination (--to-project/--to-heading/--to-area/--no-heading/--loose/--inbox)",
       );
       return;
     }
-    await runWrite(opts, (c) =>
-      c.write.moveTodo(
-        uuid,
-        {
-          ...(project !== undefined && { project }),
-          ...(area !== undefined && { area }),
-          ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
-          ...(inbox && { inbox: true }),
-          ...(detach && { detach: true }),
-        },
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: TodoMoveRequest = {
+      uuids: refs,
+      ...(dest !== undefined && { destination: dest }),
+      ...(position !== undefined && { position }),
+    };
+    await runMoveCmd(opts, (c) =>
+      c.write.moveTodos(
+        request,
         writeOptionsFrom(opts, {
-          ...(inbox && { vector: "applescript" as const }),
           ...(opts["acknowledgeProjectReopen"] !== undefined && {
             acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
           }),
         }),
       ),
     );
+  });
+
+  addPositionFlags(
+    addWriteFlags(
+      todo
+        .command("reorder <refs...>")
+        .description(
+          "Reorder to-dos IN PLACE within the container and bucket they already share — this " +
+            "REARRANGES, it never changes membership (to change what a to-do belongs to, use " +
+            "`things todo move`). The argument order is the resulting order; unmentioned " +
+            "siblings keep their own order. Bare (no position flag) assembles the named to-dos " +
+            "as a contiguous block at the EARLIEST one's current slot (partial-selection " +
+            "friendly). --first/--last/--before/--after position the block. Operands that span " +
+            "containers or buckets fail closed. Ordering rides the same experimental surface as " +
+            "`things reorder` — enable it once with `things config set allow-experimental true`.",
+        ),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: ReorderRequest = { uuids: refs, ...(position !== undefined && { position }) };
+    await runMoveCmd(opts, (c) => c.write.reorderTodos(request, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -857,103 +1306,180 @@ export function registerWriteCommands(program: Command): void {
     );
   }
 
-  const heading = group(program, "heading", "Heading-scoped operations");
+  const project = group(program, "project", "Project-scoped operations");
+
+  // --- project headings (spec §2) ------------------------------------------
+  // A heading exists only inside a project. Each verb takes <project-ref> then
+  // a heading selector: an exact title OR a uuid (never an ordinal — an index
+  // silently re-targets a different heading after any reorder). An empty-string
+  // title selects a titleless heading; duplicates fail closed with uuid
+  // candidates.
+
+  addPlacementFlags(
+    addWriteFlags(
+      project
+        .command("add-heading <project> <title>")
+        .description(
+          "Create a heading inside an existing project; its uuid is printed on success. The " +
+            "project must name an existing project (uuid or unique name). Uses the Things proxy " +
+            "shortcuts — run `things setup shortcuts` once first. By default the heading is " +
+            "appended; a placement flag positions it among the project's headings (that leg " +
+            "needs `things config set allow-experimental true`).",
+        ),
+    ),
+  ).action(
+    async (projectRef: string, title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      if (countPlacementFlags(opts) > 1) {
+        usageError(
+          opts,
+          "pass at most one of --first / --last / --before-heading / --after-heading",
+        );
+        return;
+      }
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const placement = headingPlacement(c, proj.uuid, opts);
+        return c.write.addHeading({ uuid: proj.uuid }, title, placement, writeOptionsFrom(opts));
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("add <project> <title>")
+    project
+      .command("rename-heading <project> <heading>")
       .description(
-        "Create a heading inside an existing project; its uuid is printed on success. The " +
-          "project must name an existing project (uuid or unique name). This uses the Things " +
-          "proxy shortcuts — run `things setup shortcuts` once first.",
-      ),
-  ).action(async (project: string, title: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) =>
-      c.write.addHeading({ uuid: project, title: project }, title, writeOptionsFrom(opts)),
-    );
-  });
+        `Rename a heading in place (works on archived headings too). <heading> is a ${HEADING_SEL_HELP}.`,
+      )
+      .requiredOption("--to <title>", "the new heading title"),
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        return c.write.renameHeading(h.uuid, opts["to"] as string, writeOptionsFrom(opts));
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("rename <uuid> <title>")
-      .description("Rename a heading in place (works on archived headings too)."),
-  ).action(async (uuid: string, title: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) => c.write.renameHeading(uuid, title, writeOptionsFrom(opts)));
-  });
-
-  addWriteFlags(
-    heading
-      .command("archive <uuid>")
+    project
+      .command("archive-heading <project> <heading>")
       .description(
         "Archive a heading — it leaves the active project view (reversible with " +
-          "`things heading unarchive`). This is the preferred way to retire a heading: " +
+          "`things project unarchive-heading`). This is the preferred way to retire a heading: " +
           "row DELETION exists only in the app's UI and Shortcuts with a per-run consent " +
           "dialog, never headlessly. With open children, --children is required: " +
           "complete/cancel resolve them with the heading (one atomic cascade); reparent " +
           "moves them to the project root first, keeping them open — a compound sequence " +
-          "that `things undo` reverses as one unit.",
+          `that \`things undo\` reverses as one unit. <heading> is a ${HEADING_SEL_HELP}.`,
       )
       .option(
         "--children <policy>",
         "complete | cancel | reparent (required when children are open)",
       ),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
-    await runWrite(opts, async (c) => {
-      const outcome = await c.write.archiveHeading(
-        uuid,
-        children ? { children } : {},
-        writeOptionsFrom(opts),
-      );
-      for (const leg of outcome.reparented) {
-        process.stderr.write(`reparented: ${leg.title} (${leg.result.kind})\n`);
-      }
-      return outcome.heading;
-    });
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
+      await runWrite(opts, async (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        const outcome = await c.write.archiveHeading(
+          h.uuid,
+          children ? { children } : {},
+          writeOptionsFrom(opts),
+        );
+        for (const leg of outcome.reparented) {
+          process.stderr.write(`reparented: ${leg.title} (${leg.result.kind})\n`);
+        }
+        return outcome.heading;
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("unarchive <uuid>")
+    project
+      .command("unarchive-heading <project> <heading>")
       .description(
         "Un-archive a heading. --restore-children also reopens the children the archive " +
           "cascade resolved with it (identified by matching resolution timestamps; a " +
           "someday child comes back as someday). Children resolved at other times are " +
-          "never touched.",
+          `never touched. <heading> is a ${HEADING_SEL_HELP}.`,
       )
       .option("--restore-children", "reopen cascade-resolved children too"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    await runWrite(opts, async (c) => {
-      const outcome = await c.write.unarchiveHeading(
-        uuid,
-        opts["restoreChildren"] === true ? { restoreChildren: true } : {},
-        writeOptionsFrom(opts),
-      );
-      for (const child of outcome.children) {
-        process.stderr.write(`restored: ${child.title} (${child.result.kind})\n`);
-      }
-      return outcome.heading;
-    });
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, async (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        const outcome = await c.write.unarchiveHeading(
+          h.uuid,
+          opts["restoreChildren"] === true ? { restoreChildren: true } : {},
+          writeOptionsFrom(opts),
+        );
+        for (const child of outcome.children) {
+          process.stderr.write(`restored: ${child.title} (${child.result.kind})\n`);
+        }
+        return outcome.heading;
+      });
+    },
+  );
 
   addDriveGuiFlag(
     addWriteFlags(
-      heading
-        .command("convert-to-project <uuid>")
+      project
+        .command("promote-heading <project> <heading>")
         .description(
-          "Convert a heading into a project. This REPLACES the heading with a new project — it " +
+          "Promote a heading into a project. This REPLACES the heading with a new project — it " +
             "is promoted alongside its parent project (into the same area) and the heading's " +
             "to-dos move under the new project. The heading's identity is gone and it cannot be " +
-            "undone. The new project's uuid is printed on success.",
+            `undone. The new project's uuid is printed on success. <heading> is a ${HEADING_SEL_HELP}.`,
         ),
     ),
-  ).action(async (uuid: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) =>
-      c.write.run("heading.convert-to-project", { uuid }, writeOptionsFrom(opts)),
-    );
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        return c.write.run("project.promote-heading", { uuid: h.uuid }, writeOptionsFrom(opts));
+      });
+    },
+  );
 
-  const project = group(program, "project", "Project-scoped operations");
+  addPlacementFlags(
+    addWriteFlags(
+      project
+        .command("move-heading <project> <headings...>")
+        .description(
+          "Reposition one or more of a project's headings as an ordered block — the selection " +
+            "order is the resulting order, and each heading's to-dos follow it. Pass exactly one " +
+            "placement: --first, --last, --before-heading <sel>, or --after-heading <sel>. Each " +
+            `<heading> is a ${HEADING_SEL_HELP}. Reordering headings rides the same experimental ` +
+            "surface as `things reorder` — enable it once with `things config set " +
+            "allow-experimental true`.",
+        ),
+    ),
+  ).action(
+    async (projectRef: string, sels: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+      if (countPlacementFlags(opts) !== 1) {
+        usageError(
+          opts,
+          "pass exactly one of --first / --last / --before-heading / --after-heading",
+        );
+        return;
+      }
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const headings = sels.map((s) => c.resolve.heading(proj.uuid, s).uuid);
+        const placement = headingPlacement(c, proj.uuid, opts) as HeadingPlacement;
+        return c.write.moveHeading(
+          { uuid: proj.uuid },
+          headings,
+          placement,
+          writeOptionsFrom(opts),
+        );
+      });
+    },
+  );
 
   // --- ui vector: repeating-project transforms (two-key gated) -------------
   addDriveGuiFlag(
@@ -1076,12 +1602,21 @@ export function registerWriteCommands(program: Command): void {
   addWriteFlags(
     project
       .command("add <title>")
-      .description("Create a project; its uuid is printed on success.")
+      .description(
+        "Create a project; its uuid is printed on success. Give --todo (repeatable) to " +
+          "seed it with child to-dos in the same call — the quick way to stand up a new " +
+          "project skeleton.",
+      )
       .option("--notes <text>", "notes body")
       .option("--area <ref>", "destination area (uuid or unique name)")
       .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
       .option("--deadline <date>", "YYYY-MM-DD")
-      .option("--todo <title>", "initial child to-do (repeatable)", collect, []),
+      .option(
+        "--todo <title>",
+        "initial child to-do, repeatable (seeds the new project)",
+        collect,
+        [],
+      ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
@@ -1183,30 +1718,41 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
-  addWriteFlags(
-    project
-      .command("move <ref>")
-      .description(
-        "Move a project (target by uuid or unique name) to another area, or DETACH it from " +
-          "its current area (--detach). Status and schedule are untouched. Unknown areas are " +
-          "rejected.",
-      )
-      .option("--area <ref>", "destination area (uuid or unique name)")
-      .option("--detach", "remove the current area assignment (exclusive with --area)"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & { area?: string; detach?: boolean }) => {
-    if ((opts.detach === true) === (opts.area !== undefined)) {
-      usageError(opts, "pass exactly one of --area / --detach");
+  addPositionFlags(
+    addWriteFlags(
+      project
+        .command("move <refs...>")
+        .description(
+          "Move one or more projects as an ordered block (argument order = resulting order). " +
+            "Pass one destination: --to-area (uuid or unique name) or --no-area (leave the " +
+            "area — a project's complete detach). Position among siblings with " +
+            "--first/--last/--before/--after (an anchor positions but never migrates). " +
+            "Membership always succeeds; top-of-bucket placement is guaranteed only where a " +
+            "reorder protocol exists (the result states the class). Status and schedule are " +
+            "untouched.",
+        )
+        .option("--to-area <ref>", "destination area (uuid or unique name)")
+        .option("--no-area", "leave the current area (a project's single-level detach)")
+        .option("--loose", "(not a project flag — teaches the correct spelling)")
+        .option("--detach", "(removed — teaches the replacement)"),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const dest = projectDestination(opts);
+    if (dest === "conflict") {
+      usageError(opts, "pass at most one of --to-area / --no-area");
       return;
     }
-    await runWrite(opts, (c) =>
-      opts.detach === true
-        ? c.write.detachProject(uuid, writeOptionsFrom(opts))
-        : c.write.moveProject(
-            uuid,
-            { uuid: opts.area as string, title: opts.area as string },
-            writeOptionsFrom(opts),
-          ),
-    );
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: ProjectMoveRequest = {
+      uuids: refs,
+      ...(dest !== undefined && { destination: dest }),
+      ...(position !== undefined && { position }),
+    };
+    await runMoveCmd(opts, (c) => c.write.moveProjects(request, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -1786,23 +2332,23 @@ export function registerWriteCommands(program: Command): void {
       .description(
         "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
           "area-less someday projects — one kind per call), a " +
-          "project's to-dos, a project's HEADINGS, an area, or the top-level sidebar " +
+          "project's to-dos, an area, or the top-level sidebar " +
           "projects — uuids are placed at the TOP in the given order; unlisted members " +
           "keep their relative order below. Strategies: native (EXPERIMENTAL — requires " +
           "`things config set allow-experimental true` and may stop working after a " +
-          "Things update; today/inbox/someday/project/headings/area) and bounce " +
+          "Things update; today/inbox/someday/project/area) and bounce " +
           `(today/evening/projects, max ${BOUNCE_MAX_ITEMS} items; an interrupted run ` +
           "reports which items were placed). Evening and projects (top-level sidebar " +
           "order — each project takes a brief someday/anytime round-trip) are " +
-          "bounce-only. Project children under headings cannot be reordered; reordering " +
-          "a heading carries its children with it. Area scope reorders to-dos OR " +
-          "projects — never mixed in one request.",
+          "bounce-only. Project children under headings cannot be reordered; to reorder " +
+          "the HEADINGS themselves (children follow) use `things project move-heading`. " +
+          "Area scope reorders to-dos OR projects — never mixed in one request.",
       )
       .requiredOption(
         "--scope <scope>",
-        "today | evening | inbox | someday | project | headings | area | projects",
+        "today | evening | inbox | someday | project | area | projects",
       )
-      .option("--project <ref>", "project (uuid or unique name) — scope=project|headings")
+      .option("--project <ref>", "project (uuid or unique name) — scope=project")
       .option("--area <ref>", "area (uuid or unique name) — scope=area")
       .option("--strategy <name>", "force native | bounce (default: per-scope)"),
   ).action(async (uuids: string[], opts: WriteFlagOpts & Record<string, unknown>) => {

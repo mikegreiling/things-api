@@ -300,7 +300,14 @@ describe("top-level mutation verbs → verb-hint (Part 3)", () => {
   });
 
   it("catalog-exposed verbs (not just the common set) are reserved too", () => {
-    for (const verb of ["duplicate", "restore", "reopen", "rename", "archive", "make-repeating"]) {
+    for (const verb of [
+      "duplicate",
+      "restore",
+      "reopen",
+      "rename-heading",
+      "archive-heading",
+      "make-repeating",
+    ]) {
       expect(resolve([verb, "x"]).form, verb).toBe("verb-hint");
     }
   });

@@ -38,7 +38,7 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
   },
   {
     title: "Write — create and change items",
-    commands: ["todo", "project", "area", "tag", "heading", "batch", "undo", "reorder"],
+    commands: ["todo", "project", "area", "tag", "batch", "undo", "reorder"],
   },
   {
     title: "Setup & diagnostics",
@@ -79,10 +79,9 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   changes: { args: "", desc: "items created or changed since a moment (--since)" },
   // Write
   todo: { args: "<verb>", desc: "add, edit, schedule, complete, move to-dos" },
-  project: { args: "<verb>", desc: "add, edit, complete, move projects" },
+  project: { args: "<verb>", desc: "add, edit, move projects and their headings" },
   area: { args: "<verb>", desc: "add, rename, retag, reorder, delete areas" },
   tag: { args: "<verb>", desc: "add, rename, nest, delete tags" },
-  heading: { args: "<verb>", desc: "add, rename, archive headings in a project" },
   batch: { args: "[file]", desc: "run many changes from a JSONL script" },
   undo: { args: "", desc: "reverse recent changes made through this tool" },
   reorder: { args: "<ids…>", desc: "reorder items within a list or container" },
@@ -187,7 +186,9 @@ export function renderTopLevelHelp(program: Command, width: number): string {
   lines.push(
     "Most commands take a ref (uuid, prefix, share link, or name) — see `things help ids`.",
   );
-  lines.push("Guides: `things help <topic>` — agent, filters, ids, output, repeating, writes.");
+  lines.push(
+    "Guides: `things help <topic>` — agent, filters, ids, move, output, repeating, writes.",
+  );
   lines.push("New to Things? Start with `things help agent`.");
   lines.push("Agent skill available: run `things install-skill`.");
   return lines.join("\n");
@@ -293,7 +294,11 @@ does not resolve, the error offers close title matches you can copy.
 
 WRITE targets: project, area, and tag verbs accept a uuid OR a unique name (a
 duplicated project name is refused, listing the candidates to pick from by uuid);
-to-do and heading writes take a uuid or prefix only.`,
+to-do writes take a uuid or prefix only. The project heading verbs
+(\`project add-heading|rename-heading|archive-heading|unarchive-heading|
+promote-heading|move-heading\`) take a project ref then a heading selector — an
+exact title or a uuid (never an ordinal); a duplicate title is refused with uuid
+candidates.`,
 
   output: `OUTPUT — human tables vs. --json
 
@@ -352,10 +357,48 @@ which overrides the built-in default.
 
 Writes are NAMESPACED: a bare \`things <verb> …\` (update, add, delete, complete,
 cancel, move, …) is not a command — it points you at the typed form
-(\`things todo|project|area|tag|heading <verb> …\`), never running the change.
+(\`things todo|project|area|tag <verb> …\`), never running the change.
 
 Discover every operation and the flags it needs: \`things capabilities\`.
 A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,
+
+  move: `MOVE vs REORDER — membership vs arrangement
+
+Two distinct verbs, kept apart on purpose:
+  move    changes WHAT an item belongs to (a to-do's project/area/heading; a
+          project's area).
+  reorder changes only the ARRANGEMENT of items already sharing a container —
+          never membership. Unmentioned siblings keep their order.
+
+things todo move <refs…> [destination] [position]   (pick one destination)
+  --to-project <ref>   into a project's unheaded block
+  --to-heading <sel>   under a heading (in --to-project, else the shared project)
+  --to-area <ref>      into an area
+  --no-heading         leave the heading, STAY in the project
+  --loose              the total sever: leave heading, project, AND area
+  --inbox              back to the Inbox (removes the schedule)
+  No --detach (removed) and no --no-area on a to-do — its area is inherited from
+  its project, so use --loose (or move the project).
+
+things todo reorder <refs…> [position]
+  Bare (no position): assemble the to-dos as one block at the EARLIEST one's
+  current slot, in argument order (--first NOT implied). Partial selections fine.
+
+things project move <refs…> [--to-area <ref> | --no-area] [position]
+  --no-area is a project's complete detach; --loose is a to-do word, refused here.
+
+Positions (both verbs): --first · --last · --before <ref> · --after <ref>. An
+anchor POSITIONS but never MIGRATES — --before/--after need items already in the
+anchor's container and bucket; a cross-container or cross-bucket anchor fails
+closed (name a destination flag if you meant to MOVE). Selection order = landing
+order: reverse for free by naming them backwards.
+
+PLACEMENT HONESTY. "Top of bucket" is GUARANTEED where a lab-clean protocol
+exists — loose inbox/today/evening/someday, a project's unheaded anytime OR
+someday children, an area's anytime members (needs allow-experimental). It is
+APP-DEFAULT (membership lands, order best-effort) for heading, scheduled-day, and
+area-less-anytime buckets; ordering an area's someday members is refused (it
+de-somedays them). The result's placement class says which you got.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 
@@ -394,6 +437,7 @@ export const TOPIC_NAMES: readonly string[] = [
   "agent",
   "filters",
   "ids",
+  "move",
   "output",
   "repeating",
   "writes",

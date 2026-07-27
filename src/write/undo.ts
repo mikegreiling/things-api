@@ -317,7 +317,7 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
-  "heading.add":
+  "project.add-heading":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",
   "todo.make-repeating":
@@ -333,8 +333,8 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
     "the composite creates a project then promotes it (identity replacement, UIC4-b): the " +
     "created uuid is destroyed by the promote and a new repeating template is born — delete the " +
     "resulting repeating project in the app",
-  "heading.convert-to-project":
-    "converting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
+  "project.promote-heading":
+    "promoting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",
   // NB: todo.reschedule-repeat / project.reschedule-repeat are NOT here — with
   // the full rule vocabulary they are CONDITIONAL (planUndo re-drives reschedule
@@ -1305,22 +1305,50 @@ export function planUndo(
       };
     }
 
-    case "heading.rename": {
+    case "project.rename-heading": {
       if (uuid === null) return irreversible("no target uuid recorded");
       const title = preField(record, "title");
       if (typeof title !== "string") return irreversible("the pre-op title was not captured");
       return {
         target,
         kind: "invertible",
-        steps: [{ op: "heading.rename", params: { uuid, title } }],
+        steps: [{ op: "project.rename-heading", params: { uuid, title } }],
         notes,
       };
     }
 
-    case "heading.archive": {
+    case "project.move-heading": {
+      const pre = record.pre;
+      if (pre === null) return irreversible("no pre-move heading order was captured");
+      const ranked = Object.entries(pre).filter(([, rank]) => typeof rank === "number") as [
+        string,
+        number,
+      ][];
+      if (ranked.length === 0) return irreversible("no pre-move heading ranks were captured");
+      const priorOrder = ranked.toSorted((a, b) => a[1] - b[1]).map(([id]) => id);
+      const project = record.requested["project"];
+      notes.push("restores the project's heading order to its pre-move sequence (children follow)");
+      return {
+        target,
+        kind: "invertible",
+        steps: [
+          {
+            op: "project.move-heading",
+            params: { project, headings: priorOrder, placement: { position: "first" } },
+          },
+        ],
+        notes,
+      };
+    }
+
+    case "project.archive-heading": {
       if (uuid === null) return irreversible("no target uuid recorded");
       const steps: UndoStep[] = [
-        { op: "heading.unarchive", params: { uuid }, options: { guardFields: ["status"] } },
+        {
+          op: "project.unarchive-heading",
+          params: { uuid },
+          options: { guardFields: ["status"] },
+        },
       ];
       // Reopen exactly the children the cascade resolved (nested pre map —
       // the project.complete pattern). Reparented children live in leg
@@ -1369,7 +1397,7 @@ export function planUndo(
       return { target, kind: "invertible", steps, notes };
     }
 
-    case "heading.unarchive": {
+    case "project.unarchive-heading": {
       if (uuid === null) return irreversible("no target uuid recorded");
       notes.push(
         "re-archives the heading with children: complete — children reopened by the " +
@@ -1380,7 +1408,7 @@ export function planUndo(
         kind: "invertible",
         steps: [
           {
-            op: "heading.archive",
+            op: "project.archive-heading",
             params: { uuid, children: "complete" },
             options: { guardFields: ["status"] },
           },

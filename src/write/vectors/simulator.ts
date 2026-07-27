@@ -1338,12 +1338,34 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
         .run(ctx.nowEpoch, params.uuid);
       return;
     }
-    if (params.detach === true) {
+    if (params.loose === true) {
       sim
         .prepare(
           "UPDATE TMTask SET project = NULL, area = NULL, heading = NULL, userModificationDate = ? WHERE uuid = ?",
         )
         .run(ctx.nowEpoch, params.uuid);
+      return;
+    }
+    if (params.noHeading === true) {
+      // Leave the heading, keep the current project (unheaded block). Resolve
+      // the current project (direct, or via the heading) then re-assert it.
+      const row = sim
+        .prepare("SELECT project, heading FROM TMTask WHERE uuid = ?")
+        .get(params.uuid) as { project: string | null; heading: string | null } | undefined;
+      const current =
+        row?.project ??
+        (row?.heading != null
+          ? ((
+              sim.prepare("SELECT project FROM TMTask WHERE uuid = ?").get(row.heading) as
+                | { project: string | null }
+                | undefined
+            )?.project ?? null)
+          : null);
+      sim
+        .prepare(
+          "UPDATE TMTask SET heading = NULL, project = ?, area = NULL, userModificationDate = ? WHERE uuid = ?",
+        )
+        .run(current, ctx.nowEpoch, params.uuid);
       return;
     }
     if (params.heading !== undefined && params.project !== undefined) {
@@ -1473,9 +1495,9 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       .run(genUuid(), params.title, parent);
   }),
 
-  "heading.add": op<"heading.add">((sim, params, ctx) => {
+  "project.add-heading": op<"project.add-heading">((sim, params, ctx) => {
     const projUuid = containerUuid(sim, params.project, "project");
-    if (projUuid === null) throw new Error("simulator: heading.add needs a project");
+    if (projUuid === null) throw new Error("simulator: project.add-heading needs a project");
     insertTask(sim, 2, ctx, { uuid: genUuid(), title: params.title, project: projUuid });
   }),
 

@@ -956,21 +956,21 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "heading.rename": {
+  "project.rename-heading": {
     class: "reversible",
     register() {
       it("round-trip: undo renames the heading back to the pre-op title", async () => {
         const uuid = seedHeading(fixture.db, { title: "New" });
         writeAudit([
           auditRecord({
-            op: "heading.rename",
+            op: "project.rename-heading",
             uuid,
             requested: { title: "New" },
             pre: { title: "Old" },
             observed: { title: "New" },
           }),
         ]);
-        const v = osaVector(["heading.rename"], (id) => set(id, "title = ?", ["Old"]));
+        const v = osaVector(["project.rename-heading"], (id) => set(id, "title = ?", ["Old"]));
         const items = await runUndo(deps([v.vector]), auditDir);
         expect(items[0]?.outcome).toBe("ok");
         expect(
@@ -985,14 +985,17 @@ const CASES: Record<OperationKind, CaseDef> = {
         const uuid = seedHeading(fixture.db, { title: "Hijacked" });
         writeAudit([
           auditRecord({
-            op: "heading.rename",
+            op: "project.rename-heading",
             uuid,
             requested: { title: "New" },
             pre: { title: "Old" },
             observed: { title: "New" },
           }),
         ]);
-        const items = await runUndo(deps([osaVector(["heading.rename"], null).vector]), auditDir);
+        const items = await runUndo(
+          deps([osaVector(["project.rename-heading"], null).vector]),
+          auditDir,
+        );
         expect(items[0]?.outcome).toBe("failed");
         expect(items[0]?.results[0]?.kind).toBe("blocked");
         expect(
@@ -1256,7 +1259,7 @@ const CASES: Record<OperationKind, CaseDef> = {
   },
 
   // ---- headings ----------------------------------------------------------
-  "heading.archive": {
+  "project.archive-heading": {
     class: "reversible-with-loss",
     register() {
       it("round-trip + LOSS: undo reopens ONLY the cascade-resolved child (pre-resolved stays)", async () => {
@@ -1265,7 +1268,7 @@ const CASES: Record<OperationKind, CaseDef> = {
         const doneChild = seedTodo(fixture.db, { title: "done", status: "completed", heading });
         writeAudit([
           auditRecord({
-            op: "heading.archive",
+            op: "project.archive-heading",
             uuid: heading,
             requested: { uuid: heading, children: "complete" },
             pre: {
@@ -1276,12 +1279,15 @@ const CASES: Record<OperationKind, CaseDef> = {
             observed: { status: "completed", title: "Phase 1" },
           }),
         ]);
-        const v = osaVector(["heading.unarchive", "todo.reopen"], (id) =>
+        const v = osaVector(["project.unarchive-heading", "todo.reopen"], (id) =>
           set(id, "status = ?, stopDate = ?", [0, null]),
         );
         const items = await runUndo(deps([v.vector]), auditDir);
         expect(items[0]?.outcome).toBe("ok");
-        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual(["heading.unarchive", "todo.reopen"]);
+        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual([
+          "project.unarchive-heading",
+          "todo.reopen",
+        ]);
         // The documented loss: undo is state-aware — a child resolved outside the
         // cascade is NOT reopened (only openChild returns to open).
         expect(
@@ -1301,20 +1307,69 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "heading.unarchive": {
+  "project.unarchive-heading": {
     class: "reversible",
     register() {
       it("round-trip: undo re-archives the heading (children: complete)", async () => {
         const heading = seedHeading(fixture.db, { title: "Phase 1", status: "open" });
         writeAudit([
-          auditRecord({ op: "heading.unarchive", uuid: heading, pre: { status: "completed" } }),
+          auditRecord({
+            op: "project.unarchive-heading",
+            uuid: heading,
+            pre: { status: "completed" },
+          }),
         ]);
-        const v = osaVector(["heading.archive"], (id) =>
+        const v = osaVector(["project.archive-heading"], (id) =>
           set(id, "status = ?, stopDate = ?", [3, NOW_EPOCH]),
         );
         const items = await runUndo(deps([v.vector]), auditDir);
-        expect(items[0]?.plan.steps[0]?.op).toBe("heading.archive");
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.archive-heading");
         expect(items[0]?.outcome).toBe("ok");
+      });
+    },
+  },
+  "project.move-heading": {
+    class: "conditional",
+    register() {
+      it("invertible branch: undo restores the pre-move heading order", () => {
+        const plan = planUndo(
+          auditRecord({
+            op: "project.move-heading",
+            uuid: null,
+            requested: {
+              project: { uuid: "PROJ-1" },
+              headings: ["H2"],
+              placement: { position: "first" },
+            },
+            pre: { H1: 10, H2: 20, H3: 30 },
+          }),
+          NOW,
+        );
+        expect(plan.kind).toBe("invertible");
+        expect(plan.steps[0]).toEqual({
+          op: "project.move-heading",
+          params: {
+            project: { uuid: "PROJ-1" },
+            headings: ["H1", "H2", "H3"],
+            placement: { position: "first" },
+          },
+        });
+      });
+      it("irreversible branch: no captured pre-move ranks", () => {
+        const plan = planUndo(
+          auditRecord({
+            op: "project.move-heading",
+            uuid: null,
+            requested: {
+              project: { uuid: "PROJ-1" },
+              headings: ["H2"],
+              placement: { position: "first" },
+            },
+            pre: null,
+          }),
+          NOW,
+        );
+        expect(plan.kind).toBe("irreversible");
       });
     },
   },
@@ -1430,11 +1485,11 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "heading.add": {
+  "project.add-heading": {
     class: "irreversible",
     register() {
       it("planUndo reports it irreversible (no headless delete surface)", () => {
-        const plan = planUndo(auditRecord({ op: "heading.add", uuid: "H-1" }), NOW);
+        const plan = planUndo(auditRecord({ op: "project.add-heading", uuid: "H-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
         expect(plan.reason).toContain("interactive-only");
       });
@@ -1718,11 +1773,11 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "heading.convert-to-project": {
+  "project.promote-heading": {
     class: "irreversible",
     register() {
       it("planUndo reports it irreversible (identity replacement — new project uuid)", () => {
-        const plan = planUndo(auditRecord({ op: "heading.convert-to-project", uuid: "H-1" }), NOW);
+        const plan = planUndo(auditRecord({ op: "project.promote-heading", uuid: "H-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
         expect(plan.reason).toContain("identity replacement");
       });
