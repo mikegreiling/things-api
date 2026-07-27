@@ -1745,7 +1745,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "heading",
     {
       description:
-        "Manage a project heading — action selects which. create: a new heading in an existing " +
+        "Manage a project heading — action selects which. add: a new heading in an existing " +
         "project (project + title; returns its uuid; uses the Things proxy shortcuts, set up " +
         "once with `things setup shortcuts`). rename: rename in place (uuid + title; works on " +
         "archived headings). archive: retire a heading so it leaves the active project view " +
@@ -1757,13 +1757,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "converted heading's to-dos move under the new project), and requires " +
         "dangerously_drive_gui.",
       inputSchema: {
-        action: z.enum(["create", "rename", "archive", "unarchive", "convert_to_project"]),
-        project: z.string().optional().describe(`create: existing project (${REF_FORMAT})`),
+        action: z.enum(["add", "rename", "archive", "unarchive", "convert_to_project"]),
+        project: z.string().optional().describe(`add: existing project (${REF_FORMAT})`),
         uuid: z
           .string()
           .optional()
           .describe("rename/archive/unarchive/convert_to_project: the target's uuid"),
-        title: z.string().optional().describe("create: the new heading; rename: the new title"),
+        title: z.string().optional().describe("add: the new heading; rename: the new title"),
         children: z
           .enum(["complete", "cancel", "reparent"])
           .optional()
@@ -1782,12 +1782,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const c = getClient();
         const opts = writeOptions(args);
         switch (args.action) {
-          case "create":
+          case "add":
             if (args.project === undefined || args.title === undefined) {
-              return usage('action "create" requires project and title');
+              return usage('action "add" requires project and title');
             }
             return mutationResult(
-              await c.write.createHeading(containerRef(args.project), args.title, opts),
+              await c.write.addHeading(containerRef(args.project), args.title, opts),
             );
           case "rename":
             if (args.uuid === undefined || args.title === undefined) {
@@ -1954,41 +1954,38 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "visible occurrence), templateUuid (the rule), and replacedUuid. action reschedule: " +
         "change a repeating item's rule in place, keeping the same item (undoable — it restores " +
         "the previous rule). action pause/resume: stop or restart its new occurrences, keeping " +
-        "the rule. action create (scope project only): create a project and make it repeating in " +
+        "the rule. action add (scope project only): create a project and make it repeating in " +
         "one call — the project is created first and PERSISTS even if the make-repeating step " +
         "refuses; give an area to place it or omit it to create in Someday (only frequency and " +
         "interval are supported); returns the new project's uuid.",
       inputSchema: {
         scope: z.enum(["todo", "project"]),
-        action: z.enum(["start", "reschedule", "pause", "resume", "create"]),
+        action: z.enum(["start", "reschedule", "pause", "resume", "add"]),
         uuid: z
           .string()
           .optional()
           .describe(
             "start/reschedule/pause/resume: the item (a project also accepts a unique name)",
           ),
-        title: z.string().optional().describe("create (project): the new project's title"),
-        notes: z.string().optional().describe("create (project): notes"),
-        area: z.string().optional().describe(`create (project): destination area (${REF_FORMAT})`),
+        title: z.string().optional().describe("add (project): the new project's title"),
+        notes: z.string().optional().describe("add (project): notes"),
+        area: z.string().optional().describe(`add (project): destination area (${REF_FORMAT})`),
         project_deadline: z
           .string()
           .optional()
-          .describe(`create (project): the project's due date — ${DATE_FORMAT}`),
-        todos: z
-          .array(z.string())
-          .optional()
-          .describe("create (project): initial child to-do titles"),
+          .describe(`add (project): the project's due date — ${DATE_FORMAT}`),
+        todos: z.array(z.string()).optional().describe("add (project): initial child to-do titles"),
         frequency: z
           .enum(["daily", "weekly", "monthly", "yearly"])
           .optional()
-          .describe("start/reschedule/create: how often it repeats"),
+          .describe("start/reschedule/add: how often it repeats"),
         interval: z
           .number()
           .int()
           .min(1)
           .max(99)
           .optional()
-          .describe("start/reschedule/create: every N units (1–99)"),
+          .describe("start/reschedule/add: every N units (1–99)"),
         after_completion: repeatRuleShape.after_completion,
         weekdays: repeatRuleShape.weekdays,
         monthly_day: repeatRuleShape.monthly_day,
@@ -2010,14 +2007,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const c = getClient();
         const opts = writeOptions(args);
         const { frequency, interval } = args;
-        if (args.action === "create") {
-          if (args.scope !== "project") return usage('action "create" requires scope "project"');
-          if (args.title === undefined) return usage('action "create" requires title');
+        if (args.action === "add") {
+          if (args.scope !== "project") return usage('action "add" requires scope "project"');
+          if (args.title === undefined) return usage('action "add" requires title');
           if (frequency === undefined || interval === undefined) {
-            return usage('action "create" requires frequency and interval');
+            return usage('action "add" requires frequency and interval');
           }
           return mutationResult(
-            await c.write.createRepeatingProject(
+            await c.write.addRepeatingProject(
               {
                 title: args.title,
                 ...(args.notes !== undefined && { notes: args.notes }),

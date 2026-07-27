@@ -32,7 +32,7 @@ const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
 const PROXIES = ["things-proxy-create-heading", "things-proxy-set-detail"];
 
 const SHORTCUTS_MATRIX: VectorMatrix = {
-  "heading.create": { support: "yes", disruption: 0, validation: "validated" },
+  "heading.add": { support: "yes", disruption: 0, validation: "validated" },
   "todo.clear-dated-reminder": { support: "yes", disruption: 0, validation: "validated" },
 };
 
@@ -99,7 +99,7 @@ function deps(vector: WriteVector, present: string[] = PROXIES): WriteDeps {
 
 const OK = (): ExecuteResult => ({ exitCode: 0, stdout: "", stderr: "" });
 
-describe("heading.create", () => {
+describe("heading.add", () => {
   it("runs the create-heading proxy and returns the new heading's uuid", async () => {
     const proj = seedProject(fixture.db, { title: "Dest" });
     let created: string | null = null;
@@ -111,7 +111,7 @@ describe("heading.create", () => {
       });
       return OK();
     });
-    const result = await runMutation(deps(vector), "heading.create", {
+    const result = await runMutation(deps(vector), "heading.add", {
       project: { title: "Dest" },
       title: "Phase 2",
     });
@@ -124,7 +124,7 @@ describe("heading.create", () => {
   it("BLOCKS with a setup remediation when the proxy is not installed", async () => {
     seedProject(fixture.db, { title: "Dest" });
     const { vector, calls } = fakeVector(() => OK());
-    const result = await runMutation(deps(vector, ["things-proxy-set-detail"]), "heading.create", {
+    const result = await runMutation(deps(vector, ["things-proxy-set-detail"]), "heading.add", {
       project: { title: "Dest" },
       title: "Phase 2",
     });
@@ -139,7 +139,7 @@ describe("heading.create", () => {
 
   it("blocks an unknown destination project before dispatch", async () => {
     const { vector, calls } = fakeVector(() => OK());
-    const result = await runMutation(deps(vector), "heading.create", {
+    const result = await runMutation(deps(vector), "heading.add", {
       project: { title: "ghost" },
       title: "H",
     });
@@ -153,7 +153,7 @@ describe("heading.create", () => {
     const { vector, calls } = fakeVector(() => OK());
     const result = await runMutation(
       deps(vector, []), // no proxies installed
-      "heading.create",
+      "heading.add",
       { project: { title: "Dest" }, title: "H" },
       { dryRun: true },
     );

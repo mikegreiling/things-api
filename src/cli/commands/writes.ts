@@ -869,7 +869,7 @@ export function registerWriteCommands(program: Command): void {
       ),
   ).action(async (project: string, title: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) =>
-      c.write.createHeading({ uuid: project, title: project }, title, writeOptionsFrom(opts)),
+      c.write.addHeading({ uuid: project, title: project }, title, writeOptionsFrom(opts)),
     );
   });
 
@@ -1040,7 +1040,7 @@ export function registerWriteCommands(program: Command): void {
   addDriveGuiFlag(
     addWriteFlags(
       project
-        .command("create-repeating <title>")
+        .command("add-repeating <title>")
         .description(
           "Create a project and turn it into a repeating series in ONE call. Two operations: the " +
             "project is created first and PERSISTS even if the make-repeating step refuses; then it " +
@@ -1058,7 +1058,7 @@ export function registerWriteCommands(program: Command): void {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
     await runWrite(opts, (c) =>
-      c.write.createRepeatingProject(
+      c.write.addRepeatingProject(
         {
           title,
           ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),

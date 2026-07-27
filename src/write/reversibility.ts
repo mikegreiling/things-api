@@ -207,7 +207,7 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "emptying the Trash hard-deletes every row — nothing to restore (A27)",
   },
-  "heading.create": {
+  "heading.add": {
     class: "irreversible",
     note: "a created heading has no headless delete surface (heading delete is interactive-only) — archive it in the app instead",
   },
@@ -223,7 +223,7 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "making a project repeat is an identity REPLACEMENT (UIC4-b): the original project uuid is destroyed and a new template project is born (area preserved, start normalized to someday) — there is no un-repeat that restores the original",
   },
-  "project.create-repeating": {
+  "project.add-repeating": {
     class: "irreversible",
     note: "the composite CREATES a project then promotes it (identity replacement, UIC4-b): the created uuid is destroyed by the promote and a new repeating template is born — no automated inverse captures it; delete the resulting repeating project in the app",
   },

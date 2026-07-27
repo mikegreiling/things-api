@@ -17,7 +17,7 @@ import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
-import { runCreateRepeatingProject } from "../../src/write/make-repeating-project.ts";
+import { runAddRepeatingProject } from "../../src/write/make-repeating-project.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
@@ -472,9 +472,9 @@ describe("simulator write vector — covered operations", () => {
     expect(kitchen.parent).toBe(home.uuid);
   });
 
-  it("heading.create", async () => {
+  it("heading.add", async () => {
     const proj = seedProject(fixture.db, { title: "Book" });
-    const res = await runMutation(deps(vector), "heading.create", {
+    const res = await runMutation(deps(vector), "heading.add", {
       project: { uuid: proj },
       title: "Chapter 1",
     });
@@ -488,7 +488,7 @@ describe("simulator write vector — covered operations", () => {
   it("multi-step: project → heading → to-do under heading → complete (read-back consistent)", async () => {
     const proj = await runMutation(deps(vector), "project.add", { title: "MS Project" });
     expect(proj.kind).toBe("ok");
-    const head = await runMutation(deps(vector), "heading.create", {
+    const head = await runMutation(deps(vector), "heading.add", {
       project: { title: "MS Project" },
       title: "Phase A",
     });
@@ -805,16 +805,16 @@ describe("simulator write vector — covered operations", () => {
     expect(inst[0]?.["startDate"]).toBe(encodePackedDate("2026-07-05"));
   });
 
-  it("project.create-repeating (RSIM3) via the orchestrator: template + one instance, area kept", async () => {
+  it("project.add-repeating (RSIM3) via the orchestrator: template + one instance, area kept", async () => {
     const area = seedArea(fixture.db, "Operations");
-    const res = await runCreateRepeatingProject(
+    const res = await runAddRepeatingProject(
       deps(vector),
       { title: "Monthly finances", area: { uuid: area }, frequency: "monthly", interval: 1 },
       GUI,
     );
     expect(res.kind).toBe("ok");
     if (res.kind !== "ok" || res.uuid === null) throw new Error("expected template uuid");
-    expect(res.op).toBe("project.create-repeating");
+    expect(res.op).toBe("project.add-repeating");
 
     // Net effect: exactly the template + its one instance carry the title; the
     // intermediate added project was consumed by the make-repeating replacement.

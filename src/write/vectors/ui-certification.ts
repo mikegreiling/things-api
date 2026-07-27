@@ -17,7 +17,7 @@
  * row and the app exposes no AX/URL handle to do so (a to-do card opens only on
  * a mouse double-click; a heading/project is not selectable via things:///show).
  * UIC5 (2026-07-15) then certified `project.make-repeating` (and the
- * `project.create-repeating` composite that rides it) `lab-certified` — the
+ * `project.add-repeating` composite that rides it) `lab-certified` — the
  * pure-AX row-selection path, corrected at the sitting (the row `select` action,
  * not the silent-no-op table `AXSelectedRows` set; the detached editor's interval
  * field nests in group 1 exactly like the sheet). HEADCERT1 (2026-07-17) then
@@ -83,7 +83,7 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "project.make-repeating": {
     status: "lab-certified",
     // UIC7b: create-probe now verifies the decoded rule (type/unit/interval) —
-    // the interval guard covers project make + the create-repeating promote leg.
+    // the interval guard covers project make + the add-repeating promote leg.
     evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i", "UIC7b"],
   },
   "heading.convert-to-project": {

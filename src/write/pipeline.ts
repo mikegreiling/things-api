@@ -137,7 +137,7 @@ export type MutationResult =
       undoToken?: string;
       /**
        * Make-repeating conversions (todo/project make-repeating, and
-       * project.create-repeating via its promote leg): the discovered template
+       * project.add-repeating via its promote leg): the discovered template
        * uuid, the FK-derived current-occurrence instance (use this for the
        * VISIBLE item), and the replaced original uuid — plus `childrenReplaced`
        * for project conversions. `uuid` still equals `templateUuid` (use it to

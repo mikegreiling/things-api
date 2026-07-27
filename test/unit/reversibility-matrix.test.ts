@@ -1430,11 +1430,11 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "heading.create": {
+  "heading.add": {
     class: "irreversible",
     register() {
       it("planUndo reports it irreversible (no headless delete surface)", () => {
-        const plan = planUndo(auditRecord({ op: "heading.create", uuid: "H-1" }), NOW);
+        const plan = planUndo(auditRecord({ op: "heading.add", uuid: "H-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
         expect(plan.reason).toContain("interactive-only");
       });
@@ -1738,11 +1738,11 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "project.create-repeating": {
+  "project.add-repeating": {
     class: "irreversible",
     register() {
       it("planUndo reports it irreversible (create-then-promote; the created uuid is destroyed)", () => {
-        const plan = planUndo(auditRecord({ op: "project.create-repeating", uuid: "P-1" }), NOW);
+        const plan = planUndo(auditRecord({ op: "project.add-repeating", uuid: "P-1" }), NOW);
         expect(plan.kind).toBe("irreversible");
         expect(plan.reason).toContain("identity replacement");
       });

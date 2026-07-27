@@ -326,9 +326,9 @@ export const SIMFID_CASES: SimfidCase[] = [
   },
   {
     id: "heading-create",
-    op: "heading.create",
+    op: "heading.add",
     family: "crud",
-    title: "heading.create — in a project",
+    title: "heading.add — in a project",
     evidence: "s-suite S02 / HX",
     seed(db) {
       const proj = seedProject(db, { title: "SF Heading Host" });

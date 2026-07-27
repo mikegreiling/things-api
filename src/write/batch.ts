@@ -124,9 +124,9 @@ const UUID_MINTING_OPS = new Set<string>([
   "todo.add",
   "todo.add-logged",
   "project.add",
-  "project.create-repeating",
+  "project.add-repeating",
   "area.add",
-  "heading.create",
+  "heading.add",
   "todo.duplicate",
   "project.duplicate",
   "todo.make-repeating",
@@ -200,7 +200,7 @@ function validateDeclarations(ops: BatchOp[]): {
     if (!UUID_MINTING_OPS.has(entry.op)) {
       errors.set(
         i,
-        `tempId is only valid on an op that creates something (e.g. todo.add, project.add, heading.create) — not "${entry.op}"`,
+        `tempId is only valid on an op that creates something (e.g. todo.add, project.add, heading.add) — not "${entry.op}"`,
       );
       continue;
     }

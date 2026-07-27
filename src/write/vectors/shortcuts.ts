@@ -24,7 +24,7 @@ import type { CompiledInvocation, ExecuteResult, VectorMatrix, WriteVector } fro
 const SHORTCUTS_TIMEOUT_MS = 25_000;
 
 export const SHORTCUTS_MATRIX: VectorMatrix = {
-  "heading.create": {
+  "heading.add": {
     support: "yes",
     disruption: 0,
     validation: "validated",
