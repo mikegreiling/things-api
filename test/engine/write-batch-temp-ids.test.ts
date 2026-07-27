@@ -270,6 +270,39 @@ describe("batch-level undo", () => {
     );
   });
 
+  it("bulk-add shape: N todo.add legs sharing flags land in creation order under ONE undo token", async () => {
+    const d = deps(vector, auditDirPath);
+    // Exactly what the variadic CLI `todo add A B C --notes shared` compiles to:
+    // one todo.add leg per title, every shared flag copied onto each.
+    const { results, undoToken: token } = await runBatch(d, [
+      { op: "todo.add", params: { title: "one", notes: "shared" } },
+      { op: "todo.add", params: { title: "two", notes: "shared" } },
+      { op: "todo.add", params: { title: "three", notes: "shared" } },
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "ok", "ok"]);
+    const uuids = results.map((r) => (r.outcome.kind === "ok" ? r.outcome.uuid : null));
+    // creation order preserved; the shared flag landed on every item
+    expect(uuids.map((u) => row(u as string)?.["title"])).toEqual(["one", "two", "three"]);
+    for (const u of uuids) expect(row(u as string)?.["notes"]).toBe("shared");
+    expect(token).toBeDefined();
+
+    // ONE token removes the whole skeleton — newest-created inverted first.
+    const items = await runUndo(d, auditDirPath, { txn: token as string });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.outcome).toBe("ok");
+    expect(items[0]?.plan.steps.map((s) => s.op)).toEqual([
+      "todo.delete",
+      "todo.delete",
+      "todo.delete",
+    ]);
+    expect(items[0]?.plan.steps.map((s) => s.params["uuid"])).toEqual([
+      uuids[2],
+      uuids[1],
+      uuids[0],
+    ]);
+    for (const u of uuids) expect(row(u as string)?.["trashed"]).toBe(1);
+  });
+
   it("a batch leg is not an independent undo target — the summary is the single undoable unit", async () => {
     const d = deps(vector, auditDirPath);
     const { undoToken: token } = await runBatch(d, [

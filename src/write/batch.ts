@@ -62,6 +62,8 @@ export interface BatchOp {
      * uuid-minting, so tempId-eligible), or the per-leg H-UI-DRIVE gate blocks it.
      */
     dangerouslyDriveGui?: boolean;
+    /** Create any missing tag (mkdir-p for parent/child) instead of failing on an unknown tag. */
+    createTags?: boolean;
     vector?: WriteOptions["vector"];
     verifyTimeoutMs?: number;
     maxDisruption?: WriteOptions["maxDisruption"];
@@ -548,6 +550,7 @@ export async function runBatch(
       ...(entry.options?.dangerouslyDriveGui !== undefined && {
         dangerouslyDriveGui: entry.options.dangerouslyDriveGui,
       }),
+      ...(entry.options?.createTags !== undefined && { createTags: entry.options.createTags }),
       ...(entry.options?.vector !== undefined && { vector: entry.options.vector }),
       ...(entry.options?.verifyTimeoutMs !== undefined && {
         verifyTimeoutMs: entry.options.verifyTimeoutMs,

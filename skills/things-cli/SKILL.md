@@ -46,6 +46,8 @@ Namespaced verb families — run `things <group> --help` for the verbs and `thin
 
 **Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).
 
+**Quick skeletons**: `things todo add "T1" "T2" "T3" [shared flags]` creates several to-dos in one call (every shared flag — `--project`/`--area`/`--heading`/`--when`/`--tags`/… — applies to each; `--stdin` reads titles from stdin, `--id-only` prints just the new uuids one per line for chaining; one `undoToken` removes the whole set). To stand up a new project with children, `things project add "<title>" --todo "T1" --todo "T2" …` (repeatable). For richer per-item metadata or cross-item references, use `things batch`.
+
 ## Going deeper
 
 - [references/model.md](references/model.md) — the full data model, view-membership semantics, and filters.

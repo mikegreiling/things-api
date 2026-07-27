@@ -140,6 +140,76 @@ describe("dry-run plans", () => {
   });
 });
 
+describe("bulk todo add: variadic / --stdin / --id-only", () => {
+  it("variadic add compiles one todo.add leg per title, in order, with the shared flag on each (dry-run)", async () => {
+    await run([
+      "todo",
+      "add",
+      "First",
+      "Second",
+      "Third",
+      "--when",
+      "today",
+      "--dry-run",
+      "--json",
+    ]);
+    const parsed = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    // three per-line dry-run plans + one summary line
+    expect(parsed.slice(0, 3).map((r) => r.outcome.kind)).toEqual([
+      "dry-run",
+      "dry-run",
+      "dry-run",
+    ]);
+    const invs = parsed.slice(0, 3).map((r) => String(r.outcome.plan.invocation));
+    expect(invs[0]).toContain("title=First");
+    expect(invs[1]).toContain("title=Second");
+    expect(invs[2]).toContain("title=Third");
+    // the shared --when flag is applied to EACH title
+    for (const inv of invs) expect(inv).toContain("when=today");
+    const summary = parsed[3].summary;
+    expect(summary.total).toBe(3);
+    // a dry-run mints nothing, so there is no undo token
+    expect(summary.undoToken).toBeUndefined();
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("a single title keeps the single mutation-plan envelope (not a batch stream)", async () => {
+    await run(["todo", "add", "Solo", "--dry-run", "--json"]);
+    const out = stdout.join("").trim().split("\n");
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0] ?? "{}")["kind"]).toBe("mutation-plan");
+  });
+
+  it("--stdin is mutually exclusive with positional titles (usage error, exit 2)", async () => {
+    await run(["todo", "add", "X", "--stdin"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("--stdin is mutually exclusive");
+  });
+
+  it("--id-only and --json are mutually exclusive (usage error, exit 2)", async () => {
+    await run(["todo", "add", "X", "--id-only", "--json"]);
+    expect(process.exitCode).toBe(2);
+    // --json routes the usage error to a JSON envelope on stdout.
+    expect(stdout.join("") + stderr.join("")).toContain("mutually exclusive");
+  });
+
+  it("no titles fails closed (usage error, exit 2)", async () => {
+    await run(["todo", "add"]);
+    expect(process.exitCode).toBe(2);
+    expect(stderr.join("")).toContain("provide at least one title");
+  });
+
+  it("--id-only suppresses all chrome — a single dry-run prints nothing", async () => {
+    await run(["todo", "add", "Solo", "--id-only", "--dry-run"]);
+    expect(stdout.join("")).toBe("");
+    expect(process.exitCode).toBe(0);
+  });
+});
+
 describe("blocked paths (exit 4, nothing executed)", () => {
   it("trash empty without --dangerously-permanent", async () => {
     await run(["trash", "empty", "--json"]);
