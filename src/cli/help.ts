@@ -393,10 +393,12 @@ anchor's container and bucket; a cross-container or cross-bucket anchor fails
 closed (name a destination flag if you meant to MOVE). Selection order = landing
 order: reverse for free by naming them backwards.
 
-PLACEMENT HONESTY. "Top of bucket" is GUARANTEED only where a reorder protocol
-exists — inbox/today/evening/someday-view/project-unheaded/area (needs
-\`config set allow-experimental true\`). Heading, in-container-someday, and future
-day buckets are APP-DEFAULT for now; the result's placement class says which.`,
+PLACEMENT HONESTY. "Top of bucket" is GUARANTEED where a lab-clean protocol
+exists — loose inbox/today/evening/someday, a project's unheaded anytime OR
+someday children, an area's anytime members (needs allow-experimental). It is
+APP-DEFAULT (membership lands, order best-effort) for heading, scheduled-day, and
+area-less-anytime buckets; ordering an area's someday members is refused (it
+de-somedays them). The result's placement class says which you got.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 

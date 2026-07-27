@@ -452,6 +452,103 @@ describe("mixed-bucket membership move (rule 4 — membership always legal)", ()
   });
 });
 
+describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", () => {
+  it("within-PROJECT someday reorder is GUARANTEED (SOMEORD-b — index, start=2 preserved)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "someday", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "someday", index: 2 });
+    const c = seedTodo(fixture.db, { title: "c", project: proj, start: "someday", index: 3 });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [c, a],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.placementClass).toBe("guaranteed");
+    expect(ascending(indexOrder([c, a, b]))).toBe(true);
+  });
+
+  it("within-AREA someday reorder is PROHIBITED — refused as destructive (§9f)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const t1 = seedTodo(fixture.db, { title: "t1", area, start: "someday", index: 1 });
+    seedTodo(fixture.db, { title: "t2", area, start: "someday", index: 2 });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [t1],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("§9f");
+    }
+  });
+
+  it("a container's SCHEDULED-DAY bucket is app-default (DAYORD not wired) — reorder refused unsupported", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const t = seedTodo(fixture.db, {
+      title: "t",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-20",
+      index: 1,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [t],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("unsupported");
+      expect(r.detail).toContain("scheduled day bucket");
+    }
+  });
+
+  it("a repeating TEMPLATE row is unreorderable — reorder refused, never silent (§9e)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      project: proj,
+      recurrenceRule: true,
+      index: 1,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [tmpl],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("template");
+  });
+
+  it("within-HEADING order has no native surface — a reorder is refused unsupported (HEADORD-b)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const h1 = seedTodo(fixture.db, { title: "h1", heading, index: 1 });
+    const h2 = seedTodo(fixture.db, { title: "h2", heading, index: 2 });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [h2],
+      position: { before: h1 },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("unsupported");
+      expect(r.detail).toContain("heading");
+    }
+  });
+
+  it("a membership move UNDER a heading with --before is refused (no in-heading anchor spelling)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const existing = seedTodo(fixture.db, { title: "existing", heading, index: 1 });
+    const mover = seedTodo(fixture.db, { title: "mover", start: "inbox" });
+    const r = await runTodoMove(deps(), {
+      uuids: [mover],
+      destination: { kind: "heading", sel: heading, project: { uuid: proj } },
+      position: { before: existing },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("cannot be honored");
+  });
+});
+
 describe("scope composition (#276): an out-of-scope anchor reads as not-found", () => {
   it("an anchor outside the pinned scope is byte-indistinguishable from a nonexistent one", async () => {
     const area = seedArea(fixture.db, "Work");

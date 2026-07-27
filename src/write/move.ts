@@ -16,12 +16,16 @@
  *   4. mixed-bucket = GUI parity — membership is always legal (each movee lands
  *      top-of-its-own-bucket in selection order); `--before`/`--after` require
  *      every movee in the anchor's bucket;
- *   5. placement honesty — "top of bucket" is GUARANTEED only where a reorder
- *      protocol exists for the destination bucket (the lab-locked scopes:
- *      inbox / today / evening / someday-view / project-unheaded / area); a
- *      heading bucket, an in-container someday bucket, or a scheduled day bucket
- *      is APP-DEFAULT (no HEADORD/SOMEORD/DAYORD verdict yet). The result states
- *      which class applied;
+ *   5. placement honesty — "top of bucket" is GUARANTEED only where a lab-clean
+ *      reorder protocol exists (per the REORDGAPS verdicts,
+ *      docs/lab/reordgaps-results.md): loose inbox/today/evening/someday, a
+ *      project's unheaded anytime OR someday children (SOMEORD-b), an area's
+ *      anytime members, area-less someday/anytime projects. APP-DEFAULT (no
+ *      protocol wired): heading buckets (HEADORD-b), a container's scheduled-day
+ *      bucket (DAYORD-b's todayIndex key not yet wired), area-less loose anytime
+ *      (ANYBNC bounce not wired), repeating templates (§9e). PROHIBITED (a
+ *      destructive protocol we never attempt): an area's someday to-dos (§9f).
+ *      The result states which class applied;
  *   6. compilation via the minimal-move planner (fewest legs; per-scope caps and
  *      bounce abort-honesty apply per leg).
  */
@@ -145,15 +149,20 @@ interface MoveeRow {
   start: number;
   startDate: number | null;
   startBucket: number;
+  /** Repeating TEMPLATE row: the private reorder no-ops on it (§9e addendum). */
+  isTemplate: boolean;
 }
 
 function loadRow(db: DatabaseSync, uuid: string): MoveeRow | undefined {
-  return db
+  const row = db
     .prepare(
-      "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket " +
-        "FROM TMTask WHERE uuid = ?",
+      "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket, " +
+        "rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?",
     )
-    .get(uuid) as MoveeRow | undefined;
+    .get(uuid) as (Omit<MoveeRow, "isTemplate"> & { rule: unknown; repeater: unknown }) | undefined;
+  if (row === undefined) return undefined;
+  const { rule, repeater, ...rest } = row;
+  return { ...rest, isTemplate: rule !== null || repeater !== null };
 }
 
 const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "heading" };
@@ -167,30 +176,102 @@ function scheduleBucket(row: MoveeRow, packedToday: number): string {
   return `scheduled:${row.startDate}`;
 }
 
-type ScopeTarget = { scope: ReorderScope; container?: string } | { scope: null; reason: string };
+/**
+ * A placement target — which reorder protocol (if any) delivers "top of bucket"
+ * for a row's current CONTAINER × display BUCKET, per the REORDGAPS verdicts
+ * (docs/lab/reordgaps-results.md, spec §4 rule 5):
+ *   - a `scope` → GUARANTEED (a lab-clean, non-destructive protocol exists);
+ *   - `{ scope: null }` → APP-DEFAULT (no protocol wired for that bucket yet);
+ *   - `prohibited` → a protocol exists but is DESTRUCTIVE (never attempt it).
+ */
+type ScopeTarget =
+  | { scope: ReorderScope; container?: string }
+  | { scope: null; reason: string; prohibited?: boolean };
 
-/** Where a to-do currently lives, as a reorder scope (or app-default). */
-function todoReorderScope(row: MoveeRow, packedToday: number): ScopeTarget {
-  if (row.heading !== null) return { scope: null, reason: "under a heading" };
-  if (row.project !== null) return { scope: "project", container: row.project };
-  if (row.area !== null) return { scope: "area", container: row.area };
-  // loose:
-  if (row.start === 0) return { scope: "inbox" };
-  if (row.start === 2) return { scope: "someday" };
-  if (row.startDate === null) return { scope: null, reason: "loose anytime" };
-  if (row.startDate <= packedToday) return { scope: row.startBucket === 1 ? "evening" : "today" };
-  return { scope: null, reason: "a future day bucket" };
+/**
+ * The reorder protocol for a row's container × bucket. GUARANTEED set (per the
+ * REORDGAPS verdicts): loose inbox/today/evening/someday; a project's unheaded
+ * anytime OR someday children (SOMEORD-b clean, `index`); an area's anytime
+ * members; area-less someday projects; top-level anytime projects. APP-DEFAULT:
+ * heading buckets (HEADORD-b — no native surface), a container's SCHEDULED-DAY
+ * bucket (DAYORD-b re-ranks `todayIndex` date-preservingly but that per-bucket
+ * key is not wired into the reorder op yet), area-less loose anytime to-dos
+ * (ANYBNC bounce not wired), repeating TEMPLATE rows (§9e — unreorderable).
+ * PROHIBITED: an area's SOMEDAY to-dos (the area specifier de-somedays them,
+ * §9f — never attempt).
+ */
+function reorderTargetOf(row: MoveeRow, isTodo: boolean, packedToday: number): ScopeTarget {
+  if (row.isTemplate) {
+    return { scope: null, reason: "a repeating template (unreorderable — oddity §9e)" };
+  }
+  const bucket = scheduleBucket(row, packedToday);
+  const scheduledDay =
+    bucket === "today" || bucket === "evening" || bucket.startsWith("scheduled:");
+  if (isTodo) {
+    if (row.heading !== null) {
+      return { scope: null, reason: "under a heading (no native order surface — HEADORD-b)" };
+    }
+    if (row.project !== null) {
+      // Project unheaded: anytime + someday re-rank cleanly by index (O04,
+      // SOMEORD-b); a scheduled day bucket needs the todayIndex key (DAYORD-b),
+      // not wired into the reorder op yet.
+      return scheduledDay
+        ? {
+            scope: null,
+            reason: "a scheduled day bucket (container todayIndex reorder — DAYORD, not wired)",
+          }
+        : { scope: "project", container: row.project };
+    }
+    if (row.area !== null) {
+      if (bucket === "someday") {
+        return {
+          scope: null,
+          reason: "an area's someday members (the area reorder de-somedays them — oddity §9f)",
+          prohibited: true,
+        };
+      }
+      return scheduledDay
+        ? {
+            scope: null,
+            reason: "a scheduled day bucket (container todayIndex reorder — DAYORD, not wired)",
+          }
+        : { scope: "area", container: row.area };
+    }
+    // loose:
+    if (bucket === "inbox") return { scope: "inbox" };
+    if (bucket === "someday") return { scope: "someday" };
+    if (bucket === "today") return { scope: "today" };
+    if (bucket === "evening") return { scope: "evening" };
+    if (bucket === "anytime") {
+      return { scope: null, reason: "area-less loose anytime (ANYBNC bounce — not wired)" };
+    }
+    return { scope: null, reason: "a future day bucket (Upcoming re-dates — oddity §9g)" };
+  }
+  // projects:
+  if (row.area !== null) {
+    return scheduledDay || bucket === "someday"
+      ? { scope: null, reason: "a scheduled/someday project inside an area (app-default)" }
+      : { scope: "area", container: row.area };
+  }
+  if (bucket === "someday") return { scope: "someday" };
+  if (bucket === "anytime") return { scope: "projects" };
+  return { scope: null, reason: "a scheduled day bucket (app-default)" };
 }
 
-/** Where a project currently lives, as a reorder scope (or app-default). */
-function projectReorderScope(row: MoveeRow): ScopeTarget {
-  if (row.area !== null) return { scope: "area", container: row.area };
-  if (row.start === 2) return { scope: "someday" };
-  if (row.startDate === null) return { scope: "projects" };
-  return { scope: null, reason: "a scheduled day bucket" };
+/**
+ * The STRUCTURAL container a row shares with its siblings — the rule-2 span key.
+ * Distinct from the reorder target: two in-project to-dos with different
+ * schedules share ONE structural container (their project) but different display
+ * buckets (a rule-4 concern, not a rule-2 span).
+ */
+function structuralKey(row: MoveeRow, packedToday: number): string {
+  if (row.heading !== null) return `heading:${row.heading}`;
+  if (row.project !== null) return `project:${row.project}`;
+  if (row.area !== null) return `area:${row.area}`;
+  return `list:${scheduleBucket(row, packedToday)}`;
 }
 
-/** A stable key identifying the container a row shares with its siblings. */
+/** A stable key for a placement target (guaranteed scope, or its app/prohibited reason). */
 function containerKey(target: ScopeTarget): string {
   if (target.scope === null) return `app:${target.reason}`;
   return target.container !== undefined ? `${target.scope}:${target.container}` : target.scope;
@@ -340,6 +421,20 @@ export async function runTodoMove(
     }
   }
 
+  // Where the movees will LAND (computed pre-membership from the destination +
+  // each movee's kept schedule) — drives the placement class and the pre-flight
+  // anchor check.
+  const landing = uniformLanding(
+    rows.map((r) => todoLandedRow(deps, dest, r)),
+    true,
+    packedToday,
+  );
+  // Fail-closed BEFORE any membership leg: an explicit --before/--after into a
+  // destination bucket with no guaranteed protocol cannot be honored, so refuse
+  // the whole move rather than move-then-drop-the-position (rule 5 honesty).
+  const anchorRefusal = preflightAnchor(op, position, landing);
+  if (anchorRefusal !== null) return anchorRefusal;
+
   // Membership legs (rule 1: selection order). Each movee gets one todo.move.
   const legParams = membershipLeg(deps, dest, rows, options);
   if ("refused" in legParams) return legParams.refused;
@@ -362,10 +457,24 @@ export async function runTodoMove(
     }
   }
 
-  // Placement (rules 4/5): reorder the movees within the destination bucket,
-  // when a reorder protocol exists there; otherwise app-default with a note.
-  const landing = todoLandingScope(deps, dest, rows, packedToday);
   return finishPlacement(deps, op, rows, landing, position, packedToday, options, membership);
+}
+
+/** Pre-flight refusal for an explicit anchor into a no-protocol destination bucket. */
+function preflightAnchor(
+  op: "todo.move" | "project.move",
+  position: MovePosition | undefined,
+  landing: ScopeTarget,
+): MoveRefused | null {
+  if (position === undefined || !("before" in position || "after" in position)) return null;
+  if (landing.scope !== null) return null;
+  return refused(
+    op,
+    landing.prohibited === true ? "blocked" : "unsupported",
+    `--before/--after cannot be honored in the destination (${describeScope(landing)}) — ` +
+      "no reorder protocol positions within that bucket",
+    "use --first/--last, or omit the position (membership still lands)",
+  );
 }
 
 interface MembershipPlan {
@@ -463,58 +572,49 @@ function membershipLeg(
   return { legs };
 }
 
-/** The reorder scope the movees LAND in after a membership move. */
-function todoLandingScope(
-  deps: WriteDeps,
-  dest: TodoMoveDestination,
-  rows: MoveeRow[],
-  packedToday: number,
-): ScopeTarget {
+/** The row a to-do BECOMES after a membership move (schedule kept unless it resets). */
+function todoLandedRow(deps: WriteDeps, dest: TodoMoveDestination, row: MoveeRow): MoveeRow {
   switch (dest.kind) {
     case "project": {
-      if (dest.heading !== undefined) return { scope: null, reason: "under a heading" };
       const p = resolveProject(deps.db, dest.ref);
-      return p.resolved !== null
-        ? { scope: "project", container: p.resolved.uuid }
-        : { scope: null, reason: "an unresolved project" };
+      return {
+        ...row,
+        project: p.resolved?.uuid ?? null,
+        area: null,
+        heading: dest.heading !== undefined ? "landed-heading" : null,
+      };
     }
     case "heading":
-      return { scope: null, reason: "under a heading" };
+      // Under a heading — the exact heading uuid does not matter to the target
+      // classifier (a heading bucket is app-default regardless); mark it headed.
+      return { ...row, heading: "landed-heading", area: null };
     case "area": {
       const a = resolveArea(deps.db, dest.ref);
-      return a.resolved !== null
-        ? { scope: "area", container: a.resolved.uuid }
-        : { scope: null, reason: "an unresolved area" };
+      return { ...row, area: a.resolved?.uuid ?? null, project: null, heading: null };
     }
     case "inbox":
-      return { scope: "inbox" };
+      return { ...row, start: 0, startDate: null, project: null, area: null, heading: null };
     case "no-heading": {
-      // Lands in the CURRENT project's unheaded block.
-      const container = rows[0]?.project ?? headingProjectOf(deps.db, rows[0]?.heading ?? null);
-      return container !== null && container !== undefined
-        ? { scope: "project", container }
-        : { scope: null, reason: "no project" };
+      const container = row.project ?? headingProjectOf(deps.db, row.heading);
+      return { ...row, project: container, area: null, heading: null };
     }
-    case "loose": {
-      // Keeps the schedule; landing scope is schedule-based. Uniform → use it.
-      const scopes = new Set(
-        rows.map((r) => {
-          const stripped: MoveeRow = { ...r, project: null, area: null, heading: null };
-          return containerKey(todoReorderScope(stripped, packedToday));
-        }),
-      );
-      if (scopes.size !== 1) return { scope: null, reason: "mixed loose buckets" };
-      const stripped: MoveeRow = {
-        ...(rows[0] as MoveeRow),
-        project: null,
-        area: null,
-        heading: null,
-      };
-      return todoReorderScope(stripped, packedToday);
-    }
+    case "loose":
+      return { ...row, project: null, area: null, heading: null };
     default:
-      return { scope: null, reason: "app-default" };
+      return row;
   }
+}
+
+/** The uniform landing target across the movees (app-default when they diverge). */
+function uniformLanding(landed: MoveeRow[], isTodo: boolean, packedToday: number): ScopeTarget {
+  const targets = landed.map((r) => reorderTargetOf(r, isTodo, packedToday));
+  const keys = new Set(targets.map(containerKey));
+  return keys.size === 1
+    ? (targets[0] as ScopeTarget)
+    : {
+        scope: null,
+        reason: "the movees span display buckets in the destination (per-bucket app-default)",
+      };
 }
 
 function headingProjectOf(db: DatabaseSync, headingUuid: string | null): string | null {
@@ -595,6 +695,16 @@ export async function runProjectMove(
     return repositionInPlace(deps, op, rows, position, packedToday, options, "move");
   }
 
+  const landedArea =
+    dest.kind === "area" ? (resolveArea(deps.db, dest.ref).resolved?.uuid ?? null) : null;
+  const landing = uniformLanding(
+    rows.map((r) => ({ ...r, area: landedArea })),
+    false,
+    packedToday,
+  );
+  const anchorRefusal = preflightAnchor(op, position, landing);
+  if (anchorRefusal !== null) return anchorRefusal;
+
   // Membership legs.
   const membership: MutationResult[] = [];
   for (const r of rows) {
@@ -618,25 +728,7 @@ export async function runProjectMove(
     }
   }
 
-  const landing = projectLandingScope(deps, dest, rows);
   return finishPlacement(deps, op, rows, landing, position, packedToday, options, membership);
-}
-
-function projectLandingScope(
-  deps: WriteDeps,
-  dest: ProjectMoveDestination,
-  rows: MoveeRow[],
-): ScopeTarget {
-  if (dest.kind === "area") {
-    const a = resolveArea(deps.db, dest.ref);
-    return a.resolved !== null
-      ? { scope: "area", container: a.resolved.uuid }
-      : { scope: null, reason: "an unresolved area" };
-  }
-  // --no-area: the projects become area-less. Landing scope by schedule.
-  const scopes = new Set(rows.map((r) => containerKey(projectReorderScope({ ...r, area: null }))));
-  if (scopes.size !== 1) return { scope: null, reason: "mixed buckets" };
-  return projectReorderScope({ ...(rows[0] as MoveeRow), area: null });
 }
 
 // ----------------------------------------------------------------- reorder verb
@@ -709,13 +801,12 @@ async function repositionInPlace(
   verb: "move" | "reorder",
 ): Promise<MoveResult> {
   const isTodo = op === "todo.move";
-  const scopeOf = (r: MoveeRow): ScopeTarget =>
-    isTodo ? todoReorderScope(r, packedToday) : projectReorderScope(r);
+  const targetOf = (r: MoveeRow): ScopeTarget => reorderTargetOf(r, isTodo, packedToday);
 
-  // One shared container (rule 2 / the cross-container guard).
-  const keys = new Set(rows.map((r) => containerKey(scopeOf(r))));
+  // One shared STRUCTURAL container (rule 2 / the cross-container guard).
+  const keys = new Set(rows.map((r) => structuralKey(r, packedToday)));
   if (keys.size !== 1) {
-    const where = rows.map((r) => `${r.uuid} in ${describeScope(scopeOf(r))}`).join("; ");
+    const where = rows.map((r) => `${r.uuid} in ${describeScope(targetOf(r))}`).join("; ");
     return refused(
       op,
       "blocked",
@@ -725,12 +816,17 @@ async function repositionInPlace(
         : "reorder items that already share one container and bucket, or move them together first",
     );
   }
-  const target = scopeOf(rows[0] as MoveeRow);
+  const target = targetOf(rows[0] as MoveeRow);
   if (target.scope === null) {
+    // A prohibited bucket has a destructive protocol we NEVER attempt (§9f); an
+    // app-default bucket simply has no wired protocol. Both refuse a reorder
+    // (an explicit rearrange we cannot honor honestly), but with distinct copy.
     return refused(
       op,
-      "unsupported",
-      `these items are in ${describeScope(target)} — no reorder protocol addresses that bucket yet`,
+      target.prohibited === true ? "blocked" : "unsupported",
+      target.prohibited === true
+        ? `these items are ${describeScope(target)} — reordering them there is destructive, so it is refused`
+        : `these items are in ${describeScope(target)} — no reorder protocol addresses that bucket yet`,
       "see the placement-honesty note in `things help move`",
     );
   }
@@ -769,11 +865,11 @@ async function repositionInPlace(
     const anchorRow = loadRow(deps.db, anchorUuid);
     if (anchorRow === undefined)
       return refused(op, "usage", `the anchor "${anchorRef}" was not found`);
-    if (containerKey(scopeOf(anchorRow)) !== containerKey(target)) {
+    if (structuralKey(anchorRow, packedToday) !== structuralKey(rows[0] as MoveeRow, packedToday)) {
       return refused(
         op,
         "blocked",
-        `the anchor ${anchorUuid} is in ${describeScope(scopeOf(anchorRow))}, not the movees' ` +
+        `the anchor ${anchorUuid} is in ${describeScope(targetOf(anchorRow))}, not the movees' ` +
           `container (${describeScope(target)}) — an anchor positions, it never migrates`,
         "move the items into the anchor's container explicitly, or pick an anchor that shares it",
       );
@@ -860,21 +956,23 @@ async function finishPlacement(
 
   // Anchor with a membership move: the anchor must be in the destination
   // (rule 2) and share the movees' bucket (rule 4). Validated against post-move
-  // truth.
+  // truth. When the destination bucket has no guaranteed protocol we now REFUSE
+  // an explicit --before/--after (we KNOW no honest spelling exists there —
+  // HEADORD-b/§9f) rather than silently app-default it.
   if (position !== undefined && ("before" in position || "after" in position)) {
     if (landing.scope === null) {
-      return {
-        kind: "move-ok",
+      return refused(
         op,
-        movees: moveeTitles,
-        membership,
-        placement: null,
-        placementClass: "app-default",
-        note:
-          `moved into ${describeScope(landing)}, which has no reorder protocol — --before/--after ` +
-          "cannot be honored there; placement is app-default",
-      };
+        landing.prohibited === true ? "blocked" : "unsupported",
+        `moved into ${describeScope(landing)} — --before/--after cannot be honored there; ` +
+          "no reorder protocol positions within that bucket",
+        "use --first/--last, or omit the position (membership still lands)",
+      );
     }
+    const destStructural =
+      landing.container !== undefined
+        ? `${landing.scope}:${landing.container}`
+        : `list:${landing.scope}`;
     const anchorRef = "before" in position ? position.before : position.after;
     const ar = resolveMovee(deps, anchorRef);
     if (ar instanceof ReferenceResolutionError) {
@@ -887,13 +985,7 @@ async function finishPlacement(
       };
     }
     const anchorRow = loadRow(deps.db, ar.uuid);
-    const anchorScope =
-      anchorRow === undefined
-        ? null
-        : op === "todo.move"
-          ? containerKey(todoReorderScope(anchorRow, packedToday))
-          : containerKey(projectReorderScope(anchorRow));
-    if (anchorRow === undefined || anchorScope !== containerKey(landing)) {
+    if (anchorRow === undefined || structuralKey(anchorRow, packedToday) !== destStructural) {
       return refused(
         op,
         "blocked",
@@ -915,6 +1007,8 @@ async function finishPlacement(
   }
 
   if (landing.scope === null) {
+    // Membership landed; the destination bucket has no guaranteed protocol (or a
+    // prohibited/destructive one we never attempt) — app-default placement, honest.
     return {
       kind: "move-ok",
       op,
@@ -922,7 +1016,12 @@ async function finishPlacement(
       membership,
       placement: null,
       placementClass: "app-default",
-      note: `membership moved; landed in ${describeScope(landing)} — no reorder protocol addresses that bucket yet (app-default placement, see spec rule 5)`,
+      note:
+        `membership moved; landed in ${describeScope(landing)} — ` +
+        (landing.prohibited === true
+          ? "ordering there is destructive so it was NOT attempted (the app placed it); "
+          : "no reorder protocol addresses that bucket yet; ") +
+        "app-default placement (spec rule 5)",
     };
   }
 
