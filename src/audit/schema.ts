@@ -41,6 +41,13 @@ export interface AuditRecord {
    * apart from a nonexistent one. Absent on ordinary (non-undo) mutations.
    */
   undoOf?: string;
+  /**
+   * Client idempotency id (ADDITIVE): a caller-supplied id for a batch line,
+   * recorded so a resubmitted batch can recognize an already-applied line (a
+   * later submission with the same `opId` on an `ok` record is skipped instead
+   * of re-created). Absent on records with no client idempotency id.
+   */
+  opId?: string;
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */

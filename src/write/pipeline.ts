@@ -84,6 +84,12 @@ export interface WriteOptions extends Acknowledgements {
    */
   undoOf?: string;
   /**
+   * Client idempotency id for a batch line (set by the batch orchestrator, not
+   * callers): recorded on the audit record so a resubmitted batch can skip an
+   * already-applied line. Additive; never affects dispatch.
+   */
+  opId?: string;
+  /**
    * Consumer IANA zone for THIS write, overriding the client's default zone.
    * Only affects the clock-relative `when` tokens (today/evening) when
    * {@link normalizeWhen} is set. Reminder times stay wall-clock and untranslated.
@@ -197,6 +203,12 @@ export interface WriteDeps {
   scope?: ResolvedScope;
   poller?: PollerDeps;
   pkgVersion?: string;
+  /**
+   * Audit-trail directory (client-wired): read by `runBatch` for the opId
+   * idempotency lookback. Absent = no lookback (opId dedup is a no-op), which is
+   * the correct degraded behavior when the trail is unavailable.
+   */
+  auditDirPath?: string;
 }
 
 export function readAuthToken(db: DatabaseSync): string | null {
@@ -408,6 +420,7 @@ export async function runMutation<K extends OperationKind>(
       requested: params as Record<string, unknown>,
       ...(options.txn !== undefined && { txn: options.txn }),
       ...(options.undoOf !== undefined && { undoOf: options.undoOf }),
+      ...(options.opId !== undefined && { opId: options.opId }),
       pre: null,
       observed: null,
       verify: null,

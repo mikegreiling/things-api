@@ -1511,6 +1511,35 @@ export function planUndo(
       };
     }
 
+    // A batch submission's summary record: undo the WHOLE submission by
+    // replaying each ok leg's inverse in REVERSE leg order — the same
+    // compound-summary machinery heading.archive's reparent path uses. A leg
+    // with no validated inverse is skipped with a note (established behavior for
+    // irreversible legs). A batch LEG on its own is not an undo target (excluded
+    // by undoableRecords, like every compound leg) — undo the batch by its token.
+    case "batch": {
+      if (record.txn?.role !== "summary") {
+        return irreversible(
+          "a batch leg is not undone on its own — undo the whole batch by its token",
+        );
+      }
+      const txnId = record.txn.id;
+      const legs = allRecords.filter(
+        (r) => r.txn?.id === txnId && r.txn?.role === "leg" && r.result === "ok",
+      );
+      const steps: UndoStep[] = [];
+      for (const leg of legs.toReversed()) {
+        const legPlan = planUndo(leg, now, allRecords);
+        if (legPlan.kind === "invertible") steps.push(...legPlan.steps);
+        else notes.push(`batch leg ${leg.op} (${leg.uuid ?? "?"}) is not invertible: skipped`);
+      }
+      if (steps.length === 0) {
+        return irreversible("this batch has no invertible legs — nothing to undo");
+      }
+      notes.push(`replays ${legs.length} batch leg(s) in reverse`);
+      return { target, kind: "invertible", steps, notes };
+    }
+
     default:
       return irreversible(`no inverse is defined for operation "${record.op}"`);
   }
