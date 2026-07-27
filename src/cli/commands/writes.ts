@@ -34,6 +34,7 @@ import {
   type ConfigKeyView,
   type DisruptionTier,
   type EnvelopeMeta,
+  type HeadingPlacement,
   type OperationKind,
   type ReorderResult,
   type ReorderScope,
@@ -123,6 +124,44 @@ function addCreateTagsFlag(cmd: Command): Command {
 /** WriteOptions extra carrying createTags when the flag is set. */
 function createTagsExtra(opts: Record<string, unknown>): Partial<WriteOptions> {
   return opts["createTags"] === true ? { createTags: true } : {};
+}
+
+/** Heading selector help string (exact title or uuid — never an ordinal). */
+const HEADING_SEL_HELP = "heading selector: exact title or uuid";
+
+/** The four heading-placement flags (spec §2), shared by add/move-heading. */
+function addPlacementFlags(cmd: Command): Command {
+  return cmd
+    .option("--first", "place it first among the project's headings")
+    .option("--last", "place it last among the project's headings")
+    .option("--before-heading <sel>", "place it immediately before this heading (title or uuid)")
+    .option("--after-heading <sel>", "place it immediately after this heading (title or uuid)");
+}
+
+function countPlacementFlags(opts: Record<string, unknown>): number {
+  return [
+    opts["first"] === true,
+    opts["last"] === true,
+    opts["beforeHeading"] !== undefined,
+    opts["afterHeading"] !== undefined,
+  ].filter(Boolean).length;
+}
+
+/** Build the resolved placement from the flags, resolving anchor selectors. */
+function headingPlacement(
+  c: ThingsClient,
+  projectUuid: string,
+  opts: Record<string, unknown>,
+): HeadingPlacement | undefined {
+  if (opts["first"] === true) return { position: "first" };
+  if (opts["last"] === true) return { position: "last" };
+  if (opts["beforeHeading"] !== undefined) {
+    return { before: c.resolve.heading(projectUuid, opts["beforeHeading"] as string).uuid };
+  }
+  if (opts["afterHeading"] !== undefined) {
+    return { after: c.resolve.heading(projectUuid, opts["afterHeading"] as string).uuid };
+  }
+  return undefined;
 }
 
 /** Add the mandatory GUI-drive acknowledgement to a ui-vector command. */
@@ -1024,103 +1063,180 @@ export function registerWriteCommands(program: Command): void {
     );
   }
 
-  const heading = group(program, "heading", "Heading-scoped operations");
+  const project = group(program, "project", "Project-scoped operations");
+
+  // --- project headings (spec §2) ------------------------------------------
+  // A heading exists only inside a project. Each verb takes <project-ref> then
+  // a heading selector: an exact title OR a uuid (never an ordinal — an index
+  // silently re-targets a different heading after any reorder). An empty-string
+  // title selects a titleless heading; duplicates fail closed with uuid
+  // candidates.
+
+  addPlacementFlags(
+    addWriteFlags(
+      project
+        .command("add-heading <project> <title>")
+        .description(
+          "Create a heading inside an existing project; its uuid is printed on success. The " +
+            "project must name an existing project (uuid or unique name). Uses the Things proxy " +
+            "shortcuts — run `things setup shortcuts` once first. By default the heading is " +
+            "appended; a placement flag positions it among the project's headings (that leg " +
+            "needs `things config set allow-experimental true`).",
+        ),
+    ),
+  ).action(
+    async (projectRef: string, title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      if (countPlacementFlags(opts) > 1) {
+        usageError(
+          opts,
+          "pass at most one of --first / --last / --before-heading / --after-heading",
+        );
+        return;
+      }
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const placement = headingPlacement(c, proj.uuid, opts);
+        return c.write.addHeading({ uuid: proj.uuid }, title, placement, writeOptionsFrom(opts));
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("add <project> <title>")
+    project
+      .command("rename-heading <project> <heading>")
       .description(
-        "Create a heading inside an existing project; its uuid is printed on success. The " +
-          "project must name an existing project (uuid or unique name). This uses the Things " +
-          "proxy shortcuts — run `things setup shortcuts` once first.",
-      ),
-  ).action(async (project: string, title: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) =>
-      c.write.addHeading({ uuid: project, title: project }, title, writeOptionsFrom(opts)),
-    );
-  });
+        `Rename a heading in place (works on archived headings too). <heading> is a ${HEADING_SEL_HELP}.`,
+      )
+      .requiredOption("--to <title>", "the new heading title"),
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        return c.write.renameHeading(h.uuid, opts["to"] as string, writeOptionsFrom(opts));
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("rename <uuid> <title>")
-      .description("Rename a heading in place (works on archived headings too)."),
-  ).action(async (uuid: string, title: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) => c.write.renameHeading(uuid, title, writeOptionsFrom(opts)));
-  });
-
-  addWriteFlags(
-    heading
-      .command("archive <uuid>")
+    project
+      .command("archive-heading <project> <heading>")
       .description(
         "Archive a heading — it leaves the active project view (reversible with " +
-          "`things heading unarchive`). This is the preferred way to retire a heading: " +
+          "`things project unarchive-heading`). This is the preferred way to retire a heading: " +
           "row DELETION exists only in the app's UI and Shortcuts with a per-run consent " +
           "dialog, never headlessly. With open children, --children is required: " +
           "complete/cancel resolve them with the heading (one atomic cascade); reparent " +
           "moves them to the project root first, keeping them open — a compound sequence " +
-          "that `things undo` reverses as one unit.",
+          `that \`things undo\` reverses as one unit. <heading> is a ${HEADING_SEL_HELP}.`,
       )
       .option(
         "--children <policy>",
         "complete | cancel | reparent (required when children are open)",
       ),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
-    await runWrite(opts, async (c) => {
-      const outcome = await c.write.archiveHeading(
-        uuid,
-        children ? { children } : {},
-        writeOptionsFrom(opts),
-      );
-      for (const leg of outcome.reparented) {
-        process.stderr.write(`reparented: ${leg.title} (${leg.result.kind})\n`);
-      }
-      return outcome.heading;
-    });
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
+      await runWrite(opts, async (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        const outcome = await c.write.archiveHeading(
+          h.uuid,
+          children ? { children } : {},
+          writeOptionsFrom(opts),
+        );
+        for (const leg of outcome.reparented) {
+          process.stderr.write(`reparented: ${leg.title} (${leg.result.kind})\n`);
+        }
+        return outcome.heading;
+      });
+    },
+  );
 
   addWriteFlags(
-    heading
-      .command("unarchive <uuid>")
+    project
+      .command("unarchive-heading <project> <heading>")
       .description(
         "Un-archive a heading. --restore-children also reopens the children the archive " +
           "cascade resolved with it (identified by matching resolution timestamps; a " +
           "someday child comes back as someday). Children resolved at other times are " +
-          "never touched.",
+          `never touched. <heading> is a ${HEADING_SEL_HELP}.`,
       )
       .option("--restore-children", "reopen cascade-resolved children too"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    await runWrite(opts, async (c) => {
-      const outcome = await c.write.unarchiveHeading(
-        uuid,
-        opts["restoreChildren"] === true ? { restoreChildren: true } : {},
-        writeOptionsFrom(opts),
-      );
-      for (const child of outcome.children) {
-        process.stderr.write(`restored: ${child.title} (${child.result.kind})\n`);
-      }
-      return outcome.heading;
-    });
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, async (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        const outcome = await c.write.unarchiveHeading(
+          h.uuid,
+          opts["restoreChildren"] === true ? { restoreChildren: true } : {},
+          writeOptionsFrom(opts),
+        );
+        for (const child of outcome.children) {
+          process.stderr.write(`restored: ${child.title} (${child.result.kind})\n`);
+        }
+        return outcome.heading;
+      });
+    },
+  );
 
   addDriveGuiFlag(
     addWriteFlags(
-      heading
-        .command("convert-to-project <uuid>")
+      project
+        .command("promote-heading <project> <heading>")
         .description(
-          "Convert a heading into a project. This REPLACES the heading with a new project — it " +
+          "Promote a heading into a project. This REPLACES the heading with a new project — it " +
             "is promoted alongside its parent project (into the same area) and the heading's " +
             "to-dos move under the new project. The heading's identity is gone and it cannot be " +
-            "undone. The new project's uuid is printed on success.",
+            `undone. The new project's uuid is printed on success. <heading> is a ${HEADING_SEL_HELP}.`,
         ),
     ),
-  ).action(async (uuid: string, opts: WriteFlagOpts) => {
-    await runWrite(opts, (c) =>
-      c.write.run("heading.convert-to-project", { uuid }, writeOptionsFrom(opts)),
-    );
-  });
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        return c.write.run("project.promote-heading", { uuid: h.uuid }, writeOptionsFrom(opts));
+      });
+    },
+  );
 
-  const project = group(program, "project", "Project-scoped operations");
+  addPlacementFlags(
+    addWriteFlags(
+      project
+        .command("move-heading <project> <headings...>")
+        .description(
+          "Reposition one or more of a project's headings as an ordered block — the selection " +
+            "order is the resulting order, and each heading's to-dos follow it. Pass exactly one " +
+            "placement: --first, --last, --before-heading <sel>, or --after-heading <sel>. Each " +
+            `<heading> is a ${HEADING_SEL_HELP}. Reordering headings rides the same experimental ` +
+            "surface as `things reorder` — enable it once with `things config set " +
+            "allow-experimental true`.",
+        ),
+    ),
+  ).action(
+    async (projectRef: string, sels: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+      if (countPlacementFlags(opts) !== 1) {
+        usageError(
+          opts,
+          "pass exactly one of --first / --last / --before-heading / --after-heading",
+        );
+        return;
+      }
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const headings = sels.map((s) => c.resolve.heading(proj.uuid, s).uuid);
+        const placement = headingPlacement(c, proj.uuid, opts) as HeadingPlacement;
+        return c.write.moveHeading(
+          { uuid: proj.uuid },
+          headings,
+          placement,
+          writeOptionsFrom(opts),
+        );
+      });
+    },
+  );
 
   // --- ui vector: repeating-project transforms (two-key gated) -------------
   addDriveGuiFlag(
@@ -1962,23 +2078,23 @@ export function registerWriteCommands(program: Command): void {
       .description(
         "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
           "area-less someday projects — one kind per call), a " +
-          "project's to-dos, a project's HEADINGS, an area, or the top-level sidebar " +
+          "project's to-dos, an area, or the top-level sidebar " +
           "projects — uuids are placed at the TOP in the given order; unlisted members " +
           "keep their relative order below. Strategies: native (EXPERIMENTAL — requires " +
           "`things config set allow-experimental true` and may stop working after a " +
-          "Things update; today/inbox/someday/project/headings/area) and bounce " +
+          "Things update; today/inbox/someday/project/area) and bounce " +
           `(today/evening/projects, max ${BOUNCE_MAX_ITEMS} items; an interrupted run ` +
           "reports which items were placed). Evening and projects (top-level sidebar " +
           "order — each project takes a brief someday/anytime round-trip) are " +
-          "bounce-only. Project children under headings cannot be reordered; reordering " +
-          "a heading carries its children with it. Area scope reorders to-dos OR " +
-          "projects — never mixed in one request.",
+          "bounce-only. Project children under headings cannot be reordered; to reorder " +
+          "the HEADINGS themselves (children follow) use `things project move-heading`. " +
+          "Area scope reorders to-dos OR projects — never mixed in one request.",
       )
       .requiredOption(
         "--scope <scope>",
-        "today | evening | inbox | someday | project | headings | area | projects",
+        "today | evening | inbox | someday | project | area | projects",
       )
-      .option("--project <ref>", "project (uuid or unique name) — scope=project|headings")
+      .option("--project <ref>", "project (uuid or unique name) — scope=project")
       .option("--area <ref>", "area (uuid or unique name) — scope=area")
       .option("--strategy <name>", "force native | bounce (default: per-scope)"),
   ).action(async (uuids: string[], opts: WriteFlagOpts & Record<string, unknown>) => {

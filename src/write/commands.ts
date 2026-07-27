@@ -27,6 +27,7 @@ import {
   childTagTitles,
   classifyHeadingConvert,
   classifyProjectRepeat,
+  computeHeadingMovePre,
   computeReorderPre,
   emptyPreState,
   loadTarget,
@@ -1335,7 +1336,7 @@ const reorder: CommandSpec<"reorder"> = {
   preRead(db, params, now) {
     const pre = emptyPreState();
     let containerUuid: string | null = null;
-    if (params.scope === "project" || params.scope === "headings") {
+    if (params.scope === "project") {
       pre.destProject = resolveProject(db, params.container ?? {});
       containerUuid = pre.destProject.resolved?.uuid ?? null;
     }
@@ -1361,7 +1362,7 @@ const reorder: CommandSpec<"reorder"> = {
   compile(params, vector, pre) {
     if (vector !== "applescript") unsupportedVector(this.op, vector);
     const specifier =
-      params.scope === "project" || params.scope === "headings"
+      params.scope === "project"
         ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
         : params.scope === "area"
           ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
@@ -1527,8 +1528,8 @@ function headingChildren(db: DatabaseSync, headingUuid: string): Todo[] {
   return todos;
 }
 
-const headingRename: CommandSpec<"heading.rename"> = {
-  op: "heading.rename",
+const headingRename: CommandSpec<"project.rename-heading"> = {
+  op: "project.rename-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1550,8 +1551,8 @@ const headingRename: CommandSpec<"heading.rename"> = {
   },
 };
 
-const headingArchive: CommandSpec<"heading.archive"> = {
-  op: "heading.archive",
+const headingArchive: CommandSpec<"project.archive-heading"> = {
+  op: "project.archive-heading",
   hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-CHILDREN"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1603,8 +1604,8 @@ const headingArchive: CommandSpec<"heading.archive"> = {
   },
 };
 
-const headingUnarchive: CommandSpec<"heading.unarchive"> = {
-  op: "heading.unarchive",
+const headingUnarchive: CommandSpec<"project.unarchive-heading"> = {
+  op: "project.unarchive-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1624,8 +1625,8 @@ const headingUnarchive: CommandSpec<"heading.unarchive"> = {
   },
 };
 
-const headingAdd: CommandSpec<"heading.add"> = {
-  op: "heading.add",
+const headingAdd: CommandSpec<"project.add-heading"> = {
+  op: "project.add-heading",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
     const pre = emptyPreState();
@@ -1658,6 +1659,34 @@ const headingAdd: CommandSpec<"heading.add"> = {
       title: params.title,
       project: pre.destProject?.resolved?.uuid ?? "",
     });
+  },
+};
+
+const projectMoveHeading: CommandSpec<"project.move-heading"> = {
+  op: "project.move-heading",
+  hazards: ["H-UNKNOWN-DESTINATION", "H-HEADING-ORDER"],
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.destProject = resolveProject(db, params.project);
+    pre.headingMove = computeHeadingMovePre(db, pre.destProject, params.headings, params.placement);
+    return pre;
+  },
+  expectedDelta(pre) {
+    // The reorder wire re-ranks the FULL heading list; verify the whole target
+    // order (strictly ascending "index"). Children follow their heading (scf
+    // P1), so no per-child assertion is needed.
+    return { mode: "ordering", key: "index", sequence: pre.headingMove?.targetOrder ?? [] };
+  },
+  compile(_params, vector, pre) {
+    // The same native private-reorder wire the old `reorder --scope headings`
+    // used (experimental — gated by allow-experimental + the sdef canary),
+    // fed the computed full order.
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const order = pre.headingMove?.targetOrder ?? [];
+    return osa(
+      `${PRIVATE_REORDER_COMMAND} project id ${q(pre.destProject?.resolved?.uuid ?? "")} ` +
+        `with ids ${q(order.join(","))}`,
+    );
   },
 };
 
@@ -2087,8 +2116,8 @@ const todoConvertToProject: CommandSpec<"todo.convert-to-project"> = {
   },
 };
 
-const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
-  op: "heading.convert-to-project",
+const headingConvertToProject: CommandSpec<"project.promote-heading"> = {
+  op: "project.promote-heading",
   hazards: UI_HAZARDS,
   preRead(db, params) {
     const pre = emptyPreState();
@@ -2126,7 +2155,7 @@ const headingConvertToProject: CommandSpec<"heading.convert-to-project"> = {
       // refuse here means a parentless heading (or one absent from its project's
       // heading set) slipped past — fail loud rather than drive the wrong row.
       throw new Error(
-        `heading.convert-to-project: ${tax?.kind === "refuse" ? tax.detail : "no heading taxonomy resolved (guard bypassed?)"}`,
+        `project.promote-heading: ${tax?.kind === "refuse" ? tax.detail : "no heading taxonomy resolved (guard bypassed?)"}`,
       );
     }
     return uiDrive(headingConvertToProjectRecipe(tax.projectReveal, tax.ordinal));
@@ -2288,17 +2317,18 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.set-tags": projectSetTags,
   "todo.backdate": todoBackdate,
   "todo.add-logged": todoAddLogged,
-  "heading.rename": headingRename,
-  "heading.archive": headingArchive,
-  "heading.unarchive": headingUnarchive,
-  "heading.add": headingAdd,
+  "project.add-heading": headingAdd,
+  "project.rename-heading": headingRename,
+  "project.archive-heading": headingArchive,
+  "project.unarchive-heading": headingUnarchive,
+  "project.promote-heading": headingConvertToProject,
+  "project.move-heading": projectMoveHeading,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,
   "todo.pause-repeat": todoPauseRepeat,
   "todo.resume-repeat": todoResumeRepeat,
   "todo.convert-to-project": todoConvertToProject,
-  "heading.convert-to-project": headingConvertToProject,
   "project.reschedule-repeat": projectRescheduleRepeat,
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,

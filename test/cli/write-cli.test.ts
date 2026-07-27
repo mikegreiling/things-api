@@ -113,9 +113,9 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain(`move to do id "${uuid}" to list "Inbox"`);
   });
 
-  it("heading add --dry-run plans the create-heading proxy on the shortcuts vector", async () => {
+  it("project add-heading --dry-run plans the create-heading proxy on the shortcuts vector", async () => {
     const proj = seedProject(fixture.db, { title: "Dest" });
-    await run(["heading", "add", "Dest", "Phase 2", "--dry-run", "--json"]);
+    await run(["project", "add-heading", "Dest", "Phase 2", "--dry-run", "--json"]);
     const env = envelope();
     expect(env["kind"]).toBe("mutation-plan");
     const plan = env["data"] as Record<string, unknown>;
@@ -237,11 +237,13 @@ describe("blocked paths (exit 4, nothing executed)", () => {
     expect(process.exitCode).toBe(4);
   });
 
-  it("heading add into an unknown project is rejected", async () => {
-    await run(["heading", "add", "ghost-project", "New Phase", "--json"]);
+  it("project add-heading into an unknown project is rejected (unresolved ref, usage)", async () => {
+    await run(["project", "add-heading", "ghost-project", "New Phase", "--json"]);
     const env = envelope();
-    expect((env["error"] as Record<string, unknown>)["code"]).toBe("blocked:H-UNKNOWN-DESTINATION");
-    expect(process.exitCode).toBe(4);
+    // The project ref is resolved at the consumer boundary (like every other
+    // project verb), so an unknown project is a not-found resolution error.
+    expect((env["error"] as Record<string, unknown>)["code"]).toBe("not-found");
+    expect(process.exitCode).toBe(2);
   });
 
   it("todo clear-reminder on a to-do with no reminder is rejected", async () => {
@@ -326,12 +328,16 @@ describe("project write targets accept names (Part 1)", () => {
     );
   });
 
-  it("heading write targets stay uuid-only (Part 2 entity noun)", async () => {
-    await run(["heading", "rename", "Sometitle", "New Name", "--json"]);
+  it("project rename-heading resolves the heading selector within the project", async () => {
+    seedProject(fixture.db, { title: "Proj" });
+    await run(["project", "rename-heading", "Proj", "Ghost", "--to", "New Name", "--json"]);
     const env = envelope();
+    // The heading selector (title or uuid) resolves inside the named project;
+    // an unknown one is a not-found resolution error.
     expect(String((env["error"] as Record<string, unknown>)["message"])).toContain(
-      'no heading matching uuid or partial-uuid "Sometitle"',
+      "no heading matching",
     );
+    expect(process.exitCode).toBe(2);
   });
 });
 

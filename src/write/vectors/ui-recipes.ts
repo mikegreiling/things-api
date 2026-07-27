@@ -125,7 +125,7 @@ export function resumeRepeatRecipe(targetUuid: string): UiRecipe {
 }
 
 export function convertToProjectRecipe(
-  op: "todo.convert-to-project" | "heading.convert-to-project",
+  op: "todo.convert-to-project" | "project.promote-heading",
   targetUuid: string,
 ): UiRecipe {
   return {
@@ -162,7 +162,7 @@ export function convertToProjectRecipe(
  */
 export function headingConvertToProjectRecipe(projectUuid: string, ordinal: number): UiRecipe {
   return {
-    op: "heading.convert-to-project",
+    op: "project.promote-heading",
     targetUuid: projectUuid,
     steps: [
       {

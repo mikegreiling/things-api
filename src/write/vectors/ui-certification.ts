@@ -21,7 +21,7 @@
  * pure-AX row-selection path, corrected at the sitting (the row `select` action,
  * not the silent-no-op table `AXSelectedRows` set; the detached editor's interval
  * field nests in group 1 exactly like the sheet). HEADCERT1 (2026-07-17) then
- * certified `heading.convert-to-project` `lab-certified` — the LAST uncertified
+ * certified `project.promote-heading` (then spelled `heading.convert-to-project`) `lab-certified` — the LAST uncertified
  * op — by reusing the row `select` action on the heading's parent-project view:
  * a heading row IS selectable (unlike the `things:///show` reveal UIC1 tried),
  * addressed POSITIONALLY (heading rows expose no stable AX title, only a
@@ -86,7 +86,7 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
     // the interval guard covers project make + the add-repeating promote leg.
     evidence: ["UIC4-a", "UIC4-b", "UIC4-f", "UIC5-a", "UIC6-i", "UIC7b"],
   },
-  "heading.convert-to-project": {
+  "project.promote-heading": {
     status: "lab-certified",
     evidence: ["UI2-d", "UIC1-a", "HEADCERT1"],
   },

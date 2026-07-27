@@ -122,9 +122,9 @@ export const MUTATION_VERB_SYNONYMS = new Set(["create"]);
 /**
  * The write-command groups whose subcommands are reserved mutation verbs, in
  * the order the namespaced-form hint lists them (`things todo|project|area|
- * tag|heading <verb> …`).
+ * tag <verb> …`). Heading verbs live under `project` (spec §2).
  */
-export const WRITE_GROUP_ORDER = ["todo", "project", "area", "tag", "heading"];
+export const WRITE_GROUP_ORDER = ["todo", "project", "area", "tag"];
 
 /** The reserved mutation-verb set: every write-group subcommand plus the synonyms. */
 export function mutationVerbs(program: Command): Set<string> {

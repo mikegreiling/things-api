@@ -77,6 +77,8 @@ export type {
   Acknowledgements,
   AreaAddParams,
   ContainerRef,
+  HeadingPlacement,
+  MoveHeadingParams,
   OperationKind,
   OperationParamsMap,
   ProjectAddParams,

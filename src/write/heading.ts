@@ -1,5 +1,6 @@
 /**
- * heading.archive / heading.unarchive orchestrators.
+ * project.archive-heading / project.unarchive-heading orchestrators, plus the
+ * project.add-heading create-then-place orchestrator.
  *
  * Archive with children: "complete" | "cancel" is ONE mutation — the app's
  * own cascades do the work (P10b-b1 complete, P11c cancel; pre-resolved
@@ -13,8 +14,50 @@
  */
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
-import type { HeadingArchiveParams, HeadingUnarchiveParams } from "./operations.ts";
+import type {
+  ContainerRef,
+  HeadingArchiveParams,
+  HeadingPlacement,
+  HeadingUnarchiveParams,
+} from "./operations.ts";
 import { CASCADE_WINDOW_SECONDS } from "./reopen.ts";
+
+/**
+ * Create a heading, then (when a placement is given) position it among the
+ * project's headings with a `project.move-heading` leg — the "create +
+ * move-heading leg" compilation of spec §2. Default (no placement) appends. The
+ * create lands first and PERSISTS even if the placement leg fails (a failed
+ * placement returns the created heading with a warning; it stays appended at the
+ * end). Dry-run plans the create only.
+ */
+export async function runAddHeading(
+  deps: WriteDeps,
+  project: ContainerRef,
+  title: string,
+  placement: HeadingPlacement | undefined,
+  options: WriteOptions = {},
+): Promise<MutationResult> {
+  const create = await runMutation(deps, "project.add-heading", { project, title }, options);
+  if (placement === undefined || create.kind !== "ok" || create.uuid === null) return create;
+  const move = await runMutation(
+    deps,
+    "project.move-heading",
+    { project, headings: [create.uuid], placement },
+    options,
+  );
+  if (move.kind === "ok") return create;
+  const detail =
+    move.kind === "blocked" || move.kind === "verify-failed"
+      ? move.detail
+      : `placement ${move.kind}`;
+  return {
+    ...create,
+    warnings: [
+      ...(create.warnings ?? []),
+      `the heading was created but its placement leg failed (${detail}); it was appended at the end`,
+    ],
+  };
+}
 
 export interface HeadingArchiveResult {
   heading: MutationResult;
@@ -53,7 +96,10 @@ export async function runHeadingArchive(
   const reparented: HeadingArchiveResult["reparented"] = [];
   if (params.children !== "reparent") {
     // Single-mutation path: the app's cascade is the policy.
-    return { heading: await runMutation(deps, "heading.archive", params, options), reparented };
+    return {
+      heading: await runMutation(deps, "project.archive-heading", params, options),
+      reparented,
+    };
   }
 
   const txnId = `txn-${(deps.now?.() ?? new Date()).getTime().toString(36)}-${process.pid.toString(36)}`;
@@ -73,7 +119,7 @@ export async function runHeadingArchive(
       return {
         heading: {
           kind: "blocked",
-          op: "heading.archive",
+          op: "project.archive-heading",
           reason: "hazard",
           hazard: "H-HEADING-CHILDREN",
           detail:
@@ -85,7 +131,7 @@ export async function runHeadingArchive(
       };
     }
   }
-  const heading = await runMutation(deps, "heading.archive", params, {
+  const heading = await runMutation(deps, "project.archive-heading", params, {
     ...options,
     txn: { id: txnId, role: "summary" },
   });
@@ -117,7 +163,7 @@ export async function runHeadingUnarchive(
   const txnId = `txn-${(deps.now?.() ?? new Date()).getTime().toString(36)}-${process.pid.toString(36)}`;
   const heading = await runMutation(
     deps,
-    "heading.unarchive",
+    "project.unarchive-heading",
     { uuid: params.uuid },
     candidates.length > 0 ? { ...options, txn: { id: txnId, role: "summary" } } : options,
   );

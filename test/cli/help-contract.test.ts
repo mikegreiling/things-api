@@ -558,7 +558,8 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("bounce");
     expect(help).toContain("Evening and projects");
     expect(help).toContain("bounce-only");
-    expect(help).toContain("carries its children");
+    expect(help).toContain("children follow");
+    expect(help).toContain("project move-heading");
     expect(help).toContain("--scope <scope>");
     expect(help).toContain("--strategy <name>");
     expect(help).toContain("--dry-run");
@@ -625,8 +626,8 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("live area/tag/project inventory");
   });
 
-  it("heading add: existing-project requirement + setup pointer", () => {
-    const help = helpFor("heading", "add");
+  it("project add-heading: existing-project requirement + setup pointer", () => {
+    const help = helpFor("project", "add-heading");
     expect(help).toContain("existing project");
     expect(help).toContain("things setup shortcuts");
   });
