@@ -51,7 +51,7 @@ The quick-skeleton path, distinct from (and compiled onto) the batch machinery:
 
 **No top-level generic `move`.** Genericity across movee kinds is where incoherence lives (mixed selections have no cross-kind order; kinds have different legal destinations; the wire itself refuses mixed kinds, O14). Noun-scoped verbs, extended:
 
-- `things todo move <ref…> [destination] [position]` — variadic; destinations `--to-project <ref>` / `--to-heading <sel>` (project inferred from the heading's project when unambiguous via an explicit `--to-project`, else required) / `--to-area <ref>` / the detach family (§5); positions `--first | --last | --before <todo-ref> | --after <todo-ref>`.
+- `things todo move <ref…> [destination] [position]` — variadic; destinations `--to-project <ref>` / `--to-heading <sel>` / `--to-area <ref>` / the detach family (§5). A `--to-heading` selector resolves within `--to-project`'s project when that flag is present; otherwise within the movees' current shared project; if the movees span projects and no `--to-project` is given, fail closed asking for it; positions `--first | --last | --before <todo-ref> | --after <todo-ref>`.
 - `things todo reorder <ref…> --first|--last|--before <ref>|--after <ref>` — pure positioning within the movees' CURRENT shared container+bucket; **fail-closed if the movees span containers or the anchor lives elsewhere** (the unanimous cross-container guard).
 - `things project move <ref…> --to-area <ref>|--no-area [--first|--last|--before <project>|--after <project>]` — existing op, gains the anchor grammar AND variadic movees.
 - `things project move-heading <project-ref> <heading-sel…> …` — §2, variadic.
