@@ -142,26 +142,6 @@ export interface UndoOptions {
 
 // -------------------------------------------------------------- audit reads
 
-/**
- * Legacy op-kind aliases (the verb-harmonization rename): audit records written
- * before the rename carry the OLD op-kind strings, and they must stay undoable
- * and listable FOREVER. `readAuditRecords` is the single normalization point the
- * whole undo / doctor / list path flows through, so every record's `op` is mapped
- * to its canonical name on read — downstream (selectUndoTargets, planUndo,
- * IRREVERSIBLE, the reversibility matrix, undoToken) only ever sees the new names.
- * New records are written under the canonical names only (the operation catalog
- * no longer emits the old spellings), so this map is read-only history.
- */
-export const LEGACY_OP_ALIASES: Readonly<Record<string, OperationKind>> = {
-  "heading.create": "heading.add",
-  "project.create-repeating": "project.add-repeating",
-};
-
-/** Canonicalize a (possibly legacy) op-kind string. Unknown strings pass through. */
-export function normalizeOpKind(op: string): string {
-  return LEGACY_OP_ALIASES[op] ?? op;
-}
-
 /** Parse every audit record from the monthly JSONL files, oldest first. */
 export function readAuditRecords(dir: string): AuditRecord[] {
   let files: string[];
@@ -186,10 +166,6 @@ export function readAuditRecords(dir: string): AuditRecord[] {
       try {
         const parsed = JSON.parse(line) as AuditRecord;
         if (parsed.v === 1 && typeof parsed.op === "string") {
-          // Normalize legacy op-kind aliases to their canonical names at the
-          // single read choke point (see LEGACY_OP_ALIASES) so old records stay
-          // undoable/listable under the new undo logic.
-          parsed.op = normalizeOpKind(parsed.op);
           records.push(parsed);
         }
       } catch {

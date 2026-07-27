@@ -132,6 +132,12 @@ The MCP server is itself a consumer surface (not part of the client library API)
 
 ## 2. Core TypeScript API shape
 
+### Alpha contract (pre-1.0) — ALPHA-CONTRACT
+
+The ENTIRE contract described in this document — the programmatic TS API, the CLI vocabulary, the JSON result/error shapes, the MCP tool surface, the audit-trail record format, and the error codes — is **ALPHA until package v1.0 ships.** There is exactly one consumer: the maintainer. Until v1.0, breaking changes are made **freely and cleanly, with no bridge left behind** — no compatibility shims, no alias maps, no deprecation windows, no legacy-format readers. When a shape is renamed or dropped, the old shape is deleted outright and any stale on-disk data or older caller simply stops being understood (a pre-rename audit record, for instance, carries an op-kind the current code no longer recognizes, so it becomes non-undoable and is ignored — the intended, accepted consequence). This is doctrine, not a case-by-case call: such machinery is treated as pollution and is not to be added or proposed while the contract is alpha.
+
+At **v1.0 this flips** — compatibility discipline begins (semantic-versioned breaking changes, migration notes, and, where warranted, bridges) — and **this subsection, together with the `AGENTS.md` Conventions entry and the `docs/up-next.md` §0½ signpost, is REMOVED as part of the v1.0 release** (`grep -rn ALPHA-CONTRACT`).
+
 ### Entities (`model/entities.ts`) — enums verified against live DB
 
 ```ts
