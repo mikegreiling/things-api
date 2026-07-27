@@ -15,40 +15,50 @@ import { buildFixtureDb } from "../fixtures/build-db.ts";
 const CLOCK = { now: "2026-07-20T09:00:00-05:00", tz: "America/Chicago" };
 
 describe("bench world profile", () => {
-  it("holds its invariants across five rotation seeds (validateWorld throws otherwise)", () => {
-    for (const seed of [1, 2, 3, 4, 5]) {
-      const fixture = buildFixtureDb();
-      // applyWorld runs validateWorld internally — a violation throws here.
-      const summary = applyWorld(fixture.db, { seed, clock: CLOCK });
-      expect(summary.areas).toBeGreaterThanOrEqual(7);
-      expect(summary.projects).toBeGreaterThanOrEqual(15);
-      expect(summary.todos).toBeGreaterThan(250);
-      expect(summary.templates).toBe(9);
-      expect(summary.instances).toBeGreaterThanOrEqual(18);
-      expect(summary.checklistItems).toBeGreaterThan(0);
-      fixture.close();
-    }
-  });
+  // The two five-seed loops below build five fixture DBs each — slow CI runners
+  // have twice blown the default 5 s budget (PRs #259, #281), both green on rerun.
+  it(
+    "holds its invariants across five rotation seeds (validateWorld throws otherwise)",
+    { timeout: 30_000 },
+    () => {
+      for (const seed of [1, 2, 3, 4, 5]) {
+        const fixture = buildFixtureDb();
+        // applyWorld runs validateWorld internally — a violation throws here.
+        const summary = applyWorld(fixture.db, { seed, clock: CLOCK });
+        expect(summary.areas).toBeGreaterThanOrEqual(7);
+        expect(summary.projects).toBeGreaterThanOrEqual(15);
+        expect(summary.todos).toBeGreaterThan(250);
+        expect(summary.templates).toBe(9);
+        expect(summary.instances).toBeGreaterThanOrEqual(18);
+        expect(summary.checklistItems).toBeGreaterThan(0);
+        fixture.close();
+      }
+    },
+  );
 
-  it("seeds standalone (container-less) anytime to-dos with no Today/overdue leak", () => {
-    for (const seed of [1, 2, 3, 4, 5]) {
-      const fixture = buildBenchFixture([], { seed, clock: CLOCK });
-      const db = new DatabaseSync(fixture.path, { readOnly: true });
-      // Open, actionable-now (Anytime), truly container-less loose to-dos exist.
-      const standalone = db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM TMTask
+  it(
+    "seeds standalone (container-less) anytime to-dos with no Today/overdue leak",
+    { timeout: 30_000 },
+    () => {
+      for (const seed of [1, 2, 3, 4, 5]) {
+        const fixture = buildBenchFixture([], { seed, clock: CLOCK });
+        const db = new DatabaseSync(fixture.path, { readOnly: true });
+        // Open, actionable-now (Anytime), truly container-less loose to-dos exist.
+        const standalone = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM TMTask
            WHERE type = 0 AND status = 0 AND trashed = 0 AND start = 1
              AND startDate IS NULL AND deadline IS NULL
              AND area IS NULL AND project IS NULL AND heading IS NULL
              AND rt1_recurrenceRule IS NULL`,
-        )
-        .get() as { n: number };
-      expect(standalone.n).toBeGreaterThanOrEqual(4);
-      db.close();
-      fixture.cleanup();
-    }
-  });
+          )
+          .get() as { n: number };
+        expect(standalone.n).toBeGreaterThanOrEqual(4);
+        db.close();
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("is deterministic: same (seed, clock) → identical DB content hash", () => {
     const a = buildBenchFixture([], { seed: 7, clock: CLOCK });
