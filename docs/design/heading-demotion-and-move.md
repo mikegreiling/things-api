@@ -67,6 +67,8 @@ The quick-skeleton path, distinct from (and compiled onto) the batch machinery:
 5. **Placement honesty.** "Top of bucket in selection order" is guaranteed where a reorder protocol exists for the destination bucket (project/area/today/evening/someday/inbox scopes — the lab-locked set), and app-default placement with an explicit note in the result where none does (unprobed in-project bucket cases; scheduled day-buckets until DAYORD lands). The result payload states which you got. No silent pretending.
 6. **Compilation.** Both verbs compile onto the existing lab-locked wire protocols (native re-rank, anchor-stack two-call, bounce) through a minimal-move planner: fewest wire legs for the requested placement, per-scope caps and the bounce abort-honesty model apply per leg.
 
+**Bare invocations (ratified 2026-07-27).** With a destination flag and no position, `--first` is effectively implied per bucket (rule 4's GUI parity — dropped items land at the top of their bucket in selection order). With NEITHER destination NOR position: **bare `todo move` is a teaching usage error** ("no destination and no position — use `todo reorder` to fix order in place, or add `--to-…`/`--first`/`--after`"); `move` never mutates unless a destination or position was named. **Bare `todo reorder <ref…>` IS legal**, with a deterministic in-place default: the block assembles **at the earliest movee's current slot**, in argument order — "fix the relative order, displace nothing farther than necessary." `--first` is deliberately NOT implied (silently yanking a selection to the top of its bucket is the surprise-displacement class this vocabulary exists to prevent; the flag is one keystroke away when meant). Preconditions for the bare form: all movees in ONE container and ONE bucket, else fail closed listing who is where. Note the corollary worth teaching loudly: `reorder` does NOT require enumerating the whole bucket — unmentioned siblings keep their order and the block lands relative to them. **Phase A documentation deliverable: the help topics AND the agent skill must teach the move-vs-reorder distinction explicitly** (move = membership somewhere; reorder = arrangement in place, earliest-slot anchored, partial-selection-friendly) — ratified after the maintainer noted the distinction was not inferable from the verb names alone.
+
 **Day-bucket reorder is out of scope until DAYORD** (probe-backlog): each scheduled DAY is a sortable bucket keyed on `todayIndex` (shared with Upcoming — reordering there is the same index), but no current write scope addresses a future day. If DAYORD lands a spelling, day buckets join rule 5's guaranteed set with zero vocabulary change.
 
 ## 5. The detach family — `--detach` is removed
@@ -104,6 +106,8 @@ Every refusal is specific — code family, exact copy naming the offender, candi
 | `--detach` (removed flag) | `usage` — names the replacement family |
 | Heading-sel ambiguity (duplicate or empty titles) | resolution error with uuid-bearing candidates |
 | Per-scope caps / protocol limits (e.g. bounce ≤10) | existing cap errors, unchanged |
+| Bare `todo move` (no destination, no position) | `usage` — teaching error: "use `todo reorder` to fix order in place, or add `--to-…`/`--first`/`--after`" |
+| Bare `todo reorder` with movees spanning containers or buckets | `blocked` — lists each movee's container/bucket; the bare in-place form requires one container + one bucket |
 | `set-layout` list ≠ exactly the active children + headings | `usage` — lists missing/extra/duplicated refs |
 
 ## 8. Phases
