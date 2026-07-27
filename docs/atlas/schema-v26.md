@@ -23,7 +23,7 @@ sqlite3 -readonly "<main.sqlite>" \
 | `TMChecklistItem` | Checklist items (children of a to-do via `task`) | **Core** |
 | `TMSettings` | Singleton settings row — incl. `uriSchemeAuthenticationToken` (the URL-scheme auth token, readable → zero-config write auth) and `groupTodayByParent` | **Core** |
 | `Meta` | Key/value: `databaseVersion` (plist blob wrapping an `<integer>`), `didCreateDefaultTags`, `didRemoveOrphanHeadings` | **Core** (drift keying) |
-| `TMTombstone` | Sync deletion records (`deletedObjectUUID`, `deletionDate`) — how deletions propagate; `leavesTombstone` on TMTask/TMChecklistItem opts records in | Read-informative (delete forensics) |
+| `TMTombstone` | Deletion records (`deletedObjectUUID`, `deletionDate`) written ONLY for deleted rows with `leavesTombstone=1` (repeating-template lineage) — **NOT a general deletion log**; ordinary deletions propagate tombstone-lessly via the Syncrony change-log (TOMB1) | Read-informative (delete forensics); unsuitable as a `changes --since` deletion cursor |
 | `TMSmartList` | Saved filters/smart lists (`definition` BLOB) | Not yet |
 | `TMContact` | Contacts (AppleScript `contact` class / `add contact named`) | Not yet |
 | `TMMetaItem`, `BSSyncronyMetadata` | Sync-engine internals (opaque BLOBs) | Never (do not touch) |
@@ -101,7 +101,7 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 
 ### Misc
 
-`notes` TEXT (Markdown-ish), `notesSync` INTEGER, `cachedTags` BLOB (denormalized tag cache — do not parse; use `TMTaskTag`), `experimental` BLOB (opaque; also on TMArea/TMTag/TMChecklistItem/TMSettings/TMSmartList), `leavesTombstone` INTEGER (sync deletion opt-in).
+`notes` TEXT (Markdown-ish), `notesSync` INTEGER, `cachedTags` BLOB (denormalized tag cache — do not parse; use `TMTaskTag`), `experimental` BLOB (opaque; also on TMArea/TMTag/TMChecklistItem/TMSettings/TMSmartList), `leavesTombstone` INTEGER (the tombstone GATE — deleting a row writes a `TMTombstone` iff this is 1; set only on repeating-template lineage, never on ordinary items; TOMB1).
 
 ## Other core tables
 
@@ -130,5 +130,5 @@ One row per to-do, project, or heading. Cultured Code's own DDL comments record 
 2. ~~`repeater` BLOB vs `rt1_recurrenceRule`~~ **ANSWERED (lab, 2026-07-03): 3.22.11 authors `rt1_recurrenceRule`; `repeater` stays NULL.**
 3. Heading `status` semantics when a heading is archived in UI — **PARTIALLY ANSWERED (2026-07-17, aggregate-only production shape survey for the bench world profile): non-open headings DO occur in the wild (two `type=2` rows with `status=3` observed), so archived/completed headings take completed status.** Remaining: whether UI "archive heading" is what writes `status=3` (vs project completion cascading) — lab probe still wanted.
 4. ~~`TMAreaTag` population conditions~~ **PARTIALLY ANSWERED (lab): AppleScript `set tag names of area` populates `TMAreaTag` immediately. Why Mike's production table is empty despite historical area-tag use remains a curiosity.**
-5. Tombstone lifecycle: when exactly `leavesTombstone` rows produce `TMTombstone` entries (delete-to-trash vs empty-trash vs sync).
+5. ~~Tombstone lifecycle: when exactly `leavesTombstone` rows produce `TMTombstone` entries (delete-to-trash vs empty-trash vs sync).~~ **ANSWERED — TOMB1 (2026-07-26, [../lab/tomb1-results.md](../lab/tomb1-results.md)):** a `TMTombstone` row is written iff the deleted row carried **`leavesTombstone=1`**, and the delete *path* is irrelevant (trash, empty-trash, area delete, or an applied remote delete all behave the same for a given row). `leavesTombstone=1` is set ONLY on repeating-template lineage (template + spawned instances) — NEVER on ordinary to-dos/projects/checklist items, and attaching a Cloud account does not flip it. So ordinary deletions leave NO tombstone (proven on the local deleter with sync off AND on, and on a remote receiver that applies the delete — the row vanishes tombstone-lessly; the deletion still propagates via the Syncrony change-log). `deletionDate` = the deleter's wall-clock at delete time (trustworthy epoch), but exists only for the narrow repeating-lineage population. **`TMTombstone` is not a general deletion log** — do not build `changes --since` deletion tracking on it.
 6. Logbook timing: `logInterval`/`manualLogDate` interaction with when completed items visually move to Logbook (research "Logbook timing" ancillary finding).
