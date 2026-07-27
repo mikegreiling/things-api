@@ -572,19 +572,32 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("DE-SCHEDULED");
   });
 
-  it("todo move: exclusive destinations incl. inbox de-schedule + detach", () => {
+  it("todo move: variadic destinations + detach family + positions (spec §4/§5)", () => {
     const help = helpFor("todo", "move");
+    expect(help).toContain("--to-project <ref>");
+    expect(help).toContain("--to-heading <sel>");
+    expect(help).toContain("--to-area <ref>");
+    expect(help).toContain("--no-heading");
+    expect(help).toContain("--loose");
     expect(help).toContain("--inbox");
-    expect(help).toContain("removes any schedule");
-    expect(help).toContain("--detach");
-    expect(help).toContain("keeping the schedule");
+    expect(help).toContain("--before <ref>");
+    expect(help).toContain("--after <ref>");
+    expect(help).toContain("placement class");
   });
 
-  it("project move: area destination or detach", () => {
+  it("todo reorder: in-place rearrange, earliest-slot, partial-selection friendly", () => {
+    const help = helpFor("todo", "reorder");
+    expect(help).toContain("IN PLACE");
+    expect(help).toContain("never changes membership");
+    expect(help).toContain("EARLIEST");
+    expect(help).toContain("keep their own order");
+  });
+
+  it("project move: to-area destination or --no-area (spec §5)", () => {
     const help = helpFor("project", "move");
-    expect(help).toContain("--area <ref>");
-    expect(help).toContain("--detach");
-    expect(help).toContain("Unknown areas are rejected");
+    expect(help).toContain("--to-area <ref>");
+    expect(help).toContain("--no-area");
+    expect(help).toContain("complete detach");
   });
 
   it("project reopen: children stay resolved unless restored", () => {

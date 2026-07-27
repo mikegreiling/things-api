@@ -274,7 +274,7 @@ describe("simulator write vector — covered operations", () => {
       start: "active",
       startDate: "2026-07-09",
     });
-    const res = await runMutation(deps(vector), "todo.move", { uuid: t, detach: true });
+    const res = await runMutation(deps(vector), "todo.move", { uuid: t, loose: true });
     expect(res.kind).toBe("ok");
     const r = row(t);
     expect(r["project"]).toBeNull();

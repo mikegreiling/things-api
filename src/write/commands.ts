@@ -470,11 +470,15 @@ const todoMove: CommandSpec<"todo.move"> = {
   preRead(db, params) {
     const container =
       containerGiven(params.project) || containerGiven(params.area) || params.heading !== undefined;
-    if (params.inbox === true && (container || params.detach === true)) {
-      throw new RangeError("inbox is exclusive with project/area/heading/detach");
+    const detachFamily = params.loose === true || params.noHeading === true;
+    if (params.inbox === true && (container || detachFamily)) {
+      throw new RangeError("inbox is exclusive with project/area/heading and --no-heading/--loose");
     }
-    if (params.detach === true && container) {
-      throw new RangeError("detach is exclusive with project/area/heading destinations");
+    if (params.loose === true && (container || params.noHeading === true)) {
+      throw new RangeError("--loose is exclusive with project/area/heading and --no-heading");
+    }
+    if (params.noHeading === true && container) {
+      throw new RangeError("--no-heading is exclusive with project/area/heading destinations");
     }
     if (containerGiven(params.project) && containerGiven(params.area)) {
       throw new RangeError("project and area are exclusive destinations");
@@ -493,6 +497,17 @@ const todoMove: CommandSpec<"todo.move"> = {
         }
       }
     }
+    // --no-heading re-asserts the CURRENT project as the container: resolve the
+    // target's own project (direct or via its heading) so compile/delta pin it.
+    if (params.noHeading === true) {
+      const t = pre.target;
+      const current =
+        t !== null && t.type === "to-do" ? (t.project ?? t.headingProject ?? null) : null;
+      if (current !== null) {
+        pre.destProject = { resolved: { uuid: current.uuid, title: current.title }, matches: 1 };
+        pre.destProjectStatus = projectStatus(db, current.uuid);
+      }
+    }
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
     return pre;
   },
@@ -503,7 +518,7 @@ const todoMove: CommandSpec<"todo.move"> = {
       assert.push({ field: "start", equals: "inbox" }, { field: "startDate", equals: null });
       return { mode: "update", uuid: params.uuid, assert };
     }
-    if (params.detach === true) {
+    if (params.loose === true) {
       // P21/P22: empty list-id strips every container link; the schedule is
       // untouched (pin it — a silent de-schedule would be a contrary write).
       const target = pre.target;
@@ -515,6 +530,16 @@ const todoMove: CommandSpec<"todo.move"> = {
         { field: "heading", equals: null },
         { field: "startDate", equals: startDate },
       );
+      return { mode: "update", uuid: params.uuid, assert };
+    }
+    if (params.noHeading === true) {
+      // Leave the heading, keep the project: re-assert the current project as
+      // the container with no heading (lands in the unheaded block).
+      const project = pre.destProject?.resolved;
+      assert.push({ field: "heading", equals: null });
+      if (project !== undefined && project !== null) {
+        assert.push({ field: "project.uuid", equals: project.uuid });
+      }
       return { mode: "update", uuid: params.uuid, assert };
     }
     const heading = pre.destHeading?.resolved;
@@ -537,11 +562,21 @@ const todoMove: CommandSpec<"todo.move"> = {
       if (vector !== "applescript") unsupportedVector(this.op, vector);
       return osa(`move to do id ${q(params.uuid)} to list "Inbox"`);
     }
-    if (params.detach === true) {
+    if (params.loose === true) {
       // Empty list-id = clear the container (P21/P22) — URL only; the other
       // vectors reject or silently ignore container removal (P10/P11, P26).
       if (vector !== "url-scheme") unsupportedVector(this.op, vector);
       return thingsUrl("update", { id: params.uuid, "list-id": "" }, ctx.token);
+    }
+    if (params.noHeading === true) {
+      // Re-assert the CURRENT project as the list with no heading param — the
+      // to-do drops its heading FK and lands in the project's unheaded block.
+      if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+      return thingsUrl(
+        "update",
+        { id: params.uuid, "list-id": pre.destProject?.resolved?.uuid ?? "" },
+        ctx.token,
+      );
     }
     const project = pre.destProject?.resolved;
     const area = pre.destArea?.resolved;
@@ -821,8 +856,8 @@ const projectMove: CommandSpec<"project.move"> = {
   op: "project.move",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
-    if ((params.detach === true) === containerGiven(params.area)) {
-      throw new RangeError("project.move needs exactly one of area / detach");
+    if ((params.noArea === true) === containerGiven(params.area)) {
+      throw new RangeError("project.move needs exactly one of area / --no-area");
     }
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);
@@ -836,7 +871,7 @@ const projectMove: CommandSpec<"project.move"> = {
       mode: "update",
       uuid: params.uuid,
       assert: [
-        params.detach === true
+        params.noArea === true
           ? { field: "area", equals: null }
           : { field: "area.uuid", equals: pre.destArea?.resolved?.uuid ?? "" },
       ],
@@ -844,18 +879,18 @@ const projectMove: CommandSpec<"project.move"> = {
   },
   compile(params, vector, pre, ctx) {
     if (vector === "url-scheme") {
-      // P23 (move) / P24 (empty area-id = detach — URL is the ONLY detach
+      // P23 (move) / P24 (empty area-id = leave the area — URL is the ONLY
       // surface: AppleScript rejects missing value/"" and json-null no-ops).
       return thingsUrl(
         "update-project",
         {
           id: params.uuid,
-          "area-id": params.detach === true ? "" : (pre.destArea?.resolved?.uuid ?? ""),
+          "area-id": params.noArea === true ? "" : (pre.destArea?.resolved?.uuid ?? ""),
         },
         ctx.token,
       );
     }
-    if (params.detach === true) unsupportedVector(this.op, vector);
+    if (params.noArea === true) unsupportedVector(this.op, vector);
     return osa(
       `set area of project id ${q(params.uuid)} to area id ` +
         q(pre.destArea?.resolved?.uuid ?? ""),

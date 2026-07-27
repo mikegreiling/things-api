@@ -991,12 +991,12 @@ describe("things MCP server", () => {
     expect((textOf(rejected) as { code: string }).code).toBe("usage");
   });
 
-  it("move_todo demands exactly one destination", async () => {
+  it("move_todo refuses multiple destinations and the bare invocation (spec §4)", async () => {
     await connect([fakeVector(null).vector]);
     for (const args of [
-      { uuid: "X" },
-      { uuid: "X", to_inbox: true, detach: true },
-      { uuid: "X", project: "P", detach: true },
+      { uuids: ["some-uuid"] }, // bare: no destination, no position
+      { uuids: ["some-uuid"], to_inbox: true, loose: true },
+      { uuids: ["some-uuid"], to_project: "P", to_area: "A" },
     ]) {
       // each call shares one MCP client/transport; concurrent calls would race on it
       const result = await client.callTool({ name: "move_todo", arguments: args });
@@ -1307,8 +1307,9 @@ describe("things MCP server", () => {
       return schema?.properties?.["uuid"]?.description ?? "";
     };
     // The merged write tools that can target a project resolve a unique NAME through the
-    // shared pipeline (#157) — their shared uuid arg advertises name acceptance.
-    for (const name of ["update", "set_status", "repeat", "move_project"]) {
+    // shared pipeline (#157) — their shared uuid arg advertises name acceptance. (move_project
+    // is now variadic — its `uuids` items carry the ref format instead of a single `uuid`.)
+    for (const name of ["update", "set_status", "repeat"]) {
       expect(uuidDesc(name), name).toContain("unique name");
     }
     // To-do-only write targets are identity-addressed — the target must never claim name acceptance.
@@ -2243,20 +2244,23 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.add");
     });
 
-    it("move_project plans a move (dry-run) and demands exactly one of area / detach", async () => {
+    it("move_project plans a move (dry-run) and refuses conflicting/bare invocations", async () => {
       const area = seedArea(fixture.db, "Dest Area");
       const project = seedProject(fixture.db, { title: "Wanderer" });
       await connect([fakeVector(null, { ops: ["project.move"] }).vector]);
       const outcome = textOf(
         await client.callTool({
           name: "move_project",
-          arguments: { uuid: project, area, dry_run: true },
+          arguments: { uuids: [project], to_area: area, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
+      expect(outcome.kind).toBe("move-dry-run");
       expect(outcome.op).toBe("project.move");
 
-      for (const args of [{ uuid: project }, { uuid: project, area, detach: true }]) {
+      for (const args of [
+        { uuids: [project] }, // bare
+        { uuids: [project], to_area: area, no_area: true }, // two destinations
+      ]) {
         const bad = await client.callTool({ name: "move_project", arguments: args });
         expect(bad.isError, JSON.stringify(args)).toBe(true);
         expect((textOf(bad) as { code: string }).code).toBe("usage");

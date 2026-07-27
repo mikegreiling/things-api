@@ -265,10 +265,18 @@ export interface TodoMoveParams {
   /** Move back to the Inbox — removes any schedule. Exclusive with the others. */
   inbox?: boolean;
   /**
-   * Detach from the current project/area/heading, keeping the schedule and
-   * everything else. Exclusive with the others.
+   * `--no-heading` (spec §5): leave the heading but STAY in the current
+   * project — the to-do lands in the project's unheaded block. Exclusive with
+   * the others. Wire: re-assert the current project as the container with no
+   * heading param.
    */
-  detach?: boolean;
+  noHeading?: boolean;
+  /**
+   * `--loose` (spec §5): the total sever — leave heading, project, AND area,
+   * keeping the schedule. Exclusive with the others. (This is what the removed
+   * `--detach` did; the detach family renames it.)
+   */
+  loose?: boolean;
 }
 
 export interface TodoSetTagsParams {
@@ -356,8 +364,12 @@ export interface ProjectMoveParams {
   uuid: string;
   /** Destination area (uuid or unique name). */
   area?: ContainerRef;
-  /** Detach from the current area. Exclusive with area. */
-  detach?: boolean;
+  /**
+   * `--no-area` (spec §5): leave the current area — a project's complete
+   * (single-level) detach. Exclusive with area. (Replaces the removed
+   * `--detach`.)
+   */
+  noArea?: boolean;
 }
 
 export interface ProjectCompleteParams {

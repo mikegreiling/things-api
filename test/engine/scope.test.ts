@@ -364,7 +364,7 @@ describe("writes refused / redirected under an area scope (Work)", () => {
     const scope = areaScope();
     const inbox = await runMutation(deps(scope), "todo.move", { uuid: w.workTodo, inbox: true });
     expect(inbox).toMatchObject({ kind: "blocked", reason: "scope" });
-    const detach = await runMutation(deps(scope), "todo.move", { uuid: w.workTodo, detach: true });
+    const detach = await runMutation(deps(scope), "todo.move", { uuid: w.workTodo, loose: true });
     expect(detach).toMatchObject({ kind: "blocked", reason: "scope" });
   });
 

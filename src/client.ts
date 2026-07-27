@@ -141,6 +141,15 @@ import { runEditChecklist } from "./write/edit-checklist.ts";
 import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
+import {
+  runInPlaceReorder,
+  runProjectMove,
+  runTodoMove,
+  type MoveResult,
+  type ProjectMoveRequest,
+  type ReorderRequest,
+  type TodoMoveRequest,
+} from "./write/move.ts";
 import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
   runProjectReopen,
@@ -428,6 +437,23 @@ export interface ThingsClient {
       dest: Omit<TodoMoveParams, "uuid">,
       options?: WriteOptions,
     ): Promise<MutationResult>;
+    /**
+     * Move one or more to-dos as an ordered block (spec §4). Give a destination
+     * (--to-project / --to-heading / --to-area / --no-heading / --loose) and an
+     * optional position (first/last/before/after), or a position alone to
+     * reposition items already sharing a container. Membership always succeeds;
+     * placement is guaranteed top-of-bucket only where a reorder protocol exists
+     * (the result states the placement class). Compiles onto the todo.move +
+     * reorder wire primitives — no new op kind.
+     */
+    moveTodos(request: TodoMoveRequest, options?: WriteOptions): Promise<MoveResult>;
+    /**
+     * Reorder to-dos IN PLACE within their shared container+bucket (spec §4).
+     * Bare (no position) assembles the movees as a contiguous block at the
+     * earliest movee's current slot, in argument order. Cross-container operands
+     * fail closed.
+     */
+    reorderTodos(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Replace the full tag set (an empty list clears all tags). */
     setTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     /** Merge: current direct tags + new ones, then replace. */
@@ -538,6 +564,14 @@ export interface ThingsClient {
     moveProject(uuid: string, area: ContainerRef, options?: WriteOptions): Promise<MutationResult>;
     /** Detach a project from its current area. */
     detachProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Move one or more projects as an ordered block (spec §4/§5): --to-area, or
+     * --no-area to leave the area, plus an optional position — or a position
+     * alone to reorder them among their siblings.
+     */
+    moveProjects(request: ProjectMoveRequest, options?: WriteOptions): Promise<MoveResult>;
+    /** Reorder projects IN PLACE among their siblings (spec §4). */
+    reorderProjects(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Cancel a project — open children are canceled with it, so the children policy is mandatory. */
     cancelProject(
       uuid: string,
@@ -1007,6 +1041,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       cancelTodo: (uuid, o) => run("todo.cancel", { uuid }, o),
       reopenTodo: (uuid, o) => run("todo.reopen", { uuid }, o),
       moveTodo: (uuid, dest, o) => run("todo.move", { uuid, ...dest }, o),
+      moveTodos: (request, o) => runTodoMove(writeDeps, request, o ?? {}),
+      reorderTodos: (request, o) => runInPlaceReorder(writeDeps, "todo.move", request, o ?? {}),
       setTags: (uuid, tags, o) => run("todo.set-tags", { uuid, tags }, o),
       addTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);
@@ -1031,14 +1067,17 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
       unarchiveHeading: (uuid, policy, o) =>
         runHeadingUnarchive(writeDeps, { uuid, ...policy }, o ?? {}),
-      detachTodo: (uuid, o) => run("todo.move", { uuid, detach: true }, o),
+      detachTodo: (uuid, o) => run("todo.move", { uuid, loose: true }, o),
       editChecklist: (uuid, edit, o) => runEditChecklist(writeDeps, uuid, edit, o ?? {}),
       addProject: (params, o) => run("project.add", params, o),
       updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
       completeProject: (uuid, policy, o) =>
         run("project.complete", { uuid, children: policy.children }, o),
       moveProject: (uuid, area, o) => run("project.move", { uuid, area }, o),
-      detachProject: (uuid, o) => run("project.move", { uuid, detach: true }, o),
+      detachProject: (uuid, o) => run("project.move", { uuid, noArea: true }, o),
+      moveProjects: (request, o) => runProjectMove(writeDeps, request, o ?? {}),
+      reorderProjects: (request, o) =>
+        runInPlaceReorder(writeDeps, "project.move", request, o ?? {}),
       cancelProject: (uuid, policy, o) =>
         run("project.cancel", { uuid, children: policy.children }, o),
       reopenProject: (uuid, o) => runProjectReopen(writeDeps, uuid, o ?? {}),

@@ -35,12 +35,19 @@ import {
   type DisruptionTier,
   type EnvelopeMeta,
   type HeadingPlacement,
+  type MovePosition,
+  type MoveResult,
   type OperationKind,
+  type ProjectMoveDestination,
+  type ProjectMoveRequest,
+  type ReorderRequest,
   type ReorderResult,
   type ReorderScope,
   type ReorderStrategy,
   type RepeatFrequency,
   type ThingsClient,
+  type TodoMoveDestination,
+  type TodoMoveRequest,
   type UndoItemResult,
   type VectorId,
   type WriteOptions,
@@ -417,6 +424,201 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
   }
 }
 
+// -------------------------------------------------- move / reorder (spec §4)
+
+/** Open the client, run a MoveResult-returning fn, and render it. */
+async function runMoveCmd(
+  opts: WriteFlagOpts,
+  fn: (client: ThingsClient) => Promise<MoveResult>,
+): Promise<void> {
+  const started = Date.now();
+  let client: ThingsClient | null = null;
+  const meta = (): EnvelopeMeta => {
+    let dbVersion: number | null = null;
+    let fingerprint: EnvelopeMeta["fingerprint"] = "unknown";
+    if (client !== null) {
+      const fp = client.fingerprint();
+      dbVersion = fp.observation.databaseVersion;
+      fingerprint = fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown";
+    }
+    return { dbVersion, fingerprint, elapsedMs: Date.now() - started };
+  };
+  try {
+    client = openThings(opts.db ? { dbPath: opts.db } : {});
+    emitMoveResult(await fn(client), opts, meta());
+  } catch (err) {
+    if (err instanceof ReferenceResolutionError) {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(errorEnvelope({ code: err.code, message: err.message, details: { candidates: err.candidates } }, meta()))}\n`,
+        );
+      } else {
+        process.stderr.write(`error: ${err.message}\n`);
+      }
+      process.exitCode = ExitCode.Usage;
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (opts.json) {
+      process.stdout.write(
+        `${JSON.stringify(errorEnvelope({ code: "unexpected", message }, meta()))}\n`,
+      );
+    } else {
+      process.stderr.write(`error: ${message}\n`);
+    }
+    process.exitCode = ExitCode.Unexpected;
+  } finally {
+    client?.close();
+  }
+}
+
+function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
+  switch (result.kind) {
+    case "move-ok": {
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(okEnvelope("move-result", result, meta))}\n`);
+      } else {
+        const who = result.movees.map((m) => m.title ?? m.uuid).join(", ");
+        process.stdout.write(
+          `ok ${result.op}: moved ${result.movees.length} item(s) — ${who}\n` +
+            `  placement: ${result.placementClass} — ${result.note}\n`,
+        );
+      }
+      process.exitCode = ExitCode.Ok;
+      return;
+    }
+    case "move-dry-run": {
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(okEnvelope("move-plan", result.plan, meta))}\n`);
+      } else {
+        process.stdout.write(
+          [
+            `DRY RUN ${result.op}`,
+            `  movees: ${result.plan.movees.join(", ")}`,
+            `  membership: ${result.plan.membership}`,
+            `  placement: ${result.plan.placement} (${result.plan.placementClass})`,
+            `  ${result.plan.note}`,
+            "",
+          ].join("\n"),
+        );
+      }
+      process.exitCode = ExitCode.Ok;
+      return;
+    }
+    case "move-refused": {
+      const code =
+        result.refusal === "usage"
+          ? ExitCode.Usage
+          : result.refusal === "unsupported"
+            ? ExitCode.Unsupported
+            : ExitCode.Blocked;
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            errorEnvelope(
+              {
+                code: result.refusal,
+                message: result.detail,
+                ...(result.remediation !== undefined && { remediation: result.remediation }),
+                ...(result.candidates !== undefined && {
+                  details: { candidates: result.candidates },
+                }),
+              },
+              meta,
+            ),
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(
+          `${result.refusal === "usage" ? "error" : result.refusal.toUpperCase()}: ${result.detail}\n` +
+            (result.remediation !== undefined ? `  remediation: ${result.remediation}\n` : ""),
+        );
+      }
+      process.exitCode = code;
+      return;
+    }
+    case "move-leg-failed": {
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(errorEnvelope({ code: "verify-failed", message: result.detail, detail: { failed: result.failed, completed: result.completed } }, meta))}\n`,
+        );
+      } else {
+        process.stderr.write(`MOVE FAILED: ${result.detail}\n`);
+      }
+      process.exitCode = ExitCode.VerifyFailed;
+      return;
+    }
+  }
+}
+
+/** Build a MovePosition from the shared --first/--last/--before/--after flags. */
+function movePosition(opts: Record<string, unknown>): MovePosition | undefined | "conflict" {
+  const chosen = [
+    opts["first"] === true,
+    opts["last"] === true,
+    opts["before"] !== undefined,
+    opts["after"] !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (opts["first"] === true) return { at: "first" };
+  if (opts["last"] === true) return { at: "last" };
+  if (opts["before"] !== undefined) return { before: opts["before"] as string };
+  if (opts["after"] !== undefined) return { after: opts["after"] as string };
+  return undefined;
+}
+
+/** Build a to-do move destination; "conflict" when more than one is named. */
+function todoDestination(
+  opts: Record<string, unknown>,
+): TodoMoveDestination | undefined | "conflict" {
+  const dests: TodoMoveDestination[] = [];
+  const toProject = opts["toProject"] as string | undefined;
+  const toHeading = opts["toHeading"] as string | undefined;
+  if (toHeading !== undefined) {
+    dests.push({
+      kind: "heading",
+      sel: toHeading,
+      ...(toProject !== undefined && { project: { uuid: toProject, title: toProject } }),
+    });
+  } else if (toProject !== undefined) {
+    dests.push({ kind: "project", ref: { uuid: toProject, title: toProject } });
+  }
+  const toArea = opts["toArea"] as string | undefined;
+  if (toArea !== undefined) dests.push({ kind: "area", ref: { uuid: toArea, title: toArea } });
+  // Commander maps `--no-heading`/`--no-area` onto the base key as `false`.
+  if (opts["heading"] === false) dests.push({ kind: "no-heading" });
+  if (opts["loose"] === true) dests.push({ kind: "loose" });
+  if (opts["inbox"] === true) dests.push({ kind: "inbox" });
+  if (opts["area"] === false) dests.push({ kind: "no-area" });
+  if (opts["detach"] === true) dests.push({ kind: "detach" });
+  if (dests.length > 1) return "conflict";
+  return dests[0];
+}
+
+/** Build a project move destination; "conflict" when more than one is named. */
+function projectDestination(
+  opts: Record<string, unknown>,
+): ProjectMoveDestination | undefined | "conflict" {
+  const dests: ProjectMoveDestination[] = [];
+  const toArea = opts["toArea"] as string | undefined;
+  if (toArea !== undefined) dests.push({ kind: "area", ref: { uuid: toArea, title: toArea } });
+  // Commander maps `--no-area` onto the base key `area` as `false`.
+  if (opts["area"] === false) dests.push({ kind: "no-area" });
+  if (opts["loose"] === true) dests.push({ kind: "loose" });
+  if (opts["detach"] === true) dests.push({ kind: "detach" });
+  if (dests.length > 1) return "conflict";
+  return dests[0];
+}
+
+/** The shared position flags (--first/--last/--before/--after) for move/reorder. */
+function addPositionFlags(cmd: Command): Command {
+  return cmd
+    .option("--first", "place the block at the top of its bucket")
+    .option("--last", "place the block at the bottom of its bucket")
+    .option("--before <ref>", "place the block immediately before this item (same bucket)")
+    .option("--after <ref>", "place the block immediately after this item (same bucket)");
+}
+
 /** One TTY line for a bulk-add batch item (the human, non-JSON multi rendering). */
 function addResultLine(r: BatchItemResult): string {
   const o = r.outcome;
@@ -724,52 +926,93 @@ export function registerWriteCommands(program: Command): void {
     });
   }
 
-  addWriteFlags(
-    todo
-      .command("move <uuid>")
-      .description(
-        "Move a to-do into a project or area (optionally under an existing heading), back " +
-          "to the Inbox, or out of every container. Unknown or ambiguous destinations are " +
-          "rejected. Moving into a completed/canceled project reopens that project — " +
-          "requires --acknowledge-project-reopen.",
-      )
-      .option("--project <ref>", "destination project (uuid or unique name)")
-      .option("--area <ref>", "destination area (uuid or unique name)")
-      .option("--heading <name>", "existing heading in the destination project")
-      .option("--inbox", "move back to the Inbox — removes any schedule")
-      .option("--detach", "remove ALL container links (project/area/heading) keeping the schedule")
-      .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    const project = containerRef(opts["project"] as string | undefined);
-    const area = containerRef(opts["area"] as string | undefined);
-    const inbox = opts["inbox"] === true;
-    const detach = opts["detach"] === true;
-    const dest = project !== undefined || area !== undefined || opts["heading"] !== undefined;
-    if ((inbox && (dest || detach)) || (detach && dest)) {
+  addPositionFlags(
+    addWriteFlags(
+      todo
+        .command("move <refs...>")
+        .description(
+          "Move one or more to-dos as an ordered block (the argument order is the order they " +
+            "land — name them backwards to reverse). MOVE changes WHAT a to-do belongs to; to " +
+            "rearrange to-dos that already share a container use `things todo reorder`. Pass one " +
+            "destination: --to-project / --to-heading / --to-area, or the detach family " +
+            "--no-heading (leave the heading, stay in the project) / --loose (leave heading, " +
+            "project, AND area). --inbox files back to the Inbox. Position with " +
+            "--first/--last/--before/--after (an anchor positions but never migrates — an " +
+            "anchor-only move that would cross containers is refused). Membership always " +
+            "succeeds; top-of-bucket placement is guaranteed only where a reorder protocol " +
+            "exists (the result states the placement class). Moving into a completed/canceled " +
+            "project reopens it — requires --acknowledge-project-reopen.",
+        )
+        .option("--to-project <ref>", "destination project (uuid or unique name)")
+        .option(
+          "--to-heading <sel>",
+          "destination heading (exact title or uuid; within --to-project)",
+        )
+        .option("--to-area <ref>", "destination area (uuid or unique name)")
+        .option(
+          "--no-heading",
+          "leave the heading but stay in the current project (unheaded block)",
+        )
+        .option("--loose", "detach from heading, project, AND area (keeping the schedule)")
+        .option("--inbox", "move back to the Inbox — removes any schedule")
+        .option("--no-area", "(not a to-do flag — teaches the correct spelling)")
+        .option("--detach", "(removed — teaches the replacement family)")
+        .option("--acknowledge-project-reopen", "allow moving into a completed/canceled project"),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const dest = todoDestination(opts);
+    if (dest === "conflict") {
       usageError(
         opts,
-        "--inbox/--detach are exclusive with each other and with --project/--area/--heading",
+        "pass at most one destination (--to-project/--to-heading/--to-area/--no-heading/--loose/--inbox)",
       );
       return;
     }
-    await runWrite(opts, (c) =>
-      c.write.moveTodo(
-        uuid,
-        {
-          ...(project !== undefined && { project }),
-          ...(area !== undefined && { area }),
-          ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
-          ...(inbox && { inbox: true }),
-          ...(detach && { detach: true }),
-        },
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: TodoMoveRequest = {
+      uuids: refs,
+      ...(dest !== undefined && { destination: dest }),
+      ...(position !== undefined && { position }),
+    };
+    await runMoveCmd(opts, (c) =>
+      c.write.moveTodos(
+        request,
         writeOptionsFrom(opts, {
-          ...(inbox && { vector: "applescript" as const }),
           ...(opts["acknowledgeProjectReopen"] !== undefined && {
             acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean,
           }),
         }),
       ),
     );
+  });
+
+  addPositionFlags(
+    addWriteFlags(
+      todo
+        .command("reorder <refs...>")
+        .description(
+          "Reorder to-dos IN PLACE within the container and bucket they already share — this " +
+            "REARRANGES, it never changes membership (to change what a to-do belongs to, use " +
+            "`things todo move`). The argument order is the resulting order; unmentioned " +
+            "siblings keep their own order. Bare (no position flag) assembles the named to-dos " +
+            "as a contiguous block at the EARLIEST one's current slot (partial-selection " +
+            "friendly). --first/--last/--before/--after position the block. Operands that span " +
+            "containers or buckets fail closed. Ordering rides the same experimental surface as " +
+            "`things reorder` — enable it once with `things config set allow-experimental true`.",
+        ),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: ReorderRequest = { uuids: refs, ...(position !== undefined && { position }) };
+    await runMoveCmd(opts, (c) => c.write.reorderTodos(request, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -1475,30 +1718,41 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
-  addWriteFlags(
-    project
-      .command("move <ref>")
-      .description(
-        "Move a project (target by uuid or unique name) to another area, or DETACH it from " +
-          "its current area (--detach). Status and schedule are untouched. Unknown areas are " +
-          "rejected.",
-      )
-      .option("--area <ref>", "destination area (uuid or unique name)")
-      .option("--detach", "remove the current area assignment (exclusive with --area)"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & { area?: string; detach?: boolean }) => {
-    if ((opts.detach === true) === (opts.area !== undefined)) {
-      usageError(opts, "pass exactly one of --area / --detach");
+  addPositionFlags(
+    addWriteFlags(
+      project
+        .command("move <refs...>")
+        .description(
+          "Move one or more projects as an ordered block (argument order = resulting order). " +
+            "Pass one destination: --to-area (uuid or unique name) or --no-area (leave the " +
+            "area — a project's complete detach). Position among siblings with " +
+            "--first/--last/--before/--after (an anchor positions but never migrates). " +
+            "Membership always succeeds; top-of-bucket placement is guaranteed only where a " +
+            "reorder protocol exists (the result states the class). Status and schedule are " +
+            "untouched.",
+        )
+        .option("--to-area <ref>", "destination area (uuid or unique name)")
+        .option("--no-area", "leave the current area (a project's single-level detach)")
+        .option("--loose", "(not a project flag — teaches the correct spelling)")
+        .option("--detach", "(removed — teaches the replacement)"),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const dest = projectDestination(opts);
+    if (dest === "conflict") {
+      usageError(opts, "pass at most one of --to-area / --no-area");
       return;
     }
-    await runWrite(opts, (c) =>
-      opts.detach === true
-        ? c.write.detachProject(uuid, writeOptionsFrom(opts))
-        : c.write.moveProject(
-            uuid,
-            { uuid: opts.area as string, title: opts.area as string },
-            writeOptionsFrom(opts),
-          ),
-    );
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: ProjectMoveRequest = {
+      uuids: refs,
+      ...(dest !== undefined && { destination: dest }),
+      ...(position !== undefined && { position }),
+    };
+    await runMoveCmd(opts, (c) => c.write.moveProjects(request, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
