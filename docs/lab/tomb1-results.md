@@ -76,3 +76,7 @@ The tombstone appeared on a **local** delete (single clone), persisted across re
 3. **Remote delete of a `leavesTombstone=1` row** (TEST 2 was void) — expected to tombstone on both ends by the gate, but unmeasured.
 
 **Artifacts:** `lab/artifacts/things-run-tomb1-20260726-215611/` (gitignored) — account-creation + login screenshots, `final-A.sqlite` (phase 1), `arm5-final-{A,B}.sqlite` (phase 2), `arm7-final.sqlite` (phase 3), `report.txt`.
+
+## TOMB2 — production corroboration (2026-07-26, read-only via scripts/prod-read.sh)
+
+Aggregate counts from the maintainer's live library (counts only, no content): `leavesTombstone=1` → 3,351 rows, of which 1,928 carry a live repeat linkage (`rt1_recurrenceRule` or `rt1_repeatingTemplate`); `leavesTombstone=0` → 18,287 rows, of which only 118 carry repeat linkage. The flag is overwhelmingly concentrated on repeat-associated rows, corroborating the TOMB1 law; the flagged-but-not-currently-linked remainder (~1,400) is consistent with EX-lineage (instances whose template was later deleted/stopped clears the FK) rather than a counterexample — no ordinary-item flagging signal. Verdict unchanged: `TMTombstone` records repeating-lineage churn only.
