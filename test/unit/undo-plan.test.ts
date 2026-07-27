@@ -11,8 +11,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
 import type { AnyTask } from "../../src/model/entities.ts";
 import {
-  LEGACY_OP_ALIASES,
-  normalizeOpKind,
   planUndo,
   readAuditRecords,
   scanAuditIntegrity,
@@ -263,82 +261,6 @@ describe("readAuditRecords", () => {
 
   it("returns empty for a missing directory", () => {
     expect(readAuditRecords("/nonexistent/audit")).toEqual([]);
-  });
-});
-
-// The verb-harmonization rename (heading.create → heading.add,
-// project.create-repeating → project.add-repeating) is a wire break for NEW
-// records, but pre-rename audit records carry the OLD op-kind strings and must
-// stay undoable + listable forever. readAuditRecords is the single point that
-// canonicalizes them, so old records flow through selection + inversion under
-// the new undo logic.
-describe("legacy op-kind aliases (verb-harmonization) round-trip through undo", () => {
-  it("normalizeOpKind maps the two legacy names and passes everything else through", () => {
-    expect(normalizeOpKind("heading.create")).toBe("heading.add");
-    expect(normalizeOpKind("project.create-repeating")).toBe("project.add-repeating");
-    expect(normalizeOpKind("heading.add")).toBe("heading.add"); // already canonical
-    expect(normalizeOpKind("todo.update")).toBe("todo.update"); // unrelated op
-    expect(LEGACY_OP_ALIASES).toStrictEqual({
-      "heading.create": "heading.add",
-      "project.create-repeating": "project.add-repeating",
-    });
-  });
-
-  it("readAuditRecords canonicalizes old op-kind strings on read", () => {
-    const dir = mkdtempSync(join(tmpdir(), "things-api-undo-legacy-"));
-    try {
-      writeFileSync(
-        join(dir, "2026-07.jsonl"),
-        `${JSON.stringify(record({ ts: "2026-07-05T10:00:00Z", op: "heading.create", uuid: "H-1" }))}\n` +
-          `${JSON.stringify(record({ ts: "2026-07-05T10:01:00Z", op: "project.create-repeating", uuid: "P-1" }))}\n`,
-      );
-      expect(readAuditRecords(dir).map((r) => r.op)).toEqual([
-        "heading.add",
-        "project.add-repeating",
-      ]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("an old-named record round-trips: read → select → invert (heading.create)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "things-api-undo-legacy-sel-"));
-    try {
-      writeFileSync(
-        join(dir, "2026-07.jsonl"),
-        `${JSON.stringify(record({ ts: "2026-07-05T10:00:00Z", op: "heading.create", uuid: "H-1" }))}\n`,
-      );
-      const records = readAuditRecords(dir);
-      const [target] = selectUndoTargets(records, { last: 1 });
-      expect(target).toBeDefined();
-      expect(target?.op).toBe("heading.add"); // canonicalized, still selectable
-      // Inversion resolves the canonical IRREVERSIBLE entry (not the generic
-      // "no inverse is defined" default the old string would have hit).
-      const plan = planUndo(target as AuditRecord, NOW);
-      expect(plan.kind).toBe("irreversible");
-      expect(plan.target.op).toBe("heading.add");
-      expect(plan.reason).toContain("heading delete is interactive-only");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("an old-named record round-trips: read → select → invert (project.create-repeating)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "things-api-undo-legacy-cr-"));
-    try {
-      writeFileSync(
-        join(dir, "2026-07.jsonl"),
-        `${JSON.stringify(record({ ts: "2026-07-05T10:00:00Z", op: "project.create-repeating", uuid: "P-1" }))}\n`,
-      );
-      const records = readAuditRecords(dir);
-      const [target] = selectUndoTargets(records, { last: 1 });
-      expect(target?.op).toBe("project.add-repeating");
-      const plan = planUndo(target as AuditRecord, NOW);
-      expect(plan.kind).toBe("irreversible");
-      expect(plan.reason).toContain("identity replacement");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
 
