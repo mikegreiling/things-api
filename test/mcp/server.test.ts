@@ -234,7 +234,8 @@ const EXPECTED_TOOLS = [
   "update", // update_todo/update_project/update_area/update_tag
   "set_status", // set_todo_status/set_project_status
   "delete", // delete_item/delete_area/delete_tag
-  "heading", // create/rename/archive/unarchive/convert_to_project
+  "heading", // add/rename/archive/unarchive/promote/move-heading
+  "convert_to_project", // promote a to-do into a project
   "repeat", // the 7 recurrence singletons (todo + project)
   // reads
   "read_view",
@@ -1776,101 +1777,102 @@ describe("things MCP server", () => {
   });
 
   describe("heading tool (action-parameterized)", () => {
-    it("action add plans through the proxy (dry-run), rejects an unknown project, and needs project + title", async () => {
+    it("action add_heading plans through the proxy (dry-run), rejects an unknown project, and needs title", async () => {
       const project = seedProject(fixture.db, { title: "H-Proj" });
-      await connect([fakeVector(null, { id: "shortcuts", ops: ["heading.add"] }).vector]);
+      await connect([fakeVector(null, { id: "shortcuts", ops: ["project.add-heading"] }).vector]);
       const outcome = textOf(
         await client.callTool({
           name: "heading",
-          arguments: { action: "add", project, title: "Phase 1", dry_run: true },
+          arguments: { action: "add_heading", project, title: "Phase 1", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("heading.add");
+      expect(outcome.op).toBe("project.add-heading");
 
       const unknown = await client.callTool({
         name: "heading",
-        arguments: { action: "add", project: "ghost-project", title: "x", dry_run: true },
+        arguments: { action: "add_heading", project: "ghost-project", title: "x", dry_run: true },
       });
       expect(unknown.isError).toBe(true);
 
       const missing = await client.callTool({
         name: "heading",
-        arguments: { action: "add", project, dry_run: true },
+        arguments: { action: "add_heading", project, dry_run: true },
       });
       expect(missing.isError).toBe(true);
       expect((textOf(missing) as { code: string }).code).toBe("usage");
     });
 
-    it("action rename plans an in-place rename (dry-run)", async () => {
+    it("action rename_heading resolves the selector and plans an in-place rename (dry-run)", async () => {
       const project = seedProject(fixture.db, { title: "R-Proj" });
       const heading = seedHeading(fixture.db, { title: "old", project });
-      await connect([fakeVector(null, { id: "applescript", ops: ["heading.rename"] }).vector]);
+      await connect([
+        fakeVector(null, { id: "applescript", ops: ["project.rename-heading"] }).vector,
+      ]);
       const outcome = textOf(
         await client.callTool({
           name: "heading",
-          arguments: { action: "rename", uuid: heading, title: "new", dry_run: true },
+          arguments: { action: "rename_heading", project, heading, title: "new", dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("heading.rename");
+      expect(outcome.op).toBe("project.rename-heading");
     });
 
-    it("action archive plans a childless archive; open children without a policy block", async () => {
+    it("action archive_heading plans a childless archive; open children without a policy block", async () => {
       const project = seedProject(fixture.db, { title: "A-Proj" });
       const bare = seedHeading(fixture.db, { title: "Bare", project, index: 1 });
-      await connect([fakeVector(null, { id: "applescript", ops: ["heading.archive"] }).vector]);
+      await connect([
+        fakeVector(null, { id: "applescript", ops: ["project.archive-heading"] }).vector,
+      ]);
       const outcome = textOf(
         await client.callTool({
           name: "heading",
-          arguments: { action: "archive", uuid: bare, dry_run: true },
+          arguments: { action: "archive_heading", project, heading: bare, dry_run: true },
         }),
       ) as { heading: { kind: string; op: string } };
       expect(outcome.heading.kind).toBe("dry-run");
-      expect(outcome.heading.op).toBe("heading.archive");
+      expect(outcome.heading.op).toBe("project.archive-heading");
 
       const withChild = seedHeading(fixture.db, { title: "Full", project, index: 2 });
       seedTodo(fixture.db, { title: "child", heading: withChild, project: null });
       const blocked = await client.callTool({
         name: "heading",
-        arguments: { action: "archive", uuid: withChild, dry_run: true },
+        arguments: { action: "archive_heading", project, heading: withChild, dry_run: true },
       });
       expect(blocked.isError).toBe(true);
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-HEADING-CHILDREN");
     });
 
-    it("action unarchive plans an in-place restore (dry-run)", async () => {
+    it("action unarchive_heading plans an in-place restore (dry-run)", async () => {
       const project = seedProject(fixture.db, { title: "U-Proj" });
       const heading = seedHeading(fixture.db, { title: "Archived", project });
-      await connect([fakeVector(null, { id: "applescript", ops: ["heading.unarchive"] }).vector]);
+      await connect([
+        fakeVector(null, { id: "applescript", ops: ["project.unarchive-heading"] }).vector,
+      ]);
       const outcome = textOf(
         await client.callTool({
           name: "heading",
-          arguments: { action: "unarchive", uuid: heading, dry_run: true },
+          arguments: { action: "unarchive_heading", project, heading, dry_run: true },
         }),
       ) as { heading: { kind: string; op: string } };
       expect(outcome.heading.kind).toBe("dry-run");
-      expect(outcome.heading.op).toBe("heading.unarchive");
+      expect(outcome.heading.op).toBe("project.unarchive-heading");
     });
 
-    it("action convert_to_project dispatches on type and gates the drive", async () => {
+    it("convert_to_project tool promotes a to-do and gates the drive", async () => {
       const uuid = seedTodo(fixture.db, { title: "promote me" });
       await connect([fakeVector(null, { id: "ui", ops: ["todo.convert-to-project"] }).vector]);
       const blocked = await client.callTool({
-        name: "heading",
-        arguments: { action: "convert_to_project", uuid },
+        name: "convert_to_project",
+        arguments: { uuid },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
       const outcome = textOf(
         await client.callTool({
-          name: "heading",
-          arguments: {
-            action: "convert_to_project",
-            uuid,
-            dangerously_drive_gui: true,
-            dry_run: true,
-          },
+          name: "convert_to_project",
+          arguments: { uuid, dangerously_drive_gui: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
       expect(outcome.kind).toBe("dry-run");

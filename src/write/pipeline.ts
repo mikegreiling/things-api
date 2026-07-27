@@ -35,7 +35,12 @@ import {
 } from "./failure-hints.ts";
 import { evaluateGuards, type GuardBlock, type HazardId } from "./guards.ts";
 import { acquireMutationLock, MutationLockError } from "./lock.ts";
-import type { Acknowledgements, OperationKind, OperationParamsMap } from "./operations.ts";
+import {
+  isHeadingTargetOp,
+  type Acknowledgements,
+  type OperationKind,
+  type OperationParamsMap,
+} from "./operations.ts";
 import { planVector } from "./planner.ts";
 import type { PreState } from "./pre-state.ts";
 import { REVERSIBILITY } from "./reversibility.ts";
@@ -373,18 +378,19 @@ export async function runMutation<K extends OperationKind>(
   const taskScope = scope !== undefined ? taskMembershipClause(scope) : undefined;
   const p = params as Record<string, unknown>;
   if (typeof p["uuid"] === "string") {
-    const uuid = op.startsWith("project.")
-      ? resolveProjectWriteTarget(
-          deps.db,
-          p["uuid"],
-          scope !== undefined ? { task: taskScope!, named: namedProjectClause(scope) } : undefined,
-        )
-      : resolveTaskUuidPrefix(
-          deps.db,
-          p["uuid"],
-          op.startsWith("heading.") ? "heading" : "to-do",
-          taskScope,
-        );
+    // Heading verbs (project.*-heading whose `uuid` is a heading row) resolve as
+    // headings, NOT projects, even though they share the `project.` namespace.
+    const uuid = isHeadingTargetOp(op)
+      ? resolveTaskUuidPrefix(deps.db, p["uuid"], "heading", taskScope)
+      : op.startsWith("project.")
+        ? resolveProjectWriteTarget(
+            deps.db,
+            p["uuid"],
+            scope !== undefined
+              ? { task: taskScope!, named: namedProjectClause(scope) }
+              : undefined,
+          )
+        : resolveTaskUuidPrefix(deps.db, p["uuid"], "to-do", taskScope);
     params = { ...params, uuid };
   }
   if (Array.isArray(p["uuids"])) {

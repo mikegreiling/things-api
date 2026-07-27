@@ -20,7 +20,12 @@ import { locateThingsDb } from "./db/locate.ts";
 import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
-import { resolveAreaUuid, resolveProjectUuid, resolveTaskUuidPrefix } from "./read/queries.ts";
+import {
+  resolveAreaUuid,
+  resolveHeadingUuid,
+  resolveProjectUuid,
+  resolveTaskUuidPrefix,
+} from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
@@ -101,6 +106,7 @@ import type {
   TagUpdateParams,
   HeadingArchiveParams,
   HeadingUnarchiveParams,
+  HeadingPlacement,
   TodoAddLoggedParams,
   TodoAddParams,
   TodoBackdateParams,
@@ -124,6 +130,7 @@ import {
 import { planTagCreation } from "./write/tag-refs.ts";
 import { createEnvironmentTracker, type EnvironmentTracker } from "./write/environment.ts";
 import {
+  runAddHeading,
   runHeadingArchive,
   runHeadingUnarchive,
   type HeadingArchiveResult,
@@ -298,6 +305,17 @@ export interface ThingsClient {
    * `tz` argument) so the reported `today` matches what that read computed.
    */
   clockMeta(zoneOverride?: string): ClockMeta | undefined;
+  /**
+   * Reference resolvers the consumer surfaces (CLI/MCP) call to turn a project
+   * ref + heading selector into uuids before invoking a heading verb. Both
+   * throw {@link ReferenceResolutionError} (uuid candidates on ambiguity),
+   * scope-aware when a container scope is active. `heading` shares the one
+   * heading-selector core (title | uuid | empty-string literal; no ordinal).
+   */
+  resolve: {
+    project(ref: string): { uuid: string; title: string };
+    heading(projectUuid: string, sel: string): { uuid: string; title: string };
+  };
   read: {
     /**
      * The Today list (Today + This Evening split) with the sidebar badge,
@@ -450,15 +468,31 @@ export interface ThingsClient {
     /**
      * Create a heading inside an EXISTING project; the new heading's uuid is
      * on the result. Delivered through the Things proxy shortcuts (run
-     * `things setup shortcuts` once first).
+     * `things setup shortcuts` once first). A `placement` positions the new
+     * heading among the project's headings via a native `move-heading` leg
+     * (requires allow-experimental); omitted, it appends. Anchor uuids in the
+     * placement are resolved by the caller.
      */
     addHeading(
       project: ContainerRef,
       title: string,
+      placement?: HeadingPlacement,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /** Rename a heading in place (works on archived headings too). */
     renameHeading(uuid: string, title: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Reposition one or more of a project's headings as an ordered block
+     * (selection order = resulting order; children follow). `headings` and the
+     * placement anchors are resolved heading uuids. Native reorder wire
+     * (requires allow-experimental).
+     */
+    moveHeading(
+      project: ContainerRef,
+      headings: string[],
+      placement: HeadingPlacement,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     /**
      * Archive a heading (the UI's Archive — it leaves the active project
      * view, reversibly). With open children the policy is mandatory:
@@ -734,6 +768,23 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     fingerprint,
     schemaStatus: () => toSchemaStatus(fingerprint()),
     clockMeta: (zoneOverride) => buildClockMeta(clock, zoneOverride),
+    resolve: {
+      project: (ref) => {
+        const uuid = resolveProjectUuid(conn.db, ref, {
+          ...(scopeClauses !== undefined && {
+            scopeWhere: scopeClauses.namedProject.where,
+            scopeBinds: scopeClauses.namedProject.binds,
+          }),
+        });
+        const row = conn.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as
+          | { title: string | null }
+          | undefined;
+        return { uuid, title: row?.title ?? "" };
+      },
+      // Headings inside a scoped project are in-scope by construction (the
+      // project ref was scope-checked), so no extra clause is threaded here.
+      heading: (projectUuid, sel) => resolveHeadingUuid(conn.db, projectUuid, sel),
+    },
     read: {
       // The list views own their bounding: run the full filtered query, then
       // truncate to the resolved cap (default 50 / per-block 30·3) — the exact
@@ -970,8 +1021,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
       addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
-      addHeading: (project, title, o) => run("heading.add", { project, title }, o),
-      renameHeading: (uuid, title, o) => run("heading.rename", { uuid, title }, o),
+      addHeading: (project, title, placement, o) =>
+        runAddHeading(writeDeps, project, title, placement, o ?? {}),
+      renameHeading: (uuid, title, o) => run("project.rename-heading", { uuid, title }, o),
+      moveHeading: (project, headings, placement, o) =>
+        run("project.move-heading", { project, headings, placement }, o),
       clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),

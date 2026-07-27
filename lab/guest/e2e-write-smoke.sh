@@ -133,7 +133,7 @@ run_step 0 "seed area to-do for mixed check" todo add "E2E-AT1" --area LAB-AREA-
 AT1=$(json_get "d['data']['uuid']")
 run_step 4 "mixed to-do+project area reorder is rejected (guard)" reorder --scope area --area LAB-AREA-A "$AT1" "$AP1"
 
-echo "== reorder scopes: inbox / someday / headings / projects (§C) =="
+echo "== reorder scopes: inbox / someday / projects + project move-heading (§C) =="
 run_step 0 "seed inbox I1" todo add "E2E-I1"
 I1=$(json_get "d['data']['uuid']")
 run_step 0 "seed inbox I2" todo add "E2E-I2"
@@ -169,7 +169,7 @@ else
   echo "FAIL heading fixtures did not appear (json url seed)"
   FAILURES=$((FAILURES + 1))
 fi
-run_step 0 "native reorder of a project's HEADINGS (scf P1)" reorder --scope headings --project "$HPROJ" "$H2" "$H1"
+run_step 0 "native reorder of a project's HEADINGS (scf P1)" project move-heading "$HPROJ" "$H2" "$H1" --first
 run_step 0 "seed top-level project TP1" project add "E2E-TP1"
 TP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed top-level project TP2" project add "E2E-TP2"

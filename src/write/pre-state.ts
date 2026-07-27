@@ -8,8 +8,8 @@ import { encodePackedDate, localToday } from "../model/dates.ts";
 import type { AnyTask, Project, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
-import { resolveNamedRef } from "../read/queries.ts";
-import type { ContainerRef, ReorderParams } from "./operations.ts";
+import { resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
+import type { ContainerRef, HeadingPlacement, ReorderParams } from "./operations.ts";
 
 export interface ResolvedContainer {
   uuid: string;
@@ -103,8 +103,22 @@ export interface PreState {
    * counts how many of these are dead post-op. Null for non-project ops.
    */
   repeatSubtreeUuids: string[] | null;
-  /** heading.convert-to-project: the project-reveal + heading-row ordinal (HEADCERT1). */
+  /** project.promote-heading: the project-reveal + heading-row ordinal (HEADCERT1). */
   headingConvert: HeadingConvertTaxonomy | null;
+  /** project.move-heading: current heading order + computed target order. */
+  headingMove: HeadingMovePre | null;
+}
+
+/** project.move-heading pre-computation (spec §2/§4). */
+export interface HeadingMovePre {
+  /** Destination project resolution (the container the headings live in). */
+  project: ContainerResolution;
+  /** The project's non-trashed heading uuids in current display (index) order. */
+  current: string[];
+  /** Full target order after moving the block — feeds the native wire + delta. */
+  targetOrder: string[];
+  /** Reasons the move is illegal (empty = ok). */
+  problems: string[];
 }
 
 /**
@@ -172,7 +186,65 @@ export function emptyPreState(): PreState {
     projectRepeat: null,
     repeatSubtreeUuids: null,
     headingConvert: null,
+    headingMove: null,
   };
+}
+
+/**
+ * Read a project's current heading order and compute the FULL target order
+ * after moving `headings` (an ordered block) to the requested placement. The
+ * block lands contiguously in selection order; every other heading keeps its
+ * relative order. Children follow their heading on the wire (scf P1). Illegal
+ * requests (unknown/duplicated movee, an anchor that is a movee or absent)
+ * collect problems and leave the order unchanged.
+ */
+export function computeHeadingMovePre(
+  db: DatabaseSync,
+  project: ContainerResolution,
+  headings: string[],
+  placement: HeadingPlacement,
+): HeadingMovePre {
+  const projectUuid = project.resolved?.uuid ?? "";
+  const current = (
+    db
+      .prepare(
+        `SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+      )
+      .all(projectUuid) as { uuid: string }[]
+  ).map((r) => r.uuid);
+  const problems: string[] = [];
+  const currentSet = new Set(current);
+  const movees = new Set<string>();
+  for (const h of headings) {
+    if (movees.has(h)) problems.push(`heading ${h} listed more than once`);
+    movees.add(h);
+  }
+  if (headings.length === 0) problems.push("no headings given");
+  for (const h of headings) {
+    if (!currentSet.has(h)) problems.push(`${h} is not a heading of this project`);
+  }
+  let anchor: string | null = null;
+  if ("before" in placement || "after" in placement) {
+    anchor = "before" in placement ? placement.before : placement.after;
+    if (!currentSet.has(anchor)) {
+      problems.push(`anchor heading ${anchor} is not a heading of this project`);
+    }
+    if (movees.has(anchor)) {
+      problems.push("the anchor heading cannot also be one of the moved headings");
+    }
+  }
+  if (problems.length > 0) return { project, current, targetOrder: current, problems };
+
+  const rest = current.filter((u) => !movees.has(u));
+  let targetOrder: string[];
+  if ("position" in placement) {
+    targetOrder = placement.position === "first" ? [...headings, ...rest] : [...rest, ...headings];
+  } else {
+    const idx = rest.indexOf(anchor as string);
+    const insertAt = "before" in placement ? idx : idx + 1;
+    targetOrder = [...rest.slice(0, insertAt), ...headings, ...rest.slice(insertAt)];
+  }
+  return { project, current, targetOrder, problems: [] };
 }
 
 /**
@@ -196,7 +268,7 @@ export function projectSubtreeUuids(db: DatabaseSync, projectUuid: string): stri
 }
 
 /**
- * Taxonomy for `heading.convert-to-project`'s pure-AX drive (HEADCERT1). A
+ * Taxonomy for `project.promote-heading`'s pure-AX drive (HEADCERT1). A
  * heading is not selectable via `things:///show` (the reveal URL selects to-dos
  * only — the UIC1 blocker), but revealing the heading's PARENT PROJECT shows its
  * content table, in which the heading renders as a selectable ROW. The row
@@ -355,18 +427,12 @@ export function resolveProject(db: DatabaseSync, ref: ContainerRef): ContainerRe
 export function resolveHeading(
   db: DatabaseSync,
   projectUuid: string,
-  headingTitle: string,
+  headingSel: string,
 ): ContainerResolution {
-  const rows = db
-    .prepare(
-      "SELECT uuid, title FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? AND title = ? COLLATE NOCASE",
-    )
-    .all(projectUuid, headingTitle) as unknown as ResolvedContainer[];
-  const first = rows[0];
-  return {
-    resolved: rows.length === 1 && first !== undefined ? first : null,
-    matches: rows.length,
-  };
+  // Shares the one heading-selector core (title | uuid | empty-string literal,
+  // no ordinal) with the project heading verbs — see resolveHeadingRef.
+  const r = resolveHeadingRef(db, projectUuid, headingSel);
+  return { resolved: r.resolved, matches: r.matches };
 }
 
 export function projectStatus(db: DatabaseSync, uuid: string): TaskStatus | null {
@@ -474,8 +540,6 @@ interface MemberRow {
  *             unprobed and the guard rejects them.
  *  - inbox:   unscheduled to-dos with no container (start=0), by "index"
  *             (A6/P8a — the command ranks the sent list in order).
- *  - headings: the HEADING rows (type=2) of a project, by "index" (scf P1 —
- *             the private command accepts heading uuids; children follow).
  *  - someday: loose someday to-dos AND area-less someday projects, by
  *             "index"; same-type requests only. The Someday list handler is
  *             anchor-stacked with OPPOSITE stack directions by row type:
@@ -579,10 +643,6 @@ export function computeReorderPre(
       // Inbox = unscheduled to-dos with no container (start=0, A6). Ranks on
       // "index"; the private command re-ranks the full wire list exactly.
       members = select("type = 0 AND start = 0", [], `"index"`);
-      break;
-    }
-    case "headings": {
-      members = select("type = 2 AND project = ?", [containerUuid ?? ""], `"index"`);
       break;
     }
     case "someday": {

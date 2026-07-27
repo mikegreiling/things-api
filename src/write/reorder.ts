@@ -117,7 +117,6 @@ function resolveStrategy(
       params.scope === "project" ||
       params.scope === "area" ||
       params.scope === "inbox" ||
-      params.scope === "headings" ||
       params.scope === "someday"
     ) {
       return blocked(
@@ -139,7 +138,6 @@ function resolveStrategy(
     case "project":
     case "area":
     case "inbox":
-    case "headings":
     case "someday":
       // Native-only scopes: let the pipeline explain precisely why native is
       // unavailable (planner: experimental gate; canary: sdef change).
@@ -363,7 +361,7 @@ function legOptions(options: WriteOptions, txnId?: string): WriteOptions {
 }
 
 function resolveContainerUuid(deps: WriteDeps, params: ReorderParams): string | null {
-  if (params.scope === "project" || params.scope === "headings") {
+  if (params.scope === "project") {
     return resolveProject(deps.db, params.container ?? {}).resolved?.uuid ?? null;
   }
   if (params.scope === "area") {

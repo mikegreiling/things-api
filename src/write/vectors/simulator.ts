@@ -1473,9 +1473,9 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       .run(genUuid(), params.title, parent);
   }),
 
-  "heading.add": op<"heading.add">((sim, params, ctx) => {
+  "project.add-heading": op<"project.add-heading">((sim, params, ctx) => {
     const projUuid = containerUuid(sim, params.project, "project");
-    if (projUuid === null) throw new Error("simulator: heading.add needs a project");
+    if (projUuid === null) throw new Error("simulator: project.add-heading needs a project");
     insertTask(sim, 2, ctx, { uuid: genUuid(), title: params.title, project: projUuid });
   }),
 

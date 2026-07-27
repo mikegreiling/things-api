@@ -94,14 +94,14 @@ describe("H-TEMPLATE-CHILD-RESTORE", () => {
 
 describe("H-UNKNOWN-DESTINATION (heading.add project resolution)", () => {
   it("blocks when the destination project does not resolve", () => {
-    expect(check("heading.add", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
+    expect(check("project.add-heading", { project: { title: "ghost" }, title: "H" })?.hazard).toBe(
       "H-UNKNOWN-DESTINATION",
     );
   });
 
   it("passes when the project resolves", () => {
     seedProject(fixture.db, { title: "Real" });
-    expect(check("heading.add", { project: { title: "Real" }, title: "H" })).toBeNull();
+    expect(check("project.add-heading", { project: { title: "Real" }, title: "H" })).toBeNull();
   });
 });
 
@@ -297,18 +297,18 @@ describe("H-HEADING-CHILDREN", () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     seedTodo(fixture.db, { title: "child", heading });
-    expect(check("heading.archive", { uuid: heading })?.hazard).toBe("H-HEADING-CHILDREN");
-    expect(check("heading.archive", { uuid: heading, children: "complete" })).toBeNull();
-    expect(check("heading.archive", { uuid: heading, children: "cancel" })).toBeNull();
+    expect(check("project.archive-heading", { uuid: heading })?.hazard).toBe("H-HEADING-CHILDREN");
+    expect(check("project.archive-heading", { uuid: heading, children: "complete" })).toBeNull();
+    expect(check("project.archive-heading", { uuid: heading, children: "cancel" })).toBeNull();
     // reparent at the atomic layer with children still open = orchestrator bypass
-    expect(check("heading.archive", { uuid: heading, children: "reparent" })?.detail).toContain(
-      "orchestrator",
-    );
+    expect(
+      check("project.archive-heading", { uuid: heading, children: "reparent" })?.detail,
+    ).toContain("orchestrator");
   });
 
   it("heading ops reject non-heading targets", () => {
     const todo = seedTodo(fixture.db, { title: "t" });
-    expect(check("heading.rename", { uuid: todo, title: "x" })?.hazard).toBe(
+    expect(check("project.rename-heading", { uuid: todo, title: "x" })?.hazard).toBe(
       "H-UNKNOWN-DESTINATION",
     );
   });
@@ -329,9 +329,9 @@ describe("H-HEADING-CHILDREN", () => {
       expect(block?.detail).toContain("things todo");
     }
     expect(check("project.set-tags", { uuid: todo, tags: [] })?.detail).toContain("not a project");
-    // A heading points at the heading commands.
+    // A heading points at the project heading commands.
     expect(check("project.update", { uuid: heading, title: "x" })?.detail).toContain(
-      "things heading",
+      "things project …-heading",
     );
     // The already-covered ops still reject too.
     expect(check("project.move", { uuid: todo, area: { uuid: "A" } })?.hazard).toBe(

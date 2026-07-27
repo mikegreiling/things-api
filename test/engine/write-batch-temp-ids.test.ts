@@ -104,7 +104,7 @@ describe("batch temp-id chaining", () => {
     const ops: BatchOp[] = [
       { op: "project.add", params: { title: "Launch" }, tempId: "proj" },
       {
-        op: "heading.add",
+        op: "project.add-heading",
         params: { project: { uuid: "$proj" }, title: "Phase A" },
         tempId: "head",
       },

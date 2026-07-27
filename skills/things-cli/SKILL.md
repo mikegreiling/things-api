@@ -42,7 +42,7 @@ Views and lookups — pass `--json` whenever you will act on the output: `things
 
 ## Writing
 
-Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …`, `things area …`, `things heading …`, `things tag …`, plus `things batch` (JSONL of many changes — chain created uuids across lines with `tempId`/`$ref`, retry safely with `opId`, undo the whole run with its `undoToken`; see references/contracts.md), `things undo`, and `things reorder`.
+Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …` (add/update/move/complete/… plus the heading verbs `add-heading`/`rename-heading`/`archive-heading`/`unarchive-heading`/`promote-heading`/`move-heading`, each taking a project ref then a heading selector — an exact title or uuid), `things area …`, `things tag …`, plus `things batch` (JSONL of many changes — chain created uuids across lines with `tempId`/`$ref`, retry safely with `opId`, undo the whole run with its `undoToken`; see references/contracts.md), `things undo`, and `things reorder`.
 
 **Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only (`--area`/`--project`/`--heading`). Per-verb preconditions and the rest of the write vocabulary: `things help writes`, `things help repeating`, [references/contracts.md](references/contracts.md).
 

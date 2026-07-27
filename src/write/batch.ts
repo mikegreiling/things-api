@@ -126,13 +126,13 @@ const UUID_MINTING_OPS = new Set<string>([
   "project.add",
   "project.add-repeating",
   "area.add",
-  "heading.add",
+  "project.add-heading",
   "todo.duplicate",
   "project.duplicate",
   "todo.make-repeating",
   "project.make-repeating",
   "todo.convert-to-project",
-  "heading.convert-to-project",
+  "project.promote-heading",
 ]);
 
 const TEMP_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
@@ -154,6 +154,7 @@ const REF_KEYS = new Set([
   "area",
   "container",
   "heading",
+  "headings",
 ]);
 
 /** opId idempotency lookback: at most the last 1000 records, and only the last 7 days. */
@@ -200,7 +201,7 @@ function validateDeclarations(ops: BatchOp[]): {
     if (!UUID_MINTING_OPS.has(entry.op)) {
       errors.set(
         i,
-        `tempId is only valid on an op that creates something (e.g. todo.add, project.add, heading.add) — not "${entry.op}"`,
+        `tempId is only valid on an op that creates something (e.g. todo.add, project.add, project.add-heading) — not "${entry.op}"`,
       );
       continue;
     }

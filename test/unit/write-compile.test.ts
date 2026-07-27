@@ -313,49 +313,53 @@ describe("scf2/P8 op compilation goldens", () => {
     expect(inv.payload.indexOf('with ids "C"')).toBeLessThan(inv.payload.indexOf('"C,B,A"'));
   });
 
-  it("reorder headings: project specifier carries the heading wire list forward (scf P1)", () => {
+  it("project.move-heading: project specifier carries the full computed heading order (scf P1)", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
-    pre.reorder = {
-      key: "index",
-      members: [],
-      rejected: [],
-      duplicates: [],
-      projectMembers: [],
-      mixedTypes: false,
-      wireList: ["H2", "H1"],
+    pre.headingMove = {
+      project: pre.destProject,
+      current: ["H1", "H2", "H3"],
+      targetOrder: ["H2", "H1", "H3"],
+      problems: [],
     };
-    const inv = COMMANDS["reorder"].compile(
-      { scope: "headings", container: { uuid: "PROJ-9" }, uuids: ["H2", "H1"] },
+    const inv = COMMANDS["project.move-heading"].compile(
+      { project: { uuid: "PROJ-9" }, headings: ["H2"], placement: { position: "first" } },
       "applescript",
       pre,
       { token: TOKEN },
     );
     expect(inv.payload).toContain('project id "PROJ-9"');
-    expect(inv.payload).toContain('with ids "H2,H1"');
+    expect(inv.payload).toContain('with ids "H2,H1,H3"');
   });
 });
 
 describe("heading op goldens (P10/P11)", () => {
-  it("heading.rename / archive (per-policy status) / unarchive compile to by-id AppleScript", () => {
+  it("rename / archive (per-policy status) / unarchive compile to by-id AppleScript", () => {
     const pre = emptyPreState();
     expect(
-      COMMANDS["heading.rename"].compile({ uuid: "H1", title: "New" }, "applescript", pre, {
+      COMMANDS["project.rename-heading"].compile({ uuid: "H1", title: "New" }, "applescript", pre, {
         token: TOKEN,
       }).payload,
     ).toContain('set name of to do id "H1" to "New"');
     expect(
-      COMMANDS["heading.archive"].compile({ uuid: "H1" }, "applescript", pre, { token: TOKEN })
-        .payload,
-    ).toContain('set status of to do id "H1" to completed');
-    expect(
-      COMMANDS["heading.archive"].compile({ uuid: "H1", children: "cancel" }, "applescript", pre, {
+      COMMANDS["project.archive-heading"].compile({ uuid: "H1" }, "applescript", pre, {
         token: TOKEN,
       }).payload,
+    ).toContain('set status of to do id "H1" to completed');
+    expect(
+      COMMANDS["project.archive-heading"].compile(
+        { uuid: "H1", children: "cancel" },
+        "applescript",
+        pre,
+        {
+          token: TOKEN,
+        },
+      ).payload,
     ).toContain('set status of to do id "H1" to canceled');
     expect(
-      COMMANDS["heading.unarchive"].compile({ uuid: "H1" }, "applescript", pre, { token: TOKEN })
-        .payload,
+      COMMANDS["project.unarchive-heading"].compile({ uuid: "H1" }, "applescript", pre, {
+        token: TOKEN,
+      }).payload,
     ).toContain('set status of to do id "H1" to open');
   });
 });
@@ -364,7 +368,7 @@ describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
   it("heading.add pipes {title, project:<uuid>} to things-proxy-create-heading", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-9", title: "My Project" }, matches: 1 };
-    const inv = COMMANDS["heading.add"].compile(
+    const inv = COMMANDS["project.add-heading"].compile(
       { project: { title: "My Project" }, title: "Phase Å" },
       "shortcuts",
       pre,
@@ -392,7 +396,7 @@ describe("Shortcuts vector goldens (S02 / scf P3b)", () => {
 
   it("both ops refuse a non-shortcuts vector (planner-bug guard)", () => {
     expect(() =>
-      COMMANDS["heading.add"].compile(
+      COMMANDS["project.add-heading"].compile(
         { project: { uuid: "P" }, title: "x" },
         "url-scheme",
         emptyPreState(),
