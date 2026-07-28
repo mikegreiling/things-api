@@ -145,3 +145,97 @@ TART_HOME=/Volumes/Workspace/tart \
 ```
 
 No Accessibility, no VNC — all four probes are headless URL/AppleScript. The `confirm` subcommand runs the DERIVED forward-order protocol on fresh groups (the `headless` back-insert arms ran reverse order to MAP the law, so they show reversed output by design; `confirm` proves the forward protocol lands the target). Evidence (gitignored, synthetic): `lab/artifacts/bounce2-lab/report.txt`.
+
+---
+
+# BOUNCEJSON — can ONE `things:///json` array collapse an N-item bounce to 1–2 dispatches?
+
+Third offline Tart clone (`bjhx-lab`, run 2026-07-27, Things 3.22.11, pinned clock 2026-07-05; ordering is local — no cloud account). Script: [`lab/scripts/research-bouncejson-headxproj.sh`](../../lab/scripts/research-bouncejson-headxproj.sh) (subcommands `setup`/`bouncejson`/`headxproj`/`teardown`). All BOUNCEJSON arms are HEADLESS (URL `things:///json` + read-only SQLite) — no Accessibility, no VNC. The Phase A.1 bounce protocols cost **2 verified URL dispatches PER item** (away + back), so an N-item reorder is 2N dispatches; this campaign asks whether the app's `json` update-array surface collapses that to 2 (or 1) dispatches while preserving the BOUNCE2 front/back-insert order laws.
+
+**Status: RAN + BANKED.** Headline: **YES for the BACK-insert classes — the whole bounce collapses to ONE `json` array** (interleaving both legs per item, applied in exact array order); **NO for the area-someday FRONT-insert class** — the `json` `when` update is INDEX-INERT on area-direct members (start toggles, `index` frozen), so it does not reproduce the front-insert and must stay on the sequential URL bounce.
+
+## Verdict table (observed)
+
+| Arm | Question | Verdict |
+|---|---|---|
+| **BJ-0** | does `json` `operation:"update"` accept a `when` change on an EXISTING item (auth-token op)? | **YES, both directions.** `[{type:to-do,operation:update,id,attributes:{when:someday}}]` set `start 1→2`; `when:anytime` set it back `2→1` (and front-inserted the loose item, `index -2522 → -22609`). The precondition holds — `json` can carry the bounce legs. |
+| **BJ-a headed, 2-DISPATCH** | array-order vs the BOUNCE2-h BACK-insert law | **EXACT.** away-array = all-`someday`; back-array = `anytime` in a SCRAMBLED target order `BJH3,BJH1,BJH4,BJH2` → visible order became **`BJH3<BJH1<BJH4<BJH2`** (= array order), heading FK 4/4 intact. Array order controls the resulting `index` order, reproducing the forward-order back-insert. |
+| **BJ-a headed, 1-DISPATCH** | can ONE array carry BOTH legs per item, in sequence? | **EXACT — the full collapse.** ONE array interleaving `[someday,anytime]` per item in scrambled target order `BJK2,BJK4,BJK1,BJK3` → visible **`BJK2<BJK4<BJK1<BJK3`**, headed 4/4, `start=1` 4/4. **A whole N-item back-insert bounce = ONE `json` dispatch (2N ops), applied in strict array order.** |
+| **BJ-a area-someday, 2-DISPATCH** | array-order vs the SOMEBNC-area FRONT-insert law | **INERT — DEAD END.** away-array (`anytime`) + back-array (`someday`), reverse order, left `index` UNCHANGED on all four (`BJA4<BJA3<BJA2<BJA1` before AND after; indices byte-identical); only `start` toggled `2→1→2`. Clean (someday+area preserved) but NO reorder. |
+| **BJ-a area-someday, 1-DISPATCH** | interleaved single array | **INERT — DEAD END** (same: order unchanged, `index` frozen, `start`/area preserved). |
+| **BJ-b** | terminal state only, or distinct DB transactions? | **DISTINCT transactions, in array order.** A single 5-op array wrote **5 DISTINCT `userModificationDate`** values ~2.7 ms apart, MONOTONIC in array order (`BJM1<…<BJM5` by timestamp). NOT one atomic commit — each element lands as its own write, independently verifiable at `userModificationDate` granularity. |
+| **BJ-c** | mid-array poison (bad uuid) — short-circuit / skip / abort? | **FULL ABORT (validate-first).** `[sd BJG1, sd BJG2, sd <BAD-uuid>, sd BJG3, sd BJG4]` applied to NONE — `BJG1=BJG2=BJG3=BJG4=start 1` unchanged, INCLUDING the two elements BEFORE the poison. The app validates every element first; any unresolvable id rejects the ENTIRE array (+ the `json` error modal / focus steal). No partial progress to reconcile, but a single bad ref kills the whole batch. |
+| **BJ-d** | timing: 1×30-op array vs 30 sequential dispatches | **~7× faster.** ARRAY (1 dispatch, 30 ops) = **242 ms** (8 ms/op); SEQ (30 single-op dispatches) = **1763 ms** (58 ms/op, ≈ the BOUNCE2-t URL ~55 ms/leg). A 30-item bounce (60 legs): URL ≈ 3.4 s; `json` 1-dispatch interleaved 60-op array ≈ **~0.5 s**. |
+
+## The unifying mechanism (why back-insert collapses but front-insert doesn't)
+
+The `json` `when` update reindexes selectively:
+
+| leg | on a LOOSE or CONTAINER (heading-child) item | on an AREA-DIRECT member |
+|---|---|---|
+| `when=anytime` | **REINDEXES** (BJ-0 loose → global min; headed re-entry → bucket end / back-insert) | index FROZEN |
+| `when=someday` | index FROZEN (BJ-a headed away-leg left indices untouched) | index FROZEN |
+
+So the `json`-array collapse reproduces a bounce **iff the PLACEMENT leg is `anytime` into a loose/container bucket** — i.e. the heading-children back-insert (`someday→anytime`), and by the same mechanism a project's unheaded-anytime children and area-less loose-anytime items (BJ-0 confirmed loose-anytime front-inserts). It is a DEAD END whenever the placement leg is `someday` (area-someday, project-someday, the shipped someday scope) OR the item is an area-direct member — those stay on the 2N-dispatch sequential URL bounce.
+
+## Compile-able law (feeds `src/write/reorder.ts` — the bounce compiler)
+
+- **BACK-insert reorder classes (heading children; project unheaded-anytime children):** compile the whole reorder to **ONE `things:///json` array** carrying `[{when:someday},{when:anytime}]` per item in target order (2N ops, 1 dispatch). Result order = array order exactly; heading/project FK preserved; ~7× faster than the URL loop. **Pre-validate every id** — a single unresolvable ref full-aborts the batch (BJ-c), so the compiler must resolve all refs before dispatch (it already does). Elements are independently verifiable via `userModificationDate` (BJ-b) if per-leg confirmation is wanted, but the terminal-order read suffices.
+- **FRONT-insert / someday-placement classes (area-someday, project-someday, someday scope):** `json` is index-inert — **do NOT collapse**; keep the sequential URL bounce (the reindex only fires on the URL path). Documented dead end, not a regression.
+- **Poison honesty:** the `json` array is all-or-nothing on validation failure (validate-first full abort), so partial-progress reconciliation is unnecessary for the collapsed path — but the whole batch fails on one bad ref (+ error modal), so ref resolution must precede dispatch.
+
+## Reproduce
+
+```sh
+TART_HOME=/Volumes/Workspace/tart \
+  bash lab/scripts/research-bouncejson-headxproj.sh setup       # clone+boot+airgap+clock-pin+seed
+  bash lab/scripts/research-bouncejson-headxproj.sh bouncejson    # BJ-0 · BJ-a (both classes/shapes) · BJ-b · BJ-c · BJ-d
+  bash lab/scripts/research-bouncejson-headxproj.sh teardown
+```
+
+No Accessibility, no VNC — all BOUNCEJSON arms are headless `things:///json`. The BJ-a headed arms use SCRAMBLED targets (seed order already equals a naive forward target) so a passing result proves array order CONTROLS placement, not a no-op. Evidence (gitignored, synthetic): `lab/artifacts/bjhx-lab/report.txt`.
+
+---
+
+# HEADXPROJ — heading move to a DIFFERENT project (the ellipsis-menu `Move…` recipe)
+
+Same `bjhx-lab` clone (run 2026-07-27, Accessibility granted via the AXVM1 rung-b VNC toggle after materializing the TCC row with a denied AX op). A first-class GUI operation (a heading relocates WITH its children to another project) with NO automation spelling on any headless vector (URL ⛔, AppleScript `move → project id` 301 / `set-detail` Parent silent no-op scf P2, Shortcuts ⛔). Originally queued as an AX-DRAG candidate; **redesigned 2026-07-27 (maintainer live-GUI flag) to the heading row's `…` ellipsis → `Move…` MENU path** — drive that first, drag is the fallback of last resort. LOW stakes.
+
+**Status: RAN + BANKED. VERDICT: FEASIBLE-with-recipe** via the ellipsis `Move…` menu — deterministic, keyboard-driveable, NO drag, NO §9 AX-mirror fragility. The drag fallback was not needed.
+
+## The recipe (each step lab-confirmed)
+
+1. **Show the source project** (`things:///show?id=<sourceProject>`), `activate` Things, set `AXEnhancedUserInterface=false`.
+2. **Locate the heading row.** Content rows are frame-sorted and map to DB order (project-header = ordinal 0, the heading = ordinal 1, children 2…). **The heading is directly AX-identifiable regardless of ordinal**: its `…` button is an `AXUnknown` whose `AXDescription` is **`"More. <headingTitle>"`** (it CARRIES the heading title — unlike to-do content rows, which expose only cell-template identifiers like "Task NewForToday Template"), and the heading's own title node is an `AXUnknown desc="‎<title>"` (a U+200E LTR-mark prefix, strip it). So row-identity is NOT the reordgaps `SRC_NOT_FOUND` blocker for a heading.
+3. **HID-click the `…` button** at its AX-resolved frame center. `AXPress` on the button is **INERT** (parallels §8j — the project card's `…` — but here the node DOES exist and carries the title), so use the UIC3 mouse-synthesis hybrid: `CGEvent` click at the frame center (AX points == CGEvent points; the golden is 2× Retina, so VNC pixels = AX points × 2).
+4. **Popover opens: `Archive` / `Move…` / `Convert to Project…` / `Delete`.** HID-click `Move…`.
+5. **A searchable project picker opens** (a `Move` filter field + the full project list, current project check-marked). **Type the destination project name → the list filters to the match → press Return to select** (it also offers `New Project "<name>"` to create the destination).
+6. Done — the heading + its children relocate to the destination.
+
+## DB delta (the verify oracle for a future `project.move-heading-to-project` op)
+
+Moving heading `HXH` (children `HXC1`/`HXC2`) from `HX-PA` → `HX-PB` (empty destination):
+
+| row | before | after |
+|---|---|---|
+| `HXH` (heading, type=2) | `project=HX-PA`, heading NULL, `index=0`, area NULL | **`project=HX-PB`**; heading NULL, **`index=0` (preserved, no renumber)**, area NULL — only the project FK changed |
+| `HXC1` / `HXC2` (children, type=0) | `heading=HXH`, `project=NULL`, idx −593/0 | **UNCHANGED** — `heading=HXH`, `project=NULL`, idx −593/0 — children follow the heading via their intact heading FK; their own rows are not rewritten |
+
+So a heading cross-project move is a **single-row project-FK rewrite on the heading** (its children re-home implicitly through the heading FK). Destination index = the heading's prior `index` preserved (dest was empty — collision behaviour on a populated destination is untested; a future op should capture the destination order and place explicitly). No `area`/`start`/`deadline`/`index` churn on any child.
+
+## Observations (recorded, not re-certified)
+
+- The same popover carries **`Convert to Project…`** — a SECOND spelling for heading→project promotion (currently the ui-vector Items-menu path certified in HEADCERT), and **`Archive`** / **`Delete`**. If a build ever wants a menu-driven promote/archive, this popover is the surface. Not re-certified here.
+- The `Move…` picker doubles as a **create-destination**: `New Project "<typed name>"` appears below the filtered matches.
+- Heading `…`-button AX-node existence (with title in `AXDescription`) is the load-bearing enabler — it sidesteps the reordgaps content-row title-invisibility that blocked the drag oracles. Filed as a novel path.
+
+## Reproduce
+
+```sh
+TART_HOME=/Volumes/Workspace/tart VNCDO=/path/to/vncvenv/bin/vncdo \
+  bash lab/scripts/research-bouncejson-headxproj.sh setup       # + AX grant (materialize TCC row via denied AX op, then VNC-toggle)
+  bash lab/scripts/research-bouncejson-headxproj.sh headxproj     # headless reconfirm + ellipsis Move… recipe (AX-granted)
+  bash lab/scripts/research-bouncejson-headxproj.sh teardown
+```
+
+The AX grant needs `$VNCDO` (throwaway `vncdotool` venv — the host has no `vncdo`) to toggle the `sshd-keygen-wrapper` Accessibility row; the TCC row must first be materialized by provoking a denied AX op (an `osascript` System Events UI-element read → −1719) BEFORE the toggle, else the pane has no row to flip. Evidence (gitignored, synthetic): `lab/artifacts/bjhx-lab/` (`report.txt`, `screens/*.png`).
