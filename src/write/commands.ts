@@ -1379,6 +1379,19 @@ const reorder: CommandSpec<"reorder"> = {
       pre.destArea = resolveArea(db, params.container ?? {});
       containerUuid = pre.destArea.resolved?.uuid ?? null;
     }
+    if (params.scope === "container-day") {
+      // The container may be a project OR an area (DAYORD-b); resolve whichever
+      // the ref names so the compile can pick the right `project id`/`area id`
+      // specifier. The planner always passes a resolved uuid.
+      const asProject = resolveProject(db, params.container ?? {});
+      if (asProject.resolved !== null) {
+        pre.destProject = asProject;
+        containerUuid = asProject.resolved.uuid;
+      } else {
+        pre.destArea = resolveArea(db, params.container ?? {});
+        containerUuid = pre.destArea.resolved?.uuid ?? null;
+      }
+    }
     pre.reorder = computeReorderPre(db, params, containerUuid, now);
     return pre;
   },
@@ -1396,16 +1409,22 @@ const reorder: CommandSpec<"reorder"> = {
   },
   compile(params, vector, pre) {
     if (vector !== "applescript") unsupportedVector(this.op, vector);
+    const containerDaySpecifier =
+      pre.destProject?.resolved != null
+        ? `project id ${q(pre.destProject.resolved.uuid)}`
+        : `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`;
     const specifier =
       params.scope === "project"
         ? `project id ${q(pre.destProject?.resolved?.uuid ?? "")}`
         : params.scope === "area"
           ? `area id ${q(pre.destArea?.resolved?.uuid ?? "")}`
-          : params.scope === "inbox"
-            ? `list "Inbox"`
-            : params.scope === "someday"
-              ? `list "Someday"`
-              : `list "Today"`;
+          : params.scope === "container-day"
+            ? containerDaySpecifier
+            : params.scope === "inbox"
+              ? `list "Inbox"`
+              : params.scope === "someday"
+                ? `list "Someday"`
+                : `list "Today"`;
     const wire = pre.reorder?.wireList ?? params.uuids;
     if (params.scope === "someday") {
       // The Someday handler STACKS each sent id above the list's current top

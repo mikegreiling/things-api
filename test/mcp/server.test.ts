@@ -1695,10 +1695,17 @@ describe("things MCP server", () => {
   });
 
   describe("reorder — scope-specific validation", () => {
-    it("plans a Today bounce reorder without mutating (dry-run)", async () => {
+    it("plans a Today reorder without mutating (dry-run)", async () => {
       const a = seedTodo(fixture.db, { title: "T-a", startDate: "2026-07-05", todayIndex: 0 });
       const b = seedTodo(fixture.db, { title: "T-b", startDate: "2026-07-05", todayIndex: 1 });
-      await connect([fakeVector(null).vector]);
+      // allow-experimental now defaults on, so today prefers the native re-rank;
+      // supply the applescript reorder vector so the plan resolves regardless of
+      // whether this host's sdef declares the private command (native) or falls
+      // back to the url-scheme bounce.
+      await connect([
+        fakeVector(null).vector,
+        fakeVector(null, { id: "applescript", ops: ["reorder"] }).vector,
+      ]);
       const outcome = textOf(
         await client.callTool({
           name: "reorder",

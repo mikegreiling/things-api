@@ -64,6 +64,34 @@ describe("boolean env overrides are bidirectional", () => {
     expect(loadConfig(env({ THINGS_API_AUDIT: "off" })).auditEnabled).toBe(false);
   });
 
+  it("THINGS_API_BOUNCE_ENABLED forces the bounce off/on bidirectionally", () => {
+    expect(loadConfig(env()).bounceEnabled).toBe(true); // default on
+    saveConfigKey("bounceEnabled", true, env());
+    expect(loadConfig(env({ THINGS_API_BOUNCE_ENABLED: "false" })).bounceEnabled).toBe(false);
+    saveConfigKey("bounceEnabled", false, env());
+    expect(loadConfig(env()).bounceEnabled).toBe(false); // stored false
+    expect(loadConfig(env({ THINGS_API_BOUNCE_ENABLED: "true" })).bounceEnabled).toBe(true);
+  });
+
+  it("THINGS_API_BOUNCE_MAX_ITEMS accepts a positive int and defaults to 30", () => {
+    expect(loadConfig(env()).bounceMaxItems).toBe(30);
+    expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "50" })).bounceMaxItems).toBe(50);
+    saveConfigKey("bounceMaxItems", 12, env());
+    expect(loadConfig(env()).bounceMaxItems).toBe(12); // stored
+    expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "5" })).bounceMaxItems).toBe(5); // env wins
+    // A non-positive / non-integer env value falls through to stored, then default.
+    expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "0" })).bounceMaxItems).toBe(12);
+    expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "-4" })).bounceMaxItems).toBe(12);
+    expect(loadConfig(env({ THINGS_API_BOUNCE_MAX_ITEMS: "abc" })).bounceMaxItems).toBe(12);
+  });
+
+  it("allow-experimental now defaults to TRUE (private-surface on by default)", () => {
+    expect(loadConfig(env()).allowExperimental).toBe(true);
+    expect(loadConfig(env({ THINGS_API_ALLOW_EXPERIMENTAL: "false" })).allowExperimental).toBe(
+      false,
+    );
+  });
+
   it("an unrecognized boolean env value falls through to stored/default", () => {
     saveConfigKey("uiEnabled", true, env());
     expect(loadConfig(env({ THINGS_API_UI_ENABLED: "yes" })).ui.enabled).toBe(true); // stored
@@ -108,6 +136,15 @@ describe("describeConfig provenance reflects the winning layer", () => {
     saveConfigKey("allowExperimental", true, env());
     expect(sourceOf("allow-experimental", env())).toBe("stored");
     expect(sourceOf("actor", env())).toBe("default");
+  });
+
+  it("labels the bounce keys' provenance (env > stored > default)", () => {
+    expect(sourceOf("bounce-enabled", env())).toBe("default");
+    expect(sourceOf("bounce-max-items", env())).toBe("default");
+    saveConfigKey("bounceMaxItems", 20, env());
+    expect(sourceOf("bounce-max-items", env())).toBe("stored");
+    expect(sourceOf("bounce-max-items", env({ THINGS_API_BOUNCE_MAX_ITEMS: "40" }))).toBe("env");
+    expect(sourceOf("bounce-enabled", env({ THINGS_API_BOUNCE_ENABLED: "false" }))).toBe("env");
   });
 
   it("labels host and the profile-derived maxDisruption default as derived", () => {

@@ -188,73 +188,111 @@ type ScopeTarget =
   | { scope: ReorderScope; container?: string }
   | { scope: null; reason: string; prohibited?: boolean };
 
+/** An app-default target for a bounce-dependent placement while bounce is off. */
+function bounceDisabledTarget(what: string): ScopeTarget {
+  return {
+    scope: null,
+    reason:
+      `${what} needs the when= bounce, which is disabled (bounce-enabled=false) — ` +
+      "re-enable it with `things config set bounce-enabled true`",
+  };
+}
+
 /**
- * The reorder protocol for a row's container × bucket. GUARANTEED set (per the
- * REORDGAPS verdicts): loose inbox/today/evening/someday; a project's unheaded
- * anytime OR someday children (SOMEORD-b clean, `index`); an area's anytime
- * members; area-less someday projects; top-level anytime projects. APP-DEFAULT:
- * heading buckets (HEADORD-b — no native surface), a container's SCHEDULED-DAY
- * bucket (DAYORD-b re-ranks `todayIndex` date-preservingly but that per-bucket
- * key is not wired into the reorder op yet), area-less loose anytime to-dos
- * (ANYBNC bounce not wired), repeating TEMPLATE rows (§9e — unreorderable).
- * PROHIBITED: an area's SOMEDAY to-dos (the area specifier de-somedays them,
- * §9f — never attempt).
+ * The reorder protocol for a row's container × bucket, per the REORDGAPS +
+ * BOUNCE2 verdicts (docs/lab/reordgaps-results.md, spec §4 rule 5). GUARANTEED:
+ * loose inbox/today/evening/someday/anytime (ANYBNC bounce); a project's
+ * unheaded anytime OR someday children (SOMEORD-b, native `index`); an area's
+ * anytime members; an area's someday members (SOMEBNC-area bounce — was §9f-
+ * prohibited); a heading's anytime children (BOUNCE2-h forward-order bounce); a
+ * container's same-day scheduled children (DAYORD-b native todayIndex re-rank);
+ * area-less someday projects; top-level anytime projects. APP-DEFAULT: a headed
+ * scheduled/someday/evening child; a project/area child in the evening sub-
+ * bucket; a loose future day (Upcoming re-dates, §9g); repeating TEMPLATE rows
+ * (§9e). When bounce is DISABLED the bounce-dependent classes degrade to
+ * app-default naming the flag — never a destructive or unverified fallback.
  */
-function reorderTargetOf(row: MoveeRow, isTodo: boolean, packedToday: number): ScopeTarget {
+function reorderTargetOf(
+  row: MoveeRow,
+  isTodo: boolean,
+  packedToday: number,
+  bounceEnabled: boolean,
+): ScopeTarget {
   if (row.isTemplate) {
     return { scope: null, reason: "a repeating template (unreorderable — oddity §9e)" };
   }
   const bucket = scheduleBucket(row, packedToday);
-  const scheduledDay =
-    bucket === "today" || bucket === "evening" || bucket.startsWith("scheduled:");
+  // A same-day (today-proper) or future scheduled day, startBucket=0 — the
+  // DAYORD-b container todayIndex surface. The evening sub-bucket is distinct.
+  const containerDay = bucket === "today" || bucket.startsWith("scheduled:");
   if (isTodo) {
     if (row.heading !== null) {
-      return { scope: null, reason: "under a heading (no native order surface — HEADORD-b)" };
+      // Within-heading order: anytime children get the forward-order bounce
+      // (BOUNCE2-h). Other heading sub-buckets stay app-default (unprobed);
+      // arbitrary --before/--after against an unmoved sibling stays refused
+      // (HEADORD-b) — handled by the anchor path, not here.
+      if (bucket === "anytime") {
+        return bounceEnabled
+          ? { scope: "heading", container: row.heading }
+          : bounceDisabledTarget("within-heading order");
+      }
+      return {
+        scope: null,
+        reason: `a heading's ${bucket} sub-bucket (no wired order surface for it)`,
+      };
     }
     if (row.project !== null) {
-      // Project unheaded: anytime + someday re-rank cleanly by index (O04,
-      // SOMEORD-b); a scheduled day bucket needs the todayIndex key (DAYORD-b),
-      // not wired into the reorder op yet.
-      return scheduledDay
-        ? {
-            scope: null,
-            reason: "a scheduled day bucket (container todayIndex reorder — DAYORD, not wired)",
-          }
-        : { scope: "project", container: row.project };
+      // Project unheaded: a same-day scheduled bucket re-ranks todayIndex via the
+      // container specifier, date-preserving (DAYORD-b); the evening sub-bucket
+      // stays app-default; everything else (anytime / someday / inbox) re-ranks
+      // cleanly by index through the native project reorder (O04, SOMEORD-b).
+      if (containerDay) return { scope: "container-day", container: row.project };
+      if (bucket === "evening") {
+        return { scope: null, reason: "a project child's evening sub-bucket (app-default)" };
+      }
+      return { scope: "project", container: row.project };
     }
     if (row.area !== null) {
+      // Area someday members: the SOMEBNC-area bounce (was §9f-prohibited via
+      // the destructive area reorder command — the planner NEVER uses that).
       if (bucket === "someday") {
-        return {
-          scope: null,
-          reason: "an area's someday members (the area reorder de-somedays them — oddity §9f)",
-          prohibited: true,
-        };
+        return bounceEnabled
+          ? { scope: "area-someday", container: row.area }
+          : bounceDisabledTarget("an area's someday order");
       }
-      return scheduledDay
-        ? {
-            scope: null,
-            reason: "a scheduled day bucket (container todayIndex reorder — DAYORD, not wired)",
-          }
-        : { scope: "area", container: row.area };
+      if (bucket === "anytime") return { scope: "area", container: row.area };
+      // A direct-area to-do's scheduled bucket: only the PROJECT specifier is
+      // lab-clean for a scheduled day (DAYORD-b); the AREA specifier's behavior
+      // on dated children is unprobed (and de-somedays someday items, §9f), so
+      // it stays app-default rather than risk it.
+      return { scope: null, reason: "a direct-area to-do's scheduled bucket (app-default)" };
     }
     // loose:
     if (bucket === "inbox") return { scope: "inbox" };
     if (bucket === "someday") return { scope: "someday" };
     if (bucket === "today") return { scope: "today" };
-    if (bucket === "evening") return { scope: "evening" };
+    if (bucket === "evening") {
+      return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
+    }
     if (bucket === "anytime") {
-      return { scope: null, reason: "area-less loose anytime (ANYBNC bounce — not wired)" };
+      // ANYBNC reverse-order bounce for area-less loose anytime to-dos.
+      return bounceEnabled
+        ? { scope: "anytime" }
+        : bounceDisabledTarget("area-less loose anytime order");
     }
     return { scope: null, reason: "a future day bucket (Upcoming re-dates — oddity §9g)" };
   }
   // projects:
   if (row.area !== null) {
-    return scheduledDay || bucket === "someday"
+    return containerDay || bucket === "evening" || bucket === "someday"
       ? { scope: null, reason: "a scheduled/someday project inside an area (app-default)" }
       : { scope: "area", container: row.area };
   }
   if (bucket === "someday") return { scope: "someday" };
-  if (bucket === "anytime") return { scope: "projects" };
+  if (bucket === "anytime") {
+    // Top-level sidebar order is bounce-only (P8e).
+    return bounceEnabled ? { scope: "projects" } : bounceDisabledTarget("top-level projects order");
+  }
   return { scope: null, reason: "a scheduled day bucket (app-default)" };
 }
 
@@ -428,6 +466,7 @@ export async function runTodoMove(
     rows.map((r) => todoLandedRow(deps, dest, r)),
     true,
     packedToday,
+    deps.config.bounceEnabled,
   );
   // Fail-closed BEFORE any membership leg: an explicit --before/--after into a
   // destination bucket with no guaranteed protocol cannot be honored, so refuse
@@ -467,6 +506,9 @@ function preflightAnchor(
   landing: ScopeTarget,
 ): MoveRefused | null {
   if (position === undefined || !("before" in position || "after" in position)) return null;
+  // The ONLY remaining anchor refusal is a bucket with no reorder protocol at
+  // all. Within-heading --before/--after IS supported now — the extended bounce
+  // co-bounces the members between the block and the anchor (disclosed).
   if (landing.scope !== null) return null;
   return refused(
     op,
@@ -606,8 +648,13 @@ function todoLandedRow(deps: WriteDeps, dest: TodoMoveDestination, row: MoveeRow
 }
 
 /** The uniform landing target across the movees (app-default when they diverge). */
-function uniformLanding(landed: MoveeRow[], isTodo: boolean, packedToday: number): ScopeTarget {
-  const targets = landed.map((r) => reorderTargetOf(r, isTodo, packedToday));
+function uniformLanding(
+  landed: MoveeRow[],
+  isTodo: boolean,
+  packedToday: number,
+  bounceEnabled: boolean,
+): ScopeTarget {
+  const targets = landed.map((r) => reorderTargetOf(r, isTodo, packedToday, bounceEnabled));
   const keys = new Set(targets.map(containerKey));
   return keys.size === 1
     ? (targets[0] as ScopeTarget)
@@ -701,6 +748,7 @@ export async function runProjectMove(
     rows.map((r) => ({ ...r, area: landedArea })),
     false,
     packedToday,
+    deps.config.bounceEnabled,
   );
   const anchorRefusal = preflightAnchor(op, position, landing);
   if (anchorRefusal !== null) return anchorRefusal;
@@ -801,7 +849,8 @@ async function repositionInPlace(
   verb: "move" | "reorder",
 ): Promise<MoveResult> {
   const isTodo = op === "todo.move";
-  const targetOf = (r: MoveeRow): ScopeTarget => reorderTargetOf(r, isTodo, packedToday);
+  const targetOf = (r: MoveeRow): ScopeTarget =>
+    reorderTargetOf(r, isTodo, packedToday, deps.config.bounceEnabled);
 
   // One shared STRUCTURAL container (rule 2 / the cross-container guard).
   const keys = new Set(rows.map((r) => structuralKey(r, packedToday)));
@@ -898,6 +947,7 @@ async function repositionInPlace(
   const reorderParams: ReorderParams = {
     scope: target.scope,
     uuids: reorderUuids,
+    named: movees,
     ...(target.container !== undefined && { container: { uuid: target.container } }),
   };
   const placement = await runReorder(deps, reorderParams, {
@@ -913,7 +963,7 @@ async function repositionInPlace(
         membership: "none (in-place reposition)",
         placement: `reorder scope=${target.scope}${target.container !== undefined ? ` container=${target.container}` : ""} → ${describePosition(position)}`,
         placementClass: "guaranteed",
-        note: "in-place reorder within the shared container/bucket",
+        note: dryRunNote(placement, "in-place reorder within the shared container/bucket"),
       },
     };
   }
@@ -933,8 +983,28 @@ async function repositionInPlace(
     membership: [],
     placement,
     placementClass: "guaranteed",
-    note: `reordered within ${describeScope(target)} (${target.scope} scope — placement guaranteed)`,
+    note:
+      `reordered within ${describeScope(target)} (${target.scope} scope — placement guaranteed)` +
+      touchedSuffix(placement),
   };
+}
+
+/** Honest disclosure suffix naming co-bounced siblings an anchor placement touched. */
+function touchedSuffix(placement: ReorderResult): string {
+  if (
+    placement.kind !== "ok" ||
+    placement.touched === undefined ||
+    placement.touched.length === 0
+  ) {
+    return "";
+  }
+  return `; also re-inserted ${placement.touched.length} unnamed sibling(s) to honor the anchor: ${placement.touched.join(", ")}`;
+}
+
+/** Dry-run note that surfaces the planned co-bounce touch count. */
+function dryRunNote(placement: ReorderResult, base: string): string {
+  if (placement.kind === "dry-run") return `${base} — ${placement.plan.invocation}`;
+  return base;
 }
 
 /**
@@ -1045,6 +1115,7 @@ async function finishPlacement(
     {
       scope: landing.scope,
       uuids: reorderUuids,
+      named: movees,
       ...(landing.container !== undefined && { container: { uuid: landing.container } }),
     },
     legOptions(options),
@@ -1057,7 +1128,9 @@ async function finishPlacement(
       membership,
       placement,
       placementClass: "guaranteed",
-      note: `membership moved and placed top-of-bucket in ${describeScope(landing)} (guaranteed via the ${landing.scope} reorder protocol)`,
+      note:
+        `membership moved and placed top-of-bucket in ${describeScope(landing)} (guaranteed via the ${landing.scope} reorder protocol)` +
+        touchedSuffix(placement),
     };
   }
   // The membership already landed; the placement protocol was unavailable

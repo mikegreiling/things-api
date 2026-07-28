@@ -350,7 +350,8 @@ which overrides the built-in default.
   actor               author name recorded on each change
   maxDisruption       ceiling for how disruptive a change may be
   ui-enabled          allow the GUI-driven operations
-  allow-experimental  enable experimental strategies (e.g. native reorder)
+  allow-experimental  use the app's private reorder command (default on; off-switch)
+  bounce-enabled / bounce-max-items  when= bounce reorder: on by default, ≤30 items
   scope               limit this host to one area/project — jails EVERY command,
                       your own terminal included, until \`config set scope ""\`; for
                       one process prefer \`things mcp --scope\` / THINGS_API_SCOPE
@@ -393,12 +394,15 @@ anchor's container and bucket; a cross-container or cross-bucket anchor fails
 closed (name a destination flag if you meant to MOVE). Selection order = landing
 order: reverse for free by naming them backwards.
 
-PLACEMENT HONESTY. "Top of bucket" is GUARANTEED where a lab-clean protocol
-exists — loose inbox/today/evening/someday, a project's unheaded anytime OR
-someday children, an area's anytime members (needs allow-experimental). It is
-APP-DEFAULT (membership lands, order best-effort) for heading, scheduled-day, and
-area-less-anytime buckets; ordering an area's someday members is refused (it
-de-somedays them). The result's placement class says which you got.`,
+PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a
+lab-clean protocol exists — loose inbox/today/evening/someday/anytime, a project's
+or area's members (anytime AND someday), a heading's anytime children, and a
+container's same-day scheduled children. Some use a verified when= bounce;
+--before/--after there co-bounces the members between the block and the anchor and
+lists them. bounce-max-items caps a bounce's touched items (default 30);
+bounce-enabled=false refuses bounce placements rather than degrade destructively.
+It is APP-DEFAULT (order best-effort) for a headed scheduled/someday sub-bucket, a
+container evening sub-bucket, a loose future day, and templates.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 

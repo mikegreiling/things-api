@@ -558,7 +558,9 @@ export function computeReorderPre(
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
   const key: "index" | "todayIndex" =
-    params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index";
+    params.scope === "today" || params.scope === "evening" || params.scope === "container-day"
+      ? "todayIndex"
+      : "index";
 
   const select = (where: string, binds: (string | number)[], rankCol: string): MemberRow[] =>
     db
@@ -689,6 +691,62 @@ export function computeReorderPre(
             ? "lives in an area — use scope 'area' (projects within an area reorder natively, O14)"
             : "is not a plain Anytime project — the bounce round-trip (when=someday -> " +
                 "when=anytime) only preserves state for undated start=anytime projects (P8e)",
+        );
+      }
+      break;
+    }
+    case "heading": {
+      // A heading's ANYTIME children, ranked on "index". The forward-order
+      // bounce back-inserts each (BOUNCE2-h); templates + scheduled/someday
+      // children are not members of this bucket.
+      members = select(
+        "type = 0 AND heading = ? AND start = 1 AND startDate IS NULL",
+        [containerUuid ?? ""],
+        `"index"`,
+      );
+      break;
+    }
+    case "area-someday": {
+      // An area's SOMEDAY direct members (unheaded), ranked on "index". The
+      // reverse-order bounce front-inserts each (SOMEBNC-area) — the state-
+      // preserving surface the destructive area reorder command lacks (§9f).
+      members = select(
+        "type = 0 AND area = ? AND heading IS NULL AND start = 2 AND startDate IS NULL",
+        [containerUuid ?? ""],
+        `"index"`,
+      );
+      break;
+    }
+    case "anytime": {
+      // Area-less loose ANYTIME to-dos, ranked on "index". The reverse-order
+      // bounce front-inserts each below the running global min (ANYBNC).
+      members = select(
+        "type = 0 AND project IS NULL AND area IS NULL AND heading IS NULL " +
+          "AND start = 1 AND startDate IS NULL",
+        [],
+        `"index"`,
+      );
+      break;
+    }
+    case "container-day": {
+      // A container's (project OR area) same-day scheduled children, ranked on
+      // todayIndex, date-preserving (DAYORD-b). The day is read off the first
+      // requested uuid — the planner guarantees every movee shares the bucket
+      // (rule 4). startBucket=0 (today-proper / a future day); the evening
+      // sub-bucket stays app-default (unprobed for the container specifier).
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type = 0 AND heading IS NULL AND (project = ? OR area = ?) " +
+            "AND startBucket = 0 AND startDate = ?",
+          [containerUuid ?? "", containerUuid ?? "", first.startDate],
+          "todayIndex",
         );
       }
       break;
