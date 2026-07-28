@@ -812,6 +812,80 @@
           }
         ]
       }
+    },
+    {
+      "id": "O17",
+      "title": "DAYORD-b: a CONTAINER specifier (project id) reordering same-day SCHEDULED children rewrites their day-bucket order (todayIndex) DATE-PRESERVINGLY — the clean within-day surface (contrast list \"Upcoming\", which re-dates, oddities §9g). Recurring lock for the DAYORD verdict (reordgaps-results.md); the anchor vocabulary's container same-day placement compiles onto this.",
+      "vector": "applescript",
+      "operation": "order.container-same-day",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-DAYP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DAYP' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-DO1&when=2026-07-10&list-id={uuid:O-DAYP}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DO1' AND start=2 AND startDate IS NOT NULL AND project=(SELECT uuid FROM TMTask WHERE title='O-DAYP' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=O-DO2&when=2026-07-10&list-id={uuid:O-DAYP}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DO2' AND start=2 AND project=(SELECT uuid FROM TMTask WHERE title='O-DAYP' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=O-DO3&when=2026-07-10&list-id={uuid:O-DAYP}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DO3' AND start=2 AND project=(SELECT uuid FROM TMTask WHERE title='O-DAYP' AND type=1)"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in project id \"{uuid:O-DAYP}\" with ids \"{uuid:O-DO3},{uuid:O-DO1},{uuid:O-DO2}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-DO3') < (SELECT todayIndex FROM TMTask WHERE title='O-DO1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-DO1') < (SELECT todayIndex FROM TMTask WHERE title='O-DO2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DO1"
+            },
+            "fields": ["startDate", "start", "status", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DO3"
+            },
+            "fields": ["startDate", "start", "status", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DO2"
+            },
+            "fields": ["startDate", "start", "status", "project"]
+          }
+        ]
+      }
     }
   ]
 }
