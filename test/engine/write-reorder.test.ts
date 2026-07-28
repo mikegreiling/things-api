@@ -54,6 +54,8 @@ function config(allowExperimental: boolean): ThingsApiConfig {
     auditEnabled: true,
     acceptedFingerprint: null,
     allowExperimental,
+    bounceEnabled: true,
+    bounceMaxItems: 30,
     ui: { enabled: false },
     host: "test-host",
   };
@@ -807,5 +809,320 @@ describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
     const inArea = await runReorder(deps([vector]), { scope: "someday", uuids: [areaProj] });
     expect(inArea.kind).toBe("blocked");
     if (inArea.kind === "blocked") expect(inArea.detail).toContain("INSIDE an area");
+  });
+});
+
+// -------------------------------------------------- Phase A.1 wired protocols
+
+/**
+ * Faithful index-keyed bounce sim (reordgaps-results.md BOUNCE2 re-entry law).
+ * A when= leg re-schedules the item and, when it lands in a ranked bucket,
+ * re-inserts it: FRONT (min index − 1) for a loose/area-direct item, BACK
+ * (max index + 1) for a heading/project child.
+ */
+function indexBounceVector() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const url = new URL(invocation.payload);
+      const id = url.searchParams.get("id") ?? "";
+      const when = url.searchParams.get("when") ?? "";
+      const row = fixture.db
+        .prepare("SELECT heading, project, area FROM TMTask WHERE uuid = ?")
+        .get(id) as { heading: string | null; project: string | null; area: string | null };
+      let start = 1;
+      let startDate: number | null = null;
+      let startBucket = 0;
+      if (when === "someday") start = 2;
+      else if (when === "anytime") start = 1;
+      else if (when === "today") startDate = PACKED_TODAY;
+      else if (when === "evening") {
+        startDate = PACKED_TODAY;
+        startBucket = 1;
+      }
+      fixture.db
+        .prepare(
+          "UPDATE TMTask SET start=?, startDate=?, startBucket=?, userModificationDate=? WHERE uuid=?",
+        )
+        .run(start, startDate, startBucket, modClock++, id);
+      let where: string | null = null;
+      const binds: (string | number)[] = [];
+      let back = false;
+      if (when === "anytime" && row.heading != null) {
+        where = "heading = ? AND start = 1 AND startDate IS NULL";
+        binds.push(row.heading);
+        back = true;
+      } else if (when === "someday" && row.area != null && row.heading == null) {
+        where = "area = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+        binds.push(row.area);
+      } else if (when === "someday" && row.project != null && row.heading == null) {
+        where = "project = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+        binds.push(row.project);
+        back = true;
+      } else if (
+        when === "anytime" &&
+        row.project == null &&
+        row.area == null &&
+        row.heading == null
+      ) {
+        where =
+          "project IS NULL AND area IS NULL AND heading IS NULL AND start = 1 AND startDate IS NULL";
+      }
+      if (where != null) {
+        const sib = fixture.db
+          .prepare(
+            `SELECT MIN("index") AS mn, MAX("index") AS mx FROM TMTask
+             WHERE trashed=0 AND status=0 AND type=0 AND uuid != ? AND ${where}`,
+          )
+          .get(id, ...binds) as { mn: number | null; mx: number | null };
+        const newIndex = back ? (sib.mx ?? 0) + 1 : (sib.mn ?? 0) - 1;
+        fixture.db
+          .prepare(`UPDATE TMTask SET "index"=?, userModificationDate=? WHERE uuid=?`)
+          .run(newIndex, modClock++, id);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+function ascending(nums: number[]): boolean {
+  return nums.every((n, i) => i === 0 || (nums[i - 1] as number) < n);
+}
+
+describe("heading scope (BOUNCE2-h forward-order back-insert)", () => {
+  it("realizes the exact requested order via a FORWARD-order bounce of the whole block", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const h1 = seedTodo(fixture.db, { title: "h1", heading, index: 10 });
+    const h2 = seedTodo(fixture.db, { title: "h2", heading, index: 20 });
+    const h3 = seedTodo(fixture.db, { title: "h3", heading, index: 30 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "heading",
+      container: { uuid: heading },
+      uuids: [h3, h1, h2],
+    });
+    expect(result.kind).toBe("ok");
+    // Forward order (back-insert): first bounced is h3, legs when=someday→when=anytime.
+    expect(calls[0]).toContain(`id=${h3}`);
+    expect(calls[0]).toContain("when=someday");
+    expect(calls[1]).toContain(`id=${h3}`);
+    expect(calls[1]).toContain("when=anytime");
+    expect(calls[2]).toContain(`id=${h1}`);
+    expect(ascending(ranks([h3, h1, h2], `"index"`))).toBe(true);
+  });
+});
+
+describe("area-someday scope (SOMEBNC-area reverse-order front-insert)", () => {
+  it("front-inserts the requested subset via a REVERSE-order bounce, area + start=2 preserved", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "someday", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", area, start: "someday", index: 30 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "area-someday",
+      container: { uuid: area },
+      uuids: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    // Reverse order (front-insert): first bounced is a, legs when=anytime→when=someday.
+    expect(calls[0]).toContain(`id=${a}`);
+    expect(calls[0]).toContain("when=anytime");
+    expect(calls[1]).toContain(`id=${a}`);
+    expect(calls[1]).toContain("when=someday");
+    expect(ascending(ranks([c, a], `"index"`))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db.prepare("SELECT start, area FROM TMTask WHERE uuid = ?").get(u) as {
+        start: number;
+        area: string;
+      };
+      expect(row.start).toBe(2);
+      expect(row.area).toBe(area);
+    }
+  });
+});
+
+describe("anytime scope (ANYBNC reverse-order front-insert)", () => {
+  it("front-inserts area-less loose anytime to-dos via a REVERSE-order bounce", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", start: "active", index: 30 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "anytime", uuids: [c, a] });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`id=${a}`);
+    expect(calls[0]).toContain("when=someday");
+    expect(calls[1]).toContain("when=anytime");
+    expect(ascending(ranks([c, a], `"index"`))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate, area FROM TMTask WHERE uuid = ?")
+        .get(u) as { start: number; startDate: number | null; area: string | null };
+      expect(row.start).toBe(1);
+      expect(row.startDate).toBeNull();
+      expect(row.area).toBeNull();
+    }
+  });
+});
+
+describe("container-day scope (DAYORD-b native todayIndex, date-preserving)", () => {
+  it("re-ranks a project's same-day scheduled children on todayIndex, leaving the date", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-10",
+      todayIndex: 10,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-10",
+      todayIndex: 20,
+    });
+    const c = seedTodo(fixture.db, {
+      title: "c",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-10",
+      todayIndex: 30,
+    });
+    const day = encodePackedDate("2026-07-10");
+    const { vector, calls } = nativeVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "container-day",
+      container: { uuid: proj },
+      uuids: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`project id "${proj}"`);
+    expect(calls[0]).toContain(`with ids "${c},${a},${b}"`);
+    expect(ascending(ranks([c, a, b]))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(u) as {
+        startDate: number;
+      };
+      expect(row.startDate).toBe(day); // date preserved
+    }
+  });
+});
+
+describe("project scope: SOMEBNC-project bounce fallback (native unavailable)", () => {
+  it("uses a FORWARD-order bounce when experimental is off and members are all someday", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "someday", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", project: proj, start: "someday", index: 30 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "project",
+      container: { uuid: proj },
+      uuids: [c, a, b],
+    });
+    expect(result.kind).toBe("ok");
+    // Forward order (back-insert): first bounced is c, legs when=anytime→when=someday.
+    expect(calls[0]).toContain(`id=${c}`);
+    expect(calls[0]).toContain("when=anytime");
+    expect(calls[1]).toContain("when=someday");
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db.prepare("SELECT start, project FROM TMTask WHERE uuid = ?").get(u) as {
+        start: number;
+        project: string;
+      };
+      expect(row.start).toBe(2);
+      expect(row.project).toBe(proj);
+    }
+  });
+
+  it("does NOT fall back to bounce when a non-someday member is present (native stays primary)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const anytime = seedTodo(fixture.db, {
+      title: "at",
+      project: proj,
+      start: "active",
+      index: 10,
+    });
+    const { vector } = indexBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "project",
+      container: { uuid: proj },
+      uuids: [anytime],
+    });
+    // Native is unavailable (experimental off) and the fallback does not apply →
+    // the pipeline reports the native surface unsupported, never a silent bounce.
+    expect(result.kind).toBe("unsupported");
+  });
+});
+
+describe("bounce-enabled gate + bounce-max-items cap", () => {
+  function cfg(over: Partial<ThingsApiConfig>): ThingsApiConfig {
+    return { ...config(true), ...over };
+  }
+
+  it("bounce-enabled=false refuses a bounce placement with a teaching pointer to the flag", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(deps([vector], { config: cfg({ bounceEnabled: false }) }), {
+      scope: "anytime",
+      uuids: [a],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("bounce-enabled=false");
+      expect(result.remediation).toContain("bounce-enabled true");
+    }
+    expect(calls).toHaveLength(0); // never attempted
+  });
+
+  it("bounce-max-items caps at the CONFIGURED value, not the hardcoded 10", async () => {
+    // 12 evening items pass the default cap of 30 (proves the raise from 10)…
+    const under = Array.from({ length: 12 }, (_, i) =>
+      seedToday(`U${i}`, i + 1, { evening: true }),
+    );
+    const okRun = await runReorder(deps([bounceVector().vector]), {
+      scope: "evening",
+      uuids: under,
+    });
+    expect(okRun.kind).toBe("ok");
+  });
+
+  it("bounce-max-items=3 blocks a 4-item bounce, citing the configured cap", async () => {
+    const four = Array.from({ length: 4 }, (_, i) => seedToday(`F${i}`, i + 1, { evening: true }));
+    const { vector, calls } = bounceVector();
+    const result = await runReorder(deps([vector], { config: cfg({ bounceMaxItems: 3 }) }), {
+      scope: "evening",
+      uuids: four,
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 3");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("dry-run reports the 2-legs-per-item count", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(
+      deps([vector]),
+      { scope: "anytime", uuids: [a, b] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("×2");
+      expect(result.plan.invocation).toContain("4 legs");
+    }
+    expect(calls).toHaveLength(0);
   });
 });

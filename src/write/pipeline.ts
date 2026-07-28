@@ -72,6 +72,16 @@ export interface WriteOptions extends Acknowledgements {
   /** Return the plan without executing (nothing is audited). */
   dryRun?: boolean;
   /**
+   * Skip the post-execute state VERIFY poll for this write, treating a clean
+   * transport (exit 0) as ok. Fail-loud on the transport itself is preserved (a
+   * nonzero exit / deadline still runs the recovery re-verify). Used by the
+   * bounce orchestrator for the transient AWAY/BACK legs of a `when=` round-trip:
+   * the intermediate someday state is not independently verified — one verify
+   * per item round-trip (the placed-position + when-restore delta) is asserted by
+   * the orchestrator at item completion instead (reordgaps-results.md BOUNCE2).
+   */
+  skipVerify?: boolean;
+  /**
    * Create any tag named in this op's tags that does not exist yet (through the
    * clean `make new tag` path, mkdir-p for `parent/child`) BEFORE applying —
    * turning what would be an H-UNKNOWN-TAG refusal into a create-then-apply.
@@ -151,6 +161,15 @@ export type MutationResult =
       repeating?: RepeatingDiscovery;
       /** Advisory notes (e.g. a changed environment tuple — consent may re-prompt later). */
       warnings?: string[];
+      /**
+       * Co-bounced siblings (ADDITIVE): a bounce reorder that anchors a block
+       * with --before/--after (or lands it mid-bucket) must re-insert every
+       * UNNAMED member between the block and the bucket edge. Those items get a
+       * modification bump, a changes-feed entry, and an audit leg — disclosed
+       * here explicitly, never as fine print. Absent when only the named movees
+       * were touched.
+       */
+      touched?: string[];
     }
   | {
       kind: "verify-failed";
@@ -830,6 +849,11 @@ export async function runMutation<K extends OperationKind>(
       }
       outcome = recovery;
       transportRecovered = true;
+    } else if (options.skipVerify === true) {
+      // A clean transport with verify deliberately skipped (a bounce round-trip
+      // leg): treat it as ok without polling the DB. The orchestrator asserts the
+      // real delta once per round-trip. Fail-loud on transport is preserved above.
+      outcome = { kind: "ok", observed: null, attempts: 0, elapsedMs: 0 };
     } else {
       outcome = await pollUntilVerified(
         () => evaluateDelta(delta, reader, preCapture),

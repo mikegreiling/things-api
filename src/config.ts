@@ -25,10 +25,29 @@ export interface ThingsApiConfig {
   /** User-accepted drifted fingerprint (loud escape hatch; see design §6). */
   acceptedFingerprint: string | null;
   /**
-   * Opt-in to capabilities riding undocumented app surfaces (the private
-   * sdef reorder command). Guarded further by the pipeline's sdef canary.
+   * Allow capabilities that ride the app's PRIVATE, UNDOCUMENTED sdef reorder
+   * command (default true). This is a private vendor surface, NOT a half-baked
+   * "experimental" one: every write is verify-per-write, fingerprint-gated, and
+   * canaried by the o-suite (incl. O17), which together detect any divergence.
+   * The bidirectional env/config off-switch is retained for hosts that want the
+   * private surface disabled; when off, the planner falls back to a proven bounce
+   * wherever one exists and refuses only where no enabled path remains.
    */
   allowExperimental: boolean;
+  /**
+   * Whether the `when=`-bounce reorder protocols may run (default true). When
+   * false the move/reorder planner REFUSES every bounce-dependent placement
+   * (within-heading order, area-someday order, area-less loose anytime, and the
+   * top-level projects / evening scopes) with a teaching error naming this key —
+   * it never silently falls back to a destructive or unverified path.
+   */
+  bounceEnabled: boolean;
+  /**
+   * Cap on the number of items a single bounce reorder may touch (default 30).
+   * Each item costs two verified mutations (~110 ms/item guest-local, BOUNCE2-t);
+   * the cap bounds the wall-clock and the Things-Cloud change-record fan-out.
+   */
+  bounceMaxItems: number;
   /**
    * The Accessibility GUI ("ui") write vector. When disabled the vector does
    * not exist on this machine: its GUI-only operations report unsupported.
@@ -85,6 +104,17 @@ function tierEnvOverride(raw: string | undefined): DisruptionTier | undefined {
   return raw !== undefined && /^[0-3]$/.test(raw) ? (Number(raw) as DisruptionTier) : undefined;
 }
 
+/**
+ * A THINGS_API_BOUNCE_MAX_ITEMS override, or undefined when unset/unrecognized.
+ * Only a positive integer is accepted (a bounce touches at least one item);
+ * anything else falls through to stored config, then the built-in default.
+ */
+function positiveIntEnvOverride(raw: string | undefined): number | undefined {
+  if (raw === undefined || !/^[0-9]+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 interface ConfigFile {
   profile?: Profile;
   maxDisruption?: DisruptionTier;
@@ -92,6 +122,8 @@ interface ConfigFile {
   auditEnabled?: boolean;
   acceptedFingerprint?: string;
   allowExperimental?: boolean;
+  bounceEnabled?: boolean;
+  bounceMaxItems?: number;
   uiEnabled?: boolean;
   scope?: string;
 }
@@ -130,6 +162,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
 
   const auditEnv = boolEnvOverride(env["THINGS_API_AUDIT"], "on", "off");
   const experimentalEnv = boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false");
+  const bounceEnabledEnv = boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false");
+  const bounceMaxItemsEnv = positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]);
   const uiEnv = boolEnvOverride(env["THINGS_API_UI_ENABLED"], "true", "false");
 
   // Scope precedence within the config layer: THINGS_API_SCOPE env > stored
@@ -149,7 +183,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     actor: env["THINGS_API_ACTOR"] ?? file.actor ?? `${username}@cli`,
     auditEnabled: auditEnv ?? file.auditEnabled ?? true,
     acceptedFingerprint: file.acceptedFingerprint ?? null,
-    allowExperimental: experimentalEnv ?? file.allowExperimental ?? false,
+    allowExperimental: experimentalEnv ?? file.allowExperimental ?? true,
+    bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
+    bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
     ui: { enabled: uiEnv ?? file.uiEnabled ?? false },
     scope,
     host: hostname(),
@@ -264,6 +300,18 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       cfg.allowExperimental,
       file.allowExperimental !== undefined,
       boolEnvOverride(env["THINGS_API_ALLOW_EXPERIMENTAL"], "true", "false") !== undefined,
+    ),
+    view(
+      "bounce-enabled",
+      cfg.bounceEnabled,
+      file.bounceEnabled !== undefined,
+      boolEnvOverride(env["THINGS_API_BOUNCE_ENABLED"], "true", "false") !== undefined,
+    ),
+    view(
+      "bounce-max-items",
+      cfg.bounceMaxItems,
+      file.bounceMaxItems !== undefined,
+      positiveIntEnvOverride(env["THINGS_API_BOUNCE_MAX_ITEMS"]) !== undefined,
     ),
     view(
       "ui-enabled",

@@ -162,16 +162,20 @@ describe("config get (all keys)", () => {
     expect(env["kind"]).toBe("config");
     const data = env["data"] as { key: string; source: string }[];
     expect(Array.isArray(data)).toBe(true);
-    expect(data).toHaveLength(9);
+    expect(data).toHaveLength(11);
     expect(data.map((e) => e.key)).toContain("ui-enabled");
     expect(data.map((e) => e.key)).toContain("scope");
     expect(data.map((e) => e.key)).toContain("host");
+    expect(data.map((e) => e.key)).toContain("bounce-enabled");
+    expect(data.map((e) => e.key)).toContain("bounce-max-items");
     // With no stored file and no env: settable keys sit at their default,
     // while host and the profile-derived maxDisruption report derived.
     const byKey = Object.fromEntries(data.map((e) => [e.key, e.source]));
     expect(byKey["actor"]).toBe("default");
     expect(byKey["ui-enabled"]).toBe("default");
     expect(byKey["scope"]).toBe("default");
+    expect(byKey["bounce-enabled"]).toBe("default");
+    expect(byKey["bounce-max-items"]).toBe("default");
     expect(byKey["host"]).toBe("derived");
     expect(byKey["maxDisruption"]).toBe("derived");
   });

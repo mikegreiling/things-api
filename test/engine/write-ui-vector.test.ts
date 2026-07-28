@@ -40,6 +40,8 @@ function config(uiEnabled: boolean): ThingsApiConfig {
     auditEnabled: true,
     acceptedFingerprint: null,
     allowExperimental: false,
+    bounceEnabled: true,
+    bounceMaxItems: 30,
     ui: { enabled: uiEnabled },
     host: "test-host",
   };

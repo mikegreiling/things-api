@@ -128,6 +128,8 @@ const CONFIG: ThingsApiConfig = {
   auditEnabled: true,
   acceptedFingerprint: null,
   allowExperimental: false,
+  bounceEnabled: true,
+  bounceMaxItems: 30,
   ui: { enabled: false },
   scope: null,
   host: "test-host",

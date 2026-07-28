@@ -17,6 +17,7 @@ import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import type { ResolvedScope } from "../../src/read/scope.ts";
+import { encodePackedDate } from "../../src/model/dates.ts";
 import { runInPlaceReorder, runProjectMove, runTodoMove } from "../../src/write/move.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
@@ -24,6 +25,7 @@ import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
+const TODAY_PACKED = encodePackedDate("2026-07-05");
 
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
@@ -48,22 +50,86 @@ function config(): ThingsApiConfig {
     auditEnabled: true,
     acceptedFingerprint: null,
     allowExperimental: true,
+    bounceEnabled: true,
+    bounceMaxItems: 30,
     ui: { enabled: false },
     host: "test-host",
   };
 }
 
-/** Membership vector: applies todo.move / project.move from structured params. */
+/**
+ * Faithful index/todayIndex bounce sim for the when= legs (BOUNCE2 re-entry
+ * law): a return leg FRONT-inserts a loose/area-direct item (min−1) and
+ * BACK-inserts a heading/project child (max+1).
+ */
+function bounceLeg(uuid: string, when: string): void {
+  const row = fixture.db
+    .prepare("SELECT heading, project, area FROM TMTask WHERE uuid = ?")
+    .get(uuid) as { heading: string | null; project: string | null; area: string | null };
+  let start = 1;
+  let startDate: number | null = null;
+  let startBucket = 0;
+  if (when === "someday") start = 2;
+  else if (when === "today") startDate = TODAY_PACKED;
+  else if (when === "evening") {
+    startDate = TODAY_PACKED;
+    startBucket = 1;
+  }
+  fixture.db
+    .prepare(
+      "UPDATE TMTask SET start=?, startDate=?, startBucket=?, userModificationDate=? WHERE uuid=?",
+    )
+    .run(start, startDate, startBucket, modClock++, uuid);
+  let where: string | null = null;
+  const binds: (string | number)[] = [];
+  let back = false;
+  let col = `"index"`;
+  if (when === "anytime" && row.heading != null) {
+    where = "heading = ? AND start = 1 AND startDate IS NULL";
+    binds.push(row.heading);
+    back = true;
+  } else if (when === "someday" && row.area != null && row.heading == null) {
+    where = "area = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+    binds.push(row.area);
+  } else if (when === "someday" && row.project != null && row.heading == null) {
+    where = "project = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+    binds.push(row.project);
+    back = true;
+  } else if (when === "anytime" && row.project == null && row.area == null && row.heading == null) {
+    where =
+      "project IS NULL AND area IS NULL AND heading IS NULL AND start = 1 AND startDate IS NULL";
+  }
+  if (where != null) {
+    const sib = fixture.db
+      .prepare(
+        `SELECT MIN(${col}) AS mn, MAX(${col}) AS mx FROM TMTask
+         WHERE trashed=0 AND status=0 AND type=0 AND uuid != ? AND ${where}`,
+      )
+      .get(uuid, ...binds) as { mn: number | null; mx: number | null };
+    const next = back ? (sib.mx ?? 0) + 1 : (sib.mn ?? 0) - 1;
+    fixture.db
+      .prepare(`UPDATE TMTask SET ${col} = ?, userModificationDate = ? WHERE uuid = ?`)
+      .run(next, modClock++, uuid);
+  }
+}
+
+/** Membership vector: applies todo.move / project.move + bounce when= legs. */
 function membershipVector(): WriteVector {
   return {
     id: "url-scheme",
     matrix: {
       "todo.move": { support: "yes", disruption: 0, validation: "validated" },
       "project.move": { support: "yes", disruption: 0, validation: "validated" },
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
     },
     async execute(invocation) {
       const p = invocation.opParams as Record<string, unknown>;
       const uuid = p["uuid"] as string;
+      if (invocation.op === "todo.update" || invocation.op === "project.update") {
+        bounceLeg(uuid, String(p["when"] ?? ""));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
       const set = (cols: string, ...binds: (string | number | null)[]) =>
         fixture.db
           .prepare(`UPDATE TMTask SET ${cols}, userModificationDate = ? WHERE uuid = ?`)
@@ -467,38 +533,59 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     expect(ascending(indexOrder([c, a, b]))).toBe(true);
   });
 
-  it("within-AREA someday reorder is PROHIBITED — refused as destructive (§9f)", async () => {
+  it("within-AREA someday reorder is now GUARANTEED via the SOMEBNC-area bounce (was §9f-prohibited)", async () => {
     const area = seedArea(fixture.db, "A");
-    const t1 = seedTodo(fixture.db, { title: "t1", area, start: "someday", index: 1 });
-    seedTodo(fixture.db, { title: "t2", area, start: "someday", index: 2 });
+    const a = seedTodo(fixture.db, { title: "a", area, start: "someday", index: 1 });
+    seedTodo(fixture.db, { title: "b", area, start: "someday", index: 2 });
+    const c = seedTodo(fixture.db, { title: "c", area, start: "someday", index: 3 });
     const r = await runInPlaceReorder(deps(), "todo.move", {
-      uuids: [t1],
+      uuids: [c, a],
       position: { at: "first" },
     });
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("blocked");
-      expect(r.detail).toContain("§9f");
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.placementClass).toBe("guaranteed");
+    // The area reorder command (destructive §9f) is NEVER used — the bounce is.
+    expect(ascending(indexOrder([c, a]))).toBe(true);
+    for (const u of [a, c]) {
+      const row = fixture.db.prepare("SELECT start, area FROM TMTask WHERE uuid = ?").get(u) as {
+        start: number;
+        area: string;
+      };
+      expect(row.start).toBe(2); // still Someday (not de-somedayed)
+      expect(row.area).toBe(area);
     }
   });
 
-  it("a container's SCHEDULED-DAY bucket is app-default (DAYORD not wired) — reorder refused unsupported", async () => {
+  it("a container's same-day scheduled bucket is now GUARANTEED via the DAYORD-b container reorder", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
-    const t = seedTodo(fixture.db, {
-      title: "t",
+    const a = seedTodo(fixture.db, {
+      title: "a",
       project: proj,
       start: "active",
       startDate: "2026-07-20",
-      index: 1,
+      todayIndex: 1,
     });
-    const r = await runInPlaceReorder(deps(), "todo.move", {
-      uuids: [t],
-      position: { at: "first" },
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 2,
     });
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("unsupported");
-      expect(r.detail).toContain("scheduled day bucket");
+    const r = await runInPlaceReorder(
+      deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
+      "todo.move",
+      { uuids: [b, a], position: { at: "first" } },
+    );
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.placementClass).toBe("guaranteed");
+    expect(ascending(indexOrder([b, a], "todayIndex"))).toBe(true);
+    const day = encodePackedDate("2026-07-20");
+    for (const u of [a, b]) {
+      const row = fixture.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(u) as {
+        startDate: number;
+      };
+      expect(row.startDate).toBe(day); // date preserved
     }
   });
 
@@ -518,23 +605,29 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     if (r.kind === "move-refused") expect(r.detail).toContain("template");
   });
 
-  it("within-HEADING order has no native surface — a reorder is refused unsupported (HEADORD-b)", async () => {
+  it("within-HEADING --before is now SUPPORTED via the extended bounce, co-bouncing siblings", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     const h1 = seedTodo(fixture.db, { title: "h1", heading, index: 1 });
     const h2 = seedTodo(fixture.db, { title: "h2", heading, index: 2 });
+    const h3 = seedTodo(fixture.db, { title: "h3", heading, index: 3 });
+    // Move h3 before h1 → h3, h1, h2. h1 and h2 ride along (co-bounced).
     const r = await runInPlaceReorder(deps(), "todo.move", {
-      uuids: [h2],
+      uuids: [h3],
       position: { before: h1 },
     });
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("unsupported");
-      expect(r.detail).toContain("heading");
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("unnamed sibling");
+      if (r.placement?.kind === "ok") expect(r.placement.touched).toEqual([h1, h2]);
     }
+    expect(ascending(indexOrder([h3, h1, h2]))).toBe(true);
   });
 
-  it("a membership move UNDER a heading with --before is refused (no in-heading anchor spelling)", async () => {
+  it("a membership move UNDER a heading with --before is refused when the mover has no schedule (app-default bucket)", async () => {
+    // An inbox mover keeps start=0 in the fixture → a headed INBOX sub-bucket,
+    // which has no wired order surface, so the anchor is honestly refused.
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     const existing = seedTodo(fixture.db, { title: "existing", heading, index: 1 });

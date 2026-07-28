@@ -435,7 +435,17 @@ export type ReorderScope =
   | "area"
   | "inbox"
   | "someday"
-  | "projects";
+  | "projects"
+  // Phase A.1 wired protocols (reordgaps-results.md REORDGAPS + BOUNCE2):
+  // - heading: a heading's anytime children, forward-order bounce (BOUNCE2-h)
+  // - area-someday: an area's someday members, reverse-order bounce (SOMEBNC-area)
+  // - anytime: area-less loose anytime to-dos, reverse-order bounce (ANYBNC)
+  // - container-day: a container's same-day scheduled children, native todayIndex
+  //   re-rank, date-preserving (DAYORD-b)
+  | "heading"
+  | "area-someday"
+  | "anytime"
+  | "container-day";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {
@@ -448,9 +458,18 @@ export interface ReorderParams {
   /**
    * Desired order, top-first. May be a SUBSET of the scope's members: the
    * requested uuids are placed at the top in this order and every remaining
-   * member keeps its current relative order below them.
+   * member keeps its current relative order below them. For an ANCHORED bounce
+   * placement (--before/--after) the planner passes the FULL target order here
+   * with the block spliced at the anchor.
    */
   uuids: string[];
+  /**
+   * The explicitly-NAMED movees, a subset of {@link uuids}. Distinguishes the
+   * user's block from members that only ride along a bounce anchor placement
+   * (co-bounced siblings — disclosed in the result). Defaults to all of `uuids`
+   * when omitted (every uuid is a named movee). Only the bounce path reads it.
+   */
+  named?: string[];
   /**
    * Omit for the default per scope: native for today/project/area/inbox/
    * someday (requires allowExperimental), bounce for evening and

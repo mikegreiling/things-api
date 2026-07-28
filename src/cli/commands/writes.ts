@@ -939,9 +939,12 @@ export function registerWriteCommands(program: Command): void {
             "project, AND area). --inbox files back to the Inbox. Position with " +
             "--first/--last/--before/--after (an anchor positions but never migrates — an " +
             "anchor-only move that would cross containers is refused). Membership always " +
-            "succeeds; top-of-bucket placement is guaranteed only where a reorder protocol " +
-            "exists (the result states the placement class). Moving into a completed/canceled " +
-            "project reopens it — requires --acknowledge-project-reopen.",
+            "succeeds; placement is guaranteed for loose lists, a project's/area's members, a " +
+            "heading's children, and a container's same-day scheduled children — the result " +
+            "states the placement class, and a bounce that co-bounces unnamed siblings to honor " +
+            "an anchor lists them. Set bounce-max-items to cap how many items a bounce touches; " +
+            "bounce-enabled=false refuses bounce-dependent placements. Moving into a " +
+            "completed/canceled project reopens it — requires --acknowledge-project-reopen.",
         )
         .option("--to-project <ref>", "destination project (uuid or unique name)")
         .option(
@@ -1001,8 +1004,10 @@ export function registerWriteCommands(program: Command): void {
             "siblings keep their own order. Bare (no position flag) assembles the named to-dos " +
             "as a contiguous block at the EARLIEST one's current slot (partial-selection " +
             "friendly). --first/--last/--before/--after position the block. Operands that span " +
-            "containers or buckets fail closed. Ordering rides the same experimental surface as " +
-            "`things reorder` — enable it once with `things config set allow-experimental true`.",
+            "containers or buckets fail closed. Ordering uses the native re-rank where available " +
+            "(the private surface, on by default) and a verified when= bounce otherwise; " +
+            "bounce-max-items caps how many items a bounce touches, and bounce-enabled=false " +
+            "refuses bounce-dependent placements rather than falling back destructively.",
         ),
     ),
   ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
@@ -2451,7 +2456,8 @@ export function registerWriteCommands(program: Command): void {
     .command("set <key> <value>")
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
-        "accepted-fingerprint | allow-experimental | ui-enabled | scope",
+        "accepted-fingerprint | allow-experimental | bounce-enabled | bounce-max-items | " +
+        "ui-enabled | scope",
     )
     .action((key: string, value: string) => {
       const map: Record<string, string> = {
@@ -2461,6 +2467,8 @@ export function registerWriteCommands(program: Command): void {
         auditEnabled: "auditEnabled",
         "accepted-fingerprint": "acceptedFingerprint",
         "allow-experimental": "allowExperimental",
+        "bounce-enabled": "bounceEnabled",
+        "bounce-max-items": "bounceMaxItems",
         "ui-enabled": "uiEnabled",
         scope: "scope",
       };
@@ -2471,9 +2479,12 @@ export function registerWriteCommands(program: Command): void {
         return;
       }
       const parsed: string | number | boolean =
-        target === "maxDisruption"
+        target === "maxDisruption" || target === "bounceMaxItems"
           ? Number(value)
-          : target === "auditEnabled" || target === "allowExperimental" || target === "uiEnabled"
+          : target === "auditEnabled" ||
+              target === "allowExperimental" ||
+              target === "bounceEnabled" ||
+              target === "uiEnabled"
             ? value === "true"
             : value;
       saveConfigKey(target as never, parsed);
