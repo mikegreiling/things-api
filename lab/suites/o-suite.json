@@ -886,6 +886,66 @@
           }
         ]
       }
+    },
+    {
+      "id": "O18",
+      "title": "BOUNCEJSON: ONE `things:///json` update array carrying [someday,anytime] per item, applied in ARRAY ORDER, reorders a heading's anytime children (back-insert, BJ-a) — the collapse the reorder compiler dispatches for the heading / area-less-anytime classes (§9i, BounceSpec.jsonCollapsible). Scrambled target (seed 1<2<3<4, target 2<4<1<3) proves array order CONTROLS placement, not a no-op; heading FK + start=1 preserved (validate-first, one dispatch).",
+      "vector": "url",
+      "operation": "order.bounce-json-collapse",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJH%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJHc1%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJHc2%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJHc3%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-BJHc4%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-BJHc4' AND start=1 AND heading=(SELECT uuid FROM TMTask WHERE title='O-BJH' AND type=2)"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc2}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc4}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc1}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc1}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22someday%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22operation%22%3A%22update%22%2C%22id%22%3A%22{uuid:O-BJHc3}%22%2C%22attributes%22%3A%7B%22when%22%3A%22anytime%22%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-BJHc2') < (SELECT \"index\" FROM TMTask WHERE title='O-BJHc4') AND (SELECT \"index\" FROM TMTask WHERE title='O-BJHc4') < (SELECT \"index\" FROM TMTask WHERE title='O-BJHc1') AND (SELECT \"index\" FROM TMTask WHERE title='O-BJHc1') < (SELECT \"index\" FROM TMTask WHERE title='O-BJHc3')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title LIKE 'O-BJHc%' AND heading=(SELECT uuid FROM TMTask WHERE title='O-BJH' AND type=2))=4"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-BJHc1" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-BJHc2" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-BJHc3" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-BJHc4" },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
     }
   ]
 }

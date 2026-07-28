@@ -52,11 +52,13 @@ import { computeReorderPre, resolveArea, resolveProject } from "./pre-state.ts";
 import { sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
   fingerprintLabel,
+  readAuthToken,
   runMutation,
   type MutationResult,
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
+import type { WriteVector } from "./vectors/types.ts";
 import { createDbReader, evaluateDelta } from "./verify/delta.ts";
 import { pollUntilVerified } from "./verify/poller.ts";
 
@@ -496,7 +498,39 @@ async function runBounce(
     return result;
   }
 
+  // Front-insert contexts (loose/area-direct) place last-first (reverse iterate,
+  // unshift); back-insert contexts (heading/project children) place first-first
+  // (forward iterate, push). Either way `placed` holds the current top-to-bottom
+  // order of the bounced block. The SAME per-item order drives the json-array
+  // collapse (array order == result index order for both directions).
+  const order =
+    direction === "front"
+      ? coBounce.map((_, i) => coBounce.length - 1 - i)
+      : coBounce.map((_, i) => i);
+
+  // BOUNCEJSON collapse (§9i): when the placement (`back`) leg is when=anytime
+  // into a loose/heading-container bucket, the whole N-item round-trip collapses
+  // to ONE pre-validated `things:///json` array (2N ops, 1 dispatch, ~7×,
+  // validate-first FULL-ABORT). Only against a REAL dispatch surface — under the
+  // simulator (simulates=true, per-op appliers, no json-array applier) we keep
+  // the proven sequential legs.
+  const dispatchVector = pickDispatchVector(deps, legOp);
+  const useJson =
+    spec.jsonCollapsible && dispatchVector !== undefined && dispatchVector.simulates !== true;
+
   if (options.dryRun === true) {
+    const invocation = useJson
+      ? `json-collapse ×${coBounce.length} (${direction}-insert, ` +
+        `${direction === "front" ? "reverse" : "forward"} array order, ` +
+        (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
+        `1 dispatch / ${coBounce.length * 2} ops): ` +
+        `when=${away} → when=${back} interleaved per item; validate-first full-abort, ` +
+        `one terminal order verify`
+      : `bounce ×${coBounce.length} (${direction}-insert, ` +
+        `${direction === "front" ? "reverse" : "forward"} order, ` +
+        (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
+        `${coBounce.length * 2} legs): ` +
+        `when=${away} → when=${back}; one verify per item round-trip`;
     return {
       kind: "dry-run",
       op: "reorder",
@@ -504,28 +538,29 @@ async function runBounce(
         op: "reorder",
         vector: "url-scheme",
         tier: 0,
-        invocation:
-          `bounce ×${coBounce.length} (${direction}-insert, ` +
-          `${direction === "front" ? "reverse" : "forward"} order, ` +
-          (touchedUnnamed.length > 0
-            ? `touches ${touchedUnnamed.length} unnamed sibling(s), `
-            : "") +
-          `${coBounce.length * 2} legs): ` +
-          `when=${away} → when=${back}; one verify per item round-trip`,
+        invocation,
         expectedDelta: { mode: "ordering", key: rankKey, sequence: coBounce },
         hazardsChecked: ["H-REORDER-SCOPE"],
       },
     };
   }
 
-  // Front-insert contexts (loose/area-direct) place last-first (reverse iterate,
-  // unshift); back-insert contexts (heading/project children) place first-first
-  // (forward iterate, push). Either way `placed` holds the current top-to-bottom
-  // order of the bounced block, verified after each leg-pair.
-  const order =
-    direction === "front"
-      ? coBounce.map((_, i) => coBounce.length - 1 - i)
-      : coBounce.map((_, i) => i);
+  if (useJson) {
+    return runBounceJsonCollapse(deps, params, spec, {
+      coBounce,
+      order,
+      bounceKind,
+      containerUuid,
+      preRanks,
+      txnId,
+      actor,
+      touchedUnnamed,
+      startedAt,
+      options,
+      vector: dispatchVector as WriteVector,
+    });
+  }
+
   const placed: string[] = [];
   for (let step = 0; step < order.length; step++) {
     const i = order[step] as number;
@@ -653,6 +688,169 @@ async function runBounce(
     // the audit record's undoToken); pass it to `things undo --txn <token>`.
     undoToken: txnId,
     // Co-bounced siblings the anchor placement re-inserted (honest disclosure).
+    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
+  };
+}
+
+/**
+ * The url-scheme dispatch surface for a leg op — the vector the json collapse
+ * opens its `things:///json` array through. In tests this is the injected fake
+ * (id "url-scheme"); in production `createUrlSchemeVector`; under the simulator
+ * fence the simulator (id "url-scheme", simulates=true) — which the caller then
+ * rejects for the collapse (it has no json-array applier) and falls back to the
+ * sequential per-leg bounce the simulator DOES model.
+ */
+function pickDispatchVector(
+  deps: WriteDeps,
+  legOp: "todo.update" | "project.update",
+): WriteVector | undefined {
+  return deps.vectors.find((v) => v.id === "url-scheme" && v.matrix[legOp]?.support === "yes");
+}
+
+interface JsonCollapseCtx {
+  coBounce: string[];
+  /** Per-item placement order (reverse target for front-insert, forward for back). */
+  order: number[];
+  bounceKind: BounceKind;
+  containerUuid: string | null;
+  preRanks: Record<string, unknown>;
+  txnId: string;
+  actor: string;
+  touchedUnnamed: string[];
+  startedAt: Date;
+  options: WriteOptions;
+  vector: WriteVector;
+}
+
+/**
+ * The BOUNCEJSON collapse (§9i / BJ-a / BJ-c): dispatch the whole bounce as ONE
+ * pre-validated `things:///json` update array carrying `[{when:away},{when:back}]`
+ * per item, iterated in the SAME per-item order the sequential loop uses (so
+ * array order == the resulting index order for both insert directions), then run
+ * ONE terminal ordering verify. The app validates the entire array first and
+ * applies it all-or-nothing, so a failed dispatch/verify means NOTHING landed —
+ * there is no partial-progress state to reconcile (contrast the sequential
+ * path's placed/remaining bookkeeping). Every id was already resolved in
+ * {@link runReorder} (a single unresolvable ref would full-abort the batch).
+ */
+async function runBounceJsonCollapse(
+  deps: WriteDeps,
+  params: ReorderParams,
+  spec: BounceSpec,
+  ctx: JsonCollapseCtx,
+): Promise<ReorderResult> {
+  const {
+    coBounce,
+    order,
+    bounceKind,
+    containerUuid,
+    preRanks,
+    txnId,
+    actor,
+    touchedUnnamed,
+    startedAt,
+    options,
+    vector,
+  } = ctx;
+  const { away, back, rankKey } = spec;
+  const now = deps.now ?? (() => new Date());
+
+  const abort = (detail: string): ReorderResult => {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return {
+      kind: "bounce-aborted",
+      op: "reorder",
+      detail,
+      placed: [],
+      remaining: coBounce,
+      cause: null,
+    };
+  };
+
+  // Validate-first full-abort means nothing lands, so the concurrent-edit guard
+  // checks EVERY member up front (not per item as the sequential loop does).
+  for (const uuid of coBounce) {
+    const problem = checkStillMember(deps, uuid, bounceKind, containerUuid, now());
+    if (problem !== null) {
+      return abort(
+        `aborted before the json-collapsed bounce: ${uuid} ${problem} (Things was likely ` +
+          "edited concurrently); NOTHING was applied",
+      );
+    }
+  }
+
+  // ONE json array, both legs interleaved per item, in placement order.
+  const ops = order.flatMap((i) => {
+    const uuid = coBounce[i] as string;
+    return [
+      { type: "to-do", operation: "update", id: uuid, attributes: { when: away } },
+      { type: "to-do", operation: "update", id: uuid, attributes: { when: back } },
+    ];
+  });
+  const token = readAuthToken(deps.db);
+  const data = encodeURIComponent(JSON.stringify(ops));
+  const payload = `things:///json?data=${data}${token !== null ? `&auth-token=${encodeURIComponent(token)}` : ""}`;
+  const redactedPayload = `things:///json?data=${data}${token !== null ? "&auth-token=REDACTED" : ""}`;
+
+  const exec = await vector.execute({
+    vector: "url-scheme",
+    kind: "open-url",
+    payload,
+    redactedPayload,
+  });
+  if (exec.exitCode !== 0 || exec.timedOut === true) {
+    return abort(
+      `the json-collapsed bounce dispatch failed (exit ${exec.exitCode ?? "?"}` +
+        `${exec.timedOut === true ? ", timed out" : ""}) — the array is validate-first ` +
+        "all-or-nothing, so NOTHING was applied",
+    );
+  }
+
+  // ONE terminal ordering verify over the whole run.
+  const verify = await pollUntilVerified(
+    () =>
+      evaluateDelta(
+        { mode: "ordering", key: rankKey, sequence: coBounce },
+        createDbReader(deps.db),
+        {
+          modDates: {},
+          fields: {},
+        },
+      ),
+    options.verifyTimeoutMs ?? 4000,
+    deps.poller ?? {},
+  );
+  if (verify.kind !== "ok") {
+    return abort(
+      "the json-collapsed bounce did not land the requested order — the app validates the " +
+        "whole array first and applies it all-or-nothing (§9i / BJ-c), so NOTHING was applied " +
+        "(no partial-progress repair needed); re-run once Things is idle",
+    );
+  }
+
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, rankKey);
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
+  return {
+    kind: "ok",
+    op: "reorder",
+    uuid: null,
+    observed,
+    vector: "url-scheme",
+    tier: 0,
+    undoToken: txnId,
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
   };
 }

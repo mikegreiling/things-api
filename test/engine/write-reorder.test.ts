@@ -818,10 +818,70 @@ describe("someday scope: PROJECTS (P9e inverted protocol)", () => {
  * Faithful index-keyed bounce sim (reordgaps-results.md BOUNCE2 re-entry law).
  * A when= leg re-schedules the item and, when it lands in a ranked bucket,
  * re-inserts it: FRONT (min index − 1) for a loose/area-direct item, BACK
- * (max index + 1) for a heading/project child.
+ * (max index + 1) for a heading/project child. Handles BOTH dispatch shapes so
+ * one fake covers the sequential URL bounce AND the BOUNCEJSON one-array
+ * collapse (§9i): a per-leg `things:///update?...&when=` URL, and a single
+ * `things:///json?data=[…]` array applied element-by-element in ARRAY ORDER
+ * (the app's per-element distinct sub-transactions, BJ-b) — the same reindex
+ * law modelling anytime-into-loose/heading front/back-insert.
  */
 function indexBounceVector() {
   const calls: string[] = [];
+  const applyWhen = (id: string, when: string): void => {
+    const row = fixture.db
+      .prepare("SELECT heading, project, area FROM TMTask WHERE uuid = ?")
+      .get(id) as { heading: string | null; project: string | null; area: string | null };
+    let start = 1;
+    let startDate: number | null = null;
+    let startBucket = 0;
+    if (when === "someday") start = 2;
+    else if (when === "anytime") start = 1;
+    else if (when === "today") startDate = PACKED_TODAY;
+    else if (when === "evening") {
+      startDate = PACKED_TODAY;
+      startBucket = 1;
+    }
+    fixture.db
+      .prepare(
+        "UPDATE TMTask SET start=?, startDate=?, startBucket=?, userModificationDate=? WHERE uuid=?",
+      )
+      .run(start, startDate, startBucket, modClock++, id);
+    let where: string | null = null;
+    const binds: (string | number)[] = [];
+    let back = false;
+    if (when === "anytime" && row.heading != null) {
+      where = "heading = ? AND start = 1 AND startDate IS NULL";
+      binds.push(row.heading);
+      back = true;
+    } else if (when === "someday" && row.area != null && row.heading == null) {
+      where = "area = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+      binds.push(row.area);
+    } else if (when === "someday" && row.project != null && row.heading == null) {
+      where = "project = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
+      binds.push(row.project);
+      back = true;
+    } else if (
+      when === "anytime" &&
+      row.project == null &&
+      row.area == null &&
+      row.heading == null
+    ) {
+      where =
+        "project IS NULL AND area IS NULL AND heading IS NULL AND start = 1 AND startDate IS NULL";
+    }
+    if (where != null) {
+      const sib = fixture.db
+        .prepare(
+          `SELECT MIN("index") AS mn, MAX("index") AS mx FROM TMTask
+           WHERE trashed=0 AND status=0 AND type=0 AND uuid != ? AND ${where}`,
+        )
+        .get(id, ...binds) as { mn: number | null; mx: number | null };
+      const newIndex = back ? (sib.mx ?? 0) + 1 : (sib.mn ?? 0) - 1;
+      fixture.db
+        .prepare(`UPDATE TMTask SET "index"=?, userModificationDate=? WHERE uuid=?`)
+        .run(newIndex, modClock++, id);
+    }
+  };
   const vector: WriteVector = {
     id: "url-scheme",
     matrix: {
@@ -831,61 +891,20 @@ function indexBounceVector() {
     async execute(invocation) {
       calls.push(invocation.payload);
       const url = new URL(invocation.payload);
-      const id = url.searchParams.get("id") ?? "";
-      const when = url.searchParams.get("when") ?? "";
-      const row = fixture.db
-        .prepare("SELECT heading, project, area FROM TMTask WHERE uuid = ?")
-        .get(id) as { heading: string | null; project: string | null; area: string | null };
-      let start = 1;
-      let startDate: number | null = null;
-      let startBucket = 0;
-      if (when === "someday") start = 2;
-      else if (when === "anytime") start = 1;
-      else if (when === "today") startDate = PACKED_TODAY;
-      else if (when === "evening") {
-        startDate = PACKED_TODAY;
-        startBucket = 1;
-      }
-      fixture.db
-        .prepare(
-          "UPDATE TMTask SET start=?, startDate=?, startBucket=?, userModificationDate=? WHERE uuid=?",
-        )
-        .run(start, startDate, startBucket, modClock++, id);
-      let where: string | null = null;
-      const binds: (string | number)[] = [];
-      let back = false;
-      if (when === "anytime" && row.heading != null) {
-        where = "heading = ? AND start = 1 AND startDate IS NULL";
-        binds.push(row.heading);
-        back = true;
-      } else if (when === "someday" && row.area != null && row.heading == null) {
-        where = "area = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
-        binds.push(row.area);
-      } else if (when === "someday" && row.project != null && row.heading == null) {
-        where = "project = ? AND heading IS NULL AND start = 2 AND startDate IS NULL";
-        binds.push(row.project);
-        back = true;
-      } else if (
-        when === "anytime" &&
-        row.project == null &&
-        row.area == null &&
-        row.heading == null
+      if (
+        url.pathname === "//json" ||
+        url.host === "json" ||
+        invocation.payload.includes("/json?")
       ) {
-        where =
-          "project IS NULL AND area IS NULL AND heading IS NULL AND start = 1 AND startDate IS NULL";
+        // BOUNCEJSON collapse: apply every element's when in array order.
+        const arr = JSON.parse(url.searchParams.get("data") ?? "[]") as {
+          id: string;
+          attributes: { when: string };
+        }[];
+        for (const el of arr) applyWhen(el.id, el.attributes.when);
+        return { exitCode: 0, stdout: "", stderr: "" };
       }
-      if (where != null) {
-        const sib = fixture.db
-          .prepare(
-            `SELECT MIN("index") AS mn, MAX("index") AS mx FROM TMTask
-             WHERE trashed=0 AND status=0 AND type=0 AND uuid != ? AND ${where}`,
-          )
-          .get(id, ...binds) as { mn: number | null; mx: number | null };
-        const newIndex = back ? (sib.mx ?? 0) + 1 : (sib.mn ?? 0) - 1;
-        fixture.db
-          .prepare(`UPDATE TMTask SET "index"=?, userModificationDate=? WHERE uuid=?`)
-          .run(newIndex, modClock++, id);
-      }
+      applyWhen(url.searchParams.get("id") ?? "", url.searchParams.get("when") ?? "");
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   };
@@ -894,6 +913,15 @@ function indexBounceVector() {
 
 function ascending(nums: number[]): boolean {
   return nums.every((n, i) => i === 0 || (nums[i - 1] as number) < n);
+}
+
+/** Decode a `things:///json` collapse payload into [[id, when], …] in array order. */
+function jsonOps(payload: string): [string, string][] {
+  const arr = JSON.parse(new URL(payload).searchParams.get("data") ?? "[]") as {
+    id: string;
+    attributes: { when: string };
+  }[];
+  return arr.map((el) => [el.id, el.attributes.when]);
 }
 
 describe("heading scope (BOUNCE2-h forward-order back-insert)", () => {
@@ -910,13 +938,46 @@ describe("heading scope (BOUNCE2-h forward-order back-insert)", () => {
       uuids: [h3, h1, h2],
     });
     expect(result.kind).toBe("ok");
-    // Forward order (back-insert): first bounced is h3, legs when=someday→when=anytime.
-    expect(calls[0]).toContain(`id=${h3}`);
-    expect(calls[0]).toContain("when=someday");
-    expect(calls[1]).toContain(`id=${h3}`);
-    expect(calls[1]).toContain("when=anytime");
-    expect(calls[2]).toContain(`id=${h1}`);
+    // BOUNCEJSON collapse (§9i): ONE json dispatch, both legs interleaved per
+    // item in FORWARD order (back-insert), array order == result index order.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("things:///json");
+    expect(jsonOps(calls[0] as string)).toEqual([
+      [h3, "someday"],
+      [h3, "anytime"],
+      [h1, "someday"],
+      [h1, "anytime"],
+      [h2, "someday"],
+      [h2, "anytime"],
+    ]);
     expect(ascending(ranks([h3, h1, h2], `"index"`))).toBe(true);
+  });
+
+  it("full-abort: a failed json dispatch applies NOTHING (validate-first, no partial state)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const h1 = seedTodo(fixture.db, { title: "h1", heading, index: 10 });
+    const h2 = seedTodo(fixture.db, { title: "h2", heading, index: 20 });
+    // A dispatch surface that rejects the array (validate-first full abort, BJ-c).
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix: { "todo.update": { support: "yes", disruption: 0, validation: "validated" } },
+      async execute() {
+        return { exitCode: 1, stdout: "", stderr: "json error modal" };
+      },
+    };
+    const result = await runReorder(deps([vector]), {
+      scope: "heading",
+      container: { uuid: heading },
+      uuids: [h2, h1],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.placed).toEqual([]); // nothing landed
+      expect(result.detail).toContain("NOTHING was applied");
+    }
+    // The indices are untouched (no partial progress to repair).
+    expect(ranks([h1, h2], `"index"`)).toEqual([10, 20]);
   });
 });
 
@@ -958,9 +1019,16 @@ describe("anytime scope (ANYBNC reverse-order front-insert)", () => {
     const { vector, calls } = indexBounceVector();
     const result = await runReorder(deps([vector]), { scope: "anytime", uuids: [c, a] });
     expect(result.kind).toBe("ok");
-    expect(calls[0]).toContain(`id=${a}`);
-    expect(calls[0]).toContain("when=someday");
-    expect(calls[1]).toContain("when=anytime");
+    // BOUNCEJSON collapse (§9i): ONE json dispatch, both legs interleaved per
+    // item in REVERSE order (front-insert) — a bounced first, then c.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("things:///json");
+    expect(jsonOps(calls[0] as string)).toEqual([
+      [a, "someday"],
+      [a, "anytime"],
+      [c, "someday"],
+      [c, "anytime"],
+    ]);
     expect(ascending(ranks([c, a], `"index"`))).toBe(true);
     for (const u of [a, b, c]) {
       const row = fixture.db
@@ -1109,7 +1177,7 @@ describe("bounce-enabled gate + bounce-max-items cap", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("dry-run reports the 2-legs-per-item count", async () => {
+  it("dry-run of a json-collapsible scope reports 1 dispatch / 2N ops", async () => {
     const a = seedTodo(fixture.db, { title: "a", start: "active", index: 10 });
     const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
     const { vector, calls } = indexBounceVector();
@@ -1120,7 +1188,27 @@ describe("bounce-enabled gate + bounce-max-items cap", () => {
     );
     expect(result.kind).toBe("dry-run");
     if (result.kind === "dry-run") {
-      expect(result.plan.invocation).toContain("×2");
+      // area-less anytime collapses (§9i): one json dispatch, not the URL loop.
+      expect(result.plan.invocation).toContain("json-collapse ×2");
+      expect(result.plan.invocation).toContain("1 dispatch / 4 ops");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("dry-run of a NON-collapsible scope keeps the per-item leg count", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "someday", index: 20 });
+    const { vector, calls } = indexBounceVector();
+    const result = await runReorder(
+      deps([vector]),
+      { scope: "area-someday", container: { uuid: area }, uuids: [a, b] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      // area-someday is a someday-placement / area-direct class — json-inert (§9i).
+      expect(result.plan.invocation).toContain("bounce ×2");
       expect(result.plan.invocation).toContain("4 legs");
     }
     expect(calls).toHaveLength(0);
