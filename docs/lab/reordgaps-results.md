@@ -184,6 +184,8 @@ So the `json`-array collapse reproduces a bounce **iff the PLACEMENT leg is `any
 - **FRONT-insert / someday-placement classes (area-someday, project-someday, someday scope):** `json` is index-inert — **do NOT collapse**; keep the sequential URL bounce (the reindex only fires on the URL path). Documented dead end, not a regression.
 - **Poison honesty:** the `json` array is all-or-nothing on validation failure (validate-first full abort), so partial-progress reconciliation is unnecessary for the collapsed path — but the whole batch fails on one bad ref (+ error modal), so ref resolution must precede dispatch.
 
+**Wired classification (2026-07-28, `bounceSpecOf` → `BounceSpec.jsonCollapsible`, pinned by a regression test):** eligibility is keyed off the **placement (`back`) leg VALUE, NOT the front/back direction** — the trap is that the two bounce classes whose direction and leg-value disagree get mis-sorted by a direction heuristic. Collapse-eligible = the bounce scopes whose `back === "anytime"` landing into a loose/heading-container bucket: **`heading`** (back-insert, BJ-a) **and `anytime`** (area-less loose front-insert, BJ-0 — §9i(a) confirms the loose-anytime json write matches the URL bounce). Ineligible (stay on the sequential URL bounce): **`project-someday`** (a BACK-insert but its placement leg is `someday`, §9i(b) index-inert — collapsing it is a *silent no-op*), **`area-someday`** (someday leg + area-direct, §9i(b+c)), and `today`/`evening` (todayIndex legs) / `projects` (`project.update`; json when= reindex unproven for a type=1 row). So of the two BACK-insert classes only `heading` collapses, and one FRONT-insert class (`anytime`) does — the "back-insert ⇒ json / front-insert ⇒ URL" shorthand is NOT the rule.
+
 ## Reproduce
 
 ```sh

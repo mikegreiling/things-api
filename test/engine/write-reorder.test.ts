@@ -17,7 +17,7 @@ import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate } from "../../src/model/dates.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { computeReorderPre } from "../../src/write/pre-state.ts";
-import { BOUNCE_MAX_ITEMS, runReorder } from "../../src/write/reorder.ts";
+import { BOUNCE_MAX_ITEMS, bounceJsonCollapsible, runReorder } from "../../src/write/reorder.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
@@ -1124,5 +1124,29 @@ describe("bounce-enabled gate + bounce-max-items cap", () => {
       expect(result.plan.invocation).toContain("4 legs");
     }
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("BOUNCEJSON collapse eligibility (§9i placement-leg mechanism)", () => {
+  // The `things:///json` one-array collapse works ONLY when the placement (back)
+  // leg is `when=anytime` into a loose/heading-container bucket (oddities §9i,
+  // BJ-0/BJ-a). This test pins the classification so nobody "optimizes" a
+  // someday-placement or area-direct class into json — §9i proved that is a
+  // SILENT no-op (index frozen), which would corrupt ordering without failing.
+  it("collapses exactly the anytime-placement loose/container classes", () => {
+    // Eligible: placement leg = anytime into a loose (area-less) or heading bucket.
+    expect(bounceJsonCollapsible("heading")).toBe(true); // BJ-a back-insert
+    expect(bounceJsonCollapsible("anytime")).toBe(true); // BJ-0 loose front-insert
+  });
+  it("keeps every someday-placement / area-direct / non-index class on the URL loop", () => {
+    // Someday-placement (index-INERT via json, §9i b) — despite project-someday
+    // being a BACK-insert, eligibility follows the leg VALUE, not the direction.
+    expect(bounceJsonCollapsible("area-someday")).toBe(false); // §9i b+c (area-direct)
+    expect(bounceJsonCollapsible("project-someday")).toBe(false); // §9i b
+    // todayIndex legs (not an anytime index placement).
+    expect(bounceJsonCollapsible("today")).toBe(false);
+    expect(bounceJsonCollapsible("evening")).toBe(false);
+    // project.update (type=1) — json when= reindex unproven for a project row.
+    expect(bounceJsonCollapsible("projects")).toBe(false);
   });
 });
