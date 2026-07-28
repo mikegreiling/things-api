@@ -1795,6 +1795,29 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
+  "project.move-heading-to-project": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (no wired inverse — app-reversible only, move it back)", () => {
+        const plan = planUndo(
+          auditRecord({ op: "project.move-heading-to-project", uuid: "H-1" }),
+          NOW,
+        );
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("move it back");
+      });
+    },
+  },
+  "project.dissolve-heading": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (heading hard-deleted; compound restore not wired)", () => {
+        const plan = planUndo(auditRecord({ op: "project.dissolve-heading", uuid: "H-1" }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("HARD-DELETES");
+      });
+    },
+  },
   "project.add-repeating": {
     class: "irreversible",
     register() {

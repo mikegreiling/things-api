@@ -159,7 +159,7 @@ export type DeltaSpec =
       assert: FieldAssertion[];
       cascade?: { uuid: string; assert: FieldAssertion[] }[];
     }
-  | { mode: "gone"; entity: "area" | "tag"; uuid: string }
+  | { mode: "gone"; entity: "area" | "tag" | "task"; uuid: string }
   /**
    * Area/tag creation: TMArea/TMTag have no creationDate, so the probe is
    * "a row with this title exists whose uuid was not present pre-write".
@@ -704,8 +704,15 @@ export function evaluateDelta(
       };
     }
     case "gone": {
+      // A hard-deleted task row (project.dissolve-heading — the heading is removed
+      // from TMTask entirely, DISS1) reads back null from taskByUuid; area/tag
+      // deletes use their own existence probes.
       const exists =
-        spec.entity === "area" ? reader.areaExists(spec.uuid) : reader.tagExists(spec.uuid);
+        spec.entity === "task"
+          ? reader.taskByUuid(spec.uuid) !== null
+          : spec.entity === "area"
+            ? reader.areaExists(spec.uuid)
+            : reader.tagExists(spec.uuid);
       return {
         satisfied: !exists,
         movement: !exists,

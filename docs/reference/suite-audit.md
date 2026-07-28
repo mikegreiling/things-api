@@ -45,6 +45,13 @@ The DAYORD-b verdict (a CONTAINER specifier reordering same-day SCHEDULED childr
 
 Verified GREEN in a fresh clone: run **`o-20260728-001645`**, all 16 o-suite probes `ok` (O17 `supported`, tier 0).
 
+## o-suite BOUNCEJSON collapse row — ADDED 2026-07-28 (BOUNCEJSON / BJ-a)
+
+The BOUNCEJSON collapse (a bounce whose placement leg is `when=anytime` into a loose/heading bucket dispatches as ONE `things:///json` array applied in array order — [lab/reordgaps-results.md](../lab/reordgaps-results.md) BOUNCEJSON, oddities §9i) is the app behavior the reorder compiler now relies on for the `heading` / `anytime` classes; it needed a recurring lock so the release canary re-certifies it every Things update:
+- **O18** (`order.bounce-json-collapse`): self-seeds a project + heading + 4 anytime children (`O-BJHc1..4`, seed order 1<2<3<4) via ONE `things:///json` new-project payload; the command is ONE `things:///json` update array interleaving `[{when:someday},{when:anytime}]` per item in the SCRAMBLED target order `c2,c4,c1,c3`; asserts the resulting `index` order is `c2<c4<c1<c3` (array order CONTROLS placement — the scramble proves it is not a no-op), the heading FK is preserved 4/4, and every child is back at `start=1`. Created its own targets (no new seeds).
+
+Verified GREEN in a fresh clone: run **`o-20260728-064802`**, all 17 o-suite probes `ok` (O18 `supported`, tier 0).
+
 ## ui-vector ops — coverage model is per-version CERTIFICATION, not lab:regress (noted 2026-07-15)
 
 The GUI-driven op kinds (the repeat family, the converts, and now **`area.reorder-sidebar`** — catalog now 47) are NOT in the autonomous recurring suites: the golden image carries no Accessibility grant (AXVM1 rung-b is applied per campaign via VNC), so `lab:regress` cannot drive them headlessly. Their recurring safety net is the **per-Things-version certification campaign** instead — `lab/scripts/research-uic1.sh` / `research-uic3.sh` / **`research-axdrag2.sh`** re-run the ops through the production CLI in a disposable clone and re-flip `src/write/vectors/ui-certification.ts`, per the [things-update-runbook](../lab/things-update-runbook.md) discipline. Unit-level coverage for `area.reorder-sidebar` is `test/unit/ui-drag.test.ts` (geometry + the full ladder against a scripted sidebar simulator through the injectable runner seam) plus the reversibility-matrix case; the drag driver's own per-hop DB asserts are the in-op live verification. If a future golden bakes the AX grant (AXVM1's optional L3 layer), promoting a rung-1 smoke move into `lab:regress` is the follow-up.

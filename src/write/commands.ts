@@ -26,6 +26,8 @@ import type {
 import {
   childTagTitles,
   classifyHeadingConvert,
+  classifyHeadingDissolve,
+  classifyHeadingMoveToProject,
   classifyProjectRepeat,
   computeHeadingMovePre,
   computeReorderPre,
@@ -49,7 +51,9 @@ import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
   areaReorderSidebarRecipe,
   convertToProjectRecipe,
+  dissolveHeadingRecipe,
   headingConvertToProjectRecipe,
+  moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
   projectMakeRepeatingRecipe,
@@ -2216,6 +2220,86 @@ const headingConvertToProject: CommandSpec<"project.promote-heading"> = {
   },
 };
 
+const projectMoveHeadingToProject: CommandSpec<"project.move-heading-to-project"> = {
+  op: "project.move-heading-to-project",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.headingMoveToProject = classifyHeadingMoveToProject(
+      db,
+      params.project,
+      params.heading,
+      params.toProject,
+    );
+    if (pre.headingMoveToProject.kind === "ok") {
+      // Load the heading row so the verify oracle reads its (post-op) project FK.
+      pre.target = loadTarget(db, pre.headingMoveToProject.pre.headingUuid);
+    }
+    return pre;
+  },
+  expectedDelta(pre) {
+    // HEADXPROJ: a single-row change — the heading's `project` FK becomes the
+    // destination; its children follow via their intact heading FK (no child
+    // rewrite, no index churn), so no per-child assertion is needed.
+    const tax = pre.headingMoveToProject;
+    const headingUuid = tax?.kind === "ok" ? tax.pre.headingUuid : "";
+    const destUuid = tax?.kind === "ok" ? tax.pre.destProjectUuid : "";
+    return {
+      mode: "update",
+      uuid: headingUuid,
+      assert: [{ field: "project.uuid", equals: destUuid }],
+    };
+  },
+  compile(_params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const tax = pre.headingMoveToProject;
+    if (tax === null || tax.kind === "refuse") {
+      // The taxonomy refusals are surfaced by H-UNKNOWN-DESTINATION before
+      // compile; reaching here with one means the guard was bypassed.
+      throw new Error(
+        `project.move-heading-to-project: ${tax?.kind === "refuse" ? tax.detail : "no taxonomy resolved (guard bypassed?)"}`,
+      );
+    }
+    return uiDrive(
+      moveHeadingToProjectRecipe(
+        tax.pre.sourceProjectUuid,
+        tax.pre.headingTitle,
+        tax.pre.destProjectTitle,
+      ),
+    );
+  },
+};
+
+const projectDissolveHeading: CommandSpec<"project.dissolve-heading"> = {
+  op: "project.dissolve-heading",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    pre.headingDissolve = classifyHeadingDissolve(db, pre.target);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // DISS1: the heading row is HARD-DELETED (removed from TMTask) while its
+    // children become direct project children. The verify oracle is the heading
+    // GONE — its children re-home is the DISS1-locked invariant, checked by the
+    // op's tests (a childless heading dissolve verifies identically).
+    return { mode: "gone", entity: "task", uuid: params.uuid };
+  },
+  compile(_params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const tax = pre.headingDissolve;
+    if (tax === null || tax.kind === "refuse") {
+      // The taxonomy refusals are surfaced by H-UNKNOWN-DESTINATION before
+      // compile; reaching here with one means the guard was bypassed.
+      throw new Error(
+        `project.dissolve-heading: ${tax?.kind === "refuse" ? tax.detail : "no taxonomy resolved (guard bypassed?)"}`,
+      );
+    }
+    return uiDrive(dissolveHeadingRecipe(tax.pre.projectReveal, tax.pre.headingTitle));
+  },
+};
+
 // -------------------------------------------------- sidebar AREA reorder
 
 /** The compile-time placement for area.reorder (resolved refs). */
@@ -2377,6 +2461,8 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.unarchive-heading": headingUnarchive,
   "project.promote-heading": headingConvertToProject,
   "project.move-heading": projectMoveHeading,
+  "project.move-heading-to-project": projectMoveHeadingToProject,
+  "project.dissolve-heading": projectDissolveHeading,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,

@@ -1847,7 +1847,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "promote_heading: promote a heading into a new project — this REPLACES the heading and " +
         "cannot be undone (its to-dos move under the new project), and requires " +
         "dangerously_drive_gui. move_heading: reposition headings as an ordered block (children " +
-        "follow); pass exactly one placement flag. Reordering headings needs allow-experimental.",
+        "follow); pass exactly one placement flag. Reordering headings needs allow-experimental. " +
+        "move_heading_to_project: relocate ONE heading (with its to-dos) to a DIFFERENT project " +
+        "(project + heading + to_project) — the cross-project move, distinct from move_heading's " +
+        "within-project reorder; GUI-only (requires dangerously_drive_gui), fails closed on a " +
+        "source-heading or destination-project title collision, and has no undo (move it back). " +
+        "dissolve_heading: remove a heading but KEEP its to-dos as direct project children (NOT " +
+        "trashed — the opposite of a delete cascade); GUI-only (requires dangerously_drive_gui), " +
+        "fails closed on a title collision, no undo.",
       inputSchema: {
         action: z.enum([
           "add_heading",
@@ -1856,6 +1863,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           "unarchive_heading",
           "promote_heading",
           "move_heading",
+          "move_heading_to_project",
+          "dissolve_heading",
         ]),
         project: z.string().describe(`the heading's project (${REF_FORMAT})`),
         heading: z
@@ -1866,6 +1875,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .array(z.string())
           .optional()
           .describe("move_heading: heading selectors in the order they should land"),
+        to_project: z
+          .string()
+          .optional()
+          .describe(`move_heading_to_project: the destination project (${REF_FORMAT})`),
         title: z
           .string()
           .optional()
@@ -1988,6 +2001,26 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 opts,
               ),
             );
+          }
+          case "move_heading_to_project": {
+            if (args.heading === undefined || args.to_project === undefined) {
+              return usage('action "move_heading_to_project" requires heading and to_project');
+            }
+            const dest = c.resolve.project(args.to_project);
+            return mutationResult(
+              await c.write.moveHeadingToProject(
+                { uuid: proj.uuid },
+                args.heading,
+                { uuid: dest.uuid },
+                opts,
+              ),
+            );
+          }
+          case "dissolve_heading": {
+            if (args.heading === undefined)
+              return usage('action "dissolve_heading" requires heading');
+            const h = c.resolve.heading(proj.uuid, args.heading);
+            return mutationResult(await c.write.dissolveHeading(h.uuid, opts));
           }
         }
       }),

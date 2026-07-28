@@ -336,6 +336,15 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "project.promote-heading":
     "promoting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",
+  "project.move-heading-to-project":
+    "moving a heading to another project is app-reversible (move it back) but has no wired " +
+    "automated inverse — the ellipsis Move… drive is not re-driven on undo; move it back manually " +
+    "with `project move-heading-to-project`, naming the destination and origin projects swapped",
+  "project.dissolve-heading":
+    "dissolving a heading HARD-DELETES its row (DISS1) — there is no automated inverse: the " +
+    "compound restore (re-create the heading, then move the ex-children back under it in order) " +
+    "spans surfaces (Shortcuts add-heading + N moves) and is not wired. Its children survive as " +
+    "direct project children, so nothing is lost; re-create the heading and move them back in the app",
   // NB: todo.reschedule-repeat / project.reschedule-repeat are NOT here — with
   // the full rule vocabulary they are CONDITIONAL (planUndo re-drives reschedule
   // with the CAPTURED prior rule when it is decodable and expressible; only a

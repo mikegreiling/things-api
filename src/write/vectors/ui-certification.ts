@@ -49,7 +49,7 @@ export interface CertificationEntry {
 
 /** The manifest profile — records the tier + Things build the suite certified. */
 export const UI_CERTIFICATION_PROFILE =
-  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 in-VM (Things 3.22.11) — on-device pending";
+  "UIC1 + UIC3 + AXDRAG2 + UIC5 + UIC6 + UIC7 + UIC7b + HEADCERT1 + HXPC1 + DISS1 in-VM (Things 3.22.11) — on-device pending";
 
 const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "todo.make-repeating": {
@@ -89,6 +89,30 @@ const CERTIFICATION: Partial<Record<OperationKind, CertificationEntry>> = {
   "project.promote-heading": {
     status: "lab-certified",
     evidence: ["UI2-d", "UIC1-a", "HEADCERT1"],
+  },
+  "project.move-heading-to-project": {
+    // HXPC1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Move… recipe ran
+    // end-to-end in the clone — HID-click the "More. <title>" button → Move… →
+    // type the destination → Return — and the exact HEADXPROJ delta was observed:
+    // heading `HXH` project-FK rewritten HX-PA → HX-PB, both children followed via
+    // their intact heading FK (project NULL, heading=HXH), single-row change, no
+    // index churn. The shipped recipe's popover-item AX PATHS (description-based
+    // click-element) are provisional pending an on-device sitting — HXPC1 drove the
+    // equivalent frame-center synthesis; the DB oracle + recipe flow are certified.
+    status: "lab-certified",
+    evidence: ["HXPC1"],
+  },
+  "project.dissolve-heading": {
+    // DISS1 (2026-07-28, bjhx-lab, Things 3.22.11): the ellipsis Delete recipe ran
+    // end-to-end in the clone — HID-click the "More. <title>" button → Delete — and
+    // the exact delta was observed: the heading row HARD-DELETED (gone from
+    // TMTask), its 3 children re-homed as DIRECT project children (heading→NULL,
+    // project→parent, index preserved: c1<c2<c3, trashed=0). NO confirm sheet.
+    // Popover items are AX-description-enumerable (the recipe resolves Delete by
+    // description, scoped to the popover). The shipped recipe's popover AX paths are
+    // provisional pending an on-device sitting; the DB oracle + flow are certified.
+    status: "lab-certified",
+    evidence: ["DISS1"],
   },
 };
 

@@ -107,6 +107,10 @@ export interface PreState {
   headingConvert: HeadingConvertTaxonomy | null;
   /** project.move-heading: current heading order + computed target order. */
   headingMove: HeadingMovePre | null;
+  /** project.move-heading-to-project: source reveal + heading + destination (HEADXPROJ). */
+  headingMoveToProject: HeadingMoveToProjectTaxonomy | null;
+  /** project.dissolve-heading: parent reveal + heading title + children (DISS1). */
+  headingDissolve: HeadingDissolveTaxonomy | null;
 }
 
 /** project.move-heading pre-computation (spec §2/§4). */
@@ -187,6 +191,8 @@ export function emptyPreState(): PreState {
     repeatSubtreeUuids: null,
     headingConvert: null,
     headingMove: null,
+    headingMoveToProject: null,
+    headingDissolve: null,
   };
 }
 
@@ -316,6 +322,244 @@ export function classifyHeadingConvert(
     };
   }
   return { kind: "ok", projectReveal: project.uuid, ordinal };
+}
+
+/**
+ * Taxonomy for `project.move-heading-to-project`'s ellipsis-`Move…` drive
+ * (HEADXPROJ). Unlike the promote drive (positional), the heading row is
+ * TITLE-addressable: its `…` button is an AXUnknown whose AXDescription is
+ * `"More. <title>"`, so the recipe HID-clicks that button, then `Move…`, then
+ * TYPES the destination project title into the search picker and presses Return.
+ * Two collision surfaces therefore fail closed: (a) the SOURCE heading title is
+ * shared by another heading in the same project (the `"More. <title>"` node
+ * matches both — indistinguishable), and (b) the DESTINATION title is shared by
+ * another project (the picker is search-by-title — Return would pick the wrong
+ * row). A titleless heading is refused (its `"More. "` description matches every
+ * titleless heading). Verify oracle: the heading row's `project` FK becomes the
+ * destination (children follow via their intact heading FK — a single-row change).
+ */
+export interface HeadingMoveToProjectPre {
+  /** Source project revealed via things:///show?id= to render the heading row. */
+  sourceProjectUuid: string;
+  /** The heading being moved (the verify oracle's target row). */
+  headingUuid: string;
+  /** The heading title — the `"More. <title>"` click target. */
+  headingTitle: string;
+  /** The destination project — the heading's `project` FK becomes this post-op. */
+  destProjectUuid: string;
+  /** The destination title typed into the Move… search picker. */
+  destProjectTitle: string;
+}
+
+export type HeadingMoveToProjectRefusal =
+  | "no-source"
+  | "heading-not-found"
+  | "heading-ambiguous"
+  | "empty-heading-title"
+  | "no-dest"
+  | "dest-ambiguous"
+  | "same-project";
+
+export type HeadingMoveToProjectTaxonomy =
+  | { kind: "ok"; pre: HeadingMoveToProjectPre }
+  | { kind: "refuse"; refusal: HeadingMoveToProjectRefusal; detail: string; candidates?: string[] };
+
+export function classifyHeadingMoveToProject(
+  db: DatabaseSync,
+  project: ContainerRef,
+  headingSel: string,
+  toProject: ContainerRef,
+): HeadingMoveToProjectTaxonomy {
+  const src = resolveProject(db, project);
+  if (src.resolved === null) {
+    return {
+      kind: "refuse",
+      refusal: "no-source",
+      detail:
+        src.matches > 1
+          ? "the source project title is ambiguous — pass its uuid"
+          : "the source project did not resolve",
+    };
+  }
+  const h = resolveHeading(db, src.resolved.uuid, headingSel);
+  if (h.resolved === null) {
+    return {
+      kind: "refuse",
+      refusal: h.matches > 1 ? "heading-ambiguous" : "heading-not-found",
+      detail:
+        h.matches > 1
+          ? `the heading selector "${headingSel}" matches ${h.matches} headings in the project — disambiguate with a uuid`
+          : `no heading matching "${headingSel}" in the source project`,
+    };
+  }
+  const headingRow = db
+    .prepare("SELECT title FROM TMTask WHERE uuid = ? AND type = 2 AND trashed = 0")
+    .get(h.resolved.uuid) as { title: string | null } | undefined;
+  if (headingRow === undefined) {
+    return { kind: "refuse", refusal: "heading-not-found", detail: "the heading no longer exists" };
+  }
+  const title = headingRow.title ?? "";
+  if (title === "") {
+    return {
+      kind: "refuse",
+      refusal: "empty-heading-title",
+      detail:
+        "the heading has no title — the Move… drive addresses the heading by its title-carrying " +
+        '"More. <title>" button, which cannot pick one titleless heading out of several',
+    };
+  }
+  // Source title-collision: the "More. <title>" node cannot tell two same-titled
+  // headings in one project apart, even when the SELECTOR resolved by uuid.
+  const twins = db
+    .prepare(
+      "SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? AND title = ? AND uuid != ?",
+    )
+    .all(src.resolved.uuid, title, h.resolved.uuid) as { uuid: string }[];
+  if (twins.length > 0) {
+    return {
+      kind: "refuse",
+      refusal: "heading-ambiguous",
+      detail:
+        `the heading title "${title}" is shared by ${twins.length + 1} headings in this project — ` +
+        "the ellipsis Move… drive addresses headings by title and cannot disambiguate; " +
+        "rename one first",
+      candidates: [h.resolved.uuid, ...twins.map((t) => t.uuid)],
+    };
+  }
+  const dest = resolveProject(db, toProject);
+  if (dest.resolved === null) {
+    return {
+      kind: "refuse",
+      refusal: "no-dest",
+      detail:
+        dest.matches > 1
+          ? "the destination project title is ambiguous — pass its uuid"
+          : "the destination project did not resolve",
+    };
+  }
+  if (dest.resolved.uuid === src.resolved.uuid) {
+    return {
+      kind: "refuse",
+      refusal: "same-project",
+      detail:
+        "the destination is the heading's current project — use `project move-heading` to reorder " +
+        "a heading WITHIN its project",
+    };
+  }
+  // Destination picker-collision: the picker searches BY TITLE, so a shared dest
+  // title would filter to >1 project and Return would pick the wrong one — fail
+  // closed even though the destination itself resolved (possibly by uuid).
+  const destTitle = dest.resolved.title;
+  const destTwins = db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM TMTask WHERE type = 1 AND trashed = 0 AND title = ? AND uuid != ?",
+    )
+    .get(destTitle, dest.resolved.uuid) as { n: number };
+  if (destTwins.n > 0) {
+    return {
+      kind: "refuse",
+      refusal: "dest-ambiguous",
+      detail:
+        `the destination title "${destTitle}" is shared by ${destTwins.n + 1} projects — the ` +
+        "Move… picker searches by title and would land the heading in the wrong one; rename or " +
+        "merge the duplicates first",
+    };
+  }
+  return {
+    kind: "ok",
+    pre: {
+      sourceProjectUuid: src.resolved.uuid,
+      headingUuid: h.resolved.uuid,
+      headingTitle: title,
+      destProjectUuid: dest.resolved.uuid,
+      destProjectTitle: destTitle,
+    },
+  };
+}
+
+/**
+ * Taxonomy for `project.dissolve-heading`'s ellipsis-`Delete` drive (DISS1). Same
+ * title-addressed `"More. <title>"` reveal as the cross-project move, driving the
+ * popover's Delete instead of Move…. DISS1 (2026-07-28, Things 3.22.11): Delete
+ * HARD-DELETES the heading row (removed from TMTask) while its children become
+ * DIRECT project children (heading→NULL, project→the parent, index preserved,
+ * NOT trashed) — no confirm sheet. Contrast the Shortcuts delete cascade (P12),
+ * which TRASHES the children. Fails closed on a title shared by another heading in
+ * the project (the drive addresses by title) and on a titleless heading.
+ */
+export interface HeadingDissolvePre {
+  /** Parent project revealed via things:///show?id= to render the heading row. */
+  projectReveal: string;
+  /** The heading being dissolved (the verify oracle's gone-target). */
+  headingUuid: string;
+  /** The heading title — the `"More. <title>"` click target. */
+  headingTitle: string;
+  /** Open children that become direct project children (for the result note). */
+  childUuids: string[];
+}
+
+export type HeadingDissolveRefusal =
+  | "not-a-heading"
+  | "no-project"
+  | "title-ambiguous"
+  | "empty-title";
+
+export type HeadingDissolveTaxonomy =
+  | { kind: "ok"; pre: HeadingDissolvePre }
+  | { kind: "refuse"; refusal: HeadingDissolveRefusal; detail: string; candidates?: string[] };
+
+export function classifyHeadingDissolve(
+  db: DatabaseSync,
+  target: AnyTask | null,
+): HeadingDissolveTaxonomy {
+  if (target === null || target.type !== "heading") {
+    return { kind: "refuse", refusal: "not-a-heading", detail: "target is not a heading" };
+  }
+  const project = target.project;
+  if (project === null) {
+    return {
+      kind: "refuse",
+      refusal: "no-project",
+      detail: "the heading has no owning project — cannot reveal a project view to drive its row",
+    };
+  }
+  const title = target.title;
+  if (title === "") {
+    return {
+      kind: "refuse",
+      refusal: "empty-title",
+      detail:
+        "the heading has no title — the Delete drive addresses the heading by its title-carrying " +
+        '"More. <title>" button, which cannot pick one titleless heading out of several',
+    };
+  }
+  const twins = db
+    .prepare(
+      "SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? AND title = ? AND uuid != ?",
+    )
+    .all(project.uuid, title, target.uuid) as { uuid: string }[];
+  if (twins.length > 0) {
+    return {
+      kind: "refuse",
+      refusal: "title-ambiguous",
+      detail:
+        `the heading title "${title}" is shared by ${twins.length + 1} headings in this project — ` +
+        "the ellipsis Delete drive addresses headings by title and cannot disambiguate; " +
+        "rename one first",
+      candidates: [target.uuid, ...twins.map((t) => t.uuid)],
+    };
+  }
+  const childUuids = (
+    db
+      .prepare(
+        'SELECT uuid FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0 AND heading = ? ORDER BY "index"',
+      )
+      .all(target.uuid) as { uuid: string }[]
+  ).map((r) => r.uuid);
+  return {
+    kind: "ok",
+    pre: { projectReveal: project.uuid, headingUuid: target.uuid, headingTitle: title, childUuids },
+  };
 }
 
 /**

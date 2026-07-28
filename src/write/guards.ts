@@ -169,6 +169,19 @@ const GUARDS: Record<HazardId, GuardFn> = {
         pre.entityTarget.matches > 1 ? "target reference is ambiguous" : "target not found",
       );
     }
+    // project.move-heading-to-project: the taxonomy fails closed on a missing/
+    // ambiguous source project, heading (incl. a title shared by another heading —
+    // the ellipsis Move… drive addresses by title), or destination (incl. a
+    // picker-search title collision), and on a same-project no-op.
+    if (pre.headingMoveToProject !== null && pre.headingMoveToProject.kind === "refuse") {
+      problems.push(pre.headingMoveToProject.detail);
+    }
+    // project.dissolve-heading: the taxonomy fails closed on a non-heading /
+    // parentless / titleless heading, or a title shared by another heading (the
+    // ellipsis Delete drive addresses by title).
+    if (pre.headingDissolve !== null && pre.headingDissolve.kind === "refuse") {
+      problems.push(pre.headingDissolve.detail);
+    }
     const needsTarget =
       typeof params["uuid"] === "string" &&
       op !== "todo.add" &&

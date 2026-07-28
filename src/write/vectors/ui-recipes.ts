@@ -756,6 +756,150 @@ export function projectRescheduleRepeatRecipe(
   };
 }
 
+// ------------------------------------ cross-project heading move (HEADXPROJ)
+//
+// A heading relocates (with its children) to a DIFFERENT project via the heading
+// row's `…` ellipsis → Move… menu → a keyboard-driven project picker (HEADXPROJ,
+// reordgaps-results.md). No headless spelling exists on any vector. The heading
+// `…` button is an AXUnknown whose AXDescription CARRIES the title
+// (`"More. <title>"`), so — unlike the promote drive's positional row-select —
+// the row is TITLE-addressable; but AXPress on it is INERT (§8j), so it is
+// HID-clicked at its frame center (the click-element primitive), like the project
+// repeat popover. The popover (Archive / Move… / Convert to Project… / Delete) is
+// the same custom AXUnknown-window shape as the repeat popover.
+//
+// PROVISIONAL element paths (pending HXPC1 certification): the `…` button's
+// container path, the popover-item enumeration, and the picker's search field are
+// best-guess structural paths from the HEADXPROJ AX inventory; the certification
+// sitting confirms/corrects them exactly as UIC1 corrected the repeat recipes.
+
+/** The heading `…` "More. <title>" button — provisionally in the content table. */
+function headingMoreButton(headingTitle: string): string {
+  return `(first UI element of ${PROJECT_CONTENT_TABLE} whose description is "More. ${headingTitle}")`;
+}
+/** The ellipsis popover — a custom AXUnknown window (same shape as the repeat popover). */
+const HEADING_ELLIPSIS_POPOVER = `(first window whose subrole is "AXUnknown" and size is not {40, 40})`;
+const HEADING_POPOVER_ITEMS = `scroll area 1 of ${HEADING_ELLIPSIS_POPOVER}`;
+/** The Move… project picker (a searchable list; provisionally a sheet of the main window). */
+const HEADING_MOVE_PICKER = `sheet 1 of ${MAIN_WINDOW}`;
+const HEADING_MOVE_PICKER_FIELD = `text field 1 of ${HEADING_MOVE_PICKER}`;
+
+/**
+ * Move a HEADING to a different project via the ellipsis `Move…` menu (HEADXPROJ).
+ * `sourceProjectUuid` is revealed to render the heading row; `headingTitle` is the
+ * `"More. <title>"` click target; `destProjectTitle` is typed into the picker,
+ * then Return selects the filtered match. DB effect (HEADXPROJ): the heading row's
+ * `project` FK becomes the destination; its children follow via their intact
+ * heading FK (a single-row change — no child rewrite, no index churn).
+ */
+export function moveHeadingToProjectRecipe(
+  sourceProjectUuid: string,
+  headingTitle: string,
+  destProjectTitle: string,
+): UiRecipe {
+  return {
+    op: "project.move-heading-to-project",
+    targetUuid: sourceProjectUuid,
+    steps: [
+      {
+        primitive: "reveal",
+        label: "reveal the source project in Things (things:///show?id=)",
+        value: sourceProjectUuid,
+      },
+      {
+        // NOT a fallback: the ellipsis + popover clicks are synthesized mouse
+        // input, which lands only on the foreground app (NATIVE1-e).
+        primitive: "activate",
+        label: "bring Things to the foreground (the pointer must reach the heading row)",
+      },
+      {
+        primitive: "click-element",
+        label: `open the heading's ellipsis menu ("More. ${headingTitle}")`,
+        path: headingMoreButton(headingTitle),
+        assertPath: HEADING_ELLIPSIS_POPOVER,
+        assertLabel: "the heading ellipsis menu",
+        assertTimeoutMs: 5000,
+        dynamic: true,
+        addressing: "title",
+      },
+      {
+        primitive: "click-element",
+        label: "ellipsis menu ▸ Move…",
+        path: `(first UI element of ${HEADING_POPOVER_ITEMS} whose description is "Move…")`,
+        assertPath: HEADING_MOVE_PICKER,
+        assertLabel: "the Move… project picker",
+        assertTimeoutMs: 5000,
+        dynamic: true,
+        addressing: "title",
+      },
+      {
+        primitive: "set-value",
+        label: `type the destination "${destProjectTitle}" into the Move… picker`,
+        path: HEADING_MOVE_PICKER_FIELD,
+        value: destProjectTitle,
+        dynamic: true,
+        addressing: "title",
+      },
+      {
+        primitive: "key",
+        label: "press Return to select the filtered destination project",
+        keys: "return",
+        dynamic: true,
+        addressing: "title",
+      },
+    ],
+  };
+}
+
+/**
+ * Dissolve a HEADING via the ellipsis `Delete` menu item (DISS1). Same
+ * `"More. <title>"` reveal as the cross-project move, driving Delete instead of
+ * Move…. DB effect (DISS1): the heading row is HARD-DELETED while its children
+ * become DIRECT project children (heading→NULL, project→parent, index preserved,
+ * NOT trashed) — no confirm sheet, so the Delete click is TERMINAL (the write
+ * pipeline's read-after-write is the verifier). The popover's Delete item is
+ * AX-description-enumerable and scoped to the popover so it never matches the
+ * main window's toolbar Delete.
+ */
+export function dissolveHeadingRecipe(projectReveal: string, headingTitle: string): UiRecipe {
+  return {
+    op: "project.dissolve-heading",
+    targetUuid: projectReveal,
+    steps: [
+      {
+        primitive: "reveal",
+        label: "reveal the heading's project in Things (things:///show?id=)",
+        value: projectReveal,
+      },
+      {
+        // NOT a fallback: the ellipsis + popover clicks are synthesized mouse
+        // input, which lands only on the foreground app (NATIVE1-e).
+        primitive: "activate",
+        label: "bring Things to the foreground (the pointer must reach the heading row)",
+      },
+      {
+        primitive: "click-element",
+        label: `open the heading's ellipsis menu ("More. ${headingTitle}")`,
+        path: headingMoreButton(headingTitle),
+        assertPath: HEADING_ELLIPSIS_POPOVER,
+        assertLabel: "the heading ellipsis menu",
+        assertTimeoutMs: 5000,
+        dynamic: true,
+        addressing: "title",
+      },
+      {
+        // Terminal click — DISS1 confirmed NO confirmation sheet, the heading
+        // dissolves immediately; the read-after-write verifies (heading gone).
+        primitive: "click-element",
+        label: "ellipsis menu ▸ Delete (dissolve — children become direct project children)",
+        path: `(first UI element of ${HEADING_POPOVER_ITEMS} whose description is "Delete")`,
+        dynamic: true,
+        addressing: "title",
+      },
+    ],
+  };
+}
+
 // ------------------------------------------------- sidebar AREA reorder
 
 /**
