@@ -235,6 +235,10 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "promoting a heading to a project is an identity REPLACEMENT (UI2-d): the heading uuid is destroyed, a new project is promoted into the parent's area and children reparent; no convert-back",
   },
+  "project.move-heading-to-project": {
+    class: "irreversible",
+    note: "moving a heading to another project (HEADXPROJ ellipsis Move…) is a single heading-row project-FK rewrite (children follow via their intact heading FK) and is APP-reversible — move it back — but NO automated inverse is wired: the GUI drive is not re-driven on undo. Move it back manually with `project move-heading-to-project`, origin and destination swapped",
+  },
   "todo.reschedule-repeat": {
     class: "conditional",
     note: "the rule mutates in place (identity preserved, UI2-b); the FULL rule vocabulary re-drives reschedule with the captured prior rule (weekday set, monthly/yearly anchor, ends bound, deadline/start-offset all restored) — invertible whenever the prior rule was captured, decodable, and within the Repeat dialog's vocabulary; irreversible for a rule the dialog itself cannot produce (two end bounds, a multi-anchor month/year rule, or an after-completion rule with a calendar day). A per-instance reminder time is not part of the captured rule and is not restored",

@@ -1486,6 +1486,35 @@ export function registerWriteCommands(program: Command): void {
     },
   );
 
+  addWriteFlags(
+    project
+      .command("move-heading-to-project <project> <heading>")
+      .requiredOption("--to <project>", "destination project (uuid or unique title)")
+      .description(
+        "Move a heading — WITH its to-dos — to a DIFFERENT project. This is the cross-project " +
+          "relocation, distinct from `move-heading` (which only reorders a heading within its own " +
+          `project). <heading> is a ${HEADING_SEL_HELP} in the SOURCE <project>; --to names the ` +
+          "destination. GUI-ONLY: it drives the heading row's ellipsis Move… menu, so enable it " +
+          "once with `things config set ui.enabled true` and pass --dangerously-drive-gui. Fails " +
+          "closed when the heading title is shared by another heading in the project, or the " +
+          "destination title by another project (the drive addresses both by title). No undo — " +
+          "move it back to reverse.",
+      ),
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const dest = c.resolve.project(String(opts["to"]));
+        return c.write.moveHeadingToProject(
+          { uuid: proj.uuid },
+          sel,
+          { uuid: dest.uuid },
+          writeOptionsFrom(opts),
+        );
+      });
+    },
+  );
+
   // --- ui vector: repeating-project transforms (two-key gated) -------------
   addDriveGuiFlag(
     addRepeatRuleFlags(

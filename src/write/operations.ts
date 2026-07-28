@@ -44,6 +44,7 @@ export const OPERATION_KINDS = [
   "project.unarchive-heading",
   "project.promote-heading",
   "project.move-heading",
+  "project.move-heading-to-project",
   "todo.clear-dated-reminder",
   "todo.make-repeating",
   "todo.reschedule-repeat",
@@ -83,6 +84,11 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   // area-less-anytime taxonomy needs a Someday coercion first, orchestrated by
   // runMakeRepeatingProject — but the drive itself is a ui-vector op.
   "project.make-repeating",
+  // HEADXPROJ: the heading row's `…` ellipsis → Move… menu → keyboard-driven
+  // project picker (HID-click the title-carrying "More. <title>" button, then
+  // Move…, type the destination, Return). GUI-only — no headless spelling on any
+  // vector (AS move → project 301, URL list-id no-op, Shortcuts ⛔).
+  "project.move-heading-to-project",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -102,6 +108,7 @@ export const HEADING_OPS: readonly OperationKind[] = [
   "project.unarchive-heading",
   "project.promote-heading",
   "project.move-heading",
+  "project.move-heading-to-project",
 ] as const;
 
 export function isHeadingOp(op: OperationKind): boolean {
@@ -209,6 +216,24 @@ export interface MoveHeadingParams {
 export interface HeadingRenameParams {
   uuid: string;
   title: string;
+}
+
+/**
+ * project.move-heading-to-project — relocate ONE heading (with its children) to a
+ * DIFFERENT project (spec §2 cross-project move; HEADXPROJ recipe). GUI-only: the
+ * heading row's `…` ellipsis → Move… → keyboard-driven project picker. `heading`
+ * is a selector (exact title or uuid) WITHIN `project`; `toProject` is the
+ * destination. Distinct from `project.move-heading` (a pure within-project
+ * reorder) — this is the cross-container relocation, kept a separate verb so the
+ * destructive-ish container change is never conflated with an in-project shuffle.
+ */
+export interface MoveHeadingToProjectParams {
+  /** The source project the heading currently lives in. */
+  project: ContainerRef;
+  /** The heading to move: exact title or uuid, within `project`. */
+  heading: string;
+  /** The destination project the heading (and its children) relocate to. */
+  toProject: ContainerRef;
 }
 
 export interface HeadingArchiveParams {
@@ -650,6 +675,7 @@ export interface OperationParamsMap {
   "project.unarchive-heading": HeadingUnarchiveParams;
   "project.promote-heading": UuidParams;
   "project.move-heading": MoveHeadingParams;
+  "project.move-heading-to-project": MoveHeadingToProjectParams;
   "todo.clear-dated-reminder": UuidParams;
   "todo.make-repeating": RepeatRuleParams;
   "todo.reschedule-repeat": RepeatRuleParams;

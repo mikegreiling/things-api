@@ -26,6 +26,7 @@ import type {
 import {
   childTagTitles,
   classifyHeadingConvert,
+  classifyHeadingMoveToProject,
   classifyProjectRepeat,
   computeHeadingMovePre,
   computeReorderPre,
@@ -50,6 +51,7 @@ import {
   areaReorderSidebarRecipe,
   convertToProjectRecipe,
   headingConvertToProjectRecipe,
+  moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
   pauseRepeatRecipe,
   projectMakeRepeatingRecipe,
@@ -2216,6 +2218,56 @@ const headingConvertToProject: CommandSpec<"project.promote-heading"> = {
   },
 };
 
+const projectMoveHeadingToProject: CommandSpec<"project.move-heading-to-project"> = {
+  op: "project.move-heading-to-project",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.headingMoveToProject = classifyHeadingMoveToProject(
+      db,
+      params.project,
+      params.heading,
+      params.toProject,
+    );
+    if (pre.headingMoveToProject.kind === "ok") {
+      // Load the heading row so the verify oracle reads its (post-op) project FK.
+      pre.target = loadTarget(db, pre.headingMoveToProject.pre.headingUuid);
+    }
+    return pre;
+  },
+  expectedDelta(pre) {
+    // HEADXPROJ: a single-row change — the heading's `project` FK becomes the
+    // destination; its children follow via their intact heading FK (no child
+    // rewrite, no index churn), so no per-child assertion is needed.
+    const tax = pre.headingMoveToProject;
+    const headingUuid = tax?.kind === "ok" ? tax.pre.headingUuid : "";
+    const destUuid = tax?.kind === "ok" ? tax.pre.destProjectUuid : "";
+    return {
+      mode: "update",
+      uuid: headingUuid,
+      assert: [{ field: "project.uuid", equals: destUuid }],
+    };
+  },
+  compile(_params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const tax = pre.headingMoveToProject;
+    if (tax === null || tax.kind === "refuse") {
+      // The taxonomy refusals are surfaced by H-UNKNOWN-DESTINATION before
+      // compile; reaching here with one means the guard was bypassed.
+      throw new Error(
+        `project.move-heading-to-project: ${tax?.kind === "refuse" ? tax.detail : "no taxonomy resolved (guard bypassed?)"}`,
+      );
+    }
+    return uiDrive(
+      moveHeadingToProjectRecipe(
+        tax.pre.sourceProjectUuid,
+        tax.pre.headingTitle,
+        tax.pre.destProjectTitle,
+      ),
+    );
+  },
+};
+
 // -------------------------------------------------- sidebar AREA reorder
 
 /** The compile-time placement for area.reorder (resolved refs). */
@@ -2377,6 +2429,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.unarchive-heading": headingUnarchive,
   "project.promote-heading": headingConvertToProject,
   "project.move-heading": projectMoveHeading,
+  "project.move-heading-to-project": projectMoveHeadingToProject,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,

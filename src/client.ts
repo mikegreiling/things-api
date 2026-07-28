@@ -520,6 +520,22 @@ export interface ThingsClient {
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
+     * Relocate ONE heading (with its children) to a DIFFERENT project — the
+     * cross-project move the within-project `moveHeading` reorder cannot express
+     * (HEADXPROJ). GUI-only: drives the heading row's `…` ellipsis → Move… →
+     * keyboard-driven project picker, so it needs `ui.enabled` + the
+     * `dangerouslyDriveGui` acknowledgement. `heading` is an exact title or uuid
+     * within `project`; both same-titled source headings AND a same-titled
+     * destination project fail closed (the drive addresses by title). No wired
+     * undo — it is app-reversible by moving it back.
+     */
+    moveHeadingToProject(
+      project: ContainerRef,
+      heading: string,
+      toProject: ContainerRef,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
      * Archive a heading (the UI's Archive — it leaves the active project
      * view, reversibly). With open children the policy is mandatory:
      * complete/cancel ride the app's cascade; reparent moves them to the
@@ -1062,6 +1078,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       renameHeading: (uuid, title, o) => run("project.rename-heading", { uuid, title }, o),
       moveHeading: (project, headings, placement, o) =>
         run("project.move-heading", { project, headings, placement }, o),
+      moveHeadingToProject: (project, heading, toProject, o) =>
+        run("project.move-heading-to-project", { project, heading, toProject }, o),
       clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),
