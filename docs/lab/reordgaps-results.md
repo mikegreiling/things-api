@@ -87,3 +87,61 @@ VNCDO=/path/to/vncvenv/bin/vncdo \
 ```
 
 The AX grant toggles the **`sshd-keygen-wrapper`** row in the Accessibility pane (that is the process chain that owns every osascript/node run over SSH — the AX reader + CGEvent poster); it prompts for the account password (`admin`). Headless arms need neither `$VNCDO` nor Accessibility. GUI-drag caveat: the content-row drag kit cannot identify rows by to-do title (AX title-invisibility) — a future iteration must resolve rows by DB-index→ordinal or format-mark-stripped fuzzy match. Evidence (gitignored, synthetic): `lab/artifacts/reordgaps-lab/` (`report.txt`, per-arm row/drag JSON, AX-pane screenshots).
+
+---
+
+# BOUNCE2 — Phase A.1 bounce-protocol campaign (the ordering unknowns REORDGAPS left open)
+
+Second offline Tart clone (`bounce2-lab`, run 2026-07-27, Things 3.22.11, pinned clock 2026-07-05; ordering is local — no cloud account). Script: [`lab/scripts/research-bounce2.sh`](../../lab/scripts/research-bounce2.sh) (subcommands `setup`/`headless`/`confirm`/`teardown`). Four probes Mike ruled worth resolving before the Phase A.1 build: **BOUNCE2-h** (the HEADORD-c multi-item within-heading bounce ORDERING anomaly), **SOMEBNC** (someday re-entry position within a container, via `when=` bounce not the destructive area specifier), **BOUNCE2-t** (bounce cap timing calibration), **DAYORD-o** (fold DAYORD-b into the recurring o-suite as O17). All arms HEADLESS (URL / AppleScript) — no Accessibility, no VNC.
+
+**Status: RAN + BANKED.** Every arm produced a clean deterministic verdict. Headline: the within-heading bounce ordering IS deterministic (the HEADORD-c anomaly is fully explained — it is a **back-insert**), so multi-item in-heading ORDER can now be promised; and SOMEBNC closes the §9f within-area someday gap via a state-preserving bounce, no destructive area specifier needed.
+
+## Verdict table (observed)
+
+| Arm | Question | Verdict |
+|---|---|---|
+| **BOUNCE2-h** | multi-item within-heading bounce ordering (the HEADORD-c anomaly) | **DETERMINISTIC — a `someday→anytime` bounce BACK-INSERTS a headed child (appends to the END of the heading bucket), heading FK preserved every leg.** The bounced item keeps its `index`; the app renumbers the NON-bounced siblings to lower indices so the bounced one sorts last. Reverse-order bounce → exact REVERSE order (5-item: `BV5..BV1` gave `BV5<BV4<BV3<BV2<BV1`); **FORWARD-order bounce → exact TARGET order** (4-item confirmation `BZ1,BZ2,BZ3,BZ4` → `BZ1<BZ2<BZ3<BZ4`, heading FK 4/4). This RESOLVES the HEADORD-c anomaly (single-bounce `HD1` appended to the end, sibling `HD2` renumbered below → "non-bounced sibling ended lowest"). **Compile-able protocol: to order headed children `T1..Tn`, bounce them `someday→anytime` in FORWARD order `T1,T2,…,Tn`** — the P9e-class inverse of the loose ANYBNC reverse-order front-insert. **In-heading ORDER is now promisable** (membership + first were already; arbitrary order joins them). |
+| **SOMEBNC-area** | someday re-entry position for an AREA's someday members (via `when=` bounce) | **DETERMINISTIC FRONT-INSERT — closes the §9f gap without the destructive area specifier.** A `someday→anytime→someday` toggle re-enters BELOW the someday group min (`SBA2` re-entered at `idx=-1387` < prior group min `-1025`), area FK + `start=2` preserved. **REVERSE-order protocol → target order** (`SBA3,SBA2,SBA1` → `SBA1<SBA2<SBA3`). State CLEAN 3/3: `start=2`, `area` intact, `reminderTime` NULL, `deadline` NULL throughout (someday items carry no dated reminder — confirmed stays true). This is the within-AREA someday order surface SOMEORD-a lacked (the area reorder command de-somedays, §9f). |
+| **SOMEBNC-project** | someday re-entry position for a PROJECT's someday children (via `when=` bounce) | **DETERMINISTIC BACK-INSERT — a second clean path (SOMEORD-b's native project reorder was the first).** A `someday→anytime→someday` toggle appends to the END (`SBP2` toggled: sibling `SBP3` renumbered `0→-306`, `SBP2` sorts last), project FK + `start=2` preserved. **FORWARD-order protocol → target order** (`SZP1,SZP2,SZP3` → `SZP1<SZP2<SZP3`, CLEAN 3/3). Same back-insert law as headed children; contrast the area's FRONT-insert. |
+| **BOUNCE2-t** | wall-clock cost per bounced item @ 10/20/30 | **~110 ms/item, linear.** Guest-local timing (URL open + DB-poll verify per leg, 2 legs/item, excludes host↔guest SSH RTT): 10 items 1215 ms (121 ms/item, incl. a 176 ms warm-up), 20 items 2169 ms (108 ms/item), 30 items 3365 ms (112 ms/item). 30 items ≈ 3.4 s guest-local on an idle clone. Each item = **2 verified mutations** = 2 Things-Cloud change records when online (cloud sync unmeasurable on the airgapped clone; SYNC2 model). Comfortably supports the ratified configurable `bounce-max-items` default of **30**. |
+| **DAYORD-o** | reproduce DAYORD-b for the recurring o-suite (O17) | **CONFIRMED date-preserving.** Project-specifier reorder of same-day scheduled children (`DO3,DO1,DO2`) re-ranked `todayIndex` to the requested order (`DO3<DO1<DO2`), left `startDate` UNCHANGED (integer `132805888` = 07-10 on all three, before AND after) and `index` at 0. Encoded as o-suite **O17** (`order.container-same-day`) with `fieldUnchanged` on `startDate/start/status/project`. |
+
+## The bounce re-entry law (the unifying finding)
+
+The `when=` bounce (`someday↔anytime` round-trip) re-inserts the touched item, but the DIRECTION depends on its containment context:
+
+| Item context | Re-entry | Compile protocol |
+|---|---|---|
+| Loose anytime (ANYBNC, prior) | **FRONT** — `index` below the running GLOBAL min | reverse-order bounce |
+| Area someday member (SOMEBNC-area) | **FRONT** — `index` below the someday GROUP min | reverse-order bounce |
+| Project someday child (SOMEBNC-project) | **BACK** — appended to bucket end (siblings renumbered down) | forward-order bounce |
+| Headed anytime child (BOUNCE2-h) | **BACK** — appended to heading-bucket end (siblings renumbered down) | forward-order bounce |
+
+The split is **loose/area-direct = FRONT-insert; strict-container child (project child / heading child) = BACK-insert.** Both directions are deterministic and state-preserving, so BOTH give an exact-order protocol — the planner just picks reverse-order legs for the front-insert contexts and forward-order legs for the back-insert contexts. This is the same two-directional shape as the shipped Someday scope (P8b to-dos ascend / P9e projects descend), now extended to headings and within-container someday/anytime buckets.
+
+## Design rule-5 (placement honesty) — changes from BOUNCE2
+
+Feeds [design/heading-demotion-and-move.md](../design/heading-demotion-and-move.md) §4 rule 5. Relative to the REORDGAPS-era classification:
+
+- **Heading buckets — in-heading ORDER moves from "best-effort-noted" to DETERMINISTIC (guaranteed-capable).** BOUNCE2-h resolved the HEADORD-c open anomaly: the bounce back-inserts headed children deterministically, so a FORWARD-order bounce places them in exact requested order (membership + first were already guaranteed via HEADORD-c). The only remaining in-heading refusal is `--before <sibling>`/`--after` *relative to an unmoved sibling* — still unspeakable (HEADORD-b: no heading-as-container specifier), but a full-block reorder of the heading's members is now a promisable protocol. Wiring it is Phase A.1 build scope.
+- **Within-AREA someday order moves from REFUSED (destructive) to DETERMINISTIC via the bounce.** SOMEBNC-area gives a front-insert protocol that preserves `start=2` + the area FK, sidestepping the §9f de-somedaying area reorder command entirely. The area-someday capability-matrix row flips from "no clean surface" to "clean via the bounce (2 legs/item)."
+- **Within-PROJECT someday order gains a SECOND path** (SOMEBNC-project bounce), alongside the already-guaranteed SOMEORD-b native project reorder. No classification change (already guaranteed) — banked as corroboration + an alternative when the native experimental command is unavailable.
+
+None of these are wired into the shared reorder op yet — they are the Phase A.1 build (see up-next §0 A.1). Shipped honest-noted meanwhile per rule 5.
+
+## App oddities filed (BOUNCE2)
+
+- **§9h** — the `when=` bounce re-inserts a strict-container child (project child / heading child) at its bucket END by RENUMBERING the non-bounced siblings to lower `index` values (the bounced row keeps its own `index`), whereas the same bounce FRONT-inserts a loose/area-direct item below the group min. A benign but report-worthy cross-container inconsistency in how the ordering renumber is applied (BOUNCE2-h / SOMEBNC). Not destructive — every leg preserved `start`, the container FK, `reminderTime`, and `deadline`.
+
+## Reproduce
+
+```sh
+TART_HOME=/Volumes/Workspace/tart \
+  bash lab/scripts/research-bounce2.sh setup      # clone+boot+airgap+clock-pin+seed
+  bash lab/scripts/research-bounce2.sh headless    # BOUNCE2-h · SOMEBNC · BOUNCE2-t · DAYORD-o
+  bash lab/scripts/research-bounce2.sh confirm      # forward-order protocol positive-green (headed + project-someday)
+  bash lab/scripts/research-bounce2.sh teardown
+# DAYORD-o formal cert: npm run lab:run -- --suite lab/suites/o-suite.json  (O17 green)
+```
+
+No Accessibility, no VNC — all four probes are headless URL/AppleScript. The `confirm` subcommand runs the DERIVED forward-order protocol on fresh groups (the `headless` back-insert arms ran reverse order to MAP the law, so they show reversed output by design; `confirm` proves the forward protocol lands the target). Evidence (gitignored, synthetic): `lab/artifacts/bounce2-lab/report.txt`.
