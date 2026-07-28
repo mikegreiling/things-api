@@ -1515,6 +1515,28 @@ export function registerWriteCommands(program: Command): void {
     },
   );
 
+  addWriteFlags(
+    project
+      .command("dissolve-heading <project> <heading>")
+      .description(
+        "Dissolve a heading — remove it but KEEP its to-dos, which become direct children of the " +
+          "project (in the same order), NOT trashed. This is the opposite of deleting: nothing is " +
+          `lost. <heading> is a ${HEADING_SEL_HELP}. Contrast \`things todo delete\` and the ` +
+          "Shortcuts heading-delete cascade, which TRASH the children. GUI-ONLY (drives the " +
+          "heading row's ellipsis Delete): enable it once with `things config set ui.enabled true` " +
+          "and pass --dangerously-drive-gui. Fails closed when the heading title is shared by " +
+          "another heading in the project. No undo — re-create the heading and move the to-dos back.",
+      ),
+  ).action(
+    async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      await runWrite(opts, (c) => {
+        const proj = c.resolve.project(projectRef);
+        const h = c.resolve.heading(proj.uuid, sel);
+        return c.write.dissolveHeading(h.uuid, writeOptionsFrom(opts));
+      });
+    },
+  );
+
   // --- ui vector: repeating-project transforms (two-key gated) -------------
   addDriveGuiFlag(
     addRepeatRuleFlags(

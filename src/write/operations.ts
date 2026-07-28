@@ -45,6 +45,7 @@ export const OPERATION_KINDS = [
   "project.promote-heading",
   "project.move-heading",
   "project.move-heading-to-project",
+  "project.dissolve-heading",
   "todo.clear-dated-reminder",
   "todo.make-repeating",
   "todo.reschedule-repeat",
@@ -89,6 +90,12 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   // Move…, type the destination, Return). GUI-only — no headless spelling on any
   // vector (AS move → project 301, URL list-id no-op, Shortcuts ⛔).
   "project.move-heading-to-project",
+  // DISS1: the same `…` ellipsis popover's Delete — dissolves the heading (the
+  // row is hard-deleted) while its children become DIRECT project children
+  // (heading→NULL, project→parent, index preserved, NOT trashed). No confirm
+  // sheet. GUI-only. Contrast the Shortcuts delete cascade (P12), which TRASHES
+  // the children.
+  "project.dissolve-heading",
 ] as const;
 
 export function isUiDriveOp(op: OperationKind): boolean {
@@ -109,6 +116,7 @@ export const HEADING_OPS: readonly OperationKind[] = [
   "project.promote-heading",
   "project.move-heading",
   "project.move-heading-to-project",
+  "project.dissolve-heading",
 ] as const;
 
 export function isHeadingOp(op: OperationKind): boolean {
@@ -126,6 +134,7 @@ export const HEADING_TARGET_OPS: readonly OperationKind[] = [
   "project.archive-heading",
   "project.unarchive-heading",
   "project.promote-heading",
+  "project.dissolve-heading",
 ] as const;
 
 export function isHeadingTargetOp(op: OperationKind): boolean {
@@ -676,6 +685,7 @@ export interface OperationParamsMap {
   "project.promote-heading": UuidParams;
   "project.move-heading": MoveHeadingParams;
   "project.move-heading-to-project": MoveHeadingToProjectParams;
+  "project.dissolve-heading": UuidParams;
   "todo.clear-dated-reminder": UuidParams;
   "todo.make-repeating": RepeatRuleParams;
   "todo.reschedule-repeat": RepeatRuleParams;

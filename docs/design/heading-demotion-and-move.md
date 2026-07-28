@@ -41,6 +41,10 @@ A heading exists only inside a project; the grammar now says so. The `things hea
 
 MCP: the `heading` multiplexer gains a `move_heading_to_project` action (project + heading + to_project).
 
+**Dissolve a heading — `project.dissolve-heading` (SHIPPED, ui-vector, lab-certified DISS1 2026-07-28).** Removes a heading while its to-dos SURVIVE as direct children of the project (the child-KEEPING "unwrap this section" operation). GUI-only via the same `…` ellipsis popover, driving `Delete` instead of `Move…`. Verify oracle (DISS1): the heading row is **hard-deleted** (gone from `TMTask`), and its children re-home — `heading`→NULL, `project`→the parent, `index` preserved, **not trashed** — with **no confirmation sheet** (the Delete click is terminal). Two-key gated (`ui.enabled` + `dangerouslyDriveGui`), tier 3; fails closed on a source-heading title collision (the drive addresses by title) and on a titleless heading.
+
+**Named `dissolve-heading`, NOT `delete-heading` — and it must never be confused with the Shortcuts delete cascade.** "Delete" is a trap here: the ellipsis Delete KEEPS the children (re-homed to the project), whereas the Shortcuts heading-delete (P12) **TRASHES the children** along with the heading — the two "delete a heading" surfaces do opposite things to the to-dos (oddities §9j). `dissolve` names the child-keeping semantics honestly (the heading is dissolved; its contents remain), and the help/docs contrast it LOUDLY with `todo delete` / the Shortcuts cascade so no one reaches for the wrong one. (Naming open to Mike's override — the semantics, not the word, are the contract.) **Undo: none wired** — the heading row is hard-deleted, and the compound inverse (re-create the heading via Shortcuts + move the ex-children back in order) spans surfaces; `undo` reports it irreversible and names the manual restore. Nothing is lost (the children survive), so the irreversibility is benign. MCP: the `heading` tool gains a `dissolve_heading` action.
+
 MCP: the `heading` multiplexer tool's actions respell to match the new op kinds; project param required; heading-sel semantics identical.
 
 ## 3. Bulk titles-only creation

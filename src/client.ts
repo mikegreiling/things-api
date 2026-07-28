@@ -536,6 +536,17 @@ export interface ThingsClient {
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
+     * Dissolve a heading: remove it while its to-dos SURVIVE as direct children
+     * of the project (heading→NULL, keeping their order) — NOT trashed (DISS1).
+     * This is the OPPOSITE of a delete cascade (contrast the Shortcuts heading
+     * delete, P12, which trashes the children). GUI-only (heading row's `…`
+     * ellipsis → Delete), so it needs `ui.enabled` + `dangerouslyDriveGui`. Fails
+     * closed on a title shared by another heading in the project. No wired undo —
+     * the children are kept, so re-create the heading and move them back to
+     * reverse. `uuid` is the heading.
+     */
+    dissolveHeading(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
      * Archive a heading (the UI's Archive — it leaves the active project
      * view, reversibly). With open children the policy is mandatory:
      * complete/cancel ride the app's cascade; reparent moves them to the
@@ -1080,6 +1091,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         run("project.move-heading", { project, headings, placement }, o),
       moveHeadingToProject: (project, heading, toProject, o) =>
         run("project.move-heading-to-project", { project, heading, toProject }, o),
+      dissolveHeading: (uuid, o) => run("project.dissolve-heading", { uuid }, o),
       clearReminder: (uuid, o) => runClearReminder(writeDeps, { uuid }, o ?? {}),
       archiveHeading: (uuid, policy, o) =>
         runHeadingArchive(writeDeps, { uuid, ...policy }, o ?? {}),

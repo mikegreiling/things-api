@@ -109,6 +109,8 @@ export interface PreState {
   headingMove: HeadingMovePre | null;
   /** project.move-heading-to-project: source reveal + heading + destination (HEADXPROJ). */
   headingMoveToProject: HeadingMoveToProjectTaxonomy | null;
+  /** project.dissolve-heading: parent reveal + heading title + children (DISS1). */
+  headingDissolve: HeadingDissolveTaxonomy | null;
 }
 
 /** project.move-heading pre-computation (spec §2/§4). */
@@ -190,6 +192,7 @@ export function emptyPreState(): PreState {
     headingConvert: null,
     headingMove: null,
     headingMoveToProject: null,
+    headingDissolve: null,
   };
 }
 
@@ -471,6 +474,91 @@ export function classifyHeadingMoveToProject(
       destProjectUuid: dest.resolved.uuid,
       destProjectTitle: destTitle,
     },
+  };
+}
+
+/**
+ * Taxonomy for `project.dissolve-heading`'s ellipsis-`Delete` drive (DISS1). Same
+ * title-addressed `"More. <title>"` reveal as the cross-project move, driving the
+ * popover's Delete instead of Move…. DISS1 (2026-07-28, Things 3.22.11): Delete
+ * HARD-DELETES the heading row (removed from TMTask) while its children become
+ * DIRECT project children (heading→NULL, project→the parent, index preserved,
+ * NOT trashed) — no confirm sheet. Contrast the Shortcuts delete cascade (P12),
+ * which TRASHES the children. Fails closed on a title shared by another heading in
+ * the project (the drive addresses by title) and on a titleless heading.
+ */
+export interface HeadingDissolvePre {
+  /** Parent project revealed via things:///show?id= to render the heading row. */
+  projectReveal: string;
+  /** The heading being dissolved (the verify oracle's gone-target). */
+  headingUuid: string;
+  /** The heading title — the `"More. <title>"` click target. */
+  headingTitle: string;
+  /** Open children that become direct project children (for the result note). */
+  childUuids: string[];
+}
+
+export type HeadingDissolveRefusal =
+  | "not-a-heading"
+  | "no-project"
+  | "title-ambiguous"
+  | "empty-title";
+
+export type HeadingDissolveTaxonomy =
+  | { kind: "ok"; pre: HeadingDissolvePre }
+  | { kind: "refuse"; refusal: HeadingDissolveRefusal; detail: string; candidates?: string[] };
+
+export function classifyHeadingDissolve(
+  db: DatabaseSync,
+  target: AnyTask | null,
+): HeadingDissolveTaxonomy {
+  if (target === null || target.type !== "heading") {
+    return { kind: "refuse", refusal: "not-a-heading", detail: "target is not a heading" };
+  }
+  const project = target.project;
+  if (project === null) {
+    return {
+      kind: "refuse",
+      refusal: "no-project",
+      detail: "the heading has no owning project — cannot reveal a project view to drive its row",
+    };
+  }
+  const title = target.title;
+  if (title === "") {
+    return {
+      kind: "refuse",
+      refusal: "empty-title",
+      detail:
+        "the heading has no title — the Delete drive addresses the heading by its title-carrying " +
+        '"More. <title>" button, which cannot pick one titleless heading out of several',
+    };
+  }
+  const twins = db
+    .prepare(
+      "SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? AND title = ? AND uuid != ?",
+    )
+    .all(project.uuid, title, target.uuid) as { uuid: string }[];
+  if (twins.length > 0) {
+    return {
+      kind: "refuse",
+      refusal: "title-ambiguous",
+      detail:
+        `the heading title "${title}" is shared by ${twins.length + 1} headings in this project — ` +
+        "the ellipsis Delete drive addresses headings by title and cannot disambiguate; " +
+        "rename one first",
+      candidates: [target.uuid, ...twins.map((t) => t.uuid)],
+    };
+  }
+  const childUuids = (
+    db
+      .prepare(
+        'SELECT uuid FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0 AND heading = ? ORDER BY "index"',
+      )
+      .all(target.uuid) as { uuid: string }[]
+  ).map((r) => r.uuid);
+  return {
+    kind: "ok",
+    pre: { projectReveal: project.uuid, headingUuid: target.uuid, headingTitle: title, childUuids },
   };
 }
 

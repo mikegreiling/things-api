@@ -851,6 +851,55 @@ export function moveHeadingToProjectRecipe(
   };
 }
 
+/**
+ * Dissolve a HEADING via the ellipsis `Delete` menu item (DISS1). Same
+ * `"More. <title>"` reveal as the cross-project move, driving Delete instead of
+ * Move…. DB effect (DISS1): the heading row is HARD-DELETED while its children
+ * become DIRECT project children (heading→NULL, project→parent, index preserved,
+ * NOT trashed) — no confirm sheet, so the Delete click is TERMINAL (the write
+ * pipeline's read-after-write is the verifier). The popover's Delete item is
+ * AX-description-enumerable and scoped to the popover so it never matches the
+ * main window's toolbar Delete.
+ */
+export function dissolveHeadingRecipe(projectReveal: string, headingTitle: string): UiRecipe {
+  return {
+    op: "project.dissolve-heading",
+    targetUuid: projectReveal,
+    steps: [
+      {
+        primitive: "reveal",
+        label: "reveal the heading's project in Things (things:///show?id=)",
+        value: projectReveal,
+      },
+      {
+        // NOT a fallback: the ellipsis + popover clicks are synthesized mouse
+        // input, which lands only on the foreground app (NATIVE1-e).
+        primitive: "activate",
+        label: "bring Things to the foreground (the pointer must reach the heading row)",
+      },
+      {
+        primitive: "click-element",
+        label: `open the heading's ellipsis menu ("More. ${headingTitle}")`,
+        path: headingMoreButton(headingTitle),
+        assertPath: HEADING_ELLIPSIS_POPOVER,
+        assertLabel: "the heading ellipsis menu",
+        assertTimeoutMs: 5000,
+        dynamic: true,
+        addressing: "title",
+      },
+      {
+        // Terminal click — DISS1 confirmed NO confirmation sheet, the heading
+        // dissolves immediately; the read-after-write verifies (heading gone).
+        primitive: "click-element",
+        label: "ellipsis menu ▸ Delete (dissolve — children become direct project children)",
+        path: `(first UI element of ${HEADING_POPOVER_ITEMS} whose description is "Delete")`,
+        dynamic: true,
+        addressing: "title",
+      },
+    ],
+  };
+}
+
 // ------------------------------------------------- sidebar AREA reorder
 
 /**

@@ -26,6 +26,7 @@ import type {
 import {
   childTagTitles,
   classifyHeadingConvert,
+  classifyHeadingDissolve,
   classifyHeadingMoveToProject,
   classifyProjectRepeat,
   computeHeadingMovePre,
@@ -50,6 +51,7 @@ import { escapeAppleScript } from "./vectors/applescript.ts";
 import {
   areaReorderSidebarRecipe,
   convertToProjectRecipe,
+  dissolveHeadingRecipe,
   headingConvertToProjectRecipe,
   moveHeadingToProjectRecipe,
   makeRepeatingRecipe,
@@ -2268,6 +2270,36 @@ const projectMoveHeadingToProject: CommandSpec<"project.move-heading-to-project"
   },
 };
 
+const projectDissolveHeading: CommandSpec<"project.dissolve-heading"> = {
+  op: "project.dissolve-heading",
+  hazards: UI_HAZARDS,
+  preRead(db, params) {
+    const pre = emptyPreState();
+    pre.target = loadTarget(db, params.uuid);
+    pre.headingDissolve = classifyHeadingDissolve(db, pre.target);
+    return pre;
+  },
+  expectedDelta(_pre, params) {
+    // DISS1: the heading row is HARD-DELETED (removed from TMTask) while its
+    // children become direct project children. The verify oracle is the heading
+    // GONE — its children re-home is the DISS1-locked invariant, checked by the
+    // op's tests (a childless heading dissolve verifies identically).
+    return { mode: "gone", entity: "task", uuid: params.uuid };
+  },
+  compile(_params, vector, pre) {
+    if (vector !== "ui") unsupportedVector(this.op, vector);
+    const tax = pre.headingDissolve;
+    if (tax === null || tax.kind === "refuse") {
+      // The taxonomy refusals are surfaced by H-UNKNOWN-DESTINATION before
+      // compile; reaching here with one means the guard was bypassed.
+      throw new Error(
+        `project.dissolve-heading: ${tax?.kind === "refuse" ? tax.detail : "no taxonomy resolved (guard bypassed?)"}`,
+      );
+    }
+    return uiDrive(dissolveHeadingRecipe(tax.pre.projectReveal, tax.pre.headingTitle));
+  },
+};
+
 // -------------------------------------------------- sidebar AREA reorder
 
 /** The compile-time placement for area.reorder (resolved refs). */
@@ -2430,6 +2462,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.promote-heading": headingConvertToProject,
   "project.move-heading": projectMoveHeading,
   "project.move-heading-to-project": projectMoveHeadingToProject,
+  "project.dissolve-heading": projectDissolveHeading,
   "todo.clear-dated-reminder": todoClearDatedReminder,
   "todo.make-repeating": todoMakeRepeating,
   "todo.reschedule-repeat": todoRescheduleRepeat,

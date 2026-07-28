@@ -241,3 +241,24 @@ TART_HOME=/Volumes/Workspace/tart VNCDO=/path/to/vncvenv/bin/vncdo \
 ```
 
 The AX grant needs `$VNCDO` (throwaway `vncdotool` venv — the host has no `vncdo`) to toggle the `sshd-keygen-wrapper` Accessibility row; the TCC row must first be materialized by provoking a denied AX op (an `osascript` System Events UI-element read → −1719) BEFORE the toggle, else the pane has no row to flip. Evidence (gitignored, synthetic): `lab/artifacts/bjhx-lab/` (`report.txt`, `screens/*.png`).
+
+---
+
+# DISS1 — the ellipsis popover's `Delete`: what happens to a dissolved heading's children?
+
+Same `bjhx-lab` clone (run 2026-07-28, Accessibility granted). Same `…`-ellipsis popover as HEADXPROJ (Archive / Move… / Convert to Project… / **Delete**), driving **Delete** instead of Move…. Probed BEFORE wiring `project.dissolve-heading` (the oracle its verify + naming rest on).
+
+**Status: RAN + BANKED. VERDICT: Delete DISSOLVES the heading — children SURVIVE.**
+
+## DB delta (the verify oracle for `project.dissolve-heading`)
+
+Deleting heading `DISS-H` (open children `DISS-c1`/`c2`/`c3`, `index` −480/−183/0) from project `DISS-P` via the ellipsis `Delete`:
+
+| row | before | after |
+|---|---|---|
+| `DISS-H` (heading, type=2) | `project=DISS-P`, trashed 0 | **ROW HARD-DELETED** — gone from `TMTask` entirely (not trashed, no status flip) |
+| `DISS-c1/2/3` (children, type=0) | `heading=DISS-H`, `project=NULL`, idx −480/−183/0 | **`heading=NULL`, `project=DISS-P`, `trashed=0`, `status=0`, `index` PRESERVED** (−480/−183/0 — same relative order in the unheaded block) |
+
+So a heading dissolve is a **single-row hard-delete on the heading**, and its children RE-HOME to the project (heading FK cleared, project FK set to the parent, order kept). **NO confirmation sheet** — the Delete click is immediate (the AX tree after the click showed only the standard window + the 40×40 utility window + the menubar; no `AXSheet`). The popover items ARE AX-description-enumerable (`Archive` / `Move…` / `Convert to Project…` / `Delete` all carry those `AXDescription`s — the recipe resolves `Delete` by description, scoped to the popover so it never matches the main window's toolbar Delete).
+
+**Contrast the Shortcuts delete cascade (P12), which TRASHES the children** — the two "delete a heading" surfaces disagree on the children (oddities §9j). `project.dissolve-heading` is named for the child-KEEPING ellipsis semantics; the child-trashing delete is only the Shortcuts cascade. Verify oracle: the heading row GONE (`taskByUuid` null — the `gone`/`task` delta mode); undo: irreversible (the compound re-create-heading + re-home-children inverse spans surfaces, not wired — the children survive, so nothing is lost). Certified DISS1 (this run drove the real popover Delete and observed the delta) → `ui-certification.ts` `project.dissolve-heading` `lab-certified`.

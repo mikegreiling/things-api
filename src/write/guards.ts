@@ -176,6 +176,12 @@ const GUARDS: Record<HazardId, GuardFn> = {
     if (pre.headingMoveToProject !== null && pre.headingMoveToProject.kind === "refuse") {
       problems.push(pre.headingMoveToProject.detail);
     }
+    // project.dissolve-heading: the taxonomy fails closed on a non-heading /
+    // parentless / titleless heading, or a title shared by another heading (the
+    // ellipsis Delete drive addresses by title).
+    if (pre.headingDissolve !== null && pre.headingDissolve.kind === "refuse") {
+      problems.push(pre.headingDissolve.detail);
+    }
     const needsTarget =
       typeof params["uuid"] === "string" &&
       op !== "todo.add" &&
