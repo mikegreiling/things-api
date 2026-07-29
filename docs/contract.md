@@ -1,0 +1,111 @@
+# The things-api contract
+
+This is the one page a would-be consumer reads to decide whether to trust the package. It describes the wire contract every surface honors — the CLI `--json` envelope and the library payloads the MCP server inherits — and the promises that stand behind it. Every claim here is true of the code as it ships today (`src/contracts.ts`); where a promise has a known limit, this document names it rather than papering over it.
+
+The design rationale behind these rules lives in [docs/design/api-doctrine.md](design/api-doctrine.md); the full envelope reference (batch chaining, the consumer clock, omit-empty) lives in [docs/design/contracts.md](design/contracts.md). This page is the covenant; those are the details.
+
+## The envelope grammar, in ten sentences
+
+Every `--json` response is one JSON object stamped with `apiVersion` (currently `1`) and a boolean `ok`. A successful response carries `kind` — a discriminator naming the payload class and nothing else (`today`, `detail`, `area-view`, `mutation-result`, …) — plus a `data` object and a `meta` object. Inside `data`, a read uses exactly one of four wrappers: `item` (a single entity), `view` (a composite area/project card), `items` (a flat list), or `sections` (a list broken into named sections); a mutation's `data` is the result's flat fields with no wrapper. `meta` always carries `dbVersion`, `fingerprint`, and `elapsedMs`, and adds a field only when it applies: `truncation` (the completeness metadata — its `truncated` boolean is the universal "did I see everything" check), `resolvedCommand` (the canonical command a sugar form normalized to), `warnings`, `clock`, `filter`, and `scope`. A failed response instead carries `kind: "error"` and an `error` object with a machine-readable `code`, a human `message`, an optional `likelyCause` and `remediation`, and a single optional structured `detail`. The `error.code` is drawn from a frozen registry (see below); `detail` is one object whose keys appear only for the failures that produce them. Exit codes mirror the error family: `0` ok, `1` unexpected, `2` usage, `3` verify-failed, `4` blocked, `5` drift-blocked, `6` unsupported, `7` environment — and they are never renumbered. Envelope JSON goes to stdout; every human or log line goes to stderr, so a machine consumer reads exactly one object from one stream. The one documented exception is the streaming commands (`batch`, `undo`): each emits JSON Lines — one result object per line — where a per-line string `outcome` (`"ok"`, `"blocked"`, `"already-applied"`, …) replaces the envelope's `ok`/`kind`, followed by a trailing summary line. That is the whole grammar: learn it once and every response is an instance of it.
+
+## The promises
+
+**Verified writes — `ok: true` means observed, not merely submitted.** A mutation returns `ok: true` only after the pipeline has re-read the database and observed the expected change actually present there (read-after-write verification). Submitting the command to the app is not success; the app accepting it and silently doing nothing is a first-class failure (`verify-failed:silent-noop`, exit 3), not a false positive. This is the crux of the package: a caller can act on `ok: true` without a confirming read of its own.
+
+**Honest truncation — no silent caps.** List views are bounded by default, but nothing is ever dropped silently. Every read that could omit rows carries `meta.truncation`, and `meta.truncation.truncated` is the universal completeness check: `true` exactly when anything was hidden (`shown < total`, or any grouped block capped its rows). The dropped remainder is always `total − shown`. A consumer that needs everything raises the cap (`--limit`, `--all`) and re-checks `truncated`; it never has to guess whether a cap was hit.
+
+**Reversibility — an inverse where one exists, structurally flagged where none does.** Every successful mutation returns an `undoToken`; `things undo --txn <token>` replays exactly that mutation's inverse, verified like any other write. Operations that have no representable inverse (a permanent delete, a GUI-driven identity replacement) are flagged as irreversible in their result and by `undo`, which names the manual inverse rather than pretending. Reversibility is a property the response reports, never a promise the caller has to look up elsewhere.
+
+**Partial-failure honesty — the lines and the summary can never disagree.** `batch` runs its operations sequentially and independently and reports a per-line `outcome` for each, followed by a summary. The summary is derived from the lines, so it can never claim a success the lines contradict; an aggregate exit code is decided by the single worst outcome under a documented precedence (`drift-blocked > blocked > unsupported > verify-failed`). A batch that half-succeeds says exactly which legs landed and which did not.
+
+**Determinism — same state, same bytes.** Given the same database state and the same command, the response is byte-for-byte identical apart from the wall-clock `elapsedMs`. Additive `meta` fields appear only when their condition holds (a consumer zone in effect, a scope in force), so a consumer keys on presence; the shape does not wobble between otherwise-identical calls. Determinism is a testable property, and it is tested.
+
+## The compatibility covenant (ACTIVATES at v1.0)
+
+**Today the package is pre-1.0 alpha.** The entire contract — the programmatic TS API, the CLI vocabulary, the JSON shapes, the MCP tools, the audit-record format, and the error codes — is ALPHA until package v1.0 ships, and there is exactly one consumer (the maintainer). Until then breaking changes are made freely and cleanly, with no compatibility shims, alias maps, deprecation windows, or legacy-format readers; the old shape is deleted outright and stale callers simply fall away. This is deliberate doctrine — the [ALPHA-CONTRACT rule](design/architecture.md) (see the Alpha contract section) — so the point never has to be re-argued per change.
+
+**At v1.0 this flips, and the covenant below begins.** It is written down now so a would-be consumer knows exactly what stability they will get, and so the rules are settled before they bind.
+
+A change is **breaking** — and only a breaking change may bump `apiVersion` — when it does any of:
+
+- removes or renames a field;
+- changes a field's type or its meaning;
+- repurposes an existing enum value;
+- renumbers an exit code (this never happens — see below);
+- changes the meaning of a documented `error.code`.
+
+A change is **non-breaking**, and ships without an `apiVersion` bump, when it:
+
+- adds a new field;
+- adds a new enum value, a new `kind`, or a new `error.code`;
+- adds a new additive `meta.*` field.
+
+Two obligations fall on the consumer, and honoring them is the price of forward compatibility: **tolerate unknown keys** (an object may grow fields you have not seen) and **tolerate unknown enum values** (a `kind`, a `status`, an `error.code`, a `vector` you do not recognize is a value to pass through, not an error to throw). A consumer that does both keeps working across every non-breaking release.
+
+Two invariants are stronger than the rest: `apiVersion` bumps **only** on a breaking change to the envelope shape itself, and **exit codes are never renumbered** — a value once assigned keeps its meaning forever; new conditions get new numbers appended.
+
+## The glossary — one word, one meaning
+
+The contract reserves a small vocabulary, and each word means exactly one thing everywhere it appears. Confusing two of them is the most common way to misread a response, so they are pinned here. The load-bearing doctrine line: **`ok` (and the exit code) is the only signal of call success — `kind` names the payload class, `outcome` dispositions a stream line, `status` is a domain lifecycle, and `error.code` + `error.detail` say why a call failed. None of these five ever stands in for another.**
+
+| Word | Where it appears | Its single meaning |
+|---|---|---|
+| `ok` | envelope top level | Did the call succeed. `true`/`false`, mirrored by the exit code. The ONLY success signal. |
+| `kind` | envelope top level | The payload CLASS the `data` conforms to (`today`, `detail`, `mutation-result`, `error`, …). A label for shape, never a success or status value. |
+| `outcome` | JSONL stream lines only (`batch`, `undo`) | The per-line disposition as a plain string (`"ok"`, `"blocked"`, `"verify-failed"`, `"unsupported"`, `"dry-run"`, `"invalid"`, `"skipped"`, `"already-applied"`, `"bounce-aborted"`). The streaming analogue of `ok`; it never appears in a single-object envelope. |
+| `status` | inside an entity (`data`) | A resource's domain lifecycle: `"open"` \| `"canceled"` \| `"completed"`. About the user's to-do/project, never about the call. |
+| `item` | `data.item` | The single-entity wrapper — one to-do, project, area, tag, or heading. |
+| `items` | `data.items` | The flat-list wrapper — an array of entities (`inbox`, `search`, `projects`, …). |
+| `sections` | `data.sections` | The sectioned-list wrapper — a list split into named sections (`today`'s Today/Evening split; the area-grouped `anytime`/`someday`). |
+| `view` | `data.view` | The composite-card wrapper — an area or project card with its nested collections. |
+| `detail` | `error.detail` | The SINGLE structured failure-context object. Its keys (below) appear only for the failure that produces them; there is no second `details` field. |
+| `truncation` | `meta.truncation` | The completeness metadata for a read. |
+| `truncated` | `meta.truncation.truncated` | The universal completeness check — `true` exactly when any row was hidden. |
+| `shown` / `total` | `meta.truncation`, `sections[]`, `blocks[]` | Rows returned / rows that matched after all filters. Dropped = `total − shown`. |
+| `limit` | `meta.truncation`, `blocks[]` | The effective cap; `null` means unbounded (the caller asked for all rows), and always `null` on a grouped view whose caps are per-block. |
+| `sections` (in truncation) | `meta.truncation.sections` | Per-render-section `shown`/`total` for a split flat view (the Today split). |
+| `blocks` | `meta.truncation.blocks` | The identity-carrying per-block nesting for a grouped view (anytime/someday/`area show`). |
+| `undoToken` | mutation `data` | The handle that reverses exactly this mutation (`undo --txn <token>`). Present on every successful mutation. |
+| `opId` | batch line (in), audit record | A caller-supplied idempotency key — a resubmitted line carrying a matched `opId` is skipped as `already-applied`. |
+| `tempId` | batch line (in/out) | A caller-declared handle for a uuid a leg will MINT, referenced by a later leg as `"$name"`. |
+| `boundUuid` | batch line (out) | The uuid a leg's `tempId` bound to once the leg verified ok. |
+| `resolvedCommand` | `meta.resolvedCommand` | The canonical `things …` command a sugar invocation normalized to. Present only on sugar-routed reads. |
+| `observed` | `error.detail.observed`, mutation `data.observed` | The post-write state actually read back from the database. |
+| `expected` | `error.detail.expected` | The delta the mutation was verified against. |
+| `scope` | `meta.scope` | The container jail a response was confined to (an area or project), and where the jail came from (`flag` \| `env` \| `config`). |
+| `filter` | `meta.filter` | The content filter a response was scoped to — currently the `--area` view filter (resolved uuid + title). |
+| `uuid` | throughout | A Things object's stable identity. The one durable way to name an item across calls. |
+| `start` | inside a to-do/project | The scheduling state: `"inbox"` \| `"active"` \| `"someday"`. A domain field, distinct from `status`. |
+| `vector` | mutation `data.vector` | The official app surface that performed the write (`url-scheme` \| `applescript` \| `shortcuts` \| `ui`). A structured result field; it is never named in the prose descriptions a consumer reads to CHOOSE a call (see [surface-copy.md](design/surface-copy.md)). |
+| `tier` | mutation `data.tier` | The disruption tier the write ran at (`0` invisible → `3` drives the live UI). A structured result field, same scoping as `vector`. |
+
+## The error-code registry
+
+Every `error.code` is a member of the `ErrorCode` union in `src/contracts.ts` — the compiler is the registry, so no surface can emit a code that is not listed here. Meanings are frozen at v1.0 (a documented code's meaning never changes); new codes may be added after v1.0, which is non-breaking. Two of the members are template-literal families whose suffix is minted in the write layer; their enumerated suffixes are listed in the two notes below the table.
+
+| `error.code` | Meaning | `detail` keys it may carry | Exit |
+|---|---|---|---|
+| `usage` | Invalid invocation: unknown/bad flags or arguments, mutually-exclusive flags, an unparseable date, an empty `--db`, a bare mutation verb, or a move that meant to schedule. | `candidates`, `suggestions` (either, when the fix is actionable) | 2 |
+| `not-found` | A reference (name, uuid, or partial-uuid) or a `show`/bare-noun subject resolved to nothing. | `candidates` (empty `[]`) | 2 |
+| `ambiguous` | A name or partial-uuid matched more than one resource. | `candidates: [{uuid, title, context?}]` | 2 |
+| `unsupported` | No available write vector supports the operation. | `considered: [{vector, why}]` | 6 |
+| `environment` | Database not found, Things not installed, or a permission problem. | — | 7 |
+| `unexpected` | An internal error or unhandled condition (a bug). | — | 1 |
+| `bounce-aborted` | A reorder bounce aborted part-way through its round-trips. | `placed`, `remaining`, `cause` | 3 |
+| `verify-failed` | A multi-leg move/reorder failed mid-way (one leg did not verify). | `failed`, `completed` | 3 |
+| `blocked` | The move/reorder planner refused a placement on policy grounds. | `candidates` (when a resolution failure is involved) | 4 |
+| `verify-failed:<reason>` | A single mutation executed but read-after-write verification failed. `<reason>` ∈ `timeout` \| `mismatch` \| `silent-noop`. | `expected`, `observed` | 3 |
+| `blocked:<suffix>` | A mutation was refused BEFORE touching the app. `<suffix>` is the specific hazard id when one is named, else the block reason (see below). | — (specifics ride `message` / `remediation`) | 4, or 5 for `blocked:drift` |
+
+**`verify-failed:<reason>` suffixes:** `timeout` (the expected delta never appeared before the deadline), `mismatch` (a contradictory post-state — e.g. the item landed in the wrong list), `silent-noop` (the app accepted the command and changed nothing).
+
+**`blocked:<suffix>` suffixes.** The suffix is either a hazard id or a non-hazard block reason.
+
+- Hazard ids (a guard refused the mutation before dispatch): `H-AMBIGUOUS-HEADING`, `H-BACKDATE-OPEN`, `H-CHECKLIST-REPLACE`, `H-HEADING-CHILDREN`, `H-HEADING-ORDER`, `H-NO-REMINDER`, `H-PERMANENT-DELETE`, `H-PROJECT-COMPLETE-CHILDREN`, `H-PROJECT-REPEAT`, `H-REMINDER-SCOPE`, `H-REOPEN-RESOLVED-PROJECT`, `H-REORDER-SCOPE`, `H-REPEAT-SCHEDULE`, `H-TAG-SUBTREE-DELETE`, `H-TEMPLATE-CHILD-RESTORE`, `H-UI-DRIVE`, `H-UNKNOWN-DESTINATION`, `H-UNKNOWN-TAG`.
+- Non-hazard block reasons: `drift` (schema fingerprint mismatch — this one maps to exit 5, DriftBlocked), `disruption-tier` (the operation exceeds the process's disruption ceiling), `lock` (a concurrent mutation holds the advisory lock), `environment`, `clock` (`when: evening` requested when the consumer's day differs from the app machine's), `scope` (the operation would leave the container jail).
+
+Because the core never depends on the write layer, the `ErrorCode` type models these two families as `` `verify-failed:${string}` `` / `` `blocked:${string}` `` — the SHAPE is enforced by the compiler while the enumerated suffixes above are the registry of record. A consumer that does not recognize a specific suffix should route on the prefix (`blocked:` / `verify-failed:`) and the exit code.
+
+## The machine-readable schema
+
+The envelope described here also ships in machine-readable form: a JSON Schema for the envelope, its `data` wrappers, `meta`, and the error object, generated from `src/contracts.ts` so it can never drift from this document. It lands alongside this contract in the same release; use it to validate responses in tests or to generate a typed client. Until it is generated, `src/contracts.ts` is the authoritative source and this page its prose rendering.
