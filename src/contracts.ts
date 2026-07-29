@@ -252,7 +252,8 @@ export function errorEnvelope(error: ErrorEnvelope["error"], meta: EnvelopeMeta)
  * preserved (`"ok"` for a mutation, `"move-ok"` for a move) — every other field
  * flows through unchanged. The library keeps `kind` on its in-memory
  * `MutationResult`/`ReorderResult`/`MoveResult` unions; this is the single
- * boundary that stamps the wire form both the CLI and MCP surfaces emit.
+ * boundary that stamps the wire form. The CLI emits through it today; the MCP
+ * mutation path still emits the internal shape until its phase-2 framing sweep.
  */
 export function mutationOkData<T extends { kind: string }>(
   ok: T,
