@@ -35,20 +35,20 @@ Every command supports `--json`. Envelope JSON goes to **stdout**; all human/log
   "apiVersion": 1,
   "ok": false,
   "kind": "error",
-  "error": { "code": "drift-blocked", "message": "…", "remediation": "…", "detail": {} },
+  "error": { "code": "blocked:drift", "message": "…", "remediation": "…", "detail": {} },
   "meta": { "dbVersion": 26, "fingerprint": "drift", "elapsedMs": 8 }
 }
 ```
 
 - `meta.fingerprint` ∈ `ok | drift | user-accepted | unknown`.
-- `error.code` mirrors the exit-code family (`verify-failed`, `blocked`, `drift-blocked`, `unsupported`, `environment`, `usage`, `unexpected`) plus finer-grained sub-codes where useful (e.g. `verify-failed/silent-noop`, `blocked:H-UNKNOWN-TAG`), and the reference-resolution codes `not-found` / `ambiguous`.
-- `error.details` is the additive machine-readable failure context: `candidates` (disambiguation entities) and/or `suggestions` (concrete commands to run). Present wherever a failure is self-correctable.
+- `error.code` is drawn from the frozen `ErrorCode` registry (`src/contracts.ts`; enumerated in [docs/contract.md](../contract.md) § The error-code registry): the exit-code family (`usage`, `unsupported`, `environment`, `unexpected`, `bounce-aborted`, bare `verify-failed` / `blocked`), the reference-resolution codes `not-found` / `ambiguous`, and the two colon-namespaced families `verify-failed:<reason>` (`timeout` \| `mismatch` \| `silent-noop`) and `blocked:<suffix>` (a hazard id like `blocked:H-UNKNOWN-TAG`, or a block reason like `blocked:drift` — which alone maps to exit 5).
+- `error.detail` is the SINGLE additive machine-readable failure-context object (the `detail`/`details` split was reconciled into one field in the 1.0 shape break): `candidates` / `suggestions` (self-correction), `expected` / `observed` (a verify-failed delta), `considered` (rejected vectors), and the bounce/move remnants. Each key is present only for the failure that produces it. **The MCP tool result still frames its error as `{code, message, remediation?, details}`** with `details.candidates`/`details.suggestions` (its framing sweep is phase 2) — a consumer of the MCP surface reads `details`, a consumer of the CLI envelope reads `detail`.
 
-## List-view truncation metadata (`meta.truncation` / `meta.grouped`)
+## List-view truncation metadata (`meta.truncation`)
 
-List views are bounded by default and report exactly what was hidden — nothing is ever silently dropped. Two shapes, additive and never omit-empty-pruned:
+List views are bounded by default and report exactly what was hidden — nothing is ever silently dropped. Since the 1.0 shape break there is ONE shape, `meta.truncation` (the former separate `meta.grouped` was folded into it as the optional `blocks` breakdown); `meta.truncation.truncated` is the universal completeness check. It is additive and never omit-empty-pruned.
 
-**`meta.truncation`** — the flat / chronological views (`inbox`, `today`, `upcoming`, `logbook`, `trash`, `search`, `changes`):
+**Flat / chronological views** (`inbox`, `today`, `upcoming`, `logbook`, `trash`, `search`, `changes`) carry the base shape:
 
 ```jsonc
 {
@@ -65,10 +65,12 @@ List views are bounded by default and report exactly what was hidden — nothing
 }
 ```
 
-**`meta.grouped`** — the grouped catalogues (`anytime`, `someday`) and the sectioned detail views (`area show`, and `get_area` / `list_collections` over MCP). Every header/section is always rendered; only the innermost item lists are capped:
+**Grouped catalogues** (`anytime`, `someday`) and the sectioned detail views (`area show`, and `get_area` / `list_collections` over MCP) put their per-block nesting under `meta.truncation.blocks` (the base `shown`/`total` aggregate the blocks; `limit` is `null`). Every header/section is always rendered; only the innermost item lists are capped:
 
 ```jsonc
+// meta.truncation on a grouped view
 {
+  "shown": 12, "total": 23, "limit": null,
   "truncated": true,          // any block hid items
   "blocks": [                 // one identity-carrying block per capped list
     { "kind": "loose", "ref": null, "title": null, "shown": 5, "total": 5, "limit": 30 },
@@ -91,7 +93,7 @@ List views are bounded by default and report exactly what was hidden — nothing
 - `shown`/`total`/`limit` are per block; the dropped remainder is `total - shown`. A block whose rows were ALL dropped still appears with `shown: 0` (so no truncated header is untraceable); a genuinely empty block (`total: 0`) is omitted.
 - Someday's mixed area/loose blocks additionally carry `totalProjects` / `totalTodos` (project rows list first, so the hidden split is derivable).
 
-**Breaking (pre-v1.0):** `meta.grouped.blocks` grew identity + nesting (`ref` replaced the former `uuid`; project blocks moved under `children`), and `meta.truncation` grew the optional `sections`. Same defaults and metadata apply over MCP.
+**Shape history (pre-1.0 breaks):** the block breakdown grew identity + nesting (`ref` replaced the former `uuid`; project blocks moved under `children`), `meta.truncation` grew the optional `sections`, and the 1.0 shape break folded the former standalone `meta.grouped` into `meta.truncation.blocks` so there is one completeness shape. Same defaults and metadata apply over MCP. The full consumer-facing contract — the envelope grammar, the compatibility covenant, the glossary, and the error-code registry — is in [docs/contract.md](../contract.md).
 
 ## Consumer clock (`meta.clock`, timezone / pinned now)
 
@@ -154,17 +156,17 @@ The `area` field reports the **EFFECTIVE** area (revised 2026-07-16): a to-do's 
 
 `repeating` is always present (it carries the `isTemplate` / `isInstance` booleans); inside it, `templateUuid` (null), `nextOccurrence`, `paused`, `deadlined`, and `rule` follow omit-empty.
 
-Not covered by this contract (own shapes, unchanged): the **error envelope** (`error.code` / `error.details.candidates` / `error.details.suggestions` — a candidate entity is NOT pruned), **mutation results / plans** (`kind: "mutation-result"`, dry-run plans), and the non-entity diagnostic payloads (`doctor`, `capabilities`, `config`, `legend`, `setup`). The envelope `meta` (including `truncation.limit: null`, which means "unbounded") is never pruned.
+Not covered by this contract (own shapes, unchanged): the **error envelope** (`error.code` / `error.detail.candidates` / `error.detail.suggestions` — a candidate entity is NOT pruned), **mutation results / plans** (`kind: "mutation-result"`, dry-run plans), and the non-entity diagnostic payloads (`doctor`, `capabilities`, `config`, `legend`, `setup`). The envelope `meta` (including `truncation.limit: null`, which means "unbounded") is never pruned.
 
 Source of truth in code: [`src/model/serialize.ts`](../../src/model/serialize.ts) (`omitEmpty`), applied at the two emit boundaries — [`src/cli/read-driver.ts`](../../src/cli/read-driver.ts) (`runRead`) and [`src/mcp/server.ts`](../../src/mcp/server.ts) (`readResult` / the truncated + grouped read results). Covered by `test/unit/serialize.test.ts` and the read-shape assertions in `test/cli/e2e.test.ts` / `test/mcp/server.test.ts`.
 
 ## Error-path universality (every refusal honors `--json`)
 
-**Contract:** *every* error and refusal exit — not just mutation outcomes — respects `--json`. Under `--json` the `{ok:false, error}` envelope goes to **stdout** and nothing prose goes to stderr; without it, the `error:` prose line goes to **stderr**. Flag/argument usage errors route through one shared emitter (`usageError`, `src/cli/read-driver.ts`) so this holds uniformly; there is a single envelope shape (`error.details.candidates` / `error.details.suggestions`) — never a second one.
+**Contract:** *every* error and refusal exit — not just mutation outcomes — respects `--json`. Under `--json` the `{ok:false, error}` envelope goes to **stdout** and nothing prose goes to stderr; without it, the `error:` prose line goes to **stderr**. Flag/argument usage errors route through one shared emitter (`usageError`, `src/cli/read-driver.ts`) so this holds uniformly; there is a single envelope shape (the one merged `error.detail` object with `candidates` / `suggestions`) — never a second one.
 
-Machine-readable `error.details` is emitted wherever disambiguation is actionable:
+Machine-readable `error.detail` is emitted wherever disambiguation is actionable (the CLI envelope; the MCP tool result carries the same data under `details` pending its phase-2 framing sweep):
 
-| Error path | `error.code` | exit | `error.details` |
+| Error path | `error.code` | exit | `error.detail` |
 |---|---|---|---|
 | Ambiguous write/read target — project/area/tag **name** or **partial-uuid** (`resolveProjectWriteTarget`, `resolveUuidOrThrow`, `resolveTaskUuidPrefix`) | `ambiguous` | 2 | `candidates: [{uuid, title, context?}]` |
 | Not-found target (name/uuid/partial-uuid) | `not-found` | 2 | — (`candidates: []`) |

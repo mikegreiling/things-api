@@ -51,6 +51,7 @@ import {
   type BatchOp,
   type ChecklistEdit,
   type DisruptionTier,
+  type ErrorCode,
   type HeadingPlacement,
   type MonthlyAnchor,
   type MovePosition,
@@ -214,11 +215,11 @@ function badTz(tz: string | undefined): ToolResult | null {
 }
 
 function errorResult(error: {
-  code: string;
+  code: ErrorCode;
   message: string;
   likelyCause?: string;
   remediation?: string;
-  /** Machine-readable disambiguation context, mirroring the CLI envelope's error.details. */
+  /** Machine-readable disambiguation context (candidates / suggestions), mirroring the CLI envelope's error.detail. */
   details?: { candidates?: unknown[]; suggestions?: string[] };
 }): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(error) }], isError: true };
