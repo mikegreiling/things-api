@@ -247,19 +247,23 @@ export function errorEnvelope(error: ErrorEnvelope["error"], meta: EnvelopeMeta)
 
 /**
  * Project a successful mutation/reorder/move outcome to its ENVELOPE `data`
- * shape. The envelope `kind` is the only field named `kind` on the wire, so the
- * result's internal `kind` discriminator is renamed to `result` here, its value
- * preserved (`"ok"` for a mutation, `"move-ok"` for a move) — every other field
- * flows through unchanged. The library keeps `kind` on its in-memory
- * `MutationResult`/`ReorderResult`/`MoveResult` unions; this is the single
- * boundary that stamps the wire form. The CLI emits through it today; the MCP
- * mutation path still emits the internal shape until its phase-2 framing sweep.
+ * shape. The wire's mutation-success discriminator is REDUNDANT and is not
+ * emitted: the envelope already carries call success (`ok: true`, and the
+ * envelope `kind` names the payload class — `mutation-result` / `move-result`).
+ * So the result's internal `kind` discriminator is STRIPPED here — the emitted
+ * `data` has no `result` and no `kind`, just the payload fields (`op`, `uuid`,
+ * `title`, `undoToken`, `observed`, `vector`, `tier`, `touched`, notes, …).
+ * Only the internal tags `"ok"` / `"move-ok"` ever reach this boundary
+ * (failures route to error envelopes, dry-runs to the `mutation-plan` /
+ * `move-plan` kinds), so nothing is lost by dropping it. The library keeps the
+ * idiomatic `kind` discriminator on its in-memory
+ * `MutationResult`/`ReorderResult`/`MoveResult` unions; it simply never appears
+ * on the wire. The CLI emits through it today; the MCP mutation path still
+ * emits the internal shape until its phase-2 framing sweep.
  */
-export function mutationOkData<T extends { kind: string }>(
-  ok: T,
-): Omit<T, "kind"> & { result: T["kind"] } {
-  const { kind, ...rest } = ok;
-  return { result: kind, ...rest };
+export function mutationWireData<T extends { kind: string }>(ok: T): Omit<T, "kind"> {
+  const { kind: _kind, ...rest } = ok;
+  return rest;
 }
 
 /**

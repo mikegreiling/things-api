@@ -194,7 +194,7 @@ export {
   blockedCode,
   errorEnvelope,
   ExitCode,
-  mutationOkData,
+  mutationWireData,
   okEnvelope,
   PKG_VERSION,
   verifyFailedCode,

@@ -20,7 +20,7 @@ import {
   errorEnvelope,
   ExitCode,
   getConfigKey,
-  mutationOkData,
+  mutationWireData,
   okEnvelope,
   openThings,
   outcomeFailed,
@@ -86,9 +86,30 @@ function addWriteFlags(cmd: Command): Command {
 /** A commander flag value when present-with-value (bare presence yields `true`). */
 const flagVal = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
-/** Writes one batch result as an NDJSON line to stdout. */
+/**
+ * Writes one batch result as a FLATTENED NDJSON line to stdout: the internal
+ * `outcome` union object is collapsed to one level. `outcome` becomes its tag
+ * as a plain string (`"ok"`, `"blocked"`, `"verify-failed"`, `"unsupported"`,
+ * `"dry-run"`, `"invalid"`, `"skipped"`, `"already-applied"`, `"bounce-aborted"`),
+ * and every variant field (uuid, detail, plan, expected, observed, considered,
+ * placed, remaining, cause, …) sits as a sibling of the line-level keys. The
+ * outcome's own `op` duplicates the line-level `op`, so it is dropped. No
+ * variant field name collides with a line-level key (index, op, outcome,
+ * tempId, boundUuid, opId).
+ */
 const emit = (r: BatchItemResult): void => {
-  process.stdout.write(`${JSON.stringify(r)}\n`);
+  const { index, op, outcome, tempId, boundUuid, opId } = r;
+  const { kind, op: _outcomeOp, ...variant } = outcome;
+  const line = {
+    index,
+    op,
+    outcome: kind,
+    ...variant,
+    ...(tempId !== undefined && { tempId }),
+    ...(boundUuid !== undefined && { boundUuid }),
+    ...(opId !== undefined && { opId }),
+  };
+  process.stdout.write(`${JSON.stringify(line)}\n`);
 };
 
 /**
@@ -317,7 +338,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
       }
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(okEnvelope("mutation-result", mutationOkData(result), meta))}\n`,
+          `${JSON.stringify(okEnvelope("mutation-result", mutationWireData(result), meta))}\n`,
         );
       } else {
         const uuid = result.uuid === null ? "" : ` uuid=${result.uuid}`;
@@ -480,7 +501,7 @@ function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeM
     case "move-ok": {
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(okEnvelope("move-result", mutationOkData(result), meta))}\n`,
+          `${JSON.stringify(okEnvelope("move-result", mutationWireData(result), meta))}\n`,
         );
       } else {
         const who = result.movees.map((m) => m.title ?? m.uuid).join(", ");
