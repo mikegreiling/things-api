@@ -248,7 +248,13 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       active: [fullTodo()],
       headings: [
         {
-          heading: { uuid: "head-1", type: "heading", title: "Phase 1", status: "open" },
+          heading: {
+            uuid: "head-1",
+            type: "heading",
+            title: "Phase 1",
+            status: "open",
+            project: { uuid: "proj-1", title: "Q3" },
+          },
           items: [fullTodo({ uuid: "todo-h" })],
           scheduled: [],
           someday: [],
@@ -274,6 +280,10 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect("area" in member).toBe(false);
     expect("headingProject" in member).toBe(false);
     expect("heading" in member).toBe(false); // heading-group member drops heading
+    // The heading NODE also drops its project ref (the card states it).
+    const headingNode = (out["headings"] as Obj[])[0]!["heading"] as Obj;
+    expect("project" in headingNode).toBe(false);
+    expect(headingNode["uuid"]).toBe("head-1");
     // The project card keeps its own area (the node children derive from).
     expect((out["project"] as Obj)["area"]).toBeDefined();
   });

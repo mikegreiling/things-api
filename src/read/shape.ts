@@ -236,6 +236,13 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
     if (g === null || typeof g !== "object") return g;
     const grp = g as Obj;
     const out: Obj = { ...grp };
+    // The heading NODE itself also drops its `project` ref — the enclosing
+    // project card states it (same R6 rule its members follow).
+    if (grp["heading"] !== null && typeof grp["heading"] === "object") {
+      const h = { ...(grp["heading"] as Obj) };
+      delete h["project"];
+      out["heading"] = h;
+    }
     out["items"] = shapeList(grp["items"], hd, compact);
     out["scheduled"] = shapeDateGroups(grp["scheduled"], hd, compact);
     out["someday"] = shapeList(grp["someday"], hd, compact);
