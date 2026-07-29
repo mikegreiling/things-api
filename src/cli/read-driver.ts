@@ -22,11 +22,54 @@ import {
   ThingsDbNotFoundError,
   ThingsDbOpenError,
   type EnvelopeMeta,
-  type GroupedTruncation,
   type ThingsClient,
+  type TodayView,
   type Truncation,
   type ViewFilterMeta,
 } from "../index.ts";
+
+/**
+ * Kinds whose read payload is a flat list; their envelope `data` is the R1
+ * `{ items: [...] }` wrapper (data is ALWAYS a JSON object, never a bare array).
+ */
+const ITEMS_WRAPPER_KINDS: ReadonlySet<string> = new Set([
+  "inbox",
+  "upcoming",
+  "logbook",
+  "trash",
+  "changes",
+  "search",
+  "projects",
+  "areas",
+  "tags",
+]);
+
+/**
+ * Shape a read payload into its envelope `data` object (the 1.0 contract, R1/R2):
+ * `data` is always an object. Flat lists become `{ items }`; the sectioned
+ * catalogues (anytime/someday) become `{ sections }`; `today` becomes
+ * `{ sections: [{key,items}…], badge }`; the composite cards become `{ view }`;
+ * a single-entity detail becomes `{ item }`. Everything already object-shaped
+ * (open/snapshot/…) passes through. The human-render path keeps the raw inner
+ * payload — this transform is the JSON emit boundary only.
+ */
+export function wrapEnvelopeData(kind: string, data: unknown): unknown {
+  if (ITEMS_WRAPPER_KINDS.has(kind)) return { items: data };
+  if (kind === "anytime" || kind === "someday") return { sections: data };
+  if (kind === "today") {
+    const view = data as TodayView;
+    return {
+      sections: [
+        { key: "today", items: view.today },
+        { key: "evening", items: view.evening },
+      ],
+      badge: view.badge,
+    };
+  }
+  if (kind === "area-view" || kind === "project-view") return { view: data };
+  if (kind === "detail") return { item: data };
+  return data;
+}
 
 export interface GlobalReadOpts {
   json?: boolean;
@@ -50,7 +93,10 @@ export function usageError(
     const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
     process.stdout.write(
       `${JSON.stringify(
-        errorEnvelope({ code: "usage", message, ...(details !== undefined && { details }) }, meta),
+        errorEnvelope(
+          { code: "usage", message, ...(details !== undefined && { detail: details }) },
+          meta,
+        ),
       )}\n`,
     );
   } else {
@@ -61,10 +107,19 @@ export function usageError(
 
 export interface PagedResult<T> {
   data: T;
-  /** Flat-view truncation — carried into meta and the appended hint. */
+  /**
+   * The unified completeness metadata — flat-view row counts, the Today split's
+   * per-section counts, OR a grouped view's per-block `blocks`. Carried into
+   * `meta.truncation` and (for flat views with a `hintBase`) the appended hint.
+   */
   truncation?: Truncation;
-  /** Grouped-view (anytime/someday) per-block truncation — carried into meta. */
-  grouped?: GroupedTruncation;
+  /**
+   * Override the envelope `kind` (and thus the R1/R2 data wrapper) for this
+   * result — set by the loose `show` router, which resolves its target kind
+   * only inside `fn` (a to-do → `detail`, a project → `project-view`, an area →
+   * `area-view`). Absent = the `kind` argument passed to {@link runRead}.
+   */
+  kind?: string;
   /** Active content filter (the `--area` scope) — carried into `meta.filter`. */
   filter?: ViewFilterMeta;
   /**
@@ -105,7 +160,8 @@ export function runRead<T>(
     // Reads never block on a schema change — they warn (design decision). The
     // note reuses the same cached fingerprint the write path gates on.
     const warnings = schemaWarnings(client.schemaStatus());
-    const { data, truncation, grouped, filter, lines: precomputed } = fn(client);
+    const { data, truncation, kind: kindOverride, filter, lines: precomputed } = fn(client);
+    const effectiveKind = kindOverride ?? kind;
     // The canonical command a sugar invocation normalized to — known now that
     // `fn` has resolved any reference. Present only for the routing sugars
     // (bare noun, keyword-in-show, uuid/share-link routing); null otherwise.
@@ -121,7 +177,6 @@ export function runRead<T>(
       fingerprint: fp.kind === "ok" ? "ok" : fp.kind === "drift" ? "drift" : "unknown",
       elapsedMs: Date.now() - started,
       ...(truncation !== undefined && { truncation }),
-      ...(grouped !== undefined && { grouped }),
       ...(resolvedCommand !== null && { resolvedCommand }),
       ...(warnings.length > 0 && { warnings }),
       ...(clock !== undefined && { clock }),
@@ -137,7 +192,9 @@ export function runRead<T>(
       // Omit-empty applies to the entity/data payload only (contracts.md); the
       // envelope meta/truncation is untouched, and the human render below keeps
       // the full, unpruned `data`.
-      process.stdout.write(`${JSON.stringify(okEnvelope(kind, omitEmpty(data), meta))}\n`);
+      process.stdout.write(
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, data)), meta))}\n`,
+      );
     } else {
       const lines = precomputed ?? render(data);
       if (truncation !== undefined && hintBase !== undefined) {
@@ -186,7 +243,7 @@ export function runRead<T>(
               {
                 code: "not-found",
                 message: err.message,
-                details: { candidates: candidatesJson(err) },
+                detail: { candidates: candidatesJson(err) },
               },
               meta,
             ),
@@ -205,7 +262,7 @@ export function runRead<T>(
         process.stdout.write(
           `${JSON.stringify(
             errorEnvelope(
-              { code: err.code, message: err.message, details: { candidates: err.candidates } },
+              { code: err.code, message: err.message, detail: { candidates: err.candidates } },
               meta,
             ),
           )}\n`,

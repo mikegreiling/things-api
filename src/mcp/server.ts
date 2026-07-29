@@ -51,7 +51,6 @@ import {
   type BatchOp,
   type ChecklistEdit,
   type DisruptionTier,
-  type GroupedTruncation,
   type HeadingPlacement,
   type MonthlyAnchor,
   type MovePosition,
@@ -137,17 +136,18 @@ function truncatedResult(data: unknown, truncation: Truncation): ToolResult {
 
 /**
  * Grouped read result (anytime/someday): the per-block-truncated sections plus
- * a second block carrying the {@link GroupedTruncation} counts and, when
- * anything was hidden, a one-line note the agent can read.
+ * a second block carrying the unified {@link Truncation} counts (its `blocks`
+ * hold the per-block nesting) and, when anything was hidden, a one-line note the
+ * agent can read.
  */
-function groupedResult(data: unknown, grouped: GroupedTruncation): ToolResult {
-  const note = grouped.truncated
+function groupedResult(data: unknown, truncation: Truncation): ToolResult {
+  const note = truncation.truncated
     ? "some blocks are previews — raise area_limit/project_limit for more per block, or all: true for every item"
     : undefined;
   return {
     content: [
       { type: "text", text: JSON.stringify(omitEmpty(data)) },
-      { type: "text", text: JSON.stringify({ grouped, ...(note !== undefined && { note }) }) },
+      { type: "text", text: JSON.stringify({ truncation, ...(note !== undefined && { note }) }) },
     ],
   };
 }
@@ -827,7 +827,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             case "anytime": {
               const {
                 view,
-                grouped,
+                truncation,
                 filter: fm,
               } = c.read.anytime({
                 ...filter,
@@ -837,7 +837,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit,
               });
               filterMeta = fm;
-              return groupedResult(view, grouped);
+              return groupedResult(view, truncation);
             }
             case "upcoming": {
               const {
@@ -861,7 +861,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               }
               const {
                 view,
-                grouped,
+                truncation,
                 filter: fm,
               } = c.read.someday({
                 ...filter,
@@ -875,7 +875,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit: typeof active === "number" ? active : null,
               });
               filterMeta = fm;
-              return groupedResult(view, grouped);
+              return groupedResult(view, truncation);
             }
             case "logbook": {
               const {
@@ -1110,14 +1110,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (areaLimit === "conflict" || projectLimit === "conflict") {
           return usage("pass at most one of area_limit/project_limit / all");
         }
-        const { view, grouped } = getClient().read.areaView(args.ref, {
+        const { view, truncation } = getClient().read.areaView(args.ref, {
           overdue: args.overdue === true,
           ...tagFilterFields(tagPresence(args)),
           ...(args.tz !== undefined && { zone: args.tz }),
           areaLimit,
           projectLimit,
         });
-        return groupedResult(view, grouped);
+        return groupedResult(view, truncation);
       }, args.tz),
   );
 

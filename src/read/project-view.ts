@@ -18,19 +18,38 @@ import { OVERDUE } from "./predicates.ts";
 import { inheritedTagsFor } from "./tags.ts";
 import { tagFilter, type ViewFilter } from "./views.ts";
 
+/**
+ * A heading group inside a project view. Mirrors the GUI: the heading owns its
+ * OWN display sub-buckets (§1 of the demotion/move design) — the anytime/current
+ * `items`, its future-dated `scheduled` children grouped per day, its resting
+ * `repeating` templates, and its `someday` children. The project-level buckets
+ * (below) hold ONLY the UNHEADED members; a headed child lives here, under its
+ * heading, never pooled at the project level.
+ */
+export interface ProjectHeadingGroup {
+  heading: Heading;
+  /** Open/current children under this heading, by index. */
+  items: Todo[];
+  /** This heading's future-dated children grouped by date ascending. */
+  scheduled: IsoDateGroup<Todo>[];
+  /** This heading's someday (incubated, undated) children. */
+  someday: Todo[];
+  /** This heading's repeating template rows (invisible in list views). */
+  repeating: Todo[];
+}
+
 export interface ProjectView {
   project: Project;
-  /** Open, unscheduled/current children not under a heading, by index. */
+  /** Open, unscheduled/current UNHEADED children, by index. */
   active: Todo[];
-  /** Headings in project order, each with its open children. */
-  headings: Array<{ heading: Heading; items: Todo[] }>;
-  later: {
-    /** Future-dated children grouped by date ascending. */
-    scheduled: IsoDateGroup<Todo>[];
-    /** Repeating template rows owned by this project (invisible in list views). */
-    repeating: Todo[];
-    someday: Todo[];
-  };
+  /** Headings in project order, each with its own sub-buckets. */
+  headings: ProjectHeadingGroup[];
+  /** UNHEADED future-dated children grouped by date ascending. */
+  scheduled: IsoDateGroup<Todo>[];
+  /** UNHEADED someday (incubated, undated) children. */
+  someday: Todo[];
+  /** UNHEADED repeating template rows owned by this project (invisible in list views). */
+  repeating: Todo[];
   logged: Todo[];
   trashed: Todo[];
   /**
@@ -50,6 +69,29 @@ export class ProjectNotFoundError extends Error {
     super(`no project with uuid ${uuid}`);
     this.name = "ProjectNotFoundError";
   }
+}
+
+/** A scheduled child, pre-grouping: its ISO date + within-day sort key. */
+type ScheduledRow = { date: string; ti: number; todo: Todo };
+
+/** Append `value` to the list at `key`, creating it on first use. */
+function pushInto<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const list = map.get(key) ?? [];
+  list.push(value);
+  map.set(key, list);
+}
+
+/** Group scheduled rows into per-day buckets (date ASC, within-day todayIndex ASC). */
+function groupByDate(rows: ScheduledRow[]): IsoDateGroup<Todo>[] {
+  const out: IsoDateGroup<Todo>[] = [];
+  for (const { date, todo } of rows.toSorted(
+    (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
+  )) {
+    const last = out[out.length - 1];
+    if (last && last.date === date) last.items.push(todo);
+    else out.push({ date, items: [todo] });
+  }
+  return out;
 }
 
 export function projectView(
@@ -116,13 +158,26 @@ export function projectView(
   }));
   markLogged([project, ...todos.map((t) => t.todo)], boundary);
 
+  // Project-level (UNHEADED) buckets.
   const active: Todo[] = [];
-  const byHeading = new Map<string, Todo[]>();
-  const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
+  const scheduledRows: ScheduledRow[] = [];
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
   const logged: Todo[] = [];
   const trashed: Todo[] = [];
+  // Per-heading sub-buckets, keyed by heading uuid (§9 fidelity fix): a headed
+  // scheduled/someday/repeating child nests under its heading, NOT at the
+  // project level.
+  const headingItems = new Map<string, Todo[]>();
+  const headingScheduled = new Map<string, ScheduledRow[]>();
+  const headingSomeday = new Map<string, Todo[]>();
+  const headingRepeating = new Map<string, Todo[]>();
+  // Known (fetched, untrashed) headings — a child whose heading FK is not one
+  // of these falls back to the project-level (unheaded) buckets rather than
+  // vanishing (mirrors the render's historical loose fallback).
+  const headingSet = new Set(headings.map((h) => h.uuid));
+  const headingUuidOf = (row: TaskRow): string | null =>
+    row.heading !== null && headingSet.has(row.heading) ? row.heading : null;
   // Every untrashed, non-template OPEN child, regardless of which bucket it
   // lands in below — surfaced (only when the project is itself resolved) as
   // the PLOG1 stranded-open-child count.
@@ -133,8 +188,10 @@ export function projectView(
       trashed.push(todo);
       continue;
     }
+    const h = headingUuidOf(row);
     if (todo.repeating.isTemplate) {
-      repeating.push(todo);
+      if (h !== null) pushInto(headingRepeating, h, todo);
+      else repeating.push(todo);
       continue;
     }
     if (row.status === 0) openChildren += 1;
@@ -146,61 +203,62 @@ export function projectView(
         logged.push(todo);
         continue;
       }
-      if (row.heading) {
-        const list = byHeading.get(row.heading) ?? [];
-        list.push(todo);
-        byHeading.set(row.heading, list);
-      } else {
-        active.push(todo);
-      }
+      if (h !== null) pushInto(headingItems, h, todo);
+      else active.push(todo);
       continue;
     }
     if (row.start === 2 && row.startDate === null) {
-      someday.push(todo);
+      if (h !== null) pushInto(headingSomeday, h, todo);
+      else someday.push(todo);
       continue;
     }
     if (row.startDate !== null && row.startDate > packedToday) {
-      scheduledRows.push({
+      const sr: ScheduledRow = {
         date: decodePackedDate(row.startDate) ?? "",
         ti: row.todayIndex ?? 0,
         todo,
-      });
+      };
+      if (h !== null) pushInto(headingScheduled, h, sr);
+      else scheduledRows.push(sr);
       continue;
     }
-    if (row.heading) {
-      const list = byHeading.get(row.heading) ?? [];
-      list.push(todo);
-      byHeading.set(row.heading, list);
-      continue;
-    }
-    active.push(todo);
+    if (h !== null) pushInto(headingItems, h, todo);
+    else active.push(todo);
   }
 
   logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
-  const scheduled: IsoDateGroup<Todo>[] = [];
   // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
-  for (const { date, todo } of scheduledRows.toSorted(
-    (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
-  )) {
-    const last = scheduled[scheduled.length - 1];
-    if (last && last.date === date) last.items.push(todo);
-    else scheduled.push({ date, items: [todo] });
-  }
+  const scheduled = groupByDate(scheduledRows);
 
   // Under any content scope (`--overdue` or a tag filter), a heading whose
   // children were all filtered out collapses rather than rendering an empty
-  // section; a heading with a surviving child is kept. With no scope active
-  // every heading renders (its own empty state).
+  // section; a heading with any surviving child (in ANY sub-bucket) is kept.
+  // With no scope active every heading renders (its own empty state).
   const contentScoped = overdue || tf.sql !== "";
-  const headingGroups = headings
-    .map((heading) => ({ heading, items: byHeading.get(heading.uuid) ?? [] }))
-    .filter((g) => !contentScoped || g.items.length > 0);
+  const headingGroups: ProjectHeadingGroup[] = headings
+    .map((heading) => ({
+      heading,
+      items: headingItems.get(heading.uuid) ?? [],
+      scheduled: groupByDate(headingScheduled.get(heading.uuid) ?? []),
+      someday: headingSomeday.get(heading.uuid) ?? [],
+      repeating: headingRepeating.get(heading.uuid) ?? [],
+    }))
+    .filter(
+      (g) =>
+        !contentScoped ||
+        g.items.length > 0 ||
+        g.scheduled.length > 0 ||
+        g.someday.length > 0 ||
+        g.repeating.length > 0,
+    );
 
   return {
     project,
     active,
     headings: headingGroups,
-    later: { scheduled, repeating, someday },
+    scheduled,
+    someday,
+    repeating,
     logged,
     trashed,
     openChildrenWhileResolved: project.status === "open" ? 0 : openChildren,

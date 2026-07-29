@@ -18,6 +18,7 @@ import {
   splitSectionBlocks,
 } from "../../src/read/truncation.ts";
 import type { AreaView } from "../../src/read/area-view.ts";
+import type { GroupBlock } from "../../src/contracts.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
 
 /** Minimal ListItem stand-ins — truncation only inspects type/uuid/refs. */
@@ -134,7 +135,7 @@ describe("previewSections (anytime per-block preview)", () => {
   const loose: SidebarSection = { area: null, items: items(9, "l") };
 
   it("caps area blocks and project blocks with their own limits", () => {
-    const { data, grouped: meta } = previewSections([loose, grouped], { area: 4, project: 3 });
+    const { data, truncation: meta } = previewSections([loose, grouped], { area: 4, project: 3 });
     // Loose block: 4 of 9 direct.
     expect(data[0]?.items).toHaveLength(4);
     // Area section: 4 direct + the project row + 3 children = 8 rows.
@@ -156,14 +157,16 @@ describe("previewSections (anytime per-block preview)", () => {
   });
 
   it("null caps (--all) keep every item and report no truncation", () => {
-    const { data, grouped: meta } = previewSections([grouped], { area: null, project: null });
+    const { data, truncation: meta } = previewSections([grouped], { area: null, project: null });
     expect(data[0]?.items).toHaveLength(19); // 10 direct + project row + 8 children
     expect(meta.truncated).toBe(false);
-    expect(meta.blocks.every((b) => b.shown === b.total && b.limit === null)).toBe(true);
+    expect(
+      (meta.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),
+    ).toBe(true);
   });
 
   it("empty blocks are omitted from the counts; project rows always survive", () => {
-    const { data, grouped: meta } = previewSections(
+    const { data, truncation: meta } = previewSections(
       [{ area: null, items: [project("p", "Empty Proj")] }],
       { area: 3, project: 3 },
     );
@@ -209,7 +212,7 @@ describe("previewSomedaySections", () => {
   };
 
   it("area cap covers project rows + direct to-dos as one block; children cap per project", () => {
-    const { data, grouped: meta } = previewSomedaySections([section], { area: 4, project: 2 });
+    const { data, truncation: meta } = previewSomedaySections([section], { area: 4, project: 2 });
     // 4 own (2 project rows + first 2 to-dos) + 2 children = 6.
     expect(data[0]?.items.map((i) => i.uuid)).toEqual(["p1", "p2", "u0", "u1", "k0", "k1"]);
     expect(meta.truncated).toBe(true);
@@ -229,10 +232,13 @@ describe("previewSomedaySections", () => {
   });
 
   it("null project cap (bare show flag) keeps every child", () => {
-    const { data, grouped: meta } = previewSomedaySections([section], { area: 50, project: null });
+    const { data, truncation: meta } = previewSomedaySections([section], {
+      area: 50,
+      project: null,
+    });
     expect(data[0]?.items).toHaveLength(11);
     expect(meta.truncated).toBe(false);
-    expect(meta.blocks[0]?.children?.find((b) => b.kind === "project")?.limit).toBeNull();
+    expect(meta.blocks?.[0]?.children?.find((b) => b.kind === "project")?.limit).toBeNull();
   });
 });
 
@@ -242,34 +248,34 @@ describe("capAreaSections (area show per-section caps)", () => {
       area: { uuid: "a", title: "Busy" },
       projects: todos(5, "p"),
       active: todos(7, "t"),
-      later: {
-        scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
-        repeating: [],
-        someday: [],
-      },
+      scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
+      repeating: [],
+      someday: [],
       logged: todos(3, "l"),
       trashed: [],
     }) as unknown as AreaView;
 
   it("caps the project-rows and direct-to-dos sections independently", () => {
-    const { data, grouped } = capAreaSections(view(), { area: 4, project: 2 });
+    const { data, truncation } = capAreaSections(view(), { area: 4, project: 2 });
     expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
     // Later/logged sections are containers of their own — never capped here.
-    expect(data.later.scheduled[0]?.items).toHaveLength(2);
+    expect(data.scheduled[0]?.items).toHaveLength(2);
     expect(data.logged).toHaveLength(3);
-    expect(grouped.truncated).toBe(true);
-    expect(grouped.blocks).toEqual([
+    expect(truncation.truncated).toBe(true);
+    expect(truncation.blocks).toEqual([
       { kind: "projects", ref: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
       { kind: "area", ref: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
     ]);
   });
 
   it("null caps (--all) pass both sections through untouched", () => {
-    const { data, grouped } = capAreaSections(view(), { area: null, project: null });
+    const { data, truncation } = capAreaSections(view(), { area: null, project: null });
     expect(data.projects).toHaveLength(5);
     expect(data.active).toHaveLength(7);
-    expect(grouped.truncated).toBe(false);
-    expect(grouped.blocks.every((b) => b.shown === b.total && b.limit === null)).toBe(true);
+    expect(truncation.truncated).toBe(false);
+    expect(
+      (truncation.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),
+    ).toBe(true);
   });
 });

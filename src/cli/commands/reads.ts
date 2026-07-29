@@ -142,7 +142,7 @@ export function registerReadCommands(program: Command): void {
           fingerprint: "unknown",
           elapsedMs: Date.now() - started,
         };
-        process.stdout.write(`${JSON.stringify(okEnvelope("legend", entries, meta))}\n`);
+        process.stdout.write(`${JSON.stringify(okEnvelope("legend", { items: entries }, meta))}\n`);
       } else {
         process.stdout.write(`${renderLegend().join("\n")}\n`);
       }
@@ -409,7 +409,7 @@ export function registerReadCommands(program: Command): void {
           (c) => {
             const {
               view,
-              grouped,
+              truncation,
               filter: areaFilter,
             } = c.read.anytime({
               ...filter,
@@ -419,9 +419,9 @@ export function registerReadCommands(program: Command): void {
             });
             return {
               data: view,
-              grouped,
+              truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
-              lines: renderAnytimePreview(view, grouped, limits, base),
+              lines: renderAnytimePreview(view, truncation, limits, base),
             };
           },
           // Grouped views hand back precomputed `lines`; renderSections is the
@@ -519,7 +519,7 @@ export function registerReadCommands(program: Command): void {
           (c) => {
             const {
               view,
-              grouped,
+              truncation,
               filter: areaFilter,
             } = c.read.someday({
               ...filter,
@@ -534,24 +534,24 @@ export function registerReadCommands(program: Command): void {
             // item there, so each block's total is the full group size).
             const hiddenActiveItems = showActive
               ? 0
-              : c.read
-                  .someday({ ...filter, activeProjectItems: true })
-                  .grouped.blocks.reduce(
-                    (n, b) =>
-                      n +
-                      (b.children?.reduce(
-                        (m, child) => m + (child.kind === "project" ? child.total : 0),
-                        0,
-                      ) ?? 0),
-                    0,
-                  );
+              : (
+                  c.read.someday({ ...filter, activeProjectItems: true }).truncation.blocks ?? []
+                ).reduce(
+                  (n, b) =>
+                    n +
+                    (b.children?.reduce(
+                      (m, child) => m + (child.kind === "project" ? child.total : 0),
+                      0,
+                    ) ?? 0),
+                  0,
+                );
             return {
               data: view,
-              grouped,
+              truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               lines: renderSomedayPreview(
                 view,
-                grouped,
+                truncation,
                 limits,
                 base,
                 showActive,

@@ -160,7 +160,7 @@ describe("config get (all keys)", () => {
     await run(["config", "get", "--json"]);
     const env = lastJson();
     expect(env["kind"]).toBe("config");
-    const data = env["data"] as { key: string; source: string }[];
+    const data = (env["data"] as { items: { key: string; source: string }[] }).items;
     expect(Array.isArray(data)).toBe(true);
     expect(data).toHaveLength(11);
     expect(data.map((e) => e.key)).toContain("ui-enabled");
@@ -183,7 +183,7 @@ describe("config get (all keys)", () => {
   it("mixes stored, default, and derived sources", async () => {
     await run(["config", "set", "profile", "dedicated-server"]);
     await run(["config", "get", "--json"]);
-    const data = lastJson()["data"] as { key: string; source: string }[];
+    const data = (lastJson()["data"] as { items: { key: string; source: string }[] }).items;
     const byKey = Object.fromEntries(data.map((e) => [e.key, e.source]));
     expect(byKey["profile"]).toBe("stored");
     expect(byKey["actor"]).toBe("default");

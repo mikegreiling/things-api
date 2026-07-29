@@ -21,13 +21,12 @@ export interface AreaView {
   active: Todo[];
   /** The area's open projects in sidebar order (someday projects included). */
   projects: Project[];
-  later: {
-    /** Future-dated direct to-dos grouped by date ascending. */
-    scheduled: IsoDateGroup<Todo>[];
-    /** Repeating template rows owned by this area (invisible in list views). */
-    repeating: Todo[];
-    someday: Todo[];
-  };
+  /** Future-dated direct to-dos grouped by date ascending. */
+  scheduled: IsoDateGroup<Todo>[];
+  /** Someday (incubated, undated) direct to-dos. */
+  someday: Todo[];
+  /** Repeating template rows owned by this area (invisible in list views). */
+  repeating: Todo[];
   logged: Todo[];
   trashed: Todo[];
 }
@@ -184,5 +183,5 @@ export function areaView(
     else scheduled.push({ date, items: [todo] });
   }
 
-  return { area, active, projects, later: { scheduled, repeating, someday }, logged, trashed };
+  return { area, active, projects, scheduled, someday, repeating, logged, trashed };
 }

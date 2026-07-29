@@ -160,12 +160,8 @@ describe("bulk todo add: variadic / --stdin / --id-only", () => {
       .split("\n")
       .map((l) => JSON.parse(l));
     // three per-line dry-run plans + one summary line
-    expect(parsed.slice(0, 3).map((r) => r.outcome.kind)).toEqual([
-      "dry-run",
-      "dry-run",
-      "dry-run",
-    ]);
-    const invs = parsed.slice(0, 3).map((r) => String(r.outcome.plan.invocation));
+    expect(parsed.slice(0, 3).map((r) => r.outcome)).toEqual(["dry-run", "dry-run", "dry-run"]);
+    const invs = parsed.slice(0, 3).map((r) => String(r.plan.invocation));
     expect(invs[0]).toContain("title=First");
     expect(invs[1]).toContain("title=Second");
     expect(invs[2]).toContain("title=Third");
@@ -347,7 +343,9 @@ describe("capabilities", () => {
     await run(["capabilities", "--op", "todo.delete", "--json"]);
     const env = envelope();
     expect(env["kind"]).toBe("capabilities");
-    const data = env["data"] as { op: string; vectors: { vector: string; support: string }[] }[];
+    const data = (
+      env["data"] as { items: { op: string; vectors: { vector: string; support: string }[] }[] }
+    ).items;
     expect(data).toHaveLength(1);
     const entry = data[0];
     expect(entry?.op).toBe("todo.delete");
@@ -376,11 +374,11 @@ describe("batch (Phase 13)", () => {
       .split("\n")
       .map((l) => JSON.parse(l));
     expect(lines).toHaveLength(4); // 3 results + summary
-    expect(lines[0].outcome.kind).toBe("dry-run");
-    expect(lines[1].outcome.kind).toBe("invalid");
-    expect(lines[1].outcome.detail).toMatch(/not valid JSON/);
+    expect(lines[0].outcome).toBe("dry-run");
+    expect(lines[1].outcome).toBe("invalid");
+    expect(lines[1].detail).toMatch(/not valid JSON/);
     // trash.empty dry-run still hits the H-PERMANENT-DELETE guard first
-    expect(lines[2].outcome.kind).toBe("blocked");
+    expect(lines[2].outcome).toBe("blocked");
     expect(lines[3].summary).toEqual({ total: 3, ok: 1, failed: 2, skipped: 0 });
     expect(process.exitCode).toBe(4); // blocked outranks invalid
   });
@@ -413,8 +411,8 @@ describe("batch (Phase 13)", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    expect(lines[0].outcome.kind).toBe("unsupported");
-    expect(lines[1].outcome.kind).toBe("unsupported");
+    expect(lines[0].outcome).toBe("unsupported");
+    expect(lines[1].outcome).toBe("unsupported");
     expect(lines[2].summary).toEqual({ total: 2, ok: 0, failed: 2, skipped: 0 });
     expect(process.exitCode).toBe(6);
   });
@@ -440,7 +438,7 @@ describe("batch (Phase 13)", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    expect(new Set([lines[0].outcome.kind, lines[1].outcome.kind])).toEqual(
+    expect(new Set([lines[0].outcome, lines[1].outcome])).toEqual(
       new Set(["unsupported", "blocked"]),
     );
     expect(process.exitCode).toBe(4);
@@ -467,8 +465,8 @@ describe("batch (Phase 13)", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    expect(lines[0].outcome.kind).toBe("unsupported");
-    expect(lines[1].outcome.kind).toBe("invalid");
+    expect(lines[0].outcome).toBe("unsupported");
+    expect(lines[1].outcome).toBe("invalid");
     expect(process.exitCode).toBe(6);
   });
 
@@ -489,8 +487,8 @@ describe("batch (Phase 13)", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    expect(lines[0].outcome.kind).toBe("blocked");
-    expect(lines[1].outcome.kind).toBe("skipped");
+    expect(lines[0].outcome).toBe("blocked");
+    expect(lines[1].outcome).toBe("skipped");
   });
 });
 

@@ -81,7 +81,11 @@ describe("todo add --when evening under a future pinned THINGS_NOW", () => {
     expect(env["ok"]).toBe(true);
     expect(env["kind"]).toBe("mutation-result");
     const data = env["data"] as Record<string, unknown>;
-    expect(data["kind"]).toBe("ok");
+    // The redundant mutation-success discriminator is stripped: envelope `ok`
+    // + `kind` are the success signal, so `data` carries no `result`/`kind`.
+    expect(data["result"]).toBeUndefined();
+    expect(data["kind"]).toBeUndefined();
+    expect(data["op"]).toBe("todo.add");
     expect(data["observed"]).toMatchObject({
       start: "active",
       startDate: FUTURE_TODAY,

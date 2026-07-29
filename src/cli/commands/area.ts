@@ -31,9 +31,9 @@ import {
   type AreaView,
   type BoundedAreaView,
   type GroupedLimits,
-  type GroupedTruncation,
   type Project,
   type Todo,
+  type Truncation,
 } from "../../index.ts";
 import {
   addTagFilterOptions,
@@ -83,7 +83,7 @@ function loggedCount(showLogged: boolean | string | undefined): number {
  */
 export function renderAreaView(
   view: AreaView,
-  grouped: GroupedTruncation,
+  truncation: Truncation,
   opts: AreaShowOpts,
 ): string[] {
   const todayIso = localToday(renderNow(), renderZone());
@@ -97,8 +97,8 @@ export function renderAreaView(
     ...view.projects
       .filter((p) => isScheduledProjectRow(p, todayIso))
       .map((p) => ({ date: p.startDate ?? "", item: p })),
-    ...view.later.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.date, item: t }))),
-    ...view.later.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
+    ...view.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.date, item: t }))),
+    ...view.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
   ].toSorted((a, b) => a.date.localeCompare(b.date));
 
   const logged = view.logged.slice(0, loggedCount(opts.showLogged));
@@ -106,7 +106,7 @@ export function renderAreaView(
     ...activeProjects,
     ...view.active,
     ...(opts.showLater === true
-      ? [...upcoming.map((u) => u.item), ...somedayProjects, ...view.later.someday]
+      ? [...upcoming.map((u) => u.item), ...somedayProjects, ...view.someday]
       : []),
     ...logged,
   ];
@@ -117,8 +117,8 @@ export function renderAreaView(
   // preamble and the toggled later/logged sections are never capped. The pre-cap
   // totals come from the metadata; `limits` supplies the footer's doubling.
   const limits = opts.limits ?? { area: null, project: null };
-  const projectsBlock = grouped.blocks.find((b) => b.kind === "projects");
-  const activeBlock = grouped.blocks.find((b) => b.kind === "area");
+  const projectsBlock = truncation.blocks?.find((b) => b.kind === "projects");
+  const activeBlock = truncation.blocks?.find((b) => b.kind === "area");
   const hiddenProjects = projectsBlock ? projectsBlock.total - projectsBlock.shown : 0;
   const hiddenActive = activeBlock ? activeBlock.total - activeBlock.shown : 0;
   // The user's invocation, echoed by every disclosure hint (falls back to a
@@ -163,18 +163,18 @@ export function renderAreaView(
     if (upcoming.length > 0) {
       lines.push("", bold("── Upcoming ──"), ...upcoming.map((u) => fmt(u.item)));
     }
-    if (somedayProjects.length > 0 || view.later.someday.length > 0) {
+    if (somedayProjects.length > 0 || view.someday.length > 0) {
       lines.push("", bold("── Someday ──"), ...somedayProjects.map(fmtProject));
-      if (view.later.someday.length > 0) {
+      if (view.someday.length > 0) {
         if (somedayProjects.length > 0) lines.push("");
-        lines.push(...view.later.someday.map(fmt));
+        lines.push(...view.someday.map(fmt));
       }
     }
   }
   // Default-hidden rows are never silent — a HIDDEN-SECTION placeholder (flush,
   // full command) stands where the Upcoming/Someday sections would render.
   if (opts.showLater !== true) {
-    const hiddenLater = upcoming.length + somedayProjects.length + view.later.someday.length;
+    const hiddenLater = upcoming.length + somedayProjects.length + view.someday.length;
     if (hiddenLater > 0)
       lines.push(
         "",
@@ -288,8 +288,8 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
       }
       return {
         data: bounded.view,
-        grouped: bounded.grouped,
-        lines: renderAreaView(bounded.view, bounded.grouped, { ...opts, limits, hintBase }),
+        truncation: bounded.truncation,
+        lines: renderAreaView(bounded.view, bounded.truncation, { ...opts, limits, hintBase }),
       };
     },
     () => [],

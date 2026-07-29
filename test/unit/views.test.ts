@@ -604,12 +604,62 @@ describe("projectView", () => {
     expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
     expect(view.headings).toHaveLength(1);
     expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["headed-1"]);
-    expect(view.later.scheduled).toEqual([expect.objectContaining({ date: "2026-07-05" })]);
-    expect(view.later.scheduled[0]?.items).toHaveLength(2);
-    expect(view.later.repeating.map((i) => i.title)).toEqual(["tpl"]);
-    expect(view.later.someday.map((i) => i.title)).toEqual(["incub"]);
+    expect(view.scheduled).toEqual([expect.objectContaining({ date: "2026-07-05" })]);
+    expect(view.scheduled[0]?.items).toHaveLength(2);
+    expect(view.repeating.map((i) => i.title)).toEqual(["tpl"]);
+    expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
     expect(view.logged.map((i) => i.title)).toEqual(["done"]);
     expect(view.trashed.map((i) => i.title)).toEqual(["junk"]);
+  });
+
+  it("nests headed scheduled/someday/repeating children under their heading, not at project level (§9 fidelity fix)", () => {
+    fx = buildFixtureDb();
+    const project = seedProject(fx.db, { title: "Launch" });
+    const heading = seedHeading(fx.db, { title: "Phase 1", project });
+    // UNHEADED later children — stay in the project-level buckets.
+    seedTodo(fx.db, { title: "loose-sched", project, startDate: "2026-07-05", start: "someday" });
+    seedTodo(fx.db, { title: "loose-incub", project, start: "someday" });
+    seedTodo(fx.db, { title: "loose-tpl", project, recurrenceRule: true });
+    seedTodo(fx.db, { title: "loose-active", project, index: 9 });
+    // HEADED later children (DB invariant: project = NULL) — must nest under the
+    // heading's own sub-buckets, mirroring the GUI.
+    seedTodo(fx.db, {
+      title: "headed-sched",
+      heading,
+      project: null,
+      startDate: "2026-07-06",
+      start: "someday",
+    });
+    seedTodo(fx.db, { title: "headed-incub", heading, project: null, start: "someday" });
+    seedTodo(fx.db, { title: "headed-tpl", heading, project: null, recurrenceRule: true });
+    seedTodo(fx.db, { title: "headed-active", heading, project: null, index: 1 });
+
+    const view = projectView(fx.db, project, NOW);
+
+    // Project-level buckets carry ONLY the unheaded members.
+    expect(view.active.map((i) => i.title)).toEqual(["loose-active"]);
+    expect(view.scheduled).toEqual([
+      expect.objectContaining({
+        date: "2026-07-05",
+        items: [expect.objectContaining({ title: "loose-sched" })],
+      }),
+    ]);
+    expect(view.someday.map((i) => i.title)).toEqual(["loose-incub"]);
+    expect(view.repeating.map((i) => i.title)).toEqual(["loose-tpl"]);
+
+    // The heading group carries its OWN sub-buckets.
+    expect(view.headings).toHaveLength(1);
+    const g = view.headings[0]!;
+    expect(g.heading.title).toBe("Phase 1");
+    expect(g.items.map((i) => i.title)).toEqual(["headed-active"]);
+    expect(g.scheduled).toEqual([
+      expect.objectContaining({
+        date: "2026-07-06",
+        items: [expect.objectContaining({ title: "headed-sched" })],
+      }),
+    ]);
+    expect(g.someday.map((i) => i.title)).toEqual(["headed-incub"]);
+    expect(g.repeating.map((i) => i.title)).toEqual(["headed-tpl"]);
   });
 });
 
@@ -1918,8 +1968,8 @@ describe("areaView", () => {
     expect(view.area.title).toBe("Home");
     expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
     expect(view.projects.map((i) => i.title)).toEqual(["proj-a", "proj-b"]);
-    expect(view.later.scheduled[0]?.items.map((i) => i.title)).toEqual(["sched"]);
-    expect(view.later.someday.map((i) => i.title)).toEqual(["incub"]);
+    expect(view.scheduled[0]?.items.map((i) => i.title)).toEqual(["sched"]);
+    expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
     expect(view.logged.map((i) => i.title)).toEqual(["done"]);
   });
 

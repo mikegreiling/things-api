@@ -99,7 +99,7 @@ describe("todo move scheduling-intent hint", () => {
     expect(env["ok"]).toBe(false);
     const error = env["error"] as Record<string, unknown>;
     expect(error["code"]).toBe("usage");
-    const details = error["details"] as { suggestions?: string[] };
+    const details = error["detail"] as { suggestions?: string[] };
     expect(details.suggestions).toEqual(["things todo update todo-1 --when today"]);
     expect(process.exitCode).toBe(2);
   });
@@ -107,7 +107,7 @@ describe("todo move scheduling-intent hint", () => {
   it("leading global flags are transparent (`--json todo move …`)", () => {
     const hint = dispatch(["--json", "todo", "move", "todo-1", "--someday"]);
     expect(hint).not.toBeNull();
-    const details = (jsonEnvelope()["error"] as { details?: { suggestions?: string[] } }).details;
+    const details = (jsonEnvelope()["error"] as { detail?: { suggestions?: string[] } }).detail;
     expect(details?.suggestions).toEqual(["things todo update todo-1 --when someday"]);
   });
 });

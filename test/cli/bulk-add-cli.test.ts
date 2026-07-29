@@ -114,7 +114,7 @@ describe("variadic todo add", () => {
   it("--json streams a per-line result for each item plus a summary carrying the single undoToken", async () => {
     await run(["todo", "add", "One", "Two", "--json"]);
     const parsed = lines().map((l) => JSON.parse(l));
-    expect(parsed.slice(0, 2).map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
+    expect(parsed.slice(0, 2).map((r) => r.outcome)).toEqual(["ok", "ok"]);
     expect(parsed.slice(0, 2).map((r) => r.index)).toEqual([0, 1]);
     const summary = parsed[2].summary;
     expect(summary.total).toBe(2);
@@ -125,7 +125,7 @@ describe("variadic todo add", () => {
   it("the summary undoToken removes the WHOLE skeleton in one undo", async () => {
     await run(["todo", "add", "keep-a", "keep-b", "--json"]);
     const parsed = lines().map((l) => JSON.parse(l));
-    const uuids = parsed.slice(0, 2).map((r) => r.outcome.uuid as string);
+    const uuids = parsed.slice(0, 2).map((r) => r.uuid as string);
     const token = parsed[2].summary.undoToken as string;
     expect(uuids.every((u) => rowByUuid(u)?.["trashed"] === 0)).toBe(true);
     stdout = [];

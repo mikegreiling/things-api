@@ -127,9 +127,9 @@ Every refusal is specific — code family, exact copy naming the offender, candi
 - **Phase B:** `project set-layout`; retiring the old `reorder --scope` spellings once Phase A parity is proven; view-order polish. Candidate, unratified: a `sort --by <key>` convenience (deadline/title/created) computing the permutation server-side — parked from the old ergonomics item, decide during Phase B.
 - **Externally gated:** day-bucket reorder (DAYORD probe); cross-project heading move (HEADXPROJ probe, low priority).
 
-## 9. Read-side: the heading sub-bucket fidelity fix (1.0 shape work)
+## 9. Read-side: the heading sub-bucket fidelity fix (1.0 shape work) — ✅ SHIPPED 2026-07-28
 
-`projectView` currently pools someday/scheduled/repeating children into project-level buckets regardless of heading FK; the GUI nests them under their headings (§1). As part of the 1.0 contract shape work (the ratified shape break, see up-next §0½ item 3), heading groups gain their own sub-buckets — `{heading, items, scheduled, someday, repeating}` — and the project-level buckets retain only UNHEADED members. This supersedes the earlier flatten-`later` sketch *for heading children* (the flatten rule itself stands: every named field an array, date-groups the only intermediate nesting — now applied at both the project level and inside each heading group). The v2 response-explorer samples update when this lands.
+`projectView` previously pooled someday/scheduled/repeating children into project-level buckets regardless of heading FK; the GUI nests them under their headings (§1). As part of the 1.0 contract shape work (the ratified shape break, see up-next §0½ item 3), heading groups now gain their own sub-buckets — `{heading, items, scheduled, someday, repeating}` — and the project-level buckets retain only UNHEADED members. This supersedes the earlier flatten-`later` sketch *for heading children* (the flatten rule itself stands: every named field an array, date-groups the only intermediate nesting — applied at both the project level and inside each heading group). Landed on branch `mg/contract-1-0-shapes` with dedicated read-layer tests (`test/unit/views.test.ts`, headed scheduled/someday/repeating fixtures); representative payloads regenerated for review.
 
 ## 10. Naming: there is no v2
 

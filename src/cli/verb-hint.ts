@@ -189,7 +189,7 @@ export function runVerbHint(program: Command, args: string[]): void {
         : `\`things ${p.verb} …\` is not a command — writes are namespaced (see \`things help writes\`)`;
     process.stdout.write(
       `${JSON.stringify(
-        errorEnvelope({ code: "usage", message, details: { suggestions } }, meta),
+        errorEnvelope({ code: "usage", message, detail: { suggestions } }, meta),
       )}\n`,
     );
   } else {

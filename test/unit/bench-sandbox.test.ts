@@ -78,7 +78,8 @@ describe("bench sandbox serialization", () => {
         encoding: "utf8",
       },
     );
-    const uuid = (JSON.parse(preflight) as { data: { uuid: string }[] }).data[0]?.uuid;
+    const uuid = (JSON.parse(preflight) as { data: { items: { uuid: string }[] } }).data.items[0]
+      ?.uuid;
     expect(uuid).toBeDefined();
 
     sandbox = createSandbox({ fenceEnv: env, binPath: BIN });
