@@ -1,0 +1,383 @@
+{
+  "$id": "https://github.com/mikegreiling/things-api/schema/envelope.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/WireEnvelope",
+  "definitions": {
+    "WireEnvelope": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WireOkEnvelope"
+        },
+        {
+          "$ref": "#/definitions/ErrorEnvelope"
+        }
+      ],
+      "description": "The machine-readable ROOT the envelope JSON Schema is generated from (`schema/envelope.schema.json`, produced by `npm run schema:gen`): the discriminated union — on the boolean `ok` — of a successful envelope and an  {@link  ErrorEnvelope } , exactly as written to stdout by the CLI `--json` surface and inherited by the MCP server. This is the same grammar docs/contract.md describes in prose; the schema is its generated, testable rendering. NB: the streaming commands (`batch`, `undo`) emit JSON Lines, a documented exception NOT covered by this envelope type."
+    },
+    "WireOkEnvelope": {
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true
+        },
+        "kind": {
+          "$ref": "#/definitions/WireOkKind",
+          "description": "The payload class — see  {@link  WireOkKind } ."
+        },
+        "data": {
+          "$ref": "#/definitions/WireData",
+          "description": "Command-specific payload; open at the schema layer (see  {@link  WireData } )."
+        },
+        "meta": {
+          "$ref": "#/definitions/EnvelopeMeta"
+        }
+      },
+      "required": ["apiVersion", "ok", "kind", "data", "meta"],
+      "additionalProperties": false,
+      "description": "A successful `--json` envelope, exactly as emitted on stdout."
+    },
+    "WireOkKind": {
+      "type": "string",
+      "enum": [
+        "inbox",
+        "upcoming",
+        "logbook",
+        "trash",
+        "changes",
+        "search",
+        "projects",
+        "areas",
+        "tags",
+        "today",
+        "anytime",
+        "someday",
+        "area-view",
+        "project-view",
+        "detail",
+        "mutation-result",
+        "move-result",
+        "mutation-plan",
+        "move-plan",
+        "project-reopen",
+        "doctor",
+        "capabilities",
+        "config",
+        "legend",
+        "setup-shortcuts",
+        "install-skill"
+      ],
+      "description": "The envelope `kind` discriminators a SUCCESSFUL response carries today (the error envelope's `kind` is always the literal `\"error\"`). This union is the schema's record of the known payload classes — the flat-list reads (`data.items`), the sectioned reads (`data.sections`), the composite cards (`data.view`), the single-entity detail (`data.item`), the mutations/plans (flat `data` fields), and the diagnostic payloads.\n\nPer the compatibility covenant (docs/contract.md) a consumer MUST tolerate an UNKNOWN `kind`: adding a new kind is additive / non-breaking. So this union is \"the kinds known to THIS build\", not a closed set a generic reader may assume complete — the JSON Schema pins it as an enum so drift is caught, but a forward-compatible consumer routes on the wrapper it finds in `data`."
+    },
+    "WireData": {
+      "type": "object",
+      "additionalProperties": {},
+      "description": "The `data` payload of a successful envelope. Its CONCRETE shape is command-specific — one of the R1/R2 read wrappers (`item` | `view` | `items` | `sections`) or a mutation's flat result fields — and, crucially, entity payloads are omit-empty pruned on the wire (docs/design/contracts.md).\n\nCOVERAGE BOUNDARY: this schema does NOT model the per-kind payload shapes. It pins the ENVELOPE layer exactly (`apiVersion`, `ok`, `kind`, `meta`, and the whole `error` object) and treats `data` as an open JSON object. Fully typing every kind's payload against the omit-empty wire shape is a separate, larger effort; until then `src/contracts.ts` and `docs/contract.md` remain the authoritative description of what each `kind`'s `data` contains."
+    },
+    "EnvelopeMeta": {
+      "type": "object",
+      "properties": {
+        "dbVersion": {
+          "type": ["number", "null"],
+          "description": "Things database schema version (`Meta.databaseVersion`), null when no DB was opened."
+        },
+        "fingerprint": {
+          "type": "string",
+          "enum": ["ok", "drift", "user-accepted", "unknown"],
+          "description": "Schema fingerprint status at the time of the command."
+        },
+        "elapsedMs": {
+          "type": "number",
+          "description": "Wall-clock duration of the command in milliseconds."
+        },
+        "truncation": {
+          "$ref": "#/definitions/Truncation",
+          "description": "The read's completeness metadata (the single truncation shape). Present on any read that could drop rows — flat views (row `limit`), the Today split (`sections`), and grouped views (anytime/someday/`area show`, `blocks`). `meta.truncation.truncated` is the universal \"did I see everything\" check."
+        },
+        "resolvedCommand": {
+          "type": "string",
+          "description": "The canonical `things …` command a sugar invocation normalized to (bare noun, keyword-in-show, uuid/share-link routing). Present only on routed reads reached via a sugar form; absent for canonical invocations."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-blocking advisories about this read (ADDITIVE). Present only when there is something to flag — currently a one-line note when the Things database schema no longer matches the version this build was validated against (reads stay best-effort; run `things doctor`). Absent means none."
+        },
+        "clock": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "string"
+            },
+            "today": {
+              "type": "string"
+            }
+          },
+          "required": ["timezone", "today"],
+          "additionalProperties": false,
+          "description": "The effective clock this response's date boundaries were computed for (ADDITIVE honesty field). Present ONLY when a consumer zone (`THINGS_TZ` / the MCP `tz` argument) or a pinned `THINGS_NOW` is in effect; ABSENT on the host clock, so the wire shape is unchanged for ordinary consumers."
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "area": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": ["uuid", "title"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["area"],
+          "additionalProperties": false,
+          "description": "The active content filter this response was scoped to (ADDITIVE). Present ONLY when a scope was applied — currently `area` (the `--area` view filter), carrying the resolved area's uuid + title; ABSENT otherwise, so the wire shape is unchanged for unscoped reads (the `meta.clock` precedent)."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["area", "project"]
+            },
+            "uuid": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "enum": ["flag", "env", "config"]
+            }
+          },
+          "required": ["kind", "uuid", "title", "source"],
+          "additionalProperties": false,
+          "description": "The active container scope this response was jailed to (ADDITIVE). Present ONLY when a scope is in force (the MCP `--scope` flag / `THINGS_API_SCOPE` / a stored `scope`), naming the container + where the scope came from; ABSENT otherwise, so the wire shape is unchanged for unscoped reads. Lets an agent know its own jail — which is not an oracle for what lies outside it (the `meta.clock` / `meta.filter` additive precedent)."
+        }
+      },
+      "required": ["dbVersion", "fingerprint", "elapsedMs"],
+      "additionalProperties": false
+    },
+    "Truncation": {
+      "type": "object",
+      "properties": {
+        "shown": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "limit": {
+          "type": ["number", "null"]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SectionCount"
+          },
+          "description": "Per-section shown/total breakdown for a split flat view (Today); absent otherwise."
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GroupBlock"
+          },
+          "description": "Per-block nesting for a grouped view (anytime/someday/area card); absent otherwise."
+        }
+      },
+      "required": ["shown", "total", "limit", "truncated"],
+      "additionalProperties": false,
+      "description": "The single truncation-metadata shape for every read (the `meta.truncation` field). `shown` items were returned of `total` that matched after all filters; `limit` is the effective cap (null when the caller asked for all rows, and always null on a grouped view whose caps are per-block); `truncated` is the UNIVERSAL completeness check — true exactly when anything was dropped (`shown < total`, or any block hid rows). The dropped remainder is `total - shown`.\n\nTwo optional per-shape breakdowns hang off it: `sections` for a split flat view (the Today split — per render-section shown/total), and `blocks` for a grouped view (anytime/someday/`area show` — the identity-carrying per-block nesting). Exactly one of them is present on the shapes that have it; both are absent on a plain flat view."
+    },
+    "SectionCount": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": ["today", "evening"]
+        },
+        "shown": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": ["key", "shown", "total"],
+      "additionalProperties": false,
+      "description": "Per-section counts for a SPLIT flat view — currently only `today`'s Today / This-Evening split. One entry per section IN RENDER ORDER, each reporting the rows `shown` of the `total` that matched after all filters. Lets a renderer keep a downstream section (This Evening) honest under a single global cap without a pre-truncation copy of the view."
+    },
+    "GroupBlock": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["loose", "area", "project", "projects"]
+        },
+        "ref": {
+          "type": ["string", "null"],
+          "description": "Container reference (area or project uuid); null for the loose block."
+        },
+        "title": {
+          "type": ["string", "null"],
+          "description": "Container title; null for the loose block."
+        },
+        "shown": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "limit": {
+          "type": ["number", "null"],
+          "description": "The cap that applied to THIS block (null = uncapped)."
+        },
+        "totalProjects": {
+          "type": "number",
+          "description": "Type split for blocks that mix project rows and to-dos (someday's loose/area blocks; projects always list first, so the hidden split is `totalProjects - min(shown, totalProjects)` projects, remainder to-dos). Absent on single-type blocks."
+        },
+        "totalTodos": {
+          "type": "number"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GroupBlock"
+          },
+          "description": "Nested project blocks (anytime item-lists / someday active-project groups). Absent when none."
+        }
+      },
+      "required": ["kind", "ref", "title", "shown", "total", "limit"],
+      "additionalProperties": false,
+      "description": "One identity-carrying block of a grouped catalogue (anytime/someday) or a sectioned detail view (`area show`). Every header/section is always rendered; only the innermost item lists are capped. Emitted for every block that has rows to cap (`total > 0`) — including a block whose rows were ALL dropped (`shown: 0`), so no truncated header is untraceable. A block with no cappable rows of its own (`total: 0`) is omitted UNLESS it wraps truncated `children` — an area whose only capped content is its project item-lists still appears as their container.\n\nBlocks are NESTED: an area/loose block carries its project blocks in `children` — in anytime the project item-lists inside the area, in someday the active-project child groups found in that section. The `area show` `projects`/`area` blocks are siblings of one area and stay top-level."
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "ok": {
+          "type": "boolean",
+          "const": false
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "$ref": "#/definitions/ErrorCode",
+              "description": "Stable machine-readable code from the  {@link  ErrorCode }  registry (mirrors the exit-code family, e.g. \"verify-failed\", \"blocked:H-UNKNOWN-TAG\")."
+            },
+            "message": {
+              "type": "string"
+            },
+            "likelyCause": {
+              "type": "string",
+              "description": "Advisory attribution when failure signals point somewhere: e.g. \"permission-denied\", \"permission-pending\", \"feature-disabled\", \"app-updated\", \"schema-drift\", \"app-behavior-change\"."
+            },
+            "remediation": {
+              "type": "string",
+              "description": "Actionable next step for the caller, when one exists."
+            },
+            "detail": {
+              "type": "object",
+              "properties": {
+                "expected": {},
+                "observed": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {}
+                },
+                "suggestions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "considered": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "vector": {
+                        "type": "string"
+                      },
+                      "why": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["vector", "why"],
+                    "additionalProperties": false
+                  }
+                },
+                "placed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "remaining": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cause": {},
+                "failed": {},
+                "completed": {
+                  "type": "array",
+                  "items": {}
+                }
+              },
+              "additionalProperties": false,
+              "description": "The SINGLE structured, machine-readable failure-context object (there is no separate `details` field — the two were reconciled into this one). Each key is present only for the failures that produce it:  - `expected` / `observed` — a verify-failed mutation's expected delta and    the observed post-write state.  - `candidates` — did-you-mean title matches for an unresolved    show/bare-noun subject (standard item shapes, capped), so an agent can    self-correct without another round-trip.  - `suggestions` — for a bare mutation verb (`things update <ref>`), the    concrete namespaced command(s) to run instead.  - `considered` — the vectors weighed (and why each was rejected) for an    unsupported operation.  - `placed` / `remaining` / `cause` — a bounce reorder that aborted    part-way: the items already placed, those not yet placed, and the cause.  - `failed` / `completed` — a multi-leg move that failed mid-way: the leg    that failed and the legs already completed before it."
+            }
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        },
+        "meta": {
+          "$ref": "#/definitions/EnvelopeMeta"
+        }
+      },
+      "required": ["apiVersion", "ok", "kind", "error", "meta"],
+      "additionalProperties": false
+    },
+    "ErrorCode": {
+      "type": "string",
+      "description": "The registry of stable machine-readable error codes an error envelope can carry — the compiler IS the registry. Every `error.code` value the surfaces emit is a member of this union, and the human-readable meaning of each is frozen at v1.0 (new codes may still be ADDED after v1.0 — that is non-breaking; a documented code's MEANING never changes). The canonical per-code table (meaning + the `detail` keys each may carry) lives in `docs/contract.md` (The error-code registry).\n\nTwo members are template-literal families rather than fixed strings, because their suffix is minted in the write layer and the core deliberately never depends on it (see  {@link  blockedCode }  /  {@link  verifyFailedCode } ):  - `verify-failed:${reason}` — a single mutation executed but read-after-write    verification failed; the suffix is the reason (`timeout` | `mismatch` |    `silent-noop`). The bare `verify-failed` (no suffix) is the multi-leg    move/reorder failure.  - `blocked:${suffix}` — a mutation refused before touching the app; the    suffix is the specific hazard id (`H-…`) when one is named, else the block    reason (`drift` | `disruption-tier` | `lock` | `environment` | `clock` |    `scope`). The bare `blocked` is a policy refusal from the move planner.\n\n`blocked:drift` maps to exit code 5 (DriftBlocked); every other `blocked:*` maps to exit code 4 (Blocked)."
+    }
+  },
+  "title": "things-api envelope",
+  "description": "JSON Schema for the things-api --json response envelope (the discriminated union of a success envelope and an error envelope), generated from the WireEnvelope type in src/contracts.ts. See docs/contract.md (The machine-readable schema). The envelope layer is modeled exactly; the command-specific `data` payload is an open object (coverage boundary)."
+}

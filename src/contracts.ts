@@ -274,6 +274,92 @@ export interface ErrorEnvelope {
 
 export type Envelope<T> = OkEnvelope<T> | ErrorEnvelope;
 
+/**
+ * The envelope `kind` discriminators a SUCCESSFUL response carries today (the
+ * error envelope's `kind` is always the literal `"error"`). This union is the
+ * schema's record of the known payload classes — the flat-list reads
+ * (`data.items`), the sectioned reads (`data.sections`), the composite cards
+ * (`data.view`), the single-entity detail (`data.item`), the mutations/plans
+ * (flat `data` fields), and the diagnostic payloads.
+ *
+ * Per the compatibility covenant (docs/contract.md) a consumer MUST tolerate an
+ * UNKNOWN `kind`: adding a new kind is additive / non-breaking. So this union is
+ * "the kinds known to THIS build", not a closed set a generic reader may assume
+ * complete — the JSON Schema pins it as an enum so drift is caught, but a
+ * forward-compatible consumer routes on the wrapper it finds in `data`.
+ */
+export type WireOkKind =
+  // Flat-list reads — data.items
+  | "inbox"
+  | "upcoming"
+  | "logbook"
+  | "trash"
+  | "changes"
+  | "search"
+  | "projects"
+  | "areas"
+  | "tags"
+  // Sectioned reads — data.sections
+  | "today"
+  | "anytime"
+  | "someday"
+  // Composite cards — data.view
+  | "area-view"
+  | "project-view"
+  // Single entity — data.item
+  | "detail"
+  // Mutations & dry-run plans — flat data fields (no wrapper)
+  | "mutation-result"
+  | "move-result"
+  | "mutation-plan"
+  | "move-plan"
+  | "project-reopen"
+  // Diagnostic / capability payloads — own shapes
+  | "doctor"
+  | "capabilities"
+  | "config"
+  | "legend"
+  | "setup-shortcuts"
+  | "install-skill";
+
+/**
+ * The `data` payload of a successful envelope. Its CONCRETE shape is
+ * command-specific — one of the R1/R2 read wrappers (`item` | `view` | `items` |
+ * `sections`) or a mutation's flat result fields — and, crucially, entity
+ * payloads are omit-empty pruned on the wire (docs/design/contracts.md).
+ *
+ * COVERAGE BOUNDARY: this schema does NOT model the per-kind payload shapes. It
+ * pins the ENVELOPE layer exactly (`apiVersion`, `ok`, `kind`, `meta`, and the
+ * whole `error` object) and treats `data` as an open JSON object. Fully typing
+ * every kind's payload against the omit-empty wire shape is a separate, larger
+ * effort; until then `src/contracts.ts` and `docs/contract.md` remain the
+ * authoritative description of what each `kind`'s `data` contains.
+ */
+export type WireData = Record<string, unknown>;
+
+/** A successful `--json` envelope, exactly as emitted on stdout. */
+export interface WireOkEnvelope {
+  apiVersion: typeof API_VERSION;
+  ok: true;
+  /** The payload class — see {@link WireOkKind}. */
+  kind: WireOkKind;
+  /** Command-specific payload; open at the schema layer (see {@link WireData}). */
+  data: WireData;
+  meta: EnvelopeMeta;
+}
+
+/**
+ * The machine-readable ROOT the envelope JSON Schema is generated from
+ * (`schema/envelope.schema.json`, produced by `npm run schema:gen`): the
+ * discriminated union — on the boolean `ok` — of a successful envelope and an
+ * {@link ErrorEnvelope}, exactly as written to stdout by the CLI `--json`
+ * surface and inherited by the MCP server. This is the same grammar
+ * docs/contract.md describes in prose; the schema is its generated, testable
+ * rendering. NB: the streaming commands (`batch`, `undo`) emit JSON Lines, a
+ * documented exception NOT covered by this envelope type.
+ */
+export type WireEnvelope = WireOkEnvelope | ErrorEnvelope;
+
 export function okEnvelope<T>(kind: string, data: T, meta: EnvelopeMeta): OkEnvelope<T> {
   return { apiVersion: API_VERSION, ok: true, kind, data, meta };
 }
