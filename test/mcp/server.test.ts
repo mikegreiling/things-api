@@ -16,6 +16,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import { createThingsMcpServer } from "../../src/mcp/server.ts";
 import { OPERATION_KINDS } from "../../src/write/operations.ts";
+import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
 import type { VectorId, VectorMatrix, WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
@@ -2475,5 +2476,67 @@ describe("things MCP server", () => {
       expect(report.db.databaseVersion).toBe(26);
       expect(typeof report.fingerprint.status).toBe("string");
     });
+  });
+});
+
+describe("MCP single-op idempotency (op_id)", () => {
+  const simEnvBackup: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    // The simulator vector really applies the write (so it verifies ok and a
+    // record is recorded) — but only behind its env fence + a bench-marked
+    // fixture. Replace the shared fixture with one the fence accepts.
+    fixture.close();
+    fixture = buildFixtureDb({ benchMarker: true });
+    for (const key of [
+      "THINGS_SIM_WRITES",
+      "THINGS_DB",
+      "THINGS_API_STATE_DIR",
+      "THINGS_API_CONFIG_DIR",
+    ]) {
+      simEnvBackup[key] = process.env[key];
+    }
+    process.env["THINGS_SIM_WRITES"] = "1";
+    process.env["THINGS_DB"] = fixture.path;
+    process.env["THINGS_API_STATE_DIR"] = stateDir;
+    process.env["THINGS_API_CONFIG_DIR"] = join(stateDir, "config");
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(simEnvBackup)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("a resubmitted op_id replays the original result with alreadyApplied (via the simulator)", async () => {
+    await connect([createSimulatorVector(fixture.path, { now: () => NOW })]);
+    const first = textOf(
+      await client.callTool({
+        name: "add_todo",
+        arguments: { title: "MCP-idem", op_id: "mcp-key" },
+      }),
+    ) as { uuid: string; undoToken?: string; alreadyApplied?: boolean };
+    expect(first.alreadyApplied).toBeUndefined();
+
+    const second = textOf(
+      await client.callTool({
+        name: "add_todo",
+        arguments: { title: "MCP-idem", op_id: "mcp-key" },
+      }),
+    ) as { uuid: string; undoToken?: string; alreadyApplied?: boolean };
+    expect(second.alreadyApplied).toBe(true);
+    expect(second.uuid).toBe(first.uuid);
+    expect(second.undoToken).toBe(first.undoToken);
+  });
+
+  it("a malformed op_id is a usage error", async () => {
+    await connect([fakeVector(null).vector]);
+    const bad = await client.callTool({
+      name: "add_todo",
+      arguments: { title: "x", op_id: "not a valid key!" },
+    });
+    expect(bad.isError).toBe(true);
+    expect((textOf(bad) as { code: string }).code).toBe("usage");
   });
 });

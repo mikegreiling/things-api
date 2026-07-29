@@ -28,6 +28,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { OPERATION_KINDS, type OperationKind, type OperationParamsMap } from "./operations.ts";
+import { findAppliedOpId, OP_ID_RE } from "./opid.ts";
 import { fingerprintLabel, runMutation, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 import { readAuditRecords } from "./undo.ts";
@@ -138,7 +139,6 @@ const UUID_MINTING_OPS = new Set<string>([
 ]);
 
 const TEMP_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const OP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * Param keys whose values are REFERENCES (uuid / name / container) — the only
@@ -158,10 +158,6 @@ const REF_KEYS = new Set([
   "heading",
   "headings",
 ]);
-
-/** opId idempotency lookback: at most the last 1000 records, and only the last 7 days. */
-const OPID_LOOKBACK_RECORDS = 1000;
-const OPID_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The discovery uuids a bound temp id can resolve (primary + identity-replacement kin). */
 interface Binding {
@@ -341,24 +337,6 @@ function usesRef(params: Record<string, unknown>): boolean {
       return true;
   }
   return false;
-}
-
-/**
- * The recent-history lookback for an opId: the most recent `ok` record carrying
- * that id, within the last {@link OPID_LOOKBACK_RECORDS} records AND the last
- * {@link OPID_LOOKBACK_MS} (whichever is more restrictive). Undo/intent records
- * are naturally excluded (only `result === "ok"` matches).
- */
-function findAppliedOpId(records: AuditRecord[], opId: string, now: Date): AuditRecord | undefined {
-  const cutoff = now.getTime() - OPID_LOOKBACK_MS;
-  const window = records.slice(-OPID_LOOKBACK_RECORDS);
-  let match: AuditRecord | undefined;
-  for (const r of window) {
-    if (r.opId !== opId || r.result !== "ok") continue;
-    if (new Date(r.ts).getTime() < cutoff) continue;
-    match = r; // records are oldest-first, so the last match is the newest
-  }
-  return match;
 }
 
 /** Bind a leg's discovered uuids to its temp id, once it verifies ok. */

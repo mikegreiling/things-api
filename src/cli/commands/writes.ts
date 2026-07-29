@@ -23,6 +23,7 @@ import {
   mutationWireData,
   okEnvelope,
   openThings,
+  OP_ID_RE,
   outcomeFailed,
   ReferenceResolutionError,
   saveConfigKey,
@@ -66,6 +67,7 @@ interface WriteFlagOpts {
   verifyTimeout?: string;
   actor?: string;
   dangerouslyDriveGui?: boolean;
+  opId?: string;
 }
 
 function addWriteFlags(cmd: Command): Command {
@@ -80,7 +82,37 @@ function addWriteFlags(cmd: Command): Command {
     .option("--allow-disruptive", "permit changes that briefly steal window focus")
     .option("--allow-very-disruptive", "permit changes that visibly drive the Things UI")
     .option("--verify-timeout <ms>", "how long to wait for the change to take effect")
-    .option("--actor <name>", "author name recorded for this change (default: from config)");
+    .option("--actor <name>", "author name recorded for this change (default: from config)")
+    .option(
+      "--op-id <key>",
+      "idempotency key: a resubmission with the same key is recognized as already applied " +
+        "and not re-run (matches [A-Za-z0-9_-], 1-64 chars)",
+    );
+}
+
+/** Validate an `--op-id`; on a malformed value emit the usage error and return false. */
+function opIdOk(opts: WriteFlagOpts): boolean {
+  if (opts.opId === undefined) return true;
+  if (OP_ID_RE.test(opts.opId)) return true;
+  usageError(opts, "--op-id must match [A-Za-z0-9_-] and be 1-64 characters");
+  return false;
+}
+
+/**
+ * Refuse `--op-id` on a multi-leg COMPOUND command. Single-op idempotency (phase
+ * 1) replays exactly ONE recorded ok result; a compound records several (or a
+ * summary) and its idempotency is the batch-shaped per-line `op_id`. Refusing is
+ * honest — dropping the flag silently would leave a resubmission un-deduped.
+ * Returns true when refused (the caller returns).
+ */
+function opIdCompoundRefused(opts: WriteFlagOpts, what: string): boolean {
+  if (opts.opId === undefined) return false;
+  usageError(
+    opts,
+    `--op-id is not available on ${what} (a multi-leg compound in phase 1) — express it as ` +
+      "`things batch` with a per-line op_id for idempotent resubmission",
+  );
+  return true;
 }
 
 /** A commander flag value when present-with-value (bare presence yields `true`). */
@@ -134,6 +166,7 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
     ...(opts.verifyTimeout !== undefined && { verifyTimeoutMs: Number(opts.verifyTimeout) }),
     ...(opts.actor !== undefined && { actor: opts.actor }),
     ...(opts.dangerouslyDriveGui === true && { dangerouslyDriveGui: true }),
+    ...(opts.opId !== undefined && { opId: opts.opId }),
     ...extra,
   };
 }
@@ -243,6 +276,7 @@ async function runWrite(
   fn: (client: ThingsClient) => Promise<ReorderResult>,
   emitFn: (result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta) => void = emitResult,
 ): Promise<void> {
+  if (!opIdOk(opts)) return;
   const started = Date.now();
   let client: ThingsClient | null = null;
   const meta = (client_: ThingsClient | null): EnvelopeMeta => {
@@ -342,9 +376,11 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
         );
       } else {
         const uuid = result.uuid === null ? "" : ` uuid=${result.uuid}`;
-        process.stdout.write(
-          `ok ${result.op}${uuid} (vector=${result.vector}, tier=${result.tier}, verified)\n`,
-        );
+        const status =
+          "alreadyApplied" in result && result.alreadyApplied === true
+            ? "already applied — matched op-id in the change history, not re-run"
+            : `vector=${result.vector}, tier=${result.tier}, verified`;
+        process.stdout.write(`ok ${result.op}${uuid} (${status})\n`);
       }
       process.exitCode = ExitCode.Ok;
       return;
@@ -455,6 +491,18 @@ async function runMoveCmd(
   opts: WriteFlagOpts,
   fn: (client: ThingsClient) => Promise<MoveResult>,
 ): Promise<void> {
+  // A variadic move/reorder is a multi-leg COMPOUND (the batch-shaped case), not
+  // a single recorded mutation — single-op idempotency (--op-id) does not apply
+  // in phase 1. Refuse it loudly rather than silently drop it; the compound
+  // analogue is `things batch` with a per-line op_id.
+  if (opts.opId !== undefined) {
+    usageError(
+      opts,
+      "--op-id is not available on a variadic move/reorder (a multi-leg compound) — express it " +
+        "as `things batch` with a per-line op_id for idempotent resubmission",
+    );
+    return;
+  }
   const started = Date.now();
   let client: ThingsClient | null = null;
   const meta = (): EnvelopeMeta => {
@@ -832,6 +880,19 @@ export function registerWriteCommands(program: Command): void {
         ? { acknowledgeProjectReopen: opts["acknowledgeProjectReopen"] as boolean }
         : {};
 
+    // A multi-title add compiles onto the batch machinery (below), where
+    // idempotency is a per-LINE op_id, not one key for the whole skeleton —
+    // refuse --op-id there rather than drop it. A single-title add is a single
+    // mutation and takes --op-id normally (validated inside runWrite).
+    if (finalTitles.length > 1 && opts.opId !== undefined) {
+      usageError(
+        opts,
+        "--op-id applies to a single-title add — for a multi-title add use `things batch` with a " +
+          "per-line op_id",
+      );
+      return;
+    }
+
     // Single title (positional or a one-line stdin) keeps today's single
     // mutation-result envelope exactly — unless --id-only, which prints just
     // the new uuid. Multiple titles compile onto the batch machinery.
@@ -1160,6 +1221,7 @@ export function registerWriteCommands(program: Command): void {
                 : action === "rename"
                   ? { action: "rename" as const, ...target, title: opts["to"] as string }
                   : { action: "move" as const, ...target, to: Number(opts["toPosition"]) };
+      if (opIdCompoundRefused(opts, "a granular checklist edit")) return;
       await runWrite(opts, (c) => c.write.editChecklist(uuid, edit, writeOptionsFrom(opts)));
       return;
     }
@@ -1209,6 +1271,7 @@ export function registerWriteCommands(program: Command): void {
           "re-schedule through Today. Reversible with `things undo`.",
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    if (opIdCompoundRefused(opts, "clear-reminder")) return;
     await runWrite(opts, (c) => c.write.clearReminder(uuid, writeOptionsFrom(opts)));
   });
 
@@ -1367,6 +1430,7 @@ export function registerWriteCommands(program: Command): void {
         );
         return;
       }
+      if (opIdCompoundRefused(opts, "add-heading")) return;
       await runWrite(opts, (c) => {
         const proj = c.resolve.project(projectRef);
         const placement = headingPlacement(c, proj.uuid, opts);
@@ -1411,6 +1475,7 @@ export function registerWriteCommands(program: Command): void {
   ).action(
     async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
       const children = opts["children"] as "complete" | "cancel" | "reparent" | undefined;
+      if (opIdCompoundRefused(opts, "archive-heading")) return;
       await runWrite(opts, async (c) => {
         const proj = c.resolve.project(projectRef);
         const h = c.resolve.heading(proj.uuid, sel);
@@ -1439,6 +1504,7 @@ export function registerWriteCommands(program: Command): void {
       .option("--restore-children", "reopen cascade-resolved children too"),
   ).action(
     async (projectRef: string, sel: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      if (opIdCompoundRefused(opts, "unarchive-heading")) return;
       await runWrite(opts, async (c) => {
         const proj = c.resolve.project(projectRef);
         const h = c.resolve.heading(proj.uuid, sel);
@@ -1632,6 +1698,7 @@ export function registerWriteCommands(program: Command): void {
     ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const frequency = opts["frequency"] as RepeatFrequency;
+    if (opIdCompoundRefused(opts, "project make-repeating")) return;
     await runWrite(opts, (c) =>
       c.write.makeRepeatingProject(
         uuid,
@@ -1665,6 +1732,7 @@ export function registerWriteCommands(program: Command): void {
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
+    if (opIdCompoundRefused(opts, "project add-repeating")) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingProject(
         {
@@ -1871,6 +1939,7 @@ export function registerWriteCommands(program: Command): void {
       )
       .option("--restore-children", "also reopen the children resolved with the project"),
   ).action(async (uuid: string, opts: WriteFlagOpts & { restoreChildren?: boolean }) => {
+    if (opIdCompoundRefused(opts, "project reopen")) return;
     const started = Date.now();
     let client: ThingsClient | null = null;
     try {
@@ -2438,6 +2507,7 @@ export function registerWriteCommands(program: Command): void {
     const container = containerRef(
       (opts["project"] as string | undefined) ?? (opts["area"] as string | undefined),
     );
+    if (opIdCompoundRefused(opts, "the low-level reorder")) return;
     await runWrite(opts, (c) =>
       c.write.reorder(
         {

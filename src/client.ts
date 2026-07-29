@@ -115,11 +115,13 @@ import type {
 } from "./write/operations.ts";
 import {
   readAuthToken,
+  replayResultFromRecord,
   runMutation,
   type MutationResult,
   type WriteDeps,
   type WriteOptions,
 } from "./write/pipeline.ts";
+import { findAppliedOpId } from "./write/opid.ts";
 import {
   runBatch,
   type BatchItemResult,
@@ -150,7 +152,7 @@ import {
   type ReorderRequest,
   type TodoMoveRequest,
 } from "./write/move.ts";
-import { runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
+import { readAuditRecords, runUndo, type UndoItemResult, type UndoOptions } from "./write/undo.ts";
 import {
   runProjectReopen,
   type ProjectReopenOptions,
@@ -798,13 +800,34 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     params: OperationParamsMap[K],
     writeOptions?: WriteOptions,
   ): Promise<MutationResult> => {
+    // Single-op idempotency (--op-id): before doing anything, check whether a
+    // prior submission carrying this opId already applied. On a match, SKIP
+    // execution entirely and replay the ORIGINAL result's identity with
+    // `alreadyApplied: true` (never re-running the create/tag-prep). Scoped to
+    // real runs — a dry-run mints/records nothing, so it never dedups. Matching
+    // is against VERIFIED-OK records only (phase 1). Bypassed by the batch and
+    // the compound move/reorder orchestrators, which own their own dispatch.
+    if (
+      writeOptions?.opId !== undefined &&
+      writeOptions.dryRun !== true &&
+      writeDeps.auditDirPath !== undefined
+    ) {
+      const applied = findAppliedOpId(
+        readAuditRecords(writeDeps.auditDirPath),
+        writeOptions.opId,
+        now(),
+      );
+      if (applied !== undefined) return replayResultFromRecord(applied);
+    }
     // --create-tags: create any missing tag named in this op's tags (clean
     // `make new tag` path, mkdir-p for parent/child) before applying. Skipped
     // on a dry run (no side effects). A failed creation leg short-circuits and
-    // is returned as this op's result.
+    // is returned as this op's result. The opId is NOT carried onto the
+    // tag-prep legs — it identifies the MAIN mutation (recorded on its record).
     const tags = (params as { tags?: unknown }).tags;
     if (writeOptions?.createTags === true && writeOptions.dryRun !== true && Array.isArray(tags)) {
-      const legOptions: WriteOptions = { ...writeOptions, createTags: false };
+      const { opId: _opId, ...rest } = writeOptions;
+      const legOptions: WriteOptions = { ...rest, createTags: false };
       for (const step of planTagCreation(conn.db, tags as string[])) {
         // parents must land before children (mkdir-p ordering)
         const legResult = await runMutation(

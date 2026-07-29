@@ -34,6 +34,7 @@ import {
   noUuidMatch,
   omitEmpty,
   OMIT_EMPTY_NOTE,
+  OP_ID_RE,
   OPERATION_KINDS,
   openThings,
   PKG_VERSION,
@@ -396,6 +397,23 @@ const dryRunShape = {
 };
 
 /**
+ * The per-call idempotency key for a single write tool — the analogue of a batch
+ * line's op_id. A resubmission carrying the same key is recognized as already
+ * applied (a prior verified change with that key) and is not re-run. Spread into
+ * the single-mutation write tools (not the variadic move/reorder tools, whose
+ * idempotency is the batch-shaped per-line op_id).
+ */
+const opIdShape = {
+  op_id: z
+    .string()
+    .optional()
+    .describe(
+      "Idempotency key: a resubmission with the same key is recognized as already applied " +
+        "and not re-run (matches [A-Za-z0-9_-], 1-64 chars)",
+    ),
+};
+
+/**
  * The per-call opt-in for the tools that reach a change only by driving the
  * local Things app's accessibility interface. Shared by `repeat`, the
  * `convert_to_project` tool, the heading tool's `promote_heading` action, and
@@ -539,6 +557,14 @@ function deriveMcpActor(clientName: string | undefined): string {
   return slug === "" ? MCP_ACTOR_PREFIX : `${MCP_ACTOR_PREFIX}:${slug}`;
 }
 
+/** Validate an op_id (throwing RangeError → mapped to a `usage` tool error by `guard`). */
+function assertOpId(opId: string): string {
+  if (!OP_ID_RE.test(opId)) {
+    throw new RangeError("op_id must match [A-Za-z0-9_-] and be 1-64 characters");
+  }
+  return opId;
+}
+
 /** The shape of the shared MCP write-tool args mapped into WriteOptions. */
 interface WriteOptionArgs {
   dry_run?: boolean | undefined;
@@ -551,6 +577,8 @@ interface WriteOptionArgs {
   create_tags?: boolean | undefined;
   /** Per-call IANA zone (write tools that accept `when`): normalizes today/evening to the zone. */
   tz?: string | undefined;
+  /** Single-op idempotency key (the single-mutation write tools). */
+  op_id?: string | undefined;
 }
 
 export function createThingsMcpServer(options: McpServerOptions = {}): McpServer {
@@ -590,6 +618,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
     ...(args.create_tags === true && { createTags: true }),
     ...(args.tz !== undefined && { zone: args.tz }),
+    ...(args.op_id !== undefined && { opId: assertOpId(args.op_id) }),
   });
 
   /** Run a handler, mapping environment/usage throws to tool errors. */
@@ -1232,6 +1261,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1305,6 +1335,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1440,6 +1471,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("scope project, open only: also reopen the to-dos resolved with the project"),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1485,6 +1517,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         if (args.children !== undefined) {
           return usage("children applies only to status 'completed' or 'canceled'");
+        }
+        // Reopening a project is a multi-leg compound — single-op idempotency
+        // (op_id) does not apply to it in phase 1 (every other set_status path
+        // is a single mutation). Refuse rather than silently drop the key.
+        if (args.op_id !== undefined) {
+          return usage(
+            "op_id is not available when reopening a project (a multi-leg compound in phase 1) — " +
+              "use the batch tool with a per-line op_id",
+          );
         }
         const outcome = await c.write.reopenProject(args.uuid, {
           ...opts,
@@ -1587,6 +1628,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mode: z.enum(["replace", "add"]).optional().describe("Default: replace"),
         ...createTagsShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1743,6 +1785,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("kind tag: confirm permanent deletion of ALL nested child tags too"),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: DESTRUCTIVE,
     },
@@ -1772,7 +1815,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Restore a trashed to-do or project. A to-do returns to the Inbox without its " +
         "previous schedule or project/area. A project is restored in place: its schedule, " +
         "area, and children come back exactly as they were.",
-      inputSchema: { uuid: z.string(), ...dryRunShape },
+      inputSchema: { uuid: z.string(), ...dryRunShape, ...opIdShape },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
@@ -1798,6 +1841,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         completion_date: z.string().optional().describe(DATE_FORMAT),
         creation_date: z.string().optional().describe(DATE_FORMAT),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1829,6 +1873,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         creation_date: z.string().optional().describe(`${DATE_FORMAT}; <= completion_date`),
         notes: z.string().optional(),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2056,6 +2101,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         uuid: z.string().describe("the to-do's uuid"),
         ...driveGuiShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: DESTRUCTIVE,
     },
@@ -2315,7 +2361,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Duplicate a to-do or project and return the copy's uuid; a duplicated project " +
         "includes its children. Not available for repeating items.",
-      inputSchema: { uuid: z.string(), ...dryRunShape },
+      inputSchema: { uuid: z.string(), ...dryRunShape, ...opIdShape },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
@@ -2346,6 +2392,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
         ...tzShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2417,6 +2464,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         tags: z.array(z.string()).optional().describe(`Tags — ${TAG_REF_FORMAT}`),
         ...createTagsShape,
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2441,6 +2489,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         title: z.string(),
         parent: z.string().optional().describe("Existing parent tag name"),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2480,6 +2529,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("Required for area/tag delete and trash.empty (PERMANENT, no Trash)"),
         ...dryRunShape,
+        ...opIdShape,
       },
       annotations: DESTRUCTIVE,
     },
