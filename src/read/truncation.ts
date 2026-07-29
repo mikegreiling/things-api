@@ -7,7 +7,7 @@
  * entirely past the cut so no empty header survives. `limit === null` means
  * "all rows" (the caller passed --all / all: true).
  */
-import type { GroupBlock, GroupedTruncation, SectionCount, Truncation } from "../contracts.ts";
+import type { GroupBlock, SectionCount, Truncation } from "../contracts.ts";
 import { localToday } from "../model/dates.ts";
 import { isActiveProjectRow, type AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
@@ -26,6 +26,27 @@ const whole = (total: number, limit: number | null): Truncation => ({
   limit,
   truncated: false,
 });
+
+/**
+ * Roll a grouped view's per-block counts up into the unified {@link Truncation}
+ * envelope: `shown`/`total` sum every block's own rows plus its nested children,
+ * `limit` is null (a grouped view's caps are per-block, not a single row cap),
+ * and `blocks` carries the identity-bearing nesting for a consumer that wants
+ * the detail. `truncated` is the OR across the blocks (computed by the caller).
+ */
+function groupedTruncation(blocks: GroupBlock[], truncated: boolean): Truncation {
+  let shown = 0;
+  let total = 0;
+  for (const b of blocks) {
+    shown += b.shown;
+    total += b.total;
+    for (const c of b.children ?? []) {
+      shown += c.shown;
+      total += c.total;
+    }
+  }
+  return { shown, total, limit: null, truncated, blocks };
+}
 
 /** Flat list: slice to the limit; total is the full filtered length. */
 export function truncateList<T>(
@@ -93,7 +114,7 @@ const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
 export function previewSections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; grouped: GroupedTruncation } {
+): { data: SidebarSection[]; truncation: Truncation } {
   const outSections: SidebarSection[] = [];
   const blocks: GroupBlock[] = [];
   let truncated = false;
@@ -132,7 +153,7 @@ export function previewSections(
     }
     outSections.push({ area: section.area, items });
   }
-  return { data: outSections, grouped: { truncated, blocks } };
+  return { data: outSections, truncation: groupedTruncation(blocks, truncated) };
 }
 
 /**
@@ -145,7 +166,7 @@ export function previewSections(
 export function previewSomedaySections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; grouped: GroupedTruncation } {
+): { data: SidebarSection[]; truncation: Truncation } {
   const outSections: SidebarSection[] = [];
   const blocks: GroupBlock[] = [];
   let truncated = false;
@@ -185,7 +206,7 @@ export function previewSomedaySections(
     }
     outSections.push({ area: section.area, items });
   }
-  return { data: outSections, grouped: { truncated, blocks } };
+  return { data: outSections, truncation: groupedTruncation(blocks, truncated) };
 }
 
 /**
@@ -205,7 +226,7 @@ export function capAreaSections(
   limits: GroupedLimits,
   now?: Date,
   zone?: string,
-): { data: AreaView; grouped: GroupedTruncation } {
+): { data: AreaView; truncation: Truncation } {
   const todayIso = localToday(now, zone);
   const blocks: GroupBlock[] = [];
   let truncated = false;
@@ -241,5 +262,8 @@ export function capAreaSections(
       limit: limits.area,
     });
   }
-  return { data: { ...view, projects, active }, grouped: { truncated, blocks } };
+  return {
+    data: { ...view, projects, active },
+    truncation: groupedTruncation(blocks, truncated),
+  };
 }

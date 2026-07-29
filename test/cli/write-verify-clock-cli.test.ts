@@ -81,7 +81,7 @@ describe("todo add --when evening under a future pinned THINGS_NOW", () => {
     expect(env["ok"]).toBe(true);
     expect(env["kind"]).toBe("mutation-result");
     const data = env["data"] as Record<string, unknown>;
-    expect(data["kind"]).toBe("ok");
+    expect(data["result"]).toBe("ok");
     expect(data["observed"]).toMatchObject({
       start: "active",
       startDate: FUTURE_TODAY,

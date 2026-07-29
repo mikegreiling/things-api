@@ -347,7 +347,9 @@ describe("capabilities", () => {
     await run(["capabilities", "--op", "todo.delete", "--json"]);
     const env = envelope();
     expect(env["kind"]).toBe("capabilities");
-    const data = env["data"] as { op: string; vectors: { vector: string; support: string }[] }[];
+    const data = (
+      env["data"] as { items: { op: string; vectors: { vector: string; support: string }[] }[] }
+    ).items;
     expect(data).toHaveLength(1);
     const entry = data[0];
     expect(entry?.op).toBe("todo.delete");

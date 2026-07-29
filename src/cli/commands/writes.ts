@@ -20,6 +20,7 @@ import {
   errorEnvelope,
   ExitCode,
   getConfigKey,
+  mutationOkData,
   okEnvelope,
   openThings,
   outcomeFailed,
@@ -252,7 +253,7 @@ async function runWrite(
               {
                 code: err.code,
                 message: err.message,
-                details: { candidates: err.candidates },
+                detail: { candidates: err.candidates },
               },
               meta(client),
             ),
@@ -315,7 +316,9 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
         process.stderr.write(`warning: ${warning}\n`);
       }
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(okEnvelope("mutation-result", result, meta))}\n`);
+        process.stdout.write(
+          `${JSON.stringify(okEnvelope("mutation-result", mutationOkData(result), meta))}\n`,
+        );
       } else {
         const uuid = result.uuid === null ? "" : ` uuid=${result.uuid}`;
         process.stdout.write(
@@ -402,7 +405,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
               {
                 code: "unsupported",
                 message: `no validated vector supports ${result.op}`,
-                detail: result.considered,
+                detail: { considered: result.considered },
               },
               meta,
             ),
@@ -450,7 +453,7 @@ async function runMoveCmd(
     if (err instanceof ReferenceResolutionError) {
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(errorEnvelope({ code: err.code, message: err.message, details: { candidates: err.candidates } }, meta()))}\n`,
+          `${JSON.stringify(errorEnvelope({ code: err.code, message: err.message, detail: { candidates: err.candidates } }, meta()))}\n`,
         );
       } else {
         process.stderr.write(`error: ${err.message}\n`);
@@ -476,7 +479,9 @@ function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeM
   switch (result.kind) {
     case "move-ok": {
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(okEnvelope("move-result", result, meta))}\n`);
+        process.stdout.write(
+          `${JSON.stringify(okEnvelope("move-result", mutationOkData(result), meta))}\n`,
+        );
       } else {
         const who = result.movees.map((m) => m.title ?? m.uuid).join(", ");
         process.stdout.write(
@@ -521,7 +526,7 @@ function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeM
                 message: result.detail,
                 ...(result.remediation !== undefined && { remediation: result.remediation }),
                 ...(result.candidates !== undefined && {
-                  details: { candidates: result.candidates },
+                  detail: { candidates: result.candidates },
                 }),
               },
               meta,
@@ -2440,7 +2445,9 @@ export function registerWriteCommands(program: Command): void {
       const data = capabilitiesTable(opts.op as OperationKind | undefined);
       if (opts.json) {
         const meta: EnvelopeMeta = { dbVersion: null, fingerprint: "unknown", elapsedMs: 0 };
-        process.stdout.write(`${JSON.stringify(okEnvelope("capabilities", data, meta))}\n`);
+        process.stdout.write(
+          `${JSON.stringify(okEnvelope("capabilities", { items: data }, meta))}\n`,
+        );
         return;
       }
       for (const entry of data) {
@@ -2496,7 +2503,7 @@ export function registerWriteCommands(program: Command): void {
       }
       const all = describeConfig();
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(okEnvelope("config", all, meta))}\n`);
+        process.stdout.write(`${JSON.stringify(okEnvelope("config", { items: all }, meta))}\n`);
       } else {
         for (const entry of all) {
           process.stdout.write(`${configKeyLine(entry)}\n`);

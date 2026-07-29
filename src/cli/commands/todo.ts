@@ -136,7 +136,7 @@ export function registerTodoCommands(program: Command): void {
     .action((uuid: string, opts: { json?: boolean; db?: string; all?: boolean }) => {
       runRead(
         opts,
-        "todo-detail",
+        "detail",
         (c) => {
           const detail = c.read.byUuid(uuid);
           // A miss gets a type-scoped did-you-mean (to-dos only), not a bare

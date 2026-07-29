@@ -15,12 +15,12 @@ import {
   templateStatus,
   type GroupBlock,
   type GroupedLimits,
-  type GroupedTruncation,
   type ListItem,
   type Project,
   type SectionCount,
   type SidebarSection,
   type TodayView,
+  type Truncation,
 } from "../index.ts";
 import { renderNow, renderZone } from "./clock.ts";
 import { bold, dim, strike, underline } from "./style.ts";
@@ -739,18 +739,15 @@ function mixedMoreLine(projects: number, todos: number, drill: string | null): s
 }
 
 /** The area/loose block for a section, matched by identity in the grouped metadata. */
-function areaBlockFor(
-  grouped: GroupedTruncation,
-  area: { uuid: string } | null,
-): GroupBlock | undefined {
+function areaBlockFor(grouped: Truncation, area: { uuid: string } | null): GroupBlock | undefined {
   const kind = area === null ? "loose" : "area";
   const ref = area?.uuid ?? null;
-  return grouped.blocks.find((b) => b.kind === kind && b.ref === ref);
+  return (grouped.blocks ?? []).find((b) => b.kind === kind && b.ref === ref);
 }
 
 /** A nested project block anywhere in the grouped metadata, matched by project uuid. */
-function projectBlockFor(grouped: GroupedTruncation, projectUuid: string): GroupBlock | undefined {
-  for (const b of grouped.blocks) {
+function projectBlockFor(grouped: Truncation, projectUuid: string): GroupBlock | undefined {
+  for (const b of grouped.blocks ?? []) {
     const hit = b.children?.find((c) => c.kind === "project" && c.ref === projectUuid);
     if (hit !== undefined) return hit;
   }
@@ -779,7 +776,7 @@ function groupedBottomLine(base: string, escalations: string[], allBase = base):
  */
 export function renderAnytimePreview(
   sections: SidebarSection[],
-  grouped: GroupedTruncation,
+  grouped: Truncation,
   limits: GroupedLimits,
   base: string,
 ): string[] {
@@ -864,7 +861,7 @@ export function renderAnytimePreview(
  */
 export function renderSomedayPreview(
   sections: SidebarSection[],
-  grouped: GroupedTruncation,
+  grouped: Truncation,
   limits: GroupedLimits,
   base: string,
   showActive: boolean,

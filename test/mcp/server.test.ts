@@ -768,12 +768,12 @@ describe("things MCP server", () => {
       children?: Blk[];
     };
     const meta = JSON.parse(content[1]?.text ?? "{}") as {
-      grouped: { truncated: boolean; blocks: Blk[] };
+      truncation: { truncated: boolean; blocks: Blk[] };
       note: string;
     };
-    expect(meta.grouped.truncated).toBe(true);
+    expect(meta.truncation.truncated).toBe(true);
     // Project blocks nest inside their area block — flatten to match by identity.
-    expect(flattenBlocks(meta.grouped.blocks)).toContainEqual(
+    expect(flattenBlocks(meta.truncation.blocks)).toContainEqual(
       expect.objectContaining({ kind: "project", title: "Firmware", shown: 3, total: 8, limit: 3 }),
     );
     expect(meta.note).toContain("per block");
@@ -784,10 +784,10 @@ describe("things MCP server", () => {
     });
     const widerMeta = JSON.parse(
       (wider as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as { grouped: { blocks: Blk[] } };
-    expect(flattenBlocks(widerMeta.grouped.blocks).find((b) => b.title === "Firmware")?.shown).toBe(
-      5,
-    );
+    ) as { truncation: { blocks: Blk[] } };
+    expect(
+      flattenBlocks(widerMeta.truncation.blocks).find((b) => b.title === "Firmware")?.shown,
+    ).toBe(5);
 
     const all = await client.callTool({
       name: "read_view",
@@ -795,8 +795,8 @@ describe("things MCP server", () => {
     });
     const allMeta = JSON.parse(
       (all as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as { grouped: { truncated: boolean } };
-    expect(allMeta.grouped.truncated).toBe(false);
+    ) as { truncation: { truncated: boolean } };
+    expect(allMeta.truncation.truncated).toBe(false);
   });
 
   it("read_view someday: numeric show_active_project_items caps that section; limit rejected on grouped views", async () => {
@@ -820,7 +820,7 @@ describe("things MCP server", () => {
       const meta = JSON.parse(
         (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
       ) as {
-        grouped: {
+        truncation: {
           blocks: {
             kind: string;
             title: string | null;
@@ -831,7 +831,7 @@ describe("things MCP server", () => {
         };
       };
       // The active-project child block nests inside its section block.
-      expect(flattenBlocks(meta.grouped.blocks)).toContainEqual(
+      expect(flattenBlocks(meta.truncation.blocks)).toContainEqual(
         expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
       );
     };
@@ -1165,10 +1165,10 @@ describe("things MCP server", () => {
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as {
-      grouped: { truncated: boolean; blocks: { kind: string; shown: number; total: number }[] };
+      truncation: { truncated: boolean; blocks: { kind: string; shown: number; total: number }[] };
     };
-    expect(meta.grouped.truncated).toBe(true);
-    expect(meta.grouped.blocks).toEqual([
+    expect(meta.truncation.truncated).toBe(true);
+    expect(meta.truncation.blocks).toEqual([
       expect.objectContaining({ kind: "projects", shown: 30, total: 35 }),
       expect.objectContaining({ kind: "area", shown: 30, total: 35 }),
     ]);

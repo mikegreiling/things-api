@@ -57,21 +57,29 @@ export interface SectionCount {
 }
 
 /**
- * List-view truncation metadata (ADDITIVE). Present on the meta of any read
- * command that applies a row limit; absent on unbounded/structured views.
- * `shown` items were returned of `total` that matched after all filters;
- * `limit` is the effective cap (null when the caller asked for all rows);
- * `truncated` is true exactly when `shown < total`. The dropped remainder is
- * `total - shown`. `sections` is present only on a split flat view (the Today
- * split), breaking the whole-view counts down per render section.
+ * The single truncation-metadata shape for every read (the `meta.truncation`
+ * field). `shown` items were returned of `total` that matched after all
+ * filters; `limit` is the effective cap (null when the caller asked for all
+ * rows, and always null on a grouped view whose caps are per-block); `truncated`
+ * is the UNIVERSAL completeness check — true exactly when anything was dropped
+ * (`shown < total`, or any block hid rows). The dropped remainder is
+ * `total - shown`.
+ *
+ * Two optional per-shape breakdowns hang off it: `sections` for a split flat
+ * view (the Today split — per render-section shown/total), and `blocks` for a
+ * grouped view (anytime/someday/`area show` — the identity-carrying per-block
+ * nesting). Exactly one of them is present on the shapes that have it; both are
+ * absent on a plain flat view.
  */
 export interface Truncation {
   shown: number;
   total: number;
   limit: number | null;
   truncated: boolean;
-  /** Per-section shown/total breakdown for a split flat view; absent otherwise. */
+  /** Per-section shown/total breakdown for a split flat view (Today); absent otherwise. */
   sections?: SectionCount[];
+  /** Per-block nesting for a grouped view (anytime/someday/area card); absent otherwise. */
+  blocks?: GroupBlock[];
 }
 
 /**
@@ -111,13 +119,6 @@ export interface GroupBlock {
   children?: GroupBlock[];
 }
 
-/** Grouped-view truncation metadata (ADDITIVE); the per-block counterpart of {@link Truncation}. */
-export interface GroupedTruncation {
-  /** True when any block hid items. */
-  truncated: boolean;
-  blocks: GroupBlock[];
-}
-
 export interface EnvelopeMeta {
   /** Things database schema version (`Meta.databaseVersion`), null when no DB was opened. */
   dbVersion: number | null;
@@ -125,10 +126,13 @@ export interface EnvelopeMeta {
   fingerprint: "ok" | "drift" | "user-accepted" | "unknown";
   /** Wall-clock duration of the command in milliseconds. */
   elapsedMs: number;
-  /** List-view truncation metadata; present only on limited flat read views. */
+  /**
+   * The read's completeness metadata (the single truncation shape). Present on
+   * any read that could drop rows — flat views (row `limit`), the Today split
+   * (`sections`), and grouped views (anytime/someday/`area show`, `blocks`).
+   * `meta.truncation.truncated` is the universal "did I see everything" check.
+   */
   truncation?: Truncation;
-  /** Per-block truncation metadata; present only on grouped views (anytime/someday). */
-  grouped?: GroupedTruncation;
   /**
    * The canonical `things …` command a sugar invocation normalized to (bare
    * noun, keyword-in-show, uuid/share-link routing). Present only on routed
@@ -197,16 +201,36 @@ export interface ErrorEnvelope {
     likelyCause?: string;
     /** Actionable next step for the caller, when one exists. */
     remediation?: string;
-    detail?: unknown;
     /**
-     * Structured, machine-readable failure context (ADDITIVE). For an
-     * unresolved show/bare-noun subject it carries `candidates` — the
-     * did-you-mean title matches (standard item shapes, capped) so an agent
-     * can self-correct without a second round-trip. For a bare mutation verb
-     * (`things update <ref>`) it carries `suggestions` — the concrete
-     * namespaced command(s) to run instead.
+     * The SINGLE structured, machine-readable failure-context object (there is
+     * no separate `details` field — the two were reconciled into this one). Each
+     * key is present only for the failures that produce it:
+     *  - `expected` / `observed` — a verify-failed mutation's expected delta and
+     *    the observed post-write state.
+     *  - `candidates` — did-you-mean title matches for an unresolved
+     *    show/bare-noun subject (standard item shapes, capped), so an agent can
+     *    self-correct without another round-trip.
+     *  - `suggestions` — for a bare mutation verb (`things update <ref>`), the
+     *    concrete namespaced command(s) to run instead.
+     *  - `considered` — the vectors weighed (and why each was rejected) for an
+     *    unsupported operation.
+     *  - `placed` / `remaining` / `cause` — a bounce reorder that aborted
+     *    part-way: the items already placed, those not yet placed, and the cause.
+     *  - `failed` / `completed` — a multi-leg move that failed mid-way: the leg
+     *    that failed and the legs already completed before it.
      */
-    details?: { candidates?: unknown[]; suggestions?: string[] };
+    detail?: {
+      expected?: unknown;
+      observed?: Record<string, unknown> | null;
+      candidates?: unknown[];
+      suggestions?: string[];
+      considered?: { vector: string; why: string }[];
+      placed?: string[];
+      remaining?: string[];
+      cause?: unknown;
+      failed?: unknown;
+      completed?: unknown[];
+    };
   };
   meta: EnvelopeMeta;
 }
@@ -219,6 +243,22 @@ export function okEnvelope<T>(kind: string, data: T, meta: EnvelopeMeta): OkEnve
 
 export function errorEnvelope(error: ErrorEnvelope["error"], meta: EnvelopeMeta): ErrorEnvelope {
   return { apiVersion: API_VERSION, ok: false, kind: "error", error, meta };
+}
+
+/**
+ * Project a successful mutation/reorder/move outcome to its ENVELOPE `data`
+ * shape. The envelope `kind` is the only field named `kind` on the wire, so the
+ * result's internal `kind` discriminator is renamed to `result` here, its value
+ * preserved (`"ok"` for a mutation, `"move-ok"` for a move) — every other field
+ * flows through unchanged. The library keeps `kind` on its in-memory
+ * `MutationResult`/`ReorderResult`/`MoveResult` unions; this is the single
+ * boundary that stamps the wire form both the CLI and MCP surfaces emit.
+ */
+export function mutationOkData<T extends { kind: string }>(
+  ok: T,
+): Omit<T, "kind"> & { result: T["kind"] } {
+  const { kind, ...rest } = ok;
+  return { result: kind, ...rest };
 }
 
 /**

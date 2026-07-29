@@ -55,6 +55,20 @@ function loggedSlice(view: ProjectView, showLogged: boolean | string | undefined
   return Number.isInteger(n) && n > 0 ? view.logged.slice(0, n) : view.logged;
 }
 
+/** The later sub-buckets a project OR heading group carries (§9 fidelity fix). */
+type LaterBuckets = {
+  scheduled: ProjectView["scheduled"];
+  repeating: Todo[];
+  someday: Todo[];
+};
+
+/** Total rows across a group's later sub-buckets (for the hidden-later count). */
+function countLater(g: LaterBuckets): number {
+  return (
+    g.scheduled.reduce((n, d) => n + d.items.length, 0) + g.repeating.length + g.someday.length
+  );
+}
+
 /**
  * GUI parity: later rows (scheduled / repeating / someday) render INLINE
  * beneath their heading — dimmed boxes and date chips carry the state — not
@@ -63,30 +77,28 @@ function loggedSlice(view: ProjectView, showLogged: boolean | string | undefined
  * them, `--show-logged` reveals the full logbook.
  */
 export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): string[] {
-  const later: Todo[] =
+  // Later rows (scheduled/repeating/someday) now arrive already partitioned by
+  // heading in the payload (§9 fidelity fix): the project-level buckets hold the
+  // UNHEADED rows, each heading group its own. Flatten each into a display list.
+  const laterOf = (g: {
+    scheduled: ProjectView["scheduled"];
+    repeating: Todo[];
+    someday: Todo[];
+  }): Todo[] =>
     opts.showLater === true
-      ? [
-          ...view.later.scheduled.flatMap((d) => d.items),
-          ...view.later.repeating,
-          ...view.later.someday,
-        ]
+      ? [...g.scheduled.flatMap((d) => d.items), ...g.repeating, ...g.someday]
       : [];
-  const knownHeadings = new Set(view.headings.map((g) => g.heading.uuid));
-  const laterByHeading = new Map<string, Todo[]>();
-  const looseLater: Todo[] = [];
-  for (const item of later) {
-    // A later row whose heading is absent from the view falls back to the
-    // loose block rather than vanishing.
-    if (item.heading !== null && knownHeadings.has(item.heading.uuid)) {
-      const list = laterByHeading.get(item.heading.uuid) ?? [];
-      list.push(item);
-      laterByHeading.set(item.heading.uuid, list);
-    } else {
-      looseLater.push(item);
-    }
-  }
+  const looseLater = laterOf(view);
+  const laterByHeading = new Map<string, Todo[]>(
+    view.headings.map((g) => [g.heading.uuid, laterOf(g)]),
+  );
   const logged = loggedSlice(view, opts.showLogged);
-  const everyItem = [...view.active, ...later, ...view.headings.flatMap((g) => g.items), ...logged];
+  const everyItem = [
+    ...view.active,
+    ...looseLater,
+    ...view.headings.flatMap((g) => [...g.items, ...(laterByHeading.get(g.heading.uuid) ?? [])]),
+    ...logged,
+  ];
   const w = uuidDisplayWidth([...everyItem, ...view.headings.map((g) => g.heading)]);
   // Rows inside this view never repeat the project's own name.
   const fmt = (i: (typeof everyItem)[number]) =>
@@ -142,10 +154,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   // Default-hidden rows are never silent — a HIDDEN-SECTION placeholder (flush,
   // full command) stands where the later rows would render.
   if (opts.showLater !== true) {
-    const hiddenLater =
-      view.later.scheduled.reduce((n, d) => n + d.items.length, 0) +
-      view.later.repeating.length +
-      view.later.someday.length;
+    const hiddenLater = countLater(view) + view.headings.reduce((n, g) => n + countLater(g), 0);
     if (hiddenLater > 0)
       lines.push(
         "",

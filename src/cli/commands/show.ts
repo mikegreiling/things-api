@@ -88,10 +88,14 @@ function isRoutingSugar(t: ShowTarget, ref: string): boolean {
   return /^[0-9A-Za-z]{6,}$/.test(stripped) && t.uuid.startsWith(stripped);
 }
 
-type ShowPayload =
-  | { type: "project"; view: ProjectView }
-  | { type: "area"; view: AreaView }
-  | { type: "to-do"; detail: AnyTask | null };
+/**
+ * The loose `show` router's payload: the resolved entity itself (a composite
+ * project/area view, or a single-item detail). The router no longer wraps it in
+ * a `{type, …}` discriminator — the envelope `kind` (project-view / area-view /
+ * detail, set per resolution) IS the discriminator, and each is byte-identical
+ * to the corresponding typed command (`project show` / `area show` / a detail).
+ */
+type ShowPayload = ProjectView | AreaView | AnyTask | null;
 
 export function registerShowCommands(program: Command): void {
   const show = program
@@ -207,8 +211,12 @@ export function registerShowCommands(program: Command): void {
                 showLater: opts.showLater === true || opts.all === true,
                 hintBase,
               };
+              // Emit the IDENTICAL envelope `things project show` would (kind
+              // project-view, data `{view}`) — the loose router disappears from
+              // the wire (R2).
               return {
-                data: { type: "project", view },
+                data: view,
+                kind: "project-view",
                 lines: renderProjectView(view, projectOpts),
               };
             }
@@ -219,14 +227,22 @@ export function registerShowCommands(program: Command): void {
                 areaLimit: areaCap.limit,
                 projectLimit: projectCap.limit,
               });
+              // Identical to `things area show` (kind area-view, data `{view}`).
               return {
-                data: { type: "area", view: bounded.view },
-                grouped: bounded.grouped,
-                lines: renderAreaView(bounded.view, bounded.grouped, { ...opts, limits, hintBase }),
+                data: bounded.view,
+                kind: "area-view",
+                truncation: bounded.truncation,
+                lines: renderAreaView(bounded.view, bounded.truncation, {
+                  ...opts,
+                  limits,
+                  hintBase,
+                }),
               };
             }
+            // A to-do/heading detail unifies with the typed detail (kind detail,
+            // data `{item}`; item.type discriminates).
             const detail = c.read.byUuid(t.uuid);
-            return { data: { type: "to-do", detail }, lines: renderDetail(detail) };
+            return { data: detail, kind: "detail", lines: renderDetail(detail) };
           },
           () => [],
         );

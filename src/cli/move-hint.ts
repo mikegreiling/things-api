@@ -241,10 +241,7 @@ export function runMoveHint(hint: MoveHint): void {
     const message = `${leadLine(hint).replace(/^error: /, "")} ${actionLine(hint)}`;
     process.stdout.write(
       `${JSON.stringify(
-        errorEnvelope(
-          { code: "usage", message, details: { suggestions: [hint.suggestion] } },
-          meta,
-        ),
+        errorEnvelope({ code: "usage", message, detail: { suggestions: [hint.suggestion] } }, meta),
       )}\n`,
     );
   } else {

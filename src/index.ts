@@ -17,7 +17,7 @@ export type {
   OpenOptions,
   ThingsClient,
 } from "./client.ts";
-export type { Truncation, GroupedTruncation, GroupBlock, SectionCount } from "./contracts.ts";
+export type { Truncation, GroupBlock, SectionCount } from "./contracts.ts";
 export { diagnose } from "./diagnose.ts";
 export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
@@ -194,6 +194,7 @@ export {
   blockedCode,
   errorEnvelope,
   ExitCode,
+  mutationOkData,
   okEnvelope,
   PKG_VERSION,
   verifyFailedCode,

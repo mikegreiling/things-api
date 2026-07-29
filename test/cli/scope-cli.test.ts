@@ -72,9 +72,9 @@ describe("scoped CLI reads", () => {
       title: "Work",
       source: "env",
     });
-    const titles = (env.data as Array<{ items: Array<{ title: string }> }>).flatMap((s) =>
-      s.items.map((i) => i.title),
-    );
+    const titles = (
+      env.data as { sections: Array<{ items: Array<{ title: string }> }> }
+    ).sections.flatMap((s) => s.items.map((i) => i.title));
     expect(titles).toContain("work loose");
     expect(titles).not.toContain("personal loose");
   });

@@ -54,11 +54,11 @@ function isoFromToday(days: number): string {
 }
 
 const titlesOf = (stdout: string): string[] =>
-  JSON.parse(stdout).data.map((i: { title: string }) => i.title);
+  JSON.parse(stdout).data.items.map((i: { title: string }) => i.title);
 
 /** The `data.today` titles from a `today --json` envelope. */
 const todayTitles = (stdout: string): string[] =>
-  JSON.parse(stdout).data.today.map((i: { title: string }) => i.title);
+  JSON.parse(stdout).data.sections[0].items.map((i: { title: string }) => i.title);
 
 /**
  * Run `fn` with process.env keys temporarily set/cleared, restoring them after.
@@ -173,8 +173,12 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.kind).toBe("today");
     expect(envelope.meta.dbVersion).toBe(26);
     expect(envelope.meta.fingerprint).toBe("ok");
-    expect(envelope.data.today.map((i: { title: string }) => i.title)).toEqual(["morning"]);
-    expect(envelope.data.evening.map((i: { title: string }) => i.title)).toEqual(["tonight"]);
+    expect(envelope.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual([
+      "morning",
+    ]);
+    expect(envelope.data.sections[1].items.map((i: { title: string }) => i.title)).toEqual([
+      "tonight",
+    ]);
   });
 
   it("things today puts ★/⏾ in the section headers, not on the rows", () => {
@@ -234,8 +238,8 @@ describe("cli end-to-end (fixture db)", () => {
     expect(lines.slice(hintIdx + 1, footerIdx)).toEqual([""]);
     // JSON is unchanged (fields, not glyphs): the split still carries counts.
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
-    expect(env.data.today).toHaveLength(50);
-    expect(env.data.evening).toHaveLength(0);
+    expect(env.data.sections[0].items).toHaveLength(50);
+    expect(env.data.sections[1].items).toHaveLength(0);
     expect(env.meta.truncation).toEqual({
       shown: 50,
       total: 75,
@@ -254,9 +258,10 @@ describe("cli end-to-end (fixture db)", () => {
     const { stdout, exitCode } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const envelope = JSON.parse(stdout);
-    expect(envelope.data.repeating.isTemplate).toBe(true);
+    expect(envelope.kind).toBe("detail");
+    expect(envelope.data.item.repeating.isTemplate).toBe(true);
     // Omit-empty (contracts.md): an empty checklist is absent, not [].
-    expect("checklist" in envelope.data).toBe(false);
+    expect("checklist" in envelope.data.item).toBe(false);
   });
 
   it("things snapshot --json counts every row class", () => {
@@ -332,15 +337,15 @@ describe("cli search (Phase 12 ergonomics)", () => {
 
     const open = runCli(["search", "report", "--json", "--db", fx.path]);
     expect(open.exitCode).toBe(0);
-    expect(JSON.parse(open.stdout).data.map((i: { title: string }) => i.title)).toEqual([
+    expect(JSON.parse(open.stdout).data.items.map((i: { title: string }) => i.title)).toEqual([
       "report draft",
     ]);
 
     const all = runCli(["search", "report", "--all", "--json", "--db", fx.path]);
-    expect(JSON.parse(all.stdout).data).toHaveLength(3);
+    expect(JSON.parse(all.stdout).data.items).toHaveLength(3);
 
     const logged = runCli(["search", "report", "--logged", "--json", "--db", fx.path]);
-    expect(JSON.parse(logged.stdout).data).toHaveLength(2);
+    expect(JSON.parse(logged.stdout).data.items).toHaveLength(2);
   });
 
   it("--limit and --type narrow; unknown --tag fails loudly", () => {
@@ -349,10 +354,10 @@ describe("cli search (Phase 12 ergonomics)", () => {
     seedTodo(fx.db, { title: "alpha two" });
 
     const limited = runCli(["search", "alpha", "--limit", "1", "--json", "--db", fx.path]);
-    expect(JSON.parse(limited.stdout).data).toHaveLength(1);
+    expect(JSON.parse(limited.stdout).data.items).toHaveLength(1);
 
     const typed = runCli(["search", "alpha", "--type", "project", "--json", "--db", fx.path]);
-    expect(JSON.parse(typed.stdout).data).toHaveLength(0);
+    expect(JSON.parse(typed.stdout).data.items).toHaveLength(0);
 
     const bad = runCli(["search", "alpha", "--tag", "nope", "--json", "--db", fx.path]);
     expect(bad.exitCode).not.toBe(0);
@@ -373,7 +378,9 @@ describe('cli --untagged (GUI "No Tag")', () => {
     seedTagged();
     const json = runCli(["today", "--untagged", "--json", "--db", fx!.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.today.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["bare one"]);
     const human = runCli(["today", "--untagged", "--db", fx!.path]);
     expect(human.exitCode).toBe(0);
@@ -389,7 +396,7 @@ describe('cli --untagged (GUI "No Tag")', () => {
     seedTodo(fx.db, { title: "note bare" });
     const json = runCli(["search", "note", "--untagged", "--json", "--db", fx.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.items.map((i: { title: string }) => i.title);
     expect(titles).toEqual(["note bare"]);
   });
 
@@ -418,7 +425,9 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     tagTask(fx.db, fooOnly, foo);
     const json = runCli(["today", "--tag", "foo", "--tag", "bar", "--json", "--db", fx.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.today.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["both"]);
   });
 
@@ -435,14 +444,14 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     const tagged = runCli(["today", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
       JSON.parse(tagged.stdout)
-        .data.today.map((i: { title: string }) => i.title)
+        .data.sections[0].items.map((i: { title: string }) => i.title)
         .toSorted(),
     ).toEqual(["direct", "inherited"]);
     // Flat --untagged drops the inherited-only row; only the truly bare survives.
     const untagged = runCli(["today", "--untagged", "--json", "--db", fx.path]);
-    expect(JSON.parse(untagged.stdout).data.today.map((i: { title: string }) => i.title)).toEqual([
-      "bare",
-    ]);
+    expect(
+      JSON.parse(untagged.stdout).data.sections[0].items.map((i: { title: string }) => i.title),
+    ).toEqual(["bare"]);
   });
 
   it("the removed --direct-tag / --direct-untagged flags error as unknown options", () => {
@@ -502,15 +511,15 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // Container --tag focus is NOT vacuous: it narrows to the child carrying
     // focus directly (the project's own focus is inherited by all, suppressed).
     const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
-    expect(JSON.parse(direct.stdout).data.active.map((i: { title: string }) => i.title)).toEqual([
-      "child-focus",
-    ]);
+    expect(
+      JSON.parse(direct.stdout).data.view.active.map((i: { title: string }) => i.title),
+    ).toEqual(["child-focus"]);
     // --untagged (direct-only) keeps the child with no direct tag, even though
     // it inherits focus from the project.
     const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
-    expect(JSON.parse(untagged.stdout).data.active.map((i: { title: string }) => i.title)).toEqual([
-      "child-bare",
-    ]);
+    expect(
+      JSON.parse(untagged.stdout).data.view.active.map((i: { title: string }) => i.title),
+    ).toEqual(["child-bare"]);
   });
 
   it("area show --tag filters both row kinds by direct tag; no recursion into projects", () => {
@@ -527,7 +536,7 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     const buried = seedTodo(fx.db, { title: "buried-focus", project: projBare });
     tagTask(fx.db, buried, focus);
     const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
-    const data = JSON.parse(json.stdout).data;
+    const data = JSON.parse(json.stdout).data.view;
     expect(data.active.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
     expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
     const all = JSON.stringify(data);
@@ -548,14 +557,14 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     expect(list.exitCode).toBe(0);
     expect(
       JSON.parse(list.stdout)
-        .data.map((p: { title: string }) => p.title)
+        .data.items.map((p: { title: string }) => p.title)
         .toSorted(),
     ).toEqual(["proj-direct", "proj-inherited"]);
     // area show --tag focus suppresses the SAME area's inheritance → only the
     // directly-tagged project survives (the deliberate single-container behavior).
     const areaShow = runCli(["area", "show", "Zone", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(areaShow.stdout).data.projects.map((p: { title: string }) => p.title),
+      JSON.parse(areaShow.stdout).data.view.projects.map((p: { title: string }) => p.title),
     ).toEqual(["proj-direct"]);
     // A content scope never grants a strict --limit on the container views.
     expect(
@@ -581,7 +590,7 @@ describe("cli list limits + truncation hint", () => {
     const { stdout, exitCode } = runCli(["inbox", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
-    expect(env.data).toHaveLength(50);
+    expect(env.data.items).toHaveLength(50);
     expect(env.meta.truncation).toEqual({ shown: 50, total: 60, limit: 50, truncated: true });
   });
 
@@ -608,7 +617,7 @@ describe("cli list limits + truncation hint", () => {
     fx = buildFixtureDb();
     seedInbox(60);
     const json = runCli(["inbox", "--limit", "20", "--json", "--db", fx.path]);
-    expect(JSON.parse(json.stdout).data).toHaveLength(20);
+    expect(JSON.parse(json.stdout).data.items).toHaveLength(20);
     expect(JSON.parse(json.stdout).meta.truncation).toEqual({
       shown: 20,
       total: 60,
@@ -624,7 +633,7 @@ describe("cli list limits + truncation hint", () => {
     fx = buildFixtureDb();
     seedInbox(60);
     const json = runCli(["inbox", "--all", "--json", "--db", fx.path]);
-    expect(JSON.parse(json.stdout).data).toHaveLength(60);
+    expect(JSON.parse(json.stdout).data.items).toHaveLength(60);
     expect(JSON.parse(json.stdout).meta.truncation.truncated).toBe(false);
     const human = runCli(["inbox", "--all", "--db", fx.path]);
     expect(human.stdout).not.toContain("more items");
@@ -863,7 +872,7 @@ describe("cli inbox — creation-date bounds (--since/--until)", () => {
       fx.path,
     ]).stdout;
     expect(JSON.parse(out).meta.truncation.limit).toBe(2);
-    expect(JSON.parse(out).data).toHaveLength(2);
+    expect(JSON.parse(out).data.items).toHaveLength(2);
   });
 
   it("--all semantics identical to logbook: --limit+--all conflicts, --all+--since is fine", () => {
@@ -930,8 +939,8 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     const { stdout, exitCode } = runCli(["anytime", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
-    expect(env.meta.grouped.truncated).toBe(true);
-    const blocks = env.meta.grouped.blocks as Array<{
+    expect(env.meta.truncation.truncated).toBe(true);
+    const blocks = env.meta.truncation.blocks as Array<{
       kind: string;
       total: number;
       shown: number;
@@ -956,7 +965,7 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
       ]),
     );
     // The project ROW is always present even though its children were capped.
-    const firmware = env.data
+    const firmware = env.data.sections
       .flatMap((s: { items: { title?: string; type: string }[] }) => s.items)
       .find((i: { title?: string }) => i.title === "Firmware");
     expect(firmware.type).toBe("project");
@@ -988,7 +997,7 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     const five = JSON.parse(
       runCli(["anytime", "--project-limit", "5", "--json", "--db", fx.path]).stdout,
     );
-    const fwTop = five.meta.grouped.blocks as Array<{
+    const fwTop = five.meta.truncation.blocks as Array<{
       title?: string;
       shown: number;
       children?: { title?: string; shown: number }[];
@@ -999,7 +1008,7 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     expect(fwBlock?.shown).toBe(5);
 
     const all = JSON.parse(runCli(["anytime", "--all", "--json", "--db", fx.path]).stdout);
-    expect(all.meta.grouped.truncated).toBe(false);
+    expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["anytime", "--all", "--db", fx.path]).stdout).not.toContain("more per group");
   });
 
@@ -1053,7 +1062,7 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(lines[proj + 1]).not.toBe("");
     // JSON data carries the same projects-first order.
     const env = JSON.parse(runCli(["someday", "--json", "--db", fx.path]).stdout);
-    const titles = env.data.flatMap((s: { items: { title: string }[] }) =>
+    const titles = env.data.sections.flatMap((s: { items: { title: string }[] }) =>
       s.items.map((i) => i.title),
     );
     expect(titles.indexOf("Dormant Proj")).toBeLessThan(titles.indexOf("someday direct A"));
@@ -1081,7 +1090,7 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     const env = JSON.parse(
       runCli(["someday", "--area-limit", "1", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.meta.grouped.blocks).toEqual(
+    expect(env.meta.truncation.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "area",
@@ -1145,7 +1154,7 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     const env = JSON.parse(
       runCli(["someday", "--show-active-project-items", "2", "--json", "--db", fx.path]).stdout,
     );
-    const somedayTop = env.meta.grouped.blocks as Array<{ children?: unknown[] }>;
+    const somedayTop = env.meta.truncation.blocks as Array<{ children?: unknown[] }>;
     const somedayBlocks = [...somedayTop, ...somedayTop.flatMap((b) => b.children ?? [])];
     expect(somedayBlocks).toEqual(
       expect.arrayContaining([
@@ -1197,8 +1206,10 @@ describe("cli bare-noun shorthand + show keywords", () => {
     const { stdout, exitCode } = runCli(["Hobbies", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
-    expect(env.kind).toBe("show");
-    expect(env.data.type).toBe("area");
+    // The loose router disappears from the wire: a resolved area emits the
+    // identical `area show` envelope (kind area-view, data.view).
+    expect(env.kind).toBe("area-view");
+    expect(env.data.view.area.title).toBe("Hobbies");
   });
 
   it("leading global flags route too: `things --json <name>` = `things <name> --json`", () => {
@@ -1209,15 +1220,15 @@ describe("cli bare-noun shorthand + show keywords", () => {
     const jsonFirst = runCli(["--json", "Hobbies", "--db", fx.path]);
     expect(jsonFirst.exitCode).toBe(0);
     const env = JSON.parse(jsonFirst.stdout);
-    expect(env.kind).toBe("show");
-    expect(env.data.type).toBe("area");
+    expect(env.kind).toBe("area-view");
+    expect(env.data.view.area.title).toBe("Hobbies");
     // meta.resolvedCommand rides the same path.
     expect(env.meta.resolvedCommand).toBe("things area show Hobbies");
 
     // --db <value> leading: the value is never misread as the noun.
     const dbFirst = runCli(["--db", fx.path, "Hobbies", "--json"]);
     expect(dbFirst.exitCode).toBe(0);
-    expect(JSON.parse(dbFirst.stdout).data.type).toBe("area");
+    expect(JSON.parse(dbFirst.stdout).kind).toBe("area-view");
 
     // Both flags leading, noun last.
     const bothFirst = runCli(["--json", "--db", fx.path, "Hobbies"]);
@@ -1524,9 +1535,13 @@ describe("cli detail views — area show per-section caps; project show uncapped
         fx.path,
       ]).stdout,
     );
-    expect(json.data.projects).toHaveLength(2);
-    expect(json.data.active).toHaveLength(3);
-    expect(json.meta.grouped).toEqual({
+    expect(json.data.view.projects).toHaveLength(2);
+    expect(json.data.view.active).toHaveLength(3);
+    expect(json.meta.truncation).toEqual({
+      // Aggregate counts roll the per-block totals up (2+3 shown of 35+35).
+      shown: 5,
+      total: 70,
+      limit: null,
       truncated: true,
       blocks: [
         expect.objectContaining({ kind: "projects", title: "Busy", shown: 2, total: 35, limit: 2 }),
@@ -1537,9 +1552,9 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const all = JSON.parse(
       runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
-    expect(all.data.projects).toHaveLength(35);
-    expect(all.data.active).toHaveLength(35);
-    expect(all.meta.grouped.truncated).toBe(false);
+    expect(all.data.view.projects).toHaveLength(35);
+    expect(all.data.view.active).toHaveLength(35);
+    expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
 
@@ -1570,7 +1585,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const json = JSON.parse(
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
-    expect(json.data.active).toHaveLength(60);
+    expect(json.data.view.active).toHaveLength(60);
     expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
@@ -1583,10 +1598,9 @@ describe("cli detail views — area show per-section caps; project show uncapped
     fx = buildFixtureDb();
     seedBusyArea();
     const json = JSON.parse(runCli(["show", "Busy", "--json", "--db", fx.path]).stdout);
-    expect(json.kind).toBe("show");
-    expect(json.data.type).toBe("area");
+    expect(json.kind).toBe("area-view");
     expect(json.data.view.projects).toHaveLength(30);
-    expect(json.meta.grouped.truncated).toBe(true);
+    expect(json.meta.truncation.truncated).toBe(true);
     // …and via the bare shorthand, knobs intact (footer echoes `things show …`).
     const tty = runCli(["Busy", "--area-limit", "3", "--db", fx.path]);
     expect(tty.stdout).toContain("… 32 more to-dos — `things show Busy --area-limit 6`");
@@ -1643,9 +1657,9 @@ describe("cli --exact-tag (Phase 12c)", () => {
     tagTask(fx.db, b, child);
 
     const both = runCli(["inbox", "--tag", "ctx", "--json", "--db", fx.path]);
-    expect(JSON.parse(both.stdout).data).toHaveLength(2);
+    expect(JSON.parse(both.stdout).data.items).toHaveLength(2);
     const exact = runCli(["inbox", "--tag", "ctx", "--exact-tag", "--json", "--db", fx.path]);
-    expect(JSON.parse(exact.stdout).data.map((i: { title: string }) => i.title)).toEqual([
+    expect(JSON.parse(exact.stdout).data.items.map((i: { title: string }) => i.title)).toEqual([
       "inbox-parent",
     ]);
   });
@@ -1675,7 +1689,7 @@ describe("cli tags listing (indented tree)", () => {
     seedTag(fx.db, "areas", root);
     const { stdout, exitCode } = runCli(["tags", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    const data = JSON.parse(stdout).data as { title: string; parent?: string | null }[];
+    const data = JSON.parse(stdout).data.items as { title: string; parent?: string | null }[];
     // Omit-empty (contracts.md): a root tag has NO parent key (absent = root);
     // a nested tag carries its parent NAME.
     const rootTag = data.find((t) => t.title === "old labels");
@@ -1707,9 +1721,9 @@ describe("--json error-path universality", () => {
     const env = JSON.parse(stdout);
     expect(env.ok).toBe(false);
     expect(env.error.code).toBe("ambiguous");
-    expect(env.error.details.candidates).toHaveLength(2);
-    expect(env.error.details.candidates[0]).toHaveProperty("uuid");
-    expect(env.error.details.candidates[0]).toHaveProperty("title", "Dup");
+    expect(env.error.detail.candidates).toHaveLength(2);
+    expect(env.error.detail.candidates[0]).toHaveProperty("uuid");
+    expect(env.error.detail.candidates[0]).toHaveProperty("title", "Dup");
   });
 
   it("not-found project write target → JSON envelope, code=not-found", async () => {
@@ -1727,7 +1741,7 @@ describe("--json error-path universality", () => {
     expect(exitCode).toBe(2);
     const env = JSON.parse(stdout);
     expect(env.error.code).toBe("not-found");
-    expect(env.error.details.candidates).toEqual([]);
+    expect(env.error.detail.candidates).toEqual([]);
   });
 
   it("flag-combination usage error honors --json (envelope on stdout, not prose on stderr)", () => {
@@ -1775,7 +1789,7 @@ describe("cli changes (Phase 13)", () => {
       fx.path,
     ]);
     expect(exitCode).toBe(0);
-    const data = JSON.parse(stdout).data;
+    const data = JSON.parse(stdout).data.items;
     expect(data).toHaveLength(1);
     expect(data[0].title).toBe("fresh");
     expect(data[0].changeKind).toBe("created");
@@ -1870,14 +1884,14 @@ describe("cli did-you-mean fallback (item 4)", () => {
     expect(out.stderr).toContain("or try: `things search 'outru'`");
   });
 
-  it("--json carries error.details.candidates (standard item shapes), exit 2", () => {
+  it("--json carries error.detail.candidates (standard item shapes), exit 2", () => {
     seedWorld();
     const out = runCli(["outru", "--json", "--db", fx!.path]);
     expect(out.exitCode).toBe(2);
     const env = JSON.parse(out.stdout);
     expect(env.ok).toBe(false);
     expect(env.error.code).toBe("not-found");
-    const titles = env.error.details.candidates.map((c: { title: string }) => c.title);
+    const titles = env.error.detail.candidates.map((c: { title: string }) => c.title);
     expect(titles).toEqual(expect.arrayContaining(["OutRun Restoration", "OutRun Wiring"]));
   });
 
@@ -1890,7 +1904,7 @@ describe("cli did-you-mean fallback (item 4)", () => {
     expect(json.exitCode).toBe(2);
     const env = JSON.parse(json.stdout);
     expect(env.ok).toBe(false);
-    expect(env.error.details.candidates).toHaveLength(10);
+    expect(env.error.detail.candidates).toHaveLength(10);
     const human = runCliErr(["match", "--db", fx!.path]);
     expect(human.exitCode).toBe(2);
     expect(human.stderr).toContain("5 more — `things search 'match'`");
@@ -1909,19 +1923,19 @@ describe("cli did-you-mean fallback (item 4)", () => {
     // `things project <miss>` (namespace implied-show) → projects only.
     const nsProj = JSON.parse(runCli(["project", "outru", "--json", "--db", fx!.path]).stdout);
     expect(
-      nsProj.error.details.candidates.every((c: { type?: string }) => c.type === "project"),
+      nsProj.error.detail.candidates.every((c: { type?: string }) => c.type === "project"),
     ).toBe(true);
     // explicit `things project show <miss>` → projects only.
     const typedProj = JSON.parse(
       runCli(["project", "show", "outru", "--json", "--db", fx!.path]).stdout,
     );
-    expect(typedProj.error.details.candidates.length).toBeGreaterThan(0);
+    expect(typedProj.error.detail.candidates.length).toBeGreaterThan(0);
     // `things area <miss>` → areas only (OutRun projects excluded).
     const nsArea = JSON.parse(runCli(["area", "outru", "--json", "--db", fx!.path]).stdout);
-    expect(nsArea.error.details.candidates).toHaveLength(0);
+    expect(nsArea.error.detail.candidates).toHaveLength(0);
     // untyped bare noun keeps the mixed list.
     const untyped = JSON.parse(runCli(["outru", "--json", "--db", fx!.path]).stdout);
-    expect(untyped.error.details.candidates.length).toBeGreaterThan(0);
+    expect(untyped.error.detail.candidates.length).toBeGreaterThan(0);
   });
 
   it("a to-do TITLE never resolves on the sugar path (reachable only via uuid/did-you-mean)", () => {
@@ -1933,7 +1947,7 @@ describe("cli did-you-mean fallback (item 4)", () => {
     const env = JSON.parse(
       runCli(["Read Thread on Astro City Restoration", "--json", "--db", fx!.path]).stdout,
     );
-    expect(env.error.details.candidates.map((c: { title: string }) => c.title)).toContain(
+    expect(env.error.detail.candidates.map((c: { title: string }) => c.title)).toContain(
       "Read Thread on Astro City Restoration",
     );
   });
@@ -1961,7 +1975,7 @@ describe("cli sugar routing tiers (refinements B/C)", () => {
     // The typed command keeps the historical prefix tier.
     const typed = runCli(["area", "show", "AbCdEf", "--json", "--db", fx.path]);
     expect(typed.exitCode).toBe(0);
-    expect(JSON.parse(typed.stdout).data.area.title).toBe("Zone");
+    expect(JSON.parse(typed.stdout).data.view.area.title).toBe("Zone");
   });
 });
 
@@ -1974,9 +1988,12 @@ describe("cli search heading doctrine + ranking (item 5)", () => {
     expect(human.stdout).toContain("Arcade Restoration");
     expect(human.stdout).toContain('(via heading "Fix OutRun Steering Wheel")');
     const env = JSON.parse(runCli(["search", "OutRun", "--json", "--db", fx.path]).stdout);
-    expect(env.data).toHaveLength(1);
-    expect(env.data[0].type).toBe("project");
-    expect(env.data[0].matchedVia).toEqual({ kind: "heading", title: "Fix OutRun Steering Wheel" });
+    expect(env.data.items).toHaveLength(1);
+    expect(env.data.items[0].type).toBe("project");
+    expect(env.data.items[0].matchedVia).toEqual({
+      kind: "heading",
+      title: "Fix OutRun Steering Wheel",
+    });
   });
 
   it("ranks title > notes and projects above to-dos (before the cap)", () => {
@@ -1985,7 +2002,7 @@ describe("cli search heading doctrine + ranking (item 5)", () => {
     seedTodo(fx.db, { title: "widget todo", modificationDate: 1_700_000_000 });
     seedProject(fx.db, { title: "widget project", modificationDate: 1_700_000_000, index: 1 });
     const env = JSON.parse(runCli(["search", "widget", "--json", "--db", fx.path]).stdout);
-    expect(env.data.map((i: { title: string }) => i.title)).toEqual([
+    expect(env.data.items.map((i: { title: string }) => i.title)).toEqual([
       "widget project",
       "widget todo",
       "note only",
@@ -2000,7 +2017,7 @@ describe("overdue filter (cli)", () => {
     seedTodo(fx.db, { title: "due-today", start: "active", deadline: isoFromToday(0) });
     seedTodo(fx.db, { title: "future", start: "active", deadline: isoFromToday(3) });
     const env = JSON.parse(runCli(["today", "--overdue", "--json", "--db", fx.path]).stdout);
-    expect(env.data.today.map((i: { title: string }) => i.title)).toEqual(["past"]);
+    expect(env.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual(["past"]);
   });
 
   it("is a content scope: it never lifts the default row cap", () => {
@@ -2016,12 +2033,12 @@ describe("overdue filter (cli)", () => {
       });
     }
     const capped = JSON.parse(runCli(["inbox", "--overdue", "--json", "--db", fx.path]).stdout);
-    expect(capped.data).toHaveLength(50);
+    expect(capped.data.items).toHaveLength(50);
     // --all (a volume lift) still reveals them all — overdue composes with it.
     const all = JSON.parse(
       runCli(["inbox", "--overdue", "--all", "--json", "--db", fx.path]).stdout,
     );
-    expect(all.data).toHaveLength(55);
+    expect(all.data.items).toHaveLength(55);
   });
 
   it("search --overdue refuses the status-widening flags", () => {
@@ -2034,7 +2051,9 @@ describe("overdue filter (cli)", () => {
     // On its own it is accepted and narrows the needle.
     const ok = runCli(["search", "widget", "--overdue", "--json", "--db", fx.path]);
     expect(ok.exitCode).toBe(0);
-    expect(JSON.parse(ok.stdout).data.map((i: { title: string }) => i.title)).toEqual(["widget"]);
+    expect(JSON.parse(ok.stdout).data.items.map((i: { title: string }) => i.title)).toEqual([
+      "widget",
+    ]);
   });
 });
 
@@ -2048,7 +2067,7 @@ describe("overdue in container views (cli)", () => {
     seedProject(fx.db, { title: "proj-none", area, index: 4 });
     const env = JSON.parse(runCli(["projects", "--overdue", "--json", "--db", fx.path]).stdout);
     // due-today is NOT overdue (strict <); no-deadline and future drop too.
-    expect(env.data.map((p: { title: string }) => p.title)).toEqual(["proj-overdue"]);
+    expect(env.data.items.map((p: { title: string }) => p.title)).toEqual(["proj-overdue"]);
   });
 
   it("project show --overdue filters children and collapses empty headings", () => {
@@ -2072,11 +2091,11 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.project.title).toBe("Launch");
-    expect(env.data.active.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
+    expect(env.data.view.project.title).toBe("Launch");
+    expect(env.data.view.active.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
     // Phase 2 collapsed (no surviving child); Phase 1 kept.
-    expect(env.data.headings).toHaveLength(1);
-    expect(env.data.headings[0].heading.title).toBe("Phase 1");
+    expect(env.data.view.headings).toHaveLength(1);
+    expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
     // The TTY render omits the collapsed heading entirely.
     const tty = runCli(["project", "show", "Launch", "--overdue", "--db", fx.path]).stdout;
     expect(tty).toContain("Phase 1");
@@ -2101,8 +2120,8 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.active.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
-    expect(env.data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
+    expect(env.data.view.active.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
+    expect(env.data.view.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
     const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
     expect(tty).not.toContain("buried-overdue");
     expect(tty).not.toContain("proj-clean");

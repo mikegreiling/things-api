@@ -6,7 +6,7 @@ import type { AuditWriter } from "./audit/log.ts";
 import { createAuditWriter } from "./audit/log.ts";
 import { loadConfig, type ThingsApiConfig } from "./config.ts";
 import { resolveClock, clockMeta as buildClockMeta, type ClockMeta } from "./model/clock.ts";
-import { PKG_VERSION, type GroupedTruncation, type Truncation } from "./contracts.ts";
+import { PKG_VERSION, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import {
@@ -250,20 +250,21 @@ export interface BoundedTodayView {
 
 /**
  * A bounded sidebar catalogue (anytime/someday): `view` is the
- * per-block-capped sections and `grouped` the per-block counts (identity-
- * carrying, project blocks nested under their area/loose block).
+ * per-block-capped sections and `truncation` the unified completeness metadata
+ * whose `blocks` carry the identity-bearing per-block counts (project blocks
+ * nested under their area/loose block).
  */
 export interface BoundedSectionsView {
   view: SidebarSection[];
-  grouped: GroupedTruncation;
+  truncation: Truncation;
   /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
   filter?: ViewFilterMeta;
 }
 
-/** A bounded composite area card: the per-section-capped view and the per-block counts. */
+/** A bounded composite area card: the per-section-capped view and the per-block truncation. */
 export interface BoundedAreaView {
   view: AreaView;
-  grouped: GroupedTruncation;
+  truncation: Truncation;
 }
 
 /** Resolve a flat-view row cap (omitted → default 50; null or all → unbounded). */
@@ -888,11 +889,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
-        const { data, grouped } = previewSections(
+        const { data, truncation } = previewSections(
           sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, PROJECT_PREVIEW_LIMIT),
         );
-        return { view: data, grouped, ...(filter !== undefined && { filter }) };
+        return { view: data, truncation, ...(filter !== undefined && { filter }) };
       },
       upcoming: (o) => {
         let items = upcomingView(conn.db, now(), o, zoneOf(o));
@@ -915,11 +916,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
-        const { data, grouped } = previewSomedaySections(
+        const { data, truncation } = previewSomedaySections(
           sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, null),
         );
-        return { view: data, grouped, ...(filter !== undefined && { filter }) };
+        return { view: data, truncation, ...(filter !== undefined && { filter }) };
       },
       logbook: (o) => {
         // The bound is the truncation cap; the underlying query stays unbounded
@@ -986,13 +987,13 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
               : { where: "0", binds: [] as (string | number)[] };
           resolveAreaUuid(conn.db, ref, { scopeWhere: clause.where, scopeBinds: clause.binds });
         }
-        const { data, grouped } = capAreaSections(
+        const { data, truncation } = capAreaSections(
           areaView(conn.db, ref, now(), o ?? {}, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
           now(),
           zoneOf(o),
         );
-        return { view: data, grouped };
+        return { view: data, truncation };
       },
       areas: () => {
         const areas = areasView(conn.db);
