@@ -222,6 +222,7 @@ export * from "./surface-copy.ts";
 
 // Pure model/read helpers the presentation layers reuse.
 export { omitEmpty } from "./model/serialize.ts";
+export { shapeReadPayload } from "./read/shape.ts";
 export { localToday } from "./model/dates.ts";
 export { templateStatus } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";

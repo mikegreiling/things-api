@@ -63,6 +63,7 @@ import {
   AREA_PREVIEW_LIMIT,
   ExitCode,
   FILTER_CONTRACT,
+  FULL_DESC,
   GROUPED_ALL_DESC,
   LIMIT_DESC,
   localToday,
@@ -162,6 +163,7 @@ export function registerReadCommands(program: Command): void {
     .option("--area <ref>", AREA_FILTER_DESC)
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -239,6 +241,7 @@ export function registerReadCommands(program: Command): void {
     .option("--until <when>", `only captures created on/before this bound: ${PERIOD_UNTIL}`)
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -350,6 +353,7 @@ export function registerReadCommands(program: Command): void {
     .option("--area-limit <n>", AREA_LIMIT_DESC)
     .option("--project-limit <n>", PROJECT_LIMIT_DESC)
     .option("--all", GROUPED_ALL_DESC)
+    .option("--full", FULL_DESC)
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -456,6 +460,7 @@ export function registerReadCommands(program: Command): void {
         "n caps each project's list (bare flag: every item)",
     )
     .option("--all", GROUPED_ALL_DESC)
+    .option("--full", FULL_DESC)
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
@@ -592,6 +597,7 @@ export function registerReadCommands(program: Command): void {
     .option("--untagged", UNTAGGED_DESC)
     .option("--horizon <n>", "occurrences per repeating item (default 1 = UI parity)")
     .option("--area <ref>", AREA_FILTER_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -745,6 +751,7 @@ export function registerReadCommands(program: Command): void {
     .option("--tag <ref>", TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action(
@@ -828,6 +835,7 @@ export function registerReadCommands(program: Command): void {
     .description("Trashed items (trashed=1 flag, any status), most recently modified first")
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts & { limit?: string; all?: boolean }) => {
@@ -863,6 +871,7 @@ export function registerReadCommands(program: Command): void {
     .option("--show-logged [n]", "showing one project: include logged items (bare = all)")
     .option("--overdue", "only projects past their deadline (due today is not overdue)")
     .option("--all", "include someday/future-scheduled projects (same as --show-later)")
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
   addTagFilterOptions(projects).action(
@@ -986,6 +995,7 @@ export function registerReadCommands(program: Command): void {
       "--overdue",
       "showing one area: only rows whose own deadline is past (due today is not overdue)",
     )
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
   addTagFilterOptions(areas).addHelpText("after", CONTAINER_TAG_HINT);
@@ -1086,6 +1096,7 @@ export function registerReadCommands(program: Command): void {
     )
     .option("--limit <n>", LIMIT_DESC)
     .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .action((opts: GlobalReadOpts & { since: string; limit?: string; all?: boolean }) => {
@@ -1134,6 +1145,7 @@ export function registerReadCommands(program: Command): void {
     .option("--type <kind>", "todo | project")
     .option("--logged", "include completed/canceled items")
     .option("--trashed", "include trashed items")
+    .option("--full", FULL_DESC)
     .option(
       "--all",
       "everything, unbounded: open + logged + trashed, with no row limit (excludes --limit)",

@@ -6,6 +6,7 @@ import { localToday } from "../../src/model/dates.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
+  seedChecklistItem,
   seedHeading,
   seedProject,
   seedTag,
@@ -2193,5 +2194,82 @@ describe("overdue in container views (cli)", () => {
         expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, error: { code: "usage" } });
       });
     });
+  });
+});
+
+describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
+  it("inbox defaults to the compact tier; --full restores the full record", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "capture", start: "inbox", notes: "one short line" });
+
+    const compact = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
+    const crow = compact.data.items[0];
+    // Identity + structural facts present; defaults and timestamps pruned.
+    expect(crow.uuid).toBeDefined();
+    expect(crow.title).toBe("capture");
+    expect("status" in crow).toBe(false); // open
+    expect("logged" in crow).toBe(false); // false
+    expect("trashed" in crow).toBe(false); // false
+    expect("created" in crow).toBe(false);
+    expect("modified" in crow).toBe(false);
+    expect("repeating" in crow).toBe(false); // all-false omitted
+
+    const full = JSON.parse(runCli(["inbox", "--full", "--json", "--db", fx.path]).stdout);
+    const frow = full.data.items[0];
+    expect(frow.status).toBe("open");
+    expect(frow.logged).toBe(false);
+    expect(frow.trashed).toBe(false);
+    expect("created" in frow).toBe(true);
+    expect("modified" in frow).toBe(true);
+  });
+
+  it("compact notes carry a first-line preview + notesTruncated marker", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "multi", start: "inbox", notes: "first line\nsecond line" });
+    const env = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
+    const row = env.data.items[0];
+    expect(row.notes).toBe("first line");
+    expect(row.notesTruncated).toBe(true);
+  });
+
+  it("checklist counts are reshaped into a presence-keyed checklist object", () => {
+    fx = buildFixtureDb();
+    const withList = seedTodo(fx.db, {
+      title: "has list",
+      start: "inbox",
+      checklistItemsCount: 2,
+      openChecklistItemsCount: 1,
+    });
+    seedChecklistItem(fx.db, withList, "step 1", { status: "completed" });
+    seedChecklistItem(fx.db, withList, "step 2");
+    seedTodo(fx.db, { title: "no list", start: "inbox" });
+
+    const env = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
+    const byTitle = Object.fromEntries(
+      env.data.items.map((i: Record<string, unknown>) => [i["title"], i]),
+    );
+    expect(byTitle["has list"].checklist).toEqual({ open: 1, total: 2 });
+    expect("checklistItemsCount" in byTitle["has list"]).toBe(false);
+    expect("openChecklistItemsCount" in byTitle["has list"]).toBe(false);
+    expect("checklist" in byTitle["no list"]).toBe(false); // presence-keyed
+
+    // detail nests the items under checklist.items.
+    const detail = JSON.parse(runCli(["todo", "show", withList, "--json", "--db", fx.path]).stdout);
+    expect(detail.data.item.checklist.open).toBe(1);
+    expect(detail.data.item.checklist.total).toBe(2);
+    expect(detail.data.item.checklist.items).toHaveLength(2);
+  });
+
+  it("the trash view drops the implied trashed flag; search keeps it to disambiguate", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "gone forever", trashed: true });
+
+    const trash = JSON.parse(runCli(["trash", "--json", "--db", fx.path]).stdout);
+    expect("trashed" in trash.data.items[0]).toBe(false);
+
+    const search = JSON.parse(
+      runCli(["search", "gone forever", "--trashed", "--json", "--db", fx.path]).stdout,
+    );
+    expect(search.data.items[0].trashed).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ import {
   okEnvelope,
   omitEmpty,
   openThings,
+  shapeReadPayload,
   ReferenceResolutionError,
   schemaWarnings,
   ThingsDbNotFoundError,
@@ -74,6 +75,14 @@ export function wrapEnvelopeData(kind: string, data: unknown): unknown {
 export interface GlobalReadOpts {
   json?: boolean;
   db?: string;
+  /**
+   * Force the FULL detail tier (R7) in a list context — restore the per-row
+   * density a compact list drops (`created`/`modified`, the full `repeating`
+   * block, full `notes`, the default-valued fields). Set by the `--full` flag on
+   * the list-emitting commands; absent = the compact default. The no-redundant-
+   * ancestry pruning (R6) is applied regardless.
+   */
+  full?: boolean;
 }
 
 /**
@@ -192,8 +201,9 @@ export function runRead<T>(
       // Omit-empty applies to the entity/data payload only (contracts.md); the
       // envelope meta/truncation is untouched, and the human render below keeps
       // the full, unpruned `data`.
+      const shaped = shapeReadPayload(effectiveKind, data, opts.full === true);
       process.stdout.write(
-        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, data)), meta))}\n`,
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped)), meta))}\n`,
       );
     } else {
       const lines = precomputed ?? render(data);

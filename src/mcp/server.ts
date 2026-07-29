@@ -26,6 +26,7 @@ import {
   DEFAULT_LIST_LIMIT,
   diagnose,
   FILTER_CONTRACT,
+  FULL_DESC,
   hasTagPresence,
   isValidTimeZone,
   LIMIT_DESC,
@@ -42,6 +43,7 @@ import {
   ReferenceResolutionError,
   REMINDER_FORMAT,
   schemaWarnings,
+  shapeReadPayload,
   splitWhenSugar,
   tagFilterFields,
   tagFlagConflict,
@@ -733,6 +735,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             "show everything (flat views: no row limit; anytime/someday: no per-block caps); " +
               ALL_WINS_NOTE,
           ),
+        full: z.boolean().optional().describe(FULL_DESC),
       },
       annotations: READ_ONLY,
     },
@@ -740,6 +743,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       // The active `area` scope, resolved during the read and surfaced as the
       // additive `meta.filter` (the readGuard extra-meta thunk reads it after fn).
       let filterMeta: ViewFilterMeta | undefined;
+      const full = args.full === true;
       return readGuard(
         () => {
           const badZone = badTz(args.tz);
@@ -819,11 +823,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(view, truncation);
+              return truncatedResult(shapeReadPayload("today", view, full), truncation);
             }
             case "inbox": {
               const { items, truncation } = c.read.inbox({ ...filter, ...zone, limit });
-              return truncatedResult(items, truncation);
+              return truncatedResult(shapeReadPayload("inbox", items, full), truncation);
             }
             case "anytime": {
               const {
@@ -838,7 +842,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit,
               });
               filterMeta = fm;
-              return groupedResult(view, truncation);
+              return groupedResult(shapeReadPayload("anytime", view, full), truncation);
             }
             case "upcoming": {
               const {
@@ -853,7 +857,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(items, truncation);
+              return truncatedResult(shapeReadPayload("upcoming", items, full), truncation);
             }
             case "someday": {
               const active = showActiveProjectItems;
@@ -876,7 +880,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit: typeof active === "number" ? active : null,
               });
               filterMeta = fm;
-              return groupedResult(view, truncation);
+              return groupedResult(shapeReadPayload("someday", view, full), truncation);
             }
             case "logbook": {
               const {
@@ -890,11 +894,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(items, truncation);
+              return truncatedResult(shapeReadPayload("logbook", items, full), truncation);
             }
             case "trash": {
               const { items, truncation } = c.read.trash({ ...zone, limit });
-              return truncatedResult(items, truncation);
+              return truncatedResult(shapeReadPayload("trash", items, full), truncation);
             }
           }
         },
@@ -934,6 +938,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             `Everything, unbounded: open + logged + trashed, no row limit; ${ALL_WINS_NOTE}`,
           ),
         limit: z.number().int().min(1).optional().describe(`${LIMIT_DESC}; ${LIMIT_IGNORED_NOTE}`),
+        full: z.boolean().optional().describe(FULL_DESC),
       },
       annotations: READ_ONLY,
     },
@@ -972,7 +977,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ...(args.trashed === true && { trashed: true }),
           ...(args.all === true && { all: true }),
         });
-        return truncatedResult(items, truncation);
+        return truncatedResult(shapeReadPayload("search", items, args.full === true), truncation);
       }, args.tz),
   );
 
@@ -988,6 +993,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         since: z.string().describe("ISO date-time, e.g. 2026-07-06T08:00:00"),
         ...limitShape,
         ...tzShape,
+        full: z.boolean().optional().describe(FULL_DESC),
       },
       annotations: READ_ONLY,
     },
@@ -1005,7 +1011,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           limit,
           ...(args.tz !== undefined && { zone: args.tz }),
         });
-        return truncatedResult(items, truncation);
+        return truncatedResult(shapeReadPayload("changes", items, args.full === true), truncation);
       }, args.tz),
   );
 
@@ -1025,7 +1031,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const item = getClient().read.byUuid(args.uuid);
         return item === null
           ? errorResult({ code: "not-found", message: noUuidMatch("item", args.uuid) })
-          : readResult(item);
+          : readResult(shapeReadPayload("detail", item, false));
       }),
   );
 
@@ -1047,6 +1053,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe(
             "Keep only child to-dos past their deadline (due today is not overdue); headings left empty are dropped",
           ),
+        full: z.boolean().optional().describe(FULL_DESC),
       },
       annotations: READ_ONLY,
     },
@@ -1056,11 +1063,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         if (badZone !== null) return badZone;
         if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         return readResult(
-          getClient().read.projectView(args.uuid, {
-            overdue: args.overdue === true,
-            ...tagFilterFields(tagPresence(args)),
-            ...(args.tz !== undefined && { zone: args.tz }),
-          }),
+          shapeReadPayload(
+            "project-view",
+            getClient().read.projectView(args.uuid, {
+              overdue: args.overdue === true,
+              ...tagFilterFields(tagPresence(args)),
+              ...(args.tz !== undefined && { zone: args.tz }),
+            }),
+            args.full === true,
+          ),
         );
       }, args.tz),
   );
@@ -1098,6 +1109,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             "Keep only rows (loose to-dos AND child projects) whose own deadline is past (due today is not overdue); no descent into project contents",
           ),
         all: z.boolean().optional().describe("return both sections in full (no caps)"),
+        full: z.boolean().optional().describe(FULL_DESC),
       },
       annotations: READ_ONLY,
     },
@@ -1118,7 +1130,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           areaLimit,
           projectLimit,
         });
-        return groupedResult(view, truncation);
+        return groupedResult(shapeReadPayload("area-view", view, args.full === true), truncation);
       }, args.tz),
   );
 
@@ -1140,6 +1152,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe(
             "projects only: keep only projects past their deadline (due today is not overdue); areas/tags carry no deadline and reject it",
           ),
+        full: z.boolean().optional().describe(`projects only: ${FULL_DESC}`),
       },
       annotations: READ_ONLY,
     },
@@ -1171,15 +1184,19 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
         return readResult(
-          args.kind === "projects"
-            ? c.read.projects({
-                overdue: args.overdue === true,
-                ...tagFilterFields(tagPresence(args)),
-                ...(args.tz !== undefined && { zone: args.tz }),
-              })
-            : args.kind === "areas"
-              ? c.read.areas()
-              : c.read.tags(),
+          shapeReadPayload(
+            args.kind,
+            args.kind === "projects"
+              ? c.read.projects({
+                  overdue: args.overdue === true,
+                  ...tagFilterFields(tagPresence(args)),
+                  ...(args.tz !== undefined && { zone: args.tz }),
+                })
+              : args.kind === "areas"
+                ? c.read.areas()
+                : c.read.tags(),
+            args.full === true,
+          ),
         );
       }, args.tz),
   );

@@ -3,7 +3,7 @@
  */
 import type { Command } from "commander";
 
-import { localToday, type ProjectView, type Todo } from "../../index.ts";
+import { FULL_DESC, localToday, type ProjectView, type Todo } from "../../index.ts";
 import { bold, dim, green, underline } from "../style.ts";
 import {
   countChip,
@@ -200,6 +200,7 @@ export type ProjectShowActionOpts = ProjectShowOpts &
     json?: boolean;
     db?: string;
     all?: boolean;
+    full?: boolean;
     /** Content scope: keep only child to-dos whose own deadline is overdue. */
     overdue?: boolean;
   };
@@ -261,6 +262,7 @@ export function registerProjectCommands(program: Command): void {
       "--all",
       "reveal the later rows (same as --show-later; logged stays behind --show-logged)",
     )
+    .option("--full", FULL_DESC)
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");
   addTagFilterOptions(projectShow)
