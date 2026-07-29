@@ -199,7 +199,17 @@ export {
   PKG_VERSION,
   verifyFailedCode,
 } from "./contracts.ts";
-export type { Envelope, EnvelopeMeta, ErrorCode, ErrorEnvelope, OkEnvelope } from "./contracts.ts";
+export type {
+  Envelope,
+  EnvelopeMeta,
+  ErrorCode,
+  ErrorEnvelope,
+  OkEnvelope,
+  WireData,
+  WireEnvelope,
+  WireOkEnvelope,
+  WireOkKind,
+} from "./contracts.ts";
 
 // ---------------------------------------------------------------------------
 // Consumer-surface support: everything below is exported so the CLI and MCP

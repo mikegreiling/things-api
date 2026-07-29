@@ -17,6 +17,7 @@
   "files": [
     "bin",
     "dist",
+    "schema",
     "shortcuts",
     "skills"
   ],
@@ -32,6 +33,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "npm run check && npm run build && node scripts/stamp-skill.mjs",
     "smoke:pack": "bash scripts/pack-smoke.sh",
+    "schema:gen": "node scripts/generate-schema.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "fmt": "oxfmt",
@@ -57,9 +59,11 @@
     "@earendil-works/pi-agent-core": "0.80.10",
     "@earendil-works/pi-ai": "0.80.10",
     "@types/node": "^24.13.2",
+    "ajv": "8.20.0",
     "just-bash": "3.1.0",
     "oxfmt": "^0.57.0",
     "oxlint": "^1.72.0",
+    "ts-json-schema-generator": "2.9.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
