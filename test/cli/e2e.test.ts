@@ -480,7 +480,10 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     }
   });
 
-  it("the echo hint reconstructs repeated tag flags", () => {
+  // Seeds ~120 tagged rows — the default 5 s budget has flaked on loaded CI
+  // runners (green on rerun); explicit 30 s budget, matching the bench-world
+  // five-seed loops (#283).
+  it("the echo hint reconstructs repeated tag flags", { timeout: 30_000 }, () => {
     fx = buildFixtureDb();
     for (let i = 0; i < 60; i++) {
       const uuid = seedTodo(fx.db, { title: `cap ${i}`, start: "inbox", index: i });
