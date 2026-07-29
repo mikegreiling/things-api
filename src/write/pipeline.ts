@@ -99,9 +99,12 @@ export interface WriteOptions extends Acknowledgements {
    */
   undoOf?: string;
   /**
-   * Client idempotency id for a batch line (set by the batch orchestrator, not
-   * callers): recorded on the audit record so a resubmitted batch can skip an
-   * already-applied line. Additive; never affects dispatch.
+   * Client idempotency id — a batch line's `opId` (set by the batch
+   * orchestrator) OR a single mutation's `--op-id` (set by the client `run`
+   * entry). Recorded on the audit record so a resubmission carrying the same id
+   * is recognized as already-applied. Recording is additive and never affects
+   * dispatch; the single-op idempotency CHECK (skip-and-replay on a match) runs
+   * in the client `run` entry before this pipeline is reached.
    */
   opId?: string;
   /**
@@ -170,6 +173,14 @@ export type MutationResult =
        * were touched.
        */
       touched?: string[];
+      /**
+       * Idempotency replay (ADDITIVE, presence-keyed): `true` when this result
+       * did NOT execute — a mutation carrying an `opId` matched a prior verified
+       * `ok` record with the same id in the recent change history, so the earlier
+       * change stands and nothing ran again. The `uuid`/`title`/`undoToken` echo
+       * the ORIGINAL mutation's identity. Absent on a normal (executed) result.
+       */
+      alreadyApplied?: true;
     }
   | {
       kind: "verify-failed";
@@ -974,6 +985,43 @@ export async function runMutation<K extends OperationKind>(
   } finally {
     lock.release();
   }
+}
+
+/**
+ * Build the single-op idempotency REPLAY result from the matched audit record —
+ * a `kind: "ok"` MutationResult that did not execute (`alreadyApplied: true`),
+ * echoing the ORIGINAL mutation's identity. Mirrors the pipeline's own
+ * result-shaping: the `undoToken` is surfaced under the SAME rule the executor
+ * uses (only for a non-leg, reversible op — an irreversible op or a batch leg
+ * carries none), and `title` rides `requested.title` when the record stored one
+ * (the audit record has no dedicated title field — see the trail-record note).
+ */
+export function replayResultFromRecord(record: AuditRecord): MutationResult {
+  const op = record.op as OperationKind;
+  const reversible = REVERSIBILITY[op]?.class !== "irreversible";
+  const token =
+    record.txn?.role === "leg" || !reversible
+      ? undefined
+      : undoToken({
+          ts: record.ts,
+          op: record.op,
+          actor: record.actor,
+          host: record.host,
+          uuid: record.uuid,
+          ...(record.txn !== undefined && { txn: record.txn }),
+        });
+  const title = record.requested["title"];
+  return {
+    kind: "ok",
+    op,
+    uuid: record.uuid,
+    ...(typeof title === "string" && { title }),
+    observed: record.observed,
+    vector: (record.vector ?? "url-scheme") as VectorId,
+    tier: (record.disruption ?? 0) as DisruptionTier,
+    ...(token !== undefined && { undoToken: token }),
+    alreadyApplied: true,
+  };
 }
 
 export function fingerprintLabel(

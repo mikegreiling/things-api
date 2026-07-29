@@ -237,6 +237,7 @@ export type { TagRef } from "./model/entities.ts";
 
 // Write-path values/types the surfaces render or gate on.
 export { outcomeFailed } from "./write/batch.ts";
+export { OP_ID_RE } from "./write/opid.ts";
 export { BOUNCE_MAX_ITEMS } from "./write/reorder.ts";
 export type {
   MonthlyAnchor,
