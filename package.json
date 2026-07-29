@@ -34,6 +34,7 @@
     "prepublishOnly": "npm run check && npm run build && node scripts/stamp-skill.mjs",
     "smoke:pack": "bash scripts/pack-smoke.sh",
     "schema:gen": "node scripts/generate-schema.ts",
+    "explore": "node scripts/explore/server.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "fmt": "oxfmt",

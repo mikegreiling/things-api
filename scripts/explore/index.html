@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>things explore</title>
+    <style>
+      :root {
+        --bg: #fafbfc;
+        --bg-raise: #ffffff;
+        --bg-code: #f2f5f7;
+        --ink: #1a2330;
+        --ink-soft: #4c5a6b;
+        --ink-faint: #8494a6;
+        --line: #dde4ea;
+        --accent: #0e9188;
+        --accent-soft: #e3f2f0;
+        --key: #205f9e;
+        --str: #9a3b62;
+        --lit: #6d5bd0;
+        --note: #b45309;
+        --note-soft: #f9efe2;
+        --bad: #b3372f;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #10151c;
+          --bg-raise: #171e27;
+          --bg-code: #141b24;
+          --ink: #dce3ec;
+          --ink-soft: #9fadbd;
+          --ink-faint: #64748b;
+          --line: #27313d;
+          --accent: #3fc1b6;
+          --accent-soft: #14312f;
+          --key: #7fb3e8;
+          --str: #d98cab;
+          --lit: #a795f0;
+          --note: #e8a13c;
+          --note-soft: #33270f;
+          --bad: #e07a72;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Seravek", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.55;
+      }
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 32px 24px 80px;
+      }
+      h1 {
+        font-size: 1.35rem;
+        font-weight: 600;
+        margin: 6px 0 2px;
+      }
+      .eyebrow {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.7rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .banner {
+        background: var(--note-soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.82rem;
+        color: var(--ink-soft);
+        margin: 12px 0 20px;
+      }
+      .banner b {
+        color: var(--note);
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin: 0 0 10px;
+      }
+      select,
+      .cmdwrap,
+      button.primary {
+        font: inherit;
+      }
+      select {
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--bg-raise);
+        color: var(--ink);
+        max-width: 100%;
+      }
+      .cmdwrap {
+        display: flex;
+        flex: 1 1 420px;
+        align-items: center;
+        gap: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg-raise);
+        overflow: hidden;
+      }
+      .cmdwrap:focus-within {
+        border-color: var(--accent);
+      }
+      .chip {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.85rem;
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding: 8px 10px;
+        user-select: none;
+        white-space: nowrap;
+      }
+      #cmd {
+        flex: 1;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--ink);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.9rem;
+        padding: 8px 10px;
+        min-width: 200px;
+      }
+      button.primary {
+        padding: 8px 18px;
+        border-radius: 8px;
+        border: 1px solid var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.primary:hover {
+        filter: brightness(1.05);
+      }
+      button.primary:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .metaline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: baseline;
+        margin: 10px 0 6px;
+        font-size: 0.78rem;
+        color: var(--ink-faint);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      .metaline .ok {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .metaline .bad {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      .metaline .forced {
+        color: var(--note);
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .toolbar button {
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 3px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: var(--bg-raise);
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+      .toolbar button:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .viewer {
+        background: var(--bg-code);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        overflow-x: auto;
+        font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Code", monospace;
+        font-size: 12.5px;
+        line-height: 1.6;
+        min-height: 60px;
+      }
+      .viewer details {
+        margin: 0;
+      }
+      .viewer details > div {
+        margin-left: 20px;
+        border-left: 1px solid var(--line);
+        padding-left: 12px;
+      }
+      .viewer summary {
+        cursor: pointer;
+        list-style: none;
+        white-space: nowrap;
+      }
+      .viewer summary::-webkit-details-marker {
+        display: none;
+      }
+      .viewer summary::before {
+        content: "▸";
+        display: inline-block;
+        width: 14px;
+        color: var(--ink-faint);
+      }
+      .viewer details[open] > summary::before {
+        content: "▾";
+      }
+      .viewer .row {
+        white-space: nowrap;
+        padding-left: 14px;
+      }
+      .k {
+        color: var(--key);
+      }
+      .s {
+        color: var(--str);
+      }
+      .l {
+        color: var(--lit);
+      }
+      .p {
+        color: var(--ink-faint);
+      }
+      .placeholder {
+        color: var(--ink-faint);
+        font-size: 0.85rem;
+      }
+      details.stderrbox {
+        margin: 10px 0 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg-raise);
+      }
+      details.stderrbox summary {
+        padding: 6px 12px;
+        font-size: 0.78rem;
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+      details.stderrbox pre {
+        margin: 0;
+        padding: 8px 14px 12px;
+        font-size: 0.75rem;
+        overflow-x: auto;
+        color: var(--ink-soft);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      h2 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin: 26px 0 6px;
+      }
+      #history {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      #history button {
+        text-align: left;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.78rem;
+        padding: 5px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: var(--bg-raise);
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+      #history button:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">things-api · local debug view</div>
+      <h1>things explore</h1>
+      <div class="banner">
+        <b>Live:</b> reads run against your default Things DB ·
+        <b>mutations are always <code>--dry-run</code></b> (forced server-side) ·
+        <code>--json</code> implied · localhost only
+      </div>
+
+      <div class="controls">
+        <select id="presets">
+          <option value="">presets…</option>
+          <optgroup label="Views">
+            <option>inbox</option>
+            <option>today</option>
+            <option>upcoming</option>
+            <option>anytime</option>
+            <option>someday</option>
+            <option>logbook</option>
+            <option>trash</option>
+          </optgroup>
+          <optgroup label="Cards" id="cards"></optgroup>
+          <optgroup label="Search">
+            <option value="search ">search …</option>
+          </optgroup>
+          <optgroup label="Introspection">
+            <option>capabilities</option>
+            <option>legend</option>
+            <option>doctor</option>
+          </optgroup>
+          <optgroup label="Mutations (dry-run)">
+            <option value='todo add "Example title"'>todo add "Example title"</option>
+            <option value="undo">undo (inverse plan)</option>
+          </optgroup>
+        </select>
+        <div class="cmdwrap">
+          <span class="chip">things</span>
+          <input
+            id="cmd"
+            placeholder="anytime · area show Health · search warranty …"
+            autofocus
+            spellcheck="false"
+            autocomplete="off"
+          />
+        </div>
+        <button class="primary" id="run">Run ⌘⏎</button>
+      </div>
+
+      <div class="metaline" id="meta" hidden>
+        <span id="status"></span><span id="elapsed"></span><span id="argv"></span
+        ><span id="forcednote" class="forced"></span>
+      </div>
+      <div class="toolbar" id="treebar" hidden>
+        <button id="expand">expand all</button>
+        <button id="collapse">collapse to level 2</button>
+      </div>
+      <div class="viewer" id="viewer">
+        <span class="placeholder">Run a command to explore its envelope.</span>
+      </div>
+      <details class="stderrbox" id="stderrbox" hidden>
+        <summary>stderr</summary>
+        <pre id="stderr"></pre>
+      </details>
+
+      <h2>History</h2>
+      <div id="history">
+        <span class="placeholder">Recent commands appear here (stored locally).</span>
+      </div>
+    </main>
+    <script>
+      "use strict";
+      const $ = (id) => document.getElementById(id);
+      const HISTORY_KEY = "things-explore-history";
+
+      function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+      }
+      function leaf(v) {
+        const s = el("span");
+        if (typeof v === "string") {
+          s.className = "s";
+          s.textContent = JSON.stringify(v);
+        } else {
+          s.className = "l";
+          s.textContent = String(v);
+        }
+        return s;
+      }
+      function renderNode(key, value, open) {
+        const isObj = value !== null && typeof value === "object";
+        if (!isObj) {
+          const row = el("div", "row");
+          if (key !== null)
+            row.append(
+              Object.assign(el("span", "k"), { textContent: JSON.stringify(key) }),
+              el("span", "p", ": "),
+            );
+          row.append(leaf(value));
+          return row;
+        }
+        const arr = Array.isArray(value);
+        const entries = arr ? value.map((v, i) => [i, v]) : Object.entries(value);
+        const d = el("details");
+        if (open) d.open = true;
+        const sum = el("summary");
+        if (key !== null)
+          sum.append(
+            Object.assign(el("span", "k"), { textContent: JSON.stringify(key) }),
+            el("span", "p", ": "),
+          );
+        sum.append(el("span", "p", arr ? "[" + entries.length + "]" : "{" + entries.length + "}"));
+        d.append(sum);
+        const body = el("div");
+        for (const [k, v] of entries) body.append(renderNode(arr ? null : k, v, open));
+        d.append(body);
+        return d;
+      }
+
+      function loadHistory() {
+        try {
+          return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        } catch {
+          return [];
+        }
+      }
+      function pushHistory(command) {
+        const list = loadHistory().filter((c) => c !== command);
+        list.unshift(command);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 20)));
+        renderHistory();
+      }
+      function renderHistory() {
+        const list = loadHistory();
+        const box = $("history");
+        box.textContent = "";
+        if (list.length === 0) {
+          box.append(el("span", "placeholder", "Recent commands appear here (stored locally)."));
+          return;
+        }
+        for (const c of list) {
+          const b = el("button", null, "things " + c);
+          b.addEventListener("click", () => {
+            $("cmd").value = c;
+            run();
+          });
+          box.append(b);
+        }
+      }
+
+      let running = false;
+      async function run() {
+        const command = $("cmd").value.trim();
+        if (!command || running) return;
+        running = true;
+        $("run").disabled = true;
+        try {
+          const res = await fetch("/run", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ command }),
+          });
+          const r = await res.json();
+          $("meta").hidden = false;
+          const status = $("status");
+          if (r.refused) {
+            status.textContent = "refused: " + r.refused;
+            status.className = "bad";
+            $("elapsed").textContent = "";
+            $("argv").textContent = "";
+            $("forcednote").textContent = "";
+            $("viewer").textContent = "";
+            $("viewer").append(el("span", "placeholder", r.refused));
+            $("treebar").hidden = true;
+            $("stderrbox").hidden = true;
+            return;
+          }
+          status.textContent = "exit " + r.exitCode;
+          status.className = r.exitCode === 0 ? "ok" : "bad";
+          $("elapsed").textContent = r.elapsedMs + " ms";
+          $("argv").textContent = "ran: things " + r.argv.join(" ");
+          $("forcednote").textContent = r.forced.length ? "forced: " + r.forced.join(" ") : "";
+          const viewer = $("viewer");
+          viewer.textContent = "";
+          let rendered = false;
+          for (const line of r.stdout.split("\n").filter((l) => l.trim() !== "")) {
+            try {
+              viewer.append(renderNode(null, JSON.parse(line), true));
+              rendered = true;
+            } catch {
+              const pre = el("div", "row", line);
+              viewer.append(pre);
+              rendered = true;
+            }
+          }
+          if (!rendered) viewer.append(el("span", "placeholder", "(no stdout)"));
+          $("treebar").hidden = !rendered;
+          const hasErr = r.stderr && r.stderr.trim() !== "";
+          $("stderrbox").hidden = !hasErr;
+          if (hasErr) $("stderr").textContent = r.stderr;
+          pushHistory(command);
+        } catch (err) {
+          $("viewer").textContent = "";
+          $("viewer").append(el("span", "placeholder", "request failed: " + err));
+        } finally {
+          running = false;
+          $("run").disabled = false;
+        }
+      }
+
+      $("run").addEventListener("click", run);
+      $("cmd").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+          e.preventDefault();
+          run();
+        }
+      });
+      $("presets").addEventListener("change", () => {
+        const v = $("presets").value;
+        if (!v) return;
+        $("cmd").value = v;
+        $("presets").value = "";
+        if (!v.endsWith(" ")) run();
+        else $("cmd").focus();
+      });
+      $("expand").addEventListener("click", () =>
+        $("viewer")
+          .querySelectorAll("details")
+          .forEach((d) => (d.open = true)),
+      );
+      $("collapse").addEventListener("click", () => {
+        $("viewer")
+          .querySelectorAll("details")
+          .forEach((d) => {
+            let depth = 0,
+              p = d;
+            while ((p = p.parentElement.closest("details"))) depth++;
+            d.open = depth < 2;
+          });
+      });
+
+      // Populate the card presets from the LIVE database (first area + first
+      // project) — titles are never baked into this file.
+      async function populateCards() {
+        const cards = $("cards");
+        const probe = async (view, label) => {
+          try {
+            const res = await fetch("/run", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ command: view }),
+            });
+            const r = await res.json();
+            const env = JSON.parse(r.stdout.split("\n").find((l) => l.trim() !== "") || "{}");
+            const first = env?.data?.items?.[0];
+            if (first?.title) {
+              const cmd = label + ' show "' + first.title.replaceAll('"', "") + '"';
+              const opt = el("option", null, cmd);
+              opt.value = cmd;
+              cards.append(opt);
+            }
+          } catch {
+            /* leave the group empty */
+          }
+        };
+        await probe("areas", "area");
+        await probe("projects", "project");
+        if (cards.children.length === 0)
+          cards.append(
+            Object.assign(el("option", null, "area show <name>"), { value: "area show " }),
+          );
+      }
+
+      renderHistory();
+      populateCards();
+    </script>
+  </body>
+</html>
