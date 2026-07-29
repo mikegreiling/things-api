@@ -284,6 +284,50 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view defaults to the compact tier; full: true restores the full record (R7)", async () => {
+    seedTodo(fixture.db, { title: "MCP-compact", start: "inbox" });
+    await connect([fakeVector(null).vector]);
+
+    const compact = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "inbox" } }),
+    ) as Array<Record<string, unknown>>;
+    const crow = compact.find((i) => i["title"] === "MCP-compact")!;
+    expect("status" in crow).toBe(false); // open default-pruned
+    expect("created" in crow).toBe(false);
+    expect("repeating" in crow).toBe(false);
+
+    const full = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "inbox", full: true } }),
+    ) as Array<Record<string, unknown>>;
+    const frow = full.find((i) => i["title"] === "MCP-compact")!;
+    expect(frow["status"]).toBe("open");
+    expect("created" in frow).toBe(true);
+    expect("modified" in frow).toBe(true);
+  });
+
+  it("get_project honors the full param and applies R6 ancestry stripping", async () => {
+    const area = seedArea(fixture.db, "MCP-Area", 0);
+    const proj = seedProject(fixture.db, { title: "MCP-Proj", area });
+    seedTodo(fixture.db, { title: "child", project: proj });
+    await connect([fakeVector(null).vector]);
+
+    const compact = textOf(
+      await client.callTool({ name: "get_project", arguments: { uuid: proj } }),
+    ) as { active: Array<Record<string, unknown>> };
+    const child = compact.active[0]!;
+    // R6: a project-view child drops project + area (the card states them).
+    expect("project" in child).toBe(false);
+    expect("area" in child).toBe(false);
+    expect("created" in child).toBe(false); // compact
+
+    const full = textOf(
+      await client.callTool({ name: "get_project", arguments: { uuid: proj, full: true } }),
+    ) as { active: Array<Record<string, unknown>> };
+    const fchild = full.active[0]!;
+    expect("created" in fchild).toBe(true); // full restores density
+    expect("project" in fchild).toBe(false); // R6 still applies under --full
+  });
+
   describe("read_view area filter", () => {
     it("scopes anytime to the target area and reports meta.filter", async () => {
       const alpha = seedArea(fixture.db, "Alpha", 0);
@@ -887,9 +931,15 @@ describe("things MCP server", () => {
     }
     // The reversal: an empty inherited-tag set is absent, not [].
     expect("inheritedTags" in item).toBe(false);
-    // Meaningful false/0 survive.
+    // Meaningful false survives on a detail (full tier keeps default-valued status/logged).
     expect(item["logged"]).toBe(false);
-    expect(item["checklistItemsCount"]).toBe(0);
+    // Checklist nesting (universal): the flat counts are gone from the wire, and
+    // an item with no checklist carries NO `checklist` key at all (presence-keyed).
+    expect("checklistItemsCount" in item).toBe(false);
+    expect("openChecklistItemsCount" in item).toBe(false);
+    expect("checklist" in item).toBe(false);
+    // Repeating omission (universal): the all-false block is dropped entirely.
+    expect("repeating" in item).toBe(false);
   });
 
   it("get_item keeps inheritedTags when non-empty (reversal guard)", async () => {

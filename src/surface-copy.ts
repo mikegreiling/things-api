@@ -35,6 +35,14 @@ export const LIMIT_DESC = `maximum items to show (default ${DEFAULT_LIST_LIMIT})
 /** Shared `--all`/`all` description (lift the row limit). */
 export const ALL_DESC = "show every matching item, no limit";
 
+/**
+ * Shared `--full`/`full` description — the R7 tier escape hatch. List views
+ * default to a compact line-item; this forces the full per-row record
+ * (`created`/`modified`, the full repeat block, full notes, default-valued
+ * fields). The no-redundant-ancestry pruning (R6) still applies.
+ */
+export const FULL_DESC = "full detail per row (default is a compact line-item)";
+
 /** Default per-project preview cap in the grouped catalogues (anytime). */
 export const PROJECT_PREVIEW_LIMIT = 3;
 

@@ -35,6 +35,9 @@ export interface SeedTaskOpts {
   project?: string | null;
   heading?: string | null;
   stopDate?: number | null;
+  /** The maintained checklist counters (the app keeps these on the row). */
+  checklistItemsCount?: number;
+  openChecklistItemsCount?: number;
   /** Marks the row as a repeating template. */
   recurrenceRule?: boolean;
   /** Real XML plist rule blob (implies template); overrides recurrenceRule. */
@@ -59,7 +62,7 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
        checklistItemsCount, openChecklistItemsCount,
        rt1_repeatingTemplate, rt1_recurrenceRule,
        rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, ?, NULL)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -82,6 +85,8 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     opts.area ?? null,
     opts.project ?? null,
     opts.heading ?? null,
+    opts.checklistItemsCount ?? 0,
+    opts.openChecklistItemsCount ?? 0,
     opts.repeatingTemplate ?? null,
     opts.recurrenceRuleXml !== undefined
       ? new TextEncoder().encode(opts.recurrenceRuleXml)

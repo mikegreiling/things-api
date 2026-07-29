@@ -23,6 +23,7 @@ import { DidYouMeanError } from "../did-you-mean.ts";
 import { showToggleFlags } from "./project.ts";
 import {
   AREA_PREVIEW_LIMIT,
+  FULL_DESC,
   GROUPED_ALL_DESC,
   isActiveProjectRow,
   isScheduledProjectRow,
@@ -220,6 +221,7 @@ export type AreaShowActionOpts = AreaShowOpts &
     areaLimit?: string;
     projectLimit?: string;
     all?: boolean;
+    full?: boolean;
     /** Content scope: keep only rows (loose to-dos + child projects) with an overdue own deadline. */
     overdue?: boolean;
   };
@@ -315,6 +317,7 @@ export function registerAreaCommands(program: Command): void {
     .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--overdue", "only rows whose own deadline is past (due today is not overdue)")
     .option("--all", GROUPED_ALL_DESC)
+    .option("--full", FULL_DESC)
     .addOption(new Option("--limit <n>").hideHelp())
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path");

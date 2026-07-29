@@ -9,6 +9,7 @@ import { type Command, Option } from "commander";
 
 import {
   AREA_PREVIEW_LIMIT,
+  FULL_DESC,
   GROUPED_ALL_DESC,
   stripThingsUri,
   type AnyTask,
@@ -126,6 +127,7 @@ export function registerShowCommands(program: Command): void {
       "--overdue",
       "projects/areas: only items whose own deadline is past (due today is not overdue)",
     )
+    .option("--full", FULL_DESC)
     .addOption(new Option("--limit <n>").hideHelp());
   addTagFilterOptions(show)
     .option("--json", "emit versioned JSON envelope on stdout")
@@ -141,6 +143,7 @@ export function registerShowCommands(program: Command): void {
             areaLimit?: string;
             projectLimit?: string;
             all?: boolean;
+            full?: boolean;
             overdue?: boolean;
           },
       ) => {
