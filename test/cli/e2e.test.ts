@@ -1984,20 +1984,36 @@ describe("cli sugar routing tiers (refinements B/C)", () => {
 });
 
 describe("cli search heading doctrine + ranking (item 5)", () => {
-  it("a heading-title match surfaces the parent project, annotated `via heading`", () => {
+  it("a heading-title match surfaces the parent project with an indented matched-on line", () => {
     fx = buildFixtureDb();
     const proj = seedProject(fx.db, { title: "Arcade Restoration", index: 1 });
     seedHeading(fx.db, { title: "Fix OutRun Steering Wheel", project: proj });
     const human = runCli(["search", "OutRun", "--db", fx.path]);
     expect(human.stdout).toContain("Arcade Restoration");
-    expect(human.stdout).toContain('(via heading "Fix OutRun Steering Wheel")');
+    expect(human.stdout).toContain('⤷ heading: "Fix OutRun Steering Wheel"');
     const env = JSON.parse(runCli(["search", "OutRun", "--json", "--db", fx.path]).stdout);
     expect(env.data.items).toHaveLength(1);
     expect(env.data.items[0].type).toBe("project");
-    expect(env.data.items[0].matchedVia).toEqual({
-      kind: "heading",
-      title: "Fix OutRun Steering Wheel",
+    expect(env.data.items[0].match).toEqual({
+      field: "heading",
+      text: "Fix OutRun Steering Wheel",
     });
+  });
+
+  it("a checklist-item match surfaces the parent to-do (deduped, no checklist uuids)", () => {
+    fx = buildFixtureDb();
+    const todo = seedTodo(fx.db, { title: "wire the cab" });
+    const cli1 = seedChecklistItem(fx.db, todo, "solder the jamma harness", { index: 0 });
+    seedChecklistItem(fx.db, todo, "test the jamma pinout", { index: 1 });
+    const out = runCli(["search", "jamma", "--json", "--db", fx.path]);
+    const env = JSON.parse(out.stdout);
+    expect(env.data.items).toHaveLength(1);
+    expect(env.data.items[0].uuid).toBe(todo);
+    expect(env.data.items[0].match).toEqual({
+      field: "checklist",
+      text: "solder the jamma harness",
+    });
+    expect(out.stdout).not.toContain(cli1);
   });
 
   it("ranks title > notes and projects above to-dos (before the cap)", () => {

@@ -742,6 +742,19 @@ describe("things MCP server", () => {
     expect(logged).toHaveLength(2);
   });
 
+  it("search inherits the match-provenance annotation from the library (checklist arm, no uuid)", async () => {
+    const todo = seedTodo(fixture.db, { title: "wire the cab" });
+    const cli = seedChecklistItem(fixture.db, todo, "solder the jamma harness");
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({ name: "search", arguments: { query: "jamma" } });
+    const hits = textOf(result) as Array<{ uuid: string; match?: { field: string; text: string } }>;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.uuid).toBe(todo);
+    expect(hits[0]?.match).toEqual({ field: "checklist", text: "solder the jamma harness" });
+    // The checklist-item uuid appears on NO surface.
+    expect(JSON.stringify(result)).not.toContain(cli);
+  });
+
   it("search limit + all normalizes to all winning (no usage error)", async () => {
     for (let i = 0; i < 4; i++) seedTodo(fixture.db, { title: `bulk ${i}`, index: i });
     await connect([fakeVector(null).vector]);

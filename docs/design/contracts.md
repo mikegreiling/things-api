@@ -138,6 +138,17 @@ Two shaping rules run at the read emit boundary — the CLI `--json` reads AND t
 
 The omit-empty contract below then runs on whatever the tier left, and the table describes the entity at the FULL tier (a `detail` read, or any list under `--full`); a compact list prunes further per R7.
 
+## Search match provenance (R8)
+
+`search` treats a project's HEADING titles and a to-do's CHECKLIST-item titles as searchable properties of the parent — the way it already treats notes — so a match on either surfaces the PARENT (a project for a heading, a to-do for a checklist item), never a bare heading/checklist row (the GUI has none). Every hit that matched on something OTHER than its own title carries a `match: {field, text}` annotation (`src/read/views.ts` `searchView`), shared by CLI `--json` + the MCP `search` tool + the human TTY render:
+
+- **`field`** ∈ `"heading"` | `"notes"` | `"checklist"`. **`text`** is the matched heading title, a bounded notes snippet (~80 chars, whitespace-collapsed, centered on the first occurrence with `…` elision), or the matched checklist item's title.
+- **Presence-keyed.** A TITLE match carries NO `match` (absence = matched where you'd expect). At most one annotation per hit; when several fields match, precedence is **title (none) > heading > notes > checklist** (a project matched by BOTH its notes and a child heading shows the heading annotation, though it keeps its notes RANK — the rank order is unchanged: title > notes > heading > checklist).
+- **Checklist arm — dedup + no uuids.** A to-do appears ONCE no matter how many of its checklist rows match, annotated with the FIRST matching row's title (by checklist index). **Checklist-item uuids appear on NO surface** (an implementation detail, like tag uuids — the join reads titles only); a regression test asserts the payload carries none. The arm is skipped for a `--type project` search; the heading arm is skipped for a `--type to-do` search.
+- **Compact-tier fact.** `match` rides compact rows (a non-default fact, per the compact rule) and passes through the shape/omit-empty boundary untouched. The TTY render adds an indented muted matched-on line under an annotated hit (`  ⤷ heading: "…"` / `  ⤷ notes: "…snippet…"` / `  ⤷ checklist: "…"`); a title hit renders as a plain row.
+
+(This replaces the earlier `matchedVia: {kind, title}` heading-only annotation with the one converged `match: {field, text}` shape across all three arms.)
+
 ## Omit-empty (entity payloads)
 
 **Contract:** in the `data` of every read (`--json` reads AND the MCP read tools), an entity omits any optional field whose value is empty — `null`, an empty string `""`, or an empty array `[]`. **A consumer MUST read an absent key as unset / empty / default, and MUST NOT distinguish absent from empty.** This is the whole point: `deadline` absent and `deadline: null` mean the identical thing; a consumer that branches on which one it got is wrong. Guard every access (`item.tags ?? []`, `item.deadline == null`).

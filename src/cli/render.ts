@@ -471,19 +471,23 @@ export function renderToday(
 }
 
 /**
- * Search rows: a standard list row, plus — for a project surfaced by a HEADING
- * title match — a muted `(via heading "…")` suffix crediting the heading whose
- * text matched (the parent project row stands in for the heading; the GUI has
- * no bare heading row). Ordinary title/notes matches render as plain rows.
+ * Search rows: a standard list row, plus — for a hit surfaced by something OTHER
+ * than its title — an indented muted matched-on line crediting WHERE the query
+ * matched (`  ⤷ heading: "…"` / `  ⤷ notes: "…snippet…"` / `  ⤷ checklist: "…"`).
+ * A title match renders as a plain row with no indicator (matched where you'd
+ * expect). A heading match credits the parent project, a checklist match the
+ * parent to-do (the GUI has no bare heading/checklist row).
  */
 export function renderSearch(items: ListItem[]): string[] {
   if (items.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
-  return items.map((i) => {
-    const via = (i as { matchedVia?: { kind: "heading"; title: string } }).matchedVia;
-    const row = formatItem(i, w);
-    return via === undefined ? row : `${row} ${dim(`(via heading "${via.title}")`)}`;
-  });
+  const lines: string[] = [];
+  for (const i of items) {
+    lines.push(formatItem(i, w));
+    const match = (i as { match?: { field: string; text: string } }).match;
+    if (match !== undefined) lines.push(`  ${dim(`⤷ ${match.field}: "${match.text}"`)}`);
+  }
+  return lines;
 }
 
 /** Hidden-later counts per sidebar group (null area = the loose block). */

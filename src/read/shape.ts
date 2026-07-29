@@ -148,7 +148,7 @@ function reshapeRepeating(rep: unknown): Obj | undefined {
  * Shape ONE task entity (to-do or project): the universal reshapes, then the R6
  * ancestry + bucket-implied lifecycle drops, then — when `compact` — the R7
  * default-pruning. A shallow copy is taken so unknown sibling keys (`changeKind`
- * on a changes row, `matchedVia` on a search hit) pass through untouched.
+ * on a changes row, `match` on a search hit) pass through untouched.
  * Non-task values (areas, tags, refs, headings) are returned as-is.
  */
 function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {

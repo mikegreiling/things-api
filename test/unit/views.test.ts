@@ -31,6 +31,7 @@ import {
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
+  seedChecklistItem,
   seedHeading,
   seedProject,
   seedSettings,
@@ -1481,7 +1482,7 @@ describe("template-container marker (container project is a repeating template)"
 });
 
 describe("searchView heading doctrine + ranking (item 5)", () => {
-  it("a heading-title match surfaces the PARENT PROJECT (matchedVia), never a bare heading", () => {
+  it("a heading-title match surfaces the PARENT PROJECT (match), never a bare heading", () => {
     fx = buildFixtureDb();
     const proj = seedProject(fx.db, { title: "Arcade Restoration", index: 1 });
     seedHeading(fx.db, { title: "Fix OutRun Steering Wheel", project: proj });
@@ -1491,16 +1492,43 @@ describe("searchView heading doctrine + ranking (item 5)", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]?.type).toBe("project");
     expect(hits[0]?.title).toBe("Arcade Restoration");
-    expect(hits[0]?.matchedVia).toEqual({ kind: "heading", title: "Fix OutRun Steering Wheel" });
+    expect(hits[0]?.match).toEqual({ field: "heading", text: "Fix OutRun Steering Wheel" });
   });
 
-  it("a project matched by its own title/notes never carries a redundant matchedVia", () => {
+  it("a project matched by its own TITLE never carries a redundant match (presence-keyed)", () => {
     fx = buildFixtureDb();
     const proj = seedProject(fx.db, { title: "OutRun cabinet", index: 1 });
     seedHeading(fx.db, { title: "OutRun wiring", project: proj });
     const hits = searchView(fx.db, "OutRun");
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.matchedVia).toBeUndefined();
+    expect(hits[0]?.match).toBeUndefined();
+  });
+
+  it("precedence: a project matched by BOTH its notes AND a child heading shows the HEADING annotation", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, {
+      title: "Cabinet",
+      notes: "restore the zeta board",
+      index: 1,
+    });
+    seedHeading(fx.db, { title: "zeta wiring", project: proj });
+    const hits = searchView(fx.db, "zeta");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.match).toEqual({ field: "heading", text: "zeta wiring" });
+  });
+
+  it("a notes-only match is annotated with a bounded snippet centered on the hit", () => {
+    fx = buildFixtureDb();
+    const long = `${"x".repeat(200)} the QUARRY marker ${"y".repeat(200)}`;
+    seedTodo(fx.db, { title: "no match here", notes: long });
+    const hits = searchView(fx.db, "quarry");
+    expect(hits).toHaveLength(1);
+    const match = hits[0]?.match;
+    expect(match?.field).toBe("notes");
+    expect(match?.text.toLowerCase()).toContain("quarry");
+    expect(match?.text.startsWith("…")).toBe(true);
+    expect(match?.text.endsWith("…")).toBe(true);
+    expect(match?.text.length ?? 0).toBeLessThanOrEqual(82); // ~80 + the two ellipses
   });
 
   it("heading matches do not apply to a --type todo search", () => {
@@ -1508,6 +1536,43 @@ describe("searchView heading doctrine + ranking (item 5)", () => {
     const proj = seedProject(fx.db, { title: "Arcade", index: 1 });
     seedHeading(fx.db, { title: "OutRun bits", project: proj });
     expect(searchView(fx.db, "OutRun", { type: "to-do" })).toHaveLength(0);
+  });
+
+  it("a checklist-item match surfaces the PARENT TO-DO, deduped, annotated with the first matching row", () => {
+    fx = buildFixtureDb();
+    const todo = seedTodo(fx.db, { title: "wire the cab" });
+    // Two matching rows on ONE to-do — it must appear once, credited to the first.
+    seedChecklistItem(fx.db, todo, "solder the jamma harness", { index: 0 });
+    seedChecklistItem(fx.db, todo, "test the jamma pinout", { index: 1 });
+    const hits = searchView(fx.db, "jamma");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.uuid).toBe(todo);
+    expect(hits[0]?.match).toEqual({ field: "checklist", text: "solder the jamma harness" });
+  });
+
+  it("a to-do matched by its own title keeps the title credit over a checklist-item match", () => {
+    fx = buildFixtureDb();
+    const todo = seedTodo(fx.db, { title: "jamma diagnostics" });
+    seedChecklistItem(fx.db, todo, "check jamma edge", { index: 0 });
+    const hits = searchView(fx.db, "jamma");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.match).toBeUndefined();
+  });
+
+  it("checklist matches do not apply to a --type project search", () => {
+    fx = buildFixtureDb();
+    const todo = seedTodo(fx.db, { title: "cab" });
+    seedChecklistItem(fx.db, todo, "OutRun rom swap", { index: 0 });
+    expect(searchView(fx.db, "OutRun", { type: "project" })).toHaveLength(0);
+  });
+
+  it("the search payload carries NO checklist-item uuids (implementation detail)", () => {
+    fx = buildFixtureDb();
+    const todo = seedTodo(fx.db, { title: "cab" });
+    const cliUuid = seedChecklistItem(fx.db, todo, "OutRun rom swap", { index: 0 });
+    const hits = searchView(fx.db, "OutRun");
+    expect(hits).toHaveLength(1);
+    expect(JSON.stringify(hits)).not.toContain(cliUuid);
   });
 
   it("ranks title > notes; field trumps status (someday title beats active notes)", () => {
