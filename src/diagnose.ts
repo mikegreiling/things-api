@@ -46,7 +46,7 @@ import {
 } from "./write/environment.ts";
 import { sdefDeclaresPrivateReorder } from "./write/experimental.ts";
 import { computeSyncHealth, type SyncHealth, type SyncHealthDeps } from "./sync-health.ts";
-import { ExitCode, PKG_VERSION, type EnvelopeMeta } from "./contracts.ts";
+import { ExitCode, PKG_VERSION, type EnvelopeMeta, type ErrorCode } from "./contracts.ts";
 
 const THINGS_APP = "/Applications/Things3.app";
 
@@ -226,7 +226,7 @@ export interface DiagnoseOptions {
 
 export interface DiagnoseResult {
   report: DiagnoseReport | null;
-  error: { code: string; message: string; remediation?: string } | null;
+  error: { code: ErrorCode; message: string; remediation?: string } | null;
   exitCode: ExitCode;
   meta: Pick<EnvelopeMeta, "dbVersion" | "fingerprint">;
 }

@@ -185,13 +185,50 @@ export interface OkEnvelope<T> {
   meta: EnvelopeMeta;
 }
 
+/**
+ * The registry of stable machine-readable error codes an error envelope can
+ * carry — the compiler IS the registry. Every `error.code` value the surfaces
+ * emit is a member of this union, and the human-readable meaning of each is
+ * frozen at v1.0 (new codes may still be ADDED after v1.0 — that is
+ * non-breaking; a documented code's MEANING never changes). The canonical
+ * per-code table (meaning + the `detail` keys each may carry) lives in
+ * `docs/contract.md` (The error-code registry).
+ *
+ * Two members are template-literal families rather than fixed strings, because
+ * their suffix is minted in the write layer and the core deliberately never
+ * depends on it (see {@link blockedCode} / {@link verifyFailedCode}):
+ *  - `verify-failed:${reason}` — a single mutation executed but read-after-write
+ *    verification failed; the suffix is the reason (`timeout` | `mismatch` |
+ *    `silent-noop`). The bare `verify-failed` (no suffix) is the multi-leg
+ *    move/reorder failure.
+ *  - `blocked:${suffix}` — a mutation refused before touching the app; the
+ *    suffix is the specific hazard id (`H-…`) when one is named, else the block
+ *    reason (`drift` | `disruption-tier` | `lock` | `environment` | `clock` |
+ *    `scope`). The bare `blocked` is a policy refusal from the move planner.
+ *
+ * `blocked:drift` maps to exit code 5 (DriftBlocked); every other `blocked:*`
+ * maps to exit code 4 (Blocked).
+ */
+export type ErrorCode =
+  | "usage"
+  | "not-found"
+  | "ambiguous"
+  | "unsupported"
+  | "environment"
+  | "unexpected"
+  | "bounce-aborted"
+  | "verify-failed"
+  | "blocked"
+  | `verify-failed:${string}`
+  | `blocked:${string}`;
+
 export interface ErrorEnvelope {
   apiVersion: typeof API_VERSION;
   ok: false;
   kind: "error";
   error: {
-    /** Stable machine-readable code, mirrors the exit-code family (e.g. "verify-failed", "blocked"). */
-    code: string;
+    /** Stable machine-readable code from the {@link ErrorCode} registry (mirrors the exit-code family, e.g. "verify-failed", "blocked:H-UNKNOWN-TAG"). */
+    code: ErrorCode;
     message: string;
     /**
      * Advisory attribution when failure signals point somewhere: e.g.

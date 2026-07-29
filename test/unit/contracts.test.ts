@@ -45,7 +45,7 @@ describe("json envelope contract", () => {
   it("wraps errors with stable code and remediation", () => {
     const env = errorEnvelope(
       {
-        code: "drift-blocked",
+        code: "blocked:drift",
         message: "schema fingerprint mismatch",
         remediation: "run `things doctor`",
       },
@@ -53,7 +53,7 @@ describe("json envelope contract", () => {
     );
     expect(env.ok).toBe(false);
     expect(env.kind).toBe("error");
-    expect(env.error.code).toBe("drift-blocked");
+    expect(env.error.code).toBe("blocked:drift");
   });
 });
 
