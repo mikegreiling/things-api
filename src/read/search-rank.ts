@@ -20,9 +20,9 @@ export type MatchField = "title" | "notes" | "heading" | "checklist";
 
 export interface SearchMatch {
   item: ListItem;
+  /** The RANK field (strongest match by rank order); the displayed provenance
+   * annotation rides the item as `match` and follows its own precedence. */
   field: MatchField;
-  /** Present when `field === "heading"`: the heading whose title matched. */
-  matchedVia?: { kind: "heading"; title: string };
 }
 
 const FIELD_ORDER: Record<MatchField, number> = { title: 0, notes: 1, heading: 2, checklist: 3 };

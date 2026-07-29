@@ -1041,8 +1041,35 @@ export function liteTitleSearch(
   return { candidates: ordered.slice(0, cap), total: ordered.length };
 }
 
-/** A search result annotated with WHY it surfaced (additive; `matchedVia` present only for heading-credited projects). */
-export type SearchResultItem = ListItem & { matchedVia?: { kind: "heading"; title: string } };
+/**
+ * The match-provenance annotation on a search hit — WHERE the query matched
+ * when it was NOT the title. `field` names the matched text kind; `text` is the
+ * matched heading title, a bounded notes snippet centered on the hit, or the
+ * matched checklist item's title. PRESENCE-KEYED: a TITLE match carries NO
+ * annotation (absence = matched where you'd expect). Exactly one annotation max;
+ * when several fields match, precedence is title (none) > heading > notes >
+ * checklist.
+ */
+export interface SearchMatchAnnotation {
+  field: "heading" | "notes" | "checklist";
+  text: string;
+}
+
+/** A search result, optionally annotated with its non-title match provenance. */
+export type SearchResultItem = ListItem & { match?: SearchMatchAnnotation };
+
+/** A one-line notes snippet (~80 chars) centered on the first occurrence of the needle. */
+const SNIPPET_MAX = 80;
+function notesSnippet(notes: string, needleLower: string): string {
+  const flat = notes.replace(/\s+/g, " ").trim();
+  if (flat.length <= SNIPPET_MAX) return flat;
+  const hit = Math.max(0, flat.toLowerCase().indexOf(needleLower));
+  const half = Math.max(0, Math.floor((SNIPPET_MAX - needleLower.length) / 2));
+  let end = Math.min(flat.length, Math.max(hit - half, 0) + SNIPPET_MAX);
+  const start = Math.max(0, end - SNIPPET_MAX);
+  const core = flat.slice(start, end);
+  return `${start > 0 ? "…" : ""}${core}${end < flat.length ? "…" : ""}`;
+}
 
 export function searchView(
   db: DatabaseSync,
@@ -1105,16 +1132,28 @@ export function searchView(
   );
   const needleLower = query.toLowerCase();
   const matches = new Map<string, SearchMatch>();
+  /** Attach a match annotation to a materialized hit (title matches carry none). */
+  const annotate = (item: ListItem, ann: SearchMatchAnnotation | undefined): void => {
+    if (ann !== undefined) (item as SearchResultItem).match = ann;
+  };
   for (const item of materialize(db, rows, boundary, packedToday)) {
-    // Field credit: title beats notes when both carry the substring.
+    // Field credit: title beats notes when both carry the substring. A notes-only
+    // hit is annotated with a bounded snippet centered on the match; a title hit
+    // carries no annotation (presence-keyed — matched where you'd expect).
     const field: MatchField = item.title.toLowerCase().includes(needleLower) ? "title" : "notes";
+    if (field === "notes") {
+      annotate(item, { field: "notes", text: notesSnippet(item.notes ?? "", needleLower) });
+    }
     matches.set(item.uuid, { item, field });
   }
 
   // Heading titles are treated as if they lived in the parent PROJECT's notes:
   // a heading-title match surfaces the parent project (never a bare heading
-  // row), credited at the heading-via-project field rank. A to-do-only search
-  // has no project rows, so headings do not apply there.
+  // row), credited at the heading field rank. A to-do-only search has no project
+  // rows, so headings do not apply there. Heading OUTRANKS notes for the
+  // annotation (precedence title > heading > notes): a project matched by its
+  // own notes AND by a child heading shows the heading annotation, though it
+  // keeps its notes rank; a title-matched project keeps NO annotation.
   if (options?.type !== "to-do") {
     const headingRows = db
       .prepare(
@@ -1126,10 +1165,18 @@ export function searchView(
     for (const h of headingRows) {
       if (!headingTitleFor.has(h.projectUuid)) headingTitleFor.set(h.projectUuid, h.title ?? "");
     }
-    // Surface only the projects NOT already matched by their own title/notes
-    // (a higher-ranked field already represents them), and only those passing
-    // the view's scope.
-    const wanted = [...headingTitleFor.keys()].filter((uuid) => !matches.has(uuid));
+    // Projects ALREADY matched: re-credit a notes annotation to the heading
+    // (title stays annotation-free). Projects NOT yet matched: materialize and
+    // add them at the heading rank. Both only where the view's scope allows.
+    const wanted: string[] = [];
+    for (const [uuid, headingTitle] of headingTitleFor) {
+      const existing = matches.get(uuid);
+      if (existing === undefined) {
+        wanted.push(uuid);
+      } else if (existing.item.type === "project" && existing.field === "notes") {
+        annotate(existing.item, { field: "heading", text: headingTitle });
+      }
+    }
     if (wanted.length > 0) {
       const placeholders = wanted.map(() => "?").join(", ");
       const projectRows = fetchTaskRows(
@@ -1138,13 +1185,40 @@ export function searchView(
         [...scopeBinds, ...wanted, ...tf.binds, ...of.binds],
       );
       for (const item of materialize(db, projectRows, boundary, packedToday)) {
-        const matchedVia = {
-          kind: "heading" as const,
-          title: headingTitleFor.get(item.uuid) ?? "",
-        };
-        // Annotate the freshly materialized entity in place (owned here).
-        (item as SearchResultItem).matchedVia = matchedVia;
-        matches.set(item.uuid, { item, field: "heading", matchedVia });
+        annotate(item, { field: "heading", text: headingTitleFor.get(item.uuid) ?? "" });
+        matches.set(item.uuid, { item, field: "heading" });
+      }
+    }
+  }
+
+  // Checklist-item titles are treated as properties of the parent TO-DO (like
+  // notes): a checklist-body match surfaces the parent to-do (deduped — one to-do
+  // no matter how many of its rows match), annotated with the FIRST matching
+  // row's title. Checklist is the lowest-precedence field, so it only adds to-dos
+  // not already matched by their own title/notes (those keep the higher credit).
+  // Checklist-item uuids appear on NO surface — the join reads titles only.
+  if (options?.type !== "project") {
+    const checklistRows = db
+      .prepare(
+        `SELECT task AS todoUuid, title FROM TMChecklistItem
+         WHERE task IS NOT NULL AND title LIKE ?${LIKE_ESCAPE} ORDER BY "index" ASC`,
+      )
+      .all(needle) as unknown as Array<{ todoUuid: string; title: string | null }>;
+    const checklistTitleFor = new Map<string, string>();
+    for (const c of checklistRows) {
+      if (!checklistTitleFor.has(c.todoUuid)) checklistTitleFor.set(c.todoUuid, c.title ?? "");
+    }
+    const wanted = [...checklistTitleFor.keys()].filter((uuid) => !matches.has(uuid));
+    if (wanted.length > 0) {
+      const placeholders = wanted.map(() => "?").join(", ");
+      const todoRows = fetchTaskRows(
+        db,
+        `${scope.join(" AND ")} AND t.type = 0 AND t.uuid IN (${placeholders})${tf.sql}${of.sql}`,
+        [...scopeBinds, ...wanted, ...tf.binds, ...of.binds],
+      );
+      for (const item of materialize(db, todoRows, boundary, packedToday)) {
+        annotate(item, { field: "checklist", text: checklistTitleFor.get(item.uuid) ?? "" });
+        matches.set(item.uuid, { item, field: "checklist" });
       }
     }
   }

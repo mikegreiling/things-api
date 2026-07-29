@@ -349,7 +349,7 @@ describe("shapeReadPayload — bucket-implied lifecycle flags", () => {
     const row = (
       shapeReadPayload(
         "search",
-        [fullTodo({ logged: true, trashed: true, matchedVia: undefined })],
+        [fullTodo({ logged: true, trashed: true, match: undefined })],
         true,
       ) as Obj[]
     )[0]!;
@@ -357,18 +357,19 @@ describe("shapeReadPayload — bucket-implied lifecycle flags", () => {
     expect(row["trashed"]).toBe(true);
   });
 
-  it("preserves unknown sibling keys (changeKind, matchedVia)", () => {
+  it("preserves unknown sibling keys (changeKind, match) — the match annotation rides compact rows", () => {
     const chg = (
       shapeReadPayload("changes", [fullTodo({ changeKind: "modified" })], false) as Obj[]
     )[0]!;
     expect(chg["changeKind"]).toBe("modified");
+    // compact tier (compact=true): the non-default match fact must survive.
     const hit = (
       shapeReadPayload(
         "search",
-        [fullTodo({ matchedVia: { kind: "heading", title: "Phase 1" } })],
-        false,
+        [fullTodo({ match: { field: "heading", text: "Phase 1" } })],
+        true,
       ) as Obj[]
     )[0]!;
-    expect(hit["matchedVia"]).toEqual({ kind: "heading", title: "Phase 1" });
+    expect(hit["match"]).toEqual({ field: "heading", text: "Phase 1" });
   });
 });
