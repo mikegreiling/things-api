@@ -57,6 +57,8 @@ asdf reshim nodejs  # once, if you use asdf: expose the new `things` shim
 
 Edits under `src/` take effect immediately. The bin launcher ([bin/things.js](bin/things.js)) prefers `src/` when present and falls back to `dist/`, so published installs (`npm i -g things-api`, `npx things-api`) run the compiled output with identical behavior.
 
+`npm run explore` starts a localhost-only debug view (default `127.0.0.1:5711`, `--port <n>` to change, `--no-open` to skip the browser): pick a preset or type any `things …` command and read the emitted envelope as a collapsible JSON tree, live against your default database. Reads run verbatim; every other command gets `--dry-run` force-appended server-side (the response echoes the exact argv that ran, forced flags included), so mutations can only ever produce plans. `THINGS_DB` / `THINGS_NOW` / `THINGS_TZ` set before launching apply to every command the view runs.
+
 ## Core principles
 
 - **Reads** go directly to Things' local SQLite database (read-only, WAL-aware). **Writes** go exclusively through official app surfaces — URL scheme, AppleScript, Shortcuts, and (opt-in) the Accessibility-driven GUI — never direct DB writes (sync corruption).
