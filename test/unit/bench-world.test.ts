@@ -60,16 +60,23 @@ describe("bench world profile", () => {
     },
   );
 
-  it("is deterministic: same (seed, clock) → identical DB content hash", () => {
-    const a = buildBenchFixture([], { seed: 7, clock: CLOCK });
-    const b = buildBenchFixture([], { seed: 7, clock: CLOCK });
-    const c = buildBenchFixture([], { seed: 8, clock: CLOCK });
-    expect(a.snapshotHash).toBe(b.snapshotHash);
-    expect(a.snapshotHash).not.toBe(c.snapshotHash);
-    a.cleanup();
-    b.cleanup();
-    c.cleanup();
-  });
+  // Builds three fixture DBs — the default 5 s budget has flaked on loaded CI
+  // runners (green on rerun); explicit 30 s budget, matching the two five-seed
+  // loops above (#283).
+  it(
+    "is deterministic: same (seed, clock) → identical DB content hash",
+    { timeout: 30_000 },
+    () => {
+      const a = buildBenchFixture([], { seed: 7, clock: CLOCK });
+      const b = buildBenchFixture([], { seed: 7, clock: CLOCK });
+      const c = buildBenchFixture([], { seed: 8, clock: CLOCK });
+      expect(a.snapshotHash).toBe(b.snapshotHash);
+      expect(a.snapshotHash).not.toBe(c.snapshotHash);
+      a.cleanup();
+      b.cleanup();
+      c.cleanup();
+    },
+  );
 
   it("dates ride the clock: shifting the clock shifts the calendar, so nothing goes stale", () => {
     const later = { now: "2027-03-05T09:00:00-06:00", tz: "America/Chicago" };
