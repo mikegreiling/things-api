@@ -506,7 +506,7 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
     expect("latestInstance" in row).toBe(false);
   });
 
-  it("template detail carries the flat latestInstance hoisted off the internal carrier", () => {
+  it("template detail nests latestInstance INSIDE repeating (the complete series object)", () => {
     const out = shapeReadPayload(
       "detail",
       todo({
@@ -520,10 +520,10 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
       }),
       false,
     ) as Obj;
-    // latestInstance is a FLAT wire key, not nested inside `repeating`.
-    expect(out["latestInstance"]).toBe("inst-99");
-    expect("latestInstance" in (out["repeating"] as Obj)).toBe(false);
-    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01" });
+    // latestInstance nests INSIDE `repeating` — the complete series object
+    // (forward pointer nextOccurrence + backward pointer latestInstance).
+    expect("latestInstance" in out).toBe(false);
+    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01", latestInstance: "inst-99" });
   });
 });
 

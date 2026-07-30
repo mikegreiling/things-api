@@ -973,10 +973,10 @@ describe("things MCP server", () => {
     const template = textOf(
       await client.callTool({ name: "get_item", arguments: { uuid: tmpl } }),
     ) as Record<string, unknown>;
-    // Template wire: presence of `repeating` (rule facts) MEANS template; the
-    // discriminators are gone; a template DETAIL carries the flat latestInstance.
-    expect(template["repeating"]).toEqual({ nextOccurrence: "2026-08-01" });
-    expect(template["latestInstance"]).toBe(newest);
+    // Template wire: presence of `repeating` MEANS template; the discriminators
+    // are gone; a template DETAIL nests latestInstance INSIDE repeating (the
+    // complete series object).
+    expect(template["repeating"]).toEqual({ nextOccurrence: "2026-08-01", latestInstance: newest });
     expect("instanceOf" in template).toBe(false);
     // Instance wire: flat instanceOf only, no `repeating`.
     const instance = textOf(

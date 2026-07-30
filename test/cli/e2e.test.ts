@@ -268,8 +268,8 @@ describe("cli end-to-end (fixture db)", () => {
     expect("isTemplate" in item.repeating).toBe(false);
     expect("isInstance" in item.repeating).toBe(false);
     expect("instanceOf" in item).toBe(false);
-    // No instances seeded → no latestInstance key.
-    expect("latestInstance" in item).toBe(false);
+    // No instances seeded → no latestInstance key (nested inside `repeating`).
+    expect("latestInstance" in item.repeating).toBe(false);
     // Omit-empty (contracts.md): an empty checklist is absent, not [].
     expect("checklist" in item).toBe(false);
   });
@@ -325,7 +325,7 @@ describe("cli end-to-end (fixture db)", () => {
     });
     const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
     const item = JSON.parse(stdout).data.item;
-    expect(item.latestInstance).toBe(newest);
+    expect(item.repeating.latestInstance).toBe(newest);
   });
 
   it("things todo show — R11 latestInstance SKIPS a TRASHED max-creation instance (SL2 L1)", () => {
@@ -347,7 +347,7 @@ describe("cli end-to-end (fixture db)", () => {
     });
     const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
     const item = JSON.parse(stdout).data.item;
-    expect(item.latestInstance).toBe(survivor);
+    expect(item.repeating.latestInstance).toBe(survivor);
   });
 
   it("things todo show — R11 no latestInstance when every instance is trashed (SL2 L1c)", () => {
@@ -357,8 +357,9 @@ describe("cli end-to-end (fixture db)", () => {
     const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
     const item = JSON.parse(stdout).data.item;
     // Zero untrashed instances → the affordance has nothing to resolve (the GUI
-    // even drops the "Show Latest" menu item), so the key is omitted.
-    expect("latestInstance" in item).toBe(false);
+    // even drops the "Show Latest" menu item), so the key is omitted from the
+    // nested `repeating` series object.
+    expect("latestInstance" in item.repeating).toBe(false);
   });
 
   it("things snapshot --json counts every row class", () => {

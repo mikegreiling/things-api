@@ -63,9 +63,10 @@ export interface RepeatingInfo {
    * Templates, detail reads only: the uuid of this template's LATEST spawned
    * instance — the GUI "Show Latest" pick, `max(creationDate)` among the
    * template's instances (SL1, docs/lab/sl1-show-latest.md). Populated by the
-   * detail read (src/read/detail.ts) and hoisted to a FLAT wire key
-   * `latestInstance` by the shaping transform; omitted when the template has no
-   * instances. Never on a list/card row (token economy).
+   * detail read (src/read/detail.ts); the shaping transform emits it NESTED
+   * inside the wire `repeating` object (the complete series state), the backward
+   * pointer symmetric to the forward `nextOccurrence`. Omitted when the template
+   * has no instances. Never on a list/card row (token economy).
    */
   latestInstance?: string;
 }

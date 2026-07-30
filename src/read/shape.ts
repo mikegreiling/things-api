@@ -44,10 +44,11 @@
  * - **repeating template/instance split (R11)** — the wire drops the
  *   `isTemplate`/`isInstance` discriminators; key presence carries the fact. A
  *   TEMPLATE keeps a nested `repeating: {nextOccurrence, paused?, deadlined?,
- *   rule?}` (rule facts; presence MEANS template; `nextOccurrence` explicit-null
- *   when unprojected). An INSTANCE keeps a flat `instanceOf: <templateUuid>` and
- *   no `repeating`. A plain row keeps neither. A template DETAIL additionally
- *   carries the flat `latestInstance` uuid (SL1). See {@link reshapeRepeatingWire}.
+ *   rule?, latestInstance?}` — the complete series object (rule config + forward
+ *   pointer + backward pointer + state flags); presence MEANS template;
+ *   `nextOccurrence` explicit-null when unprojected; `latestInstance` is
+ *   detail-only (SL1). An INSTANCE keeps a flat `instanceOf: <templateUuid>` and
+ *   no `repeating`. A plain row keeps neither. See {@link reshapeRepeatingWire}.
  * - **string tags** — `tags`/`inheritedTags` become plain arrays of names.
  * - **one project key** — a headed item's owning project (formerly
  *   `headingProject`) is merged into `project`; `headingProject` never appears.
@@ -149,14 +150,16 @@ function reshapeTodos(o: Obj): void {
  * `isTemplate`/`isInstance` discriminators entirely and instead lets KEY
  * PRESENCE carry the fact:
  *
- * - **Template** (`isTemplate`) → a nested `repeating` object of the rule facts:
- *   `{nextOccurrence, paused?, deadlined?, rule?}`. Presence of `repeating` MEANS
- *   template. The inner false booleans are default-pruned (presence-keyed);
- *   `nextOccurrence` stays an EXPLICIT null when there is no projected date
- *   (paused / after-completion — the `area: null` section precedent, since
- *   absence would be ambiguous). `rule` and the flat `latestInstance` hoist are
- *   detail-only (populated by src/read/detail.ts). The nested object is not a
- *   recognized entity, so omit-empty does NOT prune its `nextOccurrence: null`.
+ * - **Template** (`isTemplate`) → a nested `repeating` object — the complete
+ *   series state: `{nextOccurrence, paused?, deadlined?, rule?, latestInstance?}`.
+ *   Presence of `repeating` MEANS template. The inner false booleans are
+ *   default-pruned (presence-keyed); `nextOccurrence` stays an EXPLICIT null when
+ *   there is no projected date (paused / after-completion — the `area: null`
+ *   section precedent, since absence would be ambiguous). `rule` and
+ *   `latestInstance` are detail-only (populated by src/read/detail.ts on
+ *   `entity.repeating`); `latestInstance` is the backward pointer symmetric to the
+ *   forward `nextOccurrence`. The nested object is not a recognized entity, so
+ *   omit-empty does NOT prune its `nextOccurrence: null`.
  * - **Instance** (`isInstance`) → a flat presence-keyed `instanceOf:
  *   <templateUuid>` and NO `repeating` object. Presence of `instanceOf` MEANS
  *   instance.
@@ -172,9 +175,11 @@ function reshapeRepeatingWire(o: Obj): void {
     if (r["paused"] === true) out["paused"] = true;
     if (r["deadlined"] === true) out["deadlined"] = true;
     if (r["rule"] != null) out["rule"] = r["rule"]; // detail read only
+    // The SL1 "Show Latest" pick — detail-only; nested inside `repeating` so the
+    // object is the complete series state (rule config + forward pointer
+    // `nextOccurrence` + backward pointer `latestInstance` + state flags).
+    if (typeof r["latestInstance"] === "string") out["latestInstance"] = r["latestInstance"];
     o["repeating"] = out;
-    // The SL1 "Show Latest" pick — detail-only; a flat wire key, not nested.
-    if (typeof r["latestInstance"] === "string") o["latestInstance"] = r["latestInstance"];
   } else if (r["isInstance"] === true) {
     if (typeof r["templateUuid"] === "string") o["instanceOf"] = r["templateUuid"];
   }

@@ -68,8 +68,8 @@ function materializeOne(db: DatabaseSync, row: TaskRow, packedToday: number): An
         // without a decoded rule rather than failing the whole read.
       }
     }
-    // The GUI "Show Latest" pick (SL1) — detail-only; the shaper hoists it to
-    // the flat wire key `latestInstance`. Omitted when the template has none.
+    // The GUI "Show Latest" pick (SL1) — detail-only; the shaper emits it NESTED
+    // inside the wire `repeating` object. Omitted when the template has none.
     const latest = latestInstanceUuid(db, row.uuid);
     if (latest !== null) entity.repeating.latestInstance = latest;
   }
