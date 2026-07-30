@@ -52,7 +52,8 @@ describe("deriveStage — the derivation matrix", () => {
   it("completed/canceled but NOT yet logged keeps its live stage (logged=false falls through)", () => {
     // markLogged leaves logged=false for a checked-but-unswept row → live stage.
     expect(deriveStage(base({ logged: false, start: "active", startDate: null }))).toBe("anytime");
-    expect(deriveStage(base({ logged: false, startDate: "2026-06-01" }))).toBe("upcoming");
+    // A future When-date (no today marker) is upcoming.
+    expect(deriveStage(base({ logged: false, startDate: "2026-08-01" }))).toBe("upcoming");
     expect(deriveStage(base({ logged: false, start: "someday", startDate: null }))).toBe("someday");
     expect(deriveStage(base({ logged: false, start: "inbox" }))).toBe("inbox");
   });
@@ -69,10 +70,20 @@ describe("deriveStage — the derivation matrix", () => {
     ).toBe("upcoming");
   });
 
-  it("any startDate — past, today, OR future — → upcoming (Upcoming ⊇ Today)", () => {
-    for (const d of ["2026-06-01", "2026-07-02", "2026-08-01"]) {
-      expect(deriveStage(base({ startDate: d }))).toBe("upcoming");
-      expect(deriveStage(base({ start: "someday", startDate: d }))).toBe("upcoming");
+  it("a strictly-FUTURE startDate (no today marker) → upcoming; Upcoming is strictly future (UPC1)", () => {
+    // A future When-date carries no `today` marker (mappers scheduledArm requires
+    // startDate <= today), so it derives upcoming.
+    expect(deriveStage(base({ startDate: "2026-08-01" }))).toBe("upcoming");
+    expect(deriveStage(base({ start: "someday", startDate: "2026-08-01" }))).toBe("upcoming");
+  });
+
+  it("an ARRIVED startDate (today marker present) → anytime, NOT upcoming (UPC1 strictly-future)", () => {
+    // Today (07-02) and overdue (06-01) When-dates have both arrived — the entity
+    // carries `today: true` — so they are Anytime + Today, never Upcoming.
+    for (const d of ["2026-06-01", "2026-07-02"]) {
+      expect(deriveStage(base({ startDate: d, today: true }))).toBe("anytime");
+      // arrived someday-scheduled (start=2, startDate <= today) is an Anytime member too.
+      expect(deriveStage(base({ start: "someday", startDate: d, today: true }))).toBe("anytime");
     }
   });
 
@@ -134,7 +145,11 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
     expect(markerRow("some-supp").today).toBeUndefined();
   });
 
-  it("banner-materialized form (start=1, startDate:=deadline=today) → stage upcoming + today:true", () => {
+  it("banner-materialized form (start=1, startDate:=deadline=today) → stage anytime + today:true", () => {
+    // UPC1 §8d: acknowledging the "new to-dos" banner mutates the item to start=1,
+    // startDate := deadline (= today). That is an ARRIVED When-date, so under the
+    // strictly-future Upcoming law (UPC1 §8, R10.2) it derives ANYTIME + today,
+    // NOT upcoming (an arrived-dated open item is in Today + Anytime).
     fx = buildFixtureDb();
     seedTodo(fx.db, {
       title: "materialized",
@@ -143,7 +158,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadline: "2026-07-02",
     });
     const hit = (searchView(fx.db, "materialized", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("upcoming");
+    expect(deriveStage(hit)).toBe("anytime");
     expect(markerRow("materialized").today).toBe(true);
   });
 
@@ -181,18 +196,19 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     seedTodo(fx.db, { title: "zz-some", start: "someday", startDate: null });
     seedTodo(fx.db, { title: "zz-log", status: "completed", stopDate: NOW_EPOCH - 3600 }); // swept
     seedTodo(fx.db, { title: "zz-trash", trashed: true });
-    // Anytime is stage-MIXED: an undated active row (stage anytime) AND an
-    // ARRIVED-dated (startDate <= today) row, which derives stage `upcoming`.
+    // Anytime is stage-PURE (R10.2): an undated active row AND an ARRIVED-dated
+    // (startDate <= today) row BOTH derive stage `anytime` — Upcoming is strictly
+    // future, so an arrived When-date is Anytime + Today, never Upcoming.
     seedTodo(fx.db, { title: "zz-any", start: "active", startDate: null });
     const arrived = seedTodo(fx.db, {
       title: "zz-arrived",
       start: "active",
       startDate: "2026-07-01",
     });
-    // Upcoming is stage-MIXED: a future-dated row (stage upcoming) AND two
-    // deadline-forecast undated rows (a future deadline, no when-date) whose
-    // stages are `anytime` (active) and `someday` (deferred).
-    seedTodo(fx.db, { title: "zz-upfut", start: "active", startDate: "2026-08-01" });
+    // Upcoming is stage-MIXED: a FUTURE-scheduled row (start=2, stage upcoming)
+    // AND two deadline-forecast undated rows (a future deadline, no when-date)
+    // whose stages are `anytime` (active) and `someday` (deferred).
+    const upfut = seedTodo(fx.db, { title: "zz-upfut", start: "someday", startDate: "2026-08-01" });
     const fcAny = seedTodo(fx.db, {
       title: "zz-dl-active",
       start: "active",
@@ -207,9 +223,11 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     });
 
     // Pure catalogues: every member derives the one stage the view names, and
-    // the wire DROPS the field (the view provably states it).
+    // the wire DROPS the field (the view provably states it). `anytime` is now
+    // among them (R10.2) — its arrived-dated members derive `anytime`.
     const pure: Array<[string, unknown, string]> = [
       ["inbox", inboxView(fx.db, NOW), "inbox"],
+      ["anytime", anytimeView(fx.db, NOW), "anytime"],
       ["someday", somedayView(fx.db, NOW), "someday"],
       ["logbook", logbookView(fx.db, NOW), "logbook"],
       ["trash", trashView(fx.db, NOW), "trash"],
@@ -220,10 +238,16 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
         expect("stage" in row).toBe(false);
     }
 
+    // The R10.2 correction is load-bearing: the arrived-dated row IS an Anytime
+    // member, derives `anytime` (not `upcoming`), and its stage is DROPPED.
+    const anyWire = flatten(shapeReadPayload("anytime", anytimeView(fx.db, NOW), true));
+    const arrivedRow = anyWire.find((r) => r["uuid"] === arrived);
+    expect(arrivedRow).toBeDefined();
+    expect("stage" in arrivedRow!).toBe(false);
+
     // Mixed/derived catalogues: the wire KEEPS stage and it equals deriveStage
     // EXACTLY (strict per-item equality — not the weakened ∈{anytime,upcoming}).
     const mixed: Array<[string, unknown]> = [
-      ["anytime", anytimeView(fx.db, NOW)],
       ["upcoming", upcomingView(fx.db, NOW)],
       ["search", searchView(fx.db, "zz", {}, NOW)],
     ];
@@ -233,11 +257,11 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
         expect(row["stage"]).toBe(want.get(row["uuid"] as string));
     }
 
-    // And the mixing is REAL — each mixed catalogue actually carries a row whose
-    // stage differs from the catalogue name (so strict equality is load-bearing).
-    const anyWire = flatten(shapeReadPayload("anytime", anytimeView(fx.db, NOW), true));
-    expect(anyWire.find((r) => r["uuid"] === arrived)?.["stage"]).toBe("upcoming");
+    // And the upcoming mixing is REAL — it carries rows whose stage differs from
+    // the catalogue name (so strict equality is load-bearing). Its future-dated
+    // member stays `upcoming`; the two deadline-forecast rows are anytime/someday.
     const upWire = flatten(shapeReadPayload("upcoming", upcomingView(fx.db, NOW), true));
+    expect(upWire.find((r) => r["uuid"] === upfut)?.["stage"]).toBe("upcoming");
     expect(upWire.find((r) => r["uuid"] === fcAny)?.["stage"]).toBe("anytime");
     expect(upWire.find((r) => r["uuid"] === fcSome)?.["stage"]).toBe("someday");
   });
@@ -248,6 +272,8 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     const children = [
       seedTodo(fx.db, { title: "c-anytime", project: proj, start: "active", startDate: null }),
       seedTodo(fx.db, { title: "c-upfut", project: proj, startDate: "2026-08-01" }),
+      // ARRIVED When-date (today): rebuckets to `anytime`, NOT the upcoming
+      // date-groups — Upcoming is strictly future (R10.2).
       seedTodo(fx.db, { title: "c-uptoday", project: proj, startDate: "2026-07-02" }),
       seedTodo(fx.db, { title: "c-someday", project: proj, start: "someday", startDate: null }),
       seedTodo(fx.db, { title: "c-tmpl", project: proj, recurrenceRule: true }),
@@ -259,7 +285,6 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
       }),
       seedTodo(fx.db, { title: "c-trash", project: proj, trashed: true }),
     ];
-    void children;
     const head = seedHeading(fx.db, { title: "H", project: proj });
     seedTodo(fx.db, { title: "h-anytime", heading: head, start: "active", startDate: null });
     seedTodo(fx.db, { title: "h-upcoming", heading: head, startDate: "2026-08-05" });
@@ -304,5 +329,11 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     expect((shaped["upcoming"] as Grp[]).some((g) => g.date === null)).toBe(true); // the template
     expect((shaped["logbook"] as Row[]).length).toBe(1);
     expect((shaped["trash"] as Row[]).length).toBe(1);
+    // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
+    // upcoming group is keyed on its arrived date — Upcoming holds only future
+    // dates + the date-less template group.
+    const cUpToday = children[2]!;
+    expect((shaped["anytime"] as Row[]).some((r) => r.uuid === cUpToday)).toBe(true);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-07-02")).toBe(false);
   });
 });
