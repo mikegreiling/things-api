@@ -167,13 +167,32 @@ function loadRow(db: DatabaseSync, uuid: string): MoveeRow | undefined {
 
 const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "heading" };
 
-/** The display bucket a row sits in — the anchor single-bucket rule keys on it. */
+/**
+ * The display bucket a row sits in — the anchor single-bucket rule keys on it.
+ *
+ * DATE-FIRST precedence, mirroring the read layer's settled semantics
+ * (src/read/stage.ts deriveStage, post-R10.2/R12): a `startDate` is classified
+ * by its date BEFORE `start` is consulted, because the app's ONLY representation
+ * of a future-scheduled item is `start=2` + a future `startDate` (UPC1 upcoming
+ * cohort, BANNER1 scheduled arrivals; live prod scan 2026-07-30: 4/4
+ * future-scheduled to-dos are start=2, zero are start=1+future). Classifying
+ * `start===2 → someday` BEFORE the date check would mislabel every real
+ * future-scheduled row as `someday` and route it to the someday protocols —
+ * whose someday↔anytime bounce legs would CLEAR the item's date (a de-schedule).
+ * So: inbox → dated (arrived → today/evening; future → scheduled:<date>) → then
+ * `start===2` correctly means an UNDATED someday only → else anytime. An arrived
+ * `start=2` (someday-scheduled, `startDate <= today`) is a Today+Anytime member,
+ * so it buckets today/evening here, exactly as deriveStage derives `anytime`
+ * with the Today marker.
+ */
 function scheduleBucket(row: MoveeRow, packedToday: number): string {
   if (row.start === 0) return "inbox";
+  if (row.startDate !== null) {
+    if (row.startDate <= packedToday) return row.startBucket === 1 ? "evening" : "today";
+    return `scheduled:${row.startDate}`;
+  }
   if (row.start === 2) return "someday";
-  if (row.startDate === null) return "anytime";
-  if (row.startDate <= packedToday) return row.startBucket === 1 ? "evening" : "today";
-  return `scheduled:${row.startDate}`;
+  return "anytime";
 }
 
 /**

@@ -1049,21 +1049,21 @@ describe("container-day scope (DAYORD-b native todayIndex, date-preserving)", ()
     const a = seedTodo(fixture.db, {
       title: "a",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-10",
       todayIndex: 10,
     });
     const b = seedTodo(fixture.db, {
       title: "b",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-10",
       todayIndex: 20,
     });
     const c = seedTodo(fixture.db, {
       title: "c",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-10",
       todayIndex: 30,
     });
@@ -1305,7 +1305,11 @@ function looseDayVectors() {
 function seedLooseFuture(title: string, todayIndex: number): string {
   return seedTodo(fixture.db, {
     title,
-    start: "active",
+    // App-true future-scheduled representation: the app files a future When-date
+    // as start=2 (someday) + the future startDate, never start=1 (UPC1/BANNER1,
+    // prod scan 2026-07-30). The wire protocols key on startBucket/startDate (not
+    // start), so this is behaviorally inert here — but it keeps the fixture honest.
+    start: "someday",
     startDate: FUTURE_ISO,
     todayIndex,
   });
@@ -1373,7 +1377,7 @@ describe("loose-day scope (UPCORD1 park-sort-unpark protocol)", () => {
     const a = seedLooseFuture("a", 10);
     const b = seedTodo(fixture.db, {
       title: "b",
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-11", // a DIFFERENT future day
       todayIndex: 20,
     });
