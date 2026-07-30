@@ -612,11 +612,17 @@ export function fetchTaskByUuid(db: DatabaseSync, uuid: string): TaskRow | null 
  * project instances (`rt1_repeatingTemplate` points at the template regardless
  * of type). `creationDate` is the occurrence midnight and unique per occurrence
  * for a normal series, so ties are not expected.
+ *
+ * TRASHED instances are EXCLUDED (SL2, docs/lab/sl2-trash-dynamics.md, law L1):
+ * the GUI Show Latest never selects a trashed instance — it skips to the newest
+ * UNTRASHED one, and re-resolves live after an empty-trash. Only `trashed` is
+ * filtered; `status` is NOT (a COMPLETED newest-spawned instance is still the
+ * latest — SL1 D1). A template with no untrashed instances derives `null`.
  */
 export function latestInstanceUuid(db: DatabaseSync, templateUuid: string): string | null {
   const row = db
     .prepare(
-      "SELECT uuid FROM TMTask WHERE rt1_repeatingTemplate = ? ORDER BY creationDate DESC LIMIT 1",
+      "SELECT uuid FROM TMTask WHERE rt1_repeatingTemplate = ? AND trashed = 0 ORDER BY creationDate DESC LIMIT 1",
     )
     .get(templateUuid) as { uuid: string } | undefined;
   return row?.uuid ?? null;
