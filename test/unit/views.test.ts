@@ -329,6 +329,80 @@ describe("list views", () => {
   });
 });
 
+describe("R13 — GUI-faithful deadline-pull membership (BANNER1 / BANNER1b)", () => {
+  // Law L-A: a due/overdue unsuppressed deadline pulls an undated Inbox/Someday
+  // row OUT of its origin list and INTO Today + Anytime, even while its raw
+  // `start` still reads 0/2 (the app already does this before materialization).
+  it("a pulled SOMEDAY row leaves the someday view and enters the anytime view", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "sd-pull",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+    });
+    seedTodo(fx.db, { title: "sd-stay", start: "someday", startDate: null }); // no deadline
+    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-stay"]);
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).toContain("sd-pull");
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).not.toContain("sd-stay");
+  });
+
+  it("a pulled INBOX row leaves the inbox view and enters the anytime view", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "ib-pull", start: "inbox", startDate: null, deadline: "2026-07-02" });
+    seedTodo(fx.db, { title: "ib-stay", start: "inbox", startDate: null }); // no deadline
+    expect(inboxView(fx.db, NOW).map((i) => i.title)).toEqual(["ib-stay"]);
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).toContain("ib-pull");
+  });
+
+  it("a SUPPRESSED deadline is NOT a pull: the row stays in someday, out of anytime", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "sd-supp",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-07-01", // dismissed nag (supp == deadline)
+    });
+    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-supp"]);
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).not.toContain("sd-supp");
+  });
+
+  it("a FUTURE deadline is not yet a pull: the someday row stays in someday", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "sd-future-dl",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-20",
+    });
+    expect(flat(somedayView(fx.db, NOW)).map((i) => i.title)).toEqual(["sd-future-dl"]);
+    expect(flat(anytimeView(fx.db, NOW)).map((i) => i.title)).not.toContain("sd-future-dl");
+  });
+
+  it("the exclusion composes with a --tag filter (narrows, never lifts the pull removal)", () => {
+    fx = buildFixtureDb();
+    const t = seedTag(fx.db, "urgent");
+    const pull = seedTodo(fx.db, {
+      title: "sd-pull-tagged",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+    });
+    tagTask(fx.db, pull, t);
+    const stay = seedTodo(fx.db, { title: "sd-stay-tagged", start: "someday", startDate: null });
+    tagTask(fx.db, stay, t);
+    // Filtering by the tag still excludes the pulled row from someday and still
+    // includes it in anytime — the R13 exclusion and the tag scope AND together.
+    expect(flat(somedayView(fx.db, NOW, { tag: "urgent" })).map((i) => i.title)).toEqual([
+      "sd-stay-tagged",
+    ]);
+    expect(flat(anytimeView(fx.db, NOW, { tag: "urgent" })).map((i) => i.title)).toContain(
+      "sd-pull-tagged",
+    );
+  });
+});
+
 describe("injected clock threads through logged/logbook membership", () => {
   // logInterval 1 (daily) makes the sweep boundary local MIDNIGHT of the
   // injected `now`, so a fixed stopDate can be straddled by two pinned clocks —
@@ -1130,21 +1204,43 @@ describe("overdue filter (open items past their deadline)", () => {
     expect([...view.today, ...view.evening].map((i) => i.title)).toEqual(["today-overdue"]);
   });
 
-  it("inbox: keeps only inbox captures past their deadline", () => {
+  it("inbox: an UNSUPPRESSED overdue capture is deadline-PULLED out (R13); a suppressed one stays and --overdue keeps it", () => {
     fx = buildFixtureDb();
+    // Unsuppressed overdue undated inbox row = a deadline pull → R13 removes it
+    // from the Inbox list entirely (GUI-faithful), so --overdue can't surface it.
     seedTodo(fx.db, { title: "inbox-overdue", start: "inbox", deadline: "2026-07-01" });
+    // A SUPPRESSED overdue capture is NOT a pull — it stays in Inbox, and its
+    // deadline is still past-due, so --overdue keeps it. Proves the exclusion is
+    // specifically the pull, and --overdue still composes with the survivors.
+    seedTodo(fx.db, {
+      title: "inbox-overdue-supp",
+      start: "inbox",
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-07-01",
+    });
     seedTodo(fx.db, { title: "inbox-future", start: "inbox", deadline: "2026-07-03" });
     seedTodo(fx.db, { title: "inbox-plain", start: "inbox" });
-    expect(inboxView(fx.db, NOW, { overdue: true }).map((i) => i.title)).toEqual(["inbox-overdue"]);
+    expect(inboxView(fx.db, NOW, { overdue: true }).map((i) => i.title)).toEqual([
+      "inbox-overdue-supp",
+    ]);
   });
 
-  it("someday: keeps only incubated items past their deadline", () => {
+  it("someday: an UNSUPPRESSED overdue item is deadline-PULLED out (R13); a suppressed one stays and --overdue keeps it", () => {
     fx = buildFixtureDb();
+    // Unsuppressed overdue someday row = a deadline pull → gone from Someday (R13).
     seedTodo(fx.db, { title: "someday-overdue", start: "someday", deadline: "2026-07-01" });
+    // Suppressed (the realistic case — suppression is stamped by rescheduling an
+    // overdue item to Someday) → not a pull, stays, and --overdue keeps it.
+    seedTodo(fx.db, {
+      title: "someday-overdue-supp",
+      start: "someday",
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-07-01",
+    });
     seedTodo(fx.db, { title: "someday-future", start: "someday", deadline: "2026-07-03" });
     seedTodo(fx.db, { title: "someday-plain", start: "someday" });
     const titles = flat(somedayView(fx.db, NOW, { overdue: true })).map((i) => i.title);
-    expect(titles).toEqual(["someday-overdue"]);
+    expect(titles).toEqual(["someday-overdue-supp"]);
   });
 
   it("search: narrows a needle to its open, past-deadline matches", () => {

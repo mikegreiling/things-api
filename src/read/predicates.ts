@@ -53,6 +53,26 @@ export const ANYTIME_SELF = (col: string): string =>
     OR (${col}.start = 2 AND ${col}.startDate IS NOT NULL AND ${col}.startDate <= ?))`;
 
 /**
+ * The Today DEADLINE-PULL arm (BANNER1 / BANNER1b, docs/lab/banner1-research.md):
+ * an UNDATED row (startDate NULL) that a due/overdue, un-dismissed deadline pulls
+ * into Today — even from the Inbox or Someday, while its raw `start` still reads
+ * 0/2. This is the EXACT second arm {@link todayView} uses; it is written ONCE
+ * here so the three GUI-faithful memberships that turn on it can never drift from
+ * the pull the Today view claims (BANNER1 law L-A):
+ *   - `todayView` INCLUDES it (a deadline pulls the row into Today);
+ *   - `anytimeView` INCLUDES it (Anytime ⊇ Today's to-dos — the pull re-files the
+ *     row into Anytime, BANNER1b);
+ *   - `somedayView` / `inboxView` EXCLUDE it (the GUI removes a pulled row from
+ *     Someday/Inbox even before it materializes, BANNER1 Q1b).
+ * The `startDate IS NULL` clause scopes it to UNMATERIALIZED pulls; the
+ * suppression guard drops a dismissed nag (supp == deadline) and lets a re-armed
+ * one (supp < deadline) through (oddities §8e). ONE bind: today as a packed-date
+ * int (encodePackedDate(localToday(now))), the same injected clock every view uses.
+ */
+export const DEADLINE_PULLED = `(t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
+    AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))`;
+
+/**
  * The item's effective project: its own link, or its heading's project for
  * headed children (heading rows carry the project link).
  */
