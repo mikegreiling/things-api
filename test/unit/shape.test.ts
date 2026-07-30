@@ -1,14 +1,12 @@
 /**
- * The read-payload shaping transform (src/read/shape.ts): the token-economy
- * rules R6 (no-redundant-ancestry) and R7 (named detail tiers) plus the
- * universal item-DTO reshapes (checklist nesting, todos counts, string tags,
- * one project key, repeating omission). Pure function, exercised here on
- * hand-built synthetic payloads (no DB). Guards: per-view R6 ancestry stripping;
- * the compact default-pruning; the presence-keyed hasNotes marker; --full
- * restoring density (incl. full notes + heading) while R6 still applies;
- * bucket-implied logged/trashed dropping both directions; the checklist / todos
- * objects; string tags; the headingProject→project merge; the compact heading
- * drop; and repeating omission across tiers and detail.
+ * The read-payload shaping transform (src/read/shape.ts): R6 (no-redundant-
+ * ancestry), R7 (named detail tiers), the R9 universal reshapes (checklist /
+ * todos / string tags / one project key / repeating), and the R10 lifecycle
+ * taxonomy (`stage` replaces start/logged/trashed; today/evening markers; card
+ * bucket rename/reshape; bucket-implied stage/marker dropping). Pure function,
+ * exercised on hand-built synthetic payloads (no DB). The exhaustive `stage`
+ * derivation matrix + the property-style view↔stage consistency test live in
+ * test/unit/stage.test.ts.
  */
 import { describe, expect, it } from "vitest";
 
@@ -16,8 +14,8 @@ import { shapeReadPayload } from "../../src/read/shape.ts";
 
 type Obj = Record<string, unknown>;
 
-/** A fully-populated to-do row (every field the mappers can emit). */
-function fullTodo(over: Obj = {}): Obj {
+/** A fully-populated UNDATED-active to-do (stage `anytime`) — every emit field. */
+function todo(over: Obj = {}): Obj {
   return {
     uuid: "todo-1",
     type: "to-do",
@@ -27,10 +25,10 @@ function fullTodo(over: Obj = {}): Obj {
     logged: false,
     trashed: false,
     start: "active",
-    startDate: "2026-07-16",
-    todaySection: "today",
-    deadline: "2026-07-20",
-    reminder: "09:00",
+    startDate: null,
+    todaySection: null,
+    deadline: null,
+    reminder: null,
     area: { uuid: "area-1", title: "Work" },
     project: { uuid: "proj-1", title: "Q3" },
     heading: { uuid: "head-1", title: "Phase 1" },
@@ -56,6 +54,10 @@ function project(over: Obj = {}): Obj {
     logged: false,
     trashed: false,
     start: "active",
+    startDate: null,
+    todaySection: null,
+    deadline: null,
+    reminder: null,
     area: { uuid: "area-1", title: "Work" },
     tags: [],
     repeating: { isTemplate: false, isInstance: false, templateUuid: null },
@@ -68,205 +70,121 @@ function project(over: Obj = {}): Obj {
   };
 }
 
+const first = (out: unknown): Obj => (out as Obj[])[0]!;
+
 describe("shapeReadPayload — R7 compact tier (flat list)", () => {
-  it("compact keeps identity + structural facts, default-prunes the rest", () => {
-    const row = (shapeReadPayload("inbox", [fullTodo()], false) as Obj[])[0]!;
-    // Always present.
-    for (const k of ["uuid", "title", "type", "start"]) expect(k in row).toBe(true);
-    // Structural facts survive.
-    for (const k of ["startDate", "deadline", "reminder", "todaySection", "tags"]) {
-      expect(k in row).toBe(true);
-    }
+  it("compact keeps identity + structural facts; start/logged/trashed gone, stage kept on mixed", () => {
+    const row = first(shapeReadPayload("search", [todo()], false)); // search = mixed → keep stage
+    for (const k of ["uuid", "title", "type"]) expect(k in row).toBe(true);
+    for (const k of ["tags"]) expect(k in row).toBe(true);
+    // R10: the three lifecycle fields are gone; the one derived word replaces them.
+    expect("start" in row).toBe(false);
+    expect("logged" in row).toBe(false);
+    expect("trashed" in row).toBe(false);
+    expect(row["stage"]).toBe("anytime"); // undated active
     // Default-pruned (absence = default).
     expect("status" in row).toBe(false); // open
-    expect("logged" in row).toBe(false); // false
-    expect("trashed" in row).toBe(false); // false
-    // Always dropped in compact.
     expect("created" in row).toBe(false);
     expect("modified" in row).toBe(false);
   });
 
-  it("compact surfaces a non-default status/logged/trashed", () => {
-    const row = (
-      shapeReadPayload(
-        "inbox",
-        [fullTodo({ status: "completed", logged: true, trashed: true, notes: "" })],
-        false,
-      ) as Obj[]
-    )[0]!;
-    expect(row["status"]).toBe("completed");
-    expect(row["logged"]).toBe(true);
-    expect(row["trashed"]).toBe(true);
-  });
-
-  it("--full (full tier) restores created/modified/full notes/heading and default-valued fields", () => {
-    const row = (shapeReadPayload("inbox", [fullTodo()], true) as Obj[])[0]!;
+  it("--full (full tier) restores created/modified/full notes/heading; still no start/logged/trashed", () => {
+    const row = first(shapeReadPayload("search", [todo()], true));
     expect(row["status"]).toBe("open");
-    expect(row["logged"]).toBe(false);
-    expect(row["trashed"]).toBe(false);
+    expect("logged" in row).toBe(false);
+    expect("trashed" in row).toBe(false);
+    expect("start" in row).toBe(false);
+    expect(row["stage"]).toBe("anytime");
     expect("created" in row).toBe(true);
     expect("modified" in row).toBe(true);
-    // Full notes verbatim (no preview, no hasNotes marker).
     expect(row["notes"]).toBe("first line of the notes\nand a second line");
     expect("hasNotes" in row).toBe(false);
-    // Full tier keeps the heading ref.
-    expect(row["heading"]).toBeDefined();
+    expect(row["heading"]).toBeDefined(); // full tier keeps heading
   });
 });
 
 describe("shapeReadPayload — hasNotes marker (compact)", () => {
   it("compact drops the notes string and flags presence with hasNotes", () => {
-    const row = (shapeReadPayload("inbox", [fullTodo()], false) as Obj[])[0]!;
+    const row = first(shapeReadPayload("search", [todo()], false));
     expect("notes" in row).toBe(false);
-    expect("notesTruncated" in row).toBe(false); // the old marker is gone
     expect(row["hasNotes"]).toBe(true);
   });
 
   it("a notes-less row carries no hasNotes marker (presence-keyed)", () => {
-    const row = (shapeReadPayload("inbox", [fullTodo({ notes: "" })], false) as Obj[])[0]!;
+    const row = first(shapeReadPayload("search", [todo({ notes: "" })], false));
     expect("notes" in row).toBe(false);
     expect("hasNotes" in row).toBe(false);
   });
 });
 
-describe("shapeReadPayload — string tags (both tiers, detail)", () => {
-  it("tags fold from {title} objects to a plain array of names", () => {
+describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () => {
+  it("string tags fold from {title} objects to a plain array of names", () => {
     for (const full of [false, true]) {
-      const row = (
+      const row = first(
         shapeReadPayload(
-          "inbox",
-          [fullTodo({ tags: [{ title: "errand" }, { title: "home" }] })],
+          "search",
+          [todo({ tags: [{ title: "errand" }, { title: "home" }] })],
           full,
-        ) as Obj[]
-      )[0]!;
+        ),
+      );
       expect(row["tags"]).toEqual(["errand", "home"]);
     }
   });
 
-  it("inheritedTags fold to names too, on a detail read", () => {
-    const detail = fullTodo({
-      tags: [{ title: "urgent" }],
-      inheritedTags: [{ title: "work" }, { title: "team" }],
-    });
-    const out = shapeReadPayload("detail", detail, false) as Obj;
+  it("inheritedTags fold to names on a detail read", () => {
+    const out = shapeReadPayload(
+      "detail",
+      todo({ tags: [{ title: "urgent" }], inheritedTags: [{ title: "work" }] }),
+      false,
+    ) as Obj;
     expect(out["tags"]).toEqual(["urgent"]);
-    expect(out["inheritedTags"]).toEqual(["work", "team"]);
+    expect(out["inheritedTags"]).toEqual(["work"]);
   });
 
   it("an area listing folds each area's tags to names", () => {
     const areas = [
-      { uuid: "area-1", title: "Work", visible: true, tags: [{ title: "focus" }] },
-      { uuid: "area-2", title: "Home", visible: true, tags: [] },
+      { uuid: "a1", title: "Work", visible: true, tags: [{ title: "focus" }] },
+      { uuid: "a2", title: "Home", visible: true, tags: [] },
     ];
     const out = shapeReadPayload("areas", areas, false) as Obj[];
     expect(out[0]!["tags"]).toEqual(["focus"]);
     expect(out[1]!["tags"]).toEqual([]);
   });
-});
 
-describe("shapeReadPayload — one project key (headingProject merge)", () => {
-  it("a headed item (project null, headingProject set) emits the project under `project`", () => {
-    const row = (
-      shapeReadPayload(
-        "inbox",
-        [
-          fullTodo({
-            project: null,
-            heading: { uuid: "head-1", title: "Phase 1" },
-            headingProject: { uuid: "proj-1", title: "Q3" },
-          }),
-        ],
-        true, // full tier keeps heading, so we can see both refs
-      ) as Obj[]
-    )[0]!;
-    expect(row["project"]).toEqual({ uuid: "proj-1", title: "Q3" });
-    expect("headingProject" in row).toBe(false); // never on the wire
-    expect(row["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
-  });
-
-  it("headingProject is deleted even when a direct project is present", () => {
-    const row = (
-      shapeReadPayload(
-        "inbox",
-        [fullTodo({ project: { uuid: "p-direct", title: "Direct" } })],
-        true,
-      ) as Obj[]
-    )[0]!;
-    expect(row["project"]).toEqual({ uuid: "p-direct", title: "Direct" });
-    expect("headingProject" in row).toBe(false);
-  });
-});
-
-describe("shapeReadPayload — heading dropped in compact everywhere", () => {
-  it("compact drops the heading ref on a mixed list; full keeps it", () => {
-    const withHeading = { heading: { uuid: "head-1", title: "Phase 1" } };
-    const compact = (shapeReadPayload("inbox", [fullTodo(withHeading)], false) as Obj[])[0]!;
-    expect("heading" in compact).toBe(false);
-    const full = (shapeReadPayload("inbox", [fullTodo(withHeading)], true) as Obj[])[0]!;
-    expect(full["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
-  });
-});
-
-describe("shapeReadPayload — project todos counts", () => {
-  it("folds leaf-action counts into a presence-keyed {open,total}; all tiers", () => {
-    for (const full of [false, true]) {
-      const row = (
-        shapeReadPayload(
-          "projects",
-          [project({ untrashedLeafActionsCount: 4, openUntrashedLeafActionsCount: 2 })],
-          full,
-        ) as Obj[]
-      )[0]!;
-      expect(row["todos"]).toEqual({ open: 2, total: 4 });
-      expect("untrashedLeafActionsCount" in row).toBe(false);
-      expect("openUntrashedLeafActionsCount" in row).toBe(false);
-    }
-  });
-
-  it("omits the key entirely when the project has no to-do children (total 0)", () => {
-    for (const full of [false, true]) {
-      const row = (
-        shapeReadPayload(
-          "projects",
-          [project({ untrashedLeafActionsCount: 0, openUntrashedLeafActionsCount: 0 })],
-          full,
-        ) as Obj[]
-      )[0]!;
-      expect("todos" in row).toBe(false);
-    }
-  });
-
-  it("a detail read folds the counts the same way", () => {
-    const out = shapeReadPayload(
-      "detail",
-      project({ untrashedLeafActionsCount: 5, openUntrashedLeafActionsCount: 5 }),
-      false,
-    ) as Obj;
-    expect(out["todos"]).toEqual({ open: 5, total: 5 });
-  });
-});
-
-describe("shapeReadPayload — universal reshapes (both tiers, detail)", () => {
   it("checklist nesting: counts become a presence-keyed object; none → no key", () => {
     for (const full of [false, true]) {
-      const withCl = (shapeReadPayload("inbox", [fullTodo()], full) as Obj[])[0]!;
+      const withCl = first(shapeReadPayload("search", [todo()], full));
       expect("checklistItemsCount" in withCl).toBe(false);
-      expect("openChecklistItemsCount" in withCl).toBe(false);
       expect(withCl["checklist"]).toEqual({ open: 1, total: 3 });
-
-      const noCl = (
+      const noCl = first(
         shapeReadPayload(
-          "inbox",
-          [fullTodo({ checklistItemsCount: 0, openChecklistItemsCount: 0 })],
+          "search",
+          [todo({ checklistItemsCount: 0, openChecklistItemsCount: 0 })],
           full,
-        ) as Obj[]
-      )[0]!;
+        ),
+      );
       expect("checklist" in noCl).toBe(false);
     }
   });
 
-  it("detail nests the checklist items under checklist.items and reshapes repeating", () => {
-    const detail = fullTodo({
+  it("project todos counts fold into a presence-keyed {open,total}; omit when 0", () => {
+    for (const full of [false, true]) {
+      const row = first(shapeReadPayload("projects", [project()], full));
+      expect(row["todos"]).toEqual({ open: 2, total: 4 });
+      expect("untrashedLeafActionsCount" in row).toBe(false);
+      const empty = first(
+        shapeReadPayload(
+          "projects",
+          [project({ untrashedLeafActionsCount: 0, openUntrashedLeafActionsCount: 0 })],
+          full,
+        ),
+      );
+      expect("todos" in empty).toBe(false);
+    }
+  });
+
+  it("detail nests checklist items and reshapes repeating", () => {
+    const detail = todo({
       checklist: [
         { title: "a", status: "completed" },
         { title: "b", status: "open" },
@@ -282,55 +200,109 @@ describe("shapeReadPayload — universal reshapes (both tiers, detail)", () => {
         { title: "b", status: "open" },
       ],
     });
-    // detail is full: created/modified/status/logged retained.
-    expect("created" in out).toBe(true);
-    expect(out["status"]).toBe("open");
-    // repeating minimized to truthful keys only.
     expect(out["repeating"]).toEqual({ isTemplate: true, paused: true });
+    expect(out["stage"]).toBe("upcoming"); // a repeating template → upcoming
   });
 
-  it("repeating omission: an all-false block is dropped in BOTH tiers", () => {
-    for (const full of [false, true]) {
-      const row = (shapeReadPayload("inbox", [fullTodo()], full) as Obj[])[0]!;
-      expect("repeating" in row).toBe(false);
+  it("one project key: a headed item's owning project emits under `project`", () => {
+    const row = first(
+      shapeReadPayload(
+        "search",
+        [
+          todo({
+            project: null,
+            heading: { uuid: "head-1", title: "Phase 1" },
+            headingProject: { uuid: "proj-1", title: "Q3" },
+          }),
+        ],
+        true,
+      ),
+    );
+    expect(row["project"]).toEqual({ uuid: "proj-1", title: "Q3" });
+    expect("headingProject" in row).toBe(false);
+  });
+
+  it("compact drops the heading ref on a mixed list; full keeps it", () => {
+    const compact = first(shapeReadPayload("search", [todo()], false));
+    expect("heading" in compact).toBe(false);
+    const full = first(shapeReadPayload("search", [todo()], true));
+    expect(full["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
+  });
+});
+
+describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)", () => {
+  it("stage-scoped catalogues drop the field; mixed/derived surfaces keep it", () => {
+    for (const kind of ["inbox", "upcoming", "logbook", "trash"]) {
+      const row = first(shapeReadPayload(kind, [todo()], false));
+      expect("stage" in row).toBe(false); // implied by the view
+    }
+    for (const kind of ["search", "changes", "projects"]) {
+      const row = first(shapeReadPayload(kind, [todo({ changeKind: "modified" })], false));
+      expect(row["stage"]).toBe("anytime"); // kept — mixed/derived surface
     }
   });
 
-  it("an instance keeps only its true/non-null keys", () => {
-    const row = (
+  it("trash wins over logbook: a trashed+completed+logged row derives `trash`", () => {
+    const row = first(
       shapeReadPayload(
-        "inbox",
-        [fullTodo({ repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl-9" } })],
+        "search",
+        [todo({ status: "completed", logged: true, trashed: true })],
         true,
-      ) as Obj[]
-    )[0]!;
-    expect(row["repeating"]).toEqual({ isInstance: true, templateUuid: "tmpl-9" });
+      ),
+    );
+    expect(row["stage"]).toBe("trash");
+  });
+});
+
+describe("shapeReadPayload — R10 today/evening markers", () => {
+  it("markers survive on mixed surfaces and drop inside the today view's own sections", () => {
+    const kept = first(shapeReadPayload("search", [todo({ today: true, evening: true })], false));
+    expect(kept["today"]).toBe(true);
+    expect(kept["evening"]).toBe(true);
+
+    const view = {
+      today: [todo({ today: true })],
+      evening: [todo({ uuid: "todo-e", today: true, evening: true })],
+      badge: { dueOrOverdue: 0, other: 2 },
+    };
+    const out = shapeReadPayload("today", view, false) as Obj;
+    const t = (out["today"] as Obj[])[0]!;
+    const e = (out["evening"] as Obj[])[0]!;
+    expect("today" in t).toBe(false); // section key states it
+    expect("evening" in e).toBe(false);
+    expect(t["stage"]).toBe("anytime"); // stage KEPT on today (mixed)
+  });
+
+  it("a logbook/trash row never carries a today marker even if one was set", () => {
+    const row = first(shapeReadPayload("search", [todo({ logged: true, today: true })], true));
+    expect(row["stage"]).toBe("logbook");
+    expect("today" in row).toBe(false);
   });
 });
 
 describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
-  it("mixed lists keep every ref (inbox)", () => {
-    const row = (shapeReadPayload("inbox", [fullTodo()], true) as Obj[])[0]!;
+  it("mixed lists keep every ref (search, full tier)", () => {
+    const row = first(shapeReadPayload("search", [todo()], true));
     expect(row["project"]).toBeDefined();
     expect(row["area"]).toBeDefined();
     expect(row["heading"]).toBeDefined();
   });
 
-  it("anytime/someday sections drop area, keep project/heading", () => {
-    const sections = [{ area: { uuid: "area-1", title: "Work" }, items: [fullTodo()] }];
-    const out = shapeReadPayload("anytime", sections, true) as Array<Obj>;
+  it("anytime/someday sections drop area + the bucket-implied stage, keep project/heading", () => {
+    const sections = [{ area: { uuid: "area-1", title: "Work" }, items: [todo()] }];
+    const out = shapeReadPayload("anytime", sections, true) as Obj[];
     const item = (out[0]!["items"] as Obj[])[0]!;
     expect("area" in item).toBe(false);
+    expect("stage" in item).toBe(false); // catalogue states it
     expect(item["project"]).toBeDefined();
     expect(item["heading"]).toBeDefined();
-    // The section itself keeps its own area.
     expect(out[0]!["area"]).toEqual({ uuid: "area-1", title: "Work" });
   });
 
-  it("area-view children drop area but keep project; the card keeps everything", () => {
+  it("area-view: children buckets drop area+stage; the projects list keeps stage; card node kept", () => {
     const view = {
-      area: { uuid: "area-1", title: "Work", visible: true, tags: [] },
-      active: [fullTodo()],
+      area: { uuid: "area-1", title: "Work", visible: true, tags: [{ title: "focus" }] },
+      active: [todo()],
       projects: [project()],
       scheduled: [],
       someday: [],
@@ -339,19 +311,43 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       trashed: [],
     };
     const out = shapeReadPayload("area-view", view, true) as Obj;
-    const child = (out["active"] as Obj[])[0]!;
+    // active → anytime bucket (stage anytime); area + stage dropped.
+    const child = (out["anytime"] as Obj[])[0]!;
     expect("area" in child).toBe(false);
+    expect("stage" in child).toBe(false);
     expect(child["project"]).toBeDefined();
+    // the projects list keeps stage (mixed listing), drops area.
     const projRow = (out["projects"] as Obj[])[0]!;
     expect("area" in projRow).toBe(false);
-    // The area card is untouched (still names its own identity).
-    expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: [] });
+    expect(projRow["stage"]).toBe("anytime");
+    // The area node keeps its identity; its tags fold to names.
+    expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: ["focus"] });
+    // The renamed buckets exist; the old names are gone.
+    for (const k of ["anytime", "upcoming", "someday", "logbook", "trash"])
+      expect(k in out).toBe(true);
+    for (const k of ["active", "scheduled", "repeating", "logged", "trashed"])
+      expect(k in out).toBe(false);
   });
 
-  it("project-view children drop project+area+headingProject; heading members also drop heading", () => {
+  it("project-view: children re-bucket by stage; heading groups become {anytime,upcoming,someday}", () => {
     const view = {
       project: project(),
-      active: [fullTodo()],
+      active: [todo({ uuid: "loose-anytime" })], // stage anytime
+      scheduled: [
+        { date: "2026-08-01", items: [todo({ uuid: "loose-up", startDate: "2026-08-01" })] },
+      ],
+      someday: [todo({ uuid: "loose-some", start: "someday", startDate: null })],
+      repeating: [
+        todo({
+          uuid: "loose-tmpl",
+          repeating: {
+            isTemplate: true,
+            isInstance: false,
+            templateUuid: null,
+            nextOccurrence: null,
+          },
+        }),
+      ],
       headings: [
         {
           heading: {
@@ -361,121 +357,59 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
             status: "open",
             project: { uuid: "proj-1", title: "Q3" },
           },
-          items: [fullTodo({ uuid: "todo-h" })],
-          scheduled: [],
+          items: [todo({ uuid: "h-anytime" })],
+          scheduled: [
+            { date: "2026-08-05", items: [todo({ uuid: "h-up", startDate: "2026-08-05" })] },
+          ],
           someday: [],
           repeating: [],
         },
       ],
-      scheduled: [],
-      someday: [],
-      repeating: [],
-      logged: [],
-      trashed: [],
+      logged: [todo({ uuid: "gone-log", status: "completed", logged: true })],
+      trashed: [todo({ uuid: "gone-trash", trashed: true })],
       openChildrenWhileResolved: 0,
     };
     const out = shapeReadPayload("project-view", view, true) as Obj;
-    const unheaded = (out["active"] as Obj[])[0]!;
-    expect("project" in unheaded).toBe(false);
-    expect("area" in unheaded).toBe(false);
-    expect("headingProject" in unheaded).toBe(false);
-    // An unheaded child keeps its heading ref only if it had one; here it does,
-    // but the project-view child drop does NOT remove heading for unheaded rows.
-    const member = ((out["headings"] as Obj[])[0]!["items"] as Obj[])[0]!;
-    expect("project" in member).toBe(false);
-    expect("area" in member).toBe(false);
-    expect("headingProject" in member).toBe(false);
-    expect("heading" in member).toBe(false); // heading-group member drops heading
-    // The heading NODE also drops its project ref (the card states it).
-    const headingNode = (out["headings"] as Obj[])[0]!["heading"] as Obj;
-    expect("project" in headingNode).toBe(false);
-    expect(headingNode["uuid"]).toBe("head-1");
-    // The project card keeps its own area (the node children derive from).
+    // Loose children re-bucketed by stage.
+    expect((out["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-anytime"]);
+    expect((out["someday"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-some"]);
+    // Upcoming: the dated child under its date, then a trailing null group for the date-less template.
+    const upcoming = out["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
+    expect(upcoming.map((g) => g.date)).toEqual(["2026-08-01", null]);
+    expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["loose-up"]);
+    expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["loose-tmpl"]);
+    // A re-bucketed child drops project/area/stage.
+    const anyChild = (out["anytime"] as Obj[])[0]!;
+    expect("project" in anyChild).toBe(false);
+    expect("area" in anyChild).toBe(false);
+    expect("stage" in anyChild).toBe(false);
+    // logbook / trash buckets (renamed) carry the closed rows; old keys gone.
+    expect((out["logbook"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-log"]);
+    expect((out["trash"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-trash"]);
+    for (const k of ["active", "scheduled", "repeating", "logged", "trashed"])
+      expect(k in out).toBe(false);
+    // Heading group reshaped to {heading, anytime, upcoming, someday}.
+    const grp = (out["headings"] as Obj[])[0]!;
+    expect(Object.keys(grp).toSorted()).toEqual(["anytime", "heading", "someday", "upcoming"]);
+    expect((grp["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["h-anytime"]);
+    const hup = grp["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
+    expect(hup[0]!.date).toBe("2026-08-05");
+    // Heading-group members drop heading; the heading NODE drops its project ref.
+    expect("heading" in (grp["anytime"] as Obj[])[0]!).toBe(false);
+    expect("project" in (grp["heading"] as Obj)).toBe(false);
+    // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
+    expect((out["project"] as Obj)["stage"]).toBe("anytime");
   });
 });
 
-describe("shapeReadPayload — R6 invariant: the dropped area equals the enclosing area", () => {
-  // The mapper emits the EFFECTIVE area, and a project/heading child carries
-  // area = NULL in the DB, so a child's effective area resolves THROUGH its
-  // container to the card's area. The transform therefore only ever drops a
-  // fact the enclosing node already states — never non-redundant information.
-  it("a project-view child's area always matches the card's area (redundant, safe to drop)", () => {
-    const cardArea = { uuid: "area-1", title: "Work" };
-    const view = {
-      project: project({ area: cardArea }),
-      active: [fullTodo({ area: cardArea, project: { uuid: "proj-1", title: "Q3 launch" } })],
-      headings: [],
-      scheduled: [],
-      someday: [],
-      repeating: [],
-      logged: [],
-      trashed: [],
-      openChildrenWhileResolved: 0,
-    };
-    // Before shaping, child area === card area (the invariant the mapper guarantees).
-    expect(view.active[0]!["area"]).toEqual((view.project as Obj)["area"]);
-    const out = shapeReadPayload("project-view", view, true) as Obj;
-    // After shaping, the (redundant) child area is gone; the card still states it.
-    expect("area" in (out["active"] as Obj[])[0]!).toBe(false);
-    expect((out["project"] as Obj)["area"]).toEqual(cardArea);
-  });
-});
-
-describe("shapeReadPayload — bucket-implied lifecycle flags", () => {
-  it("the trash view drops trashed even when true; logbook drops logged", () => {
-    const trashed = (
-      shapeReadPayload("trash", [fullTodo({ trashed: true, logged: false })], true) as Obj[]
-    )[0]!;
-    expect("trashed" in trashed).toBe(false); // implied by the view
-    const logged = (
-      shapeReadPayload("logbook", [fullTodo({ logged: true, trashed: false })], true) as Obj[]
-    )[0]!;
-    expect("logged" in logged).toBe(false); // implied by the view
-  });
-
-  it("the logged/trashed section arrays of a card drop the implied flag", () => {
-    const view = {
-      project: project(),
-      active: [],
-      headings: [],
-      scheduled: [],
-      someday: [],
-      repeating: [],
-      logged: [fullTodo({ status: "completed", logged: true })],
-      trashed: [fullTodo({ trashed: true })],
-      openChildrenWhileResolved: 0,
-    };
-    const out = shapeReadPayload("project-view", view, true) as Obj;
-    expect("logged" in (out["logged"] as Obj[])[0]!).toBe(false);
-    expect("trashed" in (out["trashed"] as Obj[])[0]!).toBe(false);
-  });
-
-  it("a TRUE logged/trashed flag SURVIVES on a mixed surface (search) to disambiguate", () => {
-    const row = (
-      shapeReadPayload(
-        "search",
-        [fullTodo({ logged: true, trashed: true, match: undefined })],
-        true,
-      ) as Obj[]
-    )[0]!;
-    expect(row["logged"]).toBe(true);
-    expect(row["trashed"]).toBe(true);
-  });
-
-  it("preserves unknown sibling keys (changeKind, match) — the match annotation rides compact rows", () => {
-    const chg = (
-      shapeReadPayload("changes", [fullTodo({ changeKind: "modified" })], false) as Obj[]
-    )[0]!;
+describe("shapeReadPayload — preserves unknown sibling keys", () => {
+  it("changeKind on a changes row and match on a search hit ride through", () => {
+    const chg = first(shapeReadPayload("changes", [todo({ changeKind: "modified" })], false));
     expect(chg["changeKind"]).toBe("modified");
-    // compact tier (compact=true): the non-default match fact must survive.
-    const hit = (
-      shapeReadPayload(
-        "search",
-        [fullTodo({ match: { field: "heading", text: "Phase 1" } })],
-        true,
-      ) as Obj[]
-    )[0]!;
+    const hit = first(
+      shapeReadPayload("search", [todo({ match: { field: "heading", text: "Phase 1" } })], true),
+    );
     expect(hit["match"]).toEqual({ field: "heading", text: "Phase 1" });
   });
 });

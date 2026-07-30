@@ -1,106 +1,69 @@
 /**
- * The read-payload SHAPING transform: the token-economy rules R6 and R7 (plus
- * the universal item-DTO reshapes they ride with), applied at the JSON emit
- * boundary of the read surfaces — the CLI `--json` read envelope
- * (src/cli/read-driver.ts) and the MCP read tool results (src/mcp/server.ts),
- * the same two boundaries omit-empty runs at. Shaping runs BEFORE omit-empty: it
- * prunes redundant-but-nonempty facts (R6), reshapes the checklist / todos /
- * repeating / tags fields, and reduces list rows to the compact tier (R7);
- * omit-empty then prunes whatever is left empty. The human-render path keeps the
- * full, unshaped entities, so this is JSON-only.
+ * The read-payload SHAPING transform: the token-economy rules R6 and R7, the
+ * universal item-DTO reshapes (R9), and the R10 lifecycle taxonomy — applied at
+ * the JSON emit boundary of the read surfaces (the CLI `--json` read envelope,
+ * src/cli/read-driver.ts, and the MCP read tool results, src/mcp/server.ts), the
+ * same boundaries omit-empty runs at. Shaping runs BEFORE omit-empty. The
+ * human-render path keeps the full, unshaped entities, so this is JSON-only.
  *
- * Both rules are deterministic BY VIEW KIND / SECTION — the emitter knows
- * whether it is inside a single-container view, a lifecycle bucket, or a mixed
- * list — never a per-item heuristic.
+ * Both R6/R7 are deterministic BY VIEW KIND / SECTION — the emitter knows whether
+ * it is inside a single-container view, a lifecycle bucket, or a mixed list —
+ * never a per-item heuristic.
  *
- * ## Universal item-DTO reshapes (EVERY tier, EVERY read kind incl. `detail`)
- * - **checklist nesting** — the flat `checklistItemsCount` / `openChecklistItemsCount`
- *   are removed from the wire; an item with a checklist carries
- *   `checklist: {open, total}` (presence-keyed — no key at all when there is no
- *   checklist), and a `detail` read that also carries the items nests them at
- *   `checklist.items`.
- * - **todos counts** — a project's flat `untrashedLeafActionsCount` /
- *   `openUntrashedLeafActionsCount` are removed from the wire; a project with any
- *   to-do children carries `todos: {open, total}` (presence-keyed — no key when
- *   total is 0), the same progress-count shape as `checklist`. The counts are the
- *   app-maintained materialized leaf-action columns (to-do children only —
- *   headings and checklist items are excluded by construction).
- * - **repeating omission** — the all-false `repeating` block (a normal,
- *   non-repeating row) is dropped entirely; a real template/instance keeps a
- *   minimal truthful object (only its true booleans and non-null values).
- * - **string tags** — `tags` (and `inheritedTags`) become a plain array of tag
- *   NAMES (`["errand", "home"]`); the per-tag object wrapper is gone (tag uuids
- *   were never on the wire — titles are the identity). Applied to to-dos,
- *   projects, and areas.
- * - **one project key** — an item whose membership routes through a heading
- *   carries its owning project under the single key `project` (the former
- *   `headingProject` is merged in and deleted from the wire — the two could never
- *   coexist or disagree). R6 dropping rules unchanged: a project-view child still
- *   drops the project ref entirely.
+ * ## R10 — the `stage` lifecycle taxonomy (every tier, every kind incl. detail)
+ * The three former wire fields `start` / `logged` / `trashed` are DELETED from
+ * every item and replaced by ONE derived `stage` ∈ `inbox | upcoming | anytime |
+ * someday | logbook | trash` (src/read/stage.ts `deriveStage`, the single pure
+ * derivation reused by the card bucketing so `stage` can never disagree with the
+ * bucket a view puts an item in). Today/evening membership is a SEPARATE
+ * presence-keyed axis — `today: true` / `evening: true` (evening implies today) —
+ * derived in the mapper with the Today view's own two-arm predicate.
+ * - `stage` is DROPPED where the enclosing view/section STATES it: the
+ *   stage-scoped flat views (inbox, logbook, trash, upcoming, and the
+ *   anytime/someday catalogue sections) and the stage-named card sub-buckets
+ *   (anytime/upcoming/someday/logbook/trash). It is KEPT on the mixed/derived
+ *   surfaces: search, changes, `today` (which mixes upcoming + anytime-deadline
+ *   rows), the projects/areas listings, the card NODE, and detail.
+ * - the `today`/`evening` markers are DROPPED inside the `today` view's own
+ *   sections (the section key states it) and KEPT everywhere else. A logbook/trash
+ *   item is never a Today member, so its markers are dropped with it.
+ *
+ * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
+ * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
+ * - **todos counts** — a project's flat leaf-action counts → presence-keyed
+ *   `todos: {open, total}` (omit when total 0).
+ * - **repeating omission** — the all-false block is dropped; a template/instance
+ *   keeps a minimal truthful object.
+ * - **string tags** — `tags`/`inheritedTags` become plain arrays of names.
+ * - **one project key** — a headed item's owning project (formerly
+ *   `headingProject`) is merged into `project`; `headingProject` never appears.
  *
  * ## R6 — no-redundant-ancestry (both tiers)
- * An item never states a fact its enclosing node already states:
- * - **project-view**: every child (in ANY bucket, incl. heading-group members)
- *   drops `project` and `area` — the project card states both. Heading-group
- *   members additionally drop `heading`. The project CARD keeps everything (it is
- *   the enclosing node children derive from).
- * - **area-view**: every child item and project card drops `area` — the area
- *   card states it. Project-child items keep `project`.
- * - **anytime/someday sections** (`{area, items}`): items drop `area` (including
- *   the explicit `area: null` section); they keep `project`/`heading`.
- * - **detail** and the mixed-provenance lists (inbox, today, upcoming, search,
- *   changes, projects) keep ALL refs.
- *
- * ### Bucket-implied lifecycle flags (both tiers)
- * `logged` / `trashed` are dropped even when TRUE wherever the enclosing view or
- * section states them: the `trash` view (trashed), the `logbook` view (logged),
- * and the `logged` / `trashed` section arrays of the area/project cards. They
- * SURVIVE (when true) on mixed surfaces — search, changes — where a logged or
- * trashed row sits beside live ones and the flag disambiguates. Combined with
- * compact default-pruning (false → omitted) the flags appear ONLY where they
- * carry information.
- *
- * The dropped ancestry fact is provably equal to the enclosing node's fact: the
- * entity's `area` is the EFFECTIVE area (queries.ts `EFFECTIVE_AREA` — own area,
- * else the project's, else the heading's project's), and a project/heading child
- * carries `area = NULL` in the DB (the documented invariant), so its effective
- * area resolves THROUGH the container to exactly the card's area. The sidebar
- * grouper (sidebar-order.ts) buckets by that same effective area. No
- * non-redundant information is deleted.
+ * project-view children drop `project`+`area` (heading-group members also drop
+ * `heading`); area-view children/project-cards drop `area`; anytime/someday
+ * section items drop `area`. Mixed lists keep every ref. (In the COMPACT tier the
+ * `heading` ref is additionally dropped everywhere — R7.)
  *
  * ## R7 — named detail tiers (compact | full)
- * List contexts default to COMPACT; `detail`/`show` and a `--full` / `full:true`
- * request use FULL. Compact is ONE uniform rule — identity + structural facts +
- * non-default facts — layered on TOP of the universal reshapes and R6:
- * - always `uuid`, `title`, `type`, `start`, plus the omit-empty structural
- *   facts (`startDate`, `deadline`, `reminder`, `todaySection`, `stopped`,
- *   `tags`) and the container refs R6 left in place;
- * - default-pruned (absence = the default): `status` (`"open"`), `logged`
- *   (`false`), `trashed` (`false`);
- * - always dropped: `created`, `modified` (get them from `detail`);
- * - the full `notes` string is dropped; a presence-keyed `hasNotes: true` marks
- *   a row that has notes (absent = none). `--full` is the way to get notes in a
- *   list context;
- * - the `heading` ref is dropped (the GUI shows the project, never the heading,
- *   outside a project view). The FULL tier keeps `heading`.
- *
- * The FULL tier keeps `created`/`modified`, full `notes`, `heading`, and the
- * default-valued `status`/`logged`/`trashed` — but still applies R6 (ancestry
- * redundancy is not tier-dependent), the universal reshapes, and the
- * bucket-implied lifecycle drops.
+ * List contexts default to COMPACT; `detail`/`show` and `--full` / `full:true`
+ * use FULL. Compact drops `created`/`modified`, the full `notes` string (a
+ * presence-keyed `hasNotes: true` marks a row with notes), and the `heading` ref;
+ * `status` is omitted when `open`. FULL keeps them but still applies R6, the
+ * universal reshapes, and R10.
  */
+import { deriveStage } from "./stage.ts";
 
 type Obj = Record<string, unknown>;
 
-/** What a given view context drops from an item: redundant ancestry + bucket-implied lifecycle flags. */
+/** What a given view context drops from an item: redundant ancestry + R10 bucket/marker implications. */
 interface ItemDrop {
   project?: boolean;
   area?: boolean;
   heading?: boolean;
-  /** Drop `logged` even when true — the enclosing view/section states it. */
-  logged?: boolean;
-  /** Drop `trashed` even when true — the enclosing view/section states it. */
-  trashed?: boolean;
+  /** Drop the `stage` field — the enclosing view/section states it. */
+  stage?: boolean;
+  /** Drop the `today`/`evening` markers — the today view's section key states them. */
+  markers?: boolean;
 }
 
 /**
@@ -188,50 +151,70 @@ function reshapeRepeating(rep: unknown): Obj | undefined {
   return out;
 }
 
+/** The R10 stage input read straight off a materialized task entity. */
+function stageOf(s: Obj): ReturnType<typeof deriveStage> {
+  const repeating = s["repeating"];
+  const isTemplate =
+    repeating !== null &&
+    typeof repeating === "object" &&
+    (repeating as Obj)["isTemplate"] === true;
+  return deriveStage({
+    trashed: s["trashed"] === true,
+    logged: s["logged"] === true,
+    start: s["start"] as "inbox" | "active" | "someday",
+    startDate: (s["startDate"] as string | null) ?? null,
+    repeating: { isTemplate },
+  });
+}
+
 /**
- * Shape ONE task entity (to-do or project): the universal reshapes, then the R6
- * ancestry + bucket-implied lifecycle drops, then — when `compact` — the R7
- * default-pruning. A shallow copy is taken so unknown sibling keys (`changeKind`
- * on a changes row, `match` on a search hit) pass through untouched.
- * Non-task values (areas, tags, refs, headings) are returned as-is.
+ * Shape ONE task entity (to-do or project): the universal reshapes, the R10
+ * stage/marker rewrite, then the R6 ancestry drops, then — when `compact` — the
+ * R7 default-pruning. A shallow copy is taken so unknown sibling keys
+ * (`changeKind` on a changes row, `match` on a search hit) pass through
+ * untouched. Non-task values (areas, tags, refs, headings) are returned as-is.
  */
 function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   if (src === null || typeof src !== "object") return src;
   const s = src as Obj;
   const type = s["type"];
   if (type !== "to-do" && type !== "project") return src; // not a shaped entity
+  const stage = stageOf(s); // from the ORIGINAL fields, before any reshape
   const o: Obj = { ...s };
 
-  // Universal reshapes (every tier, every kind incl. detail).
+  // R9 universal reshapes (every tier, every kind incl. detail).
   reshapeChecklist(o);
   reshapeTodos(o);
   flattenTags(o);
   const rep = reshapeRepeating(o["repeating"]);
   if (rep === undefined) delete o["repeating"];
   else o["repeating"] = rep;
-  // One project key: a headed item's owning project (formerly `headingProject`)
-  // is merged into `project`; `headingProject` never appears on the wire.
   if (o["project"] == null && o["headingProject"] != null) o["project"] = o["headingProject"];
   delete o["headingProject"];
+
+  // R10 — the three lifecycle fields are replaced by the one derived `stage`.
+  delete o["start"];
+  delete o["logged"];
+  delete o["trashed"];
+  if (drop.stage !== true) o["stage"] = stage;
+  // Today/evening markers: dropped where the section states them, and never on a
+  // logbook/trash row (which is not a Today member).
+  if (drop.markers === true || stage === "logbook" || stage === "trash") {
+    delete o["today"];
+    delete o["evening"];
+  }
 
   // R6 — drop redundant ancestry (both tiers).
   if (drop.project === true) delete o["project"];
   if (drop.area === true) delete o["area"];
   if (drop.heading === true) delete o["heading"];
-  // Bucket-implied lifecycle: drop even when TRUE (both tiers).
-  if (drop.logged === true) delete o["logged"];
-  if (drop.trashed === true) delete o["trashed"];
 
   if (!compact) return o;
 
   // R7 compact — default-pruning (absence = the default).
   if (o["status"] === "open") delete o["status"];
-  if (o["logged"] === false) delete o["logged"];
-  if (o["trashed"] === false) delete o["trashed"];
   delete o["created"];
   delete o["modified"];
-  // Notes: the full string is dropped; a presence-keyed marker records that the
-  // row has notes (absent = none). `--full` restores the full text.
   const notes = typeof o["notes"] === "string" ? (o["notes"] as string) : "";
   delete o["notes"];
   if (notes !== "") o["hasNotes"] = true;
@@ -241,6 +224,12 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   return o;
 }
 
+/** Map a plain array of items with the item shaper. */
+function shapeList(items: unknown, drop: ItemDrop, compact: boolean): unknown {
+  if (!Array.isArray(items)) return items;
+  return items.map((i) => shapeItem(i, drop, compact));
+}
+
 /** Copy `base` and overwrite `items` with the shaped list (avoids spread-in-map). */
 function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean): Obj {
   const out: Obj = { ...base };
@@ -248,35 +237,192 @@ function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean): Obj {
   return out;
 }
 
-/** Map an IsoDateGroup's items with the item shaper, preserving `date`. */
-function shapeDateGroups(groups: unknown, drop: ItemDrop, compact: boolean): unknown {
-  if (!Array.isArray(groups)) return groups;
-  return groups.map((g) =>
-    g === null || typeof g !== "object" ? g : withShapedItems(g as Obj, drop, compact),
-  );
+/** A child entity carrying the fields the R10 re-bucketer needs. */
+interface Child extends Obj {
+  startDate?: string | null;
+  todayIndex?: number;
 }
 
-/** Map a plain array of items with the item shaper. */
-function shapeList(items: unknown, drop: ItemDrop, compact: boolean): unknown {
-  if (!Array.isArray(items)) return items;
-  return items.map((i) => shapeItem(i, drop, compact));
+/** An IsoDate group on the wire — `date` is a real string, or `null` for the resting-templates group. */
+interface WireDateGroup {
+  date: string | null;
+  items: unknown[];
 }
 
-/** Merge two drop specs (bucket-implied lifecycle onto the base ancestry drop). */
-function withDrop(base: ItemDrop, extra: ItemDrop): ItemDrop {
-  return { ...base, ...extra };
+/**
+ * Re-bucket a project's / area's / heading's live (non-logbook/trash) children
+ * into the R10 card shape by their derived {@link deriveStage} — so the bucket an
+ * item lands in ALWAYS equals its `stage`:
+ * - `anytime` — stage anytime, in encounter order;
+ * - `upcoming` — stage upcoming, date-grouped `[{date, items}]` (a dated row under
+ *   its `startDate`, a template under its `nextOccurrence`), date ASC; date-LESS
+ *   templates (after-completion / paused) form a trailing `{date: null, items}`
+ *   group (explicit null per the `area: null` section precedent);
+ * - `someday` — stage someday.
+ * Items are already in view order (index / date+todayIndex) from the read layer,
+ * so encounter order within a date group preserves that ordering. Each item is
+ * then run through {@link shapeItem} with the section drop (ancestry + `stage`,
+ * since the bucket states it).
+ */
+function rebucketChildren(
+  children: unknown[],
+  drop: ItemDrop,
+  compact: boolean,
+): { anytime: unknown[]; upcoming: WireDateGroup[]; someday: unknown[] } {
+  const anytime: unknown[] = [];
+  const someday: unknown[] = [];
+  const datedByKey = new Map<string, unknown[]>();
+  const datedOrder: string[] = [];
+  const restingTemplates: unknown[] = [];
+  const shape = (c: unknown) => shapeItem(c, drop, compact);
+  for (const raw of children) {
+    if (raw === null || typeof raw !== "object") continue;
+    const c = raw as Child;
+    const stage = stageOf(c);
+    if (stage === "anytime") {
+      anytime.push(shape(c));
+    } else if (stage === "someday") {
+      someday.push(shape(c));
+    } else if (stage === "upcoming") {
+      const repeating = c["repeating"] as Obj | undefined;
+      const nextOcc =
+        repeating != null && typeof repeating === "object"
+          ? ((repeating["nextOccurrence"] as string | null | undefined) ?? null)
+          : null;
+      const date = (c.startDate ?? null) !== null ? c.startDate! : nextOcc;
+      if (date === null) {
+        restingTemplates.push(shape(c));
+      } else {
+        if (!datedByKey.has(date)) {
+          datedByKey.set(date, []);
+          datedOrder.push(date);
+        }
+        datedByKey.get(date)!.push(shape(c));
+      }
+    } else {
+      // inbox / logbook / trash should not appear among a card's live children;
+      // route defensively to anytime rather than drop the row.
+      anytime.push(shape(c));
+    }
+  }
+  const upcoming: WireDateGroup[] = datedOrder
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((date) => ({ date, items: datedByKey.get(date)! }));
+  if (restingTemplates.length > 0) upcoming.push({ date: null, items: restingTemplates });
+  return { anytime, upcoming, someday };
 }
+
+/** Flatten an internal IsoDateGroup[] (`[{date, items}]`) to its items, in order. */
+function flattenGroups(groups: unknown): unknown[] {
+  if (!Array.isArray(groups)) return [];
+  const out: unknown[] = [];
+  for (const g of groups) {
+    if (g !== null && typeof g === "object" && Array.isArray((g as Obj)["items"])) {
+      out.push(...((g as Obj)["items"] as unknown[]));
+    }
+  }
+  return out;
+}
+
+/** Coerce an unknown value to an array (empty when absent). */
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 /** The R6 ref drop for every child bucket of a project view (unheaded members). */
-const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true };
+const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, stage: true };
 /** Heading-group members drop the heading ref too (the group states it). */
-const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true };
-/** Area-view children/project-cards drop only their area (the card states it). */
-const AREA_CHILD_DROP: ItemDrop = { area: true };
-/** Sidebar-section items drop only their area (the section states it). */
-const SECTION_DROP: ItemDrop = { area: true };
-/** Mixed-provenance lists keep every ref. */
+const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
+/** Area-view child-item buckets drop their area (the card states it) + the bucket-implied stage. */
+const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
+/** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
+const AREA_PROJECTS_DROP: ItemDrop = { area: true };
+/** Sidebar-section items (anytime/someday catalogues): drop area + the bucket-implied stage. */
+const SECTION_DROP: ItemDrop = { area: true, stage: true };
+/** The card NODE / detail / mixed lists: keep every ref, `stage`, and markers. */
 const NO_DROP: ItemDrop = {};
+/** The today view's own sections: keep `stage` (mixed), drop the section-implied markers. */
+const TODAY_SECTION_DROP: ItemDrop = { markers: true };
+
+/** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
+function shapeProjectView(view: Obj, compact: boolean): Obj {
+  const cd = PROJECT_CHILD_DROP;
+  const hd = HEADING_MEMBER_DROP;
+  const shapeHeadingGroup = (g: unknown): unknown => {
+    if (g === null || typeof g !== "object") return g;
+    const grp = g as Obj;
+    const out: Obj = {};
+    // The heading NODE itself drops its `project` ref — the card states it.
+    if (grp["heading"] !== null && typeof grp["heading"] === "object") {
+      const h = { ...(grp["heading"] as Obj) };
+      delete h["project"];
+      out["heading"] = h;
+    } else {
+      out["heading"] = grp["heading"];
+    }
+    const members = [
+      ...asArray(grp["items"]),
+      ...flattenGroups(grp["scheduled"]),
+      ...asArray(grp["someday"]),
+      ...asArray(grp["repeating"]),
+    ];
+    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact);
+    out["anytime"] = anytime;
+    out["upcoming"] = upcoming;
+    out["someday"] = someday;
+    return out;
+  };
+  const headings = Array.isArray(view["headings"])
+    ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
+    : view["headings"];
+  const looseMembers = [
+    ...asArray(view["active"]),
+    ...flattenGroups(view["scheduled"]),
+    ...asArray(view["someday"]),
+    ...asArray(view["repeating"]),
+  ];
+  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact);
+  const out: Obj = { ...view };
+  delete out["active"];
+  delete out["scheduled"];
+  delete out["repeating"];
+  delete out["logged"];
+  delete out["trashed"];
+  // The project card NODE keeps everything (children derive their container from
+  // it), but is still an item DTO, so the universal + R10 reshapes apply.
+  out["project"] = shapeItem(view["project"], NO_DROP, false);
+  out["anytime"] = anytime;
+  out["upcoming"] = upcoming;
+  out["someday"] = someday;
+  out["headings"] = headings;
+  out["logbook"] = shapeList(view["logged"], cd, compact);
+  out["trash"] = shapeList(view["trashed"], cd, compact);
+  return out;
+}
+
+/** Shape every collection bucket of an area view; the area node keeps its identity (tags folded). */
+function shapeAreaView(view: Obj, compact: boolean): Obj {
+  const looseMembers = [
+    ...asArray(view["active"]),
+    ...flattenGroups(view["scheduled"]),
+    ...asArray(view["someday"]),
+    ...asArray(view["repeating"]),
+  ];
+  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, AREA_CHILD_DROP, compact);
+  const out: Obj = { ...view };
+  delete out["active"];
+  delete out["scheduled"];
+  delete out["repeating"];
+  delete out["logged"];
+  delete out["trashed"];
+  out["area"] = shapeArea(view["area"]);
+  out["anytime"] = anytime;
+  // The projects list is a mixed listing of the area's project rows — keep stage.
+  out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact);
+  out["upcoming"] = upcoming;
+  out["someday"] = someday;
+  out["logbook"] = shapeList(view["logged"], AREA_CHILD_DROP, compact);
+  out["trash"] = shapeList(view["trashed"], AREA_CHILD_DROP, compact);
+  return out;
+}
 
 /** Fold an area entity's tags to string names in place (returns a shallow copy). */
 function shapeArea(src: unknown): unknown {
@@ -286,73 +432,16 @@ function shapeArea(src: unknown): unknown {
   return o;
 }
 
-/** Shape every collection bucket of a project view; the card is left untouched (full, enclosing node). */
-function shapeProjectView(view: Obj, compact: boolean): Obj {
-  const cd = PROJECT_CHILD_DROP;
-  const hd = HEADING_MEMBER_DROP;
-  const shapeHeadingGroup = (g: unknown): unknown => {
-    if (g === null || typeof g !== "object") return g;
-    const grp = g as Obj;
-    const out: Obj = { ...grp };
-    // The heading NODE itself also drops its `project` ref — the enclosing
-    // project card states it (same R6 rule its members follow).
-    if (grp["heading"] !== null && typeof grp["heading"] === "object") {
-      const h = { ...(grp["heading"] as Obj) };
-      delete h["project"];
-      out["heading"] = h;
-    }
-    out["items"] = shapeList(grp["items"], hd, compact);
-    out["scheduled"] = shapeDateGroups(grp["scheduled"], hd, compact);
-    out["someday"] = shapeList(grp["someday"], hd, compact);
-    out["repeating"] = shapeList(grp["repeating"], hd, compact);
-    return out;
-  };
-  const headings = Array.isArray(view["headings"])
-    ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
-    : view["headings"];
-  return {
-    ...view,
-    // The project card is the enclosing node — kept FULL and ancestry-intact
-    // (children derive their container from it), but it is still an item DTO, so
-    // the universal reshapes (checklist/todos/tags/repeating) apply.
-    project: shapeItem(view["project"], NO_DROP, false),
-    active: shapeList(view["active"], cd, compact),
-    headings,
-    scheduled: shapeDateGroups(view["scheduled"], cd, compact),
-    someday: shapeList(view["someday"], cd, compact),
-    repeating: shapeList(view["repeating"], cd, compact),
-    // The card's own `logged`/`trashed` buckets state that fact for their rows.
-    logged: shapeList(view["logged"], withDrop(cd, { logged: true }), compact),
-    trashed: shapeList(view["trashed"], withDrop(cd, { trashed: true }), compact),
-  };
-}
-
-/** Shape every collection bucket of an area view; the area card keeps its identity (tags folded to names). */
-function shapeAreaView(view: Obj, compact: boolean): Obj {
-  const d = AREA_CHILD_DROP;
-  return {
-    ...view,
-    area: shapeArea(view["area"]),
-    active: shapeList(view["active"], d, compact),
-    projects: shapeList(view["projects"], d, compact),
-    scheduled: shapeDateGroups(view["scheduled"], d, compact),
-    someday: shapeList(view["someday"], d, compact),
-    repeating: shapeList(view["repeating"], d, compact),
-    logged: shapeList(view["logged"], withDrop(d, { logged: true }), compact),
-    trashed: shapeList(view["trashed"], withDrop(d, { trashed: true }), compact),
-  };
-}
-
-/** Shape the today/evening split (mixed list — keep all refs). */
+/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied markers). */
 function shapeTodayView(view: Obj, compact: boolean): Obj {
   return {
     ...view,
-    today: shapeList(view["today"], NO_DROP, compact),
-    evening: shapeList(view["evening"], NO_DROP, compact),
+    today: shapeList(view["today"], TODAY_SECTION_DROP, compact),
+    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact),
   };
 }
 
-/** Shape sidebar sections (anytime/someday): drop `area` from items, keep the section's own `area`. */
+/** Shape sidebar sections (anytime/someday catalogues): drop area + the bucket-implied stage. */
 function shapeSections(sections: unknown, compact: boolean): unknown {
   if (!Array.isArray(sections)) return sections;
   return sections.map((s) =>
@@ -361,29 +450,29 @@ function shapeSections(sections: unknown, compact: boolean): unknown {
 }
 
 /**
- * The flat, mixed-provenance list kinds, mapped to the lifecycle flag their view
- * states (so a whole-view bucket like `trash`/`logbook` drops the implied flag,
- * while `search`/`changes` keep it to disambiguate a logged/trashed row).
+ * The flat, mixed-provenance list kinds mapped to their drop spec. The
+ * stage-scoped catalogues (inbox/upcoming/logbook/trash) drop the bucket-implied
+ * `stage`; the mixed/derived surfaces (search/changes/projects) keep it.
  */
 const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
-  ["inbox", NO_DROP],
-  ["upcoming", NO_DROP],
+  ["inbox", { stage: true }],
+  ["upcoming", { stage: true }],
+  ["logbook", { stage: true }],
+  ["trash", { stage: true }],
   ["changes", NO_DROP],
   ["search", NO_DROP],
   ["projects", NO_DROP],
-  ["trash", { trashed: true }],
-  ["logbook", { logged: true }],
 ]);
 
 /**
- * Apply the universal reshapes + R6 + R7 to a read payload for one view `kind`.
- * `full` forces the FULL tier (R7 default-pruning off, everything else applied);
- * an unrecognized kind passes through unchanged. The input is never mutated
- * (shallow copies throughout), so the human-render path keeps the full entities.
+ * Apply the universal reshapes + R6 + R7 + R10 to a read payload for one view
+ * `kind`. `full` forces the FULL tier (R7 default-pruning off, everything else
+ * applied); an unrecognized kind passes through unchanged. The input is never
+ * mutated (shallow copies throughout), so the human-render path keeps the full
+ * entities.
  */
 export function shapeReadPayload(kind: string, data: unknown, full: boolean): unknown {
-  // `detail` is the FULL record and drops no ancestry — but still gets the
-  // universal reshapes (checklist/todos/tags/repeating, one project key).
+  // `detail` is the FULL record and drops no ancestry / stage / markers.
   if (kind === "detail") return shapeItem(data, NO_DROP, false);
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);

@@ -314,8 +314,8 @@ describe("things MCP server", () => {
 
     const compact = textOf(
       await client.callTool({ name: "get_project", arguments: { uuid: proj } }),
-    ) as { active: Array<Record<string, unknown>> };
-    const child = compact.active[0]!;
+    ) as { anytime: Array<Record<string, unknown>> };
+    const child = compact.anytime[0]!;
     // R6: a project-view child drops project + area (the card states them).
     expect("project" in child).toBe(false);
     expect("area" in child).toBe(false);
@@ -323,8 +323,8 @@ describe("things MCP server", () => {
 
     const full = textOf(
       await client.callTool({ name: "get_project", arguments: { uuid: proj, full: true } }),
-    ) as { active: Array<Record<string, unknown>> };
-    const fchild = full.active[0]!;
+    ) as { anytime: Array<Record<string, unknown>> };
+    const fchild = full.anytime[0]!;
     expect("created" in fchild).toBe(true); // full restores density
     expect("project" in fchild).toBe(false); // R6 still applies under --full
   });
@@ -652,8 +652,8 @@ describe("things MCP server", () => {
         name: "get_project",
         arguments: { uuid: "P", tag: ["focus"] },
       }),
-    ) as { active: { title: string }[] };
-    expect(proj.active.map((i) => i.title)).toEqual(["child-focus"]);
+    ) as { anytime: { title: string }[] };
+    expect(proj.anytime.map((i) => i.title)).toEqual(["child-focus"]);
     // get_area tag → single-container semantics: loose to-dos + child projects
     // carrying focus DIRECTLY (Home's inherited focus is suppressed, so PBare —
     // which only inherits — is excluded).
@@ -662,8 +662,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "Home", tag: ["focus"] },
       }),
-    ) as { active: { title: string }[]; projects: { title: string }[] };
-    expect(areaRes.active.map((i) => i.title)).toEqual(["loose-focus"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(areaRes.anytime.map((i) => i.title)).toEqual(["loose-focus"]);
     expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
     // list_collections projects tag → FLAT/inheritance-inclusive: BOTH the
     // directly-tagged P and the area-inheriting PBare (the projects list is not a
@@ -945,8 +945,10 @@ describe("things MCP server", () => {
     }
     // The reversal: an empty inherited-tag set is absent, not [].
     expect("inheritedTags" in item).toBe(false);
-    // Meaningful false survives on a detail (full tier keeps default-valued status/logged).
-    expect(item["logged"]).toBe(false);
+    // R10: start/logged/trashed are gone; the derived `stage` is kept on a detail.
+    expect(item["stage"]).toBe("anytime");
+    expect("logged" in item).toBe(false);
+    expect("start" in item).toBe(false);
     // Checklist nesting (universal): the flat counts are gone from the wire, and
     // an item with no checklist carries NO `checklist` key at all (presence-keyed).
     expect("checklistItemsCount" in item).toBe(false);
@@ -1223,9 +1225,9 @@ describe("things MCP server", () => {
     }
     await connect([fakeVector(null).vector]);
     const capped = await client.callTool({ name: "get_area", arguments: { ref: "Busy" } });
-    const view = textOf(capped) as { projects: unknown[]; active: unknown[] };
+    const view = textOf(capped) as { projects: unknown[]; anytime: unknown[] };
     expect(view.projects).toHaveLength(30);
-    expect(view.active).toHaveLength(30);
+    expect(view.anytime).toHaveLength(30);
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as {
@@ -1244,9 +1246,9 @@ describe("things MCP server", () => {
 
     const narrowed = textOf(
       await client.callTool({ name: "get_area", arguments: { ref: "Busy", project_limit: 2 } }),
-    ) as { projects: unknown[]; active: unknown[] };
+    ) as { projects: unknown[]; anytime: unknown[] };
     expect(narrowed.projects).toHaveLength(2);
-    expect(narrowed.active).toHaveLength(30);
+    expect(narrowed.anytime).toHaveLength(30);
 
     const conflict = await client.callTool({
       name: "get_area",
@@ -1281,11 +1283,11 @@ describe("things MCP server", () => {
       }),
     ) as {
       project: { title: string };
-      active: { title: string }[];
+      anytime: { title: string }[];
       headings: { heading: { title: string }; items: { title: string }[] }[];
     };
     expect(view.project.title).toBe("MCP Launch");
-    expect(view.active.map((i) => i.title)).toEqual(["loose-overdue"]);
+    expect(view.anytime.map((i) => i.title)).toEqual(["loose-overdue"]);
     expect(view.headings).toHaveLength(1);
     expect(view.headings[0]?.heading.title).toBe("Phase 1");
   });
@@ -1309,8 +1311,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "MCP Home", overdue: true },
       }),
-    ) as { active: { title: string }[]; projects: { title: string }[] };
-    expect(view.active.map((i) => i.title)).toEqual(["todo-overdue"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(view.anytime.map((i) => i.title)).toEqual(["todo-overdue"]);
     expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
   });
 
