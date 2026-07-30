@@ -1,12 +1,14 @@
 /**
  * The read-payload shaping transform (src/read/shape.ts): the token-economy
- * rules R6 (no-redundant-ancestry) and R7 (named detail tiers) plus the two
- * universal item-DTO reshapes (checklist nesting, repeating omission). Pure
- * function, exercised here on hand-built synthetic payloads (no DB). Guards:
- * per-view R6 ancestry stripping; the compact default-pruning; the notes
- * preview + notesTruncated marker; --full restoring density while R6 still
- * applies; bucket-implied logged/trashed dropping both directions; the checklist
- * object; and repeating omission across tiers and detail.
+ * rules R6 (no-redundant-ancestry) and R7 (named detail tiers) plus the
+ * universal item-DTO reshapes (checklist nesting, todos counts, string tags,
+ * one project key, repeating omission). Pure function, exercised here on
+ * hand-built synthetic payloads (no DB). Guards: per-view R6 ancestry stripping;
+ * the compact default-pruning; the presence-keyed hasNotes marker; --full
+ * restoring density (incl. full notes + heading) while R6 still applies;
+ * bucket-implied logged/trashed dropping both directions; the checklist / todos
+ * objects; string tags; the headingProject→project merge; the compact heading
+ * drop; and repeating omission across tiers and detail.
  */
 import { describe, expect, it } from "vitest";
 
@@ -97,46 +99,150 @@ describe("shapeReadPayload — R7 compact tier (flat list)", () => {
     expect(row["trashed"]).toBe(true);
   });
 
-  it("--full (full tier) restores created/modified/full notes and default-valued fields", () => {
+  it("--full (full tier) restores created/modified/full notes/heading and default-valued fields", () => {
     const row = (shapeReadPayload("inbox", [fullTodo()], true) as Obj[])[0]!;
     expect(row["status"]).toBe("open");
     expect(row["logged"]).toBe(false);
     expect(row["trashed"]).toBe(false);
     expect("created" in row).toBe(true);
     expect("modified" in row).toBe(true);
-    // Full notes verbatim (no preview, no marker).
+    // Full notes verbatim (no preview, no hasNotes marker).
     expect(row["notes"]).toBe("first line of the notes\nand a second line");
-    expect("notesTruncated" in row).toBe(false);
+    expect("hasNotes" in row).toBe(false);
+    // Full tier keeps the heading ref.
+    expect(row["heading"]).toBeDefined();
   });
 });
 
-describe("shapeReadPayload — notes preview + notesTruncated", () => {
-  it("compact previews the first line and flags the truncation", () => {
+describe("shapeReadPayload — hasNotes marker (compact)", () => {
+  it("compact drops the notes string and flags presence with hasNotes", () => {
     const row = (shapeReadPayload("inbox", [fullTodo()], false) as Obj[])[0]!;
-    expect(row["notes"]).toBe("first line of the notes");
-    expect(row["notesTruncated"]).toBe(true);
+    expect("notes" in row).toBe(false);
+    expect("notesTruncated" in row).toBe(false); // the old marker is gone
+    expect(row["hasNotes"]).toBe(true);
   });
 
-  it("a single short line is complete — no marker", () => {
-    const row = (
-      shapeReadPayload("inbox", [fullTodo({ notes: "just one line" })], false) as Obj[]
-    )[0]!;
-    expect(row["notes"]).toBe("just one line");
-    expect("notesTruncated" in row).toBe(false);
-  });
-
-  it("truncates a long single line at 120 chars and flags it", () => {
-    const long = "x".repeat(200);
-    const row = (shapeReadPayload("inbox", [fullTodo({ notes: long })], false) as Obj[])[0]!;
-    expect((row["notes"] as string).length).toBe(120);
-    expect(row["notesTruncated"]).toBe(true);
-  });
-
-  it("empty notes stay omitted, no marker", () => {
+  it("a notes-less row carries no hasNotes marker (presence-keyed)", () => {
     const row = (shapeReadPayload("inbox", [fullTodo({ notes: "" })], false) as Obj[])[0]!;
-    // omit-empty (a later pass) drops "" — the shaper leaves it "" and no marker.
-    expect(row["notes"]).toBe("");
-    expect("notesTruncated" in row).toBe(false);
+    expect("notes" in row).toBe(false);
+    expect("hasNotes" in row).toBe(false);
+  });
+});
+
+describe("shapeReadPayload — string tags (both tiers, detail)", () => {
+  it("tags fold from {title} objects to a plain array of names", () => {
+    for (const full of [false, true]) {
+      const row = (
+        shapeReadPayload(
+          "inbox",
+          [fullTodo({ tags: [{ title: "errand" }, { title: "home" }] })],
+          full,
+        ) as Obj[]
+      )[0]!;
+      expect(row["tags"]).toEqual(["errand", "home"]);
+    }
+  });
+
+  it("inheritedTags fold to names too, on a detail read", () => {
+    const detail = fullTodo({
+      tags: [{ title: "urgent" }],
+      inheritedTags: [{ title: "work" }, { title: "team" }],
+    });
+    const out = shapeReadPayload("detail", detail, false) as Obj;
+    expect(out["tags"]).toEqual(["urgent"]);
+    expect(out["inheritedTags"]).toEqual(["work", "team"]);
+  });
+
+  it("an area listing folds each area's tags to names", () => {
+    const areas = [
+      { uuid: "area-1", title: "Work", visible: true, tags: [{ title: "focus" }] },
+      { uuid: "area-2", title: "Home", visible: true, tags: [] },
+    ];
+    const out = shapeReadPayload("areas", areas, false) as Obj[];
+    expect(out[0]!["tags"]).toEqual(["focus"]);
+    expect(out[1]!["tags"]).toEqual([]);
+  });
+});
+
+describe("shapeReadPayload — one project key (headingProject merge)", () => {
+  it("a headed item (project null, headingProject set) emits the project under `project`", () => {
+    const row = (
+      shapeReadPayload(
+        "inbox",
+        [
+          fullTodo({
+            project: null,
+            heading: { uuid: "head-1", title: "Phase 1" },
+            headingProject: { uuid: "proj-1", title: "Q3" },
+          }),
+        ],
+        true, // full tier keeps heading, so we can see both refs
+      ) as Obj[]
+    )[0]!;
+    expect(row["project"]).toEqual({ uuid: "proj-1", title: "Q3" });
+    expect("headingProject" in row).toBe(false); // never on the wire
+    expect(row["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
+  });
+
+  it("headingProject is deleted even when a direct project is present", () => {
+    const row = (
+      shapeReadPayload(
+        "inbox",
+        [fullTodo({ project: { uuid: "p-direct", title: "Direct" } })],
+        true,
+      ) as Obj[]
+    )[0]!;
+    expect(row["project"]).toEqual({ uuid: "p-direct", title: "Direct" });
+    expect("headingProject" in row).toBe(false);
+  });
+});
+
+describe("shapeReadPayload — heading dropped in compact everywhere", () => {
+  it("compact drops the heading ref on a mixed list; full keeps it", () => {
+    const withHeading = { heading: { uuid: "head-1", title: "Phase 1" } };
+    const compact = (shapeReadPayload("inbox", [fullTodo(withHeading)], false) as Obj[])[0]!;
+    expect("heading" in compact).toBe(false);
+    const full = (shapeReadPayload("inbox", [fullTodo(withHeading)], true) as Obj[])[0]!;
+    expect(full["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
+  });
+});
+
+describe("shapeReadPayload — project todos counts", () => {
+  it("folds leaf-action counts into a presence-keyed {open,total}; all tiers", () => {
+    for (const full of [false, true]) {
+      const row = (
+        shapeReadPayload(
+          "projects",
+          [project({ untrashedLeafActionsCount: 4, openUntrashedLeafActionsCount: 2 })],
+          full,
+        ) as Obj[]
+      )[0]!;
+      expect(row["todos"]).toEqual({ open: 2, total: 4 });
+      expect("untrashedLeafActionsCount" in row).toBe(false);
+      expect("openUntrashedLeafActionsCount" in row).toBe(false);
+    }
+  });
+
+  it("omits the key entirely when the project has no to-do children (total 0)", () => {
+    for (const full of [false, true]) {
+      const row = (
+        shapeReadPayload(
+          "projects",
+          [project({ untrashedLeafActionsCount: 0, openUntrashedLeafActionsCount: 0 })],
+          full,
+        ) as Obj[]
+      )[0]!;
+      expect("todos" in row).toBe(false);
+    }
+  });
+
+  it("a detail read folds the counts the same way", () => {
+    const out = shapeReadPayload(
+      "detail",
+      project({ untrashedLeafActionsCount: 5, openUntrashedLeafActionsCount: 5 }),
+      false,
+    ) as Obj;
+    expect(out["todos"]).toEqual({ open: 5, total: 5 });
   });
 });
 

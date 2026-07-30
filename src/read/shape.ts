@@ -1,13 +1,13 @@
 /**
  * The read-payload SHAPING transform: the token-economy rules R6 and R7 (plus
- * the two universal item-DTO reshapes they ride with), applied at the JSON emit
+ * the universal item-DTO reshapes they ride with), applied at the JSON emit
  * boundary of the read surfaces — the CLI `--json` read envelope
  * (src/cli/read-driver.ts) and the MCP read tool results (src/mcp/server.ts),
  * the same two boundaries omit-empty runs at. Shaping runs BEFORE omit-empty: it
- * prunes redundant-but-nonempty facts (R6), reshapes the checklist + repeating
- * fields, and reduces list rows to the compact tier (R7); omit-empty then prunes
- * whatever is left empty. The human-render path keeps the full, unshaped
- * entities, so this is JSON-only.
+ * prunes redundant-but-nonempty facts (R6), reshapes the checklist / todos /
+ * repeating / tags fields, and reduces list rows to the compact tier (R7);
+ * omit-empty then prunes whatever is left empty. The human-render path keeps the
+ * full, unshaped entities, so this is JSON-only.
  *
  * Both rules are deterministic BY VIEW KIND / SECTION — the emitter knows
  * whether it is inside a single-container view, a lifecycle bucket, or a mixed
@@ -19,16 +19,31 @@
  *   `checklist: {open, total}` (presence-keyed — no key at all when there is no
  *   checklist), and a `detail` read that also carries the items nests them at
  *   `checklist.items`.
+ * - **todos counts** — a project's flat `untrashedLeafActionsCount` /
+ *   `openUntrashedLeafActionsCount` are removed from the wire; a project with any
+ *   to-do children carries `todos: {open, total}` (presence-keyed — no key when
+ *   total is 0), the same progress-count shape as `checklist`. The counts are the
+ *   app-maintained materialized leaf-action columns (to-do children only —
+ *   headings and checklist items are excluded by construction).
  * - **repeating omission** — the all-false `repeating` block (a normal,
  *   non-repeating row) is dropped entirely; a real template/instance keeps a
  *   minimal truthful object (only its true booleans and non-null values).
+ * - **string tags** — `tags` (and `inheritedTags`) become a plain array of tag
+ *   NAMES (`["errand", "home"]`); the per-tag object wrapper is gone (tag uuids
+ *   were never on the wire — titles are the identity). Applied to to-dos,
+ *   projects, and areas.
+ * - **one project key** — an item whose membership routes through a heading
+ *   carries its owning project under the single key `project` (the former
+ *   `headingProject` is merged in and deleted from the wire — the two could never
+ *   coexist or disagree). R6 dropping rules unchanged: a project-view child still
+ *   drops the project ref entirely.
  *
  * ## R6 — no-redundant-ancestry (both tiers)
  * An item never states a fact its enclosing node already states:
  * - **project-view**: every child (in ANY bucket, incl. heading-group members)
- *   drops `project`/`headingProject` and `area` — the project card states both.
- *   Heading-group members additionally drop `heading`. The project CARD keeps
- *   everything (it is the enclosing node children derive from).
+ *   drops `project` and `area` — the project card states both. Heading-group
+ *   members additionally drop `heading`. The project CARD keeps everything (it is
+ *   the enclosing node children derive from).
  * - **area-view**: every child item and project card drops `area` — the area
  *   card states it. Project-child items keep `project`.
  * - **anytime/someday sections** (`{area, items}`): items drop `area` (including
@@ -63,18 +78,19 @@
  * - default-pruned (absence = the default): `status` (`"open"`), `logged`
  *   (`false`), `trashed` (`false`);
  * - always dropped: `created`, `modified` (get them from `detail`);
- * - `notes` becomes its first line truncated to 120 chars, with a sibling
- *   `notesTruncated: true` present iff that preview differs from the full notes.
+ * - the full `notes` string is dropped; a presence-keyed `hasNotes: true` marks
+ *   a row that has notes (absent = none). `--full` is the way to get notes in a
+ *   list context;
+ * - the `heading` ref is dropped (the GUI shows the project, never the heading,
+ *   outside a project view). The FULL tier keeps `heading`.
  *
- * The FULL tier keeps `created`/`modified`, full `notes`, and the default-valued
- * `status`/`logged`/`trashed` — but still applies R6 (ancestry redundancy is not
- * tier-dependent), the two universal reshapes, and the bucket-implied lifecycle
- * drops.
+ * The FULL tier keeps `created`/`modified`, full `notes`, `heading`, and the
+ * default-valued `status`/`logged`/`trashed` — but still applies R6 (ancestry
+ * redundancy is not tier-dependent), the universal reshapes, and the
+ * bucket-implied lifecycle drops.
  */
 
 type Obj = Record<string, unknown>;
-
-const NOTES_PREVIEW_MAX = 120;
 
 /** What a given view context drops from an item: redundant ancestry + bucket-implied lifecycle flags. */
 interface ItemDrop {
@@ -87,16 +103,20 @@ interface ItemDrop {
   trashed?: boolean;
 }
 
-/** The R7 compact default-pruning of the notes field. */
-function compactNotes(o: Obj): void {
-  const full = typeof o["notes"] === "string" ? (o["notes"] as string) : "";
-  if (full === "") return; // omit-empty drops it; nothing to preview
-  const firstLine = full.split("\n", 1)[0] ?? "";
-  const preview =
-    firstLine.length > NOTES_PREVIEW_MAX ? firstLine.slice(0, NOTES_PREVIEW_MAX) : firstLine;
-  o["notes"] = preview;
-  // Presence-keyed marker: present ONLY when the preview hides something.
-  if (preview !== full) o["notesTruncated"] = true;
+/**
+ * Fold the flat `tags` / `inheritedTags` arrays of `{title}` objects into plain
+ * arrays of tag NAMES (universal across tiers and kinds). Tag uuids were never
+ * on the wire; the title is the identity. A missing key is left missing; an
+ * empty array stays `[]` (omit-empty prunes it later).
+ */
+function flattenTags(o: Obj): void {
+  for (const key of ["tags", "inheritedTags"]) {
+    const v = o[key];
+    if (!Array.isArray(v)) continue;
+    o[key] = v.map((t) =>
+      t !== null && typeof t === "object" && "title" in (t as Obj) ? (t as Obj)["title"] : t,
+    );
+  }
 }
 
 /**
@@ -119,6 +139,30 @@ function reshapeChecklist(o: Obj): void {
   const cl: Obj = { open, total };
   if (Array.isArray(items)) cl["items"] = items;
   o["checklist"] = cl;
+}
+
+/**
+ * Reshape a project's flat leaf-action counts into ONE presence-keyed `todos`
+ * object — universal across tiers and kinds, mirroring {@link reshapeChecklist}.
+ * The source columns are the app-maintained materialized child counts
+ * (`untrashedLeafActionsCount` / `openUntrashedLeafActionsCount`), which count
+ * to-do children only (headings and checklist items excluded by construction).
+ * No to-do children (total 0) → the `todos` key is absent entirely; otherwise
+ * `{open, total}`. A no-op on to-dos (they carry no such columns).
+ */
+function reshapeTodos(o: Obj): void {
+  const total =
+    typeof o["untrashedLeafActionsCount"] === "number"
+      ? (o["untrashedLeafActionsCount"] as number)
+      : 0;
+  const open =
+    typeof o["openUntrashedLeafActionsCount"] === "number"
+      ? (o["openUntrashedLeafActionsCount"] as number)
+      : 0;
+  delete o["untrashedLeafActionsCount"];
+  delete o["openUntrashedLeafActionsCount"];
+  if (total === 0) return; // presence-keyed: no to-do children → omit the key
+  o["todos"] = { open, total };
 }
 
 /**
@@ -160,15 +204,18 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
 
   // Universal reshapes (every tier, every kind incl. detail).
   reshapeChecklist(o);
+  reshapeTodos(o);
+  flattenTags(o);
   const rep = reshapeRepeating(o["repeating"]);
   if (rep === undefined) delete o["repeating"];
   else o["repeating"] = rep;
+  // One project key: a headed item's owning project (formerly `headingProject`)
+  // is merged into `project`; `headingProject` never appears on the wire.
+  if (o["project"] == null && o["headingProject"] != null) o["project"] = o["headingProject"];
+  delete o["headingProject"];
 
   // R6 — drop redundant ancestry (both tiers).
-  if (drop.project === true) {
-    delete o["project"];
-    delete o["headingProject"];
-  }
+  if (drop.project === true) delete o["project"];
   if (drop.area === true) delete o["area"];
   if (drop.heading === true) delete o["heading"];
   // Bucket-implied lifecycle: drop even when TRUE (both tiers).
@@ -181,13 +228,16 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   if (o["status"] === "open") delete o["status"];
   if (o["logged"] === false) delete o["logged"];
   if (o["trashed"] === false) delete o["trashed"];
-  // A project row keeps its child-count fields, omit-0 (a `0` count is the
-  // default, so absence carries it — mirroring the checklist-object omission).
-  if (o["untrashedLeafActionsCount"] === 0) delete o["untrashedLeafActionsCount"];
-  if (o["openUntrashedLeafActionsCount"] === 0) delete o["openUntrashedLeafActionsCount"];
   delete o["created"];
   delete o["modified"];
-  compactNotes(o);
+  // Notes: the full string is dropped; a presence-keyed marker records that the
+  // row has notes (absent = none). `--full` restores the full text.
+  const notes = typeof o["notes"] === "string" ? (o["notes"] as string) : "";
+  delete o["notes"];
+  if (notes !== "") o["hasNotes"] = true;
+  // The heading ref is compact-dropped everywhere (the GUI shows the project,
+  // never the heading, outside a project view). Full tier / detail keep it.
+  delete o["heading"];
   return o;
 }
 
@@ -228,6 +278,14 @@ const SECTION_DROP: ItemDrop = { area: true };
 /** Mixed-provenance lists keep every ref. */
 const NO_DROP: ItemDrop = {};
 
+/** Fold an area entity's tags to string names in place (returns a shallow copy). */
+function shapeArea(src: unknown): unknown {
+  if (src === null || typeof src !== "object") return src;
+  const o: Obj = { ...(src as Obj) };
+  flattenTags(o);
+  return o;
+}
+
 /** Shape every collection bucket of a project view; the card is left untouched (full, enclosing node). */
 function shapeProjectView(view: Obj, compact: boolean): Obj {
   const cd = PROJECT_CHILD_DROP;
@@ -256,7 +314,7 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
     ...view,
     // The project card is the enclosing node — kept FULL and ancestry-intact
     // (children derive their container from it), but it is still an item DTO, so
-    // the two universal reshapes (checklist nesting, repeating omission) apply.
+    // the universal reshapes (checklist/todos/tags/repeating) apply.
     project: shapeItem(view["project"], NO_DROP, false),
     active: shapeList(view["active"], cd, compact),
     headings,
@@ -269,11 +327,12 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
   };
 }
 
-/** Shape every collection bucket of an area view; the area card is left untouched. */
+/** Shape every collection bucket of an area view; the area card keeps its identity (tags folded to names). */
 function shapeAreaView(view: Obj, compact: boolean): Obj {
   const d = AREA_CHILD_DROP;
   return {
     ...view,
+    area: shapeArea(view["area"]),
     active: shapeList(view["active"], d, compact),
     projects: shapeList(view["projects"], d, compact),
     scheduled: shapeDateGroups(view["scheduled"], d, compact),
@@ -323,8 +382,8 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
  * (shallow copies throughout), so the human-render path keeps the full entities.
  */
 export function shapeReadPayload(kind: string, data: unknown, full: boolean): unknown {
-  // `detail` is the FULL record and drops no ancestry — but still gets the two
-  // universal reshapes (checklist nesting, repeating omission).
+  // `detail` is the FULL record and drops no ancestry — but still gets the
+  // universal reshapes (checklist/todos/tags/repeating, one project key).
   if (kind === "detail") return shapeItem(data, NO_DROP, false);
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);
@@ -341,6 +400,8 @@ export function shapeReadPayload(kind: string, data: unknown, full: boolean): un
   if (kind === "project-view" && data !== null && typeof data === "object") {
     return shapeProjectView(data as Obj, compact);
   }
-  // areas / tags / legend / snapshot / diagnostics: not task-entity payloads.
+  // The `areas` listing carries Area entities whose tags fold to names.
+  if (kind === "areas" && Array.isArray(data)) return data.map(shapeArea);
+  // tags / legend / snapshot / diagnostics: not tag-carrying entity payloads.
   return data;
 }
