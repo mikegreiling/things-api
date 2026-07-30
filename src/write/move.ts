@@ -206,10 +206,12 @@ function bounceDisabledTarget(what: string): ScopeTarget {
  * anytime members; an area's someday members (SOMEBNC-area bounce — was §9f-
  * prohibited); a heading's anytime children (BOUNCE2-h forward-order bounce); a
  * container's same-day scheduled children (DAYORD-b native todayIndex re-rank);
- * area-less someday projects; top-level anytime projects. APP-DEFAULT: a headed
- * scheduled/someday/evening child; a project/area child in the evening sub-
- * bucket; a loose future day (Upcoming re-dates, §9g); repeating TEMPLATE rows
- * (§9e). When bounce is DISABLED the bounce-dependent classes degrade to
+ * a loose FUTURE Upcoming day (UPCORD1 park-sort-unpark, scope `loose-day` —
+ * gated like container-day); area-less someday projects; top-level anytime
+ * projects. APP-DEFAULT: a headed scheduled/someday/evening child; a project/
+ * area child in the evening sub-bucket; a loose scheduled PROJECT row (no
+ * surface); repeating TEMPLATE rows (§9e). When bounce is DISABLED the
+ * bounce-dependent classes degrade to
  * app-default naming the flag — never a destructive or unverified fallback.
  */
 function reorderTargetOf(
@@ -280,7 +282,11 @@ function reorderTargetOf(
         ? { scope: "anytime" }
         : bounceDisabledTarget("area-less loose anytime order");
     }
-    return { scope: null, reason: "a future day bucket (Upcoming re-dates — oddity §9g)" };
+    // A loose FUTURE Upcoming day: the UPCORD1 park-sort-unpark protocol
+    // (scratch PROJECT park → container-day reorder → unpark → trash). Gated by
+    // allow-experimental like container-day (the pipeline / orchestrator explains
+    // when the gate is off); NEVER routed through an area scratch (§9f).
+    return { scope: "loose-day" };
   }
   // projects:
   if (row.area !== null) {
@@ -1154,7 +1160,7 @@ async function finishPlacement(
  * EARLIEST movee's current slot (bare-reorder semantics, spec §4).
  */
 function earliestSlotOrder(deps: WriteDeps, target: ScopeTarget, movees: string[]): string[] {
-  const members = bucketMembers(deps, target);
+  const members = bucketMembers(deps, target, movees[0]);
   const moveeSet = new Set(movees);
   const earliest = members.findIndex((u) => moveeSet.has(u));
   if (earliest < 0) return movees;
@@ -1176,7 +1182,7 @@ function buildReorderOrder(
     return movees;
   }
   // last / before / after → a FULL re-rank: read the bucket order and splice.
-  const members = bucketMembers(deps, target);
+  const members = bucketMembers(deps, target, movees[0]);
   const others = members.filter((u) => !movees.includes(u));
   if ("at" in position && position.at === "last") return [...others, ...movees];
   if ("before" in position || "after" in position) {
@@ -1197,12 +1203,20 @@ function resolveMoveeUuid(deps: WriteDeps, ref: string): string {
   }
 }
 
-/** The current member order of a reorder bucket (for full re-rank builds). */
-function bucketMembers(deps: WriteDeps, target: ScopeTarget): string[] {
+/**
+ * The current member order of a reorder bucket (for full re-rank builds). The
+ * container-day and loose-day scopes read their day off the FIRST requested
+ * uuid (a day-group is keyed by a movee's startDate, not by a container), so
+ * `dayAnchor` (a movee) seeds the enumeration for them — without it those two
+ * scopes enumerate nothing and an anchored (--last/--before/--after) placement
+ * cannot splice against the real day order.
+ */
+function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string): string[] {
   if (target.scope === null) return [];
+  const seedsDay = target.scope === "container-day" || target.scope === "loose-day";
   const params: ReorderParams = {
     scope: target.scope,
-    uuids: [],
+    uuids: seedsDay && dayAnchor !== undefined ? [dayAnchor] : [],
     ...(target.container !== undefined && { container: { uuid: target.container } }),
   };
   const containerUuid = target.container ?? null;
@@ -1224,6 +1238,7 @@ function legOptions(options: WriteOptions): WriteOptions {
 
 function describeScope(target: ScopeTarget): string {
   if (target.scope === null) return target.reason;
+  if (target.scope === "loose-day") return "the loose future-day group";
   return target.container !== undefined
     ? `the ${target.scope} ${target.container}`
     : `the ${target.scope} list`;

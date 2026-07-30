@@ -802,7 +802,10 @@ export function computeReorderPre(
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
   const key: "index" | "todayIndex" =
-    params.scope === "today" || params.scope === "evening" || params.scope === "container-day"
+    params.scope === "today" ||
+    params.scope === "evening" ||
+    params.scope === "container-day" ||
+    params.scope === "loose-day"
       ? "todayIndex"
       : "index";
 
@@ -992,6 +995,49 @@ export function computeReorderPre(
           [containerUuid ?? "", containerUuid ?? "", first.startDate],
           "todayIndex",
         );
+      }
+      break;
+    }
+    case "loose-day": {
+      // STANDALONE loose (no project/area/heading) to-dos sharing ONE future
+      // Upcoming day, ranked on todayIndex (UPCORD1 Arm B). The day is read off
+      // the first requested uuid; every loose member on that same day is a
+      // member (the whole day-group is parked + re-ranked as one unit — the
+      // scratch-project container-day leg only orders its OWN children, so any
+      // un-parked day member would keep a stale todayIndex and corrupt the
+      // result). Templates (rt1_recurrenceRule/repeater) are excluded by
+      // NOT_TEMPLATE_ROW; loose scheduled PROJECT rows (type=1) are not members.
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type = 0 AND project IS NULL AND area IS NULL AND heading IS NULL " +
+            "AND startBucket = 0 AND startDate = ?",
+          [first.startDate],
+          "todayIndex",
+        );
+      }
+      // A requested uuid that is a repeating TEMPLATE gets the §9e teaching
+      // reason (the container-day reorder SKIPS template rows) rather than the
+      // generic non-member reason.
+      for (const uuid of params.uuids) {
+        const t = db
+          .prepare(
+            "SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ? AND type = 0",
+          )
+          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
+        if (t !== undefined && (t.rule !== null || t.repeater !== null)) {
+          rejectedCandidates.set(
+            uuid,
+            "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
+              "so loose future-day ordering cannot include it",
+          );
+        }
       }
       break;
     }
