@@ -231,15 +231,26 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
 });
 
 describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)", () => {
-  it("stage-scoped catalogues drop the field; mixed/derived surfaces keep it", () => {
-    for (const kind of ["inbox", "upcoming", "logbook", "trash"]) {
+  it("stage-PURE catalogues drop the field; stage-MIXED + derived surfaces keep it (R10.1)", () => {
+    for (const kind of ["inbox", "logbook", "trash"]) {
       const row = first(shapeReadPayload(kind, [todo()], false));
-      expect("stage" in row).toBe(false); // implied by the view
+      expect("stage" in row).toBe(false); // provably stated by the pure view
     }
-    for (const kind of ["search", "changes", "projects"]) {
-      const row = first(shapeReadPayload(kind, [todo({ changeKind: "modified" })], false));
-      expect(row["stage"]).toBe("anytime"); // kept — mixed/derived surface
+    // R10.1: `upcoming` is stage-MIXED (deadline-forecast anytime/someday rows),
+    // so it KEEPS stage — alongside the derived surfaces.
+    for (const kind of ["upcoming", "search", "changes", "projects"]) {
+      const row = first(shapeReadPayload(kind, [todo()], false));
+      expect(row["stage"]).toBe("anytime"); // kept
     }
+  });
+
+  it("todaySection is retired from the wire on every surface (R10.1)", () => {
+    const mixed = first(shapeReadPayload("search", [todo({ todaySection: "today" })], true));
+    expect("todaySection" in mixed).toBe(false);
+    const pure = first(shapeReadPayload("inbox", [todo({ todaySection: "evening" })], false));
+    expect("todaySection" in pure).toBe(false);
+    const detail = shapeReadPayload("detail", todo({ todaySection: "evening" }), false) as Obj;
+    expect("todaySection" in detail).toBe(false);
   });
 
   it("trash wins over logbook: a trashed+completed+logged row derives `trash`", () => {
@@ -288,15 +299,20 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(row["heading"]).toBeDefined();
   });
 
-  it("anytime/someday sections drop area + the bucket-implied stage, keep project/heading", () => {
+  it("anytime section drops area but KEEPS stage (stage-mixed, R10.1); someday drops both", () => {
     const sections = [{ area: { uuid: "area-1", title: "Work" }, items: [todo()] }];
-    const out = shapeReadPayload("anytime", sections, true) as Obj[];
-    const item = (out[0]!["items"] as Obj[])[0]!;
-    expect("area" in item).toBe(false);
-    expect("stage" in item).toBe(false); // catalogue states it
-    expect(item["project"]).toBeDefined();
-    expect(item["heading"]).toBeDefined();
-    expect(out[0]!["area"]).toEqual({ uuid: "area-1", title: "Work" });
+    const anytime = shapeReadPayload("anytime", sections, true) as Obj[];
+    const aItem = (anytime[0]!["items"] as Obj[])[0]!;
+    expect("area" in aItem).toBe(false);
+    expect(aItem["stage"]).toBe("anytime"); // R10.1: mixed catalogue → stage KEPT
+    expect(aItem["project"]).toBeDefined();
+    expect(aItem["heading"]).toBeDefined();
+    expect(anytime[0]!["area"]).toEqual({ uuid: "area-1", title: "Work" });
+
+    const someday = shapeReadPayload("someday", sections, true) as Obj[];
+    const sItem = (someday[0]!["items"] as Obj[])[0]!;
+    expect("area" in sItem).toBe(false);
+    expect("stage" in sItem).toBe(false); // stage-pure catalogue → dropped
   });
 
   it("area-view: children buckets drop area+stage; the projects list keeps stage; card node kept", () => {
