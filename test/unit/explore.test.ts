@@ -111,7 +111,7 @@ describe("explore server smoke", () => {
   });
 
   it("serves the page and runs a read against the fixture db", { timeout: 30_000 }, async () => {
-    const server = await startExploreServer({ port: 0 });
+    const { server } = await startExploreServer({ port: 0 });
     try {
       const address = server.address();
       const port = typeof address === "object" && address !== null ? address.port : 0;
@@ -145,6 +145,69 @@ describe("explore server smoke", () => {
       const writeResult = (await write.json()) as { argv: string[]; forced: string[] };
       expect(writeResult.argv).toContain("--dry-run");
       expect(writeResult.forced).toContain("--dry-run");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("gates every request in public mode", { timeout: 30_000 }, async () => {
+    const TOKEN = "0123456789abcdef0123456789abcdef";
+    const { server } = await startExploreServer({ port: 0, public: true, token: TOKEN });
+    try {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const base = `http://127.0.0.1:${port}`;
+
+      // GET / without a key is refused.
+      const noKey = await fetch(base + "/");
+      expect(noKey.status).toBe(403);
+
+      // GET /?key= serves the page and plants the cookie.
+      const withKey = await fetch(base + "/?key=" + TOKEN);
+      expect(withKey.status).toBe(200);
+      const setCookie = withKey.headers.get("set-cookie") ?? "";
+      expect(setCookie).toContain(`exploreKey=${TOKEN}`);
+      expect(setCookie).toContain("HttpOnly");
+      const body = await withKey.text();
+      expect(body).toContain("LAN access");
+      expect(body).not.toContain("localhost only");
+
+      // POST /run with the cookie is authorized.
+      const viaCookie = await fetch(base + "/run", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `exploreKey=${TOKEN}` },
+        body: JSON.stringify({ command: "inbox" }),
+      });
+      expect(viaCookie.status).toBe(200);
+      expect(((await viaCookie.json()) as { exitCode: number }).exitCode).toBe(0);
+
+      // POST /run with the x-explore-key header is authorized.
+      const viaHeader = await fetch(base + "/run", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-explore-key": TOKEN },
+        body: JSON.stringify({ command: "inbox" }),
+      });
+      expect(viaHeader.status).toBe(200);
+
+      // POST /run with nothing is refused.
+      const bare = await fetch(base + "/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ command: "inbox" }),
+      });
+      expect(bare.status).toBe(403);
+
+      // POST /run with the wrong key is refused.
+      const wrong = await fetch(base + "/run", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-explore-key": "deadbeef" },
+        body: JSON.stringify({ command: "inbox" }),
+      });
+      expect(wrong.status).toBe(403);
+
+      // GET / with the wrong key is refused.
+      const wrongGet = await fetch(base + "/?key=nope");
+      expect(wrongGet.status).toBe(403);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
