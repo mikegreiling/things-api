@@ -647,14 +647,14 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     const a = seedTodo(fixture.db, {
       title: "a",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 1,
     });
     const b = seedTodo(fixture.db, {
       title: "b",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 2,
     });
@@ -678,13 +678,13 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
   it("a loose FUTURE-day block is now GUARANTEED via the UPCORD1 loose-day protocol", async () => {
     const a = seedTodo(fixture.db, {
       title: "a",
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 20,
     });
     const b = seedTodo(fixture.db, {
       title: "b",
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 10,
     });
@@ -716,13 +716,13 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
   it("mixed future dates are refused — a single reorder cannot span days", async () => {
     const a = seedTodo(fixture.db, {
       title: "a",
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 10,
     });
     const b = seedTodo(fixture.db, {
       title: "b",
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-21",
       todayIndex: 10,
     });
@@ -738,14 +738,14 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     const a = seedTodo(fixture.db, {
       title: "a",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 20,
     });
     const b = seedTodo(fixture.db, {
       title: "b",
       project: proj,
-      start: "active",
+      start: "someday", // app-true future-scheduled (start=2 + future date)
       startDate: "2026-07-20",
       todayIndex: 10,
     });
@@ -811,6 +811,234 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     });
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") expect(r.detail).toContain("cannot be honored");
+  });
+});
+
+describe("regression: dated start=2 rows classify as scheduled, never someday", () => {
+  // The app's ONLY representation of a future-scheduled to-do is start=2
+  // (someday) + a FUTURE startDate — a plain active start=1 is always undated
+  // (UPC1 / BANNER1; live prod scan 2026-07-30: 4/4 future-scheduled to-dos are
+  // start=2, ZERO are start=1+future). Before the scheduleBucket date-ordering
+  // fix the planner tested start===2 BEFORE the date and classified EVERY such
+  // row as a Someday-bucket member, routing it to the Someday-family reorder
+  // protocols. For a direct-area/project someday member that protocol is the
+  // when= bounce whose AWAY leg is `when=anytime`, which CLEARS a startDate (a
+  // de-schedule). These pin the app-true representation end-to-end through the
+  // planner so the misroute cannot silently return.
+
+  it("a loose FUTURE-day start=2 movee routes to loose-day, NOT the someday protocol", async () => {
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("loose future-day group");
+    }
+    // The UPCORD1 park-sort-unpark protocol ran — NOT a Someday when= bounce.
+    expect(calls).toContain("project.add");
+    // De-schedule guard: start=2 + the future date are preserved (never toggled).
+    for (const u of [a, b]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        startDate: number;
+      };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBe(encodePackedDate("2026-07-20"));
+    }
+  });
+
+  it("a project-child future-day start=2 movee routes to container-day (date-preserving)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 2,
+    });
+    const r = await runInPlaceReorder(
+      deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
+      "todo.move",
+      { uuids: [b, a], position: { at: "first" } },
+    );
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("container-day");
+    }
+    expect(ascending(indexOrder([b, a], "todayIndex"))).toBe(true);
+    for (const u of [a, b]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        startDate: number;
+      };
+      expect(row.start).toBe(2); // start preserved — not de-somedayed
+      expect(row.startDate).toBe(encodePackedDate("2026-07-20")); // date preserved
+    }
+  });
+
+  it("an UNDATED start=2 movee still routes to its someday scope", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "someday", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", start: "someday", index: 2 });
+    // dry-run reads the routed scope without running the two-call Someday stack.
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [b, a], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") {
+      expect(r.plan.placement).toContain("scope=someday");
+      expect(r.plan.placementClass).toBe("guaranteed");
+    }
+    // The date-first classifier keeps these in Someday (undated start=2).
+    for (const u of [a, b]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        startDate: number | null;
+      };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBeNull();
+    }
+  });
+
+  it("an ARRIVED start=2 movee (someday-scheduled, date today) routes to today", async () => {
+    // An arrived someday-scheduled row (start=2, startDate <= today) is a
+    // Today + Anytime member (deriveStage → anytime via the Today marker), so it
+    // buckets today here — the same date-first branch, not someday.
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "someday",
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "someday",
+      startDate: "2026-07-05",
+      todayIndex: 2,
+    });
+    const r = await runInPlaceReorder(
+      deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
+      "todo.move",
+      { uuids: [b, a], position: { at: "first" } },
+    );
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("today");
+    for (const u of [a, b]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        startDate: number;
+      };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBe(encodePackedDate("2026-07-05"));
+    }
+  });
+
+  it("an ARRIVED start=2 EVENING movee routes to the evening scope (date-first, not someday)", async () => {
+    const t = seedTodo(fixture.db, {
+      title: "t",
+      start: "someday",
+      startDate: "2026-07-05",
+      evening: true, // startBucket = 1 → This Evening
+    });
+    // dry-run reads the routed scope without running the evening bounce.
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=evening");
+  });
+
+  it("the single-bucket rule separates a dated start=2 row from an undated someday sibling", async () => {
+    // Both loose, both start=2, but different display buckets post-fix: the dated
+    // row is in its scheduled day-group, the undated one in Someday. A joint
+    // reorder is refused (spans containers) — pre-fix both read "someday" and the
+    // misroute proceeded.
+    const dated = seedTodo(fixture.db, {
+      title: "dated",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const undated = seedTodo(fixture.db, { title: "undated", start: "someday", index: 1 });
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [dated, undated] });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("span different containers");
+    }
+  });
+
+  it("NO route ever selects a de-scheduling bounce for a dated movee (direct-area hazard)", async () => {
+    // THE de-schedule hazard: the area-someday (and project-someday) reorder is a
+    // when= bounce whose away leg `when=anytime` CLEARS a startDate. A dated
+    // movee must NEVER reach it. Post-fix a direct-area to-do's scheduled bucket
+    // is app-default (no wired surface), so the planner REFUSES rather than
+    // routing to the bounce — and nothing mutates. (Even pre-fix the reorder
+    // member-enumeration's `startDate IS NULL` guard would have rejected the
+    // dated movee before the bounce ran; this pins the classifier so the planner
+    // never even proposes the destructive scope.)
+    const area = seedArea(fixture.db, "A");
+    const dated = seedTodo(fixture.db, {
+      title: "dated",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [dated],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("unsupported");
+      expect(r.detail).toContain("scheduled");
+    }
+    // Untouched: still start=2 + its future date (no when= de-schedule ran).
+    const row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(dated) as {
+      start: number;
+      startDate: number;
+    };
+    expect(row.start).toBe(2);
+    expect(row.startDate).toBe(encodePackedDate("2026-07-20"));
   });
 });
 
