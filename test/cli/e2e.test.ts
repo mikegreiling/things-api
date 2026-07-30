@@ -263,18 +263,22 @@ describe("cli end-to-end (fixture db)", () => {
     const { stdout, exitCode } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const item = JSON.parse(stdout).data.item;
-    // Presence of `repeating` MEANS template; the discriminators are gone.
-    expect(item.repeating).toEqual({ nextOccurrence: "2026-08-01" });
+    // Presence of `repeating` MEANS template; the discriminators are gone. R12:
+    // `nextOccurrence` moved OUT to the top-level `when` — a bare template with a
+    // projection carries `repeating: {}` (a bare {} survives omit-empty).
+    expect(item.repeating).toEqual({});
+    expect(item.when).toBe("2026-08-01"); // the projected next occurrence
     expect("isTemplate" in item.repeating).toBe(false);
     expect("isInstance" in item.repeating).toBe(false);
     expect("instanceOf" in item).toBe(false);
+    expect("nextOccurrence" in item.repeating).toBe(false);
     // No instances seeded → no latestInstance key (nested inside `repeating`).
     expect("latestInstance" in item.repeating).toBe(false);
     // Omit-empty (contracts.md): an empty checklist is absent, not [].
     expect("checklist" in item).toBe(false);
   });
 
-  it("things todo show — R11 paused template keeps nextOccurrence: null through omit-empty", () => {
+  it("things todo show — R12 paused template has no projection → no `when`", () => {
     fx = buildFixtureDb();
     const uuid = seedTodo(fx.db, {
       title: "paused-template",
@@ -284,10 +288,10 @@ describe("cli end-to-end (fixture db)", () => {
     });
     const { stdout } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     const item = JSON.parse(stdout).data.item;
-    // Explicit null survives the full emit pipeline (nested `repeating` is not a
-    // pruned entity — the `area: null` section precedent).
-    expect(item.repeating).toEqual({ nextOccurrence: null, paused: true });
-    expect("nextOccurrence" in item.repeating).toBe(true);
+    // R12: no projected date → no `when`; `repeating` carries the state flags only.
+    expect(item.repeating).toEqual({ paused: true });
+    expect("when" in item).toBe(false);
+    expect("nextOccurrence" in item.repeating).toBe(false);
   });
 
   it("things todo show — R11 instance carries flat instanceOf, no repeating", () => {

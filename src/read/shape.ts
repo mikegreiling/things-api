@@ -32,13 +32,36 @@
  *   non-redundant information — plus `today` (mixes upcoming + anytime-deadline
  *   rows), search, changes, the projects/areas listings, the card NODE, and
  *   detail.
- * - the `today`/`evening` markers are DROPPED inside the `today` view's own
- *   sections (the section key states it) and KEPT everywhere else. A logbook/trash
- *   item is never a Today member, so its markers are dropped with it.
  * - the former `todaySection` field is RETIRED from the wire entirely (R10.1):
  *   `todaySection: "evening"` merely duplicated the `evening: true` marker. It
  *   remains an internal entity field (the human render and the write-verify delta
  *   still read it); shaping deletes it from the JSON copy.
+ *
+ * ## R12 — `when`, the derived TIME-AXIS position (replaces startDate + markers)
+ * Today/evening membership and the scheduled/projected date collapse onto ONE
+ * derived, presence-keyed field `when` (src/read/stage.ts `deriveWhen`): `"today"`
+ * / `"evening"` (Today-view membership, from the SAME `today`/`evening` markers the
+ * mapper stamps — never re-derived, so `when` can never disagree with the star), a
+ * FUTURE ISO date (a strictly-future scheduled row, or a template's projected next
+ * occurrence), or absent (unscheduled + not in Today; also an unprojected template
+ * and every logged/trashed row). The doctrine line: **`stage` enumerates the
+ * sidebar BUCKETS an item lives in; `when` enumerates its TIME POSITIONS (today |
+ * evening | a future date).** Someday is deliberately NOT a `when` value (it is a
+ * bucket → stage). Tier/drop rules:
+ * - the former `today`/`evening` marker KEYS are DELETED from the wire on EVERY
+ *   tier — `when` carries the fact; the markers stay internal (they feed `when`).
+ * - the raw `startDate` is DELETED in COMPACT (a list needs the position, not the
+ *   substrate) and KEPT in FULL/DETAIL beside `when` — different facts: `startDate`
+ *   = what is stored, `when` = where it sits.
+ * - a template's `repeating.nextOccurrence` is GONE from the wire — `when` replaces
+ *   it (same fact, one word); the resting-templates `{date: null}` group is
+ *   unchanged (an unprojected template has no `when`).
+ * - `when` is DROPPED inside the `today` view's own sections (the section key states
+ *   today/evening) and inside any card/heading `upcoming` DATE-GROUP for a member
+ *   whose `when` equals the group's date (the group states it). KEPT everywhere
+ *   else it is present — including the flat `upcoming` catalogue, `anytime`,
+ *   `inbox`, `someday`, search, changes (a deadline-pulled inbox/someday row reads
+ *   `when: "today"` there, informatively, while `stage` still reads inbox/someday).
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
@@ -46,12 +69,13 @@
  *   `todos: {open, total}` (omit when total 0).
  * - **repeating template/instance split (R11)** — the wire drops the
  *   `isTemplate`/`isInstance` discriminators; key presence carries the fact. A
- *   TEMPLATE keeps a nested `repeating: {nextOccurrence, paused?, deadlined?,
- *   rule?, latestInstance?}` — the complete series object (rule config + forward
- *   pointer + backward pointer + state flags); presence MEANS template;
- *   `nextOccurrence` explicit-null when unprojected; `latestInstance` is
- *   detail-only (SL1). An INSTANCE keeps a flat `instanceOf: <templateUuid>` and
- *   no `repeating`. A plain row keeps neither. See {@link reshapeRepeatingWire}.
+ *   TEMPLATE keeps a nested `repeating: {paused?, deadlined?, rule?,
+ *   latestInstance?}` — the series object (rule config + backward pointer +
+ *   state flags); presence MEANS template. The forward pointer `nextOccurrence`
+ *   moved to the top-level `when` (R12 — a template's projected date IS its time
+ *   position); `latestInstance` is detail-only (SL1). An INSTANCE keeps a flat
+ *   `instanceOf: <templateUuid>` and no `repeating`. A plain row keeps neither.
+ *   See {@link reshapeRepeatingWire}.
  * - **string tags** — `tags`/`inheritedTags` become plain arrays of names.
  * - **one project key** — a headed item's owning project (formerly
  *   `headingProject`) is merged into `project`; `headingProject` never appears.
@@ -69,7 +93,7 @@
  * `status` is omitted when `open`. FULL keeps them but still applies R6, the
  * universal reshapes, and R10.
  */
-import { deriveStage } from "./stage.ts";
+import { deriveStage, deriveWhen, type Stage } from "./stage.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -80,8 +104,8 @@ interface ItemDrop {
   heading?: boolean;
   /** Drop the `stage` field — the enclosing view/section states it. */
   stage?: boolean;
-  /** Drop the `today`/`evening` markers — the today view's section key states them. */
-  markers?: boolean;
+  /** Drop the derived `when` field — the today view's section key states it (R12). */
+  when?: boolean;
 }
 
 /**
@@ -153,16 +177,15 @@ function reshapeTodos(o: Obj): void {
  * `isTemplate`/`isInstance` discriminators entirely and instead lets KEY
  * PRESENCE carry the fact:
  *
- * - **Template** (`isTemplate`) → a nested `repeating` object — the complete
- *   series state: `{nextOccurrence, paused?, deadlined?, rule?, latestInstance?}`.
- *   Presence of `repeating` MEANS template. The inner false booleans are
- *   default-pruned (presence-keyed); `nextOccurrence` stays an EXPLICIT null when
- *   there is no projected date (paused / after-completion — the `area: null`
- *   section precedent, since absence would be ambiguous). `rule` and
- *   `latestInstance` are detail-only (populated by src/read/detail.ts on
- *   `entity.repeating`); `latestInstance` is the backward pointer symmetric to the
- *   forward `nextOccurrence`. The nested object is not a recognized entity, so
- *   omit-empty does NOT prune its `nextOccurrence: null`.
+ * - **Template** (`isTemplate`) → a nested `repeating` object — the series state
+ *   `{paused?, deadlined?, rule?, latestInstance?}`. Presence of `repeating` MEANS
+ *   template (an unadorned template emits `repeating: {}` — a bare `{}` is NOT
+ *   pruned by omit-empty, so the presence signal survives). The inner false
+ *   booleans are default-pruned (presence-keyed). The forward pointer
+ *   `nextOccurrence` moved OUT to the top-level `when` (R12 — a template's
+ *   projected date IS its time position); `rule` and `latestInstance` stay
+ *   detail-only (populated by src/read/detail.ts on `entity.repeating`);
+ *   `latestInstance` is the backward pointer symmetric to `when`.
  * - **Instance** (`isInstance`) → a flat presence-keyed `instanceOf:
  *   <templateUuid>` and NO `repeating` object. Presence of `instanceOf` MEANS
  *   instance.
@@ -174,13 +197,12 @@ function reshapeRepeatingWire(o: Obj): void {
   if (rep === null || typeof rep !== "object") return;
   const r = rep as Obj;
   if (r["isTemplate"] === true) {
-    const out: Obj = { nextOccurrence: r["nextOccurrence"] ?? null }; // explicit null
+    const out: Obj = {}; // presence MEANS template — a bare {} survives omit-empty
     if (r["paused"] === true) out["paused"] = true;
     if (r["deadlined"] === true) out["deadlined"] = true;
     if (r["rule"] != null) out["rule"] = r["rule"]; // detail read only
-    // The SL1 "Show Latest" pick — detail-only; nested inside `repeating` so the
-    // object is the complete series state (rule config + forward pointer
-    // `nextOccurrence` + backward pointer `latestInstance` + state flags).
+    // The SL1 "Show Latest" pick — detail-only; the backward pointer symmetric to
+    // the top-level `when` (the forward pointer, R12).
     if (typeof r["latestInstance"] === "string") out["latestInstance"] = r["latestInstance"];
     o["repeating"] = out;
   } else if (r["isInstance"] === true) {
@@ -208,9 +230,31 @@ function stageOf(s: Obj): ReturnType<typeof deriveStage> {
   });
 }
 
+/** The R12 `when` input read straight off a materialized task entity (given its stage). */
+function whenOf(s: Obj, stage: Stage): ReturnType<typeof deriveWhen> {
+  const repeating = s["repeating"];
+  const isTemplate =
+    repeating !== null &&
+    typeof repeating === "object" &&
+    (repeating as Obj)["isTemplate"] === true;
+  const nextOccurrence =
+    isTemplate && typeof (repeating as Obj)["nextOccurrence"] === "string"
+      ? ((repeating as Obj)["nextOccurrence"] as string)
+      : null;
+  return deriveWhen({
+    stage,
+    // The SAME presence-keyed markers stageOf reads — never re-derived, so a
+    // `when` of today/evening can never disagree with Today-view membership.
+    today: s["today"] === true,
+    evening: s["evening"] === true,
+    startDate: (s["startDate"] as string | null) ?? null,
+    repeating: { isTemplate, nextOccurrence },
+  });
+}
+
 /**
- * Shape ONE task entity (to-do or project): the universal reshapes, the R10
- * stage/marker rewrite, then the R6 ancestry drops, then — when `compact` — the
+ * Shape ONE task entity (to-do or project): the universal reshapes, the R10/R12
+ * stage/`when` rewrite, then the R6 ancestry drops, then — when `compact` — the
  * R7 default-pruning. A shallow copy is taken so unknown sibling keys
  * (`changeKind` on a changes row, `match` on a search hit) pass through
  * untouched. Non-task values (areas, tags, refs, headings) are returned as-is.
@@ -221,6 +265,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   const type = s["type"];
   if (type !== "to-do" && type !== "project") return src; // not a shaped entity
   const stage = stageOf(s); // from the ORIGINAL fields, before any reshape
+  const when = whenOf(s, stage); // R12 — derived from the same fields + markers
   const o: Obj = { ...s };
 
   // R9 universal reshapes (every tier, every kind incl. detail).
@@ -239,21 +284,26 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   // the internal entity keeps it for the render / write-verify paths.
   delete o["todaySection"];
   if (drop.stage !== true) o["stage"] = stage;
-  // Today/evening markers: dropped where the section states them, and never on a
-  // logbook/trash row (which is not a Today member).
-  if (drop.markers === true || stage === "logbook" || stage === "trash") {
-    delete o["today"];
-    delete o["evening"];
-  }
+  // R12 — the today/evening marker KEYS are replaced by the derived `when` on
+  // EVERY tier (they never appear on the wire); `when` is emitted unless the
+  // enclosing context provably states the position (the today view's sections;
+  // a card date-group — handled in rebucketChildren).
+  delete o["today"];
+  delete o["evening"];
+  if (drop.when !== true && when !== undefined) o["when"] = when;
 
   // R6 — drop redundant ancestry (both tiers).
   if (drop.project === true) delete o["project"];
   if (drop.area === true) delete o["area"];
   if (drop.heading === true) delete o["heading"];
 
+  // R12 — FULL/DETAIL keep the raw `startDate` beside `when` as the SUBSTRATE
+  // (`startDate` = what is stored, `when` = where it sits). COMPACT drops it below
+  // (the position `when` carries is what a list needs).
   if (!compact) return o;
 
   // R7 compact — default-pruning (absence = the default).
+  delete o["startDate"]; // R12 — position lives in `when`; substrate is full-tier only
   if (o["status"] === "open") delete o["status"];
   delete o["created"];
   delete o["modified"];
@@ -339,7 +389,14 @@ function rebucketChildren(
           datedByKey.set(date, []);
           datedOrder.push(date);
         }
-        datedByKey.get(date)!.push(shape(c));
+        // R12 — inside a date-group the group states the date, so a member whose
+        // `when` equals it drops it (every scheduled row and every projected
+        // template does — that IS the group key).
+        const shaped = shape(c);
+        if (shaped !== null && typeof shaped === "object" && (shaped as Obj)["when"] === date) {
+          delete (shaped as Obj)["when"];
+        }
+        datedByKey.get(date)!.push(shaped);
       }
     } else {
       // inbox / logbook / trash should not appear among a card's live children;
@@ -388,10 +445,10 @@ const AREA_PROJECTS_DROP: ItemDrop = { area: true };
 const ANYTIME_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** Someday sidebar-section items: stage-PURE → drop area + the bucket-implied stage. */
 const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
-/** The card NODE / detail / mixed lists: keep every ref, `stage`, and markers. */
+/** The card NODE / detail / mixed lists: keep every ref, `stage`, and `when`. */
 const NO_DROP: ItemDrop = {};
-/** The today view's own sections: keep `stage` (mixed), drop the section-implied markers. */
-const TODAY_SECTION_DROP: ItemDrop = { markers: true };
+/** The today view's own sections: keep `stage` (mixed), drop the section-implied `when` (R12). */
+const TODAY_SECTION_DROP: ItemDrop = { when: true };
 
 /** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
 function shapeProjectView(view: Obj, compact: boolean): Obj {
@@ -483,7 +540,7 @@ function shapeArea(src: unknown): unknown {
   return o;
 }
 
-/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied markers). */
+/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied `when`). */
 function shapeTodayView(view: Obj, compact: boolean): Obj {
   return {
     ...view,
@@ -527,7 +584,7 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
  * entities.
  */
 export function shapeReadPayload(kind: string, data: unknown, full: boolean): unknown {
-  // `detail` is the FULL record and drops no ancestry / stage / markers.
+  // `detail` is the FULL record and drops no ancestry / stage / `when`.
   if (kind === "detail") return shapeItem(data, NO_DROP, false);
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);

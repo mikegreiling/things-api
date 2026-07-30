@@ -208,11 +208,15 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
     });
     // R11: the wire loses isTemplate/isInstance — presence of `repeating` MEANS
     // template; it carries only the rule facts (false booleans default-pruned).
-    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01", paused: true });
+    // R12: `nextOccurrence` moved OUT to the top-level `when` (the template's
+    // projected date IS its time position).
+    expect(out["repeating"]).toEqual({ paused: true });
+    expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(false);
     expect("isTemplate" in (out["repeating"] as Obj)).toBe(false);
     expect("isInstance" in (out["repeating"] as Obj)).toBe(false);
     expect("instanceOf" in out).toBe(false);
     expect(out["stage"]).toBe("upcoming"); // a repeating template → upcoming
+    expect(out["when"]).toBe("2026-08-01"); // projected next occurrence = the time position
   });
 
   it("one project key: a headed item's owning project emits under `project`", () => {
@@ -276,12 +280,28 @@ describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)
   });
 });
 
-describe("shapeReadPayload — R10 today/evening markers", () => {
-  it("markers survive on mixed surfaces and drop inside the today view's own sections", () => {
-    const kept = first(shapeReadPayload("search", [todo({ today: true, evening: true })], false));
-    expect(kept["today"]).toBe(true);
-    expect(kept["evening"]).toBe(true);
+describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
+  it("the today/evening marker KEYS never appear on the wire — `when` replaces them", () => {
+    for (const full of [false, true]) {
+      const row = first(shapeReadPayload("search", [todo({ today: true, evening: true })], full));
+      expect("today" in row).toBe(false);
+      expect("evening" in row).toBe(false);
+      expect(row["when"]).toBe("evening"); // evening ⊃ today; evening wins
+    }
+    const todayRow = first(shapeReadPayload("search", [todo({ today: true })], false));
+    expect(todayRow["when"]).toBe("today");
+  });
 
+  it("a future-scheduled row reads `when: <iso>`; compact drops startDate, full keeps it", () => {
+    const compact = first(shapeReadPayload("search", [todo({ startDate: "2026-08-01" })], false));
+    expect(compact["when"]).toBe("2026-08-01");
+    expect("startDate" in compact).toBe(false); // R12: compact drops the substrate
+    const full = first(shapeReadPayload("search", [todo({ startDate: "2026-08-01" })], true));
+    expect(full["when"]).toBe("2026-08-01");
+    expect(full["startDate"]).toBe("2026-08-01"); // full/detail keep startDate beside when
+  });
+
+  it("`when` drops inside the today view's own sections (the section key states it)", () => {
     const view = {
       today: [todo({ today: true })],
       evening: [todo({ uuid: "todo-e", today: true, evening: true })],
@@ -290,15 +310,38 @@ describe("shapeReadPayload — R10 today/evening markers", () => {
     const out = shapeReadPayload("today", view, false) as Obj;
     const t = (out["today"] as Obj[])[0]!;
     const e = (out["evening"] as Obj[])[0]!;
-    expect("today" in t).toBe(false); // section key states it
-    expect("evening" in e).toBe(false);
+    expect("when" in t).toBe(false); // section key states today
+    expect("when" in e).toBe(false); // section key states evening
     expect(t["stage"]).toBe("anytime"); // stage KEPT on today (mixed)
   });
 
-  it("a logbook/trash row never carries a today marker even if one was set", () => {
-    const row = first(shapeReadPayload("search", [todo({ logged: true, today: true })], true));
-    expect(row["stage"]).toBe("logbook");
-    expect("today" in row).toBe(false);
+  it("`when` is KEPT on anytime/inbox/someday sections — the informative deadline-pull cases", () => {
+    // A deadline-pulled inbox item: stage-dropped in the inbox view, yet reads
+    // when: "today" (it IS a Today member). Composes.
+    const inboxRow = first(
+      shapeReadPayload("inbox", [todo({ start: "inbox", today: true })], false),
+    );
+    expect("stage" in inboxRow).toBe(false); // inbox is stage-pure
+    expect(inboxRow["when"]).toBe("today"); // kept — pulled into Today by a deadline
+    // A someday-staged deadline-pulled item: stage dropped by the section, when kept.
+    const sections = [
+      { area: null, items: [todo({ start: "someday", startDate: null, today: true })] },
+    ];
+    const someday = shapeReadPayload("someday", sections, false) as Obj[];
+    const sItem = (someday[0]!["items"] as Obj[])[0]!;
+    expect("stage" in sItem).toBe(false); // someday section is stage-pure
+    expect(sItem["when"]).toBe("today"); // kept — surfaced in Today, still someday-staged
+  });
+
+  it("a logbook/trash row has NO `when` (never a Today member) even if a marker was set", () => {
+    const log = first(shapeReadPayload("search", [todo({ logged: true, today: true })], true));
+    expect(log["stage"]).toBe("logbook");
+    expect("when" in log).toBe(false);
+    const trash = first(
+      shapeReadPayload("search", [todo({ trashed: true, startDate: "2026-08-01" })], true),
+    );
+    expect(trash["stage"]).toBe("trash");
+    expect("when" in trash).toBe(false);
   });
 });
 
@@ -405,6 +448,11 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(upcoming.map((g) => g.date)).toEqual(["2026-08-01", null]);
     expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["loose-up"]);
     expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["loose-tmpl"]);
+    // R12: inside a date-group `when` drops (the group states the date); the
+    // full tier still keeps the raw `startDate` substrate.
+    expect("when" in upcoming[0]!.items[0]!).toBe(false);
+    expect(upcoming[0]!.items[0]!["startDate"]).toBe("2026-08-01");
+    expect("when" in upcoming[1]!.items[0]!).toBe(false); // resting template — no projection anyway
     // A re-bucketed child drops project/area/stage.
     const anyChild = (out["anytime"] as Obj[])[0]!;
     expect("project" in anyChild).toBe(false);
@@ -450,7 +498,9 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
         false,
       ),
     );
-    expect(row["repeating"]).toEqual({ nextOccurrence: "2026-08-01", deadlined: true });
+    // R12: `nextOccurrence` moved OUT to `when`; `repeating` keeps only rule facts.
+    expect(row["repeating"]).toEqual({ deadlined: true });
+    expect(row["when"]).toBe("2026-08-01"); // projected next occurrence
     // Presence of `repeating` MEANS template — the discriminators are gone.
     expect("isTemplate" in (row["repeating"] as Obj)).toBe(false);
     expect("isInstance" in (row["repeating"] as Obj)).toBe(false);
@@ -460,7 +510,7 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
     expect("instanceOf" in row).toBe(false);
   });
 
-  it("paused template: nextOccurrence stays EXPLICIT null + paused true", () => {
+  it("paused/after-completion template (no projection): no `when`, bare repeating survives", () => {
     const out = shapeReadPayload(
       "detail",
       todo({
@@ -474,10 +524,11 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
       }),
       false,
     ) as Obj;
-    // Explicit null (the `area: null` precedent) — absence would be ambiguous;
-    // omit-empty does NOT prune it (the nested `repeating` is not an entity).
-    expect(out["repeating"]).toEqual({ nextOccurrence: null, paused: true });
-    expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(true);
+    // R12: no projected date → no `when`; `repeating` carries the state flags only
+    // (and presence of `repeating` still MEANS template — a bare {} would survive).
+    expect(out["repeating"]).toEqual({ paused: true });
+    expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(false);
+    expect("when" in out).toBe(false);
   });
 
   it("instance row: flat instanceOf only, no repeating object", () => {
@@ -520,10 +571,11 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
       }),
       false,
     ) as Obj;
-    // latestInstance nests INSIDE `repeating` — the complete series object
-    // (forward pointer nextOccurrence + backward pointer latestInstance).
+    // latestInstance nests INSIDE `repeating` — the backward pointer, symmetric to
+    // the top-level `when` forward pointer (R12: nextOccurrence moved to `when`).
     expect("latestInstance" in out).toBe(false);
-    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01", latestInstance: "inst-99" });
+    expect(out["repeating"]).toEqual({ latestInstance: "inst-99" });
+    expect(out["when"]).toBe("2026-08-01");
   });
 });
 

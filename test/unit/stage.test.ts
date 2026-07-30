@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { deriveStage, type StageInput } from "../../src/read/stage.ts";
+import { deriveStage, deriveWhen, type StageInput, type WhenInput } from "../../src/read/stage.ts";
 import { shapeReadPayload } from "../../src/read/shape.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import {
@@ -16,6 +16,7 @@ import {
   logbookView,
   searchView,
   somedayView,
+  todayView,
   trashView,
   upcomingView,
   type ListItem,
@@ -93,6 +94,69 @@ describe("deriveStage — the derivation matrix", () => {
   });
 });
 
+const whenBase = (over: Partial<WhenInput> = {}): WhenInput => ({
+  stage: "anytime",
+  startDate: null,
+  repeating: { isTemplate: false, nextOccurrence: null },
+  ...over,
+});
+
+describe("deriveWhen — the time-axis position matrix (R12)", () => {
+  it("evening marker → `evening` (wins over today)", () => {
+    expect(deriveWhen(whenBase({ today: true, evening: true }))).toBe("evening");
+  });
+
+  it("today marker → `today` (any arm: arrived startDate OR deadline-pull)", () => {
+    // Arrived active-dated row (stage anytime + today marker).
+    expect(deriveWhen(whenBase({ stage: "anytime", startDate: "2026-07-01", today: true }))).toBe(
+      "today",
+    );
+    // Deadline-pulled anytime (undated active, today marker, no startDate).
+    expect(deriveWhen(whenBase({ stage: "anytime", today: true }))).toBe("today");
+    // Deadline-pulled INBOX (stage inbox, today marker) — inbox CAN read when:today.
+    expect(deriveWhen(whenBase({ stage: "inbox", today: true }))).toBe("today");
+    // Deadline-pulled SOMEDAY (stage someday, today marker) — surfaced in Today.
+    expect(deriveWhen(whenBase({ stage: "someday", today: true }))).toBe("today");
+  });
+
+  it("a suppressed someday deadline (NO marker) → absent", () => {
+    // Suppression drops the today marker (mappers deadlineArm guard); no when.
+    expect(deriveWhen(whenBase({ stage: "someday" }))).toBeUndefined();
+  });
+
+  it("a strictly-future scheduled row (no marker) → its ISO date", () => {
+    expect(deriveWhen(whenBase({ stage: "upcoming", startDate: "2026-08-01" }))).toBe("2026-08-01");
+  });
+
+  it("a repeating TEMPLATE: projected → its ISO next occurrence; unprojected → absent", () => {
+    expect(
+      deriveWhen(
+        whenBase({
+          stage: "upcoming",
+          repeating: { isTemplate: true, nextOccurrence: "2026-09-15" },
+        }),
+      ),
+    ).toBe("2026-09-15");
+    // Paused / after-completion (no projection) → no when.
+    expect(
+      deriveWhen(
+        whenBase({ stage: "upcoming", repeating: { isTemplate: true, nextOccurrence: null } }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("unscheduled and not in Today → absent", () => {
+    expect(deriveWhen(whenBase({ stage: "anytime" }))).toBeUndefined();
+    expect(deriveWhen(whenBase({ stage: "someday" }))).toBeUndefined();
+  });
+
+  it("logged/trashed rows have NO when even with a marker or a future date", () => {
+    expect(deriveWhen(whenBase({ stage: "logbook", today: true }))).toBeUndefined();
+    expect(deriveWhen(whenBase({ stage: "logbook", startDate: "2026-08-01" }))).toBeUndefined();
+    expect(deriveWhen(whenBase({ stage: "trash", evening: true }))).toBeUndefined();
+  });
+});
+
 let fx: FixtureDb;
 afterEach(() => fx?.close());
 
@@ -166,6 +230,112 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "tonight", start: "active", startDate: "2026-07-02", evening: true });
     expect(markerRow("tonight")).toEqual({ today: true, evening: true });
+  });
+});
+
+/** `when` derived over a real materialized entity, mirroring src/read/shape.ts `whenOf`. */
+const whenOfEntity = (i: ListItem): ReturnType<typeof deriveWhen> =>
+  deriveWhen({
+    stage: deriveStage(i),
+    today: i.today === true,
+    evening: i.evening === true,
+    startDate: i.startDate,
+    repeating: {
+      isTemplate: i.repeating.isTemplate,
+      nextOccurrence: i.repeating.nextOccurrence ?? null,
+    },
+  });
+
+describe("deriveWhen — over real entities through the read pipeline (R12)", () => {
+  it("banner-materialized UPC1 case (start=1, startDate:=deadline=today) → when `today`", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "materialized",
+      start: "active",
+      startDate: "2026-07-02",
+      deadline: "2026-07-02",
+    });
+    const hit = (searchView(fx.db, "materialized", {}, NOW) as ListItem[])[0]!;
+    expect(whenOfEntity(hit)).toBe("today");
+    // And it composes through the emit boundary (search keeps `when`).
+    const wire = (shapeReadPayload("search", [hit], false) as Record<string, unknown>[])[0]!;
+    expect(wire["when"]).toBe("today");
+  });
+
+  it("deadline-pulled inbox/someday compose: stage dropped by the pure view, `when: today` kept", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "in-dl", start: "inbox", startDate: null, deadline: "2026-07-02" });
+    seedTodo(fx.db, {
+      title: "some-dl",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+    });
+    // Through the real inbox emit: stage dropped (pure), `when: today` kept.
+    const inboxRow = (
+      shapeReadPayload("inbox", inboxView(fx.db, NOW), false) as Record<string, unknown>[]
+    ).find((r) => r["title"] === "in-dl")!;
+    expect("stage" in inboxRow).toBe(false);
+    expect(inboxRow["when"]).toBe("today");
+    // The someday catalogue is sectioned; find the row and check the same.
+    const somedayShaped = shapeReadPayload("someday", somedayView(fx.db, NOW), false) as Array<{
+      items: Record<string, unknown>[];
+    }>;
+    const someRow = somedayShaped.flatMap((s) => s.items).find((r) => r["title"] === "some-dl")!;
+    expect("stage" in someRow).toBe(false);
+    expect(someRow["when"]).toBe("today");
+  });
+});
+
+describe("property — `when` ∈ {today, evening} ⟺ Today-view membership (R12)", () => {
+  it("no when-derivation can disagree with the Today view the star renders", () => {
+    fx = buildFixtureDb();
+    // A spread that exercises BOTH today arms + non-members across stages.
+    seedTodo(fx.db, { title: "p-arrived", start: "active", startDate: "2026-07-01" }); // today (arrived)
+    seedTodo(fx.db, {
+      title: "p-evening",
+      start: "active",
+      startDate: "2026-07-02",
+      evening: true,
+    }); // evening
+    seedTodo(fx.db, {
+      title: "p-dl-any",
+      start: "active",
+      startDate: null,
+      deadline: "2026-07-02",
+    }); // today (deadline)
+    seedTodo(fx.db, {
+      title: "p-dl-some",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+    }); // today (someday-deadline)
+    seedTodo(fx.db, {
+      title: "p-supp",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-07-01",
+    }); // NOT today (suppressed)
+    seedTodo(fx.db, { title: "p-future", start: "someday", startDate: "2026-08-01" }); // NOT today (future)
+    seedTodo(fx.db, { title: "p-any", start: "active", startDate: null }); // NOT today
+    seedTodo(fx.db, { title: "p-inbox", start: "inbox", startDate: null }); // NOT today
+
+    const view = todayView(fx.db, NOW);
+    const members = new Set([...view.today, ...view.evening].map((i) => i.uuid));
+
+    // Sweep every entity we can reach and assert the biconditional.
+    const all = [
+      ...(searchView(fx.db, "p-", {}, NOW) as ListItem[]),
+      ...(upcomingView(fx.db, NOW) as ListItem[]),
+      ...inboxView(fx.db, NOW),
+    ];
+    expect(all.length).toBeGreaterThan(0);
+    for (const i of all) {
+      const w = whenOfEntity(i);
+      const whenSaysToday = w === "today" || w === "evening";
+      expect(whenSaysToday).toBe(members.has(i.uuid));
+    }
   });
 });
 
