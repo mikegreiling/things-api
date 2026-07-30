@@ -483,9 +483,9 @@ function buildInstructions(getClient: () => ThingsClient): string {
       "confirmation parameter named in their description; refused calls return an error saying " +
       "what to pass.",
     "- Read-result semantics: an item's tags are its direct tags; its effective tags also include " +
-      "tags inherited from its containing project and area. todaySection appears only for an item " +
-      "in Today, naming its section there (today or evening); an unscheduled start=active item is " +
-      "in Anytime and omits the field. Completing an item makes it findable in Logbook.",
+      "tags inherited from its containing project and area. The today and evening markers are " +
+      "present only for an item in Today (evening implies today); an unscheduled start=active item " +
+      "is in Anytime and carries neither. Completing an item makes it findable in Logbook.",
     "- For capped reads, pass limit to cap rows or all: true for everything; if both are set, all wins.",
     `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];

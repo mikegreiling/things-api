@@ -18,15 +18,24 @@
  * bucket a view puts an item in). Today/evening membership is a SEPARATE
  * presence-keyed axis — `today: true` / `evening: true` (evening implies today) —
  * derived in the mapper with the Today view's own two-arm predicate.
- * - `stage` is DROPPED where the enclosing view/section STATES it: the
- *   stage-scoped flat views (inbox, logbook, trash, upcoming, and the
- *   anytime/someday catalogue sections) and the stage-named card sub-buckets
- *   (anytime/upcoming/someday/logbook/trash). It is KEPT on the mixed/derived
- *   surfaces: search, changes, `today` (which mixes upcoming + anytime-deadline
- *   rows), the projects/areas listings, the card NODE, and detail.
+ * - `stage` is DROPPED only where the enclosing node PROVABLY states it — the R6
+ *   rule (drop only what the node provably says). That is the stage-PURE flat
+ *   views (inbox, someday, logbook, trash) and the stage-named card sub-buckets
+ *   (anytime/upcoming/someday/logbook/trash, which the bucketer splits BY stage).
+ *   It is KEPT on every stage-MIXED or derived surface, including two flat
+ *   catalogues that only LOOK stage-pure by name (R10.1): the `anytime` view
+ *   carries arrived-dated stage-`upcoming` rows, and the `upcoming` view carries
+ *   deadline-forecast stage-`anytime`/`someday` rows — dropping `stage` there
+ *   would delete non-redundant information. Also kept on `today` (mixes upcoming +
+ *   anytime-deadline rows), search, changes, the projects/areas listings, the card
+ *   NODE, and detail.
  * - the `today`/`evening` markers are DROPPED inside the `today` view's own
  *   sections (the section key states it) and KEPT everywhere else. A logbook/trash
  *   item is never a Today member, so its markers are dropped with it.
+ * - the former `todaySection` field is RETIRED from the wire entirely (R10.1):
+ *   `todaySection: "evening"` merely duplicated the `evening: true` marker. It
+ *   remains an internal entity field (the human render and the write-verify delta
+ *   still read it); shaping deletes it from the JSON copy.
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
@@ -196,6 +205,9 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   delete o["start"];
   delete o["logged"];
   delete o["trashed"];
+  // R10.1 — `todaySection` is retired from the wire (it duplicated `evening`);
+  // the internal entity keeps it for the render / write-verify paths.
+  delete o["todaySection"];
   if (drop.stage !== true) o["stage"] = stage;
   // Today/evening markers: dropped where the section states them, and never on a
   // logbook/trash row (which is not a Today member).
@@ -335,8 +347,14 @@ const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true
 const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 /** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
 const AREA_PROJECTS_DROP: ItemDrop = { area: true };
-/** Sidebar-section items (anytime/someday catalogues): drop area + the bucket-implied stage. */
-const SECTION_DROP: ItemDrop = { area: true, stage: true };
+/**
+ * Anytime sidebar-section items: drop area, but KEEP `stage` — the Anytime view
+ * is stage-MIXED (it also carries arrived-dated stage-`upcoming` rows), so `stage`
+ * is not implied by the section (R10.1).
+ */
+const ANYTIME_SECTION_DROP: ItemDrop = { area: true };
+/** Someday sidebar-section items: stage-PURE → drop area + the bucket-implied stage. */
+const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and markers. */
 const NO_DROP: ItemDrop = {};
 /** The today view's own sections: keep `stage` (mixed), drop the section-implied markers. */
@@ -441,22 +459,25 @@ function shapeTodayView(view: Obj, compact: boolean): Obj {
   };
 }
 
-/** Shape sidebar sections (anytime/someday catalogues): drop area + the bucket-implied stage. */
-function shapeSections(sections: unknown, compact: boolean): unknown {
+/** Shape sidebar sections (anytime/someday catalogues) with the section's drop spec. */
+function shapeSections(sections: unknown, drop: ItemDrop, compact: boolean): unknown {
   if (!Array.isArray(sections)) return sections;
   return sections.map((s) =>
-    s === null || typeof s !== "object" ? s : withShapedItems(s as Obj, SECTION_DROP, compact),
+    s === null || typeof s !== "object" ? s : withShapedItems(s as Obj, drop, compact),
   );
 }
 
 /**
- * The flat, mixed-provenance list kinds mapped to their drop spec. The
- * stage-scoped catalogues (inbox/upcoming/logbook/trash) drop the bucket-implied
- * `stage`; the mixed/derived surfaces (search/changes/projects) keep it.
+ * The flat, mixed-provenance list kinds mapped to their drop spec. Only the
+ * stage-PURE catalogues (inbox/someday/logbook/trash) drop the bucket-implied
+ * `stage`. `upcoming` KEEPS it (R10.1): the Upcoming view is stage-mixed — it
+ * carries deadline-forecast stage-`anytime`/`someday` rows alongside dated
+ * stage-`upcoming` ones. The mixed/derived surfaces (search/changes/projects)
+ * keep it too.
  */
 const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
   ["inbox", { stage: true }],
-  ["upcoming", { stage: true }],
+  ["upcoming", NO_DROP],
   ["logbook", { stage: true }],
   ["trash", { stage: true }],
   ["changes", NO_DROP],
@@ -480,8 +501,11 @@ export function shapeReadPayload(kind: string, data: unknown, full: boolean): un
   if (kind === "today" && data !== null && typeof data === "object") {
     return shapeTodayView(data as Obj, compact);
   }
-  if ((kind === "anytime" || kind === "someday") && Array.isArray(data)) {
-    return shapeSections(data, compact);
+  if (kind === "anytime" && Array.isArray(data)) {
+    return shapeSections(data, ANYTIME_SECTION_DROP, compact); // stage-mixed → keep stage
+  }
+  if (kind === "someday" && Array.isArray(data)) {
+    return shapeSections(data, SOMEDAY_SECTION_DROP, compact); // stage-pure → drop stage
   }
   if (kind === "area-view" && data !== null && typeof data === "object") {
     return shapeAreaView(data as Obj, compact);

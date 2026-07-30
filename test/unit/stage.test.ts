@@ -17,6 +17,7 @@ import {
   searchView,
   somedayView,
   trashView,
+  upcomingView,
   type ListItem,
 } from "../../src/read/views.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -153,27 +154,92 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
   });
 });
 
-describe("property — an item's stage equals the view bucket that contains it", () => {
-  it("flat catalogues agree with deriveStage (inbox / trash / logbook / someday)", () => {
-    fx = buildFixtureDb();
-    seedTodo(fx.db, { title: "inbox-1", start: "inbox", startDate: null });
-    seedTodo(fx.db, { title: "trash-1", trashed: true });
-    seedTodo(fx.db, {
-      title: "log-1",
-      status: "completed",
-      stopDate: NOW_EPOCH - 3600, // swept (logInterval defaults to 0 → boundary now)
-    });
-    seedTodo(fx.db, { title: "some-1", start: "someday", startDate: null });
+describe("property — the emitted stage equals deriveStage, present exactly where the table says", () => {
+  type WireRow = Record<string, unknown>;
+  /** Flatten a flat ListItem[] OR a SidebarSection[] (`[{area, items}]`) to its rows. */
+  const flatten = (v: unknown): WireRow[] => {
+    const out: WireRow[] = [];
+    for (const el of v as WireRow[]) {
+      const items = el?.["items"];
+      if (Array.isArray(items)) out.push(...(items as WireRow[]));
+      else out.push(el);
+    }
+    return out;
+  };
+  /** uuid → deriveStage over the UNSHAPED entities of a view. */
+  const stageMap = (unshaped: unknown): Map<string, string> => {
+    const m = new Map<string, string>();
+    for (const i of flatten(unshaped))
+      m.set(i["uuid"] as string, deriveStage(i as unknown as StageInput));
+    return m;
+  };
 
-    for (const i of inboxView(fx.db, NOW)) expect(deriveStage(i)).toBe("inbox");
-    for (const i of trashView(fx.db, NOW)) expect(deriveStage(i)).toBe("trash");
-    for (const i of logbookView(fx.db, NOW)) expect(deriveStage(i)).toBe("logbook");
-    for (const s of somedayView(fx.db, NOW))
-      for (const i of s.items) expect(deriveStage(i)).toBe("someday");
-    // The Anytime CATALOGUE is a Today-inclusive mix: every member is anytime OR
-    // an arrived/starred upcoming row (a dated <= today member).
-    for (const s of anytimeView(fx.db, NOW))
-      for (const i of s.items) expect(["anytime", "upcoming"]).toContain(deriveStage(i));
+  it("stage emitted iff the flat catalogue is stage-MIXED, and (when emitted) equals deriveStage exactly", () => {
+    fx = buildFixtureDb();
+    // Provably stage-PURE catalogues.
+    seedTodo(fx.db, { title: "zz-inbox", start: "inbox", startDate: null });
+    seedTodo(fx.db, { title: "zz-some", start: "someday", startDate: null });
+    seedTodo(fx.db, { title: "zz-log", status: "completed", stopDate: NOW_EPOCH - 3600 }); // swept
+    seedTodo(fx.db, { title: "zz-trash", trashed: true });
+    // Anytime is stage-MIXED: an undated active row (stage anytime) AND an
+    // ARRIVED-dated (startDate <= today) row, which derives stage `upcoming`.
+    seedTodo(fx.db, { title: "zz-any", start: "active", startDate: null });
+    const arrived = seedTodo(fx.db, {
+      title: "zz-arrived",
+      start: "active",
+      startDate: "2026-07-01",
+    });
+    // Upcoming is stage-MIXED: a future-dated row (stage upcoming) AND two
+    // deadline-forecast undated rows (a future deadline, no when-date) whose
+    // stages are `anytime` (active) and `someday` (deferred).
+    seedTodo(fx.db, { title: "zz-upfut", start: "active", startDate: "2026-08-01" });
+    const fcAny = seedTodo(fx.db, {
+      title: "zz-dl-active",
+      start: "active",
+      startDate: null,
+      deadline: "2026-07-20",
+    });
+    const fcSome = seedTodo(fx.db, {
+      title: "zz-dl-someday",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-20",
+    });
+
+    // Pure catalogues: every member derives the one stage the view names, and
+    // the wire DROPS the field (the view provably states it).
+    const pure: Array<[string, unknown, string]> = [
+      ["inbox", inboxView(fx.db, NOW), "inbox"],
+      ["someday", somedayView(fx.db, NOW), "someday"],
+      ["logbook", logbookView(fx.db, NOW), "logbook"],
+      ["trash", trashView(fx.db, NOW), "trash"],
+    ];
+    for (const [kind, unshaped, stg] of pure) {
+      for (const i of flatten(unshaped)) expect(deriveStage(i as unknown as StageInput)).toBe(stg);
+      for (const row of flatten(shapeReadPayload(kind, unshaped, true)))
+        expect("stage" in row).toBe(false);
+    }
+
+    // Mixed/derived catalogues: the wire KEEPS stage and it equals deriveStage
+    // EXACTLY (strict per-item equality — not the weakened ∈{anytime,upcoming}).
+    const mixed: Array<[string, unknown]> = [
+      ["anytime", anytimeView(fx.db, NOW)],
+      ["upcoming", upcomingView(fx.db, NOW)],
+      ["search", searchView(fx.db, "zz", {}, NOW)],
+    ];
+    for (const [kind, unshaped] of mixed) {
+      const want = stageMap(unshaped);
+      for (const row of flatten(shapeReadPayload(kind, unshaped, true)))
+        expect(row["stage"]).toBe(want.get(row["uuid"] as string));
+    }
+
+    // And the mixing is REAL — each mixed catalogue actually carries a row whose
+    // stage differs from the catalogue name (so strict equality is load-bearing).
+    const anyWire = flatten(shapeReadPayload("anytime", anytimeView(fx.db, NOW), true));
+    expect(anyWire.find((r) => r["uuid"] === arrived)?.["stage"]).toBe("upcoming");
+    const upWire = flatten(shapeReadPayload("upcoming", upcomingView(fx.db, NOW), true));
+    expect(upWire.find((r) => r["uuid"] === fcAny)?.["stage"]).toBe("anytime");
+    expect(upWire.find((r) => r["uuid"] === fcSome)?.["stage"]).toBe("someday");
   });
 
   it("project card sub-buckets: the bucket an item lands in equals its derived stage", () => {

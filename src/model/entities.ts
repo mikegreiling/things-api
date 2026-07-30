@@ -77,12 +77,18 @@ interface TaskCommon {
   /** The "When" date (packed int in DB), null when unscheduled. */
   startDate: IsoDate | null;
   /**
-   * Today-view section ("today" | "evening"), emitted ONLY for items actually
+   * Today-view section ("today" | "evening"), meaningful ONLY for items actually
    * in Today under the evaluation clock: start=active, dated, and not
    * future-scheduled (overdue rows stay in Today). Anytime (undated) and
    * Upcoming (future startDate) rows carry a raw startBucket in the DB but are
-   * NOT in Today, so the field is null (omitted) for them. Use
-   * TodayView.evening for UI-faithful placement.
+   * NOT in Today, so this is null for them.
+   *
+   * INTERNAL-ONLY (R10.1): this field is NOT on the JSON wire — it was retired
+   * as redundant with the presence-keyed {@link TaskCommon.evening} marker
+   * (`todaySection === "evening"` ⇔ `evening: true`). It survives on the
+   * in-memory entity for the human render (evening styling) and the write-verify
+   * schedule delta, which still read it; the read-shaping transform deletes it
+   * from the emitted copy. Use TodayView.evening for UI-faithful placement.
    */
   todaySection: TodaySection | null;
   /**
