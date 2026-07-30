@@ -8,12 +8,18 @@
  * only ever produce a plan. `--json` is implied. The echoed argv in every
  * response shows exactly what ran, forced flags included.
  *
- * Binds strictly to 127.0.0.1. Environment (THINGS_DB / THINGS_NOW /
+ * Binds to 127.0.0.1 by default. With `--public` it binds 0.0.0.0 for LAN
+ * access (phone/tablet on the same network) and gates every request behind a
+ * random per-launch token: the page is served only to a request carrying the
+ * `?key=` (which then plants an `exploreKey` cookie) or that cookie; `/run`
+ * also accepts an `x-explore-key` header. Environment (THINGS_DB / THINGS_NOW /
  * THINGS_TZ) is inherited from the shell that launched the server.
  */
 import { execFile } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -208,15 +214,93 @@ function runCommand(command: string): Promise<RunResult> {
   });
 }
 
-export function startExploreServer(opts: { port?: number } = {}): Promise<Server> {
-  const html = readFileSync(join(HERE, "index.html"), "utf8");
+/** True iff `value` equals `token` (length-checked timing-safe compare). */
+function keyMatches(value: string | null | undefined, token: string): boolean {
+  if (value === null || value === undefined) return false;
+  const a = Buffer.from(value);
+  const b = Buffer.from(token);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/** Parse a `Cookie:` header into a name→value map (no decoding needed here). */
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (header === undefined) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const name = part.slice(0, eq).trim();
+    if (name !== "") out[name] = part.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+/** 403 with a short plain-text body naming the fix. */
+function unauthorized(res: ServerResponse): void {
+  res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+  res.end("unauthorized — open the printed ?key= URL first\n");
+}
+
+/** Non-internal IPv4 addresses of every network interface. */
+function lanIPv4s(): string[] {
+  const out: string[] = [];
+  for (const infos of Object.values(networkInterfaces())) {
+    for (const info of infos ?? []) {
+      if (info.family === "IPv4" && !info.internal) out.push(info.address);
+    }
+  }
+  return out;
+}
+
+export interface ExploreServerOptions {
+  port?: number;
+  /** Bind 0.0.0.0 and gate every request behind a per-launch token. */
+  public?: boolean;
+  /** Inject a fixed token (test seam); otherwise one is minted at random. */
+  token?: string;
+}
+
+export interface ExploreServerHandle {
+  server: Server;
+  /** The gating token in public mode; null in local (ungated) mode. */
+  token: string | null;
+}
+
+export function startExploreServer(opts: ExploreServerOptions = {}): Promise<ExploreServerHandle> {
+  const isPublic = opts.public === true;
+  const token = isPublic ? (opts.token ?? randomBytes(16).toString("hex")) : null;
+  const rawHtml = readFileSync(join(HERE, "index.html"), "utf8");
+  // In public mode the served copy swaps the local-only banner phrase; the file
+  // on disk is left untouched so local mode still reads "localhost only".
+  const html = isPublic ? rawHtml.replace("localhost only", "LAN access · token-gated") : rawHtml;
+
   const server = createServer((req, res) => {
-    if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    const parsed = new URL(req.url ?? "/", "http://localhost");
+    const pathname = parsed.pathname;
+    const cookies = parseCookies(req.headers.cookie);
+    if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+      if (isPublic && token !== null) {
+        const keyOk = keyMatches(parsed.searchParams.get("key"), token);
+        const cookieOk = keyMatches(cookies["exploreKey"], token);
+        if (!keyOk && !cookieOk) return unauthorized(res);
+        // A fresh ?key= plants the cookie so the phone stays signed in.
+        if (keyOk) headers["set-cookie"] = `exploreKey=${token}; HttpOnly; SameSite=Lax; Path=/`;
+      }
+      res.writeHead(200, headers);
       res.end(html);
       return;
     }
-    if (req.method === "POST" && req.url === "/run") {
+    if (req.method === "POST" && pathname === "/run") {
+      if (isPublic && token !== null) {
+        const headerKey = req.headers["x-explore-key"];
+        const authorized =
+          keyMatches(cookies["exploreKey"], token) ||
+          keyMatches(parsed.searchParams.get("key"), token) ||
+          keyMatches(Array.isArray(headerKey) ? headerKey[0] : headerKey, token);
+        if (!authorized) return unauthorized(res);
+      }
       let body = "";
       req.on("data", (chunk) => {
         body += chunk;
@@ -247,8 +331,9 @@ export function startExploreServer(opts: { port?: number } = {}): Promise<Server
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found");
   });
+  const host = isPublic ? "0.0.0.0" : "127.0.0.1";
   return new Promise((resolve) => {
-    server.listen(opts.port ?? DEFAULT_PORT, "127.0.0.1", () => resolve(server));
+    server.listen(opts.port ?? DEFAULT_PORT, host, () => resolve({ server, token }));
   });
 }
 
@@ -257,16 +342,30 @@ if (isMain) {
   const portFlag = process.argv.indexOf("--port");
   const port = portFlag !== -1 ? Number(process.argv[portFlag + 1]) : DEFAULT_PORT;
   const noOpen = process.argv.includes("--no-open");
-  void startExploreServer({ port }).then((server) => {
+  const isPublic = process.argv.includes("--public");
+  void startExploreServer({ port, public: isPublic }).then(({ server, token }) => {
     const address = server.address();
     const actual = typeof address === "object" && address !== null ? address.port : port;
-    const url = `http://127.0.0.1:${actual}/`;
-    process.stderr.write(
-      `things explore — ${url}\n` +
-        `reads run live against your default Things DB · mutations are always --dry-run · localhost only\n`,
-    );
+    const suffix = token !== null ? `?key=${token}` : "";
+    const localUrl = `http://127.0.0.1:${actual}/${suffix}`;
+    if (token !== null) {
+      const urls = ["127.0.0.1", ...lanIPv4s()].map(
+        (ip) => `  http://${ip}:${actual}/?key=${token}`,
+      );
+      process.stderr.write(
+        `things explore — LAN access · token-gated\n` +
+          `reads run live against your default Things DB · mutations are always --dry-run\n\n` +
+          `${urls.join("\n")}\n\n` +
+          `open once on your phone — a cookie keeps you signed in\n`,
+      );
+    } else {
+      process.stderr.write(
+        `things explore — ${localUrl}\n` +
+          `reads run live against your default Things DB · mutations are always --dry-run · localhost only\n`,
+      );
+    }
     if (!noOpen && process.platform === "darwin") {
-      execFile("open", [url], () => {});
+      execFile("open", [localUrl], () => {});
     }
   });
 }
