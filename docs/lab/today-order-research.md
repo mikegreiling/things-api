@@ -40,4 +40,4 @@ Against the real library, same moment as a UI read:
 ## Open edges
 
 - The uuid tiebreak is observed-stable (5 cases), not proven — a future probe could seed many idx-0 rows.
-- Whether deadline-driven entry stamps `todayIndexReferenceDate` at the deadline day or at first launch after it: indistinguishable in these runs (both were launch-after).
+- ~~Whether deadline-driven entry stamps `todayIndexReferenceDate` at the deadline day or at first launch after it: indistinguishable in these runs (both were launch-after).~~ **CLOSED (BANNER1 L5, 2026-07-30):** stamped = the **deadline date**, written at creation and invariant to a late first-launch (deadline 07-07, app CLOSED across 07-07, first launched 07-08 → `todayIndexReferenceDate` = 07-07, not 08). See [banner1-research.md](banner1-research.md).
