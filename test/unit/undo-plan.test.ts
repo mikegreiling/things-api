@@ -548,6 +548,38 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
     });
   });
 
+  it("loose-day reorder inverts to the pre-rank order, re-running the park-sort-unpark protocol", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "loose-day", uuids: ["A", "C"] },
+        pre: { A: 30, B: 20, C: 10 },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "loose-day", uuids: ["C", "B", "A"] },
+    });
+    expect(plan.notes.join(" ")).toContain("park-sort-unpark");
+  });
+
+  it("loose-day reorder with an all-tied prior order is irreversible", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "loose-day", uuids: ["A", "B"] },
+        pre: { A: 0, B: 0 },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("irreversible");
+    expect(plan.reason).toContain("all-tied");
+  });
+
   it("bounce reorder summaries (no pre-ranks) are irreversible with guidance", () => {
     const plan = planUndo(
       record({ op: "reorder", uuid: null, requested: { scope: "evening", uuids: ["A"] } }),

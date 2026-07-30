@@ -476,10 +476,16 @@ export type ReorderScope =
   // - anytime: area-less loose anytime to-dos, reverse-order bounce (ANYBNC)
   // - container-day: a container's same-day scheduled children, native todayIndex
   //   re-rank, date-preserving (DAYORD-b)
+  // - loose-day: STANDALONE loose (no project/area/heading) to-dos sharing ONE
+  //   FUTURE Upcoming day, ranked on todayIndex. No native or bounce surface
+  //   reaches them directly; delivered by the UPCORD1 park-sort-unpark protocol
+  //   (scratch PROJECT park → container-day reorder → unpark → trash the scratch),
+  //   orchestrated in reorder.ts. Planner-selected only (never a CLI flag).
   | "heading"
   | "area-someday"
   | "anytime"
-  | "container-day";
+  | "container-day"
+  | "loose-day";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {

@@ -44,6 +44,8 @@
  * direct class must NEVER collapse (json is index-inert there — a collapse
  * would silently fail to reorder).
  */
+import { randomBytes } from "node:crypto";
+
 import type { AuditRecord } from "../audit/schema.ts";
 import { localToday, encodePackedDate } from "../model/dates.ts";
 import type { ReorderParams, ReorderScope } from "./operations.ts";
@@ -251,6 +253,11 @@ export async function runReorder(
   options: WriteOptions = {},
 ): Promise<ReorderResult> {
   params = { ...params, uuids: params.uuids.map((u) => resolveTaskUuidPrefix(deps.db, u)) };
+
+  // loose-day is neither a single native command nor a when= bounce: it is the
+  // UPCORD1 park-sort-unpark COMPOUND (scratch project + container-day reorder).
+  if (params.scope === "loose-day") return runLooseDay(deps, params, options);
+
   const strategy = resolveStrategy(deps, params);
   if (strategy.kind === "blocked") return strategy.result;
 
@@ -365,6 +372,10 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
     case "area-someday":
     case "anytime":
       return { kind: "ok", strategy: "native" };
+    // loose-day is intercepted in runReorder before resolveStrategy runs; this
+    // case exists only for switch exhaustiveness.
+    case "loose-day":
+      return { kind: "ok", strategy: "native" };
   }
 }
 
@@ -407,6 +418,335 @@ function somedayProjectChildren(deps: WriteDeps, params: ReorderParams): boolean
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------- loose-day
+//
+// The UPCORD1 park-sort-unpark protocol (docs/lab/upcord1-loose-day-order.md
+// Arm B): STANDALONE loose (no project/area/heading) to-dos sharing one FUTURE
+// Upcoming day have NO native or bounce surface — `list "Upcoming"` re-dates
+// them (§9g), date-shaped `list` specifiers don't exist, and the area scratch
+// de-schedules dated members (§9f addendum). The one clean, date/state-
+// preserving path is:
+//   1. create a scratch PROJECT (unique synthetic title);
+//   2. PARK each day-group member into it (URL list-id — preserves startDate/
+//      start/todayIndex/reminder/deadline);
+//   3. ONE container-day reorder against the scratch project, full day-group in
+//      target order (the SHIPPED DAYORD-b native todayIndex re-rank);
+//   4. UNPARK each (URL empty list-id — back to loose, order preserved);
+//   5. TRASH the scratch project (delete-to-trash, NEVER permanent).
+// The whole day-group is parked (not just the named block): the container-day
+// leg only re-ranks the scratch project's OWN children, so an un-parked day
+// member would keep a stale todayIndex and corrupt the result — every un-named
+// member is a co-parked sibling (touched, disclosed, bounce co-bounce
+// precedent). Non-atomic like the bounce protocols: a mid-protocol failure
+// leaves items PARKED in the scratch project and fails loudly with placed/
+// remaining detail naming the scratch uuid, so recovery is one manual drag.
+
+/** Leg options for a loose-day sub-mutation — a compound leg, each fully verified. */
+function looseDayLegOptions(options: WriteOptions, txnId: string): WriteOptions {
+  const legs: WriteOptions = { txn: { id: txnId, role: "leg" } };
+  if (options.maxDisruption !== undefined) legs.maxDisruption = options.maxDisruption;
+  if (options.verifyTimeoutMs !== undefined) legs.verifyTimeoutMs = options.verifyTimeoutMs;
+  if (options.actor !== undefined) legs.actor = options.actor;
+  return legs;
+}
+
+/** A fresh unique-enough scratch-project title suffix (opId-ish). */
+function scratchSuffix(startedAt: Date): string {
+  return `${startedAt.getTime().toString(36)}-${randomBytes(3).toString("hex")}`;
+}
+
+/** Abort payload: items are PARKED in the scratch project — name it for recovery. */
+function looseDayAborted(
+  detail: string,
+  placed: string[],
+  remaining: string[],
+  cause: MutationResult | null,
+): ReorderResult {
+  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
+}
+
+async function runLooseDay(
+  deps: WriteDeps,
+  params: ReorderParams,
+  options: WriteOptions,
+): Promise<ReorderResult> {
+  const startedAt = deps.now?.() ?? new Date();
+  const now = deps.now ?? (() => new Date());
+  const actor = options.actor ?? deps.config.actor;
+  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
+  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
+
+  // Gate: the container-day reorder leg needs the experimental native surface —
+  // inherit the container-day gating EXACTLY, and fail BEFORE any side effect
+  // (a scratch project) rather than half-way through the protocol.
+  const nativeAvailable =
+    deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+  if (!nativeAvailable) {
+    const result: MutationResult = {
+      kind: "blocked",
+      op: "reorder",
+      reason: "environment",
+      detail:
+        "loose future-day ordering runs the UPCORD1 park-sort-unpark protocol, whose reorder leg " +
+        "is the experimental native container-day command — it is unavailable " +
+        (deps.config.allowExperimental
+          ? "(the installed Things no longer declares the private reorder command in its sdef)"
+          : "(allow-experimental is off)") +
+        ", so the protocol was NOT attempted (no scratch project was created)",
+      remediation: deps.config.allowExperimental
+        ? "check `things doctor`; the private surface was likely removed by an app update"
+        : "enable it with `things config set allow-experimental true`",
+    };
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
+    return result;
+  }
+
+  // Enumerate the loose day-group (whole group is parked as one unit).
+  const pre = computeReorderPre(deps.db, params, null, now());
+  const targetOrder = pre.wireList;
+  const named = new Set(params.named ?? params.uuids);
+  const touchedUnnamed = targetOrder.filter((u) => !named.has(u));
+
+  const problems: string[] = [];
+  if (params.container !== undefined)
+    problems.push("loose-day takes no container (it is container-less)");
+  if (params.uuids.length === 0) problems.push("no uuids given");
+  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
+  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
+  if (targetOrder.length > cap) {
+    problems.push(
+      `${targetOrder.length} touched items exceed the cap of ${cap} (the whole loose day-group is ` +
+        `parked as one unit; each item costs a park + unpark leg` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} un-named day-group sibling(s) are co-parked too`
+          : "") +
+        ")",
+    );
+  }
+  if (problems.length > 0) {
+    const result: MutationResult = {
+      kind: "blocked",
+      op: "reorder",
+      reason: "hazard",
+      hazard: "H-REORDER-SCOPE",
+      detail: `loose-day reorder rejected: ${problems.join("; ")}`,
+      remediation:
+        "reorder loose to-dos that all share ONE future Upcoming day (mixed dates, templates, and " +
+        `project rows are refused), at most ${cap} in the day-group (set with \`things config set bounce-max-items\`)`,
+    };
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
+    return result;
+  }
+
+  // Pre-ranks (todayIndex order of the whole day-group) make the SUMMARY the
+  // undoable unit — the inverse re-runs this protocol with the prior order.
+  const preRanks: Record<string, unknown> = {};
+  for (const m of pre.members) preRanks[m.uuid] = m.rank;
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `loose-day park-sort-unpark ×${targetOrder.length} ` +
+          `(scratch project + ${targetOrder.length} park + 1 container-day reorder + ` +
+          `${targetOrder.length} unpark + trash; ` +
+          (touchedUnnamed.length > 0 ? `${touchedUnnamed.length} co-parked sibling(s); ` : "") +
+          "one terminal order verify)",
+        expectedDelta: { mode: "ordering", key: "todayIndex", sequence: targetOrder },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = looseDayLegOptions(options, txnId);
+  const scratchTitle = `things-api loose-day ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch PROJECT.
+  const add = await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return looseDayAborted(
+      `could not create the scratch project "${scratchTitle}" — nothing was parked; ` +
+        "no changes were made",
+      [],
+      targetOrder,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each day-group member into the scratch project (URL list-id).
+  const parked: string[] = [];
+  for (const uuid of targetOrder) {
+    const res = await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return looseDayAborted(
+        `parking ${uuid} into scratch project ${scratch} failed — ${parked.length} item(s) are ` +
+          `PARKED there (${scratch}) and must be dragged back to loose manually; the scratch ` +
+          "project was NOT trashed",
+        parked,
+        targetOrder.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. ONE container-day reorder against the scratch project, full order.
+  const reordered = await runReorder(
+    deps,
+    {
+      scope: "container-day",
+      container: { uuid: scratch },
+      uuids: targetOrder,
+      ...(params.named !== undefined && { named: params.named }),
+    },
+    legOpts,
+  );
+  if (reordered.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...parked] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return looseDayAborted(
+      `the container-day reorder against scratch project ${scratch} did not complete ` +
+        `(${reordered.kind}) — all ${parked.length} item(s) are PARKED in ${scratch} and must be ` +
+        "dragged back to loose manually; the scratch project was NOT trashed",
+      parked,
+      [],
+      reordered.kind === "bounce-aborted" ? null : reordered,
+    );
+  }
+
+  // 4. UNPARK each (URL empty list-id → loose again, order preserved).
+  const loosened: string[] = [];
+  for (const uuid of targetOrder) {
+    const res = await runMutation(deps, "todo.move", { uuid, loose: true }, legOpts);
+    if (res.kind !== "ok") {
+      const stillParked = targetOrder.filter((u) => !loosened.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...loosened] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return looseDayAborted(
+        `un-parking ${uuid} from scratch project ${scratch} failed — ${stillParked.length} item(s) ` +
+          `remain PARKED in ${scratch} (ordered) and must be dragged back to loose manually; the ` +
+          "scratch project was NOT trashed",
+        loosened,
+        stillParked,
+        res,
+      );
+    }
+    loosened.push(uuid);
+  }
+
+  // 5. TRASH the scratch project (delete-to-trash, never permanent). A failure
+  // here does NOT undo the (already-correct) loose order — disclose it instead.
+  const del = await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
+  const scratchTrashed = del.kind === "ok";
+
+  // 6. Terminal verify: the loose day-group order matches the target (todayIndex).
+  const verify = await pollUntilVerified(
+    () =>
+      evaluateDelta(
+        { mode: "ordering", key: "todayIndex", sequence: targetOrder },
+        createDbReader(deps.db),
+        { modDates: {}, fields: {} },
+      ),
+    options.verifyTimeoutMs ?? 4000,
+    deps.poller ?? {},
+  );
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...loosened] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return looseDayAborted(
+      "the loose day-group did not land the requested order after un-parking " +
+        `(scratch project ${scratch} was ${scratchTrashed ? "trashed" : "left in place"}); ` +
+        "re-run once Things is idle",
+      loosened,
+      [],
+      null,
+    );
+  }
+
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of targetOrder) observed[uuid] = reader.rankOf(uuid, "todayIndex");
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
+
+  const warnings = [
+    `scratch project ${scratch} was created for the reorder and ` +
+      (scratchTrashed
+        ? "moved to the Trash (empty; one per invocation — the protocol never hard-deletes it)"
+        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
+  ];
+  return {
+    kind: "ok",
+    op: "reorder",
+    uuid: null,
+    observed,
+    vector: "url-scheme",
+    tier: 0,
+    undoToken: txnId,
+    warnings,
+    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
+  };
 }
 
 // ------------------------------------------------------------------- bounce
@@ -987,7 +1327,7 @@ function auditSummary(
     uuid: null,
     vector: "url-scheme",
     disruption: 0,
-    invocation: `bounce(${params.scope}) ×${params.uuids.length}`,
+    invocation: `reorder(${params.scope}) ×${params.uuids.length}`,
     requested: params as unknown as Record<string, unknown>,
     pre: extras?.pre ?? null,
     ...(extras?.txnId !== undefined && { txn: { id: extras.txnId, role: "summary" as const } }),

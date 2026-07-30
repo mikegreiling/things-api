@@ -223,6 +223,81 @@ function reorderVector(rankCol: `"index"` | "todayIndex" = `"index"`): WriteVect
   };
 }
 
+/**
+ * The full UPCORD1 loose-day protocol harness: url-scheme fake for the scratch
+ * project.add + park/unpark todo.move legs (schedule preserved), applescript
+ * fake for the native container-day reorder (todayIndex re-rank) + project.delete
+ * trash. Both read invocation.op/opParams. Returns the two vectors + a call log.
+ */
+interface LooseDayOpParams {
+  title?: string;
+  uuid: string;
+  project?: { uuid: string };
+  loose?: boolean;
+  uuids?: string[];
+}
+
+function looseDayMoveVectors() {
+  const calls: string[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "project.add": { support: "yes", disruption: 0, validation: "validated" },
+      "todo.move": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as LooseDayOpParams;
+      if (inv.op === "project.add") {
+        seedProject(fixture.db, {
+          title: p.title ?? "",
+          creationDate: Math.floor(NOW.getTime() / 1000),
+        });
+      } else if (inv.op === "todo.move") {
+        if (p.project !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=?, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.project.uuid, modClock++, p.uuid);
+        } else if (p.loose === true) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.delete": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as LooseDayOpParams;
+      if (inv.op === "reorder") {
+        let rank = 1;
+        for (const uuid of p.uuids ?? []) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      } else if (inv.op === "project.delete") {
+        fixture.db
+          .prepare("UPDATE TMTask SET trashed=1, userModificationDate=? WHERE uuid=?")
+          .run(modClock++, p.uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
 function deps(overrides: Partial<WriteDeps> = {}): WriteDeps {
   return {
     db: fixture.db,
@@ -598,6 +673,92 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
       };
       expect(row.startDate).toBe(day); // date preserved
     }
+  });
+
+  it("a loose FUTURE-day block is now GUARANTEED via the UPCORD1 loose-day protocol", async () => {
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("loose future-day group");
+    }
+    // Block a,b landed at the top of the day in selection order.
+    expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
+    // The protocol ran (scratch project.add + park + reorder + unpark + trash).
+    expect(calls).toContain("project.add");
+    expect(calls).toContain("project.delete");
+    // Items are loose again on their day.
+    for (const u of [a, b]) {
+      expect(containerOf(u).project).toBeNull();
+      const row = fixture.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(u) as {
+        startDate: number;
+      };
+      expect(row.startDate).toBe(encodePackedDate("2026-07-20"));
+    }
+  });
+
+  it("mixed future dates are refused — a single reorder cannot span days", async () => {
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "active",
+      startDate: "2026-07-21",
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", { uuids: [a, b] });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.refusal).toBe("blocked");
+    expect(calls).toHaveLength(0); // never created a scratch project
+  });
+
+  it("a non-loose (project-child) future-day movee routes to container-day, not loose-day", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "active",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("container-day");
+    // container-day is a single native reorder — NO scratch project machinery.
+    expect(calls).not.toContain("project.add");
+    expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
   });
 
   it("a repeating TEMPLATE row is unreorderable — reorder refused, never silent (§9e)", async () => {

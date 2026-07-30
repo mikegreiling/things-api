@@ -18,6 +18,8 @@ import { encodePackedDate } from "../../src/model/dates.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import { computeReorderPre } from "../../src/write/pre-state.ts";
 import { BOUNCE_MAX_ITEMS, bounceJsonCollapsible, runReorder } from "../../src/write/reorder.ts";
+import { planUndo } from "../../src/write/undo.ts";
+import type { ReorderParams } from "../../src/write/operations.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
@@ -1212,6 +1214,288 @@ describe("bounce-enabled gate + bounce-max-items cap", () => {
       expect(result.plan.invocation).toContain("4 legs");
     }
     expect(calls).toHaveLength(0);
+  });
+});
+
+// -------------------------------------------- loose-day (UPCORD1 park-sort-unpark)
+
+const FUTURE_ISO = "2026-07-10";
+const FUTURE_PACKED = encodePackedDate(FUTURE_ISO);
+
+/**
+ * Faithful loose-day protocol sim. TWO fakes (the protocol legs dispatch on
+ * different vectors): a url-scheme fake for the scratch project.add + the
+ * park/unpark todo.move legs, and an applescript fake for the native
+ * container-day reorder + the project.delete trash. Both read the STRUCTURED
+ * invocation.op/opParams the pipeline attaches (never the compiled payload), so
+ * one pair models the whole compound. Park PRESERVES startDate/todayIndex
+ * (UPCORD1 leg 1); the container-day reorder re-ranks todayIndex ascending in
+ * the sent order (DAYORD-b); unpark clears containers, schedule preserved.
+ */
+interface LooseDayOpParams {
+  title?: string;
+  uuid: string;
+  project?: { uuid: string };
+  loose?: boolean;
+  uuids?: string[];
+}
+
+function looseDayVectors() {
+  const calls: string[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "project.add": { support: "yes", disruption: 0, validation: "validated" },
+      "todo.move": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as LooseDayOpParams;
+      if (inv.op === "project.add") {
+        // Create-probe discovery needs a fresh creationDate in [nowEpoch-2, …].
+        seedProject(fixture.db, {
+          title: p.title ?? "",
+          creationDate: Math.floor(NOW.getTime() / 1000),
+        });
+      } else if (inv.op === "todo.move") {
+        if (p.project !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=?, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.project.uuid, modClock++, p.uuid);
+        } else if (p.loose === true) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.delete": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as LooseDayOpParams;
+      if (inv.op === "reorder") {
+        let rank = 1;
+        for (const uuid of p.uuids ?? []) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      } else if (inv.op === "project.delete") {
+        fixture.db
+          .prepare("UPDATE TMTask SET trashed=1, userModificationDate=? WHERE uuid=?")
+          .run(modClock++, p.uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
+function seedLooseFuture(title: string, todayIndex: number): string {
+  return seedTodo(fixture.db, {
+    title,
+    start: "active",
+    startDate: FUTURE_ISO,
+    todayIndex,
+  });
+}
+
+describe("loose-day scope (UPCORD1 park-sort-unpark protocol)", () => {
+  it("parks the whole day-group, container-day reorders, unparks, and trashes the scratch", async () => {
+    const a = seedLooseFuture("a", 30);
+    const b = seedLooseFuture("b", 20);
+    const c = seedLooseFuture("c", 10);
+    const { vectors, calls } = looseDayVectors();
+    // Request order c,a (block); b is an un-named co-parked day sibling.
+    const result = await runReorder(deps(vectors), {
+      scope: "loose-day",
+      uuids: [c, a],
+      named: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    // targetOrder = wireList = [c, a] + [b] = [c, a, b].
+    // Legs: project.add, park×3, reorder, unpark×3, project.delete.
+    expect(calls).toEqual([
+      "project.add",
+      "todo.move",
+      "todo.move",
+      "todo.move",
+      "reorder",
+      "todo.move",
+      "todo.move",
+      "todo.move",
+      "project.delete",
+    ]);
+    expect(ascending(ranks([c, a, b]))).toBe(true);
+    // Every member is loose again, on the same future day.
+    for (const u of [a, b, c]) {
+      const row = fixture.db
+        .prepare("SELECT project, area, heading, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        project: string | null;
+        area: string | null;
+        heading: string | null;
+        startDate: number;
+      };
+      expect(row.project).toBeNull();
+      expect(row.area).toBeNull();
+      expect(row.heading).toBeNull();
+      expect(row.startDate).toBe(FUTURE_PACKED);
+    }
+    if (result.kind === "ok") {
+      expect(result.touched).toEqual([b]); // co-parked, disclosed
+      expect(result.warnings?.join(" ")).toContain("scratch project");
+      expect(result.warnings?.join(" ")).toContain("Trash");
+    }
+    // The scratch project exists and is TRASHED (never permanent).
+    const scratch = fixture.db
+      .prepare("SELECT trashed FROM TMTask WHERE type = 1 AND title LIKE 'things-api loose-day %'")
+      .get() as { trashed: number } | undefined;
+    expect(scratch?.trashed).toBe(1);
+    // Summary reorder audit record (undoable unit) + leg records.
+    const summary = auditRecords.filter((r) => r.op === "reorder" && r.txn?.role === "summary");
+    expect(summary).toHaveLength(1);
+    expect(summary[0]?.result).toBe("ok");
+  });
+
+  it("refuses mixed future dates (rejects the off-day member as a non-member)", async () => {
+    const a = seedLooseFuture("a", 10);
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "active",
+      startDate: "2026-07-11", // a DIFFERENT future day
+      todayIndex: 20,
+    });
+    const { vectors, calls } = looseDayVectors();
+    const result = await runReorder(deps(vectors), { scope: "loose-day", uuids: [a, b] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("not an open member");
+    expect(calls).toHaveLength(0); // no scratch project created
+  });
+
+  it("refuses a repeating TEMPLATE movee, naming the §9e law", async () => {
+    const t = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "active",
+      startDate: FUTURE_ISO,
+      todayIndex: 10,
+      recurrenceRule: true,
+    });
+    const { vectors, calls } = looseDayVectors();
+    const result = await runReorder(deps(vectors), { scope: "loose-day", uuids: [t] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("§9e");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is gated by allow-experimental (the container-day leg's surface) — no scratch created", async () => {
+    const a = seedLooseFuture("a", 10);
+    const { vectors, calls } = looseDayVectors();
+    const result = await runReorder(deps(vectors, { config: config(false) }), {
+      scope: "loose-day",
+      uuids: [a],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("allow-experimental is off");
+      expect(result.detail).toContain("no scratch project was created");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("caps the touched day-group by bounce-max-items (parking legs count)", async () => {
+    const uuids = Array.from({ length: 4 }, (_, i) => seedLooseFuture(`F${i}`, (i + 1) * 10));
+    const { vectors, calls } = looseDayVectors();
+    const result = await runReorder(
+      deps(vectors, { config: { ...config(true), bounceMaxItems: 3 } }),
+      { scope: "loose-day", uuids },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 3");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails loudly naming the scratch project when a park leg fails mid-protocol", async () => {
+    const a = seedLooseFuture("a", 10);
+    const b = seedLooseFuture("b", 20);
+    const { vectors } = looseDayVectors();
+    // Make the SECOND park leg fail (after project.add + first park).
+    let moves = 0;
+    const urlFake = vectors[0] as WriteVector;
+    const inner = urlFake.execute.bind(urlFake);
+    urlFake.execute = async (inv) => {
+      if (inv.op === "todo.move") {
+        moves += 1;
+        if (moves === 2) return { exitCode: 1, stdout: "", stderr: "boom" };
+      }
+      return inner(inv);
+    };
+    const result = await runReorder(deps(vectors), { scope: "loose-day", uuids: [a, b] });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.detail).toContain("PARKED");
+      expect(result.detail).toContain("NOT trashed");
+      // The scratch uuid appears in the recovery detail.
+      const scratch = fixture.db
+        .prepare("SELECT uuid FROM TMTask WHERE type = 1 AND title LIKE 'things-api loose-day %'")
+        .get() as { uuid: string };
+      expect(result.detail).toContain(scratch.uuid);
+    }
+  });
+
+  it("undo round-trip restores the prior loose-day order (re-runs the protocol)", async () => {
+    const a = seedLooseFuture("a", 30);
+    const b = seedLooseFuture("b", 20);
+    const c = seedLooseFuture("c", 10); // prior order c < b < a
+    const fwd = await runReorder(deps(looseDayVectors().vectors), {
+      scope: "loose-day",
+      uuids: [c, a],
+      named: [c, a],
+    });
+    expect(fwd.kind).toBe("ok"); // forward lands c < a < b
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    expect(summary).toBeDefined();
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const step = plan.steps[0];
+    expect(step?.op).toBe("reorder");
+    const inv = await runReorder(
+      deps(looseDayVectors().vectors),
+      step?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    // Restored to the original relative order c < b < a.
+    expect(ascending(ranks([c, b, a]))).toBe(true);
+  });
+
+  it("dry-run describes the protocol without creating a scratch project", async () => {
+    const a = seedLooseFuture("a", 10);
+    const b = seedLooseFuture("b", 20);
+    const { vectors, calls } = looseDayVectors();
+    const result = await runReorder(
+      deps(vectors),
+      { scope: "loose-day", uuids: [a, b] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("loose-day park-sort-unpark ×2");
+      expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
+    }
+    expect(calls).toHaveLength(0);
+    expect(auditRecords).toHaveLength(0);
   });
 });
 
