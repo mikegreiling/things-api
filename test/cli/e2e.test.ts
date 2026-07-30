@@ -328,6 +328,39 @@ describe("cli end-to-end (fixture db)", () => {
     expect(item.latestInstance).toBe(newest);
   });
 
+  it("things todo show — R11 latestInstance SKIPS a TRASHED max-creation instance (SL2 L1)", () => {
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
+    // The newest-spawned (max creationDate) instance is TRASHED — the GUI Show
+    // Latest never selects a trashed row (SL2), so it must be excluded and the
+    // pick falls to the newest UNTRASHED instance.
+    const survivor = seedTodo(fx.db, {
+      title: "occ-live",
+      repeatingTemplate: tmpl,
+      creationDate: 1_783_296_000, // 2026-07-06, newest UNTRASHED
+    });
+    seedTodo(fx.db, {
+      title: "occ-trashed",
+      repeatingTemplate: tmpl,
+      creationDate: 1_783_382_400, // 2026-07-07, MAX creation but TRASHED
+      trashed: true,
+    });
+    const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
+    const item = JSON.parse(stdout).data.item;
+    expect(item.latestInstance).toBe(survivor);
+  });
+
+  it("things todo show — R11 no latestInstance when every instance is trashed (SL2 L1c)", () => {
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
+    seedTodo(fx.db, { title: "occ-gone", repeatingTemplate: tmpl, trashed: true });
+    const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
+    const item = JSON.parse(stdout).data.item;
+    // Zero untrashed instances → the affordance has nothing to resolve (the GUI
+    // even drops the "Show Latest" menu item), so the key is omitted.
+    expect("latestInstance" in item).toBe(false);
+  });
+
   it("things snapshot --json counts every row class", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "a" });
