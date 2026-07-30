@@ -23,6 +23,14 @@
  *    applies (completion ≠ logged; a closed row past the sweep boundary).
  *    A completed/canceled row NOT yet past the boundary has `logged=false` here,
  *    so it FALLS THROUGH and keeps its live stage below (Mike's explicit ruling).
+ * 2½. a DEADLINE-PULLED undated row (`today` marker set ∧ `startDate IS NULL`) →
+ *    `anytime` — R13 (BANNER1 / BANNER1b, law L-A): a due-deadline pull re-files
+ *    an undated Inbox/Someday row into ANYTIME (the GUI removes it from
+ *    Someday/Inbox and adds it to Anytime at pull time, even while raw `start`
+ *    still reads 0/2). It derives its DESTINATION, not its origin. Ordered ABOVE
+ *    inbox so an inbox-origin pull is caught; templates never carry the marker.
+ *    With this, EVERY Today member derives `anytime` (arrived via step 5, pulled
+ *    here).
  * 3. `start=inbox` → `inbox`.
  * 4. a repeating TEMPLATE → `upcoming` — regardless of its projected next date;
  *    the `repeating` object stays the template discriminator.
@@ -52,12 +60,14 @@
  * The two axes cross: an undated ACTIVE to-do whose DEADLINE is today reads
  * `stage: "anytime"` AND `today: true` (F-DL pull; UPC1 2026-07-13, GUI-verified,
  * docs/lab/upcoming-research.md, summarized in docs/things-app-oddities.md
- * §8d–8e). A SOMEDAY item with a due/overdue UNsuppressed deadline reads
- * `stage: "someday"` AND `today: true` (surfaced in Today, still technically
- * someday); the same item once its deadline is SUPPRESSED
+ * §8d–8e). A SOMEDAY or INBOX item with a due/overdue UNsuppressed deadline is
+ * PULLED into Today+Anytime, so it too reads `stage: "anytime"` AND `today: true`
+ * (R13 / BANNER1b — the GUI files a pulled row under Anytime, out of its origin
+ * bucket, §8s); the same item once its deadline is SUPPRESSED
  * (`deadlineSuppressionDate` stamped — a side effect of rescheduling an
- * overdue-deadline item, oddities §8e) reads `stage: "someday"` with NO today
- * marker. And after the user OKs the "new to-dos" banner (§8d) the app MUTATES
+ * overdue-deadline item, oddities §8e) is NOT pulled: no today marker, so it
+ * reads its ORIGIN stage (`someday` / `inbox`) with NO today marker. And after
+ * the user OKs the "new to-dos" banner (§8d) the app MUTATES
  * such an item to `start=1` / `startDate := deadline` (= today, an ARRIVED
  * When-date), so the SAME conceptual item legitimately reads `stage: "anytime"` +
  * `today: true` post-acknowledgement — an arrived `startDate` is Anytime + Today,
@@ -96,6 +106,18 @@ export interface StageInput {
 export function deriveStage(item: StageInput): Stage {
   if (item.trashed) return "trash";
   if (item.logged) return "logbook";
+  // R13 (BANNER1 / BANNER1b, law L-A): a due-deadline PULL re-files an undated
+  // row (Inbox or Someday origin) into ANYTIME — the GUI removes it from the
+  // Someday/Inbox lists and adds it to the Anytime list at pull time, even while
+  // its raw `start` still reads 0/2 (Anytime ⊇ Today's to-dos). The row carries
+  // the Today marker via the deadline arm (mappers `todayMarkers`) with its
+  // startDate still NULL, so a Today-marked UNDATED row IS a deadline pull → it
+  // derives its DESTINATION bucket `anytime`, not its origin (inbox/someday).
+  // Consequence: EVERY Today member is now stage `anytime` (arrived → anytime
+  // via the arrived-startDate branch below; pulled → anytime here). Reuses the
+  // marker verbatim — no independent re-derivation. Ordered ABOVE the inbox
+  // branch so an inbox-origin pull is caught (templates never carry the marker).
+  if (item.today === true && item.startDate === null) return "anytime";
   if (item.start === "inbox") return "inbox";
   if (item.repeating.isTemplate) return "upcoming";
   // Upcoming is STRICTLY FUTURE (UPC1): a future When-date → `upcoming`; an

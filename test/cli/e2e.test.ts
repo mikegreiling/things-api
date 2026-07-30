@@ -2144,12 +2144,16 @@ describe("overdue filter (cli)", () => {
   it("is a content scope: it never lifts the default row cap", () => {
     fx = buildFixtureDb();
     // 55 overdue inbox captures > the default 50: a content scope must not lift
-    // the cap the way a range bound (--since/--until) would.
+    // the cap the way a range bound (--since/--until) would. The deadlines are
+    // SUPPRESSED (supp == deadline) so R13's deadline-pull exclusion does NOT
+    // remove them from the Inbox list — an unsuppressed overdue capture would be
+    // pulled into Today and gone from Inbox (see the inbox --overdue unit test).
     for (let i = 0; i < 55; i++) {
       seedTodo(fx.db, {
         title: `cap ${i}`,
         start: "inbox",
         deadline: isoFromToday(-1),
+        deadlineSuppressionDate: isoFromToday(-1),
         index: i,
       });
     }

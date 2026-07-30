@@ -312,7 +312,10 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
     const e = (out["evening"] as Obj[])[0]!;
     expect("when" in t).toBe(false); // section key states today
     expect("when" in e).toBe(false); // section key states evening
-    expect(t["stage"]).toBe("anytime"); // stage KEPT on today (mixed)
+    // R13: every Today member derives stage `anytime`, so the today sections are
+    // stage-PURE and the field is DROPPED (was kept as "mixed" pre-R13).
+    expect("stage" in t).toBe(false);
+    expect("stage" in e).toBe(false);
   });
 
   it("`when` is KEPT on anytime/inbox/someday sections — the informative deadline-pull cases", () => {

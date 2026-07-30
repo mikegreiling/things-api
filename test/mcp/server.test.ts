@@ -285,6 +285,41 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view surfaces the R13 provisional marker; today sections drop stage; pulled row re-files to anytime", async () => {
+    // A deadline-pulled SOMEDAY row (unmaterialized) is a provisional Today member.
+    seedTodo(fixture.db, {
+      title: "MCP-Pull",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-05",
+    });
+    // A materialized member (user-placed when=today) is NOT provisional.
+    seedTodo(fixture.db, { title: "MCP-Placed", start: "active", startDate: "2026-07-05" });
+    await connect([fakeVector(null).vector]);
+
+    const today = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "today" } }),
+    ) as { today: Array<Record<string, unknown>>; evening: unknown[] };
+    const pull = today.today.find((i) => i["title"] === "MCP-Pull")!;
+    const placed = today.today.find((i) => i["title"] === "MCP-Placed")!;
+    expect(pull["provisional"]).toBe(true); // the banner pip, as data
+    expect("stage" in pull).toBe(false); // today sections are stage-pure (R13)
+    expect(placed["provisional"]).toBeUndefined(); // materialized → not provisional
+
+    // GUI fidelity: the pulled row is GONE from someday, PRESENT in anytime.
+    const someday = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "someday" } }),
+    ) as Array<{ items: Array<Record<string, unknown>> }>;
+    expect(someday.flatMap((s) => s.items).some((i) => i["title"] === "MCP-Pull")).toBe(false);
+    const anytime = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "anytime" } }),
+    ) as Array<{ items: Array<Record<string, unknown>> }>;
+    const anyPull = anytime.flatMap((s) => s.items).find((i) => i["title"] === "MCP-Pull")!;
+    expect(anyPull).toBeDefined();
+    expect(anyPull["provisional"]).toBe(true); // marker rides the anytime catalogue too
+    expect(anyPull["when"]).toBe("today");
+  });
+
   it("read_view defaults to the compact tier; full: true restores the full record (R7)", async () => {
     seedTodo(fixture.db, { title: "MCP-compact", start: "inbox" });
     await connect([fakeVector(null).vector]);

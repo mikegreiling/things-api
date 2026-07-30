@@ -59,9 +59,28 @@
  * - `when` is DROPPED inside the `today` view's own sections (the section key states
  *   today/evening) and inside any card/heading `upcoming` DATE-GROUP for a member
  *   whose `when` equals the group's date (the group states it). KEPT everywhere
- *   else it is present — including the flat `upcoming` catalogue, `anytime`,
- *   `inbox`, `someday`, search, changes (a deadline-pulled inbox/someday row reads
- *   `when: "today"` there, informatively, while `stage` still reads inbox/someday).
+ *   else it is present — including the flat `upcoming`/`anytime`/`inbox`/`someday`
+ *   catalogues, search, changes (a deadline-pulled row reads `when: "today"` in the
+ *   mixed search/changes surfaces, informatively; note R13 re-files it to stage
+ *   `anytime` and the flat inbox/someday views now EXCLUDE it — it appears in the
+ *   `anytime` catalogue instead, `when: "today"` kept, stage dropped as pure).
+ *
+ * ## R13 — provisional Today members + GUI-faithful pulled-row membership
+ * BANNER1 / BANNER1b (docs/lab/banner1-research.md). Two coupled facts:
+ * - **`provisional: true`** — a presence-keyed marker on every Today member the GUI
+ *   pips / counts in the "You have N new to-dos" banner: a Today member NOT yet
+ *   materialized (`start != active OR startDate IS NULL`, BANNER1 L1). Derived from
+ *   the SAME today/evening markers + fields the stage/`when` axes use (never
+ *   re-derived). Emitted on EVERY tier, NEVER dropped (the banner is not a section,
+ *   so no node implies it). Absent on non-Today rows and on materialized ones.
+ *   Read-only: the app clears it by materializing the row on banner-OK, a GUI-only
+ *   side effect our read cannot perform (watchers beware).
+ * - **stage `anytime` for a deadline pull** — a due-deadline pull re-files an undated
+ *   Inbox/Someday row into Anytime (deriveStage step 2½, L-A). So EVERY Today member
+ *   derives stage `anytime`, and the `today` view's own sections become stage-PURE →
+ *   `stage` is DROPPED there (TODAY_SECTION_DROP), alongside the section-implied
+ *   `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
+ *   INCLUDES them (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
@@ -266,6 +285,20 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   if (type !== "to-do" && type !== "project") return src; // not a shaped entity
   const stage = stageOf(s); // from the ORIGINAL fields, before any reshape
   const when = whenOf(s, stage); // R12 — derived from the same fields + markers
+  // R13 (BANNER1 law L-B): a Today member is PROVISIONAL — the GUI pips it and
+  // counts it in the "You have N new to-dos" banner — until the app MATERIALIZES
+  // it (start:=1, startDate:=today). Presence-keyed marker, derived from the SAME
+  // inputs as the stage/`when` axes (never an independent re-derivation): the row
+  // is a Today member (via the today/evening markers `whenOf` reuses — so it can
+  // never disagree with the star) AND not yet materialized (BANNER1 L1:
+  // `start != active OR startDate IS NULL`). Templates are never Today members,
+  // so they never mark. NEVER dropped by any view/section — the banner is not a
+  // section, so no enclosing node implies it. The app rewrites start/startDate
+  // when the user acknowledges the banner; that is a GUI-only side effect our
+  // read cannot clear (watchers beware — see contract.md `provisional`).
+  const provisional =
+    (when === "today" || when === "evening") &&
+    (s["start"] !== "active" || (s["startDate"] ?? null) === null);
   const o: Obj = { ...s };
 
   // R9 universal reshapes (every tier, every kind incl. detail).
@@ -291,6 +324,8 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   delete o["today"];
   delete o["evening"];
   if (drop.when !== true && when !== undefined) o["when"] = when;
+  // R13 — the provisional banner marker (never dropped; presence-keyed).
+  if (provisional) o["provisional"] = true;
 
   // R6 — drop redundant ancestry (both tiers).
   if (drop.project === true) delete o["project"];
@@ -436,19 +471,30 @@ const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 const AREA_PROJECTS_DROP: ItemDrop = { area: true };
 /**
  * Anytime sidebar-section items: stage-PURE → drop area + the section-implied
- * stage (R10.2). Every Anytime-view member (ANYTIME_SELF: undated-active,
- * arrived-active, arrived someday-scheduled) derives `anytime` — an ARRIVED
- * dated row is Anytime, not Upcoming (Upcoming is STRICTLY FUTURE, UPC1) — and
- * repeating templates are excluded from the view (NOT_TEMPLATE), so no
- * stage-`upcoming` row can appear here.
+ * stage (R10.2). Every Anytime-view member derives `anytime`: ANYTIME_SELF
+ * (undated-active, arrived-active, arrived someday-scheduled) — an ARRIVED dated
+ * row is Anytime, not Upcoming (Upcoming is STRICTLY FUTURE, UPC1) — AND, since
+ * R13, the DEADLINE-PULLED undated Inbox/Someday rows the view now includes
+ * (BANNER1b), which derive `anytime` too (deriveStage step 2½: a Today-marked
+ * undated row is a pull → anytime). Repeating templates are excluded from the
+ * view (NOT_TEMPLATE), so no stage-`upcoming` row can appear here — still pure.
  */
 const ANYTIME_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** Someday sidebar-section items: stage-PURE → drop area + the bucket-implied stage. */
 const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and `when`. */
 const NO_DROP: ItemDrop = {};
-/** The today view's own sections: keep `stage` (mixed), drop the section-implied `when` (R12). */
-const TODAY_SECTION_DROP: ItemDrop = { when: true };
+/**
+ * The today view's own sections: drop the section-implied `when` (R12) AND the
+ * section-implied `stage` (R13). Every Today member now derives stage `anytime`
+ * by construction — an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½)
+ * both derive `anytime`, and there are no future-dated or undated-someday Today
+ * members — so the Today sections are provably stage-PURE `anytime` and the field
+ * is redundant there (verified strict by the today-section purity property test
+ * in test/unit/stage.test.ts). `provisional` is NOT a drop — the banner is not a
+ * section, so nothing implies it.
+ */
+const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
 /** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
 function shapeProjectView(view: Obj, compact: boolean): Obj {

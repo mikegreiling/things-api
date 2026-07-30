@@ -182,7 +182,10 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
     expect(markerRow("dl-active").evening).toBeUndefined();
   });
 
-  it("SOMEDAY item with a due/overdue UNsuppressed deadline → stage someday + today:true", () => {
+  it("SOMEDAY item with a due/overdue UNsuppressed deadline → PULLED to stage anytime + today:true (R13)", () => {
+    // R13 (BANNER1b, L-A): a due-deadline pull re-files an undated Someday row into
+    // ANYTIME (the GUI removes it from Someday and adds it to Anytime at pull time),
+    // so it derives its DESTINATION `anytime`, not its origin `someday`.
     fx = buildFixtureDb();
     seedTodo(fx.db, {
       title: "some-due",
@@ -191,7 +194,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadline: "2026-07-01", // overdue vs 07-02
     });
     const hit = (searchView(fx.db, "some-due", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("someday");
+    expect(deriveStage(hit)).toBe("anytime");
     expect(markerRow("some-due").today).toBe(true);
   });
 
@@ -262,7 +265,7 @@ describe("deriveWhen — over real entities through the read pipeline (R12)", ()
     expect(wire["when"]).toBe("today");
   });
 
-  it("deadline-pulled inbox/someday compose: stage dropped by the pure view, `when: today` kept", () => {
+  it("deadline-pulled inbox/someday rows re-file to the ANYTIME catalogue (R13): gone from inbox/someday, stage dropped, when today", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "in-dl", start: "inbox", startDate: null, deadline: "2026-07-02" });
     seedTodo(fx.db, {
@@ -271,19 +274,26 @@ describe("deriveWhen — over real entities through the read pipeline (R12)", ()
       startDate: null,
       deadline: "2026-07-01",
     });
-    // Through the real inbox emit: stage dropped (pure), `when: today` kept.
-    const inboxRow = (
-      shapeReadPayload("inbox", inboxView(fx.db, NOW), false) as Record<string, unknown>[]
-    ).find((r) => r["title"] === "in-dl")!;
-    expect("stage" in inboxRow).toBe(false);
-    expect(inboxRow["when"]).toBe("today");
-    // The someday catalogue is sectioned; find the row and check the same.
-    const somedayShaped = shapeReadPayload("someday", somedayView(fx.db, NOW), false) as Array<{
+    // R13: the pulled rows are EXCLUDED from the flat inbox/someday views (the GUI
+    // removes them from those lists even before materialization).
+    expect(inboxView(fx.db, NOW).some((r) => r.title === "in-dl")).toBe(false);
+    expect(
+      somedayView(fx.db, NOW)
+        .flatMap((s) => s.items)
+        .some((r) => r.title === "some-dl"),
+    ).toBe(false);
+    // They appear in the ANYTIME catalogue instead (Anytime ⊇ Today's to-dos),
+    // stage dropped (still stage-pure), `when: today` kept.
+    const anyShaped = shapeReadPayload("anytime", anytimeView(fx.db, NOW), false) as Array<{
       items: Record<string, unknown>[];
     }>;
-    const someRow = somedayShaped.flatMap((s) => s.items).find((r) => r["title"] === "some-dl")!;
-    expect("stage" in someRow).toBe(false);
-    expect(someRow["when"]).toBe("today");
+    const rows = anyShaped.flatMap((s) => s.items);
+    for (const title of ["in-dl", "some-dl"]) {
+      const row = rows.find((r) => r["title"] === title)!;
+      expect(row).toBeDefined();
+      expect("stage" in row).toBe(false);
+      expect(row["when"]).toBe("today");
+    }
   });
 });
 
@@ -505,5 +515,186 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     const cUpToday = children[2]!;
     expect((shaped["anytime"] as Row[]).some((r) => r.uuid === cUpToday)).toBe(true);
     expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-07-02")).toBe(false);
+  });
+});
+
+describe("R13 property — every Today-view member derives stage `anytime` (justifies the today-section stage drop)", () => {
+  it("the today sections are stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
+    fx = buildFixtureDb();
+    // A spread across every Today-membership arm AND every origin bucket.
+    seedTodo(fx.db, { title: "t-arrived-active", start: "active", startDate: "2026-07-01" });
+    seedTodo(fx.db, { title: "t-arrived-someday", start: "someday", startDate: "2026-07-02" });
+    seedTodo(fx.db, {
+      title: "t-evening",
+      start: "active",
+      startDate: "2026-07-02",
+      evening: true,
+    });
+    seedTodo(fx.db, {
+      title: "t-dl-active",
+      start: "active",
+      startDate: null,
+      deadline: "2026-07-02",
+    });
+    seedTodo(fx.db, {
+      title: "t-dl-inbox",
+      start: "inbox",
+      startDate: null,
+      deadline: "2026-07-01",
+    });
+    seedTodo(fx.db, {
+      title: "t-dl-someday",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-02",
+    });
+    const tmpl = seedTodo(fx.db, {
+      title: "t-template",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-07-05",
+    });
+    seedTodo(fx.db, {
+      title: "t-instance",
+      start: "someday",
+      startDate: "2026-07-02",
+      repeatingTemplate: tmpl,
+    });
+
+    const view = todayView(fx.db, NOW);
+    const members = [...view.today, ...view.evening];
+    expect(members.length).toBeGreaterThan(5);
+    // STRICT: every member derives `anytime` — no residual mixed case survives.
+    // (If this ever fails, the today sections are NOT stage-pure and the
+    // TODAY_SECTION_DROP `stage: true` must be reverted — report prominently.)
+    for (const m of members) expect(deriveStage(m)).toBe("anytime");
+    // Consequently the emit boundary DROPS `stage` on every today-section row.
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    for (const r of [...shaped.today, ...shaped.evening]) expect("stage" in r).toBe(false);
+  });
+});
+
+const provOf = (rows: Array<Record<string, unknown>>, title: string) =>
+  rows.find((r) => r["title"] === title)?.["provisional"];
+
+describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count reconstruction", () => {
+  it("all five BANNER1b entrant classes → provisional; user-placed + materialized → NOT; suppressed → not a Today member", () => {
+    fx = buildFixtureDb();
+    // The five AUTONOMOUS entrant classes, pre-OK (unmaterialized):
+    // (a) deadline-pull SOMEDAY, (b) deadline-pull INBOX, (c) deadline-pull ANYTIME,
+    // (d) scheduled arrival (start=2 on its startDate), (e) repeat-instance spawn.
+    seedTodo(fx.db, {
+      title: "a-dl-someday",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-02",
+    });
+    seedTodo(fx.db, {
+      title: "b-dl-inbox",
+      start: "inbox",
+      startDate: null,
+      deadline: "2026-07-02",
+    });
+    seedTodo(fx.db, {
+      title: "c-dl-anytime",
+      start: "active",
+      startDate: null,
+      deadline: "2026-07-02",
+    });
+    seedTodo(fx.db, { title: "d-scheduled", start: "someday", startDate: "2026-07-02" });
+    const tmpl = seedTodo(fx.db, {
+      title: "e-template",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-07-03",
+    });
+    seedTodo(fx.db, {
+      title: "e-spawn",
+      start: "someday",
+      startDate: "2026-07-02",
+      repeatingTemplate: tmpl,
+    });
+    // NON-provisional Today members (already materialized, start=1 + startDate set):
+    // user-placed (add/update when=today) and the post-OK deadline-pull.
+    seedTodo(fx.db, { title: "u-placed", start: "active", startDate: "2026-07-02" });
+    seedTodo(fx.db, {
+      title: "m-materialized",
+      start: "active",
+      startDate: "2026-07-02",
+      deadline: "2026-07-02",
+    });
+    // A SUPPRESSED someday-deadline row — never a Today member (no pip at all).
+    seedTodo(fx.db, {
+      title: "s-suppressed",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-01",
+      deadlineSuppressionDate: "2026-07-01",
+    });
+
+    const view = todayView(fx.db, NOW);
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    const rows = [...shaped.today, ...shaped.evening];
+
+    for (const t of ["a-dl-someday", "b-dl-inbox", "c-dl-anytime", "d-scheduled", "e-spawn"]) {
+      expect(provOf(rows, t)).toBe(true);
+    }
+    for (const t of ["u-placed", "m-materialized"]) {
+      expect(rows.some((r) => r["title"] === t)).toBe(true); // present as a Today member
+      expect(provOf(rows, t)).toBeUndefined(); // but NOT provisional (materialized)
+    }
+    expect(rows.some((r) => r["title"] === "s-suppressed")).toBe(false); // absent entirely
+
+    // Banner-count reconstruction: N = count(provisional) = the 5 seeded new
+    // entrants, exactly (BANNER1 L1 — banner N equals the pip count).
+    expect(rows.filter((r) => r["provisional"] === true).length).toBe(5);
+  });
+
+  it("provisional rides BOTH tiers, and a NON-Today row never carries it", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "pv-pull",
+      start: "someday",
+      startDate: null,
+      deadline: "2026-07-02",
+    }); // Today member, provisional
+    seedTodo(fx.db, { title: "pv-plain", start: "active", startDate: null }); // Anytime, NOT in Today
+
+    // The provisional row is a search hit either way; compact AND full carry it.
+    for (const full of [false, true]) {
+      const hit = (
+        shapeReadPayload("search", searchView(fx.db, "pv-pull", {}, NOW), full) as Array<
+          Record<string, unknown>
+        >
+      )[0]!;
+      expect(hit["provisional"]).toBe(true);
+    }
+    // A non-Today row never carries the marker.
+    const plain = (
+      shapeReadPayload("search", searchView(fx.db, "pv-plain", {}, NOW), false) as Array<
+        Record<string, unknown>
+      >
+    )[0]!;
+    expect("provisional" in plain).toBe(false);
+  });
+
+  it("a repeating TEMPLATE is never provisional (never a Today member — BANNER1b)", () => {
+    // Templates are excluded from search; they surface in `upcoming` (at their
+    // projected next occurrence). That row is future-dated → not a Today member.
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, {
+      title: "tmpl-daily",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-07-03",
+    });
+    const hit = (
+      shapeReadPayload("upcoming", upcomingView(fx.db, NOW), true) as Array<Record<string, unknown>>
+    ).find((r) => r["uuid"] === tmpl)!;
+    expect(hit).toBeDefined();
+    expect("provisional" in hit).toBe(false);
   });
 });

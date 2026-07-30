@@ -2,7 +2,10 @@
  * List views mirroring the Things sidebar. Predicates derived from the
  * validated research plus live probes (docs/atlas/schema-v26.md):
  *
- * - inbox:    start=0
+ * - inbox:    start=0, MINUS due-deadline-pulled undated rows (BANNER1 Q1b:
+ *             a due/overdue unsuppressed deadline removes an undated Inbox row
+ *             from the GUI Inbox list and files it under Today/Anytime, even
+ *             while raw `start` still reads 0 — DEADLINE_PULLED, predicates.ts)
  * - today:    (startDate <= today AND start IN (1, 2)) OR a DUE DEADLINE
  *             with no startDate — a due/overdue deadline pulls an item into
  *             Today even from the Inbox; a FUTURE startDate suppresses it
@@ -35,7 +38,11 @@
  * - anytime:  ALL active items — unscheduled PLUS Today members (the UI
  *             renders Today members with a star; live-verified via screenshot
  *             2026-07-02: starred = in Today, unstarred = unscheduled).
- *             Star equivalence: startDate != NULL && <= today.
+ *             Star equivalence: startDate != NULL && <= today. Anytime is a
+ *             SUPERSET of Today's to-dos (BANNER1b): a due-deadline pull re-files
+ *             an undated Inbox/Someday row INTO Anytime (out of its origin
+ *             bucket) even while raw `start` still reads 0/2 — so membership is
+ *             ANYTIME_SELF OR DEADLINE_PULLED (predicates.ts).
  *             CONTAINER CASCADE (live-verified 2026-07-09): children of a
  *             project that is not itself anytime-visible (someday/future/
  *             logged/trashed) are excluded — the project row represents
@@ -67,7 +74,11 @@
  *             rt1_nextInstanceStartDate (UI parity; opt out via
  *             repeats:false). Occurrence deadline = start − rule.ts
  *             (instance-validated 2026-07-04).
- * - someday:  start=2 AND startDate IS NULL, container-less members only
+ * - someday:  start=2 AND startDate IS NULL, MINUS due-deadline-pulled rows
+ *             (BANNER1 Q1b: a due/overdue unsuppressed deadline removes an
+ *             undated Someday row from the GUI Someday list and files it under
+ *             Today/Anytime — DEADLINE_PULLED, predicates.ts); container-less
+ *             members only
  *             (project children appear ONLY via the activeProjectItems
  *             toggle, and only for anytime-active projects — mirrors the
  *             UI's "Show items from active projects"). Grouped in sidebar
@@ -105,6 +116,7 @@ import {
 import {
   ANYTIME_SELF,
   CONTAINER_UNTRASHED,
+  DEADLINE_PULLED,
   EFF_PROJECT,
   LIVE,
   OPEN,
@@ -329,8 +341,7 @@ export function todayView(
     db,
     `${OPEN_OR_UNSWEPT} AND ${CONTAINER_UNTRASHED} AND (
        (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
-       OR (t.deadline IS NOT NULL AND t.deadline <= ? AND t.startDate IS NULL
-           AND (t.deadlineSuppressionDate IS NULL OR t.deadlineSuppressionDate < t.deadline))
+       OR ${DEADLINE_PULLED}
      )${tf.sql}${of.sql}
      ORDER BY t.startBucket ASC,
               COALESCE(t.todayIndexReferenceDate, t.startDate, t.deadline) DESC,
@@ -387,9 +398,11 @@ export function inboxView(
   zone?: string,
 ): ListItem[] {
   const tf = tagFilter(db, filter);
-  // `now` is threaded only for the `--overdue` boundary (the inbox order and
-  // the since/until window key on epoch creationDate, not on today).
-  const of = overdueFilter(filter, encodePackedDate(localToday(now, zone)));
+  // `now` is threaded for the `--overdue` boundary AND for the deadline-pull
+  // exclusion below (the inbox order and the since/until window key on epoch
+  // creationDate, not on today).
+  const packedToday = encodePackedDate(localToday(now, zone));
+  const of = overdueFilter(filter, packedToday);
   const where = [OPEN, "t.start = 0"];
   const binds: (string | number)[] = [];
   // creationDate is an epoch REAL (Unix seconds) — mirror the changes/logbook
@@ -402,6 +415,14 @@ export function inboxView(
     where.push("t.creationDate <= ?");
     binds.push(filter.until.getTime() / 1000);
   }
+  // R13 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
+  // undated Inbox row into Today AND removes it from the GUI Inbox list — even
+  // while its raw `start` still reads 0. EXCLUDE the pulled rows so the flat
+  // inbox view stays GUI-faithful; reuse the Today deadline arm verbatim so the
+  // exclusion can never drift from the pull todayView claims. A SUPPRESSED
+  // deadline (guard inside DEADLINE_PULLED) is not a pull, so it stays in Inbox.
+  where.push(`NOT ${DEADLINE_PULLED}`);
+  binds.push(packedToday);
   const rows = fetchTaskRows(
     db,
     `${where.join(" AND ")}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
@@ -438,17 +459,26 @@ export function anytimeView(
   // the parent project be open, so a closed-but-unswept project's children stay
   // cascade-excluded — the checked project row represents them. The boundary is
   // threaded into the SQL filter and materialize so presence and `logged` agree.
+  //
+  // R13 (BANNER1b, law L-A): Anytime is a SUPERSET of Today's to-dos — a
+  // due-deadline pull re-files an undated Inbox/Someday row into Anytime (out of
+  // its origin bucket) even while its raw `start` still reads 0/2. So the
+  // membership arm is ANYTIME_SELF *OR* the Today deadline-pull arm (reused
+  // verbatim from todayView, never re-derived). The container cascade still
+  // applies (a pulled child of a non-active project is represented by that
+  // project row).
   const boundary = logBoundary(db, now, zone);
   const rows = fetchTaskRows(
     db,
-    `${OPEN_OR_UNSWEPT} AND ${ANYTIME_SELF("t")}
+    `${OPEN_OR_UNSWEPT} AND (${ANYTIME_SELF("t")} OR ${DEADLINE_PULLED})
      AND ${PROJECT_ANYTIME_ACTIVE}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
     [
       boundary.getTime() / 1000,
-      packedToday,
-      packedToday,
-      packedToday,
-      packedToday,
+      packedToday, // ANYTIME_SELF arm 1
+      packedToday, // ANYTIME_SELF arm 2
+      packedToday, // DEADLINE_PULLED
+      packedToday, // PROJECT_ANYTIME_ACTIVE arm 1
+      packedToday, // PROJECT_ANYTIME_ACTIVE arm 2
       ...tf.binds,
       ...of.binds,
     ],
@@ -706,11 +736,22 @@ export function somedayView(
     ? `EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
          AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")})`
     : "0";
+  // R13 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
+  // undated Someday row into Today AND removes it from the GUI Someday list —
+  // even while its raw `start` still reads 2. EXCLUDE the pulled rows so the flat
+  // someday view stays GUI-faithful; reuse the Today deadline arm verbatim so the
+  // exclusion can never drift from the pull todayView claims. A SUPPRESSED
+  // deadline (guard inside DEADLINE_PULLED) is not a pull, so it stays in Someday.
   const rows = fetchTaskRows(
     db,
     `${OPEN} AND t.start = 2 AND t.startDate IS NULL
-     AND (${EFF_PROJECT} IS NULL OR ${childArm})${tf.sql}${of.sql} ORDER BY t."index" ASC`,
-    [...(withActiveChildren ? [packedToday, packedToday] : []), ...tf.binds, ...of.binds],
+     AND (${EFF_PROJECT} IS NULL OR ${childArm}) AND NOT ${DEADLINE_PULLED}${tf.sql}${of.sql} ORDER BY t."index" ASC`,
+    [
+      ...(withActiveChildren ? [packedToday, packedToday] : []),
+      packedToday, // DEADLINE_PULLED exclusion
+      ...tf.binds,
+      ...of.binds,
+    ],
   );
   const sections = groupBySidebar(
     db,
