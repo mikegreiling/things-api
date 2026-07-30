@@ -253,16 +253,79 @@ describe("cli end-to-end (fixture db)", () => {
     });
   });
 
-  it("things todo show includes checklist and repeating flags", () => {
+  it("things todo show — R11 template wire (repeating rule facts, no discriminators)", () => {
     fx = buildFixtureDb();
-    const uuid = seedTodo(fx.db, { title: "template", recurrenceRule: true });
+    const uuid = seedTodo(fx.db, {
+      title: "template",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-08-01",
+    });
     const { stdout, exitCode } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    const envelope = JSON.parse(stdout);
-    expect(envelope.kind).toBe("detail");
-    expect(envelope.data.item.repeating.isTemplate).toBe(true);
+    const item = JSON.parse(stdout).data.item;
+    // Presence of `repeating` MEANS template; the discriminators are gone.
+    expect(item.repeating).toEqual({ nextOccurrence: "2026-08-01" });
+    expect("isTemplate" in item.repeating).toBe(false);
+    expect("isInstance" in item.repeating).toBe(false);
+    expect("instanceOf" in item).toBe(false);
+    // No instances seeded → no latestInstance key.
+    expect("latestInstance" in item).toBe(false);
     // Omit-empty (contracts.md): an empty checklist is absent, not [].
-    expect("checklist" in envelope.data.item).toBe(false);
+    expect("checklist" in item).toBe(false);
+  });
+
+  it("things todo show — R11 paused template keeps nextOccurrence: null through omit-empty", () => {
+    fx = buildFixtureDb();
+    const uuid = seedTodo(fx.db, {
+      title: "paused-template",
+      recurrenceRule: true,
+      nextInstanceStartDate: null, // paused / after-completion → no projected date
+      instanceCreationPaused: true,
+    });
+    const { stdout } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
+    const item = JSON.parse(stdout).data.item;
+    // Explicit null survives the full emit pipeline (nested `repeating` is not a
+    // pruned entity — the `area: null` section precedent).
+    expect(item.repeating).toEqual({ nextOccurrence: null, paused: true });
+    expect("nextOccurrence" in item.repeating).toBe(true);
+  });
+
+  it("things todo show — R11 instance carries flat instanceOf, no repeating", () => {
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
+    const inst = seedTodo(fx.db, { title: "occurrence", repeatingTemplate: tmpl });
+    const { stdout } = runCli(["todo", "show", inst, "--json", "--db", fx.path]);
+    const item = JSON.parse(stdout).data.item;
+    expect(item.instanceOf).toBe(tmpl);
+    expect("repeating" in item).toBe(false);
+    expect("latestInstance" in item).toBe(false);
+  });
+
+  it("things todo show — R11 latestInstance = max(creationDate) instance, even when COMPLETED (SL1 D1)", () => {
+    fx = buildFixtureDb();
+    const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
+    // Divergent creationDate / startDate / status per SL1: the newest-spawned
+    // (max creationDate) instance wins even though it is COMPLETED and NOT the
+    // one with the max startDate or the newest stopDate.
+    seedTodo(fx.db, {
+      title: "occ-old",
+      repeatingTemplate: tmpl,
+      creationDate: 1_783_209_600, // 2026-07-05, min creation
+      startDate: "2026-07-20", // MAX startDate — must be ignored
+      status: "completed",
+      stopDate: 1_783_999_999, // newest stopDate — must be ignored
+    });
+    const newest = seedTodo(fx.db, {
+      title: "occ-new",
+      repeatingTemplate: tmpl,
+      creationDate: 1_783_468_800, // 2026-07-08, MAX creation
+      startDate: "2026-07-15",
+      status: "completed", // completed newest is STILL the latest
+      stopDate: 1_783_500_000,
+    });
+    const { stdout } = runCli(["todo", "show", tmpl, "--json", "--db", fx.path]);
+    const item = JSON.parse(stdout).data.item;
+    expect(item.latestInstance).toBe(newest);
   });
 
   it("things snapshot --json counts every row class", () => {

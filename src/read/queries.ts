@@ -601,6 +601,27 @@ export function fetchTaskByUuid(db: DatabaseSync, uuid: string): TaskRow | null 
   return rows[0] ?? null;
 }
 
+/**
+ * The uuid of a repeating template's LATEST spawned instance, or null when the
+ * template has none. The GUI-verified "Show Latest" law (SL1,
+ * docs/lab/sl1-show-latest.md, 2026-07-29): the pick is `max(creationDate)`
+ * among the template's instances — the most recently spawned occurrence — and
+ * NOTHING else. It is INDEPENDENT of `startDate`, `userModificationDate`,
+ * `stopDate`, and completion `status`: a completed newest-spawned instance is
+ * still the latest (the SL1 D1 case). No status filter; spans both to-do and
+ * project instances (`rt1_repeatingTemplate` points at the template regardless
+ * of type). `creationDate` is the occurrence midnight and unique per occurrence
+ * for a normal series, so ties are not expected.
+ */
+export function latestInstanceUuid(db: DatabaseSync, templateUuid: string): string | null {
+  const row = db
+    .prepare(
+      "SELECT uuid FROM TMTask WHERE rt1_repeatingTemplate = ? ORDER BY creationDate DESC LIMIT 1",
+    )
+    .get(templateUuid) as { uuid: string } | undefined;
+  return row?.uuid ?? null;
+}
+
 export function fetchChecklistRows(db: DatabaseSync, taskUuid: string): ChecklistRow[] {
   const sql = `SELECT ${selectList("TMChecklistItem")} FROM TMChecklistItem WHERE task = ? ORDER BY ${q("index")} ASC`;
   return db.prepare(sql).all(taskUuid) as unknown as ChecklistRow[];

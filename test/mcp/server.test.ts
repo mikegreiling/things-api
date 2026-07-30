@@ -958,6 +958,34 @@ describe("things MCP server", () => {
     expect("repeating" in item).toBe(false);
   });
 
+  it("get_item — R11 template/instance split rides the shared library shaping", async () => {
+    const tmpl = seedTodo(fixture.db, {
+      title: "mcp tpl",
+      recurrenceRule: true,
+      nextInstanceStartDate: "2026-08-01",
+    });
+    const newest = seedTodo(fixture.db, {
+      title: "occ",
+      repeatingTemplate: tmpl,
+      creationDate: 1_783_468_800,
+    });
+    await connect([fakeVector(null).vector]);
+    const template = textOf(
+      await client.callTool({ name: "get_item", arguments: { uuid: tmpl } }),
+    ) as Record<string, unknown>;
+    // Template wire: presence of `repeating` (rule facts) MEANS template; the
+    // discriminators are gone; a template DETAIL carries the flat latestInstance.
+    expect(template["repeating"]).toEqual({ nextOccurrence: "2026-08-01" });
+    expect(template["latestInstance"]).toBe(newest);
+    expect("instanceOf" in template).toBe(false);
+    // Instance wire: flat instanceOf only, no `repeating`.
+    const instance = textOf(
+      await client.callTool({ name: "get_item", arguments: { uuid: newest } }),
+    ) as Record<string, unknown>;
+    expect(instance["instanceOf"]).toBe(tmpl);
+    expect("repeating" in instance).toBe(false);
+  });
+
   it("get_item keeps inheritedTags when non-empty (reversal guard)", async () => {
     const area = seedArea(fixture.db, "InhArea");
     const areaTag = seedTag(fixture.db, "inh-area-tag");

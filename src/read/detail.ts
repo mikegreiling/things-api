@@ -18,6 +18,7 @@ import {
   fetchChecklistRows,
   fetchTagsForTasks,
   fetchTaskByUuid,
+  latestInstanceUuid,
   makeHeadingProjectResolver,
   makeRefResolver,
 } from "./queries.ts";
@@ -58,13 +59,19 @@ function materializeOne(db: DatabaseSync, row: TaskRow, packedToday: number): An
       if (p !== null) entity.headingProject = p;
     }
   }
-  if (entity.repeating.isTemplate && row.rt1_recurrenceRule !== null) {
-    try {
-      entity.repeating.rule = decodeRecurrenceRule(row.rt1_recurrenceRule);
-    } catch {
-      // Unknown rule schema (future Things build) — surface the template
-      // without a decoded rule rather than failing the whole read.
+  if (entity.repeating.isTemplate) {
+    if (row.rt1_recurrenceRule !== null) {
+      try {
+        entity.repeating.rule = decodeRecurrenceRule(row.rt1_recurrenceRule);
+      } catch {
+        // Unknown rule schema (future Things build) — surface the template
+        // without a decoded rule rather than failing the whole read.
+      }
     }
+    // The GUI "Show Latest" pick (SL1) — detail-only; the shaper hoists it to
+    // the flat wire key `latestInstance`. Omitted when the template has none.
+    const latest = latestInstanceUuid(db, row.uuid);
+    if (latest !== null) entity.repeating.latestInstance = latest;
   }
   return entity;
 }
