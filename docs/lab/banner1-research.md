@@ -97,3 +97,41 @@ Things **3.22.11** · macOS **15.7.7** · DB schema **v26** · golden `things-la
 ## Oracle limits (what the AppleScript list oracle can / can't see)
 
 `get name of to dos of list "Today"` returns membership **and order**, matching the rendered rows one-for-one — but is **blind to the yellow banner and the per-row pips** (both custom NSViews absent from the AX tree; a static-text scan for "new" and a `button "OK"` scan both come back empty). Pip identity therefore requires screenshots; the DB's `start`/`startDate` (the L1 predicate) is the exact ground-truth proxy, verified against the screenshots every round.
+
+---
+
+# BANNER1b — provisional Today members vs the Anytime list
+
+**Extends BANNER1 Q1b.** BANNER1 proved a deadline-pulled item, pre-OK (raw `start` still 2/0, `startDate NULL`), renders in **Today only** — excluded from the GUI Someday and Inbox lists despite its raw columns not having moved. The one fact BANNER1 left open: **does the GUI ANYTIME list show these provisional members pre-OK?** This decides how a reader models a provisional row: as **already-filed-under-Anytime** (stage `anytime` + a provisional marker) or as **bucket-less limbo** (still tagged with its origin stage). BANNER1b settles it: **already-filed-under-Anytime.**
+
+## Verdict (as a law)
+
+> **Pre-OK provisional Today members ARE GUI-Anytime members — in every class.** The Anytime list is a **superset of Today's to-dos**: it lists every incomplete actionable to-do *except* Someday-deferred and future-scheduled ones, so **every** Today member — materialized or provisional — also appears in Anytime. A due deadline (or a scheduled/spawned arrival) that pulls a row into Today simultaneously **re-files it into Anytime**, out of its origin Someday/Inbox bucket, *even while its raw `start` column still reads 2 or 0*. Acknowledging the banner (OK) does **not** change Anytime (or Today) list membership at all — the pre-OK and post-OK lists were byte-identical; OK only mutates the rows' `start`/`startDate` and clears the pips.
+
+So a provisional row models as **stage `anytime` + provisional marker**, NOT as its origin stage. The reader's someday/inbox views must *exclude* deadline-pulled rows (BANNER1) and its **anytime view must *include* them** (BANNER1b) — the two are the same reclassification seen from both sides.
+
+## The class matrix (one VM sitting, clock 07-05 → 07-06, read pre-OK via the AppleScript list oracle; pips from screenshots; DB = ground truth)
+
+Fixtures created 07-05, deadlines/scheduled 07-06; a daily-fixed repeater seeded 07-05 (07-05 instance materialized via a baseline OK, fresh 07-06 instance spawned on advance). At 07-06 pre-OK, read `Today` / `Anytime` / `Someday` / `Inbox`:
+
+| # | Class | Pre-OK DB shape | In Today (pip)? | **In Anytime pre-OK?** | In origin list? |
+|---|---|---|---|---|---|
+| **a** | deadline-pull **SOMEDAY** (`BAN1B-SD-DL`) | `start=2, startDate NULL, deadline=today` | YES (pip) | **YES** | **NO** — Someday held only the untouched `LAB-SOMEDAY-1` |
+| **b** | deadline-pull **INBOX** (`BAN1B-IB-DL`) | `start=0, startDate NULL, deadline=today` | YES (pip) | **YES** | **NO** — Inbox held only `LAB-INBOX-1/2` |
+| **c** | deadline-pull **ANYTIME** (control, `BAN1B-AT-DL`) | `start=1, startDate NULL, deadline=today` | YES (pip) | **YES** | (was already Anytime — stayed) |
+| **d** | **scheduled** arrival (`BAN1B-SCHED`) | `start=2, startDate=today` | YES (pip) | **YES** | (arrived from Upcoming) |
+| **e** | repeat-instance **spawn** (`BAN1B-REPEAT` 07-06 instance) | `start=2, startDate=today` | YES (pip) | **YES** | (autonomous spawn) |
+
+All five provisional classes are Anytime members pre-OK. The `Today` oracle (16 rows) and `Anytime` oracle (24 rows) both listed all five; every Today **to-do** member appeared in Anytime (the repeating **project** `LAB-REPEAT-WEEKLY-PROJ` is a Today member but not a `to dos of list "Anytime"` row — projects are a separate class). The hidden repeating **template** (`start=2, startDate NULL`, tiRefD = the *next* occurrence 07-07) is in **neither** Today nor Anytime — verified by UUID: both `BAN1B-REPEAT` rows in each list were the two **instances**, never the template.
+
+**Free re-confirm (BANNER1 corroboration):** `BAN1B-SD-DL` absent from Someday, `BAN1B-IB-DL` absent from Inbox — the pulled rows have left their origin lists, as BANNER1 found.
+
+**Post-OK:** all five materialized (`start 2→1` for SD/SCHED/REPEAT, `start 0→1` for IB, `startDate` stamped 07-06 on the AT-DL deadline-pull), and the `Anytime` and `Today` oracles returned **identical** membership and order to the pre-OK reads. The pre/post `.dump` diff was 14 lines = **7 `TMTask` rows** (the 5 `BAN1B-*` + golden `LAB-P-2` deadline-pull + `LAB-REPEAT-DAILY` spawn) = the banner's "7 new" exactly — re-confirming BANNER1 L4 (OK touches only the new rows) on a fresh class set. No list membership moved; only the columns and pips changed.
+
+## Wrinkle — the "new" pip is Today-list-only; Anytime never shows it (oddities §8s addendum)
+
+Screenshotting the **Anytime** list pre-OK: the provisional members render there **without any yellow pip**. What Anytime shows next to a Today member is the **yellow Today ★ (star)** — the standard "this item is starred for Today" overlay affordance — and a provisional member is **visually indistinguishable** from a materialized one there (both `BAN1B-REPEAT` instances — the provisional `start=2` 07-06 and the materialized `start=1` 07-05 — carried the same star, no pip). Anytime-only items (`LAB-TAGGED-BOTH`, `LAB-ANYTIME-1`) carry **no** star. So: the banner + per-row pips (the "not yet reviewed" signal) are a **Today-list-only rendering**; the Anytime list surfaces only Today-membership, not newness. This does not weaken the reader's derived `provisional` flag (still `start != 1 OR startDate IS NULL`, per BANNER1 L1) — it just means the GUI itself only *displays* that flag in Today.
+
+## Environment / method / harness
+
+Same rig and recipe as BANNER1: Things **3.22.11** · macOS **15.7.7** · DB schema **v26** · golden `things-lab-golden-v1` (UNTOUCHED), ONE disposable `--vnc-experimental` clone `banner1-lab` (airgapped, clock-pinned 2026-07-05 → +1 day to 07-06, torn down on completion). Setup via [`lab/scripts/research-banner1.sh`](../../lab/scripts/research-banner1.sh); driven with [`lab/scripts/banner1.sh`](../../lab/scripts/banner1.sh) (`url`/`repeater`/`relaunch`/`rows`/`aslist <List>`/`shot`/`okvnc`/`dbdump`/`pull`). Fixtures fully synthetic (`BAN1B-*`). OK clicked via VNC HID (banner button not AX-reachable). Artifacts (gitignored): `lab/artifacts/banner1-lab/` — screenshots `0706-today-preok*` / `0706-anytime-preok` and the before/after-OK `0706-preok`/`0706-postok` `.dump`s. Branch `mg/banner1b-anytime-membership`.
