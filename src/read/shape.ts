@@ -20,15 +20,18 @@
  * derived in the mapper with the Today view's own two-arm predicate.
  * - `stage` is DROPPED only where the enclosing node PROVABLY states it — the R6
  *   rule (drop only what the node provably says). That is the stage-PURE flat
- *   views (inbox, someday, logbook, trash) and the stage-named card sub-buckets
- *   (anytime/upcoming/someday/logbook/trash, which the bucketer splits BY stage).
- *   It is KEPT on every stage-MIXED or derived surface, including two flat
- *   catalogues that only LOOK stage-pure by name (R10.1): the `anytime` view
- *   carries arrived-dated stage-`upcoming` rows, and the `upcoming` view carries
- *   deadline-forecast stage-`anytime`/`someday` rows — dropping `stage` there
- *   would delete non-redundant information. Also kept on `today` (mixes upcoming +
- *   anytime-deadline rows), search, changes, the projects/areas listings, the card
- *   NODE, and detail.
+ *   views (inbox, `anytime`, someday, logbook, trash) and the stage-named card
+ *   sub-buckets (anytime/upcoming/someday/logbook/trash, which the bucketer splits
+ *   BY stage). The `anytime` catalogue is stage-PURE (R10.2): every member is an
+ *   Anytime-view row (ANYTIME_SELF) — undated-active, arrived-active, or arrived
+ *   someday-scheduled — and an ARRIVED dated row derives `anytime` (Upcoming is
+ *   STRICTLY FUTURE, UPC1), so the field is redundant there.
+ *   `stage` is KEPT on the stage-MIXED or derived surfaces: the `upcoming` view
+ *   carries deadline-forecast stage-`anytime`/`someday` rows alongside its
+ *   future-dated stage-`upcoming` ones — dropping `stage` there would delete
+ *   non-redundant information — plus `today` (mixes upcoming + anytime-deadline
+ *   rows), search, changes, the projects/areas listings, the card NODE, and
+ *   detail.
  * - the `today`/`evening` markers are DROPPED inside the `today` view's own
  *   sections (the section key states it) and KEPT everywhere else. A logbook/trash
  *   item is never a Today member, so its markers are dropped with it.
@@ -198,6 +201,10 @@ function stageOf(s: Obj): ReturnType<typeof deriveStage> {
     start: s["start"] as "inbox" | "active" | "someday",
     startDate: (s["startDate"] as string | null) ?? null,
     repeating: { isTemplate },
+    // The presence-keyed Today marker (stamped at materialize with the response
+    // clock) discriminates an ARRIVED dated row (→ anytime) from a strictly-
+    // future one (→ upcoming). Read BEFORE the marker is stripped downstream.
+    today: s["today"] === true,
   });
 }
 
@@ -371,11 +378,14 @@ const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 /** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
 const AREA_PROJECTS_DROP: ItemDrop = { area: true };
 /**
- * Anytime sidebar-section items: drop area, but KEEP `stage` — the Anytime view
- * is stage-MIXED (it also carries arrived-dated stage-`upcoming` rows), so `stage`
- * is not implied by the section (R10.1).
+ * Anytime sidebar-section items: stage-PURE → drop area + the section-implied
+ * stage (R10.2). Every Anytime-view member (ANYTIME_SELF: undated-active,
+ * arrived-active, arrived someday-scheduled) derives `anytime` — an ARRIVED
+ * dated row is Anytime, not Upcoming (Upcoming is STRICTLY FUTURE, UPC1) — and
+ * repeating templates are excluded from the view (NOT_TEMPLATE), so no
+ * stage-`upcoming` row can appear here.
  */
-const ANYTIME_SECTION_DROP: ItemDrop = { area: true };
+const ANYTIME_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** Someday sidebar-section items: stage-PURE → drop area + the bucket-implied stage. */
 const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and markers. */
@@ -492,9 +502,10 @@ function shapeSections(sections: unknown, drop: ItemDrop, compact: boolean): unk
 
 /**
  * The flat, mixed-provenance list kinds mapped to their drop spec. Only the
- * stage-PURE catalogues (inbox/someday/logbook/trash) drop the bucket-implied
- * `stage`. `upcoming` KEEPS it (R10.1): the Upcoming view is stage-mixed — it
- * carries deadline-forecast stage-`anytime`/`someday` rows alongside dated
+ * stage-PURE catalogues (inbox/someday/logbook/trash; the section-based `anytime`
+ * is pure too, handled via shapeSections below) drop the bucket-implied `stage`.
+ * `upcoming` KEEPS it (R10.2): the Upcoming view is stage-mixed — it carries
+ * deadline-forecast stage-`anytime`/`someday` rows alongside future-dated
  * stage-`upcoming` ones. The mixed/derived surfaces (search/changes/projects)
  * keep it too.
  */
@@ -525,7 +536,7 @@ export function shapeReadPayload(kind: string, data: unknown, full: boolean): un
     return shapeTodayView(data as Obj, compact);
   }
   if (kind === "anytime" && Array.isArray(data)) {
-    return shapeSections(data, ANYTIME_SECTION_DROP, compact); // stage-mixed → keep stage
+    return shapeSections(data, ANYTIME_SECTION_DROP, compact); // stage-pure → drop stage
   }
   if (kind === "someday" && Array.isArray(data)) {
     return shapeSections(data, SOMEDAY_SECTION_DROP, compact); // stage-pure → drop stage

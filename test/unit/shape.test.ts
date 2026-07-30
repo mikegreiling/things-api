@@ -310,12 +310,12 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(row["heading"]).toBeDefined();
   });
 
-  it("anytime section drops area but KEEPS stage (stage-mixed, R10.1); someday drops both", () => {
+  it("anytime & someday sections both drop area + stage (both stage-pure, R10.2)", () => {
     const sections = [{ area: { uuid: "area-1", title: "Work" }, items: [todo()] }];
     const anytime = shapeReadPayload("anytime", sections, true) as Obj[];
     const aItem = (anytime[0]!["items"] as Obj[])[0]!;
     expect("area" in aItem).toBe(false);
-    expect(aItem["stage"]).toBe("anytime"); // R10.1: mixed catalogue → stage KEPT
+    expect("stage" in aItem).toBe(false); // R10.2: anytime is stage-pure → dropped
     expect(aItem["project"]).toBeDefined();
     expect(aItem["heading"]).toBeDefined();
     expect(anytime[0]!["area"]).toEqual({ uuid: "area-1", title: "Work" });
