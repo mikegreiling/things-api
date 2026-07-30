@@ -85,6 +85,21 @@ interface TaskCommon {
    * TodayView.evening for UI-faithful placement.
    */
   todaySection: TodaySection | null;
+  /**
+   * Presence-keyed Today-view marker (`true` or absent) — derived with the Today
+   * view's own two-arm membership (a scheduled `startDate <= today`, OR an
+   * undated due/overdue deadline that is not suppressed; see
+   * src/read/stage.ts and views.ts todayView). It is a SEPARATE axis from
+   * {@link stage-taxonomy}: an item can be `anytime`/`someday`/`inbox`/`upcoming`
+   * and still be in Today. Set only when true (never `false`).
+   */
+  today?: true;
+  /**
+   * Presence-keyed This-Evening marker (`true` or absent) — the evening
+   * sub-section of Today (`startBucket=1` AND `startDate` exactly today). Implies
+   * {@link TaskCommon.today}. Set only when true.
+   */
+  evening?: true;
   deadline: IsoDate | null;
   /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
   reminder: ReminderTime | null;

@@ -516,13 +516,13 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // focus directly (the project's own focus is inherited by all, suppressed).
     const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(direct.stdout).data.view.active.map((i: { title: string }) => i.title),
+      JSON.parse(direct.stdout).data.view.anytime.map((i: { title: string }) => i.title),
     ).toEqual(["child-focus"]);
     // --untagged (direct-only) keeps the child with no direct tag, even though
     // it inherits focus from the project.
     const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(untagged.stdout).data.view.active.map((i: { title: string }) => i.title),
+      JSON.parse(untagged.stdout).data.view.anytime.map((i: { title: string }) => i.title),
     ).toEqual(["child-bare"]);
   });
 
@@ -541,7 +541,7 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     tagTask(fx.db, buried, focus);
     const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
     const data = JSON.parse(json.stdout).data.view;
-    expect(data.active.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
+    expect(data.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
     expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
     const all = JSON.stringify(data);
     expect(all).not.toContain("buried-focus");
@@ -1540,7 +1540,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       ]).stdout,
     );
     expect(json.data.view.projects).toHaveLength(2);
-    expect(json.data.view.active).toHaveLength(3);
+    expect(json.data.view.anytime).toHaveLength(3);
     expect(json.meta.truncation).toEqual({
       // Aggregate counts roll the per-block totals up (2+3 shown of 35+35).
       shown: 5,
@@ -1557,7 +1557,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
     expect(all.data.view.projects).toHaveLength(35);
-    expect(all.data.view.active).toHaveLength(35);
+    expect(all.data.view.anytime).toHaveLength(35);
     expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
@@ -1589,7 +1589,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const json = JSON.parse(
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
-    expect(json.data.view.active).toHaveLength(60);
+    expect(json.data.view.anytime).toHaveLength(60);
     expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
@@ -2112,7 +2112,7 @@ describe("overdue in container views (cli)", () => {
       runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
     );
     expect(env.data.view.project.title).toBe("Launch");
-    expect(env.data.view.active.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
+    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
     // Phase 2 collapsed (no surviving child); Phase 1 kept.
     expect(env.data.view.headings).toHaveLength(1);
     expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
@@ -2140,7 +2140,7 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.view.active.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
+    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
     expect(env.data.view.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
     const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
     expect(tty).not.toContain("buried-overdue");
@@ -2227,8 +2227,12 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect(crow.uuid).toBeDefined();
     expect(crow.title).toBe("capture");
     expect("status" in crow).toBe(false); // open
-    expect("logged" in crow).toBe(false); // false
-    expect("trashed" in crow).toBe(false); // false
+    // R10: start/logged/trashed replaced by the derived `stage`; the inbox
+    // catalogue is stage-scoped, so `stage` itself is bucket-implied (dropped).
+    expect("start" in crow).toBe(false);
+    expect("logged" in crow).toBe(false);
+    expect("trashed" in crow).toBe(false);
+    expect("stage" in crow).toBe(false); // inbox implies it
     expect("created" in crow).toBe(false);
     expect("modified" in crow).toBe(false);
     expect("repeating" in crow).toBe(false); // all-false omitted
@@ -2236,8 +2240,10 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     const full = JSON.parse(runCli(["inbox", "--full", "--json", "--db", fx.path]).stdout);
     const frow = full.data.items[0];
     expect(frow.status).toBe("open");
-    expect(frow.logged).toBe(false);
-    expect(frow.trashed).toBe(false);
+    expect("start" in frow).toBe(false);
+    expect("logged" in frow).toBe(false);
+    expect("trashed" in frow).toBe(false);
+    expect("stage" in frow).toBe(false); // still bucket-implied under --full
     expect("created" in frow).toBe(true);
     expect("modified" in frow).toBe(true);
   });
@@ -2352,16 +2358,19 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect(detail.data.item.checklist.items).toHaveLength(2);
   });
 
-  it("the trash view drops the implied trashed flag; search keeps it to disambiguate", () => {
+  it("the trash view drops the implied stage; search keeps stage to disambiguate", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "gone forever", trashed: true });
 
     const trash = JSON.parse(runCli(["trash", "--json", "--db", fx.path]).stdout);
+    // R10: trashed is gone; the trash view implies the stage, so it is dropped.
     expect("trashed" in trash.data.items[0]).toBe(false);
+    expect("stage" in trash.data.items[0]).toBe(false);
 
     const search = JSON.parse(
       runCli(["search", "gone forever", "--trashed", "--json", "--db", fx.path]).stdout,
     );
-    expect(search.data.items[0].trashed).toBe(true);
+    // On the mixed search surface the derived stage IS kept to disambiguate.
+    expect(search.data.items[0].stage).toBe("trash");
   });
 });

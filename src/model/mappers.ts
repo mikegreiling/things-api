@@ -34,6 +34,8 @@ export interface TaskRow {
   startBucket: number | null;
   reminderTime: number | null;
   deadline: number | null;
+  /** Dismissed-deadline suppression marker (packed date) — gates the Today deadline arm. */
+  deadlineSuppressionDate: number | null;
   index: number | null;
   todayIndex: number | null;
   area: string | null;
@@ -135,8 +137,37 @@ function mapRepeating(row: TaskRow): RepeatingInfo {
   return info;
 }
 
+/**
+ * The presence-keyed Today / This-Evening markers, derived with the Today view's
+ * OWN two-arm membership (src/read/views.ts todayView) so a marked item always
+ * agrees with the view: a SCHEDULED arm (a `startDate <= today` on a start=active
+ * or start=someday row) OR a DEADLINE arm (an undated row whose deadline is
+ * due/overdue and not dismissed — the `deadlineSuppressionDate` guard, oddities
+ * §8e). Evening is the This-Evening sub-section (`startBucket=1` AND `startDate`
+ * exactly today), and implies today. Repeating templates are never in Today
+ * (the view excludes them), so they never mark. The closed-and-swept (logged)
+ * gate is applied downstream at the emit boundary (which knows `stage`), since
+ * the logbook boundary is not visible here.
+ */
+function todayMarkers(row: TaskRow, packedToday: number): { today?: true; evening?: true } {
+  const isTemplate = row.rt1_recurrenceRule !== null || row.repeater !== null;
+  if (isTemplate) return {};
+  const start = row.start ?? 0;
+  const scheduledArm =
+    row.startDate !== null && row.startDate <= packedToday && (start === 1 || start === 2);
+  const deadlineArm =
+    row.startDate === null &&
+    row.deadline !== null &&
+    row.deadline <= packedToday &&
+    (row.deadlineSuppressionDate === null || row.deadlineSuppressionDate < row.deadline);
+  if (!scheduledArm && !deadlineArm) return {};
+  const evening = row.startBucket === 1 && start === 1 && row.startDate === packedToday;
+  return evening ? { today: true, evening: true } : { today: true };
+}
+
 function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number) {
   return {
+    ...todayMarkers(row, packedToday),
     uuid: row.uuid,
     title: row.title ?? "",
     notes: row.notes ?? "",
