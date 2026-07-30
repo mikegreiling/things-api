@@ -2242,13 +2242,86 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect("modified" in frow).toBe(true);
   });
 
-  it("compact notes carry a first-line preview + notesTruncated marker", () => {
+  it("compact drops the notes string for a presence-keyed hasNotes marker; --full restores it", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "multi", start: "inbox", notes: "first line\nsecond line" });
-    const env = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
-    const row = env.data.items[0];
-    expect(row.notes).toBe("first line");
-    expect(row.notesTruncated).toBe(true);
+    seedTodo(fx.db, { title: "bare", start: "inbox", notes: "" });
+    const compact = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
+    const c: Record<string, Record<string, unknown>> = Object.fromEntries(
+      compact.data.items.map((i: Record<string, unknown>) => [i["title"], i]),
+    );
+    // Compact carries no notes string and no truncation marker — just hasNotes.
+    expect("notes" in c["multi"]!).toBe(false);
+    expect("notesTruncated" in c["multi"]!).toBe(false);
+    expect(c["multi"]!["hasNotes"]).toBe(true);
+    // A notes-less row carries no hasNotes marker (presence-keyed).
+    expect("hasNotes" in c["bare"]!).toBe(false);
+    expect("notes" in c["bare"]!).toBe(false);
+
+    // --full carries the complete notes string (omit-empty) and no hasNotes.
+    const full = JSON.parse(runCli(["inbox", "--full", "--json", "--db", fx.path]).stdout);
+    const f: Record<string, Record<string, unknown>> = Object.fromEntries(
+      full.data.items.map((i: Record<string, unknown>) => [i["title"], i]),
+    );
+    expect(f["multi"]!["notes"]).toBe("first line\nsecond line");
+    expect("hasNotes" in f["multi"]!).toBe(false);
+    expect("notes" in f["bare"]!).toBe(false); // omit-empty drops ""
+  });
+
+  it("string tags: an item's tags are a plain array of names on every tier", () => {
+    fx = buildFixtureDb();
+    const t = seedTodo(fx.db, { title: "tagged", start: "inbox" });
+    const errand = seedTag(fx.db, "errand");
+    const home = seedTag(fx.db, "home");
+    tagTask(fx.db, t, errand);
+    tagTask(fx.db, t, home);
+    const compact = JSON.parse(runCli(["inbox", "--json", "--db", fx.path]).stdout);
+    expect(compact.data.items[0].tags).toEqual(["errand", "home"]);
+    const detail = JSON.parse(runCli(["todo", "show", t, "--json", "--db", fx.path]).stdout);
+    expect(detail.data.item.tags).toEqual(["errand", "home"]);
+  });
+
+  it("project todos counts fold into a presence-keyed {open,total}; leaf columns gone", () => {
+    // The counts are the app-maintained materialized leaf-action columns (to-do
+    // children only — headings and checklist items excluded by construction).
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Work");
+    // A project with 2 open to-dos (one carrying 3 checklist items) + 1 heading +
+    // 1 completed to-do. The app's leaf-action count is 3 to-dos (2 open + 1
+    // completed): the heading is a container and the checklist items are not
+    // TMTask rows, so both are excluded from the maintained column.
+    const proj = seedProject(fx.db, {
+      title: "Q3",
+      area,
+      untrashedLeafActionsCount: 3,
+      openUntrashedLeafActionsCount: 2,
+    });
+    const head = seedHeading(fx.db, { title: "Phase 1", project: proj });
+    void head;
+    const withList = seedTodo(fx.db, {
+      title: "a",
+      project: proj,
+      checklistItemsCount: 3,
+      openChecklistItemsCount: 3,
+    });
+    seedChecklistItem(fx.db, withList, "s1");
+    seedChecklistItem(fx.db, withList, "s2", { index: 1 });
+    seedChecklistItem(fx.db, withList, "s3", { index: 2 });
+    seedTodo(fx.db, { title: "b", project: proj });
+    seedTodo(fx.db, { title: "c done", project: proj, status: "completed" });
+
+    const env = JSON.parse(runCli(["projects", "--json", "--db", fx.path]).stdout);
+    const row = env.data.items.find((i: Record<string, unknown>) => i["title"] === "Q3");
+    expect(row.todos).toEqual({ open: 2, total: 3 });
+    expect("untrashedLeafActionsCount" in row).toBe(false);
+    expect("openUntrashedLeafActionsCount" in row).toBe(false);
+
+    // A project with no to-do children omits the key entirely (presence-keyed).
+    const empty = seedProject(fx.db, { title: "Empty", area });
+    void empty;
+    const env2 = JSON.parse(runCli(["projects", "--json", "--db", fx.path]).stdout);
+    const emptyRow = env2.data.items.find((i: Record<string, unknown>) => i["title"] === "Empty");
+    expect("todos" in emptyRow).toBe(false);
   });
 
   it("checklist counts are reshaped into a presence-keyed checklist object", () => {

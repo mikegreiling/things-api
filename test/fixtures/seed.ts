@@ -38,6 +38,14 @@ export interface SeedTaskOpts {
   /** The maintained checklist counters (the app keeps these on the row). */
   checklistItemsCount?: number;
   openChecklistItemsCount?: number;
+  /**
+   * The app-maintained materialized leaf-action counts on a PROJECT row (to-do
+   * children only — headings and checklist items are excluded by construction).
+   * Fixtures do not compute these from real children; set them explicitly to
+   * mirror what the app would maintain.
+   */
+  untrashedLeafActionsCount?: number;
+  openUntrashedLeafActionsCount?: number;
   /** Marks the row as a repeating template. */
   recurrenceRule?: boolean;
   /** Real XML plist rule blob (implies template); overrides recurrenceRule. */
@@ -62,7 +70,7 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
        checklistItemsCount, openChecklistItemsCount,
        rt1_repeatingTemplate, rt1_recurrenceRule,
        rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, NULL)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   ).run(
     uuid,
     type,
@@ -85,6 +93,8 @@ function insertTask(db: DatabaseSync, type: 0 | 1 | 2, opts: SeedTaskOpts): stri
     opts.area ?? null,
     opts.project ?? null,
     opts.heading ?? null,
+    opts.untrashedLeafActionsCount ?? 0,
+    opts.openUntrashedLeafActionsCount ?? 0,
     opts.checklistItemsCount ?? 0,
     opts.openChecklistItemsCount ?? 0,
     opts.repeatingTemplate ?? null,
