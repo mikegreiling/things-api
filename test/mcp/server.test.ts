@@ -974,9 +974,10 @@ describe("things MCP server", () => {
       await client.callTool({ name: "get_item", arguments: { uuid: tmpl } }),
     ) as Record<string, unknown>;
     // Template wire: presence of `repeating` MEANS template; the discriminators
-    // are gone; a template DETAIL nests latestInstance INSIDE repeating (the
-    // complete series object).
-    expect(template["repeating"]).toEqual({ nextOccurrence: "2026-08-01", latestInstance: newest });
+    // are gone. R12: the forward pointer `nextOccurrence` moved to the top-level
+    // `when`; `repeating` keeps the backward pointer `latestInstance` (detail).
+    expect(template["repeating"]).toEqual({ latestInstance: newest });
+    expect(template["when"]).toBe("2026-08-01");
     expect("instanceOf" in template).toBe(false);
     // Instance wire: flat instanceOf only, no `repeating`.
     const instance = textOf(

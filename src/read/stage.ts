@@ -105,3 +105,59 @@ export function deriveStage(item: StageInput): Stage {
   if (item.start === "someday") return "someday";
   return "anytime";
 }
+
+/**
+ * An item's TIME-AXIS POSITION (R12) — a presence-keyed value complementary to
+ * {@link Stage}. The doctrine line: **`stage` enumerates the sidebar BUCKETS an
+ * item lives in; `when` enumerates its TIME POSITIONS (today | evening | a future
+ * date).** Someday is deliberately NOT a `when` value — it is a bucket, so it
+ * lives on the `stage` axis.
+ *
+ * - `"evening"` — the This-Evening sub-bucket of Today (implies today);
+ * - `"today"` — in the Today view by ANY arm (an arrived `startDate`, or a
+ *   due/overdue undated deadline that is not suppressed — the same two-arm
+ *   predicate {@link isTodayMarked} / mappers `todayMarkers` derive);
+ * - a FUTURE ISO date — a strictly-future scheduled row (`startDate > today`), or
+ *   a repeating TEMPLATE's app-materialized next occurrence;
+ * - absent — unscheduled and not in Today (an unprojected template — paused /
+ *   after-completion — has none, and neither does a logged/trashed item).
+ */
+export type When = "today" | "evening" | IsoDate;
+
+/** The minimal shape {@link deriveWhen} reads (all fields off the materialized entity). */
+export interface WhenInput {
+  /** The derived {@link Stage} — gates out logbook/trash (never time-axis members). */
+  stage: Stage;
+  /** The presence-keyed Today marker (mappers `todayMarkers`) — reused, never re-derived. */
+  today?: boolean;
+  /** The presence-keyed This-Evening marker (implies today). */
+  evening?: boolean;
+  startDate: IsoDate | null;
+  /** A template's projected next occurrence (a future date), if it has one. */
+  repeating: { isTemplate: boolean; nextOccurrence?: IsoDate | null };
+}
+
+/**
+ * Derive an item's {@link When} from its materialized fields. PURE, and it REUSES
+ * the Today markers rather than re-deriving membership — so `when` ∈
+ * {`"today"`, `"evening"`} can NEVER disagree with Today-view membership (the same
+ * fact the star renders). See the type doc for the four positions.
+ */
+export function deriveWhen(item: WhenInput): When | undefined {
+  // Out of the time axis: a logged/trashed item is never a Today member and is no
+  // longer scheduled-forward — no `when`. (This is the same gate that strips the
+  // raw materialize-time markers from a logbook/trash row at the emit boundary.)
+  if (item.stage === "logbook" || item.stage === "trash") return undefined;
+  // Today membership rides the presence-keyed markers verbatim (evening ⊃ today).
+  if (item.evening === true) return "evening";
+  if (item.today === true) return "today";
+  // A repeating TEMPLATE sits at its projected next occurrence (a future date); an
+  // unprojected one (paused / after-completion) has none → absent.
+  if (item.repeating.isTemplate) return item.repeating.nextOccurrence ?? undefined;
+  // A dated, NON-today-marked row is strictly future: the marker's scheduled arm is
+  // EXACTLY `startDate <= today`, so `!today` on a dated row ⟺ `startDate > today`.
+  // Arrived dates never reach here — they carried the `today` marker and returned
+  // above.
+  if (item.startDate !== null) return item.startDate;
+  return undefined;
+}
