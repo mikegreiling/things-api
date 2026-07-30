@@ -41,8 +41,13 @@
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
  * - **todos counts** — a project's flat leaf-action counts → presence-keyed
  *   `todos: {open, total}` (omit when total 0).
- * - **repeating omission** — the all-false block is dropped; a template/instance
- *   keeps a minimal truthful object.
+ * - **repeating template/instance split (R11)** — the wire drops the
+ *   `isTemplate`/`isInstance` discriminators; key presence carries the fact. A
+ *   TEMPLATE keeps a nested `repeating: {nextOccurrence, paused?, deadlined?,
+ *   rule?}` (rule facts; presence MEANS template; `nextOccurrence` explicit-null
+ *   when unprojected). An INSTANCE keeps a flat `instanceOf: <templateUuid>` and
+ *   no `repeating`. A plain row keeps neither. A template DETAIL additionally
+ *   carries the flat `latestInstance` uuid (SL1). See {@link reshapeRepeatingWire}.
  * - **string tags** — `tags`/`inheritedTags` become plain arrays of names.
  * - **one project key** — a headed item's owning project (formerly
  *   `headingProject`) is merged into `project`; `headingProject` never appears.
@@ -138,26 +143,41 @@ function reshapeTodos(o: Obj): void {
 }
 
 /**
- * Reduce a `repeating` block to its minimal truthful object (universal across
- * tiers): the all-false block (a normal, non-repeating row) is dropped; a real
- * template/instance keeps only its true booleans and non-null values. Returns
- * the minimal object, or undefined when the whole block should be omitted.
+ * R11 — rewrite the internal `repeating` block into the wire's template/instance
+ * split, mutating `o` in place. The internal entity carries the full
+ * RepeatingInfo (`isTemplate`/`isInstance`/`templateUuid`/…); the wire loses the
+ * `isTemplate`/`isInstance` discriminators entirely and instead lets KEY
+ * PRESENCE carry the fact:
+ *
+ * - **Template** (`isTemplate`) → a nested `repeating` object of the rule facts:
+ *   `{nextOccurrence, paused?, deadlined?, rule?}`. Presence of `repeating` MEANS
+ *   template. The inner false booleans are default-pruned (presence-keyed);
+ *   `nextOccurrence` stays an EXPLICIT null when there is no projected date
+ *   (paused / after-completion — the `area: null` section precedent, since
+ *   absence would be ambiguous). `rule` and the flat `latestInstance` hoist are
+ *   detail-only (populated by src/read/detail.ts). The nested object is not a
+ *   recognized entity, so omit-empty does NOT prune its `nextOccurrence: null`.
+ * - **Instance** (`isInstance`) → a flat presence-keyed `instanceOf:
+ *   <templateUuid>` and NO `repeating` object. Presence of `instanceOf` MEANS
+ *   instance.
+ * - **Plain** (neither) → neither key.
  */
-function reshapeRepeating(rep: unknown): Obj | undefined {
-  if (rep === null || typeof rep !== "object") return undefined;
+function reshapeRepeatingWire(o: Obj): void {
+  const rep = o["repeating"];
+  delete o["repeating"];
+  if (rep === null || typeof rep !== "object") return;
   const r = rep as Obj;
-  const isTemplate = r["isTemplate"] === true;
-  const isInstance = r["isInstance"] === true;
-  if (!isTemplate && !isInstance) return undefined; // all-false → omit
-  const out: Obj = {};
-  if (isTemplate) out["isTemplate"] = true;
-  if (isInstance) out["isInstance"] = true;
-  if (typeof r["templateUuid"] === "string") out["templateUuid"] = r["templateUuid"];
-  if (r["nextOccurrence"] != null) out["nextOccurrence"] = r["nextOccurrence"];
-  if (r["paused"] === true) out["paused"] = true;
-  if (r["deadlined"] === true) out["deadlined"] = true;
-  if (r["rule"] != null) out["rule"] = r["rule"];
-  return out;
+  if (r["isTemplate"] === true) {
+    const out: Obj = { nextOccurrence: r["nextOccurrence"] ?? null }; // explicit null
+    if (r["paused"] === true) out["paused"] = true;
+    if (r["deadlined"] === true) out["deadlined"] = true;
+    if (r["rule"] != null) out["rule"] = r["rule"]; // detail read only
+    o["repeating"] = out;
+    // The SL1 "Show Latest" pick — detail-only; a flat wire key, not nested.
+    if (typeof r["latestInstance"] === "string") o["latestInstance"] = r["latestInstance"];
+  } else if (r["isInstance"] === true) {
+    if (typeof r["templateUuid"] === "string") o["instanceOf"] = r["templateUuid"];
+  }
 }
 
 /** The R10 stage input read straight off a materialized task entity. */
@@ -195,9 +215,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   reshapeChecklist(o);
   reshapeTodos(o);
   flattenTags(o);
-  const rep = reshapeRepeating(o["repeating"]);
-  if (rep === undefined) delete o["repeating"];
-  else o["repeating"] = rep;
+  reshapeRepeatingWire(o);
   if (o["project"] == null && o["headingProject"] != null) o["project"] = o["headingProject"];
   delete o["headingProject"];
 

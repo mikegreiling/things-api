@@ -183,13 +183,19 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
     }
   });
 
-  it("detail nests checklist items and reshapes repeating", () => {
+  it("detail nests checklist items and reshapes repeating (R11 template wire)", () => {
     const detail = todo({
       checklist: [
         { title: "a", status: "completed" },
         { title: "b", status: "open" },
       ],
-      repeating: { isTemplate: true, isInstance: false, templateUuid: null, paused: true },
+      repeating: {
+        isTemplate: true,
+        isInstance: false,
+        templateUuid: null,
+        nextOccurrence: "2026-08-01",
+        paused: true,
+      },
     });
     const out = shapeReadPayload("detail", detail, false) as Obj;
     expect(out["checklist"]).toEqual({
@@ -200,7 +206,12 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
         { title: "b", status: "open" },
       ],
     });
-    expect(out["repeating"]).toEqual({ isTemplate: true, paused: true });
+    // R11: the wire loses isTemplate/isInstance — presence of `repeating` MEANS
+    // template; it carries only the rule facts (false booleans default-pruned).
+    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01", paused: true });
+    expect("isTemplate" in (out["repeating"] as Obj)).toBe(false);
+    expect("isInstance" in (out["repeating"] as Obj)).toBe(false);
+    expect("instanceOf" in out).toBe(false);
     expect(out["stage"]).toBe("upcoming"); // a repeating template → upcoming
   });
 
@@ -416,6 +427,103 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
     expect((out["project"] as Obj)["stage"]).toBe("anytime");
+  });
+});
+
+describe("shapeReadPayload — R11 repeating template/instance split", () => {
+  it("template LIST row: repeating present with rule facts; no discriminators, no latestInstance", () => {
+    const row = first(
+      shapeReadPayload(
+        "search", // mixed list → compact row
+        [
+          todo({
+            uuid: "tmpl-1",
+            repeating: {
+              isTemplate: true,
+              isInstance: false,
+              templateUuid: null,
+              nextOccurrence: "2026-08-01",
+              deadlined: true,
+            },
+          }),
+        ],
+        false,
+      ),
+    );
+    expect(row["repeating"]).toEqual({ nextOccurrence: "2026-08-01", deadlined: true });
+    // Presence of `repeating` MEANS template — the discriminators are gone.
+    expect("isTemplate" in (row["repeating"] as Obj)).toBe(false);
+    expect("isInstance" in (row["repeating"] as Obj)).toBe(false);
+    // latestInstance is DETAIL-only — never on a list/card row.
+    expect("latestInstance" in row).toBe(false);
+    // A template is not an instance.
+    expect("instanceOf" in row).toBe(false);
+  });
+
+  it("paused template: nextOccurrence stays EXPLICIT null + paused true", () => {
+    const out = shapeReadPayload(
+      "detail",
+      todo({
+        repeating: {
+          isTemplate: true,
+          isInstance: false,
+          templateUuid: null,
+          nextOccurrence: null, // paused / after-completion → no projected date
+          paused: true,
+        },
+      }),
+      false,
+    ) as Obj;
+    // Explicit null (the `area: null` precedent) — absence would be ambiguous;
+    // omit-empty does NOT prune it (the nested `repeating` is not an entity).
+    expect(out["repeating"]).toEqual({ nextOccurrence: null, paused: true });
+    expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(true);
+  });
+
+  it("instance row: flat instanceOf only, no repeating object", () => {
+    const row = first(
+      shapeReadPayload(
+        "search",
+        [
+          todo({
+            uuid: "inst-1",
+            repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl-1" },
+          }),
+        ],
+        false,
+      ),
+    );
+    expect(row["instanceOf"]).toBe("tmpl-1");
+    // Presence of `instanceOf` MEANS instance — no `repeating` object at all.
+    expect("repeating" in row).toBe(false);
+    expect("latestInstance" in row).toBe(false);
+  });
+
+  it("plain row: neither repeating nor instanceOf", () => {
+    const row = first(shapeReadPayload("search", [todo()], false));
+    expect("repeating" in row).toBe(false);
+    expect("instanceOf" in row).toBe(false);
+    expect("latestInstance" in row).toBe(false);
+  });
+
+  it("template detail carries the flat latestInstance hoisted off the internal carrier", () => {
+    const out = shapeReadPayload(
+      "detail",
+      todo({
+        repeating: {
+          isTemplate: true,
+          isInstance: false,
+          templateUuid: null,
+          nextOccurrence: "2026-08-01",
+          latestInstance: "inst-99",
+        },
+      }),
+      false,
+    ) as Obj;
+    // latestInstance is a FLAT wire key, not nested inside `repeating`.
+    expect(out["latestInstance"]).toBe("inst-99");
+    expect("latestInstance" in (out["repeating"] as Obj)).toBe(false);
+    expect(out["repeating"]).toEqual({ nextOccurrence: "2026-08-01" });
   });
 });
 
