@@ -806,7 +806,9 @@ export function computeReorderPre(
     params.scope === "evening" ||
     params.scope === "container-day" ||
     params.scope === "loose-day" ||
-    params.scope === "heading-day"
+    params.scope === "heading-day" ||
+    params.scope === "area-day" ||
+    params.scope === "upcoming-day"
       ? "todayIndex"
       : "index";
 
@@ -1037,6 +1039,88 @@ export function computeReorderPre(
             uuid,
             "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
               "so loose future-day ordering cannot include it",
+          );
+        }
+      }
+      break;
+    }
+    case "area-day": {
+      // An AREA's direct dated children sharing ONE future day (ORDFIN1 Arm 3),
+      // ranked on todayIndex. Delivered by the park→container-day→restore compound
+      // (reorder.ts) — the whole same-day area-direct group is parked as one unit,
+      // so every same-day direct child is a member (an un-parked one would keep a
+      // stale todayIndex and corrupt the result). The destructive AREA specifier
+      // (§9f) is NEVER used. Templates excluded by NOT_TEMPLATE_ROW.
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type = 0 AND area = ? AND project IS NULL AND heading IS NULL " +
+            "AND startBucket = 0 AND startDate = ?",
+          [containerUuid ?? "", first.startDate],
+          "todayIndex",
+        );
+      }
+      for (const uuid of params.uuids) {
+        const t = db
+          .prepare(
+            "SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ? AND type = 0",
+          )
+          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
+        if (t !== undefined && (t.rule !== null || t.repeater !== null)) {
+          rejectedCandidates.set(
+            uuid,
+            "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
+              "so direct-area future-day ordering cannot include it",
+          );
+        }
+      }
+      break;
+    }
+    case "upcoming-day": {
+      // A CROSS-CONTAINER future day-group (ORDFIN1 Arm 4): any mix of loose,
+      // project-child, headed-child, and area-child to-dos sharing ONE future day,
+      // ranked on todayIndex. Enumerated across ALL containers (parked as one unit
+      // — the reorder.ts compound captures each member's origin, so the restore leg
+      // re-homes it). Templates excluded by NOT_TEMPLATE_ROW; a requested template
+      // or a scheduled PROJECT row (type=1, not parkable — UPCORD1) is refused with
+      // a clear reason (a same-day PROJECT SIBLING is a fail-closed hazard the
+      // orchestrator surfaces, since it cannot be parked and would corrupt the axis).
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type = 0 AND startBucket = 0 AND startDate = ?",
+          [first.startDate],
+          "todayIndex",
+        );
+      }
+      for (const uuid of params.uuids) {
+        const t = db
+          .prepare("SELECT type, rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?")
+          .get(uuid) as { type: number; rule: unknown; repeater: unknown } | undefined;
+        if (t === undefined) continue;
+        if (t.type === 1) {
+          rejectedCandidates.set(
+            uuid,
+            "is a scheduled project row — projects are not parkable (UPCORD1), so cross-container " +
+              "day ordering cannot include it",
+          );
+        } else if (t.rule !== null || t.repeater !== null) {
+          rejectedCandidates.set(
+            uuid,
+            "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
+              "so cross-container day ordering cannot include it",
           );
         }
       }

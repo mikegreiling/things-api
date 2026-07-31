@@ -1270,10 +1270,15 @@ export function planUndo(
         number,
       ][];
       if (ranked.length === 0) return irreversible("no pre-ranks were captured");
-      // loose-day / heading-day pre-ranks are todayIndex values: a tie means the
-      // prior order was genuinely undetermined, so the exact position cannot be
-      // reconstructed (the area.reorder precedent for all-tied ranks).
-      if (requested.scope === "loose-day" || requested.scope === "heading-day") {
+      // The park-sort-restore / heading-day pre-ranks are todayIndex values: a tie
+      // means the prior order was genuinely undetermined, so the exact position
+      // cannot be reconstructed (the area.reorder precedent for all-tied ranks).
+      if (
+        requested.scope === "loose-day" ||
+        requested.scope === "area-day" ||
+        requested.scope === "upcoming-day" ||
+        requested.scope === "heading-day"
+      ) {
         const values = ranked.map(([, r]) => r);
         if (new Set(values).size !== values.length) {
           return irreversible(
@@ -1285,10 +1290,14 @@ export function planUndo(
       const uuids = ranked.toSorted((a, b) => a[1] - b[1]).map(([id]) => id);
       const params: Record<string, unknown> = { scope: requested.scope, uuids };
       if (requested.container !== undefined) params["container"] = requested.container;
-      if (requested.scope === "loose-day") {
+      if (
+        requested.scope === "loose-day" ||
+        requested.scope === "area-day" ||
+        requested.scope === "upcoming-day"
+      ) {
         notes.push(
-          "the inverse re-runs the UPCORD1 park-sort-unpark protocol with the prior order — it " +
-            "creates (and trashes) a fresh scratch project of its own",
+          "the inverse re-runs the ORDFIN1 park-sort-restore compound with the prior order — it " +
+            "creates (and trashes) a fresh scratch project of its own (needs allow-experimental)",
         );
       }
       if (requested.scope === "heading-day") {

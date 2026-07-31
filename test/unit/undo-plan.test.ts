@@ -548,7 +548,7 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
     });
   });
 
-  it("loose-day reorder inverts to the pre-rank order, re-running the park-sort-unpark protocol", () => {
+  it("loose-day reorder inverts to the pre-rank order, re-running the park-sort-restore protocol", () => {
     const plan = planUndo(
       record({
         op: "reorder",
@@ -563,7 +563,7 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
       op: "reorder",
       params: { scope: "loose-day", uuids: ["C", "B", "A"] },
     });
-    expect(plan.notes.join(" ")).toContain("park-sort-unpark");
+    expect(plan.notes.join(" ")).toContain("park-sort-restore");
   });
 
   it("loose-day reorder with an all-tied prior order is irreversible", () => {
@@ -572,6 +572,56 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
         op: "reorder",
         uuid: null,
         requested: { scope: "loose-day", uuids: ["A", "B"] },
+        pre: { A: 0, B: 0 },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("irreversible");
+    expect(plan.reason).toContain("all-tied");
+  });
+
+  it("area-day reorder inverts to the pre-rank order, preserving the area container", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "area-day", container: { uuid: "area-1" }, uuids: ["A", "C"] },
+        pre: { A: 30, B: 20, C: 10 },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "area-day", uuids: ["C", "B", "A"], container: { uuid: "area-1" } },
+    });
+    expect(plan.notes.join(" ")).toContain("park-sort-restore");
+  });
+
+  it("upcoming-day reorder inverts to the pre-rank order (container-less)", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "upcoming-day", uuids: ["A", "C"] },
+        pre: { A: 30, B: 20, C: 10 },
+      }),
+      NOW,
+    );
+    expect(plan.kind).toBe("invertible");
+    expect(plan.steps[0]).toEqual({
+      op: "reorder",
+      params: { scope: "upcoming-day", uuids: ["C", "B", "A"] },
+    });
+    expect(plan.notes.join(" ")).toContain("park-sort-restore");
+  });
+
+  it("upcoming-day reorder with an all-tied prior order is irreversible", () => {
+    const plan = planUndo(
+      record({
+        op: "reorder",
+        uuid: null,
+        requested: { scope: "upcoming-day", uuids: ["A", "B"] },
         pre: { A: 0, B: 0 },
       }),
       NOW,

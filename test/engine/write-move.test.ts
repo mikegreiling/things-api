@@ -18,7 +18,12 @@ import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import type { ResolvedScope } from "../../src/read/scope.ts";
 import { encodePackedDate } from "../../src/model/dates.ts";
-import { runInPlaceReorder, runProjectMove, runTodoMove } from "../../src/write/move.ts";
+import {
+  runInPlaceReorder,
+  runProjectMove,
+  runTodoMove,
+  type MovePosition,
+} from "../../src/write/move.ts";
 import type { WriteDeps } from "../../src/write/pipeline.ts";
 import type { WriteVector } from "../../src/write/vectors/types.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -1004,15 +1009,14 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     }
   });
 
-  it("NO route ever selects a de-scheduling bounce for a dated movee (direct-area hazard)", async () => {
+  it("a dated direct-area movee routes to the SAFE area-day compound, NEVER a de-scheduling bounce", async () => {
     // THE de-schedule hazard: the area-someday (and project-someday) reorder is a
-    // when= bounce whose away leg `when=anytime` CLEARS a startDate. A dated
-    // movee must NEVER reach it. Post-fix a direct-area to-do's scheduled bucket
-    // is app-default (no wired surface), so the planner REFUSES rather than
-    // routing to the bounce — and nothing mutates. (Even pre-fix the reorder
-    // member-enumeration's `startDate IS NULL` guard would have rejected the
-    // dated movee before the bounce ran; this pins the classifier so the planner
-    // never even proposes the destructive scope.)
+    // when= bounce whose away leg `when=anytime` CLEARS a startDate — a dated
+    // movee must NEVER reach it. A direct-area scheduled-day child now routes to
+    // the ORDFIN1 Arm 3 `area-day` park-sort-restore compound (park into a scratch
+    // PROJECT → container-day reorder → restore to the area), which preserves the
+    // date. The dry-run pins the classifier so the planner never proposes the
+    // destructive bounce.
     const area = seedArea(fixture.db, "A");
     const dated = seedTodo(fixture.db, {
       title: "dated",
@@ -1021,16 +1025,18 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
       startDate: "2026-07-20",
       todayIndex: 1,
     });
-    const r = await runInPlaceReorder(deps(), "todo.move", {
-      uuids: [dated],
-      position: { at: "first" },
-    });
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("unsupported");
-      expect(r.detail).toContain("scheduled");
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [dated], position: { at: "first" } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") {
+      expect(r.plan.placement).toContain("scope=area-day");
+      expect(r.plan.placement).not.toContain("someday");
     }
-    // Untouched: still start=2 + its future date (no when= de-schedule ran).
+    // Untouched by the dry-run: still start=2 + its future date.
     const row = fixture.db
       .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
       .get(dated) as {
@@ -1105,7 +1111,10 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
     expect(placement).not.toContain("container-day");
   });
 
-  it("a headed EVENING child stays app-default (display axis GUI-ambiguous)", async () => {
+  it("a headed EVENING child routes to the shipped evening bounce (ORDFIN1 Arm 2b)", async () => {
+    // ORDFIN1 Arm 2b: the today↔evening bounce preserves a headed child's heading
+    // FK byte-identical, so the `evening` scope orders it unchanged — no new
+    // machinery, no display-axis ambiguity. (Was previously app-default-refused.)
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     const e1 = seedTodo(fixture.db, {
@@ -1115,10 +1124,23 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
       evening: true,
       todayIndex: 10,
     });
-    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [e1] }, { dryRun: true });
-    // app-default bucket → an explicit reorder is honestly refused (not routed).
+    expect(await routedScope([e1])).toContain("scope=evening");
+  });
+
+  it("a headed EVENING child degrades to app-default when bounce is disabled (never destructive)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const e1 = seedTodo(fixture.db, {
+      title: "e1",
+      heading,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    const noBounce = deps({ config: { ...config(), bounceEnabled: false } });
+    const r = await runInPlaceReorder(noBounce, "todo.move", { uuids: [e1] }, { dryRun: true });
     expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") expect(r.detail).toContain("evening");
+    if (r.kind === "move-refused") expect(r.detail).toContain("bounce");
   });
 
   it("a PROJECT-child evening item routes to the shipped evening bounce (Arm D)", async () => {
@@ -1158,5 +1180,253 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
     const r = await runInPlaceReorder(noBounce, "todo.move", { uuids: [e1] }, { dryRun: true });
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") expect(r.detail).toContain("bounce");
+  });
+});
+
+// ------------------ ORDFIN1 planner routing (area-day + upcoming-day compounds)
+
+/**
+ * The full ORDFIN1 park-sort-restore harness for the move planner: url-scheme fake
+ * for the scratch project.add + origin-aware park/restore todo.move legs (schedule
+ * preserved, FK re-homed, todayIndex NEVER touched on a restore), applescript fake
+ * for the native container-day reorder (todayIndex re-rank) + project.delete trash.
+ */
+function dayCompoundMoveVectors() {
+  const calls: string[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "project.add": { support: "yes", disruption: 0, validation: "validated" },
+      "todo.move": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as {
+        title?: string;
+        uuid: string;
+        project?: { uuid: string };
+        area?: { uuid: string };
+        heading?: string;
+        loose?: boolean;
+      };
+      if (inv.op === "project.add") {
+        seedProject(fixture.db, {
+          title: p.title ?? "",
+          creationDate: Math.floor(NOW.getTime() / 1000),
+        });
+      } else if (inv.op === "todo.move") {
+        if (p.heading !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET heading=?, project=NULL, area=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.heading, modClock++, p.uuid);
+        } else if (p.project !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=?, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.project.uuid, modClock++, p.uuid);
+        } else if (p.area !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET area=?, project=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.area.uuid, modClock++, p.uuid);
+        } else if (p.loose === true) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.delete": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as { uuid: string; uuids?: string[] };
+      if (inv.op === "reorder") {
+        let rank = 1;
+        for (const uuid of p.uuids ?? []) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      } else if (inv.op === "project.delete") {
+        fixture.db
+          .prepare("UPDATE TMTask SET trashed=1, userModificationDate=? WHERE uuid=?")
+          .run(modClock++, p.uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
+describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
+  async function routedScope(uuids: string[], position?: MovePosition): Promise<string> {
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      position !== undefined ? { uuids, position } : { uuids },
+      { dryRun: true },
+    );
+    if (r.kind !== "move-dry-run") throw new Error(`expected move-dry-run, got ${r.kind}`);
+    return r.plan.placement;
+  }
+
+  it("a same-area future-day group routes to area-day (single-container path)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    expect(await routedScope([a, b])).toContain("scope=area-day");
+  });
+
+  it("a CROSS-CONTAINER future-day group routes to upcoming-day (not the span-refusal)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const projChild = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    expect(await routedScope([projChild, areaChild])).toContain("scope=upcoming-day");
+  });
+
+  it("a cross-container group on DIFFERENT days still fails closed (span refusal, not upcoming-day)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const projChild = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-21", // a DIFFERENT future day
+      todayIndex: 20,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [projChild, areaChild] });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("span different containers");
+  });
+
+  it("runs the cross-container upcoming-day compound end-to-end, restoring each FK and the order", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const area = seedArea(fixture.db, "A");
+    const loose = seedTodo(fixture.db, {
+      title: "loose",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 40,
+    });
+    const projChild = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 30,
+    });
+    const headedChild = seedTodo(fixture.db, {
+      title: "hc",
+      heading,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const { vectors, calls } = dayCompoundMoveVectors();
+    // Place the block loose,areaChild at the TOP in selection order.
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [loose, areaChild],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("Upcoming day-group");
+    }
+    // The protocol ran (scratch project.add + park + reorder + restore + trash).
+    expect(calls).toContain("project.add");
+    expect(calls).toContain("project.delete");
+    // The block landed at the top of the day in selection order.
+    expect(ascending(indexOrder([loose, areaChild], "todayIndex"))).toBe(true);
+    // Every FK round-tripped to its origin.
+    expect(containerOf(loose)).toMatchObject({ project: null, area: null, heading: null });
+    expect(containerOf(projChild).project).toBe(proj);
+    expect(containerOf(headedChild).heading).toBe(heading);
+    expect(containerOf(areaChild).area).toBe(area);
+  });
+
+  it("a --before anchor OUTSIDE the day-group is refused (positions, never migrates)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const projChild = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    // An anchor on a DIFFERENT day is not a member of the group.
+    const offDay = seedTodo(fixture.db, {
+      title: "off",
+      start: "someday",
+      startDate: "2026-07-21",
+      todayIndex: 1,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [projChild, areaChild],
+      position: { before: offDay },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("day-group");
   });
 });

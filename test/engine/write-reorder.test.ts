@@ -1495,11 +1495,431 @@ describe("loose-day scope (UPCORD1 park-sort-unpark protocol)", () => {
     );
     expect(result.kind).toBe("dry-run");
     if (result.kind === "dry-run") {
-      expect(result.plan.invocation).toContain("loose-day park-sort-unpark ×2");
+      expect(result.plan.invocation).toContain("loose-day park-sort-restore ×2");
       expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
     }
     expect(calls).toHaveLength(0);
     expect(auditRecords).toHaveLength(0);
+  });
+});
+
+// ----------------------- area-day + upcoming-day (ORDFIN1 park-sort-restore)
+
+/**
+ * Faithful ORDFIN1 park-sort-restore sim, extending the loose-day vectors to the
+ * origin-aware restore legs. Only laws the probes proved (ordfin1-ordering-
+ * endgame.md) are modeled:
+ *   - PARK (todo.move project=scratch) preserves startDate/todayIndex, clears the
+ *     origin container (project=scratch, area/heading NULL) — Arm 3/4 leg 1;
+ *   - the container-day reorder re-ranks todayIndex ascending in the sent order
+ *     (DAYORD-b) — the ONLY leg that touches todayIndex;
+ *   - RESTORE re-homes each member to its captured origin FK and is a todayIndex
+ *     NO-OP (loose ← project/area/heading NULL; project ← project; area ← area;
+ *     headed ← heading FK) — Arm 4 "restore-leg order is irrelevant". The sim
+ *     NEVER writes todayIndex on a restore, so the reorder alone sets the order.
+ */
+interface DayCompoundOpParams {
+  title?: string;
+  uuid: string;
+  project?: { uuid: string };
+  area?: { uuid: string };
+  heading?: string;
+  loose?: boolean;
+  uuids?: string[];
+}
+
+function dayCompoundVectors() {
+  const calls: string[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "project.add": { support: "yes", disruption: 0, validation: "validated" },
+      "todo.move": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as DayCompoundOpParams;
+      if (inv.op === "project.add") {
+        seedProject(fixture.db, {
+          title: p.title ?? "",
+          creationDate: Math.floor(NOW.getTime() / 1000),
+        });
+      } else if (inv.op === "todo.move") {
+        // Restore/park legs re-home the FK; todayIndex is NEVER touched here.
+        if (p.heading !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET heading=?, project=NULL, area=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.heading, modClock++, p.uuid);
+        } else if (p.project !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=?, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.project.uuid, modClock++, p.uuid);
+        } else if (p.area !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET area=?, project=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(p.area.uuid, modClock++, p.uuid);
+        } else if (p.loose === true) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+            )
+            .run(modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.delete": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as DayCompoundOpParams;
+      if (inv.op === "reorder") {
+        let rank = 1;
+        for (const uuid of p.uuids ?? []) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      } else if (inv.op === "project.delete") {
+        fixture.db
+          .prepare("UPDATE TMTask SET trashed=1, userModificationDate=? WHERE uuid=?")
+          .run(modClock++, p.uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
+describe("area-day scope (ORDFIN1 Arm 3 park-sort-restore to the area)", () => {
+  function seedAreaFuture(area: string, title: string, todayIndex: number): string {
+    return seedTodo(fixture.db, {
+      title,
+      area,
+      start: "someday", // app-true future-scheduled (start=2 + future startDate)
+      startDate: FUTURE_ISO,
+      todayIndex,
+    });
+  }
+
+  it("parks the area's dated children, container-day reorders, restores to the area, trashes scratch", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedAreaFuture(area, "a", 30);
+    const b = seedAreaFuture(area, "b", 20);
+    const c = seedAreaFuture(area, "c", 10);
+    const { vectors, calls } = dayCompoundVectors();
+    // Request order c,a (block); b is an un-named co-parked day sibling.
+    const result = await runReorder(deps(vectors), {
+      scope: "area-day",
+      container: { uuid: area },
+      uuids: [c, a],
+      named: [c, a],
+    });
+    expect(result.kind).toBe("ok");
+    // project.add, park×3, reorder, restore×3, project.delete.
+    expect(calls).toEqual([
+      "project.add",
+      "todo.move",
+      "todo.move",
+      "todo.move",
+      "reorder",
+      "todo.move",
+      "todo.move",
+      "todo.move",
+      "project.delete",
+    ]);
+    expect(ascending(ranks([c, a, b]))).toBe(true);
+    // Every member is back in the area on the same future day (area FK round-trips).
+    for (const u of [a, b, c]) {
+      const row = fixture.db
+        .prepare("SELECT project, area, heading, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        project: string | null;
+        area: string | null;
+        heading: string | null;
+        startDate: number;
+      };
+      expect(row.area).toBe(area);
+      expect(row.project).toBeNull();
+      expect(row.heading).toBeNull();
+      expect(row.startDate).toBe(FUTURE_PACKED);
+    }
+    if (result.kind === "ok") expect(result.touched).toEqual([b]); // co-parked, disclosed
+    // Scratch is a PROJECT (never the area) and is trashed — the §9f area
+    // specifier is never touched.
+    const scratch = fixture.db
+      .prepare("SELECT trashed FROM TMTask WHERE type = 1 AND title LIKE 'things-api area-day %'")
+      .get() as { trashed: number } | undefined;
+    expect(scratch?.trashed).toBe(1);
+  });
+
+  it("refuses a repeating TEMPLATE movee, naming §9e (never routed through an area scratch)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const t = seedTodo(fixture.db, {
+      title: "tmpl",
+      area,
+      start: "active",
+      startDate: FUTURE_ISO,
+      todayIndex: 10,
+      recurrenceRule: true,
+    });
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(deps(vectors), {
+      scope: "area-day",
+      container: { uuid: area },
+      uuids: [t],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("§9e");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is gated by allow-experimental — no scratch created", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedAreaFuture(area, "a", 10);
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(deps(vectors, { config: config(false) }), {
+      scope: "area-day",
+      container: { uuid: area },
+      uuids: [a],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("allow-experimental is off");
+      expect(result.detail).toContain("no scratch project was created");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("caps the touched day-group by bounce-max-items", async () => {
+    const area = seedArea(fixture.db, "A");
+    const uuids = Array.from({ length: 4 }, (_, i) => seedAreaFuture(area, `F${i}`, (i + 1) * 10));
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(
+      deps(vectors, { config: { ...config(true), bounceMaxItems: 3 } }),
+      { scope: "area-day", container: { uuid: area }, uuids },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 3");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("undo round-trip restores the prior area-day order (re-runs the compound)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedAreaFuture(area, "a", 30);
+    const b = seedAreaFuture(area, "b", 20);
+    const c = seedAreaFuture(area, "c", 10); // prior order c < b < a
+    const fwd = await runReorder(deps(dayCompoundVectors().vectors), {
+      scope: "area-day",
+      container: { uuid: area },
+      uuids: [c, a],
+      named: [c, a],
+    });
+    expect(fwd.kind).toBe("ok"); // forward lands c < a < b
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const undoParams = plan.steps[0]?.params as unknown as ReorderParams;
+    const inv = await runReorder(deps(dayCompoundVectors().vectors), undoParams);
+    expect(inv.kind).toBe("ok");
+    expect(ascending(ranks([c, b, a]))).toBe(true); // restored to c < b < a
+    // The container (area) survives the undo round-trip.
+    expect(undoParams.container).toEqual({ uuid: area });
+  });
+
+  it("dry-run describes the compound without creating a scratch project", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedAreaFuture(area, "a", 10);
+    const b = seedAreaFuture(area, "b", 20);
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(
+      deps(vectors),
+      { scope: "area-day", container: { uuid: area }, uuids: [a, b] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("area-day park-sort-restore ×2");
+      expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("upcoming-day scope (ORDFIN1 Arm 4 cross-container park-sort-restore)", () => {
+  /** A whole cross-container day-group on FUTURE_ISO: loose, project, headed, area. */
+  function seedCrossContainerDay() {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const area = seedArea(fixture.db, "A");
+    const loose = seedTodo(fixture.db, {
+      title: "loose",
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 40,
+    });
+    const projChild = seedTodo(fixture.db, {
+      title: "projChild",
+      project: proj,
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 30,
+    });
+    const headedChild = seedTodo(fixture.db, {
+      title: "headedChild",
+      heading,
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 20,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "areaChild",
+      area,
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 10,
+    });
+    return { proj, heading, area, loose, projChild, headedChild, areaChild };
+  }
+
+  it("parks the whole cross-container day-group, reorders globally, restores each to its origin FK", async () => {
+    const { proj, heading, area, loose, projChild, headedChild, areaChild } =
+      seedCrossContainerDay();
+    const { vectors, calls } = dayCompoundVectors();
+    // Scrambled global interleave vs the current todayIndex order (10<20<30<40).
+    const target = [areaChild, projChild, loose, headedChild];
+    const result = await runReorder(deps(vectors), {
+      scope: "upcoming-day",
+      uuids: target,
+      named: target,
+    });
+    expect(result.kind).toBe("ok");
+    // project.add, park×4, reorder, restore×4, project.delete.
+    expect(calls).toEqual([
+      "project.add",
+      ...Array(4).fill("todo.move"),
+      "reorder",
+      ...Array(4).fill("todo.move"),
+      "project.delete",
+    ]);
+    // The global todayIndex order lands the scrambled target exactly.
+    expect(ascending(ranks(target))).toBe(true);
+    // Every FK round-trips to its captured origin (Arm 4).
+    const fk = (u: string) =>
+      fixture.db
+        .prepare("SELECT project, area, heading, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        project: string | null;
+        area: string | null;
+        heading: string | null;
+        startDate: number;
+      };
+    expect(fk(loose)).toMatchObject({ project: null, area: null, heading: null });
+    expect(fk(projChild)).toMatchObject({ project: proj, area: null, heading: null });
+    expect(fk(headedChild).heading).toBe(heading);
+    expect(fk(areaChild)).toMatchObject({ area, project: null, heading: null });
+    for (const u of [loose, projChild, headedChild, areaChild]) {
+      expect(fk(u).startDate).toBe(FUTURE_PACKED); // schedule preserved
+    }
+    const scratch = fixture.db
+      .prepare(
+        "SELECT trashed FROM TMTask WHERE type = 1 AND title LIKE 'things-api upcoming-day %'",
+      )
+      .get() as { trashed: number } | undefined;
+    expect(scratch?.trashed).toBe(1);
+  });
+
+  it("refuses a scheduled PROJECT row sharing the day (not parkable — UPCORD1, fail-closed)", async () => {
+    const { loose, areaChild } = seedCrossContainerDay();
+    // A scheduled PROJECT row on the SAME day — UPCORD1: not parkable.
+    seedProject(fixture.db, {
+      title: "sched-proj",
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 5,
+    });
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(deps(vectors), {
+      scope: "upcoming-day",
+      uuids: [loose, areaChild],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("scheduled project row");
+    expect(calls).toHaveLength(0); // never created a scratch project
+  });
+
+  it("refuses a repeating TEMPLATE movee, naming §9e", async () => {
+    const { loose } = seedCrossContainerDay();
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "active",
+      startDate: FUTURE_ISO,
+      todayIndex: 15,
+      recurrenceRule: true,
+    });
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(deps(vectors), {
+      scope: "upcoming-day",
+      uuids: [tmpl, loose],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("§9e");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("caps the touched day-group by bounce-max-items", async () => {
+    const { loose, projChild, headedChild, areaChild } = seedCrossContainerDay();
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(
+      deps(vectors, { config: { ...config(true), bounceMaxItems: 3 } }),
+      { scope: "upcoming-day", uuids: [loose, projChild, headedChild, areaChild] },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 3");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is gated by allow-experimental — no scratch created", async () => {
+    const { loose, areaChild } = seedCrossContainerDay();
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(deps(vectors, { config: config(false) }), {
+      scope: "upcoming-day",
+      uuids: [loose, areaChild],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("allow-experimental is off");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("dry-run describes the compound without creating a scratch project", async () => {
+    const { loose, areaChild } = seedCrossContainerDay();
+    const { vectors, calls } = dayCompoundVectors();
+    const result = await runReorder(
+      deps(vectors),
+      { scope: "upcoming-day", uuids: [loose, areaChild] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("upcoming-day park-sort-restore");
+      expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
+    }
+    expect(calls).toHaveLength(0);
   });
 });
 

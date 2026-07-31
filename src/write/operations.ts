@@ -478,9 +478,25 @@ export type ReorderScope =
   //   re-rank, date-preserving (DAYORD-b)
   // - loose-day: STANDALONE loose (no project/area/heading) to-dos sharing ONE
   //   FUTURE Upcoming day, ranked on todayIndex. No native or bounce surface
-  //   reaches them directly; delivered by the UPCORD1 park-sort-unpark protocol
-  //   (scratch PROJECT park → container-day reorder → unpark → trash the scratch),
+  //   reaches them directly; delivered by the ORDFIN1 park-sort-restore compound
+  //   (scratch PROJECT park → container-day reorder → restore → trash the scratch),
   //   orchestrated in reorder.ts. Planner-selected only (never a CLI flag).
+  // ORDFIN1 park-sort-restore day compounds (lab/ordfin1-ordering-endgame.md):
+  // - area-day: an AREA's direct dated children sharing ONE future day (Arm 3).
+  //   The AREA reorder specifier is destructive (§9f de-schedules dated members),
+  //   so this rides the SAME park→container-day→restore compound as loose-day,
+  //   only the restore leg homes each child back to the area (list-id=<area>) —
+  //   date/todayIndex/start=2/reminder/deadline preserved, area FK round-trips.
+  //   Gated like container-day. Planner-selected only (needs the area container).
+  // - upcoming-day: a CROSS-CONTAINER future day-group — any mix of loose,
+  //   project-child, headed-child, and area-child to-dos sharing ONE future day
+  //   (Arm 4). Each member's ORIGIN (loose / project / project+heading / area) is
+  //   captured BEFORE parking; after the single container-day reorder each is
+  //   restored to that captured origin FK (restore-leg order irrelevant). The
+  //   generalization of loose-day + area-day (both are degenerate uniform-origin
+  //   cases). Refuses a repeating TEMPLATE movee (§9e) and any scheduled PROJECT
+  //   row on the day (UPCORD1: not parkable), fail-closed. Gated like container-
+  //   day. Planner-selected only (no container — the day is read off a movee).
   // HEADSUB1 within-heading sub-bucket protocols (lab/headsub1-heading-subbuckets.md):
   // - heading-someday: a heading's SOMEDAY children, ranked on "index". Re-headed
   //   in FORWARD target order (each a single `todo.move` list-id+heading leg) —
@@ -500,7 +516,9 @@ export type ReorderScope =
   | "container-day"
   | "loose-day"
   | "heading-someday"
-  | "heading-day";
+  | "heading-day"
+  | "area-day"
+  | "upcoming-day";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {

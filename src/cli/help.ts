@@ -394,15 +394,15 @@ anchor's container and bucket; a cross-container or cross-bucket anchor fails
 closed (name a destination flag if you meant to MOVE). Selection order = landing
 order: reverse for free by naming them backwards.
 
-PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a
-lab-clean protocol exists — loose inbox/today/evening/someday/anytime, a project's
-or area's members (anytime AND someday), a heading's anytime/someday/scheduled-day
-children, a container child's evening/scheduled-day slot, a loose future day, and
-area-less someday/anytime projects. Some use a when= bounce; --before/--after there
-co-bounces intervening siblings and lists them. bounce-max-items caps touched items
-(default 30); bounce-enabled=false refuses them rather than degrade destructively.
-It is APP-DEFAULT (order best-effort) for a headed evening sub-bucket, a direct-area
-scheduled-day child, a loose scheduled project row, and templates.`,
+PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a lab-
+clean protocol exists — loose inbox/today/evening/someday/anytime, a project's or
+area's members (anytime AND someday), a heading's anytime/someday/scheduled-day
+children, ANY container child's evening slot (project/area/headed), a container's
+scheduled-day children, a loose / direct-area / cross-container future Upcoming day,
+and area-less someday/anytime projects. Some use a bounce or a park-sort-restore
+compound; --before/--after co-touches siblings, listed. bounce-max-items caps touched
+(30); bounce-enabled/allow-experimental=false refuse, never degrade. The only app-
+default rows are a loose scheduled PROJECT row and templates — dead-end-refused.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 
