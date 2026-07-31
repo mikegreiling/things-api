@@ -33,7 +33,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { encodePackedDate, localToday } from "../model/dates.ts";
+import { addDaysIso, decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
 import {
   ReferenceResolutionError,
   resolveTaskUuidPrefix,
@@ -188,6 +188,18 @@ const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "headi
  * so it buckets today/evening here, exactly as deriveStage derives `anytime`
  * with the Today marker.
  */
+/**
+ * The packed startDate of TOMORROW (the day after `packedToday`). Packed dates
+ * are bit-fields, not integers, so tomorrow is NOT packedToday+1 across a month/
+ * year boundary — decode → +1 calendar day → re-encode. Feeds the ORDFIN2
+ * TOMORROWLIST fast path (a future day-group whose day == tomorrow rides the
+ * native `list "Tomorrow"` one-call sort, not the scratch-park compound).
+ */
+function packedTomorrowOf(packedToday: number): number {
+  const iso = decodePackedDate(packedToday);
+  return iso === null ? packedToday : encodePackedDate(addDaysIso(iso, 1));
+}
+
 function scheduleBucket(row: MoveeRow, packedToday: number): string {
   if (row.start === 0) return "inbox";
   if (row.startDate !== null) {
@@ -256,6 +268,14 @@ function reorderTargetOf(
   // A same-day (today-proper) or future scheduled day, startBucket=0 — the
   // DAYORD-b container todayIndex surface. The evening sub-bucket is distinct.
   const containerDay = bucket === "today" || bucket.startsWith("scheduled:");
+  // ORDFIN2 TOMORROWLIST: a row scheduled for TOMORROW (startBucket=0) rides the
+  // native one-call `list "Tomorrow"` day-sort instead of the scratch-park
+  // compound (loose-day / area-day) or the project-row app-default. It re-ranks
+  // the whole cross-container tomorrow group on todayIndex, projects included,
+  // preserving startDate/FKs (no §9g re-date). This replaces the scratch-park
+  // compounds only — container-day / heading-day (single-container project /
+  // heading children) keep their existing native/compound paths.
+  const isTomorrow = row.startBucket === 0 && row.startDate === packedTomorrowOf(packedToday);
   if (isTodo) {
     if (row.heading !== null) {
       // Within-heading order (HEADSUB1). anytime → the forward-order bounce
@@ -321,8 +341,10 @@ function reorderTargetOf(
       // park-sort-restore compound (park each dated child into a scratch PROJECT →
       // container-day reorder → restore to the area) — date/todayIndex/start=2/
       // reminder/deadline preserved, area FK round-trips. The destructive AREA
-      // reorder specifier (§9f) is NEVER used. Gated like container-day.
-      if (containerDay) return { scope: "area-day", container: row.area };
+      // reorder specifier (§9f) is NEVER used. Gated like container-day. When the
+      // day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
+      if (containerDay)
+        return isTomorrow ? { scope: "tomorrow" } : { scope: "area-day", container: row.area };
       return { scope: null, reason: "a direct-area to-do's scheduled bucket (app-default)" };
     }
     // loose:
@@ -341,11 +363,16 @@ function reorderTargetOf(
     // A loose FUTURE Upcoming day: the UPCORD1 park-sort-unpark protocol
     // (scratch PROJECT park → container-day reorder → unpark → trash). Gated by
     // allow-experimental like container-day (the pipeline / orchestrator explains
-    // when the gate is off); NEVER routed through an area scratch (§9f).
-    return { scope: "loose-day" };
+    // when the gate is off); NEVER routed through an area scratch (§9f). When the
+    // day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
+    return isTomorrow ? { scope: "tomorrow" } : { scope: "loose-day" };
   }
   // projects:
   if (row.area !== null) {
+    // A scheduled project inside an area: app-default, EXCEPT a tomorrow-scheduled
+    // project rides the native `list "Tomorrow"` sort (O12 — it accepts a project
+    // row inline; project-row movees are allowed only on this path).
+    if (containerDay && isTomorrow) return { scope: "tomorrow" };
     return containerDay || bucket === "evening" || bucket === "someday"
       ? { scope: null, reason: "a scheduled/someday project inside an area (app-default)" }
       : { scope: "area", container: row.area };
@@ -355,6 +382,9 @@ function reorderTargetOf(
     // Top-level sidebar order is bounce-only (P8e).
     return bounceEnabled ? { scope: "projects" } : bounceDisabledTarget("top-level projects order");
   }
+  // An area-less scheduled project row: app-default, EXCEPT tomorrow (the native
+  // `list "Tomorrow"` sort accepts a project row inline — TOMORROWLIST).
+  if (containerDay && isTomorrow) return { scope: "tomorrow" };
   return { scope: null, reason: "a scheduled day bucket (app-default)" };
 }
 
@@ -952,8 +982,9 @@ async function runUpcomingDayReposition(
   rows: MoveeRow[],
   position: MovePosition | undefined,
   options: WriteOptions,
+  scope: "upcoming-day" | "tomorrow",
 ): Promise<MoveResult> {
-  const target: ScopeTarget = { scope: "upcoming-day" };
+  const target: ScopeTarget = { scope };
   const movees = rows.map((r) => r.uuid);
   const members = bucketMembers(deps, target, movees[0]);
 
@@ -986,9 +1017,13 @@ async function runUpcomingDayReposition(
       : buildReorderOrder(deps, target, movees, position);
   const placement = await runReorder(
     deps,
-    { scope: "upcoming-day", uuids: reorderUuids, named: movees },
+    { scope, uuids: reorderUuids, named: movees },
     { ...legOptions(options), ...(options.dryRun === true && { dryRun: true }) },
   );
+  const mechanism =
+    scope === "tomorrow"
+      ? 'cross-container Tomorrow day-group reorder (one-call `list "Tomorrow"` sort)'
+      : "cross-container Upcoming day-group reorder (park-sort-restore)";
   if (options.dryRun === true) {
     return {
       kind: "move-dry-run",
@@ -996,12 +1031,9 @@ async function runUpcomingDayReposition(
       plan: {
         movees,
         membership: "none (in-place reposition)",
-        placement: `reorder scope=upcoming-day → ${describePosition(position)}`,
+        placement: `reorder scope=${scope} → ${describePosition(position)}`,
         placementClass: "guaranteed",
-        note: dryRunNote(
-          placement,
-          "cross-container Upcoming day-group reorder (park-sort-restore)",
-        ),
+        note: dryRunNote(placement, mechanism),
       },
     };
   }
@@ -1022,8 +1054,9 @@ async function runUpcomingDayReposition(
     placement,
     placementClass: "guaranteed",
     note:
-      `reordered within ${describeScope(target)} (upcoming-day scope — placement guaranteed)` +
-      touchedSuffix(placement),
+      `reordered within ${describeScope(target)} (${scope} scope — placement guaranteed)` +
+      touchedSuffix(placement) +
+      strandSuffix(placement),
   };
 }
 
@@ -1053,8 +1086,13 @@ async function repositionInPlace(
   // heading-day / loose-day / area-day.) A mix carrying a scheduled PROJECT row or
   // a template is fail-closed by the compound's own membership guard.
   const keys = new Set(rows.map((r) => structuralKey(r, packedToday)));
-  if (isTodo && keys.size > 1 && sharedFutureDay(rows, packedToday) !== null) {
-    return runUpcomingDayReposition(deps, op, rows, position, options);
+  const sharedDay = sharedFutureDay(rows, packedToday);
+  if (isTodo && keys.size > 1 && sharedDay !== null) {
+    // ORDFIN2 TOMORROWLIST: a cross-container group whose shared day == tomorrow
+    // rides the native one-call `list "Tomorrow"` sort; any other future day
+    // rides the scratch-park upcoming-day compound.
+    const scope = sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "upcoming-day";
+    return runUpcomingDayReposition(deps, op, rows, position, options, scope);
   }
 
   // One shared STRUCTURAL container (rule 2 / the cross-container guard).
@@ -1191,6 +1229,23 @@ async function repositionInPlace(
       `reordered within ${describeScope(target)} (${target.scope} scope — placement guaranteed)` +
       touchedSuffix(placement),
   };
+}
+
+/**
+ * Honest disclosure suffix naming same-day scheduled PROJECT rows the day-sort
+ * left stranded below the block (PRJMIX — projects are not parkable, UPCORD1).
+ */
+function strandSuffix(placement: ReorderResult): string {
+  if (
+    placement.kind !== "ok" ||
+    placement.stranded === undefined ||
+    placement.stranded.length === 0
+  )
+    return "";
+  return (
+    `; ${placement.stranded.length} same-day scheduled project row(s) are not parkable so they ` +
+    `remain below the sorted block in their prior order: ${placement.stranded.map((s) => s.uuid).join(", ")}`
+  );
 }
 
 /** Honest disclosure suffix naming co-bounced siblings an anchor placement touched. */
@@ -1415,7 +1470,8 @@ function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string)
     target.scope === "container-day" ||
     target.scope === "loose-day" ||
     target.scope === "area-day" ||
-    target.scope === "upcoming-day";
+    target.scope === "upcoming-day" ||
+    target.scope === "tomorrow";
   const params: ReorderParams = {
     scope: target.scope,
     uuids: seedsDay && dayAnchor !== undefined ? [dayAnchor] : [],
@@ -1443,6 +1499,7 @@ function describeScope(target: ScopeTarget): string {
   if (target.scope === "loose-day") return "the loose future-day group";
   if (target.scope === "area-day") return "the direct-area future-day group";
   if (target.scope === "upcoming-day") return "the cross-container Upcoming day-group";
+  if (target.scope === "tomorrow") return "the Tomorrow day-group";
   return target.container !== undefined
     ? `the ${target.scope} ${target.container}`
     : `the ${target.scope} list`;

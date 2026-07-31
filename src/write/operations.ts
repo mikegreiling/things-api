@@ -494,9 +494,21 @@ export type ReorderScope =
   //   captured BEFORE parking; after the single container-day reorder each is
   //   restored to that captured origin FK (restore-leg order irrelevant). The
   //   generalization of loose-day + area-day (both are degenerate uniform-origin
-  //   cases). Refuses a repeating TEMPLATE movee (§9e) and any scheduled PROJECT
-  //   row on the day (UPCORD1: not parkable), fail-closed. Gated like container-
-  //   day. Planner-selected only (no container — the day is read off a movee).
+  //   cases). Refuses a repeating TEMPLATE movee (§9e), and refuses a scheduled
+  //   PROJECT row as a MOVEE (UPCORD1: not parkable) but DISCLOSES an untouched
+  //   same-day project SIBLING as a strand (PRJMIX). Gated like container-day.
+  //   Planner-selected only (no container — the day is read off a movee).
+  // ORDFIN2 TOMORROWLIST — the one-call TOMORROW fast path (ordfin2-followups.md):
+  // - tomorrow: a whole next-day (== tomorrow, relative to the response clock)
+  //   day-group across ALL containers, ranked on todayIndex. `list "Tomorrow"` is
+  //   a CLEAN one-call native day-sort surface — it re-ranks the full group in ONE
+  //   `_private_experimental_ reorder to dos in list "Tomorrow"` call, ACCEPTS a
+  //   scheduled PROJECT row inline (O12 analog — projects pass the `ids` filter),
+  //   and preserves startDate/start/startBucket/area+project FKs (no §9g re-date,
+  //   unlike `list "Upcoming"`). Replaces the scratch-park compound (loose-day /
+  //   area-day / upcoming-day) for the single tomorrow case, and project-row
+  //   movees are allowed ONLY here. Gated like container-day (allow-experimental +
+  //   sdef canary). Planner-selected only (the day is read off a movee).
   // HEADSUB1 within-heading sub-bucket protocols (lab/headsub1-heading-subbuckets.md):
   // - heading-someday: a heading's SOMEDAY children, ranked on "index". Re-headed
   //   in FORWARD target order (each a single `todo.move` list-id+heading leg) —
@@ -518,7 +530,8 @@ export type ReorderScope =
   | "heading-someday"
   | "heading-day"
   | "area-day"
-  | "upcoming-day";
+  | "upcoming-day"
+  | "tomorrow";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {

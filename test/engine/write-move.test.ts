@@ -865,6 +865,88 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
   });
 });
 
+describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (planner routing)', () => {
+  // NOW = 2026-07-05, so tomorrow = 2026-07-06; a later day = 2026-07-20.
+  const TOMORROW = "2026-07-06";
+  const LATER = "2026-07-20";
+
+  it("a loose tomorrow block routes to the native `tomorrow` scope, not the scratch-park compound", async () => {
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "someday",
+      startDate: TOMORROW,
+      todayIndex: 20,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "someday",
+      startDate: TOMORROW,
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
+    expect(calls).not.toContain("project.add"); // native one-call — no scratch project
+    expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
+  });
+
+  it("a LATER future day still rides the scratch-park loose-day compound (not tomorrow)", async () => {
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      start: "someday",
+      startDate: LATER,
+      todayIndex: 20,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      start: "someday",
+      startDate: LATER,
+      todayIndex: 10,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("loose future-day group");
+    expect(calls).toContain("project.add"); // the scratch-park compound ran
+  });
+
+  it("a scheduled PROJECT row is ACCEPTED as a movee for tomorrow (O12 inline)", async () => {
+    const p = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: TOMORROW,
+      todayIndex: 5,
+    });
+    const { vectors } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "project.move", {
+      uuids: [p],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
+  });
+
+  it("a scheduled PROJECT row is REFUSED as a movee on a LATER day (app-default)", async () => {
+    const p = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: LATER,
+      todayIndex: 5,
+    });
+    const { vectors, calls } = looseDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "project.move", { uuids: [p] });
+    expect(r.kind).toBe("move-refused");
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("regression: dated start=2 rows classify as scheduled, never someday", () => {
   // The app's ONLY representation of a future-scheduled to-do is start=2
   // (someday) + a FUTURE startDate — a plain active start=1 is always undated

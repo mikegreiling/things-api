@@ -174,6 +174,18 @@ export type MutationResult =
        */
       touched?: string[];
       /**
+       * Disclosed strand (ADDITIVE): same-day scheduled PROJECT rows that share
+       * the target Upcoming day but were NOT sorted. A to-do day-sort parks its
+       * members into a scratch project, and a project row is not parkable
+       * (UPCORD1); the PRJMIX law is deterministic, so instead of refusing the
+       * whole sort the block is placed at the TOP of the day and these project
+       * rows keep their prior relative order BELOW it — disclosed here (never
+       * silent), each with its uuid + pre-write title. Absent when the day
+       * carried no untouched project row (the common case) and for every non
+       * day-sort op.
+       */
+      stranded?: { uuid: string; title: string }[];
+      /**
        * Idempotency replay (ADDITIVE, presence-keyed): `true` when this result
        * did NOT execute — a mutation carrying an `opId` matched a prior verified
        * `ok` record with the same id in the recent change history, so the earlier

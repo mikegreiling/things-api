@@ -1841,10 +1841,12 @@ describe("upcoming-day scope (ORDFIN1 Arm 4 cross-container park-sort-restore)",
     expect(scratch?.trashed).toBe(1);
   });
 
-  it("refuses a scheduled PROJECT row sharing the day (not parkable — UPCORD1, fail-closed)", async () => {
+  it("DISCLOSES an untouched scheduled PROJECT sibling as a strand (PRJMIX), not a refusal", async () => {
     const { loose, areaChild } = seedCrossContainerDay();
-    // A scheduled PROJECT row on the SAME day — UPCORD1: not parkable.
-    seedProject(fixture.db, {
+    // A scheduled PROJECT row on the SAME day — UPCORD1: not parkable, but the
+    // PRJMIX law is deterministic (block sorts above it), so it is DISCLOSED as a
+    // strand, and the to-do sort proceeds.
+    const proj = seedProject(fixture.db, {
       title: "sched-proj",
       start: "someday",
       startDate: FUTURE_ISO,
@@ -1855,9 +1857,12 @@ describe("upcoming-day scope (ORDFIN1 Arm 4 cross-container park-sort-restore)",
       scope: "upcoming-day",
       uuids: [loose, areaChild],
     });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.detail).toContain("scheduled project row");
-    expect(calls).toHaveLength(0); // never created a scratch project
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stranded).toEqual([{ uuid: proj, title: "sched-proj" }]);
+      expect((result.warnings ?? []).some((w) => w.includes("below the sorted block"))).toBe(true);
+    }
+    expect(calls.length).toBeGreaterThan(0); // the sort DID run
   });
 
   it("refuses a repeating TEMPLATE movee, naming §9e", async () => {
@@ -1918,6 +1923,49 @@ describe("upcoming-day scope (ORDFIN1 Arm 4 cross-container park-sort-restore)",
     if (result.kind === "dry-run") {
       expect(result.plan.invocation).toContain("upcoming-day park-sort-restore");
       expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('tomorrow scope (ORDFIN2 TOMORROWLIST one-call `list "Tomorrow"` day-sort)', () => {
+  const TOMORROW_ISO = "2026-07-06"; // NOW = 2026-07-05
+  const seedTomorrow = (title: string, todayIndex: number, project?: string) =>
+    seedTodo(fixture.db, {
+      title,
+      start: "someday",
+      startDate: TOMORROW_ISO,
+      todayIndex,
+      ...(project !== undefined && { project }),
+    });
+
+  it('re-ranks the tomorrow day-group on todayIndex via `list "Tomorrow"`, project row inline', async () => {
+    const t1 = seedTomorrow("t1", 30);
+    const proj = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: TOMORROW_ISO,
+      todayIndex: 20,
+    });
+    const t2 = seedTomorrow("t2", 10);
+    const { vector, calls } = nativeVector("todayIndex");
+    const result = await runReorder(deps([vector]), { scope: "tomorrow", uuids: [t2, proj, t1] });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain('list "Tomorrow"'); // the one-call surface
+    // sent order (t2, proj, t1) == ascending todayIndex — the project row re-ranked inline.
+    expect(ascending(ranks([t2, proj, t1]))).toBe(true);
+  });
+
+  it("is gated by allow-experimental (no native call)", async () => {
+    const t1 = seedTomorrow("t1", 10);
+    const { vector, calls } = nativeVector("todayIndex");
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "tomorrow",
+      uuids: [t1],
+    });
+    expect(result.kind).toBe("unsupported");
+    if (result.kind === "unsupported") {
+      expect(result.considered[0]?.why).toContain("allow-experimental");
     }
     expect(calls).toHaveLength(0);
   });
