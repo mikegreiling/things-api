@@ -2491,7 +2491,8 @@ export function registerWriteCommands(program: Command): void {
           `(today/evening/projects, max ${BOUNCE_MAX_ITEMS} items; an interrupted run ` +
           "reports which items were placed). Evening and projects (top-level sidebar " +
           "order — each project takes a brief someday/anytime round-trip) are " +
-          "bounce-only. Project children under headings cannot be reordered; to reorder " +
+          "bounce-only. This --scope surface does not reach a heading's children; to " +
+          "rearrange to-dos under a heading use `things todo reorder`, and to reorder " +
           "the HEADINGS themselves (children follow) use `things project move-heading`. " +
           "Area scope reorders to-dos OR projects — never mixed in one request.",
       )

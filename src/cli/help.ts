@@ -396,13 +396,13 @@ order: reverse for free by naming them backwards.
 
 PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a
 lab-clean protocol exists — loose inbox/today/evening/someday/anytime, a project's
-or area's members (anytime AND someday), a heading's anytime children, and a
-container's same-day scheduled children. Some use a verified when= bounce;
---before/--after there co-bounces the members between the block and the anchor and
-lists them. bounce-max-items caps a bounce's touched items (default 30);
-bounce-enabled=false refuses bounce placements rather than degrade destructively.
-It is APP-DEFAULT (order best-effort) for a headed scheduled/someday sub-bucket, a
-container evening sub-bucket, a loose future day, and templates.`,
+or area's members (anytime AND someday), a heading's anytime/someday/scheduled-day
+children, a container child's evening/scheduled-day slot, a loose future day, and
+area-less someday/anytime projects. Some use a when= bounce; --before/--after there
+co-bounces intervening siblings and lists them. bounce-max-items caps touched items
+(default 30); bounce-enabled=false refuses them rather than degrade destructively.
+It is APP-DEFAULT (order best-effort) for a headed evening sub-bucket, a direct-area
+scheduled-day child, a loose scheduled project row, and templates.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 
