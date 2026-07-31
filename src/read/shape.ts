@@ -112,7 +112,8 @@
  * `status` is omitted when `open`. FULL keeps them but still applies R6, the
  * universal reshapes, and R10.
  */
-import { deriveStage, deriveWhen, type Stage } from "./stage.ts";
+import { deriveStage, deriveWhen, whenIsProvisional, type Stage } from "./stage.ts";
+import type { StartState } from "../model/entities.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -296,9 +297,11 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   // section, so no enclosing node implies it. The app rewrites start/startDate
   // when the user acknowledges the banner; that is a GUI-only side effect our
   // read cannot clear (watchers beware — see contract.md `provisional`).
-  const provisional =
-    (when === "today" || when === "evening") &&
-    (s["start"] !== "active" || (s["startDate"] ?? null) === null);
+  const provisional = whenIsProvisional(
+    when,
+    s["start"] as StartState,
+    (s["startDate"] as string | null) ?? null,
+  );
   const o: Obj = { ...s };
 
   // R9 universal reshapes (every tier, every kind incl. detail).

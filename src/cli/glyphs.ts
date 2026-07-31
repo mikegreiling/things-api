@@ -302,6 +302,14 @@ export const CHECKLIST_MARK = "≔";
 export const todayStar = (): string => yellow("★");
 export const eveningMoon = (): string => brightBlue("⏾");
 
+/**
+ * The GUI's yellow "new item" pip — a provisional Today member (banner-counted,
+ * not yet acknowledged). Same yellow as {@link todayStar}. Rendered ONLY in the
+ * `things today` view, in the after-the-box mark slot the star/crescent share
+ * (there the section header carries the ★, freeing the row slot for the pip).
+ */
+export const provisionalPip = (): string => yellow("•");
+
 /** The sections the legend groups its entries under, in render order. */
 export type LegendGroup =
   | "To-dos"
@@ -361,6 +369,11 @@ export const LEGEND: readonly LegendEntry[] = [
   // Markers & chips — trail the title (bell, notes, checklist) or precede it.
   { glyph: todayStar(), meaning: "Today member", group: "Markers & chips" },
   { glyph: eveningMoon(), meaning: "This Evening member", group: "Markers & chips" },
+  {
+    glyph: provisionalPip(),
+    meaning: "provisional Today item — shown until acknowledged in the app",
+    group: "Markers & chips",
+  },
   {
     glyph: bold(dim("⚑")),
     meaning: "deadline — bold gray while upcoming, bold red once due or overdue",

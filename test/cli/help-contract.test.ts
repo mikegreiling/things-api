@@ -663,6 +663,13 @@ describe("write-command help states the contract", () => {
     }
   });
 
+  it("today help mentions the provisional • pip (Today-only marker)", () => {
+    const help = renderedHelp("today");
+    expect(help).toContain("•");
+    expect(help).toContain("provisional");
+    expect(help).toContain("acknowledged in the app");
+  });
+
   it("setup shortcuts: names the unlocked operations, the click, and --check", () => {
     const help = helpFor("setup", "shortcuts");
     expect(help).toContain("creating a heading in an existing project");

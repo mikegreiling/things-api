@@ -42,6 +42,7 @@ import {
   LEGEND,
   LEGEND_GROUPS,
   NOTES_MARK,
+  provisionalPip,
   REMINDER_MARK,
   todayStar,
 } from "../../src/cli/glyphs.ts";
@@ -1074,6 +1075,61 @@ describe("renderToday (things today split)", () => {
   });
 });
 
+// A deadline-pulled undated active row is a Today member (todayView's deadline
+// arm) AND unmaterialized (startDate IS NULL) — the canonical provisional case
+// (BANNER1). It also files under Anytime (stage), so ONE fixture serves both the
+// today-view (pip present) and anytime-view (pip absent) assertions. The control
+// is a materialized Today member (start=active, arrived startDate) — a Today
+// member that is NOT provisional, so it never gets the pip.
+function seedProvisional(fx: FixtureDb) {
+  seedTodo(fx.db, { title: "provisional row", start: "active", deadline: "2026-07-05" });
+  seedTodo(fx.db, { title: "materialized row", start: "active", startDate: "2026-07-05" });
+}
+
+describe("provisional pip (yellow • in the Today view only)", () => {
+  const base = "things today";
+
+  it("renders • on the provisional Today row, not on the materialized one", () => {
+    fixture = buildFixtureDb();
+    seedProvisional(fixture);
+    const lines = renderToday(todayView(fixture.db, NOW), undefined, base);
+    const provLine = lines.find((l) => l.includes("provisional row"));
+    const matLine = lines.find((l) => l.includes("materialized row"));
+    if (provLine === undefined || matLine === undefined) throw new Error("today rows missing");
+    // The pip rides the after-the-box mark slot (color OFF here → bare glyph).
+    expect(provLine).toContain(provisionalPip());
+    expect(matLine).not.toContain(provisionalPip());
+  });
+
+  it("pips an evening-section provisional row too (both Today sections)", () => {
+    fixture = buildFixtureDb();
+    // An arrived someday-scheduled EVENING row: Today member, evening section,
+    // and unmaterialized (start != active) → provisional.
+    seedTodo(fixture.db, {
+      title: "evening prov",
+      start: "someday",
+      startDate: "2026-07-05",
+      evening: true,
+    });
+    const lines = renderToday(todayView(fixture.db, NOW), undefined, base);
+    const evLine = lines.find((l) => l.includes("evening prov"));
+    if (evLine === undefined) throw new Error("evening row missing");
+    expect(evLine).toContain(provisionalPip());
+  });
+
+  it("does NOT render • in the anytime view for the same provisional row", () => {
+    fixture = buildFixtureDb();
+    seedProvisional(fixture);
+    // Anytime sidebar layout, with the Today ★ marks on (star=true) — the row is
+    // a Today member (★ present) yet the new-item pip stays exclusive to Today.
+    const lines = renderSections(anytimeView(fixture.db, NOW), true);
+    const provLine = lines.find((l) => l.includes("provisional row"));
+    if (provLine === undefined) throw new Error("anytime row missing");
+    expect(provLine).toContain(todayStar()); // it IS a Today member here
+    expect(provLine).not.toContain(provisionalPip()); // …but never the pip
+  });
+});
+
 describe("renderLegend (things legend)", () => {
   it("groups entries under the five section headers, in order", () => {
     const lines = renderLegend();
@@ -1113,6 +1169,7 @@ describe("renderLegend (things legend)", () => {
       CHECKLIST_MARK,
       todayStar(),
       eveningMoon(),
+      provisionalPip(),
       areaMark(),
       "⚑",
     ];
