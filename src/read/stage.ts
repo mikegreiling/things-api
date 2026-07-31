@@ -183,3 +183,28 @@ export function deriveWhen(item: WhenInput): When | undefined {
   if (item.startDate !== null) return item.startDate;
   return undefined;
 }
+
+/** The materialized-entity shape {@link entityWhen} reads (a superset of both inputs). */
+export interface WhenStageInput extends StageInput {
+  /** The presence-keyed This-Evening marker (implies today). */
+  evening?: boolean;
+  repeating: { isTemplate: boolean; nextOccurrence?: IsoDate | null };
+}
+
+/**
+ * The ONE time-axis derivation for a materialized ENTITY — the SINGLE SOURCE the
+ * wire emit boundary (`shape.ts` `whenOf`) and the human/TTY renderers
+ * (`whenValue`, `todayMark`) share. Composes {@link deriveStage} → {@link
+ * deriveWhen} off the entity's own presence-keyed markers, so a TTY when/pip can
+ * NEVER disagree with the emitted `when` (never re-derived from `startBucket` /
+ * `todaySection`). Returns the same {@link When} the wire carries.
+ */
+export function entityWhen(item: WhenStageInput): When | undefined {
+  return deriveWhen({
+    stage: deriveStage(item),
+    ...(item.today !== undefined && { today: item.today }),
+    ...(item.evening !== undefined && { evening: item.evening }),
+    startDate: item.startDate,
+    repeating: item.repeating,
+  });
+}

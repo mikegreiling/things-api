@@ -766,6 +766,52 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
   });
 
+  it("`todo reorder` reranks a MIXED to-do+project Today block (O12 — the native Today list intermixes types)", async () => {
+    // Two LOOSE Today-bucket rows: a to-do and a project (startBucket=0, dated
+    // today). O12: the native `list "Today"` reorder accepts project uuids
+    // intermixed with to-dos, so `todo reorder <todo> <project>` must compile the
+    // mixed wire list, not refuse "homogeneous kinds".
+    const todo = seedTodo(fixture.db, {
+      title: "t",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: 10,
+    });
+    const proj = seedProject(fixture.db, {
+      title: "P",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: 20,
+    });
+    const r = await runInPlaceReorder(
+      deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
+      "todo.move",
+      { uuids: [proj, todo], position: { at: "first" } },
+    );
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.placementClass).toBe("guaranteed");
+    // Both reranked on the Today (todayIndex) axis, in the requested order — the
+    // mixed wire list [project, to-do] was compiled and sent.
+    expect(indexOrder([proj, todo], "todayIndex")).toEqual([1, 2]);
+  });
+
+  it("the mixed-kind relaxation is Today-only — a project OUTSIDE the Today bucket still refuses", async () => {
+    const todo = seedTodo(fixture.db, {
+      title: "t",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: 10,
+    });
+    // An anytime (undated) project — NOT a Today member.
+    const proj = seedProject(fixture.db, { title: "P", start: "active" });
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [todo, proj] });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("homogeneous kinds");
+    }
+  });
+
   it("a repeating TEMPLATE row is unreorderable — reorder refused, never silent (§9e)", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const tmpl = seedTodo(fixture.db, {

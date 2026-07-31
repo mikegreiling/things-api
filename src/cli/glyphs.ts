@@ -8,7 +8,7 @@
  * Every glyph lives here so a cross-terminal rendering audit
  * (docs/roadmap.md) can retune the language in one file.
  */
-import type { Project, TagRef, Todo } from "../index.ts";
+import { entityWhen, type Project, type TagRef, type Todo } from "../index.ts";
 import { blue, bold, brightBlue, dim, green, red, strike, underline, yellow } from "./style.ts";
 
 const MONTHS = [
@@ -204,23 +204,24 @@ export function thingsLink(uuid: string): string {
  * date; the card does not), future dates show the date, undated someday
  * shows Someday. Appends the reminder time (clock glyph) when set.
  */
-export function whenValue(
-  item: Pick<Todo | Project, "startDate" | "todaySection" | "start" | "reminder">,
-  todayIso: string,
-): string | null {
-  let label: string | null = null;
-  if (item.startDate !== null) {
-    label =
-      item.startDate <= todayIso
-        ? item.todaySection === "evening"
-          ? `${eveningMoon()} This Evening`
-          : `${todayStar()} Today`
-        : shortDate(item.startDate, todayIso);
-  } else if (item.start === "someday") {
-    label = "Someday";
-  }
+export function whenValue(item: Todo | Project, todayIso: string): string | null {
+  // Consume the ONE derived `when` (the same value the wire emits) — never
+  // re-derive Today/Evening from `todaySection`/`startBucket` (those diverge
+  // from the marker on stale rows: a past-dated startBucket=1 row is Today, not
+  // Evening). `entityWhen` returns "today" | "evening" | a future ISO date |
+  // undefined; a non-template someday row (undefined + start=someday) shows
+  // Someday.
+  const when = entityWhen(item);
+  let label: string | null;
+  if (when === "evening") label = `${eveningMoon()} This Evening`;
+  else if (when === "today") label = `${todayStar()} Today`;
+  else if (when !== undefined) label = shortDate(when, todayIso);
+  else if (item.start === "someday") label = "Someday";
+  else label = null;
   if (label === null) return null;
-  return item.reminder === null ? label : `${label} ${dim(REMINDER_MARK)} ${item.reminder}`;
+  return item.reminder === null
+    ? label
+    : `${label} ${dim(REMINDER_MARK)} ${formatReminderTime(item.reminder)}`;
 }
 
 /**
@@ -279,6 +280,20 @@ export const NOTES_MARK = "≡";
  * family resemblance to the project pies).
  */
 export const REMINDER_MARK = "◷";
+
+/**
+ * A reminder time for the TTY: the wire keeps the machine `HH:MM` (24h); the
+ * human card renders 12-hour `h:mmam/pm` (Mike's preference — no locale
+ * detection). `12:00` → `12:00pm` (noon), `00:00` → `12:00am` (midnight),
+ * `18:00` → `6:00pm`, `09:05` → `9:05am`.
+ */
+export function formatReminderTime(hhmm: string): string {
+  const [rawH, rawM] = hhmm.split(":");
+  const h = Number(rawH);
+  const period = h < 12 ? "am" : "pm";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${(rawM ?? "00").padStart(2, "0")}${period}`;
+}
 
 /** Checklist-present marker (the GUI's small list icon). */
 export const CHECKLIST_MARK = "≔";
