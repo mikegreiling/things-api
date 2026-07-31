@@ -239,10 +239,13 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     if (asTitle) t = underline(t);
     return t;
   };
-  // GUI indicator order after the title: bell, document, checklist.
+  // GUI indicator order after the title: bell, document, checklist. The bell
+  // rides the presence-keyed `reminderLive` marker (§9n) — the SAME materialize-
+  // time gate the JSON wire's `reminder` key uses, so a stale reminder (past
+  // startDate, bell hidden in the GUI) shows no chip here either.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
-    ...(item.reminder !== null ? [dim(REMINDER_MARK)] : []),
+    ...(item.reminderLive === true ? [dim(REMINDER_MARK)] : []),
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
     ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
   ];

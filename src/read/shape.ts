@@ -326,6 +326,13 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   // a card date-group — handled in rebucketChildren).
   delete o["today"];
   delete o["evening"];
+  // §9n — a reminder byte is presentation-dead once its `startDate` goes strictly
+  // past: the GUI hides the bell but never clears the byte. The materialize-time
+  // `reminderLive` marker (mappers, via `reminderIsLive` under the response clock)
+  // says whether the stored reminder still renders; drop the `reminder` key when
+  // it does not, mirroring the GUI. The marker itself never rides the wire.
+  if (o["reminderLive"] !== true) delete o["reminder"];
+  delete o["reminderLive"];
   if (drop.when !== true && when !== undefined) o["when"] = when;
   // R13 — the provisional banner marker (never dropped; presence-keyed).
   if (provisional) o["provisional"] = true;

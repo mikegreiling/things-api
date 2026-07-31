@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 
-import { encodePackedDate, localToday } from "../model/dates.ts";
+import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { AnyTask, Project, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
@@ -57,6 +57,15 @@ export interface ReorderPre {
 export interface PreState {
   /** Primary target for uuid-addressed operations. */
   target: AnyTask | null;
+  /**
+   * The response clock's local calendar date (guest/host clock), captured at
+   * pre-read. Feeds §9n reminder-liveness: the `when=` reminder auto-preserve
+   * (commands.ts `effectiveReminder`) gates a STALE reminder byte out against
+   * the target's CURRENT startDate under this date, rather than resurrecting a
+   * presentation-dead reminder. Defaults to the host today (emptyPreState); the
+   * date-bearing update preReads stamp the injected clock.
+   */
+  todayIso: IsoDate;
   destProject: ContainerResolution | null;
   /** Status of the resolved destination project (reopen hazard, T19). */
   destProjectStatus: TaskStatus | null;
@@ -169,6 +178,7 @@ export type ProjectRepeatTaxonomy =
 export function emptyPreState(): PreState {
   return {
     target: null,
+    todayIso: localToday(new Date()),
     destProject: null,
     destProjectStatus: null,
     destArea: null,

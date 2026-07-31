@@ -119,6 +119,18 @@ interface TaskCommon {
   deadline: IsoDate | null;
   /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
   reminder: ReminderTime | null;
+  /**
+   * Presence-keyed marker (`true` or absent): the stored {@link reminder} STILL
+   * RENDERS under the evaluation clock — i.e. `reminder` is set AND `startDate`
+   * is today-or-future (src/read/stage.ts `reminderIsLive`). §9n: once
+   * `startDate` goes strictly past, the GUI hides the reminder bell while the DB
+   * keeps the byte forever, so a stale reminder is presentation-dead — this
+   * marker is absent for it. Computed at materialize (mappers) with the response
+   * clock, exactly like the {@link today}/{@link evening} markers. INTERNAL: it
+   * gates the read-shaping `reminder` emit and the human-render bell, and is
+   * stripped from the JSON wire by the shaping transform. Set only when true.
+   */
+  reminderLive?: true;
   area: Ref | null;
   /** Direct tags only, by name — mirrors DB truth (inherited tags are computed; see inheritedTags). */
   tags: TagRef[];

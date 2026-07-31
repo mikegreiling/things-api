@@ -117,6 +117,54 @@ describe("shapeReadPayload — hasNotes marker (compact)", () => {
   });
 });
 
+describe("shapeReadPayload — §9n reminder gating (keys on the reminderLive marker)", () => {
+  // A stale reminder: the byte is on the entity (reminder set) but the
+  // materialize-time reminderLive marker is ABSENT (past startDate) — the GUI
+  // shows no bell, so the wire must omit the key. A live reminder carries the
+  // marker (today/future) and is kept. The marker itself never rides the wire.
+  it("drops a STALE reminder (marker absent) in list rows, both tiers", () => {
+    for (const full of [false, true]) {
+      const row = first(
+        shapeReadPayload("search", [todo({ startDate: "2026-07-01", reminder: "18:00" })], full),
+      );
+      expect("reminder" in row).toBe(false);
+      expect("reminderLive" in row).toBe(false); // internal marker never emitted
+    }
+  });
+
+  it("keeps a LIVE reminder (marker present) and strips only the marker, both tiers", () => {
+    for (const full of [false, true]) {
+      const row = first(
+        shapeReadPayload(
+          "search",
+          [todo({ startDate: "2026-07-15", reminder: "18:00", reminderLive: true })],
+          full,
+        ),
+      );
+      expect(row["reminder"]).toBe("18:00");
+      expect("reminderLive" in row).toBe(false); // internal marker never emitted
+    }
+  });
+
+  it("drops a STALE reminder on a detail read; keeps a live one", () => {
+    const stale = shapeReadPayload(
+      "detail",
+      todo({ startDate: "2026-07-01", reminder: "18:00" }),
+      false,
+    ) as Obj;
+    expect("reminder" in stale).toBe(false);
+    expect("reminderLive" in stale).toBe(false);
+
+    const live = shapeReadPayload(
+      "detail",
+      todo({ startDate: "2026-07-15", reminder: "18:00", reminderLive: true }),
+      false,
+    ) as Obj;
+    expect(live["reminder"]).toBe("18:00");
+    expect("reminderLive" in live).toBe(false);
+  });
+});
+
 describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () => {
   it("string tags fold from {title} objects to a plain array of names", () => {
     for (const full of [false, true]) {

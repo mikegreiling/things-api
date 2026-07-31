@@ -17,6 +17,7 @@ import {
   type TodaySection,
 } from "./entities.ts";
 import { decodeEpochReal, decodePackedDate, decodeReminderTime } from "./dates.ts";
+import { reminderIsLive } from "../read/stage.ts";
 
 /** Raw TMTask row shape (subset per schema manifest). */
 export interface TaskRow {
@@ -166,8 +167,19 @@ function todayMarkers(row: TaskRow, packedToday: number): { today?: true; evenin
 }
 
 function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number) {
+  const startDate = decodePackedDate(row.startDate);
+  const reminder = decodeReminderTime(row.reminderTime);
+  // §9n: a reminder byte renders only while startDate is today-or-future — a
+  // strictly-past startDate leaves the byte in the DB but presentation-dead.
+  // Bake that liveness into a presence-keyed marker under the response clock (as
+  // todayMarkers bakes Today/Evening), so the read-emit boundary and the human
+  // render gate on it without re-consulting a clock. decodePackedDate(packedToday)
+  // is today's ISO; reminderIsLive keeps null-startDate reminders (defensive).
+  const reminderLive =
+    reminder !== null && reminderIsLive(startDate, decodePackedDate(packedToday) ?? "");
   return {
     ...todayMarkers(row, packedToday),
+    ...(reminderLive ? { reminderLive: true as const } : {}),
     uuid: row.uuid,
     title: row.title ?? "",
     notes: row.notes ?? "",
@@ -178,7 +190,7 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday:
     logged: mapStatus(row) !== "open",
     trashed: row.trashed === 1,
     start: mapStart(row),
-    startDate: decodePackedDate(row.startDate),
+    startDate,
     todaySection: mapTodaySection(row, packedToday),
     // A template's own `deadline` column is not a real date: it is NULL
     // (deadline-less) or a far-future sentinel (4001-01-01, deadlined) that
@@ -188,7 +200,7 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday:
       row.rt1_recurrenceRule !== null || row.repeater !== null
         ? null
         : decodePackedDate(row.deadline),
-    reminder: decodeReminderTime(row.reminderTime),
+    reminder,
     // The EFFECTIVE area: a to-do nested in a project (own `area` NULL) reports
     // its container's area, restoring useful area info omit-empty (#163) would
     // otherwise hide. Projects and area-direct to-dos are unaffected (effective

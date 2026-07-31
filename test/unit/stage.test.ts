@@ -7,7 +7,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { deriveStage, deriveWhen, type StageInput, type WhenInput } from "../../src/read/stage.ts";
+import {
+  deriveStage,
+  deriveWhen,
+  reminderIsLive,
+  type StageInput,
+  type WhenInput,
+} from "../../src/read/stage.ts";
 import { shapeReadPayload } from "../../src/read/shape.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import {
@@ -99,6 +105,23 @@ const whenBase = (over: Partial<WhenInput> = {}): WhenInput => ({
   startDate: null,
   repeating: { isTemplate: false, nextOccurrence: null },
   ...over,
+});
+
+describe("reminderIsLive — the §9n stale-reminder boundary", () => {
+  const TODAY = "2026-07-15";
+  it("keeps a TODAY-dated reminder (boundary is inclusive)", () => {
+    expect(reminderIsLive("2026-07-15", TODAY)).toBe(true);
+  });
+  it("keeps a FUTURE-dated reminder (a live upcoming reminder)", () => {
+    expect(reminderIsLive("2026-07-16", TODAY)).toBe(true);
+  });
+  it("drops a STRICTLY-PAST reminder (presentation-dead per §9n)", () => {
+    expect(reminderIsLive("2026-07-14", TODAY)).toBe(false);
+    expect(reminderIsLive("2026-06-01", TODAY)).toBe(false);
+  });
+  it("keeps a NULL-startDate reminder (defensive — not a real app shape)", () => {
+    expect(reminderIsLive(null, TODAY)).toBe(true);
+  });
 });
 
 describe("deriveWhen — the time-axis position matrix (R12)", () => {

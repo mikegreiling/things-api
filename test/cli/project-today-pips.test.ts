@@ -74,7 +74,13 @@ function runCli(argv: string[]): string {
 /** Strip ANSI SGR so assertions match the visible glyphs/text. */
 const plain = (s: string): string => s.replace(/\[[0-9;]*m/g, "");
 
-function seedWorld(): { area: string; today: string; evening: string; stale: string } {
+function seedWorld(): {
+  area: string;
+  today: string;
+  evening: string;
+  stale: string;
+  live: string;
+} {
   const area = seedArea(fx.db, "Work", 0);
   const today = seedProject(fx.db, {
     title: "proj-today",
@@ -89,8 +95,10 @@ function seedWorld(): { area: string; today: string; evening: string; stale: str
     startDate: "2026-07-31",
     evening: true,
   });
-  // STALE bytes: startBucket=1 (evening) but the startDate is in the PAST — the
-  // evening marker expires daily, so this row is Today, not This Evening.
+  // STALE bytes: startBucket=1 (evening) AND a reminderTime, but the startDate is
+  // in the PAST — §9n: the app hides BOTH the evening placement and the reminder
+  // bell daily while the bytes linger, so this row is plain Today with NO
+  // reminder.
   const stale = seedProject(fx.db, {
     title: "proj-stale",
     area,
@@ -99,8 +107,17 @@ function seedWorld(): { area: string; today: string; evening: string; stale: str
     evening: true,
     reminder: "18:00",
   });
+  // LIVE reminder: startDate is TODAY, so the reminder still renders — the format
+  // fixtures ride this row (§9n keeps today/future reminders).
+  const live = seedProject(fx.db, {
+    title: "proj-live",
+    area,
+    start: "active",
+    startDate: "2026-07-31",
+    reminder: "18:00",
+  });
   seedProject(fx.db, { title: "proj-anytime", area });
-  return { area, today, evening, stale };
+  return { area, today, evening, stale, live };
 }
 
 describe("wire: project rows emit `when` like to-dos", () => {
@@ -131,13 +148,21 @@ describe("wire: project rows emit `when` like to-dos", () => {
     expect(byTitle.get("proj-stale")).toBe("today");
   });
 
-  it("the wire reminder stays 24-hour HH:MM (machine format unchanged)", () => {
+  it("the wire reminder stays 24-hour HH:MM on a LIVE row (machine format unchanged)", () => {
     seedWorld();
     const env = JSON.parse(runCli(["projects", "--json", "--full"]));
-    const stale = (env.data.items as Array<{ title: string; reminder?: string }>).find(
-      (p) => p.title === "proj-stale",
+    const byTitle = new Map(
+      (env.data.items as Array<{ title: string; reminder?: string }>).map((p) => [
+        p.title,
+        p.reminder,
+      ]),
     );
-    expect(stale?.reminder).toBe("18:00");
+    // A today-dated reminder is live — kept, 24h HH:MM.
+    expect(byTitle.get("proj-live")).toBe("18:00");
+    // §9n: the stale row's reminder byte lingers in the DB but is presentation-
+    // dead — the wire omits the key entirely (presence-keyed), mirroring the GUI.
+    expect(byTitle.has("proj-stale")).toBe(true);
+    expect(byTitle.get("proj-stale")).toBeUndefined();
   });
 });
 
@@ -167,10 +192,26 @@ describe("TTY when/Today/Evening is single-source (consumes the derived `when`)"
     expect(out).not.toContain("This Evening");
   });
 
-  it("the TTY reminder chip renders 12-hour (h:mmam/pm)", () => {
-    const { stale } = seedWorld();
-    const out = plain(runCli(["show", stale]));
+  it("the TTY reminder chip renders 12-hour (h:mmam/pm) on a LIVE row", () => {
+    const { live } = seedWorld();
+    const out = plain(runCli(["show", live]));
     expect(out).toContain("6:00pm");
     expect(out).not.toContain("18:00");
+  });
+
+  it("§9n: a STALE reminder shows no bell — chip absent in the list row AND the card", () => {
+    const { stale } = seedWorld();
+    // Detail card (whenValue): the reminder is gone, and the row is plain Today.
+    const card = plain(runCli(["show", stale]));
+    expect(card).toContain("★ Today");
+    expect(card).not.toContain("6:00pm");
+    expect(card).not.toContain("18:00");
+    expect(card).not.toContain("◷");
+    // List row (formatItem tail bell) — the ◷ reminder mark is absent too.
+    const row =
+      plain(runCli(["projects"]))
+        .split("\n")
+        .find((l) => l.includes("proj-stale")) ?? "";
+    expect(row).not.toContain("◷");
   });
 });

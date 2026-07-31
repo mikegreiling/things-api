@@ -9,6 +9,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   decodeReminderTime,
   encodeReminderTime,
+  localToday,
   reminderUrlToken,
   type IsoDate,
   type ReminderTime,
@@ -16,6 +17,7 @@ import {
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { isLooseRef } from "../read/pseudo-area.ts";
+import { reminderIsLive } from "../read/stage.ts";
 import type { HazardId } from "./guards.ts";
 import type {
   ContainerRef,
@@ -341,6 +343,14 @@ const todoAdd: CommandSpec<"todo.add"> = {
  * `when=` CLEARS an existing reminder (R07/R20), so when the caller
  * re-schedules to today/evening/a date without addressing the reminder we
  * auto-preserve the current one; an explicit null is the intentional clear.
+ *
+ * §9n: a reminder whose row's `startDate` is already strictly PAST is
+ * presentation-dead (the GUI hides its bell; the byte lingers in the DB). We do
+ * NOT auto-preserve such a stale byte — carrying it into the re-schedule would
+ * RESURRECT a reminder the user believes gone. A LIVE reminder (startDate
+ * today/future) is preserved as before. The liveness test is the SAME
+ * {@link reminderIsLive} predicate the read side gates on, consulted against the
+ * target's CURRENT `startDate` under the response clock.
  */
 function effectiveReminder(
   pre: PreState,
@@ -355,6 +365,7 @@ function effectiveReminder(
   if (!schedulable) return null;
   const target = pre.target;
   if (target === null || target.type === "heading") return null;
+  if (!reminderIsLive(target.startDate, pre.todayIso)) return null;
   return target.reminder;
 }
 
@@ -390,9 +401,10 @@ function expectedNotes(pre: PreState, params: { appendNotes?: string; prependNot
 const todoUpdate: CommandSpec<"todo.update"> = {
   op: "todo.update",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
-  preRead(db, params) {
+  preRead(db, params, now) {
     assertNotesModesExclusive(params);
     const pre = emptyPreState();
+    pre.todayIso = localToday(now);
     pre.target = loadTarget(db, params.uuid);
     return pre;
   },
@@ -783,9 +795,10 @@ const projectAdd: CommandSpec<"project.add"> = {
 const projectUpdate: CommandSpec<"project.update"> = {
   op: "project.update",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE", "H-REMINDER-SCOPE"],
-  preRead(db, params) {
+  preRead(db, params, now) {
     assertNotesModesExclusive(params);
     const pre = emptyPreState();
+    pre.todayIso = localToday(now);
     pre.target = loadTarget(db, params.uuid);
     return pre;
   },
