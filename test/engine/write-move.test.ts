@@ -701,7 +701,7 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
       expect(r.placementClass).toBe("guaranteed");
-      expect(r.note).toContain("loose future-day group");
+      expect(r.note).toContain("loose 2026-07-20 day-group");
     }
     // Block a,b landed at the top of the day in selection order.
     expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
@@ -913,7 +913,7 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
       position: { at: "first" },
     });
     expect(r.kind).toBe("move-ok");
-    if (r.kind === "move-ok") expect(r.note).toContain("loose future-day group");
+    if (r.kind === "move-ok") expect(r.note).toContain("loose 2026-07-20 day-group");
     expect(calls).toContain("project.add"); // the scratch-park compound ran
   });
 
@@ -980,7 +980,7 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
       expect(r.placementClass).toBe("guaranteed");
-      expect(r.note).toContain("loose future-day group");
+      expect(r.note).toContain("loose 2026-07-20 day-group");
     }
     // The UPCORD1 park-sort-unpark protocol ran — NOT a Someday when= bounce.
     expect(calls).toContain("project.add");
@@ -1173,6 +1173,153 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     };
     expect(row.start).toBe(2);
     expect(row.startDate).toBe(encodePackedDate("2026-07-20"));
+  });
+});
+
+describe("regression: ARRIVED container children are Today members, not day-group members", () => {
+  // BUG (2026-07-31): the dated branches of reorderTargetOf classified a row by
+  // its date-GROUP without first checking arrived-ness, so an arrived container
+  // child (startDate <= today) misrouted into a future day-group compound
+  // (area-day / container-day / heading-day) instead of the shipped today/evening
+  // scopes — the same class of bug #325 fixed in scheduleBucket. The GUI renders
+  // arrived/today-dated rows in TODAY; the Upcoming day-groups hold STRICTLY
+  // FUTURE dates only. NOW = 2026-07-05; "2026-07-03" is a 2-day-past arrival.
+
+  /** The reorder scope an in-place reorder of these movees routes to (dry-run). */
+  async function routedScope(uuids: string[]): Promise<string> {
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids }, { dryRun: true });
+    if (r.kind !== "move-dry-run") throw new Error(`expected move-dry-run, got ${r.kind}`);
+    return r.plan.placement;
+  }
+
+  it("an arrived (2-day-past) direct-area to-do routes to the today scope, NOT area-day", async () => {
+    const area = seedArea(fixture.db, "A");
+    const arrived = seedTodo(fixture.db, {
+      title: "arrived",
+      area,
+      start: "someday", // app-true dated form (start=2 + a date)
+      startDate: "2026-07-03",
+      todayIndex: 1,
+    });
+    const placement = await routedScope([arrived]);
+    expect(placement).toContain("scope=today");
+    expect(placement).not.toContain("area-day");
+  });
+
+  it("an evening-flagged today-dated direct-area to-do routes to the evening scope", async () => {
+    const area = seedArea(fixture.db, "A");
+    const eve = seedTodo(fixture.db, {
+      title: "eve",
+      area,
+      startDate: "2026-07-05", // today
+      evening: true, // startBucket=1 → This Evening (live only while date == today, §9n)
+      todayIndex: 1,
+    });
+    expect(await routedScope([eve])).toContain("scope=evening");
+  });
+
+  it("a today-dated project child routes to the today scope, NOT container-day", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const child = seedTodo(fixture.db, {
+      title: "child",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-05", // today (arrived)
+      todayIndex: 1,
+    });
+    const placement = await routedScope([child]);
+    expect(placement).toContain("scope=today");
+    expect(placement).not.toContain("container-day");
+  });
+
+  it("an arrived headed child routes to the today scope, NOT heading-day", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const child = seedTodo(fixture.db, {
+      title: "hc",
+      heading,
+      start: "someday",
+      startDate: "2026-07-03", // arrived
+      todayIndex: 1,
+    });
+    const placement = await routedScope([child]);
+    expect(placement).toContain("scope=today");
+    expect(placement).not.toContain("heading-day");
+  });
+
+  it("strictly-FUTURE dates are unchanged — each container child keeps its day-group scope", async () => {
+    // The fix reroutes ONLY arrived rows; a future date keeps day-group routing.
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const area = seedArea(fixture.db, "A");
+    const projChild = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const headChild = seedTodo(fixture.db, {
+      title: "hc",
+      heading,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const areaChild = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const looseRow = seedTodo(fixture.db, {
+      title: "loose",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    expect(await routedScope([projChild])).toContain("scope=container-day");
+    expect(await routedScope([headChild])).toContain("scope=heading-day");
+    expect(await routedScope([areaChild])).toContain("scope=area-day");
+    expect(await routedScope([looseRow])).toContain("scope=loose-day");
+  });
+});
+
+describe("regression: day-group refusal copy carries the ISO date (no self-contradiction)", () => {
+  // BUG (2026-07-31): every day-group container label rendered WITHOUT its date,
+  // so a cross-day anchor refusal read "the anchor … is in the loose future-day
+  // group, not the movees' container (the loose future-day group)" — the same
+  // label on both sides. A day-group's identity IS its day, so the label must
+  // name the ISO date. NOW = 2026-07-05.
+
+  it("a cross-day loose anchor refusal names BOTH dates and reads coherently", async () => {
+    const movee = seedTodo(fixture.db, {
+      title: "m",
+      start: "someday",
+      startDate: "2026-08-05",
+      todayIndex: 1,
+    });
+    // The anchor is a loose scheduled PROJECT on a DIFFERENT future day (the repro
+    // shape) — targetOf treats a loose row as a loose future-day member either way.
+    const anchor = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: "2026-08-07",
+      todayIndex: 1,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [movee],
+      position: { after: anchor },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.detail).toContain("the loose 2026-08-05 day-group");
+      expect(r.detail).toContain("the loose 2026-08-07 day-group");
+      // The old date-less label must be gone (it was identical on both sides).
+      expect(r.detail).not.toContain("the loose future-day group");
+      expect(r.detail).toContain("an anchor positions, it never migrates");
+    }
   });
 });
 
