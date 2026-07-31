@@ -12,11 +12,13 @@ import { mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskRows, makeRefResolver, resolveAreaUuid } from "./queries.ts";
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import { OVERDUE } from "./predicates.ts";
+import { isLooseRef } from "./pseudo-area.ts";
 import { areaTags } from "./tags.ts";
 import { tagFilter, type ViewFilter } from "./views.ts";
 
 export interface AreaView {
-  area: Area;
+  /** The area, or `null` for the `loose` pseudo-area (the NULL-area composite). */
+  area: Area | null;
   /** Open, unscheduled/current direct to-dos, by index. */
   active: Todo[];
   /** The area's open projects in sidebar order (someday projects included). */
@@ -60,20 +62,48 @@ export function areaView(
   zone?: string,
 ): AreaView {
   const overdue = filter.overdue === true;
-  const uuid = resolveAreaUuid(db, ref);
-  const row = db
-    .prepare(`SELECT uuid, title, visible, "index" FROM TMArea WHERE uuid = ?`)
-    .get(uuid) as
-    | { uuid: string; title: string | null; visible: number | null; index: number | null }
-    | undefined;
-  if (row === undefined) throw new Error(`no area with uuid ${uuid}`);
-  const area: Area = {
-    uuid: row.uuid,
-    title: row.title ?? "",
-    visible: row.visible !== 0,
-    // Area tags by NAME only (tag uuids are internal).
-    tags: areaTags(db, uuid).map((t) => ({ title: t.title })),
-  };
+  // The reserved `loose` ref addresses the NULL area (area-less items) as a
+  // pseudo-area: `area === null`, and the per-kind area predicates swap to the
+  // NULL-area membership rule (projects with no area; direct to-dos with no area
+  // AND no project AND not in the Inbox). Every other filter/section behaves
+  // identically, so the two paths differ ONLY in the area clause + the synthetic
+  // null area object.
+  const loose = isLooseRef(ref);
+  let area: Area | null;
+  // The per-kind area membership: PROJECTS filter on the area FK; DIRECT to-dos
+  // additionally exclude project-nested rows and Inbox captures (start=0) — a
+  // real area's `t.area = ?` gets those exclusions for free (an inbox/nested row
+  // carries no area FK), so they only appear in the NULL-area branch.
+  let projectAreaSql: string;
+  let projectAreaBinds: (string | number)[];
+  let todoAreaSql: string;
+  let todoAreaBinds: (string | number)[];
+  if (loose) {
+    area = null;
+    projectAreaSql = "t.area IS NULL";
+    projectAreaBinds = [];
+    todoAreaSql = "t.area IS NULL AND t.project IS NULL AND t.start != 0";
+    todoAreaBinds = [];
+  } else {
+    const uuid = resolveAreaUuid(db, ref);
+    const row = db
+      .prepare(`SELECT uuid, title, visible, "index" FROM TMArea WHERE uuid = ?`)
+      .get(uuid) as
+      | { uuid: string; title: string | null; visible: number | null; index: number | null }
+      | undefined;
+    if (row === undefined) throw new Error(`no area with uuid ${uuid}`);
+    area = {
+      uuid: row.uuid,
+      title: row.title ?? "",
+      visible: row.visible !== 0,
+      // Area tags by NAME only (tag uuids are internal).
+      tags: areaTags(db, uuid).map((t) => ({ title: t.title })),
+    };
+    projectAreaSql = "t.area = ?";
+    projectAreaBinds = [uuid];
+    todoAreaSql = "t.area = ?";
+    todoAreaBinds = [uuid];
+  }
 
   const refs = makeRefResolver(db);
   const tagsOf = (rows: TaskRow[]) =>
@@ -109,9 +139,9 @@ export function areaView(
   // OVERDUE predicate's own `status = 0` narrows this to open overdue projects.
   const projectRows = fetchTaskRows(
     db,
-    `t.type = 1 AND t.area = ? AND t.trashed = 0
+    `t.type = 1 AND ${projectAreaSql} AND t.trashed = 0
      AND (t.status = 0 OR t.stopDate > ?)${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
-    [uuid, boundary.getTime() / 1000, ...overdueBinds, ...tf.binds],
+    [...projectAreaBinds, boundary.getTime() / 1000, ...overdueBinds, ...tf.binds],
   );
   const projectTags = tagsOf(projectRows);
   const projects = markLogged(
@@ -121,8 +151,8 @@ export function areaView(
 
   const todoRows = fetchTaskRows(
     db,
-    `t.type = 0 AND t.area = ?${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
-    [uuid, ...overdueBinds, ...tf.binds],
+    `t.type = 0 AND ${todoAreaSql}${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
+    [...todoAreaBinds, ...overdueBinds, ...tf.binds],
   );
   const todoTags = tagsOf(todoRows);
   const todos = todoRows.map((r) => ({

@@ -27,6 +27,7 @@ import {
   resolveTaskUuidPrefix,
 } from "./read/queries.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
+import { isLooseRef, looseShadowNotice, shadowingLooseArea } from "./read/pseudo-area.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
 import { classifyShowTarget, type ShowTarget } from "./read/show-target.ts";
@@ -267,6 +268,12 @@ export interface BoundedSectionsView {
 export interface BoundedAreaView {
   view: AreaView;
   truncation: Truncation;
+  /**
+   * A resolution disclosure — present ONLY on the `loose` pseudo-area read when
+   * a real area shadows the reserved word (names it, by uuid, for targeting).
+   * Surfaced by the consumers as a `meta.warnings` advisory.
+   */
+  notice?: string;
 }
 
 /** Resolve a flat-view row cap (omitted → default 50; null or all → unbounded). */
@@ -1002,7 +1009,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         // Area scope → only the scope area is viewable; project scope → an area
         // is broader than the jail, so ANY areaView is not-found. Resolve
         // scope-aware first so an out-of-scope area throws the same not-found a
-        // nonexistent one does.
+        // nonexistent one does. The `loose` pseudo-area is the NULL area — it
+        // lies outside every container jail, so a scope resolves it not-found
+        // (the reserved word never matches an in-scope area name).
         if (scope !== undefined) {
           const clause =
             scope.kind === "area"
@@ -1016,7 +1025,14 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           now(),
           zoneOf(o),
         );
-        return { view: data, truncation };
+        // Reserved-word disclosure: `loose` ALWAYS wins over a real area named
+        // "Loose"; when one shadows, name it (by uuid) so it stays targetable.
+        const shadow = isLooseRef(ref) ? shadowingLooseArea(conn.db) : undefined;
+        return {
+          view: data,
+          truncation,
+          ...(shadow !== undefined && { notice: looseShadowNotice(shadow) }),
+        };
       },
       areas: () => {
         const areas = areasView(conn.db);

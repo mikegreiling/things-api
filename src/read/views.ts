@@ -124,6 +124,7 @@ import {
   OVERDUE,
   PROJECT_ANYTIME_ACTIVE,
 } from "./predicates.ts";
+import { isLooseRef } from "./pseudo-area.ts";
 import { groupBySidebar } from "./sidebar-order.ts";
 import type { Area } from "../model/entities.ts";
 import { areasView } from "./tags.ts";
@@ -859,8 +860,12 @@ export function projectsView(
   } & ViewFilter,
 ): Project[] {
   // areaUuid accepts a uuid OR a unique (case-insensitive) title; ambiguous
-  // or unknown references throw like every other ref resolver.
-  const area = options?.areaUuid === undefined ? null : resolveAreaUuid(db, options.areaUuid);
+  // or unknown references throw like every other ref resolver. The reserved
+  // `loose` ref scopes to the NULL area (area-less projects) — the sidebar's
+  // leading loose block — with no uuid to resolve.
+  const loose = options?.areaUuid !== undefined && isLooseRef(options.areaUuid);
+  const area =
+    options?.areaUuid === undefined || loose ? null : resolveAreaUuid(db, options.areaUuid);
   const packedToday = encodePackedDate(localToday(options?.now, options?.zone));
   // Tag scope (§9a): the projects LIST is a FLAT view (like `anytime` restricted
   // to project rows), NOT a single-container view — projects sit in different
@@ -891,10 +896,14 @@ export function projectsView(
   // (area-less) projects first in their own drag order — the GUI lists them
   // above the areas — then each area by ITS sidebar rank (TMArea."index"),
   // projects within an area by their drag order.
-  const where = area
-    ? `${OPEN} AND t.type = 1 AND t.area = ?${laterSql}${overdueSql}${tf.sql}
+  // A single-group flat listing (loose OR a real area) shares one ORDER shape;
+  // only the unscoped sidebar catalogue interleaves areas by their rank.
+  const areaClause = loose ? " AND t.area IS NULL" : area ? " AND t.area = ?" : "";
+  const where =
+    loose || area
+      ? `${OPEN} AND t.type = 1${areaClause}${laterSql}${overdueSql}${tf.sql}
        ORDER BY ${activeFirst}t."index" ASC`
-    : `${OPEN} AND t.type = 1${laterSql}${overdueSql}${tf.sql} ORDER BY (t.area IS NOT NULL) ASC,
+      : `${OPEN} AND t.type = 1${laterSql}${overdueSql}${tf.sql} ORDER BY (t.area IS NOT NULL) ASC,
        (SELECT a."index" FROM TMArea a WHERE a.uuid = t.area) ASC, ${activeFirst}t."index" ASC`;
   const rows = fetchTaskRows(db, where, [
     ...(area ? [area] : []),

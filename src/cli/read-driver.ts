@@ -132,6 +132,13 @@ export interface PagedResult<T> {
   /** Active content filter (the `--area` scope) — carried into `meta.filter`. */
   filter?: ViewFilterMeta;
   /**
+   * Additional non-blocking advisories from the read itself (ADDITIVE), merged
+   * with the schema-drift warnings into `meta.warnings` (and echoed once on
+   * stderr for human output). Used by the `loose` pseudo-area reads to surface
+   * the resolution-shadow disclosure.
+   */
+  warnings?: string[];
+  /**
    * Precomputed human lines. Grouped views render inside `fn` (where the full
    * per-block totals live) and hand the finished lines back here; when absent,
    * `render(data)` produces them.
@@ -168,8 +175,17 @@ export function runRead<T>(
     const fp = client.fingerprint();
     // Reads never block on a schema change — they warn (design decision). The
     // note reuses the same cached fingerprint the write path gates on.
-    const warnings = schemaWarnings(client.schemaStatus());
-    const { data, truncation, kind: kindOverride, filter, lines: precomputed } = fn(client);
+    const {
+      data,
+      truncation,
+      kind: kindOverride,
+      filter,
+      warnings: readWarnings,
+      lines: precomputed,
+    } = fn(client);
+    // Schema-drift advisories plus any read-specific advisories (e.g. the loose
+    // pseudo-area resolution-shadow disclosure).
+    const warnings = [...schemaWarnings(client.schemaStatus()), ...(readWarnings ?? [])];
     const effectiveKind = kindOverride ?? kind;
     // The canonical command a sugar invocation normalized to — known now that
     // `fn` has resolved any reference. Present only for the routing sugars
@@ -314,8 +330,19 @@ export function withClient<T>(
   kind: string,
   fn: (client: ThingsClient) => T,
   render: (data: T) => string[],
+  /** Optional read-specific advisories (merged into `meta.warnings` + stderr). */
+  warnings?: (client: ThingsClient) => string[] | undefined,
 ): void {
-  runRead<T>(opts, kind, (client) => ({ data: fn(client) }), render);
+  runRead<T>(
+    opts,
+    kind,
+    (client) => {
+      const data = fn(client);
+      const w = warnings?.(client);
+      return { data, ...(w !== undefined && w.length > 0 && { warnings: w }) };
+    },
+    render,
+  );
 }
 
 /** Result of resolving `--limit`/`--all`; `limit: null` means every row. */

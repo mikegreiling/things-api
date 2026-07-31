@@ -11,6 +11,8 @@ import {
   AREA_PREVIEW_LIMIT,
   FULL_DESC,
   GROUPED_ALL_DESC,
+  isLooseRef,
+  LOOSE_OPEN_REFUSAL,
   stripThingsUri,
   type AnyTask,
   type AreaView,
@@ -104,8 +106,9 @@ export function registerShowCommands(program: Command): void {
     .description(
       "Render whatever the reference points at: a to-do, a project (a heading reference " +
         "shows its containing project), or an area. Accepts a uuid, a >=6-char uuid " +
-        "prefix (as printed in every list view), a things:/// share link, or an area " +
-        "name. Tags and checklist items have no show view. The word `show` may be " +
+        "prefix (as printed in every list view), a things:/// share link, an area " +
+        "name, or the reserved word `loose` (the area-less items). Tags and checklist " +
+        "items have no show view. The word `show` may be " +
         "omitted: `things <ref>` works whenever <ref> is not a command name (command " +
         "names always win — `things area show <name>` targets an item that shares a " +
         "view's name). A list-view name is that view: " +
@@ -235,6 +238,7 @@ export function registerShowCommands(program: Command): void {
                 data: bounded.view,
                 kind: "area-view",
                 truncation: bounded.truncation,
+                ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
                 lines: renderAreaView(bounded.view, bounded.truncation, {
                   ...opts,
                   limits,
@@ -267,6 +271,19 @@ export function registerShowCommands(program: Command): void {
     .option("--db <path>", "explicit database path")
     .action((ref: string, opts: { json?: boolean; db?: string }) => {
       const lower = ref.toLowerCase();
+      // The loose pseudo-area is a derived view (READ only) — it has no app
+      // screen to open; refuse by name, not a generic no-such-resource error.
+      if (isLooseRef(ref)) {
+        withClient(
+          opts,
+          "open",
+          () => {
+            throw new RangeError(LOOSE_OPEN_REFUSAL);
+          },
+          () => [],
+        );
+        return;
+      }
       // Open's vocabulary belongs to the app: only the seven URL-scheme ids
       // launch directly. The plural list-view names (projects/areas/tags) are
       // valid `show` keywords but have no app screen to open — reject them with
