@@ -555,10 +555,19 @@ describe("things MCP server", () => {
       arguments: { kind: "project", uuid: "Dup", title: "x" },
     });
     expect(result.isError).toBe(true);
-    const err = textOf(result) as { code: string; details?: { candidates?: unknown[] } };
+    const err = textOf(result) as {
+      code: string;
+      details?: { candidates?: Record<string, unknown>[] };
+    };
     expect(err.code).toBe("ambiguous");
     expect(err.details?.candidates).toHaveLength(2);
-    expect(err.details?.candidates?.[0]).toHaveProperty("title", "Dup");
+    // Library shape flows through unchanged: the MCP candidate is the SAME fixed
+    // {@link CandidateRef} the CLI emits — type-tagged, allowed keys only.
+    const cand = err.details?.candidates?.[0] ?? {};
+    expect(cand).toHaveProperty("title", "Dup");
+    expect(cand).toHaveProperty("type", "project");
+    const allowed = new Set(["uuid", "title", "type", "area", "project", "stage", "when"]);
+    for (const k of Object.keys(cand)) expect(allowed.has(k)).toBe(true);
   });
 
   it("a not-found write target returns code=not-found (structured, empty candidates)", async () => {

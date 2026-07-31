@@ -8,7 +8,12 @@
 import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
-import { candidatesJson, DidYouMeanError, renderDidYouMean } from "./did-you-mean.ts";
+import {
+  candidatesJson,
+  DidYouMeanError,
+  didYouMeanMessage,
+  renderDidYouMean,
+} from "./did-you-mean.ts";
 import {
   ClockError,
   DEFAULT_LIST_LIMIT,
@@ -268,7 +273,7 @@ export function runRead<T>(
             errorEnvelope(
               {
                 code: "not-found",
-                message: err.message,
+                message: didYouMeanMessage(err),
                 detail: { candidates: candidatesJson(err) },
               },
               meta,

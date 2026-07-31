@@ -182,7 +182,11 @@ export type { AreaFilterTarget, AreaScopedRead, ViewFilterMeta } from "./read/ar
 // when it resolves to zero or several entities, carrying the machine shape the
 // CLI --json envelope and MCP tool errors surface (code + candidates).
 export { ReferenceResolutionError } from "./read/queries.ts";
-export type { RefCandidate } from "./read/queries.ts";
+// The ONE fixed error-candidate shape and its single-source projector — the DTO
+// a not-found/ambiguous resolution and the did-you-mean fallback list under
+// `error.detail.candidates`. See src/read/shape.ts.
+export { candidateRef, CANDIDATE_CAP } from "./read/shape.ts";
+export type { CandidateRef, CandidateType } from "./read/shape.ts";
 
 // Container-scoped sandbox: the pinned-scope shape (surfaced as `meta.scope` and
 // `client.scope`) and the fail-closed error a bad `--scope` raises. See
@@ -243,7 +247,7 @@ export type { When } from "./read/stage.ts";
 export type { LiteCandidate, LiteSearchResult } from "./read/views.ts";
 export { partitionSomedaySection, splitSectionBlocks } from "./read/sections.ts";
 export type { GroupedLimits } from "./read/sections.ts";
-export { noUuidMatch, stripThingsUri } from "./read/queries.ts";
+export { deadNameMatchHint, noUuidMatch, stripThingsUri } from "./read/queries.ts";
 export type { Snapshot } from "./read/snapshot.ts";
 export type { ShowTarget } from "./read/show-target.ts";
 export type { ChecklistEdit } from "./client.ts";

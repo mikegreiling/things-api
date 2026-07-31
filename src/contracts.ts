@@ -244,9 +244,11 @@ export interface ErrorEnvelope {
      * key is present only for the failures that produce it:
      *  - `expected` / `observed` — a verify-failed mutation's expected delta and
      *    the observed post-write state.
-     *  - `candidates` — did-you-mean title matches for an unresolved
-     *    show/bare-noun subject (standard item shapes, capped), so an agent can
-     *    self-correct without another round-trip.
+     *  - `candidates` — the disambiguation list for a not-found / ambiguous
+     *    resolution (or a show/bare-noun did-you-mean): the ONE fixed, flag-
+     *    invariant candidate shape (`CandidateRef`; see docs/contract.md), a
+     *    LIVE-scoped pool capped at 8, so an agent can self-correct without
+     *    another round-trip.
      *  - `suggestions` — for a bare mutation verb (`things update <ref>`), the
      *    concrete namespaced command(s) to run instead.
      *  - `considered` — the vectors weighed (and why each was rejected) for an

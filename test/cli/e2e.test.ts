@@ -1989,30 +1989,44 @@ describe("cli did-you-mean fallback (item 4)", () => {
     expect(out.stderr).toContain("or try: `things search 'outru'`");
   });
 
-  it("--json carries error.detail.candidates (standard item shapes), exit 2", () => {
+  it("--json carries error.detail.candidates in the fixed shape (no entity leak), exit 2", () => {
     seedWorld();
     const out = runCli(["outru", "--json", "--db", fx!.path]);
     expect(out.exitCode).toBe(2);
     const env = JSON.parse(out.stdout);
     expect(env.ok).toBe(false);
     expect(env.error.code).toBe("not-found");
-    const titles = env.error.detail.candidates.map((c: { title: string }) => c.title);
+    const candidates = env.error.detail.candidates as Record<string, unknown>[];
+    const titles = candidates.map((c) => c.title as string);
     expect(titles).toEqual(expect.arrayContaining(["OutRun Restoration", "OutRun Wiring"]));
+    // WIRE schema pin: every candidate carries ONLY the fixed keys — a future
+    // field leak (the old raw-entity emit shipped notes/counts/todaySection/…)
+    // fails here loudly.
+    const allowed = new Set(["uuid", "title", "type", "area", "project", "stage", "when"]);
+    for (const c of candidates) {
+      for (const k of Object.keys(c)) expect(allowed.has(k)).toBe(true);
+      expect(c).not.toHaveProperty("notes");
+      expect(c).not.toHaveProperty("untrashedLeafActionsCount");
+      expect(c).not.toHaveProperty("todaySection");
+      expect(typeof c.type).toBe("string");
+    }
+    // a project candidate names its kind
+    expect(candidates.find((c) => c.title === "OutRun Restoration")?.type).toBe("project");
   });
 
-  it("caps the candidate list at ~10 and reports `… n more`", () => {
+  it("caps the candidate list at 8 and reports `… n more`", () => {
     fx = buildFixtureDb();
     for (let i = 0; i < 15; i++) seedTodo(fx!.db, { title: `match ${i}`, index: i });
     // Bare `match` has no exact name, so it fails resolution; did-you-mean then
-    // lists the 15 title-substring matches, capped at 10.
+    // lists the 15 title-substring matches, capped at CANDIDATE_CAP (8).
     const json = runCli(["match", "--json", "--db", fx!.path]);
     expect(json.exitCode).toBe(2);
     const env = JSON.parse(json.stdout);
     expect(env.ok).toBe(false);
-    expect(env.error.detail.candidates).toHaveLength(10);
+    expect(env.error.detail.candidates).toHaveLength(8);
     const human = runCliErr(["match", "--db", fx!.path]);
     expect(human.exitCode).toBe(2);
-    expect(human.stderr).toContain("5 more — `things search 'match'`");
+    expect(human.stderr).toContain("7 more — `things search 'match'`");
   });
 
   it("empty lite-search = plain error + suggestion, no candidate block", () => {
@@ -2021,6 +2035,22 @@ describe("cli did-you-mean fallback (item 4)", () => {
     expect(out.exitCode).toBe(2);
     expect(out.stderr).not.toContain("did you mean:");
     expect(out.stderr).toContain("or try:");
+  });
+
+  it("zero LIVE matches but a trashed/logged row matches → honest dead-row hint, no dead candidate", () => {
+    fx = buildFixtureDb();
+    // one trashed + one swept-logbook to-do, both matching the name; NO live row.
+    seedTodo(fx!.db, { title: "Phantom Task", trashed: true });
+    seedTodo(fx!.db, { title: "Phantom Task", status: "completed", stopDate: 1_000_000 });
+    const json = JSON.parse(runCli(["Phantom Task", "--json", "--db", fx!.path]).stdout);
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("not-found");
+    expect(json.error.detail.candidates).toEqual([]); // dead rows are NOT candidates
+    expect(json.error.message).toContain("1 trashed item matches this name — see `things trash`");
+    expect(json.error.message).toContain("1 logbook item matches this name — see `things logbook`");
+    // the human render surfaces the same hint on its error line
+    const human = runCliErr(["Phantom Task", "--db", fx!.path]);
+    expect(human.stderr).toContain("see `things trash`");
   });
 
   it("TYPED scoping: namespace/explicit paths list only that type", () => {
