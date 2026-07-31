@@ -1514,39 +1514,66 @@ interface HeadingMoveOpParams {
 }
 
 /**
- * Re-head sim (heading-someday): a `todo.move` with a heading param BACK-INSERTS
- * the movee at the heading someday-bucket end (index = current max + step), the
- * heading FK set + project NULL + start=2 kept (HEADSUB1 Arm B-someday). Reads
- * the structured op/opParams, never the compiled URL.
+ * Re-head sim (heading-someday), FAITHFUL to HEADSUB2 Q1:
+ *   - unhead (`noHeading`) clears the heading + re-asserts the heading's project,
+ *     keeping index/start (Arm C);
+ *   - a `todo.move` with a heading param where the row is ALREADY under that
+ *     heading is a same-heading NO-OP — index untouched (HEADSUB2 Q1(b));
+ *   - a re-head of a now-LOOSE row (heading != target) BACK-INSERTS at the heading
+ *     someday-bucket end (index = current max + step), heading FK set + project
+ *     NULL + start=2 kept (HEADSUB1 Arm B-someday).
+ * So a direct re-head of an already-headed block is inert; only the unhead →
+ * re-head round-trip sorts. Reads structured op/opParams, never the compiled URL.
  */
 function reheadVector() {
   const calls: string[] = [];
+  const legKinds: string[] = []; // "unhead" | "rehead" per todo.move leg
   const vector: WriteVector = {
     id: "url-scheme",
     matrix: { "todo.move": { support: "yes", disruption: 0, validation: "validated" } },
     async execute(inv) {
       calls.push(inv.op ?? "?");
       const p = inv.opParams as HeadingMoveOpParams;
-      if (inv.op === "todo.move" && p.heading !== undefined) {
-        const max = fixture.db
-          .prepare(
-            `SELECT MAX("index") AS m FROM TMTask WHERE heading = ? AND start = 2
-             AND startDate IS NULL AND trashed = 0 AND status = 0 AND uuid != ?`,
-          )
-          .get(p.heading, p.uuid) as { m: number | null };
-        fixture.db
-          .prepare(
-            `UPDATE TMTask SET heading = ?, project = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
-          )
-          .run(p.heading, (max.m ?? 0) + 10, modClock++, p.uuid);
+      if (inv.op === "todo.move") {
+        legKinds.push(p.noHeading === true ? "unhead" : "rehead");
+        const cur = fixture.db.prepare("SELECT heading FROM TMTask WHERE uuid = ?").get(p.uuid) as {
+          heading: string | null;
+        };
+        if (p.noHeading === true) {
+          const projRow =
+            cur.heading !== null
+              ? (fixture.db
+                  .prepare("SELECT project FROM TMTask WHERE uuid = ?")
+                  .get(cur.heading) as { project: string | null })
+              : { project: null };
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET heading = NULL, project = ?, userModificationDate = ? WHERE uuid = ?",
+            )
+            .run(projRow.project, modClock++, p.uuid);
+        } else if (p.heading !== undefined && cur.heading !== p.heading) {
+          // Re-head a LOOSE row: back-insert at the someday-bucket end. A row
+          // already under p.heading falls through here as a NO-OP (Q1(b)).
+          const max = fixture.db
+            .prepare(
+              `SELECT MAX("index") AS m FROM TMTask WHERE heading = ? AND start = 2
+               AND startDate IS NULL AND trashed = 0 AND status = 0 AND uuid != ?`,
+            )
+            .get(p.heading, p.uuid) as { m: number | null };
+          fixture.db
+            .prepare(
+              `UPDATE TMTask SET heading = ?, project = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+            )
+            .run(p.heading, (max.m ?? 0) + 10, modClock++, p.uuid);
+        }
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   };
-  return { vector, calls };
+  return { vector, calls, legKinds };
 }
 
-describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => {
+describe("heading-someday scope (HEADSUB2 unhead → re-head-in-order back-insert)", () => {
   function seedSomedayHeading() {
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
@@ -1558,7 +1585,7 @@ describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => 
 
   it("realizes the exact requested order via forward-order re-heads, start=2 preserved", async () => {
     const { heading, s1, s2, s3 } = seedSomedayHeading();
-    const { vector, calls } = reheadVector();
+    const { vector, calls, legKinds } = reheadVector();
     const result = await runReorder(deps([vector]), {
       scope: "heading-someday",
       container: { uuid: heading },
@@ -1566,8 +1593,11 @@ describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => 
       named: [s3, s1, s2],
     });
     expect(result.kind).toBe("ok");
-    // One re-head leg per member, forward order (no when= bounce, no json collapse).
-    expect(calls).toEqual(["todo.move", "todo.move", "todo.move"]);
+    // Unhead ×3 then re-head ×3, forward order (no when= bounce, no json collapse):
+    // a same-heading re-head is a no-op (HEADSUB2 Q1(b)), so each member is
+    // unheaded first, then re-headed to back-insert at the bucket end.
+    expect(calls).toEqual(Array(6).fill("todo.move"));
+    expect(legKinds).toEqual(["unhead", "unhead", "unhead", "rehead", "rehead", "rehead"]);
     expect(ascending(ranks([s3, s1, s2], `"index"`))).toBe(true);
     for (const u of [s1, s2, s3]) {
       const row = fixture.db.prepare("SELECT start, heading FROM TMTask WHERE uuid = ?").get(u) as {
@@ -1590,8 +1620,9 @@ describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => 
       named: [s3],
     });
     expect(result.kind).toBe("ok");
-    // Only s3 is re-headed (block = suffix from its slot = just [s3]); no co-touch.
-    expect(calls).toEqual(["todo.move"]);
+    // Only s3 is touched (block = suffix from its slot = just [s3]); no co-touch.
+    // Two legs: unhead s3, then re-head s3.
+    expect(calls).toEqual(["todo.move", "todo.move"]);
     if (result.kind === "ok") expect(result.touched).toBeUndefined();
     expect(ascending(ranks([s1, s2, s3], `"index"`))).toBe(true);
   });
@@ -1607,7 +1638,8 @@ describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => 
       named: [s1],
     });
     expect(result.kind).toBe("ok");
-    expect(calls).toHaveLength(3);
+    // block = [s1, s2, s3]: unhead ×3 then re-head ×3.
+    expect(calls).toHaveLength(6);
     if (result.kind === "ok") expect(result.touched).toEqual([s2, s3]);
   });
 
