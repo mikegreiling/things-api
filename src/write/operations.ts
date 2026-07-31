@@ -475,29 +475,28 @@ export type ReorderScope =
   // - area-someday: an area's someday members, reverse-order bounce (SOMEBNC-area)
   // - anytime: area-less loose anytime to-dos, reverse-order bounce (ANYBNC)
   // - container-day: a container's same-day scheduled children, native todayIndex
-  //   re-rank, date-preserving (DAYORD-b)
-  // - loose-day: STANDALONE loose (no project/area/heading) to-dos sharing ONE
-  //   FUTURE Upcoming day, ranked on todayIndex. No native or bounce surface
-  //   reaches them directly; delivered by the ORDFIN1 park-sort-restore compound
-  //   (scratch PROJECT park → container-day reorder → restore → trash the scratch),
-  //   orchestrated in reorder.ts. Planner-selected only (never a CLI flag).
-  // ORDFIN1 park-sort-restore day compounds (lab/ordfin1-ordering-endgame.md):
-  // - area-day: an AREA's direct dated children sharing ONE future day (Arm 3).
-  //   The AREA reorder specifier is destructive (§9f de-schedules dated members),
-  //   so this rides the SAME park→container-day→restore compound as loose-day,
-  //   only the restore leg homes each child back to the area (list-id=<area>) —
-  //   date/todayIndex/start=2/reminder/deadline preserved, area FK round-trips.
-  //   Gated like container-day. Planner-selected only (needs the area container).
-  // - upcoming-day: a CROSS-CONTAINER future day-group — any mix of loose,
-  //   project-child, headed-child, and area-child to-dos sharing ONE future day
-  //   (Arm 4). Each member's ORIGIN (loose / project / project+heading / area) is
-  //   captured BEFORE parking; after the single container-day reorder each is
-  //   restored to that captured origin FK (restore-leg order irrelevant). The
-  //   generalization of loose-day + area-day (both are degenerate uniform-origin
-  //   cases). Refuses a repeating TEMPLATE movee (§9e), and refuses a scheduled
-  //   PROJECT row as a MOVEE (UPCORD1: not parkable) but DISCLOSES an untouched
-  //   same-day project SIBLING as a strand (PRJMIX). Gated like container-day.
-  //   Planner-selected only (no container — the day is read off a movee).
+  //   re-rank, date-preserving (DAYORD-b). KEPT for the single-project-container,
+  //   unheaded degenerate case (one atomic native call — cheaper than the bounce).
+  // SIT4 DAYBNC — the DATED BOUNCE (lab/sit4-daybounce-eveord-axdrag4.md):
+  // - day: an ARBITRARY future day-group across ALL containers — loose, project-
+  //   child, headed-child, and area-direct to-dos AND area-less scheduled PROJECT
+  //   rows sharing ONE future Upcoming day, ranked on todayIndex. A cross-date re-
+  //   when round-trip (away = the neighbour day D+1, back = the day D; to-dos via
+  //   todo.update, projects via update-project — per row TYPE) FRONT-inserts each
+  //   row at the day-D GLOBAL todayIndex minimum across containers, so a reverse-
+  //   target-order bounce lands the exact cross-container order. Non-destructive:
+  //   reminderTime, deadline, and the heading FK all survive the round-trip (§2e /
+  //   R21 — the decisive contrast with the evening bounce, whose when=evening leg
+  //   strips a reminder). Bounce-only — NO native surface reaches an arbitrary day
+  //   (the private reorder is not needed); gated by bounce-enabled + bounce-max-
+  //   items like every bounce. Sequential URL legs only (the things:///json when=
+  //   reindex is unproven for dated placement — §9i tested anytime only). Refuses a
+  //   repeating TEMPLATE movee/anchor (§9e/§1 — a dated when= leg CRASHES a
+  //   template). SUPERSEDES the scratch-park compounds (loose-day / area-day /
+  //   upcoming-day) and the heading-day unhead→re-head round-trip — the dated
+  //   bounce serves their whole population plus area-less project rows, with no
+  //   scratch project and no experimental gate. Planner-selected only (never a CLI
+  //   flag; the day is read off a movee).
   // ORDFIN2 TOMORROWLIST — the one-call TOMORROW fast path (ordfin2-followups.md):
   // - tomorrow: a whole next-day (== tomorrow, relative to the response clock)
   //   day-group across ALL containers, ranked on todayIndex. `list "Tomorrow"` is
@@ -505,11 +504,11 @@ export type ReorderScope =
   //   `_private_experimental_ reorder to dos in list "Tomorrow"` call, ACCEPTS a
   //   scheduled PROJECT row inline (O12 analog — projects pass the `ids` filter),
   //   and preserves startDate/start/startBucket/area+project FKs (no §9g re-date,
-  //   unlike `list "Upcoming"`). Replaces the scratch-park compound (loose-day /
-  //   area-day / upcoming-day) for the single tomorrow case, and project-row
-  //   movees are allowed ONLY here. Gated like container-day (allow-experimental +
-  //   sdef canary). Planner-selected only (the day is read off a movee).
-  // HEADSUB1 within-heading sub-bucket protocols (lab/headsub1-heading-subbuckets.md):
+  //   unlike `list "Upcoming"`). The cheapest day surface — KEPT for the tomorrow
+  //   case (one call vs the dated bounce's 2N legs). Gated like container-day
+  //   (allow-experimental + sdef canary). Planner-selected only (day read off a
+  //   movee).
+  // HEADSUB1 within-heading sub-bucket protocol (lab/headsub1-heading-subbuckets.md):
   // - heading-someday: a heading's SOMEDAY children, ranked on "index". Re-headed
   //   in FORWARD target order (each a single `todo.move` list-id+heading leg) —
   //   the move-to-heading BACK-INSERT is deterministic (Arm B-someday / Arm C),
@@ -517,20 +516,12 @@ export type ReorderScope =
   //   the `heading` anytime scope (back-insert suffix, co-touch disclosure), but
   //   the per-item leg is one re-head, not a when= bounce. No experimental/bounce
   //   gate (pure URL move legs). Planner-selected only.
-  // - heading-day: a heading's SAME-DAY SCHEDULED children, ranked on todayIndex.
-  //   The native container-day reorder RIPS a headed child's heading FK (§9k / Arm
-  //   A), so the direct re-rank is forbidden; delivered by the unhead → container-
-  //   day reorder → re-head round-trip (Arm C2, date/todayIndex-preserving). Gated
-  //   like container-day (allow-experimental). Planner-selected only.
   | "heading"
   | "area-someday"
   | "anytime"
   | "container-day"
-  | "loose-day"
+  | "day"
   | "heading-someday"
-  | "heading-day"
-  | "area-day"
-  | "upcoming-day"
   | "tomorrow";
 export type ReorderStrategy = "native" | "bounce";
 

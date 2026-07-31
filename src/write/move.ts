@@ -239,21 +239,20 @@ function bounceDisabledTarget(what: string): ScopeTarget {
  * unheaded anytime OR someday children (SOMEORD-b, native `index`); an area's
  * anytime members; an area's someday members (SOMEBNC-area bounce — was §9f-
  * prohibited); a heading's anytime children (BOUNCE2-h forward-order bounce); a
- * container's same-day scheduled children (DAYORD-b native todayIndex re-rank);
- * a loose FUTURE Upcoming day (UPCORD1 park-sort-restore, scope `loose-day` —
- * gated like container-day); a DIRECT-AREA scheduled-DAY child (ORDFIN1 Arm 3,
- * scope `area-day` — the same compound restoring to the area, the destructive §9f
- * area specifier NEVER used); a whole CROSS-CONTAINER future day-group (ORDFIN1
- * Arm 4, scope `upcoming-day` — routed in {@link repositionInPlace}, not here); a
- * heading's SOMEDAY children (HEADSUB1 heading-someday re-head-in-order back-
- * insert); a heading's same-day SCHEDULED children (HEADSUB1 heading-day
- * unhead→container-day→re-head, gated like container-day); a container child's
- * EVENING sub-bucket (HEADSUB1 Arm D + ORDFIN1 Arm 2b — the shipped `evening`
- * bounce accepts project/area/HEADED children unchanged, heading FK preserved);
- * area-less someday projects; top-level anytime projects. APP-DEFAULT: a loose
- * scheduled PROJECT row (no surface); repeating TEMPLATE rows (§9e). When bounce
- * is DISABLED the bounce-dependent classes degrade to app-default naming the flag
- * — never a destructive or unverified fallback.
+ * container's UNHEADED same-day scheduled children (DAYORD-b native todayIndex re-
+ * rank — the single-project degenerate case); ANY OTHER future day-group — loose,
+ * direct-area, headed, cross-container, or any mix incl. AREA-LESS scheduled
+ * PROJECT rows — via the SIT4 dated `day` bounce (cross-date re-when round-trip,
+ * per-type legs, reminder/deadline/heading-FK preserving; the one-call `tomorrow`
+ * sort when the day is tomorrow); a heading's SOMEDAY children (HEADSUB1 heading-
+ * someday re-head-in-order back-insert); a container child's EVENING sub-bucket,
+ * to-do OR project (HEADSUB1 Arm D + ORDFIN1 Arm 2b + SIT4 EVEORD — the shipped
+ * `evening` bounce accepts project/area/HEADED movees, heading FK preserved,
+ * projects share the evening axis); area-less someday projects; top-level anytime
+ * projects. APP-DEFAULT: an AREA project's future-day cell (only area-less project
+ * rows are proven — SIT4 DAYBNC); repeating TEMPLATE rows (§9e). When bounce is
+ * DISABLED the bounce-dependent classes degrade to app-default naming the flag —
+ * never a destructive or unverified fallback.
  */
 function reorderTargetOf(
   row: MoveeRow,
@@ -278,12 +277,12 @@ function reorderTargetOf(
   // future scheduled rows below, so startDate is non-null there.
   const dayField: { day?: number } = row.startDate !== null ? { day: row.startDate } : {};
   // ORDFIN2 TOMORROWLIST: a row scheduled for TOMORROW (startBucket=0) rides the
-  // native one-call `list "Tomorrow"` day-sort instead of the scratch-park
-  // compound (loose-day / area-day) or the project-row app-default. It re-ranks
-  // the whole cross-container tomorrow group on todayIndex, projects included,
-  // preserving startDate/FKs (no §9g re-date). This replaces the scratch-park
-  // compounds only — container-day / heading-day (single-container project /
-  // heading children) keep their existing native/compound paths.
+  // native one-call `list "Tomorrow"` day-sort instead of the SIT4 dated `day`
+  // bounce. It re-ranks the whole cross-container tomorrow group on todayIndex,
+  // projects included, preserving startDate/FKs (no §9g re-date) — cheaper than
+  // the 2N-leg bounce. The single-project container-day path keeps its own native
+  // re-rank; HEADED children never ride the native sort (it RIPS a heading, §9k),
+  // so they take the dated bounce even on tomorrow.
   const isTomorrow = row.startBucket === 0 && row.startDate === packedTomorrowOf(packedToday);
   if (isTodo) {
     // ARRIVED Today-view members route DATE-FIRST, before any container branch.
@@ -310,17 +309,23 @@ function reorderTargetOf(
       // Within-heading order (HEADSUB1). anytime → the forward-order bounce
       // (BOUNCE2-h). someday → the re-head-in-order back-insert (heading-someday,
       // Arm B/C — pure URL move legs, no gate). FUTURE same-day scheduled → the
-      // unhead → container-day → re-head round-trip (heading-day, Arm C2 — gated
-      // like container-day at runtime, since the direct native reorder RIPS the
-      // heading FK, §9k). --before/--after against an unmoved sibling rides these
-      // scopes' co-touch (handled by the anchor path), not here.
+      // SIT4 dated `day` bounce (it preserves the heading FK, §2e/R21 — no unhead/
+      // re-head round-trip needed). --before/--after against an unmoved sibling
+      // rides these scopes' co-touch (handled by the anchor path), not here.
       if (bucket === "anytime") {
         return bounceEnabled
           ? { scope: "heading", container: row.heading }
           : bounceDisabledTarget("within-heading order");
       }
       if (bucket === "someday") return { scope: "heading-someday", container: row.heading };
-      if (containerDay) return { scope: "heading-day", container: row.heading, ...dayField };
+      // A heading's same-day SCHEDULED children ride the `day` dated bounce — SIT4
+      // DAYBNC proved the cross-date round-trip preserves the heading FK byte-
+      // identical and lands a headed child exactly, so the former heading-day
+      // unhead→container-day→re-head round-trip is gone. Container-less: `day` is a
+      // GLOBAL cross-container axis. Headed rows NEVER ride the native tomorrow
+      // sort (the private reorder RIPS a headed child, §9k/O06), so even on tomorrow
+      // a headed child bounces.
+      if (containerDay) return { scope: "day", ...dayField };
       return {
         scope: null,
         reason: `a heading's ${bucket} sub-bucket (no wired order surface for it)`,
@@ -343,16 +348,12 @@ function reorderTargetOf(
           : bounceDisabledTarget("an area's someday order");
       }
       if (bucket === "anytime") return { scope: "area", container: row.area };
-      // A direct-area to-do's FUTURE scheduled DAY: ORDFIN1 Arm 3 wires the
-      // `area-day` park-sort-restore compound (park each dated child into a scratch
-      // PROJECT → container-day reorder → restore to the area) — date/todayIndex/
-      // start=2/reminder/deadline preserved, area FK round-trips. The destructive
-      // AREA reorder specifier (§9f) is NEVER used. Gated like container-day. When
-      // the day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
+      // A direct-area to-do's FUTURE scheduled DAY rides the `day` dated bounce
+      // (SIT4 DAYBNC — the when= round-trip preserves the area FK and needs no
+      // scratch project; container-less GLOBAL axis), or the one-call `list
+      // "Tomorrow"` sort when the day is tomorrow.
       if (containerDay)
-        return isTomorrow
-          ? { scope: "tomorrow", ...dayField }
-          : { scope: "area-day", container: row.area, ...dayField };
+        return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "day", ...dayField };
       return { scope: null, reason: "a direct-area to-do's scheduled bucket (app-default)" };
     }
     // loose:
@@ -364,20 +365,31 @@ function reorderTargetOf(
         ? { scope: "anytime" }
         : bounceDisabledTarget("area-less loose anytime order");
     }
-    // A loose FUTURE Upcoming day: the UPCORD1 park-sort-unpark protocol
-    // (scratch PROJECT park → container-day reorder → unpark → trash). Gated by
-    // allow-experimental like container-day (the pipeline / orchestrator explains
-    // when the gate is off); NEVER routed through an area scratch (§9f). When the
-    // day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
-    return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "loose-day", ...dayField };
+    // A loose FUTURE Upcoming day rides the `day` dated bounce (SIT4 DAYBNC — the
+    // reverse-target when= round-trip front-inserts on the global todayIndex axis,
+    // no scratch project, no experimental gate), or the one-call `list "Tomorrow"`
+    // sort when the day is tomorrow.
+    return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "day", ...dayField };
   }
   // projects:
+  // ARRIVED Today-view members route DATE-FIRST (mirrors the to-do path, #341). An
+  // arrived today-dated project is a Today member — the native Today reorder
+  // accepts projects intermixed (O12); an arrived This-Evening project rides the
+  // shipped `evening` bounce (SIT4 EVEORD — projects share the evening todayIndex
+  // axis, R07 reminder-loss caveat inherited). Only STRICTLY-FUTURE project rows
+  // fall through to the day-group / app-default routing below.
+  if (bucket === "today") return { scope: "today" };
+  if (bucket === "evening") {
+    return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
+  }
   if (row.area !== null) {
-    // A scheduled project inside an area: app-default, EXCEPT a tomorrow-scheduled
-    // project rides the native `list "Tomorrow"` sort (O12 — it accepts a project
-    // row inline; project-row movees are allowed only on this path).
-    if (containerDay && isTomorrow) return { scope: "tomorrow" };
-    return containerDay || bucket === "evening" || bucket === "someday"
+    // A project INSIDE an area on a strictly-future day rides the one-call Tomorrow
+    // sort when the day is tomorrow, else stays app-default: only AREA-LESS project
+    // rows are proven on the dated bounce (SIT4 DAYBNC), so an area project's
+    // future-day cell is unwired. Someday stays app-default; anytime rides the
+    // area's native index order.
+    if (containerDay && isTomorrow) return { scope: "tomorrow", ...dayField };
+    return containerDay || bucket === "someday"
       ? { scope: null, reason: "a scheduled/someday project inside an area (app-default)" }
       : { scope: "area", container: row.area };
   }
@@ -386,9 +398,12 @@ function reorderTargetOf(
     // Top-level sidebar order is bounce-only (P8e).
     return bounceEnabled ? { scope: "projects" } : bounceDisabledTarget("top-level projects order");
   }
-  // An area-less scheduled project row: app-default, EXCEPT tomorrow (the native
-  // `list "Tomorrow"` sort accepts a project row inline — TOMORROWLIST).
-  if (containerDay && isTomorrow) return { scope: "tomorrow" };
+  // An AREA-LESS scheduled PROJECT row on a strictly-future day: the dated `day`
+  // bounce (SIT4 DAYBNC — DP rows front-insert on the shared todayIndex axis via
+  // update-project), or the one-call `list "Tomorrow"` sort when the day is
+  // tomorrow. This is the loose-scheduled-PROJECT-row cell, formerly app-default.
+  if (containerDay)
+    return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "day", ...dayField };
   return { scope: null, reason: "a scheduled day bucket (app-default)" };
 }
 
@@ -927,23 +942,30 @@ export async function runInPlaceReorder(
     if (row.type !== want) wrongKind.push({ ref: r.uuid, kind: KIND_LABEL[row.type] ?? "item" });
     rows.push(row);
   }
-  // O12: the native Today scope reorders the `list "Today"` bucket, which accepts
-  // PROJECT uuids INTERMIXED with to-dos in one ids list. So on the `todo reorder`
-  // path a project movee is legal WHEN every movee shares the Today bucket
-  // (startBucket=0, dated today) — the mixed set then routes to the `today` scope,
-  // whose wire list is type IN (0,1) (computeReorderPre keeps mixedTypes=false for
-  // it, and the H-REORDER-SCOPE guard passes). Every OTHER bucket keeps the
-  // homogeneous-kinds refusal; a non-loose today member still fails the downstream
-  // single-container guard, so the relaxation never reaches an unvalidated scope.
-  const todayIntermix =
-    isTodo && rows.length > 0 && rows.every((r) => scheduleBucket(r, packedToday) === "today");
-  if (wrongKind.length > 0 && !todayIntermix) {
+  // The GLOBAL todayIndex buckets accept PROJECT rows INTERMIXED with to-dos in one
+  // reorder: `today` (O12 — `list "Today"` takes projects inline), `evening` (SIT4
+  // EVEORD — projects share the evening axis, per-type bounce legs), and the future
+  // day-group scopes (`day`/`tomorrow` — SIT4 DAYBNC + TOMORROWLIST accept area-
+  // less project rows). So on the `todo reorder` path a project movee is legal WHEN
+  // every movee sits in a today/evening/scheduled bucket; the mixed set routes to
+  // one of those scopes (whose wire list is type IN (0,1)). Every OTHER bucket
+  // keeps the homogeneous-kinds refusal, and an ineligible member still fails the
+  // downstream scope guard, so the relaxation never reaches an unvalidated scope.
+  const globalAxisIntermix =
+    isTodo &&
+    rows.length > 0 &&
+    rows.every((r) => {
+      const b = scheduleBucket(r, packedToday);
+      return b === "today" || b === "evening" || b.startsWith("scheduled:");
+    });
+  if (wrongKind.length > 0 && !globalAxisIntermix) {
     const list = wrongKind.map((w) => `${w.ref} (${w.kind})`).join(", ");
     return refused(
       op,
       "usage",
       `homogeneous kinds required — reorder ${isTodo ? "to-dos" : "projects"} only ` +
-        `(the Today list also accepts projects intermixed with to-dos); not: ${list}`,
+        `(the Today, This Evening, and future day-group lists also accept projects intermixed ` +
+        `with to-dos); not: ${list}`,
     );
   }
 
@@ -953,47 +975,54 @@ export async function runInPlaceReorder(
 // ---------------------------------------------------------------- shared core
 
 /**
- * The single future Upcoming day every movee shares (packed startDate), or null.
- * All movees must be scheduled to-dos on the SAME future day in the Today-bucket
- * axis (startBucket=0) — the precondition for the `upcoming-day` cross-container
- * compound. A row off the day (or a project/template with a null/other startDate)
- * breaks the group and falls through to the normal single-container guard.
+ * The single STRICTLY-FUTURE day every movee shares (packed startDate), or null —
+ * the precondition for the SIT4 dated `day` bounce (and the one-call `tomorrow`
+ * sort). Members are to-dos in ANY container AND AREA-LESS scheduled PROJECT rows,
+ * all on the SAME future day in the Today-bucket axis (startBucket=0). A row off
+ * the day, an area-DIRECT project row (unproven on the dated bounce — DAYBNC), a
+ * template, or an undated/arrived row breaks the group and falls through to the
+ * normal single-container guard. (Templates never reach here: startDate is NULL on
+ * a resting template, so `startDate === day` fails for them.)
  */
 function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
   const first = rows[0];
   if (first === undefined) return null;
   const day = first.startDate;
-  if (day === null || day <= packedToday || first.startBucket !== 0 || first.type !== 0) {
-    return null;
-  }
+  if (day === null || day <= packedToday || first.startBucket !== 0) return null;
   for (const r of rows) {
-    if (r.type !== 0 || r.startBucket !== 0 || r.startDate !== day) return null;
+    if (r.startBucket !== 0 || r.startDate !== day) return null;
+    if (r.type !== 0 && r.type !== 1) return null;
+    // Area-direct project rows are not dated-bounce members (only area-less are).
+    if (r.type === 1 && r.area !== null) return null;
+    if (r.isTemplate) return null;
   }
   return day;
 }
 
 /**
- * Reposition a CROSS-CONTAINER future day-group via the `upcoming-day` compound
- * (ORDFIN1 Arm 4). The whole day-group is parked into one scratch project, re-
- * ranked, and each member restored to its captured origin; the anchor (if any)
- * must be a member of the same day-group — it positions within the parked set, it
- * never migrates. The compound refuses fail-closed on an unparkable member (a
- * scheduled project row or a template on the day).
+ * Reposition a shared FUTURE day-group on the global todayIndex axis — the SIT4
+ * dated `day` bounce (loose/direct-area/headed/cross-container to-dos + area-less
+ * project rows, any mix), or the one-call native `list "Tomorrow"` sort when the
+ * day is tomorrow. Both order the WHOLE cross-container day-group on ONE shared
+ * axis, so the anchor (if any) is validated by DAY-GROUP membership (not the
+ * structural container) — an anchor positions within the group, it never migrates.
  */
-async function runUpcomingDayReposition(
+async function runDayGroupReposition(
   deps: WriteDeps,
   op: "todo.move" | "project.move",
   rows: MoveeRow[],
   position: MovePosition | undefined,
   options: WriteOptions,
-  scope: "upcoming-day" | "tomorrow",
+  scope: "day" | "tomorrow",
   day: number,
 ): Promise<MoveResult> {
   const target: ScopeTarget = { scope, day };
   const movees = rows.map((r) => r.uuid);
   const members = bucketMembers(deps, target, movees[0]);
 
-  // Anchor must share the movees' day-group (positions, never migrates).
+  // Anchor must share the movees' day-group (positions, never migrates) — an
+  // AXIS-aware check (the day-group is one cross-container todayIndex axis, so a
+  // different structural container is NOT a migration).
   if (position !== undefined && ("before" in position || "after" in position)) {
     const anchorRef = "before" in position ? position.before : position.after;
     const ar = resolveMovee(deps, anchorRef);
@@ -1010,7 +1039,7 @@ async function runUpcomingDayReposition(
       return refused(
         op,
         "blocked",
-        `the anchor ${ar.uuid} is not in the movees' Upcoming day-group — an anchor positions, it never migrates`,
+        `the anchor ${ar.uuid} is not in ${describeScope(target)} — an anchor positions, it never migrates`,
         "pick an anchor that shares the movees' day, or use --first/--last",
       );
     }
@@ -1028,7 +1057,7 @@ async function runUpcomingDayReposition(
   const mechanism =
     scope === "tomorrow"
       ? 'cross-container Tomorrow day-group reorder (one-call `list "Tomorrow"` sort)'
-      : "cross-container Upcoming day-group reorder (park-sort-restore)";
+      : "cross-container future day-group reorder (SIT4 dated when= bounce)";
   if (options.dryRun === true) {
     return {
       kind: "move-dry-run",
@@ -1060,8 +1089,7 @@ async function runUpcomingDayReposition(
     placementClass: "guaranteed",
     note:
       `reordered within ${describeScope(target)} (${scope} scope — placement guaranteed)` +
-      touchedSuffix(placement) +
-      strandSuffix(placement),
+      touchedSuffix(placement),
   };
 }
 
@@ -1083,25 +1111,34 @@ async function repositionInPlace(
   const targetOf = (r: MoveeRow): ScopeTarget =>
     reorderTargetOf(r, isTodo, packedToday, deps.config.bounceEnabled);
 
-  // Cross-container future-day group → the `upcoming-day` compound (ORDFIN1 Arm
-  // 4). When to-do movees span structural containers but ALL share one future
-  // Upcoming day, they are a single cross-container day-group ordered on the shared
-  // todayIndex axis — not the normal single-container reorder. (A same-container
-  // day-group keeps structKeys.size===1 and rides its own scope: container-day /
-  // heading-day / loose-day / area-day.) A mix carrying a scheduled PROJECT row or
-  // a template is fail-closed by the compound's own membership guard.
-  const keys = new Set(rows.map((r) => structuralKey(r, packedToday)));
+  // A shared FUTURE day-group (single- OR cross-container) rides the global
+  // todayIndex axis, not the normal single-container reorder: the SIT4 dated `day`
+  // bounce (loose/direct-area/headed/cross-container to-dos + area-less project
+  // rows, any mix), or the one-call `list "Tomorrow"` sort when the day is
+  // tomorrow. The ONLY exception is a single UNHEADED PROJECT container — its same-
+  // day children ride the cheaper atomic native container-day re-rank, so it falls
+  // through to the normal path below (reorderTargetOf → container-day). Templates
+  // and area-direct project rows are excluded by sharedFutureDay.
+  const structKeys = new Set(rows.map((r) => structuralKey(r, packedToday)));
   const sharedDay = sharedFutureDay(rows, packedToday);
-  if (isTodo && keys.size > 1 && sharedDay !== null) {
-    // ORDFIN2 TOMORROWLIST: a cross-container group whose shared day == tomorrow
-    // rides the native one-call `list "Tomorrow"` sort; any other future day
-    // rides the scratch-park upcoming-day compound.
-    const scope = sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "upcoming-day";
-    return runUpcomingDayReposition(deps, op, rows, position, options, scope, sharedDay);
+  if (sharedDay !== null) {
+    const soleStruct = structKeys.size === 1 ? (structKeys.values().next().value as string) : null;
+    const singleProjectContainer = soleStruct?.startsWith("project:") ?? false;
+    if (!singleProjectContainer) {
+      const scope = sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "day";
+      return runDayGroupReposition(deps, op, rows, position, options, scope, sharedDay);
+    }
   }
 
-  // One shared STRUCTURAL container (rule 2 / the cross-container guard).
-  if (keys.size !== 1) {
+  // One shared reorder TARGET (rule 2 span). Keyed by the reorder target, NOT the
+  // structural container: a GLOBAL todayIndex bucket (today / evening) collapses
+  // cross-container rows to ONE target, so they reorder together on that shared
+  // axis (the GUI permits exactly that drag — nothing migrates); an INDEX-axis
+  // bucket keeps its per-container key, so a genuine cross-container span still
+  // refuses. The comparator and the describer read the SAME key, so an identical-
+  // label refusal is structurally impossible.
+  const targetKeys = new Set(rows.map((r) => containerKey(targetOf(r))));
+  if (targetKeys.size !== 1) {
     const where = rows.map((r) => `${r.uuid} in ${describeScope(targetOf(r))}`).join("; ");
     return refused(
       op,
@@ -1161,12 +1198,19 @@ async function repositionInPlace(
     const anchorRow = loadRow(deps.db, anchorUuid);
     if (anchorRow === undefined)
       return refused(op, "usage", `the anchor "${anchorRef}" was not found`);
-    if (structuralKey(anchorRow, packedToday) !== structuralKey(rows[0] as MoveeRow, packedToday)) {
+    // AXIS-aware anchor validity: the anchor must share the movees' reorder TARGET,
+    // not its structural container. For a GLOBAL todayIndex bucket (today/evening)
+    // a different structural container is NOT a migration — both collapse to the
+    // same target — so the anchor is valid; for an INDEX-axis bucket a cross-
+    // container anchor genuinely implies migration and still refuses. Comparator
+    // and describer read the SAME key (containerKey ⇔ describeScope), so the two
+    // rendered labels can never be identical when the comparator refuses.
+    const anchorTarget = targetOf(anchorRow);
+    if (containerKey(anchorTarget) !== containerKey(target)) {
       return refused(
         op,
         "blocked",
-        `the anchor ${anchorUuid} is in ${describeScope(targetOf(anchorRow))}, not the movees' ` +
-          `container (${describeScope(target)}) — an anchor positions, it never migrates`,
+        `the anchor ${anchorUuid} is in ${describeScope(anchorTarget)}, not ${describeScope(target)} — an anchor positions, it never migrates`,
         "move the items into the anchor's container explicitly, or pick an anchor that shares it",
       );
     }
@@ -1234,23 +1278,6 @@ async function repositionInPlace(
       `reordered within ${describeScope(target)} (${target.scope} scope — placement guaranteed)` +
       touchedSuffix(placement),
   };
-}
-
-/**
- * Honest disclosure suffix naming same-day scheduled PROJECT rows the day-sort
- * left stranded below the block (PRJMIX — projects are not parkable, UPCORD1).
- */
-function strandSuffix(placement: ReorderResult): string {
-  if (
-    placement.kind !== "ok" ||
-    placement.stranded === undefined ||
-    placement.stranded.length === 0
-  )
-    return "";
-  return (
-    `; ${placement.stranded.length} same-day scheduled project row(s) are not parkable so they ` +
-    `remain below the sorted block in their prior order: ${placement.stranded.map((s) => s.uuid).join(", ")}`
-  );
 }
 
 /** Honest disclosure suffix naming co-bounced siblings an anchor placement touched. */
@@ -1463,20 +1490,16 @@ function resolveMoveeUuid(deps: WriteDeps, ref: string): string {
 
 /**
  * The current member order of a reorder bucket (for full re-rank builds). The
- * container-day and loose-day scopes read their day off the FIRST requested
- * uuid (a day-group is keyed by a movee's startDate, not by a container), so
- * `dayAnchor` (a movee) seeds the enumeration for them — without it those two
- * scopes enumerate nothing and an anchored (--last/--before/--after) placement
- * cannot splice against the real day order.
+ * day-group scopes (container-day, `day`, tomorrow) read their day off the FIRST
+ * requested uuid (a day-group is keyed by a movee's startDate, not by a
+ * container), so `dayAnchor` (a movee) seeds the enumeration for them — without it
+ * those scopes enumerate nothing and an anchored (--last/--before/--after)
+ * placement cannot splice against the real day order.
  */
 function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string): string[] {
   if (target.scope === null) return [];
   const seedsDay =
-    target.scope === "container-day" ||
-    target.scope === "loose-day" ||
-    target.scope === "area-day" ||
-    target.scope === "upcoming-day" ||
-    target.scope === "tomorrow";
+    target.scope === "container-day" || target.scope === "day" || target.scope === "tomorrow";
   const params: ReorderParams = {
     scope: target.scope,
     uuids: seedsDay && dayAnchor !== undefined ? [dayAnchor] : [],
@@ -1505,20 +1528,12 @@ function describeScope(target: ScopeTarget): string {
   // coherently (e.g. "the loose 2026-08-05 day-group" vs "…2026-08-07…"), never
   // the self-contradictory date-less "the loose future-day group" on both sides.
   const day = target.day !== undefined ? decodePackedDate(target.day) : null;
-  if (target.scope === "loose-day") {
-    return day !== null ? `the loose ${day} day-group` : "the loose future-day group";
-  }
-  if (target.scope === "area-day") {
-    return day !== null ? `the direct-area ${day} day-group` : "the direct-area future-day group";
-  }
-  if (target.scope === "upcoming-day") {
-    return day !== null
-      ? `the cross-container ${day} Upcoming day-group`
-      : "the cross-container Upcoming day-group";
+  if (target.scope === "day") {
+    return day !== null ? `the ${day} day-group` : "the future day-group";
   }
   if (target.scope === "tomorrow") return "the Tomorrow day-group";
-  if ((target.scope === "container-day" || target.scope === "heading-day") && day !== null) {
-    return `the ${target.scope} ${target.container} day-group (${day})`;
+  if (target.scope === "container-day" && day !== null) {
+    return `the container-day ${target.container} day-group (${day})`;
   }
   return target.container !== undefined
     ? `the ${target.scope} ${target.container}`

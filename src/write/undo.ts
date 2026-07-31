@@ -1270,16 +1270,10 @@ export function planUndo(
         number,
       ][];
       if (ranked.length === 0) return irreversible("no pre-ranks were captured");
-      // The park-sort-restore / heading-day pre-ranks are todayIndex values: a tie
-      // means the prior order was genuinely undetermined, so the exact position
-      // cannot be reconstructed (the area.reorder precedent for all-tied ranks).
-      if (
-        requested.scope === "loose-day" ||
-        requested.scope === "area-day" ||
-        requested.scope === "upcoming-day" ||
-        requested.scope === "tomorrow" ||
-        requested.scope === "heading-day"
-      ) {
+      // The day-group pre-ranks are todayIndex values: a tie means the prior order
+      // was genuinely undetermined, so the exact position cannot be reconstructed
+      // (the area.reorder precedent for all-tied ranks).
+      if (requested.scope === "day" || requested.scope === "tomorrow") {
         const values = ranked.map(([, r]) => r);
         if (new Set(values).size !== values.length) {
           return irreversible(
@@ -1291,20 +1285,10 @@ export function planUndo(
       const uuids = ranked.toSorted((a, b) => a[1] - b[1]).map(([id]) => id);
       const params: Record<string, unknown> = { scope: requested.scope, uuids };
       if (requested.container !== undefined) params["container"] = requested.container;
-      if (
-        requested.scope === "loose-day" ||
-        requested.scope === "area-day" ||
-        requested.scope === "upcoming-day"
-      ) {
+      if (requested.scope === "day") {
         notes.push(
-          "the inverse re-runs the ORDFIN1 park-sort-restore compound with the prior order — it " +
-            "creates (and trashes) a fresh scratch project of its own (needs allow-experimental)",
-        );
-      }
-      if (requested.scope === "heading-day") {
-        notes.push(
-          "the inverse re-runs the HEADSUB1 unhead → container-day reorder → re-head round-trip " +
-            "with the prior order (needs allow-experimental, like the forward protocol)",
+          "the inverse re-runs the SIT4 dated when= bounce with the prior order (needs " +
+            "bounce-enabled, like the forward protocol)",
         );
       }
       if (requested.scope === "heading-someday") {
