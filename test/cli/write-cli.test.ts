@@ -139,6 +139,45 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain("things-proxy-set-detail");
     expect(String(plan["invocation"])).toContain("Reminder Time");
   });
+
+  // §9n write-side: a bare `when=` re-schedule auto-preserves the current
+  // reminder — but ONLY if it is still LIVE. A STALE reminder byte (startDate
+  // strictly past) is presentation-dead in the GUI, so preserving it would
+  // RESURRECT a reminder the user believes gone. Far-past/far-future startDates
+  // keep the assertion clock-independent (no THINGS_NOW needed).
+  it("project update --when evening does NOT resurrect a STALE reminder (§9n)", async () => {
+    const proj = seedProject(fixture.db, {
+      title: "stale-reminder-proj",
+      startDate: "2020-01-01", // strictly past → reminder is presentation-dead
+      evening: true,
+      reminder: "18:00",
+    });
+    await run(["project", "update", proj, "--when", "evening", "--dry-run", "--json"]);
+    const plan = envelope()["data"] as Record<string, unknown>;
+    const inv = String(plan["invocation"]);
+    expect(inv).toContain("when=evening"); // the re-schedule still happens
+    expect(inv).not.toContain("%40"); // ...but with NO @HH:MM reminder token
+    expect(inv).not.toContain("18");
+    // The expected delta agrees: the reminder is asserted null (cleared), not 18:00.
+    const delta = plan["expectedDelta"] as { assert?: Array<Record<string, unknown>> };
+    const rem = delta.assert?.find((a) => a["field"] === "reminder");
+    expect(rem?.["equals"]).toBeNull();
+  });
+
+  it("project update --when evening DOES auto-preserve a LIVE reminder", async () => {
+    const proj = seedProject(fixture.db, {
+      title: "live-reminder-proj",
+      startDate: "2999-01-01", // future → the reminder is a live upcoming reminder
+      reminder: "18:00",
+    });
+    await run(["project", "update", proj, "--when", "evening", "--dry-run", "--json"]);
+    const plan = envelope()["data"] as Record<string, unknown>;
+    const inv = String(plan["invocation"]);
+    expect(inv).toContain("when=evening%4018%3A00"); // evening@18:00, preserved
+    const delta = plan["expectedDelta"] as { assert?: Array<Record<string, unknown>> };
+    const rem = delta.assert?.find((a) => a["field"] === "reminder");
+    expect(rem?.["equals"]).toBe("18:00");
+  });
 });
 
 describe("bulk todo add: variadic / --stdin / --id-only", () => {

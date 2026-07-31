@@ -655,6 +655,7 @@ export async function runMutation<K extends OperationKind>(
 
     // 5. Compile + expected delta.
     const nowEpoch = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
+    const todayIso = localToday(deps.now?.() ?? new Date());
     const token = readAuthToken(deps.db);
     // The simulator vector applies mutations from STRUCTURED op/params via SQL,
     // never from a compiled payload — and a single VectorId cannot satisfy the
@@ -677,10 +678,7 @@ export async function runMutation<K extends OperationKind>(
       invocation.op = op;
       invocation.opParams = params;
     }
-    const delta = spec.expectedDelta(pre, params, {
-      nowEpoch,
-      todayIso: localToday(deps.now?.() ?? new Date()),
-    });
+    const delta = spec.expectedDelta(pre, params, { nowEpoch, todayIso });
 
     if (options.dryRun === true) {
       return {

@@ -219,7 +219,11 @@ export function whenValue(item: Todo | Project, todayIso: string): string | null
   else if (item.start === "someday") label = "Someday";
   else label = null;
   if (label === null) return null;
-  return item.reminder === null
+  // The reminder rides the presence-keyed `reminderLive` marker (§9n) — the SAME
+  // materialize-time gate the JSON wire uses — so a stale reminder (past
+  // startDate, bell hidden in the GUI) is omitted from the card too. The marker
+  // implies `reminder` is set, so the non-null value read below is safe.
+  return item.reminderLive !== true || item.reminder === null
     ? label
     : `${label} ${dim(REMINDER_MARK)} ${formatReminderTime(item.reminder)}`;
 }

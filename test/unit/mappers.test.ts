@@ -125,6 +125,79 @@ describe("mapTodaySection gate (Today members only)", () => {
   });
 });
 
+describe("reminderLive marker (§9n stale-reminder gating)", () => {
+  // 18:00 packed (hour<<26|minute<<20) — the live-verified §9n repro vector.
+  const REM_1800 = 1207959552;
+
+  it("a PAST-dated reminder is presentation-dead: byte kept, marker absent", () => {
+    // The §9n repro row: type/start=1, startBucket=1, startDate strictly past,
+    // reminderTime set. The GUI hides the bell; the DB keeps the byte.
+    const todo = mapTodo(
+      row({ start: 1, startDate: PAST, startBucket: 1, reminderTime: REM_1800 }),
+      refs,
+      [],
+      TODAY,
+    );
+    expect(todo.reminder).toBe("18:00"); // raw byte still decoded (write path reads it)
+    expect(todo.reminderLive).toBeUndefined(); // ...but not live → read/render suppress it
+    // It IS still an arrived Today member (the today marker is unaffected).
+    expect(todo.today).toBe(true);
+  });
+
+  it("a TODAY-dated reminder is live: marker set", () => {
+    const todo = mapTodo(
+      row({ start: 1, startDate: TODAY, startBucket: 0, reminderTime: REM_1800 }),
+      refs,
+      [],
+      TODAY,
+    );
+    expect(todo.reminder).toBe("18:00");
+    expect(todo.reminderLive).toBe(true);
+  });
+
+  it("a FUTURE-dated reminder is live (an upcoming reminder): marker set", () => {
+    const todo = mapTodo(
+      row({ start: 1, startDate: FUTURE, startBucket: 0, reminderTime: REM_1800 }),
+      refs,
+      [],
+      TODAY,
+    );
+    expect(todo.reminder).toBe("18:00");
+    expect(todo.reminderLive).toBe(true);
+  });
+
+  it("no reminderTime → no marker (nothing to gate)", () => {
+    const todo = mapTodo(row({ start: 1, startDate: PAST, reminderTime: null }), refs, [], TODAY);
+    expect(todo.reminder).toBeNull();
+    expect(todo.reminderLive).toBeUndefined();
+  });
+
+  it("a reminder with NO startDate keeps the byte live (defensive — the app never produces this shape)", () => {
+    // reminderIsLive(null, today) === true: a date-less reminder is not a real
+    // data shape (a reminder requires a scheduled startDate), so we do not gate
+    // it — absence of a date is not evidence of staleness.
+    const todo = mapTodo(
+      row({ start: 1, startDate: null, startBucket: 0, reminderTime: REM_1800 }),
+      refs,
+      [],
+      TODAY,
+    );
+    expect(todo.reminder).toBe("18:00");
+    expect(todo.reminderLive).toBe(true);
+  });
+
+  it("generalizes to projects (the marker lives on the shared common fields)", () => {
+    const staleProject = mapProject(
+      row({ type: 1, start: 1, startDate: PAST, startBucket: 1, reminderTime: REM_1800 }),
+      refs,
+      [],
+      TODAY,
+    );
+    expect(staleProject.reminder).toBe("18:00");
+    expect(staleProject.reminderLive).toBeUndefined();
+  });
+});
+
 describe("mapProject / mapHeading", () => {
   it("maps project child counts", () => {
     const project = mapProject(

@@ -234,3 +234,27 @@ export function whenIsProvisional(
 export function entityProvisional(item: WhenStageInput): boolean {
   return whenIsProvisional(entityWhen(item), item.start, item.startDate);
 }
+
+/**
+ * The §9n stale-reminder LAW — the ONE liveness predicate the read-emit boundary
+ * (its precomputed `reminderLive` marker, mappers) and the write-side reminder
+ * auto-preserve ({@link src/write/commands.ts} `effectiveReminder`) share, so a
+ * reminder is reported/preserved iff the GUI would still render its bell.
+ *
+ * A time-of-day reminder renders in the GUI ONLY while its row's `startDate` is
+ * the current day or FUTURE (a future-scheduled row's reminder is a live
+ * upcoming reminder; today's is live). Once `startDate` goes STRICTLY PAST the
+ * app hides the bell at the presentation layer while leaving the `reminderTime`
+ * byte in the DB forever — presentation-dead, never cleared (docs/lab/
+ * sit3-arrival-evening-lists.md REMSTALE, oddities §9n). A read keyed on the raw
+ * byte would over-report; a `when=` re-schedule that auto-preserved it would
+ * resurrect a reminder the user believes gone.
+ *
+ * A row with NO `startDate` keeps the byte live (a reminder cannot exist without
+ * a scheduled date in the app's model, so this arm is defensive — see the test).
+ * ISO `YYYY-MM-DD` strings order lexicographically == chronologically, so the
+ * bare `>=` is the calendar comparison.
+ */
+export function reminderIsLive(startDate: IsoDate | null, todayIso: IsoDate): boolean {
+  return startDate === null || startDate >= todayIso;
+}
