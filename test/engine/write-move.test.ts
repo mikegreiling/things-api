@@ -1066,3 +1066,97 @@ describe("scope composition (#276): an out-of-scope anchor reads as not-found", 
     if (r.kind === "move-refused") expect(r.refusal).toBe("usage");
   });
 });
+
+describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () => {
+  /** The reorder scope an in-place reorder of these movees routes to (dry-run). */
+  async function routedScope(uuids: string[]): Promise<string> {
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids }, { dryRun: true });
+    if (r.kind !== "move-dry-run") throw new Error(`expected move-dry-run, got ${r.kind}`);
+    return r.plan.placement;
+  }
+
+  it("a headed SOMEDAY child routes to heading-someday", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const s1 = seedTodo(fixture.db, { title: "s1", heading, start: "someday", index: 10 });
+    const s2 = seedTodo(fixture.db, { title: "s2", heading, start: "someday", index: 20 });
+    expect(await routedScope([s1, s2])).toContain("scope=heading-someday");
+  });
+
+  it("a headed same-day SCHEDULED child routes to heading-day, NEVER container-day (§9k rail)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedTodo(fixture.db, {
+      title: "d1",
+      heading,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const d2 = seedTodo(fixture.db, {
+      title: "d2",
+      heading,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const placement = await routedScope([d1, d2]);
+    expect(placement).toContain("scope=heading-day");
+    expect(placement).not.toContain("container-day");
+  });
+
+  it("a headed EVENING child stays app-default (display axis GUI-ambiguous)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const e1 = seedTodo(fixture.db, {
+      title: "e1",
+      heading,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [e1] }, { dryRun: true });
+    // app-default bucket → an explicit reorder is honestly refused (not routed).
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("evening");
+  });
+
+  it("a PROJECT-child evening item routes to the shipped evening bounce (Arm D)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const e1 = seedTodo(fixture.db, {
+      title: "e1",
+      project: proj,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    expect(await routedScope([e1])).toContain("scope=evening");
+  });
+
+  it("an AREA-child evening item routes to the shipped evening bounce (Arm D)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const e1 = seedTodo(fixture.db, {
+      title: "e1",
+      area,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    expect(await routedScope([e1])).toContain("scope=evening");
+  });
+
+  it("child-evening degrades to app-default when bounce is disabled (never a destructive fallback)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const e1 = seedTodo(fixture.db, {
+      title: "e1",
+      project: proj,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    const noBounce = deps({ config: { ...config(), bounceEnabled: false } });
+    const r = await runInPlaceReorder(noBounce, "todo.move", { uuids: [e1] }, { dryRun: true });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("bounce");
+  });
+});

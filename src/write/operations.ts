@@ -481,11 +481,26 @@ export type ReorderScope =
   //   reaches them directly; delivered by the UPCORD1 park-sort-unpark protocol
   //   (scratch PROJECT park → container-day reorder → unpark → trash the scratch),
   //   orchestrated in reorder.ts. Planner-selected only (never a CLI flag).
+  // HEADSUB1 within-heading sub-bucket protocols (lab/headsub1-heading-subbuckets.md):
+  // - heading-someday: a heading's SOMEDAY children, ranked on "index". Re-headed
+  //   in FORWARD target order (each a single `todo.move` list-id+heading leg) —
+  //   the move-to-heading BACK-INSERT is deterministic (Arm B-someday / Arm C),
+  //   so re-heading the block in target order IS the sort. Compiles exactly like
+  //   the `heading` anytime scope (back-insert suffix, co-touch disclosure), but
+  //   the per-item leg is one re-head, not a when= bounce. No experimental/bounce
+  //   gate (pure URL move legs). Planner-selected only.
+  // - heading-day: a heading's SAME-DAY SCHEDULED children, ranked on todayIndex.
+  //   The native container-day reorder RIPS a headed child's heading FK (§9k / Arm
+  //   A), so the direct re-rank is forbidden; delivered by the unhead → container-
+  //   day reorder → re-head round-trip (Arm C2, date/todayIndex-preserving). Gated
+  //   like container-day (allow-experimental). Planner-selected only.
   | "heading"
   | "area-someday"
   | "anytime"
   | "container-day"
-  | "loose-day";
+  | "loose-day"
+  | "heading-someday"
+  | "heading-day";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {
