@@ -229,10 +229,11 @@ function reorderVector(rankCol: `"index"` | "todayIndex" = `"index"`): WriteVect
 }
 
 /**
- * The full UPCORD1 loose-day protocol harness: url-scheme fake for the scratch
- * project.add + park/unpark todo.move legs (schedule preserved), applescript
- * fake for the native container-day reorder (todayIndex re-rank) + project.delete
- * trash. Both read invocation.op/opParams. Returns the two vectors + a call log.
+ * A native-reorder + membership harness: url-scheme fake for project.add +
+ * todo.move (schedule preserved), applescript fake for the native container-day /
+ * tomorrow reorder (todayIndex re-rank) + project.delete. Used by the single-
+ * project container-day and one-call `tomorrow` routing tests (the SIT4 dated
+ * `day` bounce uses {@link datedBounceMoveVectors} instead — no scratch project).
  */
 interface LooseDayOpParams {
   title?: string;
@@ -301,6 +302,60 @@ function looseDayMoveVectors() {
     },
   };
   return { vectors: [urlFake, asFake], calls };
+}
+
+/**
+ * The SIT4 dated `day` bounce harness for the move path: a url-scheme fake for the
+ * todo.update / update-project when= legs that FRONT-inserts each row at the target
+ * day+bucket's GLOBAL todayIndex min (to-dos AND area-less projects share ONE
+ * axis). No scratch project, no experimental gate — just the when= round-trip; the
+ * op recorded (todo.update vs project.update) proves the per-type leg dispatch.
+ */
+function datedBounceMoveVectors() {
+  const calls: string[] = [];
+  const apply = (uuid: string, when: string): void => {
+    const at = when.indexOf("@");
+    const base = at >= 0 ? when.slice(0, at) : when;
+    let packed: number;
+    let bucket: number;
+    if (base === "evening") {
+      packed = TODAY_PACKED;
+      bucket = 1;
+    } else if (base === "today") {
+      packed = TODAY_PACKED;
+      bucket = 0;
+    } else {
+      packed = encodePackedDate(base);
+      bucket = 0;
+    }
+    const min = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0
+         AND startBucket = ? AND startDate = ?`,
+      )
+      .get(bucket, packed) as { m: number | null };
+    const startVal = packed > TODAY_PACKED ? 2 : 1;
+    fixture.db
+      .prepare(
+        `UPDATE TMTask SET start = ?, startDate = ?, startBucket = ?, todayIndex = ?,
+         userModificationDate = ? WHERE uuid = ?`,
+      )
+      .run(startVal, packed, bucket, (min.m ?? 0) - 1, modClock++, uuid);
+  };
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as { uuid: string; when?: string };
+      if (inv.op === "todo.update" || inv.op === "project.update") apply(p.uuid, p.when ?? "");
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake], calls };
 }
 
 function deps(overrides: Partial<WriteDeps> = {}): WriteDeps {
@@ -465,6 +520,101 @@ describe("rule 2: anchors position, never migrate", () => {
     if (result.kind === "move-refused") {
       expect(result.refusal).toBe("blocked");
       expect(result.detail).toContain("an anchor positions, it never migrates");
+    }
+  });
+});
+
+describe("axis-aware anchor validity (global todayIndex scopes — BUG 3)", () => {
+  // Today / Evening / day are ONE cross-container todayIndex axis: an anchor in a
+  // different STRUCTURAL container is NOT a migration (the GUI permits the drag).
+  // Anchor validity keys on the reorder TARGET, not the structural container; the
+  // comparator and describer read the same key, so a refusal never renders the
+  // self-contradictory identical-label message. Index-axis scopes are unchanged.
+
+  it("Today: an area-child movee --after a project-child anchor COMPILES (cross-container)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const areaMovee = seedTodo(fixture.db, {
+      title: "am",
+      area,
+      startDate: "2026-07-05", // arrived today
+      todayIndex: 10,
+    });
+    const projAnchor = seedTodo(fixture.db, {
+      title: "pa",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 20,
+    });
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [areaMovee], position: { after: projAnchor } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
+  });
+
+  it("Today: a loose movee --after an area'd anchor COMPILES (cross-container)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const loose = seedTodo(fixture.db, { title: "loose", startDate: "2026-07-05", todayIndex: 10 });
+    const areaAnchor = seedTodo(fixture.db, {
+      title: "aa",
+      area,
+      startDate: "2026-07-05",
+      todayIndex: 20,
+    });
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [loose], position: { after: areaAnchor } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
+  });
+
+  it("Evening: a project-child movee --after a loose anchor COMPILES (bounce path)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const projEve = seedTodo(fixture.db, {
+      title: "pe",
+      project: proj,
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 10,
+    });
+    const looseEve = seedTodo(fixture.db, {
+      title: "le",
+      startDate: "2026-07-05",
+      evening: true,
+      todayIndex: 20,
+    });
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [projEve], position: { after: looseEve } },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=evening");
+  });
+
+  it("index-axis: an anytime movee --after another project's anytime item still REFUSES (differing labels)", async () => {
+    const p1 = seedProject(fixture.db, { title: "P1" });
+    const p2 = seedProject(fixture.db, { title: "P2" });
+    const movee = seedTodo(fixture.db, { title: "m", project: p1, start: "active", index: 1 });
+    const anchor = seedTodo(fixture.db, { title: "a", project: p2, start: "active", index: 1 });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [movee],
+      position: { after: anchor },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.detail).toContain("an anchor positions, it never migrates");
+      // The two container labels MUST differ (no self-contradiction).
+      expect(r.detail).toContain(p1);
+      expect(r.detail).toContain(p2);
     }
   });
 });
@@ -680,7 +830,7 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     }
   });
 
-  it("a loose FUTURE-day block is now GUARANTEED via the UPCORD1 loose-day protocol", async () => {
+  it("a loose FUTURE-day block is now GUARANTEED via the SIT4 dated `day` bounce", async () => {
     const a = seedTodo(fixture.db, {
       title: "a",
       start: "someday", // app-true future-scheduled (start=2 + future date)
@@ -693,7 +843,7 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
       startDate: "2026-07-20",
       todayIndex: 10,
     });
-    const { vectors, calls } = looseDayMoveVectors();
+    const { vectors, calls } = datedBounceMoveVectors();
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [a, b],
       position: { at: "first" },
@@ -701,14 +851,14 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
       expect(r.placementClass).toBe("guaranteed");
-      expect(r.note).toContain("loose 2026-07-20 day-group");
+      expect(r.note).toContain("2026-07-20 day-group");
     }
     // Block a,b landed at the top of the day in selection order.
     expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
-    // The protocol ran (scratch project.add + park + reorder + unpark + trash).
-    expect(calls).toContain("project.add");
-    expect(calls).toContain("project.delete");
-    // Items are loose again on their day.
+    // NO scratch project — the dated bounce is pure when= legs (todo.update).
+    expect(calls).not.toContain("project.add");
+    expect(calls.every((c) => c === "todo.update")).toBe(true);
+    // Items stayed loose on their day (the round-trip preserves the container).
     for (const u of [a, b]) {
       expect(containerOf(u).project).toBeNull();
       const row = fixture.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(u) as {
@@ -894,7 +1044,7 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
     expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
   });
 
-  it("a LATER future day still rides the scratch-park loose-day compound (not tomorrow)", async () => {
+  it("a LATER future day rides the SIT4 dated `day` bounce (not tomorrow, no scratch)", async () => {
     const a = seedTodo(fixture.db, {
       title: "a",
       start: "someday",
@@ -907,14 +1057,15 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
       startDate: LATER,
       todayIndex: 10,
     });
-    const { vectors, calls } = looseDayMoveVectors();
+    const { vectors, calls } = datedBounceMoveVectors();
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [a, b],
       position: { at: "first" },
     });
     expect(r.kind).toBe("move-ok");
-    if (r.kind === "move-ok") expect(r.note).toContain("loose 2026-07-20 day-group");
-    expect(calls).toContain("project.add"); // the scratch-park compound ran
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    expect(calls).not.toContain("project.add"); // pure when= bounce — no scratch project
+    expect(calls.every((c) => c === "todo.update")).toBe(true);
   });
 
   it("a scheduled PROJECT row is ACCEPTED as a movee for tomorrow (O12 inline)", async () => {
@@ -933,17 +1084,31 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
     if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
   });
 
-  it("a scheduled PROJECT row is REFUSED as a movee on a LATER day (app-default)", async () => {
-    const p = seedProject(fixture.db, {
-      title: "P",
+  it("an area-less scheduled PROJECT row on a LATER day is now WIRED via the `day` bounce", async () => {
+    // SIT4 DAYBNC: area-less project rows front-insert on the shared todayIndex
+    // axis via update-project — the loose-scheduled-PROJECT-row cell flips to WIRED.
+    const p1 = seedProject(fixture.db, {
+      title: "P1",
       start: "someday",
       startDate: LATER,
-      todayIndex: 5,
+      todayIndex: 20,
     });
-    const { vectors, calls } = looseDayMoveVectors();
-    const r = await runInPlaceReorder(deps({ vectors }), "project.move", { uuids: [p] });
-    expect(r.kind).toBe("move-refused");
-    expect(calls).toHaveLength(0);
+    const p2 = seedProject(fixture.db, {
+      title: "P2",
+      start: "someday",
+      startDate: LATER,
+      todayIndex: 10,
+    });
+    const { vectors, calls } = datedBounceMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "project.move", {
+      uuids: [p1, p2],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    // Project rows dispatch through update-project (the per-type leg op).
+    expect(calls.every((c) => c === "project.update")).toBe(true);
+    expect(ascending(indexOrder([p1, p2], "todayIndex"))).toBe(true);
   });
 });
 
@@ -959,7 +1124,7 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
   // de-schedule). These pin the app-true representation end-to-end through the
   // planner so the misroute cannot silently return.
 
-  it("a loose FUTURE-day start=2 movee routes to loose-day, NOT the someday protocol", async () => {
+  it("a loose FUTURE-day start=2 movee routes to the `day` bounce, NOT the someday protocol", async () => {
     const a = seedTodo(fixture.db, {
       title: "a",
       start: "someday",
@@ -972,7 +1137,7 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
       startDate: "2026-07-20",
       todayIndex: 10,
     });
-    const { vectors, calls } = looseDayMoveVectors();
+    const { vectors, calls } = datedBounceMoveVectors();
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [a, b],
       position: { at: "first" },
@@ -980,10 +1145,11 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
       expect(r.placementClass).toBe("guaranteed");
-      expect(r.note).toContain("loose 2026-07-20 day-group");
+      expect(r.note).toContain("2026-07-20 day-group");
     }
-    // The UPCORD1 park-sort-unpark protocol ran — NOT a Someday when= bounce.
-    expect(calls).toContain("project.add");
+    // The dated `day` bounce ran — NOT a Someday when=anytime bounce (which would
+    // clear the date). Every leg is a dated todo.update, no scratch project.
+    expect(calls).not.toContain("project.add");
     // De-schedule guard: start=2 + the future date are preserved (never toggled).
     for (const u of [a, b]) {
       const row = fixture.db
@@ -1137,14 +1303,13 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     }
   });
 
-  it("a dated direct-area movee routes to the SAFE area-day compound, NEVER a de-scheduling bounce", async () => {
+  it("a dated direct-area movee routes to the SAFE `day` bounce, NEVER a de-scheduling bounce", async () => {
     // THE de-schedule hazard: the area-someday (and project-someday) reorder is a
     // when= bounce whose away leg `when=anytime` CLEARS a startDate — a dated
     // movee must NEVER reach it. A direct-area scheduled-day child now routes to
-    // the ORDFIN1 Arm 3 `area-day` park-sort-restore compound (park into a scratch
-    // PROJECT → container-day reorder → restore to the area), which preserves the
-    // date. The dry-run pins the classifier so the planner never proposes the
-    // destructive bounce.
+    // the SIT4 dated `day` bounce (a cross-DATE when= round-trip that preserves the
+    // area FK and the date, no scratch project). The dry-run pins the classifier so
+    // the planner never proposes the destructive someday bounce.
     const area = seedArea(fixture.db, "A");
     const dated = seedTodo(fixture.db, {
       title: "dated",
@@ -1161,7 +1326,7 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
     );
     expect(r.kind).toBe("move-dry-run");
     if (r.kind === "move-dry-run") {
-      expect(r.plan.placement).toContain("scope=area-day");
+      expect(r.plan.placement).toContain("scope=day");
       expect(r.plan.placement).not.toContain("someday");
     }
     // Untouched by the dry-run: still start=2 + its future date.
@@ -1279,10 +1444,12 @@ describe("regression: ARRIVED container children are Today members, not day-grou
       startDate: "2026-07-20",
       todayIndex: 1,
     });
+    // A single UNHEADED PROJECT container keeps the cheap native container-day
+    // re-rank; every other future day-group rides the SIT4 dated `day` bounce.
     expect(await routedScope([projChild])).toContain("scope=container-day");
-    expect(await routedScope([headChild])).toContain("scope=heading-day");
-    expect(await routedScope([areaChild])).toContain("scope=area-day");
-    expect(await routedScope([looseRow])).toContain("scope=loose-day");
+    expect(await routedScope([headChild])).toContain("scope=day");
+    expect(await routedScope([areaChild])).toContain("scope=day");
+    expect(await routedScope([looseRow])).toContain("scope=day");
   });
 });
 
@@ -1314,9 +1481,11 @@ describe("regression: day-group refusal copy carries the ISO date (no self-contr
     });
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") {
-      expect(r.detail).toContain("the loose 2026-08-05 day-group");
-      expect(r.detail).toContain("the loose 2026-08-07 day-group");
-      // The old date-less label must be gone (it was identical on both sides).
+      // The dated `day` bounce validates the anchor by day-group membership: the
+      // anchor lives on a DIFFERENT day, so it is not in the movee's group. The
+      // refusal names the movee's day (its identity IS its date), never the old
+      // date-less label that read identically on both sides.
+      expect(r.detail).toContain("the 2026-08-05 day-group");
       expect(r.detail).not.toContain("the loose future-day group");
       expect(r.detail).toContain("an anchor positions, it never migrates");
     }
@@ -1364,7 +1533,10 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
     expect(await routedScope([s1, s2])).toContain("scope=heading-someday");
   });
 
-  it("a headed same-day SCHEDULED child routes to heading-day, NEVER container-day (§9k rail)", async () => {
+  it("a headed same-day SCHEDULED child routes to the `day` bounce (heading FK preserved, §9k rail)", async () => {
+    // SIT4 DAYBNC: the dated when= round-trip preserves the heading FK, so a headed
+    // same-day child just bounces — no unhead→re-head round-trip, and NEVER the
+    // native container-day reorder (which RIPS the heading, §9k).
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     const d1 = seedTodo(fixture.db, {
@@ -1382,7 +1554,7 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
       todayIndex: 20,
     });
     const placement = await routedScope([d1, d2]);
-    expect(placement).toContain("scope=heading-day");
+    expect(placement).toContain("scope=day");
     expect(placement).not.toContain("container-day");
   });
 
@@ -1458,95 +1630,10 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
   });
 });
 
-// ------------------ ORDFIN1 planner routing (area-day + upcoming-day compounds)
+// ------------------ SIT4 dated `day` bounce planner routing (supersedes the
+// former loose-day / area-day / upcoming-day / heading-day compounds)
 
-/**
- * The full ORDFIN1 park-sort-restore harness for the move planner: url-scheme fake
- * for the scratch project.add + origin-aware park/restore todo.move legs (schedule
- * preserved, FK re-homed, todayIndex NEVER touched on a restore), applescript fake
- * for the native container-day reorder (todayIndex re-rank) + project.delete trash.
- */
-function dayCompoundMoveVectors() {
-  const calls: string[] = [];
-  const urlFake: WriteVector = {
-    id: "url-scheme",
-    matrix: {
-      "project.add": { support: "yes", disruption: 0, validation: "validated" },
-      "todo.move": { support: "yes", disruption: 0, validation: "validated" },
-    },
-    async execute(inv) {
-      calls.push(inv.op ?? "?");
-      const p = inv.opParams as {
-        title?: string;
-        uuid: string;
-        project?: { uuid: string };
-        area?: { uuid: string };
-        heading?: string;
-        loose?: boolean;
-      };
-      if (inv.op === "project.add") {
-        seedProject(fixture.db, {
-          title: p.title ?? "",
-          creationDate: Math.floor(NOW.getTime() / 1000),
-        });
-      } else if (inv.op === "todo.move") {
-        if (p.heading !== undefined) {
-          fixture.db
-            .prepare(
-              "UPDATE TMTask SET heading=?, project=NULL, area=NULL, userModificationDate=? WHERE uuid=?",
-            )
-            .run(p.heading, modClock++, p.uuid);
-        } else if (p.project !== undefined) {
-          fixture.db
-            .prepare(
-              "UPDATE TMTask SET project=?, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
-            )
-            .run(p.project.uuid, modClock++, p.uuid);
-        } else if (p.area !== undefined) {
-          fixture.db
-            .prepare(
-              "UPDATE TMTask SET area=?, project=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
-            )
-            .run(p.area.uuid, modClock++, p.uuid);
-        } else if (p.loose === true) {
-          fixture.db
-            .prepare(
-              "UPDATE TMTask SET project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
-            )
-            .run(modClock++, p.uuid);
-        }
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    },
-  };
-  const asFake: WriteVector = {
-    id: "applescript",
-    matrix: {
-      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
-      "project.delete": { support: "yes", disruption: 0, validation: "validated" },
-    },
-    async execute(inv) {
-      calls.push(inv.op ?? "?");
-      const p = inv.opParams as { uuid: string; uuids?: string[] };
-      if (inv.op === "reorder") {
-        let rank = 1;
-        for (const uuid of p.uuids ?? []) {
-          fixture.db
-            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
-            .run(rank++, modClock++, uuid);
-        }
-      } else if (inv.op === "project.delete") {
-        fixture.db
-          .prepare("UPDATE TMTask SET trashed=1, userModificationDate=? WHERE uuid=?")
-          .run(modClock++, p.uuid);
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    },
-  };
-  return { vectors: [urlFake, asFake], calls };
-}
-
-describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
+describe("SIT4 dated `day` bounce planner routing", () => {
   async function routedScope(uuids: string[], position?: MovePosition): Promise<string> {
     const r = await runInPlaceReorder(
       deps(),
@@ -1558,7 +1645,7 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
     return r.plan.placement;
   }
 
-  it("a same-area future-day group routes to area-day (single-container path)", async () => {
+  it("a same-area future-day group routes to the `day` bounce (container-less global axis)", async () => {
     const area = seedArea(fixture.db, "A");
     const a = seedTodo(fixture.db, {
       title: "a",
@@ -1574,10 +1661,10 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
       startDate: "2026-07-20",
       todayIndex: 20,
     });
-    expect(await routedScope([a, b])).toContain("scope=area-day");
+    expect(await routedScope([a, b])).toContain("scope=day");
   });
 
-  it("a CROSS-CONTAINER future-day group routes to upcoming-day (not the span-refusal)", async () => {
+  it("a CROSS-CONTAINER future-day group routes to the `day` bounce (not the span-refusal)", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const area = seedArea(fixture.db, "A");
     const projChild = seedTodo(fixture.db, {
@@ -1594,10 +1681,47 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
       startDate: "2026-07-20",
       todayIndex: 20,
     });
-    expect(await routedScope([projChild, areaChild])).toContain("scope=upcoming-day");
+    expect(await routedScope([projChild, areaChild])).toContain("scope=day");
   });
 
-  it("a cross-container group on DIFFERENT days still fails closed (span refusal, not upcoming-day)", async () => {
+  it("a MIXED to-do + area-less project future-day group routes to the `day` bounce", async () => {
+    // The first mixed-kind day-group: a loose to-do + an area-less project row on
+    // one August day. `todo reorder` accepts the project intermixed (globalAxis).
+    const todo = seedTodo(fixture.db, {
+      title: "t",
+      start: "someday",
+      startDate: "2026-08-12",
+      todayIndex: 10,
+    });
+    const proj = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: "2026-08-12",
+      todayIndex: 20,
+    });
+    expect(await routedScope([todo, proj])).toContain("scope=day");
+  });
+
+  it("a single UNHEADED project container still routes to the cheap native container-day", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    expect(await routedScope([a, b])).toContain("scope=container-day");
+  });
+
+  it("a cross-container group on DIFFERENT days still fails closed (span refusal)", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const area = seedArea(fixture.db, "A");
     const projChild = seedTodo(fixture.db, {
@@ -1619,7 +1743,7 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
     if (r.kind === "move-refused") expect(r.detail).toContain("span different containers");
   });
 
-  it("runs the cross-container upcoming-day compound end-to-end, restoring each FK and the order", async () => {
+  it("runs the cross-container dated bounce end-to-end, preserving each FK and the order", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
     const area = seedArea(fixture.db, "A");
@@ -1650,8 +1774,7 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
       startDate: "2026-07-20",
       todayIndex: 10,
     });
-    const { vectors, calls } = dayCompoundMoveVectors();
-    // Place the block loose,areaChild at the TOP in selection order.
+    const { vectors, calls } = datedBounceMoveVectors();
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [loose, areaChild],
       position: { at: "first" },
@@ -1659,18 +1782,40 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
       expect(r.placementClass).toBe("guaranteed");
-      expect(r.note).toContain("Upcoming day-group");
+      expect(r.note).toContain("2026-07-20 day-group");
     }
-    // The protocol ran (scratch project.add + park + reorder + restore + trash).
-    expect(calls).toContain("project.add");
-    expect(calls).toContain("project.delete");
+    // NO scratch project — pure when= legs.
+    expect(calls).not.toContain("project.add");
+    expect(calls).not.toContain("project.delete");
     // The block landed at the top of the day in selection order.
     expect(ascending(indexOrder([loose, areaChild], "todayIndex"))).toBe(true);
-    // Every FK round-tripped to its origin.
+    // Every FK is preserved by the round-trip (never re-homed).
     expect(containerOf(loose)).toMatchObject({ project: null, area: null, heading: null });
     expect(containerOf(projChild).project).toBe(proj);
     expect(containerOf(headedChild).heading).toBe(heading);
     expect(containerOf(areaChild).area).toBe(area);
+  });
+
+  it("an anchored --after a PROJECT row in the day group works (cross-kind anchor)", async () => {
+    const loose = seedTodo(fixture.db, {
+      title: "loose",
+      start: "someday",
+      startDate: "2026-08-12",
+      todayIndex: 10,
+    });
+    const projRow = seedProject(fixture.db, {
+      title: "P",
+      start: "someday",
+      startDate: "2026-08-12",
+      todayIndex: 20,
+    });
+    const { vectors, calls } = datedBounceMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [loose],
+      position: { after: projRow },
+    });
+    expect(r.kind).toBe("move-ok"); // the project row is a valid anchor (same day-group)
+    expect(calls).not.toContain("project.add");
   });
 
   it("a --before anchor OUTSIDE the day-group is refused (positions, never migrates)", async () => {
@@ -1690,7 +1835,6 @@ describe("ORDFIN1 planner routing (area-day + upcoming-day)", () => {
       startDate: "2026-07-20",
       todayIndex: 20,
     });
-    // An anchor on a DIFFERENT day is not a member of the group.
     const offDay = seedTodo(fixture.db, {
       title: "off",
       start: "someday",

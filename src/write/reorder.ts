@@ -44,11 +44,9 @@
  * direct class must NEVER collapse (json is index-inert there — a collapse
  * would silently fail to reorder).
  */
-import { randomBytes } from "node:crypto";
-
 import type { AuditRecord } from "../audit/schema.ts";
-import { localToday, encodePackedDate } from "../model/dates.ts";
-import type { ReorderParams, ReorderScope, TodoMoveParams } from "./operations.ts";
+import { addDaysIso, decodePackedDate, localToday, encodePackedDate } from "../model/dates.ts";
+import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
 import { computeReorderPre, resolveArea, resolveProject } from "./pre-state.ts";
 import { sdefDeclaresPrivateReorder } from "./experimental.ts";
@@ -84,6 +82,7 @@ export const BOUNCE_MAX_ITEMS = 30;
 export type BounceKind =
   | "today"
   | "evening"
+  | "day"
   | "projects"
   | "heading"
   | "area-someday"
@@ -91,12 +90,31 @@ export type BounceKind =
   | "project-someday";
 
 interface BounceSpec {
-  away: "today" | "evening" | "someday" | "anytime";
-  back: "today" | "evening" | "someday" | "anytime";
+  /**
+   * The two `when=` legs (away then back). For a fixed-bucket bounce these are
+   * scheduling keywords; for the DATED `day` bounce ({@link dated}) they are
+   * computed per invocation from the movees' shared day (away = D+1, back = D),
+   * so the spec leaves them null.
+   */
+  away: "today" | "evening" | "someday" | "anytime" | null;
+  back: "today" | "evening" | "someday" | "anytime" | null;
+  /**
+   * SIT4 DAYBNC: the `day` bounce's legs are a cross-DATE round-trip (away = the
+   * neighbour day D+1, back = the day D itself), computed from the movees' shared
+   * startDate at dispatch — not a fixed bucket. Sequential URL legs only (the
+   * things:///json when= reindex is unproven for dated placement, §9i).
+   */
+  dated: boolean;
   /** front = reverse-iterate (front-insert); back = forward-iterate (back-insert). */
   direction: "front" | "back";
   rankKey: "index" | "todayIndex";
-  legOp: "todo.update" | "project.update";
+  /**
+   * The mutation op for each leg. `per-type` chooses todo.update for a to-do
+   * (type=0) and update-project for a project (type=1) row-by-row — the first
+   * MIXED-kind bounce (SIT4 DAYBNC dated groups + EVEORD evening groups both
+   * front-insert to-dos and projects on ONE shared todayIndex axis).
+   */
+  legOp: "todo.update" | "project.update" | "per-type";
   /**
    * Whether the whole N-item round-trip may collapse to ONE pre-validated
    * `things:///json` update array (BOUNCEJSON, oddities §9i). The app's `json`
@@ -145,6 +163,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
       return {
         away: "evening",
         back: "today",
+        dated: false,
         direction: "front",
         rankKey: "todayIndex",
         legOp: "todo.update",
@@ -152,18 +171,40 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         jsonCollapsible: false,
       };
     case "evening":
+      // EVEORD: to-dos AND projects share ONE evening todayIndex axis; a project's
+      // when=evening re-entry front-inserts at the group min just like a to-do
+      // (×3). So the evening bounce accepts MIXED movees via a per-type leg op.
+      // Caveat: when=evening CLEARS reminderTime for BOTH kinds (§9n / R07).
       return {
         away: "today",
         back: "evening",
+        dated: false,
         direction: "front",
         rankKey: "todayIndex",
-        legOp: "todo.update",
+        legOp: "per-type",
+        jsonCollapsible: false,
+      };
+    // SIT4 DAYBNC: the DATED BOUNCE for an arbitrary future day-group across all
+    // containers — loose/project-child/headed/area-direct to-dos AND area-less
+    // project rows front-insert at the day-D GLOBAL todayIndex min on the back
+    // leg. away/back are the cross-date round-trip (D+1 → D), per-type legs,
+    // reminder/deadline/heading-FK preserving (§2e/R21). Sequential URL only —
+    // the json when= reindex is unproven for dated placement (§9i tested anytime).
+    case "day":
+      return {
+        away: null,
+        back: null,
+        dated: true,
+        direction: "front",
+        rankKey: "todayIndex",
+        legOp: "per-type",
         jsonCollapsible: false,
       };
     case "projects":
       return {
         away: "someday",
         back: "anytime",
+        dated: false,
         direction: "front",
         rankKey: "index",
         legOp: "project.update",
@@ -177,6 +218,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
       return {
         away: "someday",
         back: "anytime",
+        dated: false,
         direction: "back",
         rankKey: "index",
         legOp: "todo.update",
@@ -188,6 +230,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
       return {
         away: "anytime",
         back: "someday",
+        dated: false,
         direction: "front",
         rankKey: "index",
         legOp: "todo.update",
@@ -199,6 +242,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
       return {
         away: "someday",
         back: "anytime",
+        dated: false,
         direction: "front",
         rankKey: "index",
         legOp: "todo.update",
@@ -211,6 +255,7 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
       return {
         away: "anytime",
         back: "someday",
+        dated: false,
         direction: "back",
         rankKey: "index",
         legOp: "todo.update",
@@ -254,26 +299,12 @@ export async function runReorder(
 ): Promise<ReorderResult> {
   params = { ...params, uuids: params.uuids.map((u) => resolveTaskUuidPrefix(deps.db, u)) };
 
-  // The park-sort-restore day compounds (neither a single native command nor a
-  // when= bounce): a scratch project holds the whole day-group for ONE container-
-  // day reorder, then each member is restored to its origin. loose-day (UPCORD1),
-  // area-day (ORDFIN1 Arm 3), and upcoming-day (ORDFIN1 Arm 4) are the SAME
-  // origin-aware compound — loose-day/area-day are the uniform-origin degenerate
-  // cases (every member homes loose / to the area), upcoming-day the general one.
-  if (
-    params.scope === "loose-day" ||
-    params.scope === "area-day" ||
-    params.scope === "upcoming-day"
-  ) {
-    return runDayCompound(deps, params, options);
-  }
-
-  // HEADSUB1 within-heading sub-bucket compounds (headsub1-heading-subbuckets.md).
+  // HEADSUB1 within-heading sub-bucket compound (headsub1-heading-subbuckets.md):
   // heading-someday re-heads the block in forward order (move-to-heading back-
-  // insert); heading-day runs the unhead → container-day reorder → re-head round-
-  // trip (the native container-day reorder alone RIPS the heading FK, §9k).
+  // insert). (The former heading-day unhead→container-day→re-head round-trip is
+  // SUPERSEDED by the `day` dated bounce — SIT4 DAYBNC preserves the heading FK,
+  // so a headed same-day child just bounces.)
   if (params.scope === "heading-someday") return runHeadingSomeday(deps, params, options);
-  if (params.scope === "heading-day") return runHeadingDay(deps, params, options);
 
   const strategy = resolveStrategy(deps, params);
   if (strategy.kind === "blocked") return strategy.result;
@@ -319,6 +350,7 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
   // Scopes whose ONLY surface is the bounce (no native command reaches them).
   const bounceOnly: Partial<Record<ReorderScope, { kind: BounceKind; what: string }>> = {
     evening: { kind: "evening", what: "evening-section order" },
+    day: { kind: "day", what: "an arbitrary future-day order" },
     projects: { kind: "projects", what: "top-level projects order" },
     heading: { kind: "heading", what: "within-heading order" },
     "area-someday": { kind: "area-someday", what: "an area's someday order" },
@@ -386,19 +418,15 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
       return { kind: "ok", strategy: "native" };
     // bounce-only scopes handled by bounceEntry above; unreachable here.
     case "evening":
+    case "day":
     case "projects":
     case "heading":
     case "area-someday":
     case "anytime":
       return { kind: "ok", strategy: "native" };
-    // loose-day / area-day / upcoming-day / heading-someday / heading-day are
-    // intercepted in runReorder before resolveStrategy runs; these cases exist
-    // only for switch exhaustiveness.
-    case "loose-day":
-    case "area-day":
-    case "upcoming-day":
+    // heading-someday is intercepted in runReorder before resolveStrategy runs;
+    // this case exists only for switch exhaustiveness.
     case "heading-someday":
-    case "heading-day":
       return { kind: "ok", strategy: "native" };
   }
 }
@@ -444,93 +472,14 @@ function somedayProjectChildren(deps: WriteDeps, params: ReorderParams): boolean
   return true;
 }
 
-// ------------------------------------------------- park-sort-restore day compounds
+// ----------------------------------------------------- compound leg options
 //
-// loose-day (UPCORD1, docs/lab/upcord1-loose-day-order.md Arm B), area-day
-// (ORDFIN1 Arm 3), and upcoming-day (ORDFIN1 Arm 4) are ONE origin-aware compound.
-// A future Upcoming day-group has no native or bounce surface — `list "Upcoming"`
-// re-dates it (§9g), date-shaped `list` specifiers don't exist (−1728), and the
-// AREA reorder specifier de-schedules dated members (§9f). The one clean, date/
-// state-preserving path is a scratch PROJECT round-trip:
-//   1. create a scratch PROJECT (unique synthetic title);
-//   2. capture each day-group member's ORIGIN (loose / project / project+heading /
-//      area) BEFORE parking, then PARK it into the scratch (URL list-id — preserves
-//      startDate/start/todayIndex/reminder/deadline; parking a headed child clears
-//      its heading, exactly like the unhead leg);
-//   3. ONE container-day reorder against the scratch project, full day-group in
-//      target order (the SHIPPED DAYORD-b native todayIndex re-rank);
-//   4. RESTORE each member to its captured origin FK (loose ← empty list-id;
-//      project child ← list-id=<P>; headed child ← list-id=<P>&heading=<H>; area
-//      child ← list-id=<A>) — a membership move is a todayIndex no-op, so the
-//      reorder alone fixes the order and restore-leg order is irrelevant (Arm 4);
-//   5. TRASH the scratch project (delete-to-trash, NEVER permanent).
-// loose-day / area-day are the uniform-origin degenerate cases (every member homes
-// loose / to the area); upcoming-day the mixed-origin general one. The whole day-
-// group is parked (not just the named block): the container-day leg only re-ranks
-// the scratch project's OWN children, so an un-parked day member would keep a stale
-// todayIndex and corrupt the result — every un-named member is a co-parked sibling
-// (touched, disclosed, bounce co-bounce precedent). upcoming-day DISCLOSES a
-// strand when the day carries an untouched scheduled PROJECT row (not parkable —
-// UPCORD1): the block sorts to the TOP of the day and the project row(s) keep
-// their prior relative order below it (ORDFIN2 PRJMIX), surfaced in `stranded`. A
-// requested repeating TEMPLATE or a requested project movee is still refused
-// (§9e / not parkable). Non-atomic like the bounce protocols: a mid-protocol
-// failure leaves items PARKED in the scratch project and fails loudly with
-// placed/remaining detail naming the scratch uuid.
-
-/**
- * A day-group member's origin container, captured BEFORE parking so the restore
- * leg can re-home it (upcoming-day is origin-aware; loose-day/area-day are the
- * uniform-origin degenerate cases).
- */
-type DayOrigin =
-  | { kind: "loose" }
-  | { kind: "project"; project: string }
-  | { kind: "heading"; project: string; heading: string }
-  | { kind: "area"; area: string };
-
-/** Read a member's current origin container; error string if unrestorable. */
-function captureDayOrigin(deps: WriteDeps, uuid: string): DayOrigin | { error: string } {
-  const row = deps.db
-    .prepare("SELECT project, area, heading FROM TMTask WHERE uuid = ?")
-    .get(uuid) as
-    | { project: string | null; area: string | null; heading: string | null }
-    | undefined;
-  if (row === undefined) return { error: `${uuid} no longer exists` };
-  if (row.heading !== null) {
-    const project = headingProjectUuid(deps, row.heading);
-    if (project === null) {
-      return { error: `${uuid} is under a heading with no owning project — cannot restore it` };
-    }
-    return { kind: "heading", project, heading: row.heading };
-  }
-  if (row.project !== null) return { kind: "project", project: row.project };
-  if (row.area !== null) return { kind: "area", area: row.area };
-  return { kind: "loose" };
-}
-
-/** The todo.move params that restore a member to its captured origin. */
-function restoreLegParams(uuid: string, origin: DayOrigin): TodoMoveParams {
-  switch (origin.kind) {
-    case "loose":
-      return { uuid, loose: true };
-    case "project":
-      return { uuid, project: { uuid: origin.project } };
-    case "heading":
-      return { uuid, project: { uuid: origin.project }, heading: origin.heading };
-    case "area":
-      return { uuid, area: { uuid: origin.area } };
-  }
-}
-
-/** Human-readable scope label for the compound's messages. */
-function dayScopeLabel(scope: "loose-day" | "area-day" | "upcoming-day"): string {
-  return scope === "loose-day"
-    ? "loose future-day"
-    : scope === "area-day"
-      ? "direct-area future-day"
-      : "cross-container future-day";
-}
+// (The former park-sort-restore day compounds — loose-day / area-day / upcoming-
+// day — and the heading-day unhead→re-head round-trip are DELETED: SIT4 DAYBNC
+// proved the dated `day` bounce serves their whole population plus area-less
+// project rows, reminder/deadline/heading-FK preserving, with NO scratch project
+// and NO experimental gate. compoundLegOptions survives — heading-someday still
+// uses it for its per-leg move sub-mutations.)
 
 /** Leg options for a compound sub-mutation — each leg fully verified. */
 function compoundLegOptions(options: WriteOptions, txnId: string): WriteOptions {
@@ -541,361 +490,15 @@ function compoundLegOptions(options: WriteOptions, txnId: string): WriteOptions 
   return legs;
 }
 
-/** A fresh unique-enough scratch-project title suffix (opId-ish). */
-function scratchSuffix(startedAt: Date): string {
-  return `${startedAt.getTime().toString(36)}-${randomBytes(3).toString("hex")}`;
-}
-
-/** Abort payload: items are PARKED in the scratch project — name it for recovery. */
-function dayAborted(
-  detail: string,
-  placed: string[],
-  remaining: string[],
-  cause: MutationResult | null,
-): ReorderResult {
-  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
-}
-
-/**
- * The origin-aware park-sort-restore compound: loose-day / area-day / upcoming-day.
- * Parks the WHOLE future day-group into a scratch project, runs ONE container-day
- * reorder, restores each member to its captured origin FK, then trashes the
- * scratch. loose-day/area-day are uniform-origin degenerate cases (every member
- * homes loose / to the area); upcoming-day the mixed-origin general case.
- */
-async function runDayCompound(
-  deps: WriteDeps,
-  params: ReorderParams,
-  options: WriteOptions,
-): Promise<ReorderResult> {
-  const scope = params.scope as "loose-day" | "area-day" | "upcoming-day";
-  const startedAt = deps.now?.() ?? new Date();
-  const now = deps.now ?? (() => new Date());
-  const actor = options.actor ?? deps.config.actor;
-  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
-  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
-  // area-day homes into an area; loose-day/upcoming-day carry no container.
-  const containerUuid = scope === "area-day" ? (params.container?.uuid ?? null) : null;
-
-  // Gate: the container-day reorder leg needs the experimental native surface —
-  // inherit the container-day gating EXACTLY, and fail BEFORE any side effect
-  // (a scratch project) rather than half-way through the protocol.
-  const nativeAvailable =
-    deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
-  if (!nativeAvailable) {
-    const result: MutationResult = {
-      kind: "blocked",
-      op: "reorder",
-      reason: "environment",
-      detail:
-        `${dayScopeLabel(scope)} ordering runs the ORDFIN1 park-sort-restore protocol, whose ` +
-        "reorder leg is the experimental native container-day command — it is unavailable " +
-        (deps.config.allowExperimental
-          ? "(the installed Things no longer declares the private reorder command in its sdef)"
-          : "(allow-experimental is off)") +
-        ", so the protocol was NOT attempted (no scratch project was created)",
-      remediation: deps.config.allowExperimental
-        ? "check `things doctor`; the private surface was likely removed by an app update"
-        : "enable it with `things config set allow-experimental true`",
-    };
-    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
-    return result;
-  }
-
-  // Enumerate the day-group (whole group is parked as one unit).
-  const pre = computeReorderPre(deps.db, params, containerUuid, now());
-  const targetOrder = pre.wireList;
-  const named = new Set(params.named ?? params.uuids);
-  const touchedUnnamed = targetOrder.filter((u) => !named.has(u));
-
-  // Capture each member's ORIGIN before parking (upcoming-day is origin-aware; the
-  // others are uniform). An unrestorable member is a fail-closed problem.
-  const origins = new Map<string, DayOrigin>();
-  const originErrors: string[] = [];
-  for (const uuid of targetOrder) {
-    const o = captureDayOrigin(deps, uuid);
-    if ("error" in o) originErrors.push(o.error);
-    else origins.set(uuid, o);
-  }
-
-  const problems: string[] = [];
-  if (scope === "area-day") {
-    if (params.container?.uuid === undefined) {
-      problems.push("area-day needs the area container (the reorder's home area)");
-    }
-  } else if (params.container !== undefined) {
-    problems.push(`${scope} takes no container (the day is read off a movee)`);
-  }
-  if (params.uuids.length === 0) problems.push("no uuids given");
-  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
-  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
-  problems.push(...originErrors);
-  // upcoming-day: a same-day scheduled PROJECT row (type=1) cannot be parked into
-  // the scratch project (UPCORD1). ORDFIN2 PRJMIX proved the strand law is
-  // deterministic — an untouched same-day project row keeps its todayIndex byte-
-  // identical and the park-sorted block always lands ABOVE it (the block is re-
-  // based below the GLOBAL day-group minimum across all containers). So instead of
-  // refusing fail-closed we proceed with the to-do sort and DISCLOSE the stranded
-  // project rows (a REQUESTED project movee stays refused by computeReorderPre —
-  // it is unsortable here; only untouched project SIBLINGS strand). Templates are
-  // still refused as movees (§9e, via computeReorderPre).
-  const stranded: { uuid: string; title: string }[] = [];
-  if (scope === "upcoming-day") {
-    const firstUuid = params.uuids[0];
-    const first =
-      firstUuid !== undefined
-        ? (deps.db
-            .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
-            .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
-        : undefined;
-    if (first?.startDate != null && first.startBucket === 0) {
-      const requested = new Set(params.uuids);
-      const projectRows = deps.db
-        .prepare(
-          "SELECT uuid, title FROM TMTask WHERE trashed = 0 AND status = 0 AND type = 1 " +
-            'AND startBucket = 0 AND startDate = ? ORDER BY todayIndex ASC, "index" ASC',
-        )
-        .all(first.startDate) as { uuid: string; title: string | null }[];
-      for (const r of projectRows) {
-        if (!requested.has(r.uuid)) stranded.push({ uuid: r.uuid, title: r.title ?? "" });
-      }
-    }
-  }
-  if (targetOrder.length > cap) {
-    problems.push(
-      `${targetOrder.length} touched items exceed the cap of ${cap} (the whole day-group is ` +
-        "parked as one unit; each item costs a park + restore leg" +
-        (touchedUnnamed.length > 0
-          ? `; ${touchedUnnamed.length} un-named day-group sibling(s) are co-parked too`
-          : "") +
-        ")",
-    );
-  }
-  if (problems.length > 0) {
-    const result: MutationResult = {
-      kind: "blocked",
-      op: "reorder",
-      reason: "hazard",
-      hazard: "H-REORDER-SCOPE",
-      detail: `${scope} reorder rejected: ${problems.join("; ")}`,
-      remediation:
-        `reorder ${dayScopeLabel(scope)} to-dos that all share ONE future Upcoming day (mixed ` +
-        "dates and templates are refused; a same-day scheduled project row is left in place below " +
-        "the sorted block, not sorted), at most " +
-        `${cap} in the day-group (set with \`things config set bounce-max-items\`)`,
-    };
-    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
-    return result;
-  }
-
-  // Pre-ranks (todayIndex order of the whole day-group) make the SUMMARY the
-  // undoable unit — the inverse re-runs this protocol with the prior order.
-  const preRanks: Record<string, unknown> = {};
-  for (const m of pre.members) preRanks[m.uuid] = m.rank;
-
-  if (options.dryRun === true) {
-    return {
-      kind: "dry-run",
-      op: "reorder",
-      plan: {
-        op: "reorder",
-        vector: "url-scheme",
-        tier: 0,
-        invocation:
-          `${scope} park-sort-restore ×${targetOrder.length} ` +
-          `(scratch project + ${targetOrder.length} park + 1 container-day reorder + ` +
-          `${targetOrder.length} restore + trash; ` +
-          (touchedUnnamed.length > 0 ? `${touchedUnnamed.length} co-parked sibling(s); ` : "") +
-          "one terminal order verify)",
-        expectedDelta: { mode: "ordering", key: "todayIndex", sequence: targetOrder },
-        hazardsChecked: ["H-REORDER-SCOPE"],
-      },
-    };
-  }
-
-  const legOpts = compoundLegOptions(options, txnId);
-  const scratchTitle = `things-api ${scope} ${scratchSuffix(startedAt)}`;
-
-  // 1. Create the scratch PROJECT.
-  const add = await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
-  if (add.kind !== "ok" || add.uuid === null) {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [] },
-      { pre: preRanks, txnId, actor },
-    );
-    return dayAborted(
-      `could not create the scratch project "${scratchTitle}" — nothing was parked; ` +
-        "no changes were made",
-      [],
-      targetOrder,
-      add.kind === "ok" ? null : add,
-    );
-  }
-  const scratch = add.uuid;
-
-  // 2. PARK each day-group member into the scratch project (URL list-id).
-  const parked: string[] = [];
-  for (const uuid of targetOrder) {
-    const res = await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
-    if (res.kind !== "ok") {
-      auditSummary(
-        deps,
-        params,
-        startedAt,
-        "verify-failed:mismatch",
-        { placed: [...parked] },
-        { pre: preRanks, txnId, actor },
-      );
-      return dayAborted(
-        `parking ${uuid} into scratch project ${scratch} failed — ${parked.length} item(s) are ` +
-          `PARKED there (${scratch}) and must be restored to their origin manually; the scratch ` +
-          "project was NOT trashed",
-        parked,
-        targetOrder.slice(parked.length),
-        res,
-      );
-    }
-    parked.push(uuid);
-  }
-
-  // 3. ONE container-day reorder against the scratch project, full order.
-  const reordered = await runReorder(
-    deps,
-    {
-      scope: "container-day",
-      container: { uuid: scratch },
-      uuids: targetOrder,
-      ...(params.named !== undefined && { named: params.named }),
-    },
-    legOpts,
-  );
-  if (reordered.kind !== "ok") {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [...parked] },
-      { pre: preRanks, txnId, actor },
-    );
-    return dayAborted(
-      `the container-day reorder against scratch project ${scratch} did not complete ` +
-        `(${reordered.kind}) — all ${parked.length} item(s) are PARKED in ${scratch} and must be ` +
-        "restored to their origin manually; the scratch project was NOT trashed",
-      parked,
-      [],
-      reordered.kind === "bounce-aborted" ? null : reordered,
-    );
-  }
-
-  // 4. RESTORE each member to its captured origin FK (loose / project / heading /
-  //    area). A membership move is a todayIndex no-op, so restore-leg order is
-  //    irrelevant — the container-day reorder alone fixed the order (Arm 4).
-  const restored: string[] = [];
-  for (const uuid of targetOrder) {
-    const origin = origins.get(uuid) ?? { kind: "loose" as const };
-    const res = await runMutation(deps, "todo.move", restoreLegParams(uuid, origin), legOpts);
-    if (res.kind !== "ok") {
-      const stillParked = targetOrder.filter((u) => !restored.includes(u));
-      auditSummary(
-        deps,
-        params,
-        startedAt,
-        "verify-failed:mismatch",
-        { placed: [...restored] },
-        { pre: preRanks, txnId, actor },
-      );
-      return dayAborted(
-        `restoring ${uuid} from scratch project ${scratch} failed — ${stillParked.length} item(s) ` +
-          `remain PARKED in ${scratch} (ordered) and must be restored to their origin manually; the ` +
-          "scratch project was NOT trashed",
-        restored,
-        stillParked,
-        res,
-      );
-    }
-    restored.push(uuid);
-  }
-
-  // 5. TRASH the scratch project (delete-to-trash, never permanent). A failure
-  //    here does NOT undo the (already-correct) order — disclose it instead.
-  const del = await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
-  const scratchTrashed = del.kind === "ok";
-
-  // 6. Terminal verify: the day-group order matches the target (todayIndex).
-  const verify = await pollUntilVerified(
-    () =>
-      evaluateDelta(
-        { mode: "ordering", key: "todayIndex", sequence: targetOrder },
-        createDbReader(deps.db),
-        { modDates: {}, fields: {} },
-      ),
-    options.verifyTimeoutMs ?? 4000,
-    deps.poller ?? {},
-  );
-  if (verify.kind !== "ok") {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [...restored] },
-      { pre: preRanks, txnId, actor },
-    );
-    return dayAborted(
-      "the day-group did not land the requested order after restoring " +
-        `(scratch project ${scratch} was ${scratchTrashed ? "trashed" : "left in place"}); ` +
-        "re-run once Things is idle",
-      restored,
-      [],
-      null,
-    );
-  }
-
-  const reader = createDbReader(deps.db);
-  const observed: Record<string, unknown> = {};
-  for (const uuid of targetOrder) observed[uuid] = reader.rankOf(uuid, "todayIndex");
-  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
-
-  const warnings = [
-    `scratch project ${scratch} was created for the reorder and ` +
-      (scratchTrashed
-        ? "moved to the Trash (empty; one per invocation — the protocol never hard-deletes it)"
-        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
-  ];
-  if (stranded.length > 0) {
-    // Placement-honesty note (PRJMIX): the sorted block is at the TOP of the day;
-    // the untouched project row(s) remain BELOW it in their prior relative order.
-    warnings.push(
-      `the day's to-dos were sorted and placed at the top of the day; ${stranded.length} same-day ` +
-        `scheduled project row(s) are not parkable (UPCORD1) so they remain below the sorted block ` +
-        `in their prior relative order: ${stranded.map((s) => s.uuid).join(", ")}`,
-    );
-  }
-  return {
-    kind: "ok",
-    op: "reorder",
-    uuid: null,
-    observed,
-    vector: "url-scheme",
-    tier: 0,
-    undoToken: txnId,
-    warnings,
-    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
-    ...(stranded.length > 0 && { stranded }),
-  };
-}
-
 // ----------------------------------------------------- heading sub-buckets
 //
 // HEADSUB1 (docs/lab/headsub1-heading-subbuckets.md) settled the per-class order
-// of a heading's sub-buckets. Two are wired here; the third (anytime) already
-// rides the `heading` bounce, and the evening sub-bucket stays app-default (its
-// display ordering axis is GUI-ambiguous — Arm B).
+// of a heading's sub-buckets. heading-someday is wired here; the anytime sub-
+// bucket rides the `heading` bounce, the EVENING sub-bucket rides the shipped
+// `evening` bounce (Arm 2b — the heading FK survives the today↔evening round-
+// trip), and a heading's same-day SCHEDULED children ride the `day` dated bounce
+// (SIT4 DAYBNC — the cross-date round-trip preserves the heading FK, so the former
+// unhead→container-day→re-head heading-day round-trip is no longer needed).
 //
 //   heading-someday: UNHEAD the block, then RE-HEAD it in FORWARD target order
 //     (Arm B-someday / Arm C + HEADSUB2 Q1). A re-head of a row ALREADY under the
@@ -908,15 +511,6 @@ async function runDayCompound(
 //     id move, not a when= reindex); needs neither the experimental surface nor
 //     the bounce. (The earlier direct-re-head-only compile shipped in #327 was a
 //     silent no-op — HEADSUB2 §Q1 — corrected here.)
-//
-//   heading-day: the unhead → container-day reorder → re-head round-trip (Arm
-//     C2). The native container-day reorder RIPS a headed child's heading FK on
-//     the todayIndex axis too (§9k / Arm A), so a headed row must NEVER be fed to
-//     it directly — the protocol unheads the whole same-day headed sub-bucket
-//     FIRST (clean, date/todayIndex-preserving), re-ranks the now-unheaded rows
-//     via the shipped container-day scope, then re-heads each (todayIndex
-//     preserved). Gated like container-day (allow-experimental); a mid-protocol
-//     failure leaves items UNHEADED in the project root and fails loudly.
 
 /** The project a heading belongs to (its re-head destination), or null. */
 function headingProjectUuid(deps: WriteDeps, headingUuid: string | null): string | null {
@@ -1140,286 +734,6 @@ async function runHeadingSomeday(
   };
 }
 
-/** Abort payload for heading-day: items are UNHEADED in the project root. */
-function headingDayAborted(
-  detail: string,
-  placed: string[],
-  remaining: string[],
-  cause: MutationResult | null,
-): ReorderResult {
-  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
-}
-
-/**
- * heading-day: the unhead → container-day reorder → re-head round-trip (HEADSUB1
- * Arm C2). The native container-day reorder RIPS a headed child's heading FK on
- * the todayIndex axis (§9k / Arm A), so the whole same-day headed sub-bucket is
- * unheaded FIRST (clean — heading→NULL, date/todayIndex/start preserved), re-
- * ranked via the shipped container-day scope against the real project, then re-
- * headed (todayIndex preserved). Gated like container-day (allow-experimental).
- * Non-atomic: a mid-protocol failure leaves items UNHEADED in the project root
- * and fails loudly with placed/remaining detail.
- */
-async function runHeadingDay(
-  deps: WriteDeps,
-  params: ReorderParams,
-  options: WriteOptions,
-): Promise<ReorderResult> {
-  const startedAt = deps.now?.() ?? new Date();
-  const now = deps.now ?? (() => new Date());
-  const actor = options.actor ?? deps.config.actor;
-  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
-  const headingUuid = params.container?.uuid ?? null;
-  const projectUuid = headingProjectUuid(deps, headingUuid);
-  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
-
-  // Gate: the container-day reorder leg needs the experimental native surface —
-  // fail BEFORE any side effect (no half-unheaded sub-bucket).
-  const nativeAvailable =
-    deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
-  if (!nativeAvailable) {
-    const result: MutationResult = {
-      kind: "blocked",
-      op: "reorder",
-      reason: "environment",
-      detail:
-        "within-heading day ordering runs the HEADSUB1 unhead → container-day reorder → re-head " +
-        "round-trip, whose reorder leg is the experimental native container-day command — it is " +
-        "unavailable " +
-        (deps.config.allowExperimental
-          ? "(the installed Things no longer declares the private reorder command in its sdef)"
-          : "(allow-experimental is off)") +
-        ", so the protocol was NOT attempted (nothing was unheaded)",
-      remediation: deps.config.allowExperimental
-        ? "check `things doctor`; the private surface was likely removed by an app update"
-        : "enable it with `things config set allow-experimental true`",
-    };
-    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
-    return result;
-  }
-
-  const pre = computeReorderPre(deps.db, params, headingUuid, now());
-  const targetOrder = pre.wireList;
-  const named = new Set(params.named ?? params.uuids);
-  const touchedUnnamed = targetOrder.filter((u) => !named.has(u));
-
-  const problems: string[] = [];
-  if (headingUuid === null || projectUuid === null) {
-    problems.push("the heading did not resolve to a project (re-head needs the heading's project)");
-  }
-  if (params.uuids.length === 0) problems.push("no uuids given");
-  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
-  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
-  if (targetOrder.length > cap) {
-    problems.push(
-      `${targetOrder.length} touched items exceed the cap of ${cap} (the whole same-day headed ` +
-        `sub-bucket is unheaded + re-headed as one unit; each costs an unhead + re-head leg` +
-        (touchedUnnamed.length > 0
-          ? `; ${touchedUnnamed.length} unnamed same-day heading sibling(s) are co-unheaded too`
-          : "") +
-        ")",
-    );
-  }
-  if (problems.length > 0) {
-    const result: MutationResult = {
-      kind: "blocked",
-      op: "reorder",
-      reason: "hazard",
-      hazard: "H-REORDER-SCOPE",
-      detail: `within-heading day reorder rejected: ${problems.join("; ")}`,
-      remediation:
-        "reorder same-day scheduled children of ONE heading that all share ONE day (mixed dates, " +
-        `templates, and non-members are refused), at most ${cap} in the sub-bucket ` +
-        "(set with `things config set bounce-max-items`)",
-    };
-    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
-      pre: captureRanks(pre),
-      txnId,
-      actor,
-    });
-    return result;
-  }
-
-  const preRanksMap = captureRanks(pre);
-
-  if (options.dryRun === true) {
-    return {
-      kind: "dry-run",
-      op: "reorder",
-      plan: {
-        op: "reorder",
-        vector: "url-scheme",
-        tier: 0,
-        invocation:
-          `unhead ×${targetOrder.length} → container-day reorder → re-head ×${targetOrder.length} ` +
-          (touchedUnnamed.length > 0 ? `(${touchedUnnamed.length} co-unheaded sibling(s); ` : "(") +
-          "the native container-day leg RIPS a headed row, §9k, so the sub-bucket is unheaded " +
-          "first; one terminal order verify)",
-        expectedDelta: { mode: "ordering", key: "todayIndex", sequence: targetOrder },
-        hazardsChecked: ["H-REORDER-SCOPE"],
-      },
-    };
-  }
-
-  const legOpts = compoundLegOptions(options, txnId);
-
-  // 1. UNHEAD each same-day headed member (clean — heading→NULL, schedule kept).
-  //    After this NO member is headed, so the container-day leg can never see a
-  //    headed row (the §9k rail: computeReorderPre(container-day) also filters
-  //    `heading IS NULL`, a second guard).
-  const unheaded: string[] = [];
-  for (const uuid of targetOrder) {
-    const res = await runMutation(deps, "todo.move", { uuid, noHeading: true }, legOpts);
-    if (res.kind !== "ok") {
-      auditSummary(
-        deps,
-        params,
-        startedAt,
-        "verify-failed:mismatch",
-        { placed: [...unheaded] },
-        {
-          pre: preRanksMap,
-          txnId,
-          actor,
-        },
-      );
-      return headingDayAborted(
-        `unheading ${uuid} failed — ${unheaded.length} item(s) are UNHEADED in project ` +
-          `${projectUuid} and must be moved back under the heading manually`,
-        unheaded,
-        targetOrder.slice(unheaded.length),
-        res,
-      );
-    }
-    unheaded.push(uuid);
-  }
-
-  // 2. ONE container-day reorder against the REAL project, full target order. The
-  //    now-unheaded members re-rank date-preservingly (DAYORD-b); the project's
-  //    OTHER same-day unheaded children are co-ranked below (relative order kept).
-  const reordered = await runReorder(
-    deps,
-    {
-      scope: "container-day",
-      container: { uuid: projectUuid as string },
-      uuids: targetOrder,
-      ...(params.named !== undefined && { named: params.named }),
-    },
-    legOpts,
-  );
-  if (reordered.kind !== "ok") {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [...unheaded] },
-      {
-        pre: preRanksMap,
-        txnId,
-        actor,
-      },
-    );
-    return headingDayAborted(
-      `the container-day reorder against project ${projectUuid} did not complete ` +
-        `(${reordered.kind}) — all ${unheaded.length} item(s) are UNHEADED in the project root and ` +
-        "must be moved back under the heading manually",
-      unheaded,
-      [],
-      reordered.kind === "bounce-aborted" ? null : reordered,
-    );
-  }
-
-  // 3. RE-HEAD each (todayIndex preserved — the sorted key survives, Arm C2).
-  const rehead: string[] = [];
-  for (const uuid of targetOrder) {
-    const res = await runMutation(
-      deps,
-      "todo.move",
-      { uuid, project: { uuid: projectUuid as string }, heading: headingUuid as string },
-      legOpts,
-    );
-    if (res.kind !== "ok") {
-      const stillUnheaded = targetOrder.filter((u) => !rehead.includes(u));
-      auditSummary(
-        deps,
-        params,
-        startedAt,
-        "verify-failed:mismatch",
-        { placed: [...rehead] },
-        {
-          pre: preRanksMap,
-          txnId,
-          actor,
-        },
-      );
-      return headingDayAborted(
-        `re-heading ${uuid} failed — ${stillUnheaded.length} item(s) remain UNHEADED in project ` +
-          `${projectUuid} (ordered) and must be moved back under the heading manually`,
-        rehead,
-        stillUnheaded,
-        res,
-      );
-    }
-    rehead.push(uuid);
-  }
-
-  // 4. Terminal verify: the sub-bucket's todayIndex order matches the target.
-  const verify = await pollUntilVerified(
-    () =>
-      evaluateDelta(
-        { mode: "ordering", key: "todayIndex", sequence: targetOrder },
-        createDbReader(deps.db),
-        { modDates: {}, fields: {} },
-      ),
-    options.verifyTimeoutMs ?? 4000,
-    deps.poller ?? {},
-  );
-  if (verify.kind !== "ok") {
-    auditSummary(
-      deps,
-      params,
-      startedAt,
-      "verify-failed:mismatch",
-      { placed: [...rehead] },
-      {
-        pre: preRanksMap,
-        txnId,
-        actor,
-      },
-    );
-    return headingDayAborted(
-      "the heading sub-bucket did not land the requested order after re-heading; " +
-        "re-run once Things is idle",
-      rehead,
-      [],
-      null,
-    );
-  }
-
-  const reader = createDbReader(deps.db);
-  const observed: Record<string, unknown> = {};
-  for (const uuid of targetOrder) observed[uuid] = reader.rankOf(uuid, "todayIndex");
-  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanksMap, txnId, actor });
-  return {
-    kind: "ok",
-    op: "reorder",
-    uuid: null,
-    observed,
-    vector: "url-scheme",
-    tier: 0,
-    undoToken: txnId,
-    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
-  };
-}
-
-/** todayIndex/index pre-ranks keyed by uuid (the undoable-summary capture). */
-function captureRanks(pre: ReturnType<typeof computeReorderPre>): Record<string, unknown> {
-  const ranks: Record<string, unknown> = {};
-  for (const m of pre.members) ranks[m.uuid] = m.rank;
-  return ranks;
-}
-
 // ------------------------------------------------------------------- bounce
 
 async function runBounce(
@@ -1432,11 +746,53 @@ async function runBounce(
   const now = deps.now ?? (() => new Date());
   const actor = options.actor ?? deps.config.actor;
   const spec = bounceSpecOf(bounceKind);
-  const { away, back, direction, rankKey, legOp } = spec;
+  const { direction, rankKey, legOp } = spec;
   const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
   const containerUuid = resolveContainerUuid(deps, params);
   const wantsContainer =
     bounceKind === "heading" || bounceKind === "area-someday" || bounceKind === "project-someday";
+
+  // The two `when=` leg values. A fixed-bucket bounce uses the spec's keywords; the
+  // DATED `day` bounce (SIT4 DAYBNC) derives them from the movees' shared day —
+  // back = the day D, away = the neighbour day D+1 (a strictly-future staging day
+  // ≠ D that keeps the transient visit out of Today). The day is read off the first
+  // requested uuid (the planner guarantees every movee shares it); an absent/
+  // malformed day yields an empty member set and is rejected below before any
+  // dispatch, so the today fallback here only keeps the WhenValue well-typed.
+  let dayPacked: number | null = null;
+  let awayValue: WhenValue;
+  let backValue: WhenValue;
+  if (spec.dated) {
+    const firstUuid = params.uuids[0];
+    dayPacked =
+      firstUuid !== undefined
+        ? ((
+            deps.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(firstUuid) as
+              | { startDate: number | null }
+              | undefined
+          )?.startDate ?? null)
+        : null;
+    const iso = decodePackedDate(dayPacked);
+    backValue = iso ?? localToday(now());
+    awayValue = iso !== null ? addDaysIso(iso, 1) : localToday(now());
+  } else {
+    awayValue = spec.away as WhenValue;
+    backValue = spec.back as WhenValue;
+  }
+  // Per-item leg op: the mixed-kind `day`/`evening` bounces pick update-project for
+  // a project row (type=1) and todo.update for a to-do (type=0); every other bounce
+  // uses one fixed op. (NEVER send a dated when= leg to a template — §1 crash — but
+  // templates are already excluded from the member set, and a requested template
+  // ref is refused by computeReorderPre, so no leg ever targets one.)
+  const opForRow = (uuid: string): "todo.update" | "project.update" => {
+    if (legOp !== "per-type") return legOp;
+    const t = (
+      deps.db.prepare("SELECT type FROM TMTask WHERE uuid = ?").get(uuid) as
+        | { type: number }
+        | undefined
+    )?.type;
+    return t === 1 ? "project.update" : "todo.update";
+  };
 
   const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
   // Scope/membership guard — same data the native path's guard uses.
@@ -1525,7 +881,10 @@ async function runBounce(
   // validate-first FULL-ABORT). Only against a REAL dispatch surface — under the
   // simulator (simulates=true, per-op appliers, no json-array applier) we keep
   // the proven sequential legs.
-  const dispatchVector = pickDispatchVector(deps, legOp);
+  // The json collapse is only ever eligible for a fixed-op, jsonCollapsible spec;
+  // per-type (day/evening) and every dated bounce stay on the sequential URL loop.
+  const dispatchVector =
+    spec.jsonCollapsible && legOp !== "per-type" ? pickDispatchVector(deps, legOp) : undefined;
   const useJson =
     spec.jsonCollapsible && dispatchVector !== undefined && dispatchVector.simulates !== true;
 
@@ -1535,13 +894,13 @@ async function runBounce(
         `${direction === "front" ? "reverse" : "forward"} array order, ` +
         (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
         `1 dispatch / ${coBounce.length * 2} ops): ` +
-        `when=${away} → when=${back} interleaved per item; validate-first full-abort, ` +
+        `when=${awayValue} → when=${backValue} interleaved per item; validate-first full-abort, ` +
         `one terminal order verify`
       : `bounce ×${coBounce.length} (${direction}-insert, ` +
         `${direction === "front" ? "reverse" : "forward"} order, ` +
         (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
         `${coBounce.length * 2} legs): ` +
-        `when=${away} → when=${back}; one verify per item round-trip`;
+        `when=${awayValue} → when=${backValue}; one verify per item round-trip`;
     return {
       kind: "dry-run",
       op: "reorder",
@@ -1580,7 +939,7 @@ async function runBounce(
       direction === "front" ? coBounce.slice(0, i + 1) : coBounce.slice(i);
 
     // Concurrent-edit re-check: the item must still be an eligible member.
-    const memberProblem = checkStillMember(deps, uuid, bounceKind, containerUuid, now());
+    const memberProblem = checkStillMember(deps, uuid, bounceKind, containerUuid, now(), dayPacked);
     if (memberProblem !== null) {
       const detail =
         `aborted before bouncing ${uuid}: ${memberProblem} (Things was likely edited ` +
@@ -1604,8 +963,15 @@ async function runBounce(
     }
 
     // leg 1 sends the item AWAY from its resting bucket; leg 2 returns it — the
-    // return leg is what front/back-inserts (BOUNCE2 re-entry law).
-    const leg1 = await runMutation(deps, legOp, { uuid, when: away }, legOptions(options, txnId));
+    // return leg is what front/back-inserts (BOUNCE2 re-entry law). The op is
+    // chosen per row type (to-do vs project) for the mixed-kind day/evening bounce.
+    const rowLegOp = opForRow(uuid);
+    const leg1 = await runMutation(
+      deps,
+      rowLegOp,
+      { uuid, when: awayValue },
+      legOptions(options, txnId),
+    );
     if (leg1.kind !== "ok") {
       auditSummary(
         deps,
@@ -1618,14 +984,19 @@ async function runBounce(
       return {
         kind: "bounce-aborted",
         op: "reorder",
-        detail: `bounce leg 1 (when=${away}) failed for ${uuid} — the item was NOT moved`,
+        detail: `bounce leg 1 (when=${awayValue}) failed for ${uuid} — the item was NOT moved`,
         placed: [...placed],
         remaining: remainingBefore(),
         cause: leg1,
       };
     }
     // leg 2 must follow leg 1's committed state for the same item before the next item's bounce begins
-    const leg2 = await runMutation(deps, legOp, { uuid, when: back }, legOptions(options, txnId));
+    const leg2 = await runMutation(
+      deps,
+      rowLegOp,
+      { uuid, when: backValue },
+      legOptions(options, txnId),
+    );
     if (leg2.kind !== "ok") {
       auditSummary(
         deps,
@@ -1639,8 +1010,8 @@ async function runBounce(
         kind: "bounce-aborted",
         op: "reorder",
         detail:
-          `bounce leg 2 (when=${back}) failed for ${uuid} — THE ITEM IS STRANDED IN ` +
-          `${away.toUpperCase()}; re-schedule it (when=${back}) or fix in the app`,
+          `bounce leg 2 (when=${backValue}) failed for ${uuid} — THE ITEM IS STRANDED IN ` +
+          `${String(awayValue).toUpperCase()}; re-schedule it (when=${backValue}) or fix in the app`,
         placed: [...placed],
         remaining: remainingBefore(),
         cause: leg2,
@@ -1763,7 +1134,12 @@ async function runBounceJsonCollapse(
     options,
     vector,
   } = ctx;
-  const { away, back, rankKey } = spec;
+  const { rankKey } = spec;
+  // The json collapse is only ever reached for a fixed-bucket, jsonCollapsible spec
+  // (heading / anytime) — never a dated or per-type bounce — so away/back are the
+  // concrete keywords the spec pins.
+  const away = spec.away as WhenValue;
+  const back = spec.back as WhenValue;
   const now = deps.now ?? (() => new Date());
 
   const abort = (detail: string): ReorderResult => {
@@ -1792,7 +1168,7 @@ async function runBounceJsonCollapse(
   // Validate-first full-abort means nothing lands, so the concurrent-edit guard
   // checks EVERY member up front (not per item as the sequential loop does).
   for (const uuid of coBounce) {
-    const problem = checkStillMember(deps, uuid, bounceKind, containerUuid, now());
+    const problem = checkStillMember(deps, uuid, bounceKind, containerUuid, now(), null);
     if (problem !== null) {
       return abort(
         `aborted before the json-collapsed bounce: ${uuid} ${problem} (Things was likely ` +
@@ -1886,15 +1262,14 @@ function resolveContainerUuid(deps: WriteDeps, params: ReorderParams): string | 
   if (params.scope === "area") {
     return resolveArea(deps.db, params.container ?? {}).resolved?.uuid ?? null;
   }
-  // heading / area-someday / container-day / heading-someday / heading-day: the
-  // planner passes a resolved uuid container directly (a heading uuid, an area
-  // uuid, or a project/area uuid).
+  // heading / area-someday / container-day / heading-someday: the planner passes a
+  // resolved uuid container directly (a heading uuid, an area uuid, or a project/
+  // area uuid). The `day` bounce is container-less (a global cross-container axis).
   if (
     params.scope === "heading" ||
     params.scope === "area-someday" ||
     params.scope === "container-day" ||
-    params.scope === "heading-someday" ||
-    params.scope === "heading-day"
+    params.scope === "heading-someday"
   ) {
     return params.container?.uuid ?? null;
   }
@@ -1908,6 +1283,7 @@ function checkStillMember(
   bounceKind: BounceKind,
   containerUuid: string | null,
   now: Date,
+  dayPacked: number | null,
 ): string | null {
   const packedToday = encodePackedDate(localToday(now));
   const row = deps.db
@@ -1977,6 +1353,18 @@ function checkStillMember(
       if (bounceKind === "today" && row.startBucket !== 0) return "the item moved to This Evening";
       if (bounceKind === "evening" && (row.startBucket !== 1 || row.startDate !== packedToday)) {
         return "the item left This Evening";
+      }
+      return null;
+    }
+    case "day": {
+      // The dated bounce's members are to-dos (any container) and area-less project
+      // rows sharing the day D on the startBucket=0 axis. A concurrent edit that
+      // re-dates, de-schedules, evenings, or (for a project) files it into an area
+      // ejects it from the group.
+      if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
+      if (row.type === 1 && row.area !== null) return "the project moved into an area";
+      if (row.startBucket !== 0 || row.startDate !== dayPacked) {
+        return "the item left the day-group (re-dated, evening-ed, or de-scheduled)";
       }
       return null;
     }
