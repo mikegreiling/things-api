@@ -877,14 +877,17 @@ describe("todayMark", () => {
     seedTodo(fixture.db, { title: "Day item", startDate: "2026-07-05" });
     seedTodo(fixture.db, { title: "Night item", startDate: "2026-07-05", evening: true });
     seedTodo(fixture.db, { title: "Future item", startDate: "2026-07-20" });
-    const find = (t: string) => searchView(fixture!.db, t)[0];
+    // Materialize at NOW so the Today/Evening markers are computed against the
+    // same clock the render reads — the CLI always shares one clock (production
+    // never renders an entity materialized at a different instant).
+    const find = (t: string) => searchView(fixture!.db, t, undefined, NOW)[0];
     const day = find("Day item");
     const night = find("Night item");
     const future = find("Future item");
     if (!day || !night || !future) throw new Error("seed missing");
-    expect(todayMark(day, NOW)).toBe("★");
-    expect(todayMark(night, NOW)).toBe("⏾");
-    expect(todayMark(future, NOW)).toBeNull();
+    expect(todayMark(day)).toBe("★");
+    expect(todayMark(night)).toBe("⏾");
+    expect(todayMark(future)).toBeNull();
   });
 
   it("stars an unscheduled to-do pulled into Today by a due deadline (anytime ★)", () => {
@@ -899,7 +902,7 @@ describe("todayMark", () => {
     const mark = (t: string) => {
       const item = items.find((i) => i.title === t);
       if (!item) throw new Error(`missing anytime item: ${t}`);
-      return todayMark(item, NOW);
+      return todayMark(item);
     };
     expect(mark("due today")).toBe("★");
     expect(mark("due later")).toBeNull();

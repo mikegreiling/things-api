@@ -893,12 +893,23 @@ export async function runInPlaceReorder(
     if (row.type !== want) wrongKind.push({ ref: r.uuid, kind: KIND_LABEL[row.type] ?? "item" });
     rows.push(row);
   }
-  if (wrongKind.length > 0) {
+  // O12: the native Today scope reorders the `list "Today"` bucket, which accepts
+  // PROJECT uuids INTERMIXED with to-dos in one ids list. So on the `todo reorder`
+  // path a project movee is legal WHEN every movee shares the Today bucket
+  // (startBucket=0, dated today) — the mixed set then routes to the `today` scope,
+  // whose wire list is type IN (0,1) (computeReorderPre keeps mixedTypes=false for
+  // it, and the H-REORDER-SCOPE guard passes). Every OTHER bucket keeps the
+  // homogeneous-kinds refusal; a non-loose today member still fails the downstream
+  // single-container guard, so the relaxation never reaches an unvalidated scope.
+  const todayIntermix =
+    isTodo && rows.length > 0 && rows.every((r) => scheduleBucket(r, packedToday) === "today");
+  if (wrongKind.length > 0 && !todayIntermix) {
     const list = wrongKind.map((w) => `${w.ref} (${w.kind})`).join(", ");
     return refused(
       op,
       "usage",
-      `homogeneous kinds required — reorder ${isTodo ? "to-dos" : "projects"} only; not: ${list}`,
+      `homogeneous kinds required — reorder ${isTodo ? "to-dos" : "projects"} only ` +
+        `(the Today list also accepts projects intermixed with to-dos); not: ${list}`,
     );
   }
 

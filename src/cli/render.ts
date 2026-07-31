@@ -8,7 +8,7 @@
  * (../cli/style.ts).
  */
 import {
-  isTodayMember,
+  entityWhen,
   localToday,
   partitionSomedaySection,
   splitSectionBlocks,
@@ -278,12 +278,15 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
  * effective This-Evening members (raw evening assignment counts only while
  * startDate is exactly today — the UI's daily expiry), null otherwise.
  */
-export function todayMark(item: ListItem, now?: Date): string | null {
-  const instant = now ?? renderNow();
-  const zone = renderZone();
-  if (!isTodayMember(item, instant, zone)) return null;
-  const evening = item.todaySection === "evening" && item.startDate === localToday(instant, zone);
-  return evening ? eveningMoon() : todayStar();
+export function todayMark(item: ListItem): string | null {
+  // Consume the ONE derived `when` (the same value the wire emits) so a row's
+  // ★/⏾ can never disagree with the emitted `when` — never re-derive membership
+  // or evening from `todaySection`/`startBucket`/`startDate`. Projects carry the
+  // Today markers exactly like to-dos (probe O12), so they pip identically.
+  const when = entityWhen(item);
+  if (when === "evening") return eveningMoon();
+  if (when === "today") return todayStar();
+  return null;
 }
 
 /** Minimum displayed-prefix length: shorter prefixes collide across the DB. */
@@ -536,7 +539,14 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
       lines.push(`${bold("──")} ${areaMark()} ${bold(`${group.area.title} ──`)}`);
     }
     lines.push(
-      ...rows.map((item) => formatItem(item, w, { suppressArea: group.area?.uuid ?? null })),
+      ...rows.map((item) =>
+        formatItem(item, w, {
+          suppressArea: group.area?.uuid ?? null,
+          // Projects can live in Today/This-Evening (probe O12) — pip them
+          // exactly like a to-do row would be in a today-aware view.
+          mark: todayMark(item),
+        }),
+      ),
     );
     // A per-group locator count (not a standalone disclosure): it marks WHERE
     // the hidden later projects sit; the single reveal command rides the
