@@ -2126,7 +2126,7 @@ describe("areaView", () => {
     seedProject(fx.db, { title: "elsewhere" });
 
     const view = areaView(fx.db, "Home", NOW);
-    expect(view.area.title).toBe("Home");
+    expect(view.area?.title).toBe("Home");
     expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
     expect(view.projects.map((i) => i.title)).toEqual(["proj-a", "proj-b"]);
     expect(view.scheduled[0]?.items.map((i) => i.title)).toEqual(["sched"]);

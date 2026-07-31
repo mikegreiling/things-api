@@ -23,6 +23,7 @@ import {
   resolveTaskUuidPrefix,
   stripThingsUri,
 } from "./queries.ts";
+import { isLooseRef, LOOSE_REF } from "./pseudo-area.ts";
 import {
   namedAreaClause,
   namedProjectClause,
@@ -50,6 +51,11 @@ export function classifyShowTarget(
   scope?: ResolvedScope,
 ): ShowTarget {
   const stripped = stripThingsUri(ref);
+  // The reserved `loose` ref resolves to the NULL-area pseudo-area (READ only),
+  // ALWAYS winning over a real area named "Loose". It lies outside any container
+  // jail, so under a scope it falls through to the normal not-found (parity).
+  // `uuid` carries the reserved word so `areaView` re-detects it downstream.
+  if (scope === undefined && isLooseRef(stripped)) return { kind: "area", uuid: LOOSE_REF };
   const taskClause = scope !== undefined ? taskMembershipClause(scope) : undefined;
   const projectClause = scope !== undefined ? namedProjectClause(scope) : undefined;
   // Area scope → only the scope area; project scope → no area is showable.

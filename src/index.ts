@@ -164,6 +164,16 @@ export {
 } from "./read/area-view.ts";
 export { ProjectNotFoundError } from "./read/project-view.ts";
 
+// The `loose` pseudo-area: the reserved-word predicate + open/write refusals the
+// consumer surfaces gate on (the null-area composite view is read-only).
+export {
+  isLooseRef,
+  looseShadowNotice,
+  LOOSE_OPEN_REFUSAL,
+  LOOSE_REF,
+  LOOSE_TO_AREA_REFUSAL,
+} from "./read/pseudo-area.ts";
+
 // The `--area` view filter (post-filter on the shaped view): its option type,
 // the resolved-target/annotation types the surfaces echo as `meta.filter`.
 export type { AreaFilterTarget, AreaScopedRead, ViewFilterMeta } from "./read/area-filter.ts";

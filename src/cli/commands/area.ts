@@ -25,6 +25,8 @@ import {
   AREA_PREVIEW_LIMIT,
   FULL_DESC,
   GROUPED_ALL_DESC,
+  isLooseRef,
+  LOOSE_OPEN_REFUSAL,
   isActiveProjectRow,
   isScheduledProjectRow,
   isSomedayProjectRow,
@@ -122,9 +124,13 @@ export function renderAreaView(
   const activeBlock = truncation.blocks?.find((b) => b.kind === "area");
   const hiddenProjects = projectsBlock ? projectsBlock.total - projectsBlock.shown : 0;
   const hiddenActive = activeBlock ? activeBlock.total - activeBlock.shown : 0;
+  // The `loose` pseudo-area renders like an area card but has no uuid/uri/tags
+  // and no `logbook --area` archive (the NULL area is a derived view).
+  const isLoose = view.area === null;
+  const areaTitle = view.area?.title ?? "Loose";
   // The user's invocation, echoed by every disclosure hint (falls back to a
   // canonical typed command when a caller omits it, e.g. a direct unit test).
-  const base = opts.hintBase ?? `things area show ${quoteTitle(view.area.title)}`;
+  const base = opts.hintBase ?? `things area show ${isLoose ? "loose" : quoteTitle(areaTitle)}`;
   // A per-block TRUNCATION FOOTER (indented two spaces under its partially-
   // shown block): `  … N more <noun>s — `<base> <flag> <bigger>``.
   const sectionMore = (hidden: number, noun: string, flag: string, cap: number | null): void => {
@@ -140,18 +146,18 @@ export function renderAreaView(
   // group in this view), so they get the bold project title from delta 1 but NO
   // underline; only ANYTIME treats projects as headings. So a project renders
   // exactly like any other row here — no projectTitle opt.
-  const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area.uuid });
+  const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area?.uuid ?? null });
   const fmtProject = fmt;
 
   // Card header: glyph + name, the GUI's share link (carries the uuid — it
   // pastes back into any ref argument), then labeled meta lines. The opened
   // resource shows its tags green (GUI: list pills are gray).
-  const lines: string[] = [
-    `${bold("Area:")} ${areaMark()} ${bold(view.area.title)}`,
-    `  ${dim("uri:")} ${thingsLink(view.area.uuid)}`,
-  ];
-  if (view.area.tags.length > 0)
-    lines.push(`  ${dim("tags:")} ${green(`#${view.area.tags.map((t) => t.title).join(" #")}`)}`);
+  const lines: string[] = [`${bold("Area:")} ${areaMark()} ${bold(areaTitle)}`];
+  if (view.area !== null) {
+    lines.push(`  ${dim("uri:")} ${thingsLink(view.area.uuid)}`);
+    if (view.area.tags.length > 0)
+      lines.push(`  ${dim("tags:")} ${green(`#${view.area.tags.map((t) => t.title).join(" #")}`)}`);
+  }
   const block = (rows: string[]) => {
     if (rows.length > 0) lines.push("", ...rows);
   };
@@ -183,8 +189,10 @@ export function renderAreaView(
       );
   }
   // The full archive belongs to `things logbook --area <ref>` — echoed
-  // ready-to-paste with the real area name, like every other drill hint.
-  const logbookCmd = `things logbook --area ${quoteTitle(view.area.title)}`;
+  // ready-to-paste with the real area name, like every other drill hint. The
+  // loose pseudo-area has no `logbook --area` archive, so it reveals more with
+  // `--show-logged <n>` (the NULL area accumulates far fewer logged rows).
+  const logbookCmd = isLoose ? null : `things logbook --area ${quoteTitle(areaTitle)}`;
   if (logged.length > 0) {
     // Truncation is loud: areas accumulate years of history. The header keeps
     // the shown-of-total count for orientation; the actionable drill rides a
@@ -195,7 +203,10 @@ export function renderAreaView(
         ? `── Logged (${logged.length} of ${view.logged.length}) ──`
         : `── Logged (${view.logged.length}) ──`;
     lines.push("", bold(header), ...logged.map(fmt));
-    if (more > 0) lines.push(dim(`… ${more} more — \`${logbookCmd}\``));
+    if (more > 0)
+      lines.push(
+        dim(`… ${more} more — \`${logbookCmd ?? `${base} --show-logged ${view.logged.length}`}\``),
+      );
   } else if (view.logged.length > 0) {
     // Hidden-section placeholder: `--show-logged` reveals only the RECENT 15
     // (areas accumulate years), so it is labeled; the logbook drill reads its
@@ -204,7 +215,7 @@ export function renderAreaView(
       "",
       disclosureHint(view.logged.length, "logged item", [
         { label: "recent", command: `${base} --show-logged` },
-        { command: logbookCmd },
+        ...(logbookCmd !== null ? [{ command: logbookCmd }] : []),
       ]),
     );
   }
@@ -291,6 +302,7 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
       return {
         data: bounded.view,
         truncation: bounded.truncation,
+        ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
         lines: renderAreaView(bounded.view, bounded.truncation, { ...opts, limits, hintBase }),
       };
     },
@@ -306,7 +318,8 @@ export function registerAreaCommands(program: Command): void {
       "Composite area view mirroring the native UI: active projects first, then the " +
         "area's direct to-dos. --show-later adds the Upcoming (date-ordered) and " +
         "Someday sections; --show-logged adds the full logbook. Tag filters match rows " +
-        "directly and never descend into project contents. Target by uuid or unique name.",
+        "directly and never descend into project contents. Target by uuid or unique name, " +
+        "or the reserved word `loose` for the area-less items (the null-area composite).",
     )
     .option("--show-later", "include Upcoming and Someday sections")
     .option(
@@ -336,6 +349,9 @@ export function registerAreaCommands(program: Command): void {
         opts,
         "open",
         (c) => {
+          // The loose pseudo-area is a derived view — refuse by name, not a
+          // generic no-such-area error.
+          if (isLooseRef(ref)) throw new RangeError(LOOSE_OPEN_REFUSAL);
           const t = c.read.showTarget(ref);
           if (t.kind !== "area")
             throw new RangeError(

@@ -243,8 +243,8 @@ export function capAreaSections(
     if (shownActive < activeTotal) truncated = true;
     blocks.push({
       kind: "projects",
-      ref: view.area.uuid,
-      title: view.area.title,
+      ref: view.area?.uuid ?? null,
+      title: view.area?.title ?? null,
       shown: shownActive,
       total: activeTotal,
       limit: limits.project,
@@ -255,8 +255,8 @@ export function capAreaSections(
     if (active.length < view.active.length) truncated = true;
     blocks.push({
       kind: "area",
-      ref: view.area.uuid,
-      title: view.area.title,
+      ref: view.area?.uuid ?? null,
+      title: view.area?.title ?? null,
       shown: active.length,
       total: view.active.length,
       limit: limits.area,

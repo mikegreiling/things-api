@@ -65,8 +65,10 @@ import {
   FILTER_CONTRACT,
   FULL_DESC,
   GROUPED_ALL_DESC,
+  isLooseRef,
   LIMIT_DESC,
   localToday,
+  looseShadowNotice,
   okEnvelope,
   PERIOD_SINCE,
   PERIOD_UNTIL,
@@ -866,7 +868,7 @@ export function registerReadCommands(program: Command): void {
         "inheritance-inclusive (a project inherits its area's tags), the same as the flat " +
         "views. --show-logged applies only when showing one project.",
     )
-    .option("--area <ref>", "filter by area (uuid or unique name)")
+    .option("--area <ref>", "filter by area (uuid or unique name, or `loose` for area-less)")
     .option("--show-later", "include someday/future-scheduled projects after each active block")
     .option("--show-logged [n]", "showing one project: include logged items (bare = all)")
     .option("--overdue", "only projects past their deadline (due today is not overdue)")
@@ -974,6 +976,13 @@ export function registerReadCommands(program: Command): void {
           }
           return lines;
         },
+        // Reserved-word disclosure: `--area loose` ALWAYS wins over a real area
+        // named "Loose"; when one shadows, name it (by uuid) for targeting.
+        (c) => {
+          if (opts.area === undefined || !isLooseRef(opts.area)) return undefined;
+          const shadow = c.read.areas().find((a) => isLooseRef(a.title));
+          return shadow !== undefined ? [looseShadowNotice(shadow.uuid)] : undefined;
+        },
       );
     },
   );
@@ -982,7 +991,8 @@ export function registerReadCommands(program: Command): void {
     .command("areas [ref]")
     .description(
       "List all areas with their direct tags, or — given a ref — show that one area " +
-        "(exactly like `things area show <ref>`: its projects and direct to-dos). " +
+        "(exactly like `things area show <ref>`: its projects and direct to-dos). The " +
+        "reserved ref `loose` shows the area-less items (the null-area composite). " +
         "--show-later / --show-logged / --area-limit / --project-limit / the tag filters " +
         "apply only when showing one area.",
     )

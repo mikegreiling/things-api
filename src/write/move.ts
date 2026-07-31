@@ -40,6 +40,7 @@ import {
   type RefCandidate,
 } from "../read/queries.ts";
 import { taskMembershipClause } from "../read/scope.ts";
+import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
 import { computeReorderPre, resolveArea, resolveHeading, resolveProject } from "./pre-state.ts";
 import type { ContainerRef, ReorderParams, ReorderScope, TodoMoveParams } from "./operations.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
@@ -644,6 +645,12 @@ function membershipLeg(
     return { legs };
   }
 
+  // `loose` is the reserved READ-only pseudo-area — never a move destination.
+  // (Detaching a to-do to area-less is `--loose`, not `--to-area loose`.)
+  if (dest.kind === "area" && isLooseRef(dest.ref.uuid ?? dest.ref.title ?? "")) {
+    return { refused: refused(op, "usage", LOOSE_TO_AREA_REFUSAL) };
+  }
+
   for (const r of rows) {
     switch (dest.kind) {
       case "project":
@@ -803,6 +810,11 @@ export async function runProjectMove(
     return repositionInPlace(deps, op, rows, position, packedToday, options, "move");
   }
 
+  // `loose` is the reserved READ-only pseudo-area — never a move destination.
+  // (A project leaves its area with `--no-area`, not `--to-area loose`.)
+  if (dest.kind === "area" && isLooseRef(dest.ref.uuid ?? dest.ref.title ?? "")) {
+    return refused(op, "usage", LOOSE_TO_AREA_REFUSAL);
+  }
   const landedArea =
     dest.kind === "area" ? (resolveArea(deps.db, dest.ref).resolved?.uuid ?? null) : null;
   const landing = uniformLanding(
