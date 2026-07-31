@@ -1357,12 +1357,11 @@ function checkStillMember(
       return null;
     }
     case "day": {
-      // The dated bounce's members are to-dos (any container) and area-less project
-      // rows sharing the day D on the startBucket=0 axis. A concurrent edit that
-      // re-dates, de-schedules, evenings, or (for a project) files it into an area
-      // ejects it from the group.
+      // The dated bounce's members are to-dos (any container) and scheduled project
+      // rows (area-less OR area-direct — SIT5 AREAPROJDAY) sharing the day D on the
+      // startBucket=0 axis. A concurrent edit that re-dates, de-schedules, or
+      // evenings the row ejects it from the group.
       if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
-      if (row.type === 1 && row.area !== null) return "the project moved into an area";
       if (row.startBucket !== 0 || row.startDate !== dayPacked) {
         return "the item left the day-group (re-dated, evening-ed, or de-scheduled)";
       }

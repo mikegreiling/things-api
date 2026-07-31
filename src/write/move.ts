@@ -82,10 +82,26 @@ export interface ProjectMoveRequest {
   position?: MovePosition;
 }
 
-/** A pure reposition (`todo reorder` / `project reorder`). */
+/** A pure reposition (`things reorder` — the kind-neutral in-place verb). */
 export interface ReorderRequest {
   uuids: string[];
   position?: MovePosition;
+  /**
+   * Axis / container disambiguation for a DUAL-AXIS reorder (`reorder --in`). A
+   * Today/Evening member has a `todayIndex` slot in the Today view AND an `index`
+   * slot in its container (a project/area/heading child, or the loose Anytime
+   * bucket), so a bare reorder of a set coherent on BOTH axes is refused; `in`
+   * names the axis:
+   *   - `"today"` | `"evening"` — the view's cross-container `todayIndex` axis;
+   *   - `"anytime"` | `"someday"` | `"inbox"` — a loose list axis;
+   *   - a project/area/heading ref (uuid or unique title) — that container's
+   *     `index` axis.
+   * `"loose"` is NOT accepted (it is a read view, not a reorder bucket). Forcing
+   * the container index axis on a Today member is honored ONLY where the native
+   * project/area re-rank preserves the flag; a bounce-only index axis (a heading
+   * child, the loose Anytime bucket) is refused (it would de-Today the row).
+   */
+  in?: string;
 }
 
 // ------------------------------------------------------------------- result
@@ -380,14 +396,15 @@ function reorderTargetOf(
     return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
   }
   if (row.area !== null) {
-    // A project INSIDE an area on a strictly-future day rides the one-call Tomorrow
-    // sort when the day is tomorrow, else stays app-default: only AREA-LESS project
-    // rows are proven on the dated bounce (SIT4 DAYBNC), so an area project's
-    // future-day cell is unwired. Someday stays app-default; anytime rides the
+    // A project INSIDE an area on a strictly-future day now rides the dated `day`
+    // bounce (SIT5 AREAPROJDAY — the update-project when= legs preserve the area FK
+    // and re-enter at the day's global todayIndex min), or the one-call Tomorrow
+    // sort when the day is tomorrow. Someday stays app-default; anytime rides the
     // area's native index order.
-    if (containerDay && isTomorrow) return { scope: "tomorrow", ...dayField };
-    return containerDay || bucket === "someday"
-      ? { scope: null, reason: "a scheduled/someday project inside an area (app-default)" }
+    if (containerDay)
+      return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "day", ...dayField };
+    return bucket === "someday"
+      ? { scope: null, reason: "a someday project inside an area (app-default)" }
       : { scope: "area", container: row.area };
   }
   if (bucket === "someday") return { scope: "someday" };
@@ -402,6 +419,295 @@ function reorderTargetOf(
   if (containerDay)
     return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "day", ...dayField };
   return { scope: null, reason: "a scheduled day bucket (app-default)" };
+}
+
+// ------------------------------------------------------ reorder axis (`--in`)
+//
+// A Today/Evening member is DUAL-AXIS: it has a `todayIndex` slot in the Today/
+// Evening view AND an `index` slot in its container (a project/area/heading child)
+// or the loose Anytime bucket. `things reorder` refuses a set coherent on BOTH
+// axes unless `--in` picks one — replacing the old silent always-Today resolution.
+//   today | evening        -> the view's cross-container `todayIndex` axis;
+//   anytime|someday|inbox   -> a loose list axis (only for genuinely-loose members;
+//                              forcing it on a Today member de-Todays it -> refused);
+//   <project/area/heading>  -> that container's `index` axis. Honored on a Today
+//                              member ONLY for the native project/area re-rank
+//                              (Today-flag-safe: writes only `index`, sit3 EVEPROJ /
+//                              DAYORD-b); a heading child's index axis is a when=
+//                              bounce that de-Todays -> refused.
+
+type InAxis = "today" | "evening" | "anytime" | "someday" | "inbox";
+const IN_AXES: readonly InAxis[] = ["today", "evening", "anytime", "someday", "inbox"];
+
+/**
+ * The INDEX-axis reorder target of a row — the target it has through its CONTAINER
+ * (a project/area/heading `index`, or the loose Anytime bucket), IGNORING any
+ * Today/Evening membership. For a dual-axis row this is the alternative to its
+ * view-axis (today/evening) target; computed by classifying the row as if it sat
+ * in its container's ANYTIME bucket (start=1, no startDate — date-independent, so
+ * the packedToday argument is irrelevant here).
+ */
+function indexAxisTargetOf(row: MoveeRow, bounceEnabled: boolean): ScopeTarget {
+  const asAnytime: MoveeRow = { ...row, start: 1, startDate: null, startBucket: 0 };
+  return reorderTargetOf(asAnytime, true, 0, bounceEnabled);
+}
+
+/**
+ * True when a row's INDEX-axis target preserves the Today/Evening flag — the
+ * NATIVE project/area `index` re-rank writes only `index` (startBucket/startDate
+ * kept). A bounce index axis (heading child, loose Anytime) overwrites the flag
+ * via its when= legs, so it is NOT Today-flag-safe.
+ */
+function indexAxisTodaySafe(target: ScopeTarget): boolean {
+  return target.scope === "project" || target.scope === "area";
+}
+
+/** A row's Today/Evening view, or null when it is not an arrived view member. */
+function viewOf(row: MoveeRow, packedToday: number): "today" | "evening" | null {
+  const b = scheduleBucket(row, packedToday);
+  return b === "today" || b === "evening" ? b : null;
+}
+
+/** The container uuid a row's INDEX axis lives in (most-specific), or null (loose). */
+function indexAxisContainerOf(row: MoveeRow): string | null {
+  return row.heading ?? row.project ?? row.area ?? null;
+}
+
+/** A container's display title (for the `--in <title>` spelling), else its uuid. */
+function containerLabel(deps: WriteDeps, uuid: string): string {
+  const r = deps.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as
+    | { title: string | null }
+    | undefined;
+  return r?.title ?? uuid;
+}
+
+/** The kind of a resolved `--in` container uuid. */
+function containerKindOf(deps: WriteDeps, uuid: string): "project" | "area" | "heading" {
+  const t = deps.db.prepare("SELECT type FROM TMTask WHERE uuid = ?").get(uuid) as
+    | { type: number }
+    | undefined;
+  if (t?.type === 1) return "project";
+  if (t?.type === 2) return "heading";
+  return "area";
+}
+
+/** A short phrase naming the display bucket(s) the set currently sits in. */
+function describeSetLocation(rows: MoveeRow[], packedToday: number): string {
+  const buckets = [...new Set(rows.map((r) => scheduleBucket(r, packedToday)))];
+  return `in the ${buckets.join(" / ")} bucket`;
+}
+
+type ParsedIn =
+  | { axis: InAxis }
+  | { container: { uuid: string; kind: "project" | "area" | "heading" } }
+  | { error: string };
+
+/** Parse a raw `--in <target>` into a list axis or a resolved container ref. */
+function parseInTarget(deps: WriteDeps, raw: string, rows: MoveeRow[]): ParsedIn {
+  const norm = raw.trim().toLowerCase();
+  if ((IN_AXES as readonly string[]).includes(norm)) return { axis: norm as InAxis };
+  if (norm === "loose") {
+    return {
+      error:
+        '`--in loose` is not valid — "loose" is a read view, not a reorder bucket; ' +
+        "use --in anytime / --in someday, or a project/area/heading ref",
+    };
+  }
+  // A raw uuid that IS a movee's own container (project/area/heading).
+  const ownContainers = new Set(
+    rows.map(indexAxisContainerOf).filter((u): u is string => u !== null),
+  );
+  if (ownContainers.has(raw)) {
+    return { container: { uuid: raw, kind: containerKindOf(deps, raw) } };
+  }
+  const p = resolveProject(deps.db, { title: raw });
+  if (p.resolved?.uuid !== undefined) {
+    return { container: { uuid: p.resolved.uuid, kind: "project" } };
+  }
+  const a = resolveArea(deps.db, { title: raw });
+  if (a.resolved?.uuid !== undefined) {
+    return { container: { uuid: a.resolved.uuid, kind: "area" } };
+  }
+  // A heading, resolved within the movees' shared project.
+  const proj = rows[0]?.project ?? headingProjectOf(deps.db, rows[0]?.heading ?? null);
+  if (proj !== null && proj !== undefined) {
+    const h = resolveHeading(deps.db, proj, raw);
+    if (h.resolved?.uuid !== undefined) {
+      return { container: { uuid: h.resolved.uuid, kind: "heading" } };
+    }
+  }
+  return {
+    error:
+      `--in "${raw}" did not resolve to a project, area, or heading ` +
+      "(or one of today | evening | anytime | someday | inbox)",
+  };
+}
+
+type AxisResolution = { targetOf: (r: MoveeRow) => ScopeTarget } | { refused: MoveRefused };
+
+/**
+ * Resolve the reorder AXIS for a `things reorder` set per `--in` (the ratified
+ * axis-disambiguation contract). Returns a per-row target classifier, or a
+ * refusal. The `todo move` anchor-implied reposition (verb !== "reorder") keeps
+ * its prior single-axis behavior — no `--in`, no ambiguity gate.
+ */
+function resolveReorderAxis(
+  deps: WriteDeps,
+  op: "todo.move" | "project.move",
+  rows: MoveeRow[],
+  inTarget: string | undefined,
+  packedToday: number,
+  verb: "move" | "reorder",
+  position: MovePosition | undefined,
+): AxisResolution {
+  const isTodo = op === "todo.move";
+  const bounceEnabled = deps.config.bounceEnabled;
+  const base = (r: MoveeRow): ScopeTarget => reorderTargetOf(r, isTodo, packedToday, bounceEnabled);
+  if (verb !== "reorder") return { targetOf: base };
+
+  // The coherence set is the movees PLUS the anchor (spec: "the movee set AND
+  // anchor is coherent on both axes"). A cross-container anchor breaks the index
+  // axis (so the reorder is unambiguously the view axis); an unresolved anchor is
+  // left to the downstream anchor validation.
+  const anchorRow =
+    position !== undefined && ("before" in position || "after" in position)
+      ? (() => {
+          const ar = resolveMovee(deps, "before" in position ? position.before : position.after);
+          return ar instanceof ReferenceResolutionError ? undefined : loadRow(deps.db, ar.uuid);
+        })()
+      : undefined;
+  const coherence = anchorRow !== undefined ? [...rows, anchorRow] : rows;
+
+  // One shared Today/Evening view? (Mixed today+evening is caught downstream by the
+  // single-bucket guard; view=null means "not a clean view set".)
+  const views = new Set(coherence.map((r) => viewOf(r, packedToday)));
+  const view = views.size === 1 ? [...views][0] : null;
+
+  // The shared index-axis container target, if the whole coherence set has one
+  // (classifying each row as though it sat in its container's anytime bucket).
+  const indexTargets = coherence.map((r) => indexAxisTargetOf(r, bounceEnabled));
+  const indexKeys = new Set(indexTargets.map(containerKey));
+  const indexTarget =
+    indexKeys.size === 1 && indexTargets[0]?.scope != null
+      ? (indexTargets[0] as ScopeTarget)
+      : null;
+
+  // Force the CONTAINER index axis for view members, leaving non-view members on
+  // their natural target (used when --in names a container).
+  const indexClassifier = (r: MoveeRow): ScopeTarget =>
+    viewOf(r, packedToday) !== null ? indexAxisTargetOf(r, bounceEnabled) : base(r);
+
+  if (inTarget !== undefined) {
+    const parsed = parseInTarget(deps, inTarget, rows);
+    if ("error" in parsed) return { refused: refused(op, "usage", parsed.error) };
+
+    if ("axis" in parsed) {
+      const axis = parsed.axis;
+      if (axis === "today" || axis === "evening") {
+        if (view === axis) return { targetOf: base };
+        return {
+          refused: refused(
+            op,
+            "blocked",
+            `--in ${axis} but the items are ${describeSetLocation(rows, packedToday)} — they are ` +
+              `not ${axis === "today" ? "Today" : "This Evening"} members`,
+            "name the axis the items actually share, or omit --in if it is unambiguous",
+          ),
+        };
+      }
+      // anytime | someday | inbox — a loose list axis.
+      if (view !== null) {
+        return {
+          refused: refused(
+            op,
+            "blocked",
+            `--in ${axis} would order ${view === "today" ? "Today" : "This Evening"} members on ` +
+              `the loose ${axis} axis, whose when= legs OVERWRITE the Today/Evening flag ` +
+              "(de-Today hazard) — refused rather than silently stripping it",
+            `reorder them in the view with --in ${view}, or reschedule them off Today first`,
+          ),
+        };
+      }
+      const wrong = rows.filter(
+        (r) =>
+          scheduleBucket(r, packedToday) !== axis ||
+          r.project !== null ||
+          r.area !== null ||
+          r.heading !== null,
+      );
+      if (wrong.length > 0) {
+        return {
+          refused: refused(
+            op,
+            "usage",
+            `--in ${axis} but the items are ${describeSetLocation(rows, packedToday)}` +
+              (rows.some((r) => r.project !== null || r.area !== null || r.heading !== null)
+                ? " (and some are in a container, not loose)"
+                : ""),
+            "omit --in and reorder the items where they are, or move them first",
+          ),
+        };
+      }
+      return { targetOf: base };
+    }
+
+    // A container ref (project/area/heading).
+    const container = parsed.container;
+    const notIn = rows.filter((r) => indexAxisContainerOf(r) !== container.uuid);
+    if (notIn.length > 0) {
+      return {
+        refused: refused(
+          op,
+          "usage",
+          `--in "${inTarget}" (${container.kind} ${container.uuid}) but these items are not in it: ` +
+            notIn.map((r) => r.uuid).join(", "),
+          "name the container the items actually share, or omit --in",
+        ),
+      };
+    }
+    if (view !== null) {
+      const forced = indexAxisTargetOf(rows[0] as MoveeRow, bounceEnabled);
+      if (!indexAxisTodaySafe(forced)) {
+        return {
+          refused: refused(
+            op,
+            "blocked",
+            `--in "${inTarget}" would order these ${view === "today" ? "Today" : "This Evening"} ` +
+              `members on ${describeScope(forced)}, a when= bounce whose legs OVERWRITE the ` +
+              "Today/Evening flag (de-Today hazard) — only a native project/area index re-rank is " +
+              "Today-flag-safe, so it is refused rather than silently stripping the flag",
+            `reorder them in the view with --in ${view}, or reschedule them off Today first`,
+          ),
+        };
+      }
+    }
+    return { targetOf: indexClassifier };
+  }
+
+  // No --in: refuse only when BOTH axes are honest — a view AND a Today-safe native
+  // container index. A bounce-only index axis (heading child, loose Anytime) is not
+  // an honest alternative (it de-Todays), so the view stays the sole reading; a
+  // cross-container set has no shared index axis. Non-view sets pass straight
+  // through single-axis. This replaces the old silent always-Today resolution.
+  if (
+    view !== null &&
+    indexTarget !== null &&
+    indexTarget.scope !== null &&
+    indexAxisTodaySafe(indexTarget)
+  ) {
+    const label = containerLabel(deps, indexTarget.container ?? "");
+    return {
+      refused: refused(
+        op,
+        "blocked",
+        `these items are ${view === "today" ? "Today" : "This Evening"} members that also share ` +
+          `${describeScope(indexTarget)} — the reorder is ambiguous between the ${view} view ` +
+          "(todayIndex slots) and the container (index slots); say which with --in",
+        `--in ${view} to reorder the ${view} view, or --in "${label}" to reorder within the container`,
+      ),
+    };
+  }
+  return { targetOf: base };
 }
 
 /**
@@ -618,12 +924,21 @@ function preflightAnchor(
   // all. Within-heading --before/--after IS supported now — the extended bounce
   // co-bounces the members between the block and the anchor (disclosed).
   if (landing.scope !== null) return null;
+  // A mixed-stage selection (movees span the destination's stage sub-buckets) is
+  // the per-bucket anchor refusal (§4 rule 4): an anchor has no honest cross-bucket
+  // meaning. Distinguished from a single bucket that simply has no protocol.
+  const spansBuckets = landing.reason.includes("span display buckets");
   return refused(
     op,
     landing.prohibited === true ? "blocked" : "unsupported",
-    `--before/--after cannot be honored in the destination (${describeScope(landing)}) — ` +
-      "no reorder protocol positions within that bucket",
-    "use --first/--last, or omit the position (membership still lands)",
+    spansBuckets
+      ? "--before/--after cannot anchor a selection that spans stage sub-buckets in the " +
+          "destination — every movee must share the anchor's sub-bucket"
+      : `--before/--after cannot be honored in the destination (${describeScope(landing)}) — ` +
+          "no reorder protocol positions within that bucket",
+    spansBuckets
+      ? "split the move by bucket, or drop the anchor (use --first/--last — they apply per sub-bucket)"
+      : "use --first/--last, or omit the position (membership still lands)",
   );
 }
 
@@ -957,16 +1272,30 @@ export async function runInPlaceReorder(
     });
   if (wrongKind.length > 0 && !globalAxisIntermix) {
     const list = wrongKind.map((w) => `${w.ref} (${w.kind})`).join(", ");
+    const allProjects = isTodo && rows.length > 0 && rows.every((r) => r.type === 1);
     return refused(
       op,
       "usage",
-      `homogeneous kinds required — reorder ${isTodo ? "to-dos" : "projects"} only ` +
-        `(the Today, This Evening, and future day-group lists also accept projects intermixed ` +
-        `with to-dos); not: ${list}`,
+      `homogeneous kinds required — \`reorder\` rearranges to-dos ` +
+        "(the Today, This Evening, and future day-group lists also accept project rows " +
+        `intermixed with to-dos); not: ${list}`,
+      allProjects
+        ? "to rearrange projects in their sidebar/area/someday order use `things project move " +
+            "<refs…> --first/--last/--before/--after`"
+        : undefined,
     );
   }
 
-  return repositionInPlace(deps, op, rows, request.position, packedToday, options, "reorder");
+  return repositionInPlace(
+    deps,
+    op,
+    rows,
+    request.position,
+    packedToday,
+    options,
+    "reorder",
+    request.in,
+  );
 }
 
 // ---------------------------------------------------------------- shared core
@@ -974,12 +1303,12 @@ export async function runInPlaceReorder(
 /**
  * The single STRICTLY-FUTURE day every movee shares (packed startDate), or null —
  * the precondition for the SIT4 dated `day` bounce (and the one-call `tomorrow`
- * sort). Members are to-dos in ANY container AND AREA-LESS scheduled PROJECT rows,
- * all on the SAME future day in the Today-bucket axis (startBucket=0). A row off
- * the day, an area-DIRECT project row (unproven on the dated bounce — DAYBNC), a
- * template, or an undated/arrived row breaks the group and falls through to the
- * normal single-container guard. (Templates never reach here: startDate is NULL on
- * a resting template, so `startDate === day` fails for them.)
+ * sort). Members are to-dos in ANY container AND scheduled PROJECT rows (area-less
+ * OR area-direct — SIT5 AREAPROJDAY proved the update-project when= legs preserve
+ * the area FK), all on the SAME future day in the Today-bucket axis (startBucket=0).
+ * A row off the day, a template, or an undated/arrived row breaks the group and
+ * falls through to the normal single-container guard. (Templates never reach here:
+ * startDate is NULL on a resting template, so `startDate === day` fails for them.)
  */
 function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
   const first = rows[0];
@@ -989,8 +1318,6 @@ function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
   for (const r of rows) {
     if (r.startBucket !== 0 || r.startDate !== day) return null;
     if (r.type !== 0 && r.type !== 1) return null;
-    // Area-direct project rows are not dated-bounce members (only area-less are).
-    if (r.type === 1 && r.area !== null) return null;
     if (r.isTemplate) return null;
   }
   return day;
@@ -1103,10 +1430,16 @@ async function repositionInPlace(
   packedToday: number,
   options: WriteOptions,
   verb: "move" | "reorder",
+  inTarget?: string,
 ): Promise<MoveResult> {
-  const isTodo = op === "todo.move";
-  const targetOf = (r: MoveeRow): ScopeTarget =>
-    reorderTargetOf(r, isTodo, packedToday, deps.config.bounceEnabled);
+  // Resolve the reorder AXIS (`reorder --in` disambiguation). The classifier maps
+  // each row to its effective reorder target for the chosen axis: the view axis
+  // (today/evening) leaves reorderTargetOf unchanged; a container index axis
+  // reclassifies Today/Evening members by their container. A dual-axis set with no
+  // --in is refused here (naming both --in spellings).
+  const axis = resolveReorderAxis(deps, op, rows, inTarget, packedToday, verb, position);
+  if ("refused" in axis) return axis.refused;
+  const targetOf = axis.targetOf;
 
   // A shared FUTURE day-group (single- OR cross-container) rides the global
   // todayIndex axis, not the normal single-container reorder: the SIT4 dated `day`
@@ -1364,6 +1697,20 @@ async function finishPlacement(
     }
   }
 
+  // Mixed-stage --first/--last (spec §4 rule 4): a selection that lands across
+  // stage sub-buckets (anytime + scheduled + someday) places each stage-group at
+  // the top/bottom of ITS bucket in the destination. Grouped off the RELOADED
+  // post-move rows (real container uuids + true buckets), so it needs no dest
+  // context and is correct for a heading landing too. Dry-run keeps the generic
+  // path (no DB truth to reload).
+  if (options.dryRun !== true && position !== undefined && "at" in position) {
+    const reloaded = rows.map((r) => loadRow(deps.db, r.uuid) ?? r);
+    const groups = groupByReorderTarget(deps, reloaded, packedToday);
+    if (groups.length > 1) {
+      return placePerBucket(deps, op, groups, position, moveeTitles, membership, options);
+    }
+  }
+
   if (landing.scope === null) {
     // Membership landed; the destination bucket has no guaranteed protocol (or a
     // prohibited/destructive one we never attempt) — app-default placement, honest.
@@ -1434,6 +1781,97 @@ async function finishPlacement(
       `membership moved into ${describeScope(landing)}, but the ${landing.scope} reorder protocol ` +
       `was unavailable (${placement.kind}${placement.kind === "blocked" ? `: ${placement.detail}` : ""}) — ` +
       "placement fell back to app-default; enable it with `things config set allow-experimental true`",
+  };
+}
+
+/** One stage sub-bucket of a mixed-stage landing: its reorder target + its rows. */
+interface LandingGroup {
+  target: ScopeTarget;
+  rows: MoveeRow[];
+}
+
+/**
+ * Partition rows by their reorder TARGET (the distinct placement protocol each
+ * stage sub-bucket needs), preserving selection order within each group. Used for
+ * per-sub-bucket --first/--last on a mixed-stage membership move.
+ */
+function groupByReorderTarget(
+  deps: WriteDeps,
+  rows: MoveeRow[],
+  packedToday: number,
+): LandingGroup[] {
+  const groups = new Map<string, LandingGroup>();
+  for (const r of rows) {
+    const target = reorderTargetOf(r, r.type === 0, packedToday, deps.config.bounceEnabled);
+    const key = containerKey(target);
+    const g = groups.get(key);
+    if (g !== undefined) g.rows.push(r);
+    else groups.set(key, { target, rows: [r] });
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Place each stage-group of a mixed-stage membership move at the top/bottom of ITS
+ * sub-bucket (spec §4 rule 4). Each group with a wired protocol runs its own
+ * --first/--last reorder; a protocol-less group is honest app-default. The note
+ * states every group's outcome (the rule-5 honesty surface).
+ */
+async function placePerBucket(
+  deps: WriteDeps,
+  op: "todo.move" | "project.move",
+  groups: LandingGroup[],
+  position: { at: "first" | "last" },
+  moveeTitles: { uuid: string; title: string | null }[],
+  membership: MutationResult[],
+  options: WriteOptions,
+): Promise<MoveResult> {
+  const notes: string[] = [];
+  const placements: ReorderResult[] = [];
+  let anyGuaranteed = false;
+  let anyDefault = false;
+  for (const g of groups) {
+    const count = g.rows.length;
+    if (g.target.scope === null) {
+      anyDefault = true;
+      notes.push(`${describeScope(g.target)}: app-default (${count})`);
+      continue;
+    }
+    const movees = g.rows.map((r) => r.uuid);
+    const reorderUuids = buildReorderOrder(deps, g.target, movees, position);
+    const placement = await runReorder(
+      deps,
+      {
+        scope: g.target.scope,
+        uuids: reorderUuids,
+        named: movees,
+        ...(g.target.container !== undefined && { container: { uuid: g.target.container } }),
+      },
+      legOptions(options),
+    );
+    placements.push(placement);
+    if (placement.kind === "ok") {
+      anyGuaranteed = true;
+      notes.push(
+        `${describeScope(g.target)}: ${position.at} (${count})${touchedSuffix(placement)}`,
+      );
+    } else {
+      anyDefault = true;
+      notes.push(
+        `${describeScope(g.target)}: placement unavailable (${placement.kind}) — app-default`,
+      );
+    }
+  }
+  return {
+    kind: "move-ok",
+    op,
+    movees: moveeTitles,
+    membership,
+    placement: placements[0] ?? null,
+    placementClass: anyGuaranteed && !anyDefault ? "guaranteed" : "app-default",
+    note:
+      `membership moved; mixed-stage placement applied PER sub-bucket (--${position.at}): ` +
+      notes.join("; "),
   };
 }
 

@@ -13,7 +13,6 @@ import { addRepeatRuleFlags, repeatRuleFlagsFromOpts } from "./repeat-flags.ts";
 import {
   aggregateExitCode,
   blockedCode,
-  BOUNCE_MAX_ITEMS,
   capabilitiesTable,
   ClockError,
   describeConfig,
@@ -44,8 +43,6 @@ import {
   type ProjectMoveRequest,
   type ReorderRequest,
   type ReorderResult,
-  type ReorderScope,
-  type ReorderStrategy,
   type RepeatFrequency,
   type ThingsClient,
   type TodoMoveDestination,
@@ -1078,33 +1075,6 @@ export function registerWriteCommands(program: Command): void {
         }),
       ),
     );
-  });
-
-  addPositionFlags(
-    addWriteFlags(
-      todo
-        .command("reorder <refs...>")
-        .description(
-          "Reorder to-dos IN PLACE within the container and bucket they already share — this " +
-            "REARRANGES, it never changes membership (to change what a to-do belongs to, use " +
-            "`things todo move`). The argument order is the resulting order; unmentioned " +
-            "siblings keep their own order. Bare (no position flag) assembles the named to-dos " +
-            "as a contiguous block at the EARLIEST one's current slot (partial-selection " +
-            "friendly). --first/--last/--before/--after position the block. Operands that span " +
-            "containers or buckets fail closed. Ordering uses the native re-rank where available " +
-            "(the private surface, on by default) and a verified when= bounce otherwise; " +
-            "bounce-max-items caps how many items a bounce touches, and bounce-enabled=false " +
-            "refuses bounce-dependent placements rather than falling back destructively.",
-        ),
-    ),
-  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
-    const position = movePosition(opts);
-    if (position === "conflict") {
-      usageError(opts, "pass at most one of --first/--last/--before/--after");
-      return;
-    }
-    const request: ReorderRequest = { uuids: refs, ...(position !== undefined && { position }) };
-    await runMoveCmd(opts, (c) => c.write.reorderTodos(request, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(
@@ -2477,51 +2447,44 @@ export function registerWriteCommands(program: Command): void {
       }
     });
 
-  addWriteFlags(
-    program
-      .command("reorder <uuids...>")
-      .description(
-        "Reorder items within Today, This Evening, the Inbox, Someday (loose to-dos or " +
-          "area-less someday projects — one kind per call), a " +
-          "project's to-dos, an area, or the top-level sidebar " +
-          "projects — uuids are placed at the TOP in the given order; unlisted members " +
-          "keep their relative order below. Strategies: native (EXPERIMENTAL — requires " +
-          "`things config set allow-experimental true` and may stop working after a " +
-          "Things update; today/inbox/someday/project/area) and bounce " +
-          `(today/evening/projects, max ${BOUNCE_MAX_ITEMS} items; an interrupted run ` +
-          "reports which items were placed). Evening and projects (top-level sidebar " +
-          "order — each project takes a brief someday/anytime round-trip) are " +
-          "bounce-only. This --scope surface does not reach a heading's children; to " +
-          "rearrange to-dos under a heading use `things todo reorder`, and to reorder " +
-          "the HEADINGS themselves (children follow) use `things project move-heading`. " +
-          "Area scope reorders to-dos OR projects — never mixed in one request.",
-      )
-      .requiredOption(
-        "--scope <scope>",
-        "today | evening | inbox | someday | project | area | projects",
-      )
-      .option("--project <ref>", "project (uuid or unique name) — scope=project")
-      .option("--area <ref>", "area (uuid or unique name) — scope=area")
-      .option("--strategy <name>", "force native | bounce (default: per-scope)"),
-  ).action(async (uuids: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
-    const scope = opts["scope"] as ReorderScope;
-    const container = containerRef(
-      (opts["project"] as string | undefined) ?? (opts["area"] as string | undefined),
-    );
-    if (opIdCompoundRefused(opts, "the low-level reorder")) return;
-    await runWrite(opts, (c) =>
-      c.write.reorder(
-        {
-          scope,
-          uuids,
-          ...(container !== undefined && { container }),
-          ...(opts["strategy"] !== undefined && {
-            strategy: opts["strategy"] as ReorderStrategy,
-          }),
-        },
-        writeOptionsFrom(opts),
-      ),
-    );
+  addPositionFlags(
+    addWriteFlags(
+      program
+        .command("reorder <refs...>")
+        .description(
+          "Rearrange to-dos (and the project rows the Today/Evening/day lists intermix with " +
+            "them) IN PLACE within the container and bucket they already share — REARRANGES, " +
+            "never changes membership (to change what an item belongs to, use `things todo " +
+            "move` / `things project move`). Argument order is the resulting order; unmentioned " +
+            "siblings keep theirs. Bare (no position) assembles the named items as a block at " +
+            "the EARLIEST one's current slot (partial-selection friendly); --first/--last/" +
+            "--before/--after position the block. Operands that span containers or buckets fail " +
+            "closed. A Today/Evening member also has an index slot in its container, so a set " +
+            "sharing BOTH axes is ambiguous — pass --in to say which (the refusal names both " +
+            "spellings). Ordering uses the native re-rank where available (private surface, on " +
+            "by default) and a verified when= bounce otherwise; bounce-max-items caps a bounce, " +
+            "bounce-enabled=false refuses bounce-dependent placements rather than degrading. " +
+            "For a project's HEADINGS use `things project move-heading`; for sidebar AREAS use " +
+            "`things area reorder`.",
+        )
+        .option(
+          "--in <target>",
+          "disambiguate the axis of a Today/Evening set: today | evening | anytime | someday | " +
+            "inbox, or a project/area/heading ref (uuid or unique title)",
+        ),
+    ),
+  ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
+    const position = movePosition(opts);
+    if (position === "conflict") {
+      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      return;
+    }
+    const request: ReorderRequest = {
+      uuids: refs,
+      ...(position !== undefined && { position }),
+      ...(opts["in"] !== undefined && { in: opts["in"] as string }),
+    };
+    await runMoveCmd(opts, (c) => c.write.reorderTodos(request, writeOptionsFrom(opts)));
   });
 
   program

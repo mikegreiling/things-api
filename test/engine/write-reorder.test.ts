@@ -1385,7 +1385,9 @@ describe("day scope (SIT4 DAYBNC — the dated cross-container bounce)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("refuses an area-DIRECT project row (only area-less rows are proven — DAYBNC)", async () => {
+  it("accepts an area-DIRECT project row as a day member, preserving its area FK (SIT5 AREAPROJDAY)", async () => {
+    // SIT5 AREAPROJDAY: area-direct project rows are proven dated-bounce members —
+    // the update-project when= legs preserve the area FK through the round-trip.
     const area = seedArea(fixture.db, "A");
     const t = seedDay("T", 0);
     const ap = seedProject(fixture.db, {
@@ -1394,10 +1396,20 @@ describe("day scope (SIT4 DAYBNC — the dated cross-container bounce)", () => {
       todayIndex: 5,
       area,
     });
-    const { vector } = datedBounceVector();
-    const result = await runReorder(deps([vector]), { scope: "day", uuids: [t, ap] });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.detail).toContain("project inside an area");
+    const { vector, calls } = datedBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: [ap, t] });
+    expect(result.kind).toBe("ok");
+    // Per-type legs: the area'd project row goes through update-project.
+    const projLegs = calls.filter((c) => c.includes(`id=${ap}`));
+    expect(projLegs.length).toBe(2);
+    expect(projLegs.every((c) => c.includes("update-project"))).toBe(true);
+    // The area FK survived the round-trip (the SIT5 law).
+    const apRow = fixture.db
+      .prepare("SELECT area, startBucket, type FROM TMTask WHERE uuid = ?")
+      .get(ap) as { area: string; startBucket: number; type: number };
+    expect(apRow.area).toBe(area);
+    expect(apRow.startBucket).toBe(0);
+    expect(apRow.type).toBe(1);
   });
 
   it("is gated by bounce-enabled — no dispatch when the flag is off", async () => {
