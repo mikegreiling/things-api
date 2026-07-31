@@ -1,6 +1,6 @@
-# SIT3 — arrival / evening / lists: five probe arms (EVEPROJ · BANNERACK · REMSTALE · LATERLINK · SPECLIST)
+# SIT3 — arrival / evening / lists: six probe arms (EVEPROJ · BANNERACK · REMSTALE · LATERLINK · SPECLIST · TOMORROWHEAD)
 
-Probe sitting 3 closes five residual questions around **This-Evening for PROJECTS**, **replicating the Today-banner OK headlessly**, the **stale evening/reminder gating law**, and the **`show` / `list` id vocabularies**.
+Probe sitting 3 closes six residual questions around **This-Evening for PROJECTS**, **replicating the Today-banner OK headlessly**, the **stale evening/reminder gating law**, the **`show` / `list` id vocabularies**, and whether the **`list "Tomorrow"` reorder rips a headed child's heading FK** (TOMORROWHEAD, added mid-sitting to de-risk PR #335).
 
 ONE disposable Tart clone (`sit3-lab`, run 2026-07-31, **Things 3.22.11**, **macOS 15.7.7** Sequoia, **DB schema v26**, golden `things-lab-golden-v1` UNTOUCHED; airgapped, no cloud account). Pinned clock **2026-07-05 12:00**, rolled forward **+1 → 2026-07-06** and **+1 → 2026-07-07** with the app CLOSED (RSIM-S small-increment law; clock-rolls in the VM ONLY, never the host). Writes go exclusively through official surfaces (URL scheme + AppleScript `_private_experimental_` reorder). Ground truth = guest read-only SQLite reads (raw bytes + decoded) + the AppleScript list oracle + VNC screenshots (the banner, pips, reminder badge and This-Evening section are custom NSViews, invisible to the AX tree — BANNER1 oracle-limits). Fixtures **fully synthetic** (`S3-*`). Script: [`lab/scripts/research-sit3.sh`](../../lab/scripts/research-sit3.sh) (subcommands `setup` + verbs `url`/`as`/`aslist`/`full`/`rows`/`sql`/`clock`/`relaunch`/`shot`/`click`/`key`/`dbdump`/`teardown`). Date codec is the library's (`y<<16|m<<12|d<<7`; reminderTime `hour<<26|minute<<20`) — **no hand-packed integers**: `07-05`=132805248, `07-06`=132805376, `07-07`=132805504, `07-10`=132805888; reminder `18:00`=1207959552. Evidence (gitignored): `lab/artifacts/sit3-lab/` (`snaps/*.png`, `report.txt`, `final-evidence.txt`, `dumps/sit3-final.dump`).
 
@@ -15,6 +15,7 @@ ONE disposable Tart clone (`sit3-lab`, run 2026-07-31, **Things 3.22.11**, **mac
 | **REMSTALE** | The exact stale evening/reminder gating law. | **The `startBucket=1` (This-Evening) flag AND the `reminderTime` render only while `startDate == current day`.** The day `startDate` goes stale (`< today`, or NULL for a pull) the GUI **discards both at the presentation layer** — the row collapses to plain "Today" (day section, no This-Evening section, no reminder badge/popover) — while the DB bytes are **NEVER cleared**: not by day-rollover/arrival, not by the banner OK. The app IGNORES the stale bytes; it does not clean them. Generalizes to **to-do AND project**. Maintainer-observed popover end-state cited. |
 | **LATERLINK** | Is `things:///show?id=later-projects` valid? `show?id=tomorrow`? | **`later-projects` = INVALID** (error modal "Cannot show the list with ID 'later-projects' because it does not exist"; view unchanged). **`tomorrow` = VALID** (opens the Tomorrow view in the main pane). So the **`show`-URL id vocabulary ≠ the AppleScript `list id` vocabulary**: `later-projects` is a valid `list id` specifier (P9a) but not a valid `show` id; `tomorrow` is valid in both. |
 | **SPECLIST** | Is the P9a `every list` enumeration closed? | **CLOSED.** `every list` = Inbox, Today, Tomorrow, Anytime, Upcoming, Someday, Later Projects, Logbook, Trash + areas (verbatim, unchanged). Every speculative door — `This Evening`, `Next Week`, `Deadlines`, `Day After Tomorrow`, `list id "evening"`, `list id "deadlines"`, and date-shaped (`March 16`, `2026-08-15`) — errors **−1728** for BOTH the `get` and the `_private_experimental_ reorder` specifier (identical resolution). |
+| **TOMORROWHEAD** | Does the one-call `reorder to dos in list "Tomorrow"` RIP a headed child's heading FK (as the container-day project-specifier does, §9k)? | **NO — heading-PRESERVING.** The `list "Tomorrow"` reorder re-ranks `todayIndex` to the sent order WITHOUT reparenting: a **repositioned** headed child kept `heading` byte-identical (project stayed NULL — NOT reparented to root), and a **tail-pinned** headed child (in the wire but not moved) was left byte-identical. §9k does **NOT** extend to the Tomorrow list — the #335 cross-container tomorrow fast path **STANDS** for headed children. |
 
 ---
 
@@ -168,6 +169,23 @@ Speculative specifiers via `count of (to dos of list …)`:
 | `list id "deadlines"` | −1728 |
 
 The `_private_experimental_ reorder to dos in list …` specifier resolves identically: `list "This Evening"` → −1728, `list id "deadlines"` → −1728, while the valid `list "Tomorrow"` (bad id string) → no error (tolerated). So `get` and `reorder` share one list-object resolver; there is no hidden reachable list beyond `every list`. **The P9a enumeration is CLOSED.** (Reconfirms the date-shaped-specifier −1728 corpus fact.)
+
+## ARM 6 — TOMORROWHEAD: does the `list "Tomorrow"` reorder rip a headed child's heading FK?
+
+Added mid-sitting to de-risk PR #335, which now routes a cross-container tomorrow day-group **including headed children** through the one-call `_private_experimental_ reorder to dos in list "Tomorrow"`. ORDFIN2's TOMORROWLIST proved the Tomorrow sort clean for loose/project/area rows, but its seed had **no headed row** — and §9k (HEADSUB1 Arm A) proved the container-day PROJECT-specifier reorder RIPS a headed child's heading FK (`heading → NULL`, `project → root`) on the `todayIndex` axis. Question: does `list "Tomorrow"` do the same?
+
+**Seed (tomorrow 2026-07-06, `startDate`=132805376):** two to-dos `S3-TH-C`/`S3-TH-C2` headed under an existing heading (golden `LAB-PROJ-HEADINGS` §Alpha, uuid `5saDdJco…`; the golden's own synthetic heading — the move-to-heading URL only attaches to a heading that already exists, it does not create one) + one loose unheaded tomorrow sibling `S3-TH-U`. All three `start=2, startBucket=0, startDate 07-06`.
+
+**One call, scrambled wire including both headed children** — `reorder to dos in list "Tomorrow" with ids "S3-TH-C, S3-TH-U, …, S3-TH-C2"` (C sent FIRST = repositioned to front; C2 sent LAST = tail):
+
+| row | heading FK before → after | todayIndex before → after | project | startDate | userModificationDate |
+|---|---|---|---|---|---|
+| S3-TH-C (repositioned) | 5saDdJco → **5saDdJco (KEPT)** | −574 → **−3711** (moved to front) | NULL (kept) | 07-06 (kept) | 1783252925.5767 (unchanged) |
+| S3-TH-C2 (tail-pinned) | 5saDdJco → **5saDdJco (KEPT)** | −1798 → −1798 (unchanged) | NULL (kept) | 07-06 (kept) | 1783252928.83651 (unchanged) |
+
+The reorder CONTROLLED placement (post-order `todayIndex`: C −3711 < U −3154 < C2 −1798 = the sent order; C genuinely moved from last to first) yet **preserved the heading FK on BOTH headed children** — the repositioned one AND the tail-pinned one — with `project` still NULL (not reparented to the project root) and `startDate` intact. (The tail item C2 was left byte-identical; the app achieved the target order by re-basing the moved rows below it, not by touching C2.) So the `list "Tomorrow"` reorder is a pure cross-container `todayIndex` day-sort that does **not** reparent — unlike the §9k container-day project-specifier reorder, which flattens headings.
+
+**Verdict: heading-PRESERVING — §9k does NOT extend to the Tomorrow list.** The #335 routing of a cross-container tomorrow day-group through this one call is **SOUND for headed children** (no MUST-FIX). This extends ORDFIN2 TOMORROWLIST (clean for loose/project/area) to the headed case. **Evidence only.**
 
 ## App oddities filed
 
