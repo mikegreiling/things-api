@@ -1,0 +1,92 @@
+#!/usr/bin/osascript -l JavaScript
+// ORDFIN1 AX dumper — dumps the MAIN (Upcoming) list rows so we can see what a
+// PROJECTED REPEATING row exposes to Accessibility vs an ordinary dated to-do.
+// ObjC-bridge incantations are NATIVE1/axdrag.js verbatim. Usage:
+//   osascript -l JavaScript ordfin1-axdump.js maindump
+ObjC.import('AppKit')
+ObjC.import('ApplicationServices')
+
+function pidOf(name) { return Application('System Events').processes.byName(name).unixId() }
+function attr(el, name) {
+  var out = Ref()
+  if ($.AXUIElementCopyAttributeValue(el, $(name), out) !== 0) return null
+  return ObjC.castRefToObject(out[0])
+}
+function sv(el, name) { var v = attr(el, name); return v ? v.js : '' }
+function role(el) { return sv(el, 'AXRole') }
+function subrole(el) { return sv(el, 'AXSubrole') }
+function frame(el) {
+  var p = attr(el, 'AXPosition'), z = attr(el, 'AXSize')
+  if (!p || !z) return null
+  var pd = ObjC.castRefToObject($.CFCopyDescription(p)).js
+  var zd = ObjC.castRefToObject($.CFCopyDescription(z)).js
+  var pm = pd.match(/x:([-0-9.]+) y:([-0-9.]+)/), zm = zd.match(/w:([-0-9.]+) h:([-0-9.]+)/)
+  return (pm && zm) ? { x: +pm[1], y: +pm[2], w: +zm[1], h: +zm[2] } : null
+}
+function kids(el) {
+  var c = attr(el, 'AXChildren'); if (!c) return []
+  var a = []; for (var i = 0; i < c.count; i++) a.push(c.objectAtIndex(i)); return a
+}
+function appEl() { return $.AXUIElementCreateApplication(pidOf('Things3')) }
+function stdWindow() {
+  var ws = kids(appEl())
+  for (var i = 0; i < ws.length; i++) { if (subrole(ws[i]) === 'AXStandardWindow') return ws[i] }
+  return ws.length ? ws[0] : null
+}
+function findAll(el, wantRole, depth, acc) {
+  acc = acc || []; if (depth < 0) return acc
+  var ch = kids(el)
+  for (var i = 0; i < ch.length; i++) {
+    if (role(ch[i]) === wantRole) acc.push(ch[i])
+    findAll(ch[i], wantRole, depth - 1, acc)
+  }
+  return acc
+}
+// collect EVERY descendant attribute of interest (role/subrole/desc/value/help/identifier)
+function descText(el, acc, depth) {
+  acc = acc || []; depth = (depth == null) ? 7 : depth; if (depth < 0) return acc
+  var v = sv(el, 'AXValue'); if (v) acc.push('val=' + v)
+  var d = sv(el, 'AXDescription'); if (d) acc.push('desc=' + d)
+  var t = sv(el, 'AXTitle'); if (t) acc.push('ttl=' + t)
+  var h = sv(el, 'AXHelp'); if (h) acc.push('help=' + h)
+  var id = sv(el, 'AXIdentifier'); if (id) acc.push('id=' + id)
+  var ch = kids(el)
+  for (var i = 0; i < ch.length; i++) descText(ch[i], acc, depth - 1)
+  return acc
+}
+function mainList() {
+  var w = stdWindow(); if (!w) return null
+  // main list = the WIDE table/outline (sidebar is narrow, w<400)
+  var cands = findAll(w, 'AXTable', 14, []).concat(findAll(w, 'AXOutline', 14, []))
+  var best = null
+  for (var i = 0; i < cands.length; i++) {
+    var f = frame(cands[i]); if (!f) continue
+    if (f.w >= 400) { if (!best || f.w > best.w) best = { el: cands[i], f: f, role: role(cands[i]) } }
+  }
+  return best
+}
+function dumpMain() {
+  var m = mainList()
+  if (!m) return JSON.stringify({ error: 'no wide list found' })
+  var out = { list: { role: m.role, frame: m.f }, rows: [] }
+  var ch = kids(m.el)
+  for (var i = 0; i < ch.length; i++) {
+    var r = role(ch[i])
+    if (r !== 'AXRow' && r !== 'AXTableRow' && r !== 'AXOutlineRow' && r !== 'AXGroup') continue
+    var f = frame(ch[i])
+    out.rows.push({
+      i: out.rows.length,
+      role: r,
+      subrole: subrole(ch[i]),
+      desc: sv(ch[i], 'AXDescription'),
+      disclosure: sv(ch[i], 'AXDisclosureLevel'),
+      text: descText(ch[i], [], 7).join(' | '),
+      y: f ? f.y : null, h: f ? f.h : null, w: f ? f.w : null
+    })
+  }
+  return JSON.stringify(out, null, 1)
+}
+function run(argv) {
+  if (argv[0] === 'maindump') return dumpMain()
+  return 'UNKNOWN_CMD'
+}
