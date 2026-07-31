@@ -238,7 +238,7 @@ export { templateStatus } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";
 // The single-source time-axis derivation the wire emit boundary and the TTY
 // renderers share (a TTY when/pip can never disagree with the emitted `when`).
-export { entityWhen } from "./read/stage.ts";
+export { entityProvisional, entityWhen } from "./read/stage.ts";
 export type { When } from "./read/stage.ts";
 export type { LiteCandidate, LiteSearchResult } from "./read/views.ts";
 export { partitionSomedaySection, splitSectionBlocks } from "./read/sections.ts";

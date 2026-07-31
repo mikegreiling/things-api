@@ -208,3 +208,29 @@ export function entityWhen(item: WhenStageInput): When | undefined {
     repeating: item.repeating,
   });
 }
+
+/**
+ * The R13 provisional-marker LAW (BANNER1 L-B) — the ONE predicate the wire emit
+ * boundary (`shape.ts`) and the TTY pip (`render.ts` renderToday) share, so a
+ * rendered `•` can NEVER disagree with the emitted `provisional`. A Today member
+ * (a today/evening `when`) the app has not yet MATERIALIZED: `start != active OR
+ * startDate IS NULL`. A future/undated/someday row (no today/evening `when`) is
+ * never provisional; templates never carry a today/evening `when`, so they never
+ * qualify either. Takes the already-derived `when` so neither caller re-derives it.
+ */
+export function whenIsProvisional(
+  when: When | undefined,
+  start: StartState,
+  startDate: IsoDate | null,
+): boolean {
+  return (when === "today" || when === "evening") && (start !== "active" || startDate === null);
+}
+
+/**
+ * Entity-level {@link whenIsProvisional}: derives the entity's own
+ * {@link entityWhen} (the same value the wire emits), so the TTY provisional pip
+ * shares the wire's derivation end to end.
+ */
+export function entityProvisional(item: WhenStageInput): boolean {
+  return whenIsProvisional(entityWhen(item), item.start, item.startDate);
+}

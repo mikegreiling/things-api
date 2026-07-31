@@ -8,6 +8,7 @@
  * (../cli/style.ts).
  */
 import {
+  entityProvisional,
   entityWhen,
   localToday,
   partitionSomedaySection,
@@ -38,6 +39,7 @@ import {
   NOTES_MARK,
   projectCircle,
   projectTitleAccent,
+  provisionalPip,
   REMINDER_MARK,
   todayStar,
   todoBox,
@@ -401,12 +403,29 @@ export function renderList(items: ListItem[]): string[] {
 }
 
 /**
+ * The Today-view per-row mark: a provisional Today member fills the after-the-box
+ * mark slot with a yellow `•` (see {@link renderToday}). Derived through
+ * {@link entityProvisional}, the SAME law the wire emit boundary uses.
+ */
+const provisionalRowOpts = (i: ListItem): FormatOpts =>
+  entityProvisional(i) ? { mark: provisionalPip() } : {};
+
+/**
  * The `things today` split. The membership glyph lives in the SECTION HEADER,
  * not on every row — a yellow ★ in the Today header (which also carries the
  * sidebar badge split) and a blue ⏾ in the This Evening header — so the rows
  * drop the redundant per-item marker (the same convention that suppresses a
  * `(project)` context inside that project's own view). Every OTHER view keeps
  * the per-row ★/⏾, where the marker still carries information.
+ *
+ * A PROVISIONAL Today member (the wire's presence-keyed `provisional`, BANNER1
+ * law — a Today entrant the app has not yet materialized, banner-counted until
+ * acknowledged) gets a yellow `•` in the freed mark slot, mirroring the GUI's
+ * yellow "new item" pip. It is per-row (it distinguishes rows within a section,
+ * so it is NOT header-deduped like the ★) and — per the GUI — renders ONLY here,
+ * never in anytime or any other view. Derived through {@link entityProvisional},
+ * the SAME law the wire emit boundary uses, so the pip can never disagree with
+ * the emitted `provisional`.
  *
  * This Evening mirrors the GUI: it renders ONLY when evening items exist —
  * a truly-empty evening has no header at all. `view` is the rows that survived
@@ -440,7 +459,9 @@ export function renderToday(
     ? []
     : [
         `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${view.badge.dueOrOverdue} due/overdue · ${view.badge.other} other) ──`)}`,
-        ...(view.today.length === 0 ? ["(empty)"] : view.today.map((i) => formatItem(i, w))),
+        ...(view.today.length === 0
+          ? ["(empty)"]
+          : view.today.map((i) => formatItem(i, w, provisionalRowOpts(i)))),
       ];
   if (eveningTotal > 0) {
     // A blank line before the header matches every other grouped renderer's
@@ -448,7 +469,7 @@ export function renderToday(
     // --evening mode the header is the first line, so no leading blank.
     if (!eveningOnly) lines.push("");
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
-    for (const i of view.evening) lines.push(formatItem(i, w));
+    for (const i of view.evening) lines.push(formatItem(i, w, provisionalRowOpts(i)));
     const hidden = eveningTotal - view.evening.length;
     if (hidden > 0) {
       const more = view.evening.length > 0 ? "more " : "";

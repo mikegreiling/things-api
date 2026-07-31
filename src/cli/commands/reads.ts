@@ -1251,6 +1251,13 @@ export function registerReadCommands(program: Command): void {
     "search",
   ]);
   for (const c of program.commands) {
+    if (c.name() === "today") {
+      // The one Today-only glyph: the yellow `•` new-item pip.
+      c.addHelpText(
+        "after",
+        "\n`•` marks a provisional Today item — shown until acknowledged in the app.",
+      );
+    }
     if (GLYPH_VIEWS.has(c.name())) {
       c.addHelpText("after", "\nsymbols & colors: run `things legend`");
     }
