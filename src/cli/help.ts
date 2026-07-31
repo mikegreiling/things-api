@@ -397,12 +397,12 @@ order: reverse for free by naming them backwards.
 PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a lab-
 clean protocol exists — loose inbox/today/evening/someday/anytime, a project's or
 area's members (anytime AND someday), a heading's anytime/someday/scheduled-day
-children, ANY container child's evening slot (project/area/headed), a container's
-scheduled-day children, a loose / direct-area / cross-container future Upcoming day,
-and area-less someday/anytime projects. Some use a bounce or a park-sort-restore
-compound; --before/--after co-touches siblings, listed. bounce-max-items caps touched
-(30); bounce-enabled/allow-experimental=false refuse, never degrade. The only app-
-default rows are a loose scheduled PROJECT row and templates — dead-end-refused.`,
+children, ANY container child's evening slot, a container's scheduled-day children,
+a loose / direct-area / cross-container future Upcoming day (TOMORROW is one native
+list "Tomorrow" call), and area-less someday/anytime projects. Some use a bounce or a
+park-sort-restore compound; --before/--after co-touches siblings, listed. bounce-max-
+items caps touched (30); bounce-enabled/allow-experimental=false refuse, never degrade.
+App-default: a loose scheduled PROJECT row (except tomorrow) and templates — refused.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 

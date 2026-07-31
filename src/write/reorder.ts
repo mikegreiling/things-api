@@ -379,8 +379,10 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
     case "inbox":
     case "someday":
     case "container-day":
+    case "tomorrow":
       // Native-only scopes: let the pipeline explain precisely why native is
-      // unavailable (planner: experimental gate; canary: sdef change).
+      // unavailable (planner: experimental gate; canary: sdef change). `tomorrow`
+      // is the ORDFIN2 one-call `list "Tomorrow"` day-sort (TOMORROWLIST).
       return { kind: "ok", strategy: "native" };
     // bounce-only scopes handled by bounceEntry above; unreachable here.
     case "evening":
@@ -467,11 +469,14 @@ function somedayProjectChildren(deps: WriteDeps, params: ReorderParams): boolean
 // group is parked (not just the named block): the container-day leg only re-ranks
 // the scratch project's OWN children, so an un-parked day member would keep a stale
 // todayIndex and corrupt the result — every un-named member is a co-parked sibling
-// (touched, disclosed, bounce co-bounce precedent). upcoming-day additionally
-// REFUSES fail-closed when the day carries a scheduled PROJECT row (not parkable —
-// UPCORD1) or a requested repeating TEMPLATE (§9e). Non-atomic like the bounce
-// protocols: a mid-protocol failure leaves items PARKED in the scratch project and
-// fails loudly with placed/remaining detail naming the scratch uuid.
+// (touched, disclosed, bounce co-bounce precedent). upcoming-day DISCLOSES a
+// strand when the day carries an untouched scheduled PROJECT row (not parkable —
+// UPCORD1): the block sorts to the TOP of the day and the project row(s) keep
+// their prior relative order below it (ORDFIN2 PRJMIX), surfaced in `stranded`. A
+// requested repeating TEMPLATE or a requested project movee is still refused
+// (§9e / not parkable). Non-atomic like the bounce protocols: a mid-protocol
+// failure leaves items PARKED in the scratch project and fails loudly with
+// placed/remaining detail naming the scratch uuid.
 
 /**
  * A day-group member's origin container, captured BEFORE parking so the restore
@@ -625,9 +630,16 @@ async function runDayCompound(
   if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
   problems.push(...originErrors);
-  // upcoming-day: a same-day scheduled PROJECT row cannot be parked (UPCORD1) and
-  // would corrupt the shared todayIndex axis — refuse fail-closed rather than
-  // silently leave it un-ordered (its projected sibling has no proven restore leg).
+  // upcoming-day: a same-day scheduled PROJECT row (type=1) cannot be parked into
+  // the scratch project (UPCORD1). ORDFIN2 PRJMIX proved the strand law is
+  // deterministic — an untouched same-day project row keeps its todayIndex byte-
+  // identical and the park-sorted block always lands ABOVE it (the block is re-
+  // based below the GLOBAL day-group minimum across all containers). So instead of
+  // refusing fail-closed we proceed with the to-do sort and DISCLOSE the stranded
+  // project rows (a REQUESTED project movee stays refused by computeReorderPre —
+  // it is unsortable here; only untouched project SIBLINGS strand). Templates are
+  // still refused as movees (§9e, via computeReorderPre).
+  const stranded: { uuid: string; title: string }[] = [];
   if (scope === "upcoming-day") {
     const firstUuid = params.uuids[0];
     const first =
@@ -637,18 +649,15 @@ async function runDayCompound(
             .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
         : undefined;
     if (first?.startDate != null && first.startBucket === 0) {
+      const requested = new Set(params.uuids);
       const projectRows = deps.db
         .prepare(
-          "SELECT uuid FROM TMTask WHERE trashed = 0 AND status = 0 AND type = 1 " +
-            "AND startBucket = 0 AND startDate = ?",
+          "SELECT uuid, title FROM TMTask WHERE trashed = 0 AND status = 0 AND type = 1 " +
+            'AND startBucket = 0 AND startDate = ? ORDER BY todayIndex ASC, "index" ASC',
         )
-        .all(first.startDate) as { uuid: string }[];
-      if (projectRows.length > 0) {
-        problems.push(
-          `the day carries ${projectRows.length} scheduled project row(s) ` +
-            `(${projectRows.map((r) => r.uuid).join(", ")}) that cannot be parked (UPCORD1) — ` +
-            "reschedule or move them off the day, then re-run",
-        );
+        .all(first.startDate) as { uuid: string; title: string | null }[];
+      for (const r of projectRows) {
+        if (!requested.has(r.uuid)) stranded.push({ uuid: r.uuid, title: r.title ?? "" });
       }
     }
   }
@@ -671,7 +680,8 @@ async function runDayCompound(
       detail: `${scope} reorder rejected: ${problems.join("; ")}`,
       remediation:
         `reorder ${dayScopeLabel(scope)} to-dos that all share ONE future Upcoming day (mixed ` +
-        "dates, templates, and scheduled project rows are refused), at most " +
+        "dates and templates are refused; a same-day scheduled project row is left in place below " +
+        "the sorted block, not sorted), at most " +
         `${cap} in the day-group (set with \`things config set bounce-max-items\`)`,
     };
     auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
@@ -857,6 +867,15 @@ async function runDayCompound(
         ? "moved to the Trash (empty; one per invocation — the protocol never hard-deletes it)"
         : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
   ];
+  if (stranded.length > 0) {
+    // Placement-honesty note (PRJMIX): the sorted block is at the TOP of the day;
+    // the untouched project row(s) remain BELOW it in their prior relative order.
+    warnings.push(
+      `the day's to-dos were sorted and placed at the top of the day; ${stranded.length} same-day ` +
+        `scheduled project row(s) are not parkable (UPCORD1) so they remain below the sorted block ` +
+        `in their prior relative order: ${stranded.map((s) => s.uuid).join(", ")}`,
+    );
+  }
   return {
     kind: "ok",
     op: "reorder",
@@ -867,6 +886,7 @@ async function runDayCompound(
     undoToken: txnId,
     warnings,
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
+    ...(stranded.length > 0 && { stranded }),
   };
 }
 

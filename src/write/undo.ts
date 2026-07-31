@@ -1277,6 +1277,7 @@ export function planUndo(
         requested.scope === "loose-day" ||
         requested.scope === "area-day" ||
         requested.scope === "upcoming-day" ||
+        requested.scope === "tomorrow" ||
         requested.scope === "heading-day"
       ) {
         const values = ranked.map(([, r]) => r);

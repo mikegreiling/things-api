@@ -11,11 +11,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { UiCommand, UiRunResult } from "../../src/write/vectors/ui.ts";
 import {
   areaRowsInOrder,
+  areaTitleRank,
   boundaryAboveRow,
   boundaryBelowLast,
   correctedDropY,
   driveSidebarAreaReorder,
   findAreaRow,
+  findAreaRowNth,
   parseSidebarSnapshot,
   placementSatisfied,
   rowMatchesTitle,
@@ -64,6 +66,24 @@ describe("row identity", () => {
   it("findAreaRow refuses ambiguity (two rows carrying the title)", () => {
     const rows = [entityRow("A", 100), entityRow("A", 200)];
     expect(findAreaRow(rows, "A")).toBeNull();
+  });
+
+  it("findAreaRowNth picks the Nth same-titled row in visual (y) order (ORDFIN2 AXDRAG3)", () => {
+    const rows = [entityRow("A", 300), entityRow("B", 100), entityRow("A", 200)];
+    expect(findAreaRowNth(rows, "A", 0)?.y).toBe(200); // topmost A by y
+    expect(findAreaRowNth(rows, "A", 1)?.y).toBe(300);
+    expect(findAreaRowNth(rows, "A", 2)).toBeNull(); // only two A rows
+  });
+
+  it("areaTitleRank ranks a uuid among same-titled by (index,uuid) order; -1 when unique", () => {
+    const areas = [
+      { uuid: "u1", title: "Dupe" },
+      { uuid: "u2", title: "Solo" },
+      { uuid: "u3", title: "Dupe" },
+    ];
+    expect(areaTitleRank(areas, "u1", "Dupe")).toBe(0);
+    expect(areaTitleRank(areas, "u3", "Dupe")).toBe(1);
+    expect(areaTitleRank(areas, "u2", "Solo")).toBe(-1); // unique — no disambiguation
   });
 });
 

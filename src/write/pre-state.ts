@@ -808,7 +808,8 @@ export function computeReorderPre(
     params.scope === "loose-day" ||
     params.scope === "heading-day" ||
     params.scope === "area-day" ||
-    params.scope === "upcoming-day"
+    params.scope === "upcoming-day" ||
+    params.scope === "tomorrow"
       ? "todayIndex"
       : "index";
 
@@ -1088,9 +1089,9 @@ export function computeReorderPre(
       // ranked on todayIndex. Enumerated across ALL containers (parked as one unit
       // — the reorder.ts compound captures each member's origin, so the restore leg
       // re-homes it). Templates excluded by NOT_TEMPLATE_ROW; a requested template
-      // or a scheduled PROJECT row (type=1, not parkable — UPCORD1) is refused with
-      // a clear reason (a same-day PROJECT SIBLING is a fail-closed hazard the
-      // orchestrator surfaces, since it cannot be parked and would corrupt the axis).
+      // or a scheduled PROJECT row (type=1, not parkable — UPCORD1) is refused as a
+      // MOVEE here. An UNTOUCHED same-day project SIBLING is not refused — the
+      // orchestrator discloses it as a strand (PRJMIX: the block sorts above it).
       const firstUuid = params.uuids[0];
       const first =
         firstUuid !== undefined
@@ -1121,6 +1122,44 @@ export function computeReorderPre(
             uuid,
             "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
               "so cross-container day ordering cannot include it",
+          );
+        }
+      }
+      break;
+    }
+    case "tomorrow": {
+      // The whole TOMORROW day-group across ALL containers (ORDFIN2 TOMORROWLIST),
+      // ranked on todayIndex. `list "Tomorrow"` is a clean one-call native surface
+      // that ACCEPTS a scheduled PROJECT row inline (type=1, O12 analog) and re-
+      // ranks it in position — so members are type IN (0,1), and a project row is a
+      // valid MOVEE here (the ONLY reorder scope that accepts one on the day axis).
+      // The day is read off the first requested uuid; the planner guarantees it is
+      // tomorrow. Templates excluded by NOT_TEMPLATE_ROW.
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type IN (0, 1) AND startBucket = 0 AND startDate = ?",
+          [first.startDate],
+          "todayIndex",
+        );
+      }
+      // A repeating TEMPLATE gets the §9e teaching reason (the reorder SKIPS
+      // template rows) rather than the generic non-member reason.
+      for (const uuid of params.uuids) {
+        const t = db
+          .prepare("SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?")
+          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
+        if (t !== undefined && (t.rule !== null || t.repeater !== null)) {
+          rejectedCandidates.set(
+            uuid,
+            "is a repeating template — the private reorder SKIPS template rows (oddity §9e), " +
+              "so the Tomorrow day-sort cannot include it",
           );
         }
       }

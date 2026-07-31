@@ -15,6 +15,7 @@ import {
 } from "../model/dates.ts";
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
+import { isLooseRef } from "../read/pseudo-area.ts";
 import type { HazardId } from "./guards.ts";
 import type {
   ContainerRef,
@@ -1428,7 +1429,9 @@ const reorder: CommandSpec<"reorder"> = {
               ? `list "Inbox"`
               : params.scope === "someday"
                 ? `list "Someday"`
-                : `list "Today"`;
+                : params.scope === "tomorrow"
+                  ? `list "Tomorrow"`
+                  : `list "Today"`;
     const wire = pre.reorder?.wireList ?? params.uuids;
     if (params.scope === "someday") {
       // The Someday handler STACKS each sent id above the list's current top
@@ -2336,6 +2339,18 @@ const areaReorderSidebar: CommandSpec<"area.reorder"> = {
     ) {
       throw new RangeError(`invalid position "${params.position}" — expected first | last`);
     }
+    // The reserved `loose` pseudo-area ref (the derived area-less view) has no
+    // sidebar row, so it can be neither moved nor an anchor — refuse it by name
+    // with a specific message rather than a generic no-such-area error, matching
+    // the loose-pseudo-area write-refusal pattern (src/read/pseudo-area.ts).
+    for (const ref of [params.target, params.before, params.after]) {
+      if (ref !== undefined && isLooseRef(ref)) {
+        throw new RangeError(
+          "the loose pseudo-area is a derived view — it has no sidebar row and cannot be " +
+            "reordered",
+        );
+      }
+    }
     const pre = emptyPreState();
     pre.entityTarget = resolveArea(db, { uuid: params.target, title: params.target });
     const ref = params.before ?? params.after;
@@ -2345,17 +2360,25 @@ const areaReorderSidebar: CommandSpec<"area.reorder"> = {
     if (target != null && dest != null && target.uuid === dest.uuid) {
       throw new RangeError("the destination area is the area being moved");
     }
-    // The sidebar drag addresses rows by their VISIBLE NAME — a duplicated
-    // area title makes the row ambiguous, so refuse up front.
+    // The sidebar drag addresses rows by their VISIBLE NAME. A DUPLICATE area
+    // title is now handled by positional disambiguation in the ui-vector driver
+    // (ORDFIN2 AXDRAG3: the intended uuid's Nth same-titled row is grabbed by the
+    // `(index, uuid)` ASC law, and the post-gesture DB assert + self-invert catch
+    // a wrong grab) — so a uuid-targeted ref whose title is shared is NO LONGER
+    // refused here. A duplicate NAME ref stays refused upstream (resolveArea
+    // returns the ambiguity candidates). Only a SANITY CAP remains: too many
+    // same-titled rows could make the positional grab loop unreliable, so refuse
+    // rather than churn. (WIRED — lab-cert pending an AXDRAG4 VM sitting.)
+    const SAME_TITLE_CAP = 8;
     for (const area of [target, dest]) {
       if (area == null) continue;
       const dup = db
         .prepare("SELECT COUNT(*) AS n FROM TMArea WHERE title = ? COLLATE NOCASE")
         .get(area.title) as { n: number };
-      if (dup.n > 1) {
+      if (dup.n > SAME_TITLE_CAP) {
         throw new RangeError(
-          `area title "${area.title}" is shared by ${dup.n} areas — the sidebar move addresses ` +
-            "areas by their visible name; rename one first",
+          `area title "${area.title}" is shared by ${dup.n} areas (over the ${SAME_TITLE_CAP}-row ` +
+            "positional-disambiguation cap) — rename some, or reorder by a uniquely-titled anchor",
         );
       }
     }

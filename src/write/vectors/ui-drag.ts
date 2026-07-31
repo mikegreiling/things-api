@@ -495,6 +495,65 @@ export function findAreaRow(rows: SidebarRowInfo[], title: string): SidebarRowIn
 }
 
 /**
+ * The Nth (0-based) sidebar row carrying `title`, in visual (y) order — the
+ * positional disambiguation for DUPLICATE area titles (ORDFIN2 AXDRAG3: sidebar
+ * rows render in `TMArea."index" ASC, uuid ASC`, so the Nth same-titled AX row
+ * == the Nth same-titled DB area). Null when fewer than `ordinal + 1` rows carry
+ * the title in the current snapshot (e.g. a same-titled row scrolled off).
+ */
+export function findAreaRowNth(
+  rows: SidebarRowInfo[],
+  title: string,
+  ordinal: number,
+): SidebarRowInfo | null {
+  const matches = rows.filter((r) => rowMatchesTitle(r.text, title)).toSorted((a, b) => a.y - b.y);
+  return matches[ordinal] ?? null;
+}
+
+/**
+ * The rank (0-based) of `uuid` among all areas that share `title`, by the DB's
+ * canonical `(index, uuid)` ASC order (AXDRAG3) — i.e. which same-titled sidebar
+ * row IS this uuid. Returns -1 when the title is UNIQUE (no disambiguation
+ * needed) or the uuid is not among the same-titled set. Recomputed from LIVE
+ * state each hop so it stays correct as the dragged area crosses a same-titled
+ * sibling (its rank shifts in lockstep with its visual row).
+ */
+export function areaTitleRank(
+  areas: { uuid: string; title: string }[],
+  uuid: string,
+  title: string,
+): number {
+  const same = areas.filter((a) => a.title === title);
+  if (same.length <= 1) return -1;
+  return same.findIndex((a) => a.uuid === uuid);
+}
+
+/** Resolve an area's sidebar row by title, disambiguating duplicates by rank. */
+function resolveAreaRow(
+  rows: SidebarRowInfo[],
+  title: string,
+  rank: number,
+): SidebarRowInfo | null {
+  return rank < 0 ? findAreaRow(rows, title) : findAreaRowNth(rows, title, rank);
+}
+
+/** The Nth (0-based) entry carrying `title` in a visual-ordered area-row list. */
+function nthByTitle(
+  ordered: { title: string; row: SidebarRowInfo }[],
+  title: string,
+  ordinal: number,
+): number {
+  let seen = 0;
+  for (let i = 0; i < ordered.length; i++) {
+    if (ordered[i]?.title === title) {
+      if (seen === ordinal) return i;
+      seen += 1;
+    }
+  }
+  return -1;
+}
+
+/**
  * The source's group span: lifting an area collapses its row AND its visible
  * nested project rows. Computed from resolved frames as the distance from the
  * source area row's top to the NEXT area row's top (falls back to the median
@@ -525,6 +584,11 @@ export function staticBoundaryY(
   allRows: SidebarRowInfo[],
   sourceTitle: string,
   placement: SidebarPlacement,
+  // Rank (0-based) of a DUPLICATE-titled anchor among its same-titled set, or -1
+  // when the anchor title is unique. Disambiguates which same-titled anchor row
+  // to drop against (ORDFIN2 AXDRAG3); indexed into the full ordered list, not
+  // `others`, so it is correct even when the source shares the anchor's title.
+  anchorRank = -1,
 ): { y: number; anchor: string } | { error: string } {
   const others = orderedAreaRows.filter((a) => a.title !== sourceTitle);
   if (others.length === 0) return { error: "no other area rows resolved in the sidebar" };
@@ -533,6 +597,11 @@ export function staticBoundaryY(
     if (y === null) return { error: "no sidebar rows resolved" };
     return { y, anchor: "the end of the sidebar list" };
   };
+  // Locate the anchor row in the full ordered list (rank-aware for duplicates).
+  const anchorIndexInOrdered = (title: string): number =>
+    anchorRank >= 0
+      ? nthByTitle(orderedAreaRows, title, anchorRank)
+      : orderedAreaRows.findIndex((a) => a.title === title);
   switch (placement.kind) {
     case "first": {
       const first = others[0] as { title: string; row: SidebarRowInfo };
@@ -541,15 +610,16 @@ export function staticBoundaryY(
     case "last":
       return belowLast();
     case "before": {
-      const ref = others.find((a) => a.title === placement.title);
+      const i = anchorIndexInOrdered(placement.title);
+      const ref = i >= 0 ? orderedAreaRows[i] : undefined;
       if (ref === undefined)
         return { error: `the sidebar row for "${placement.title}" did not resolve` };
       return { y: boundaryAboveRow(allRows, ref.row), anchor: ref.title };
     }
     case "after": {
-      const refIdx = others.findIndex((a) => a.title === placement.title);
-      if (refIdx < 0) return { error: `the sidebar row for "${placement.title}" did not resolve` };
-      const next = others[refIdx + 1];
+      const i = anchorIndexInOrdered(placement.title);
+      if (i < 0) return { error: `the sidebar row for "${placement.title}" did not resolve` };
+      const next = orderedAreaRows[i + 1];
       if (next === undefined) return belowLast();
       return { y: boundaryAboveRow(allRows, next.row), anchor: next.title };
     }
@@ -733,8 +803,12 @@ function planDrop(
   spec: SidebarDragSpec,
   areaTitles: readonly string[],
   placement: SidebarPlacement,
+  // DUPLICATE-title disambiguation (ORDFIN2 AXDRAG3), recomputed from live state
+  // by the driver each hop: `sourceRank` = which same-titled row is the target,
+  // `anchorRank` = which same-titled row is the before/after anchor; -1 = unique.
+  ranks: { sourceRank: number; anchorRank: number } = { sourceRank: -1, anchorRank: -1 },
 ): PlannedDrop | { error: string } {
-  const source = findAreaRow(snap.rows, spec.targetTitle);
+  const source = resolveAreaRow(snap.rows, spec.targetTitle, ranks.sourceRank);
   if (source === null) {
     return {
       error:
@@ -744,7 +818,13 @@ function planDrop(
     };
   }
   const ordered = areaRowsInOrder(snap.rows, areaTitles);
-  const boundary = staticBoundaryY(ordered, snap.rows, spec.targetTitle, placement);
+  const boundary = staticBoundaryY(
+    ordered,
+    snap.rows,
+    spec.targetTitle,
+    placement,
+    ranks.anchorRank,
+  );
   if ("error" in boundary) return boundary;
   const span = sourceGroupSpan(ordered, spec.targetTitle, snap.rows);
   const sourceCenter = source.y + source.h / 2;
@@ -828,6 +908,21 @@ export async function driveSidebarAreaReorder(
   const pre = ctx.state();
   const preTies = hasRankTies(pre);
   const areaTitles = pre.areas.map((a) => a.title);
+
+  // DUPLICATE-title positional disambiguation (ORDFIN2 AXDRAG3). Recomputed from
+  // LIVE state each hop so the target's rank among its same-titled siblings stays
+  // correct as it drags past one (its `(index, uuid)` rank and its visual row
+  // shift together). -1 on both = a unique-titled move (the ordinary path).
+  const ranksNow = (): { sourceRank: number; anchorRank: number } => {
+    const areas = ctx.state().areas;
+    const p = spec.placement;
+    return {
+      sourceRank: areaTitleRank(areas, spec.targetUuid, spec.targetTitle),
+      anchorRank:
+        p.kind === "before" || p.kind === "after" ? areaTitleRank(areas, p.uuid, p.title) : -1,
+    };
+  };
+  const isDuplicateMove = ranksNow().sourceRank >= 0 || ranksNow().anchorRank >= 0;
 
   if (positionOf(pre, spec.targetUuid) < 0) {
     return { ok: false, detail: `area ${spec.targetUuid} no longer exists` };
@@ -913,7 +1008,9 @@ export async function driveSidebarAreaReorder(
       const visibleSlots = Math.max(1, Math.floor(viewport.h / pitch) - 2);
       hopCap = Math.min(MAX_HOPS_CEILING, Math.ceil(pre.areas.length / visibleSlots) + 2);
     }
-    const finalPlan = planDrop(snap, spec, areaTitles, spec.placement);
+    // Recompute duplicate-title ranks from live state for THIS hop's planning.
+    const ranks = ranksNow();
+    const finalPlan = planDrop(snap, spec, areaTitles, spec.placement, ranks);
     if ("error" in finalPlan) {
       if (!resolveRetried) {
         resolveRetried = true;
@@ -934,7 +1031,7 @@ export async function driveSidebarAreaReorder(
       if (!inBand(grab.y, viewport) || !inBand(finalPlan.dropY, viewport)) {
         // pre-scroll must land before the drag
         ready = await scrollUntil(ctx, (s) => {
-          const p = planDrop(s, spec, areaTitles, spec.placement);
+          const p = planDrop(s, spec, areaTitles, spec.placement, ranks);
           if ("error" in p || s.viewport === null) return null;
           const g = grabPoint(p.source);
           if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
@@ -944,7 +1041,7 @@ export async function driveSidebarAreaReorder(
         });
       }
       if (ready !== null) {
-        const plan = planDrop(ready, spec, areaTitles, spec.placement);
+        const plan = planDrop(ready, spec, areaTitles, spec.placement, ranks);
         if (!("error" in plan) && ready.viewport !== null) {
           const g = grabPoint(plan.source);
           if (inBand(g.y, ready.viewport) && inBand(plan.dropY, ready.viewport)) {
@@ -975,6 +1072,20 @@ export async function driveSidebarAreaReorder(
               if (!finalRetried) {
                 finalRetried = true;
                 continue;
+              }
+              // A DUPLICATE-title move that never reached the INTENDED uuid's slot
+              // may have dragged the WRONG same-titled area — self-invert (the
+              // existing recovery drags the sidebar back to the pre-op order) and
+              // report honestly, rather than leaving a mystery move behind.
+              if (isDuplicateMove) {
+                return refuseOrRecover(
+                  ctx,
+                  pre,
+                  spec,
+                  hops,
+                  `the drop never reached the intended area's slot — with a duplicate area title ` +
+                    `the positional grab may have moved a same-titled sibling`,
+                );
               }
               return abortPartial(
                 ctx,
@@ -1007,7 +1118,7 @@ export async function driveSidebarAreaReorder(
         ctx,
         (s) => {
           if (s.viewport === null) return null;
-          const src = findAreaRow(s.rows, spec.targetTitle);
+          const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
           if (src === null) return null;
           const g = grabPoint(src);
           if (inBand(g.y, s.viewport)) return null;
@@ -1015,12 +1126,12 @@ export async function driveSidebarAreaReorder(
         },
         (s) => {
           if (s.viewport === null) return false;
-          const src = findAreaRow(s.rows, spec.targetTitle);
+          const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
           return src !== null && inBand(grabPoint(src).y, s.viewport);
         },
       );
       if (grabbable !== null && grabbable.viewport !== null) {
-        const src = findAreaRow(grabbable.rows, spec.targetTitle);
+        const src = resolveAreaRow(grabbable.rows, spec.targetTitle, ranks.sourceRank);
         const anchor = rung2AnchorTitle(
           grabbable.rows,
           areaTitles,
@@ -1029,7 +1140,7 @@ export async function driveSidebarAreaReorder(
         );
         if (src !== null && anchor !== undefined) {
           const g = grabPoint(src);
-          const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement);
+          const plan2 = planDrop(grabbable, spec, areaTitles, spec.placement, ranks);
           const travel = "error" in plan2 ? viewport.h * 4 : Math.abs(plan2.dropY - g.y);
           // TRAVEL CAP (AXDRAG2-c): held-scroll is proven up to ~1.5 viewport
           // heights; beyond that the app's AX mirror can lose row names for
@@ -1093,7 +1204,7 @@ export async function driveSidebarAreaReorder(
       ctx,
       (s) => {
         if (s.viewport === null) return null;
-        const src = findAreaRow(s.rows, spec.targetTitle);
+        const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
         if (src === null) return null;
         const g = grabPoint(src);
         const edge = s.viewport.h * 0.15; // park near the trailing edge (frame fraction)
@@ -1105,7 +1216,7 @@ export async function driveSidebarAreaReorder(
       // Scroll pinned before reaching the parking spot: grabbable is enough.
       (s) => {
         if (s.viewport === null) return false;
-        const src = findAreaRow(s.rows, spec.targetTitle);
+        const src = resolveAreaRow(s.rows, spec.targetTitle, ranks.sourceRank);
         return src !== null && inBand(grabPoint(src).y, s.viewport);
       },
     );
@@ -1113,7 +1224,10 @@ export async function driveSidebarAreaReorder(
       return refuseOrRecover(ctx, pre, spec, hops, "could not scroll the area's row into view");
     }
     const ordered = areaRowsInOrder(parked.rows, areaTitles);
-    const srcIdx = ordered.findIndex((a) => a.title === spec.targetTitle);
+    const srcIdx =
+      ranks.sourceRank < 0
+        ? ordered.findIndex((a) => a.title === spec.targetTitle)
+        : nthByTitle(ordered, spec.targetTitle, ranks.sourceRank);
     const source = ordered[srcIdx];
     if (srcIdx < 0 || source === undefined) {
       return refuseOrRecover(ctx, pre, spec, hops, "the area's row vanished after scrolling");
@@ -1263,50 +1377,82 @@ async function refuseOrRecover(
   why: string,
 ): Promise<DragDriveResult> {
   const now = ctx.state();
-  const moved =
-    positionOf(now, spec.targetUuid) !== positionOf(pre, spec.targetUuid) ||
+  const orderChanged =
     now.areas.map((a) => a.uuid).join(",") !== pre.areas.map((a) => a.uuid).join(",");
-  if (!moved || hasRankTies(pre)) {
+  if (!orderChanged || hasRankTies(pre)) {
     return {
       ok: false,
       detail: `${why}. No sidebar change was left behind${hops > 0 ? ` after ${hops} hop(s)` : ""}.`,
     };
   }
-  const preIdx = positionOf(pre, spec.targetUuid);
+  // Which area was actually displaced? Normally the target; but a DUPLICATE-title
+  // positional grab may have moved a SAME-TITLED SIBLING instead (the target's
+  // own slot is unchanged). Restore whichever uuid drifted farthest from its
+  // pre-op slot — that is the one the erroneous drag moved (ORDFIN2 AXDRAG3
+  // self-invert). Its title equals the target's when it is a mis-grabbed sibling.
+  const preIndex = (uuid: string): number => positionOf(pre, uuid);
+  let displaced = spec.targetUuid;
+  let worstDrift = Math.abs(positionOf(now, spec.targetUuid) - preIndex(spec.targetUuid));
+  if (worstDrift === 0) {
+    for (const a of pre.areas) {
+      const drift = Math.abs(positionOf(now, a.uuid) - preIndex(a.uuid));
+      if (drift > worstDrift) {
+        worstDrift = drift;
+        displaced = a.uuid;
+      }
+    }
+  }
+  const displacedRow = pre.areas.find((a) => a.uuid === displaced);
+  const preIdx = preIndex(displaced);
   const successor = pre.areas[preIdx + 1];
   const placement: SidebarPlacement =
     successor !== undefined
       ? { kind: "before", uuid: successor.uuid, title: successor.title }
       : { kind: "last" };
+  // A restore spec addressing the DISPLACED area (target or mis-grabbed sibling).
+  const restoreSpec: SidebarDragSpec = {
+    targetUuid: displaced,
+    targetTitle: displacedRow?.title ?? spec.targetTitle,
+    placement,
+  };
+  const restoreRanks = (): { sourceRank: number; anchorRank: number } => {
+    const areas = ctx.state().areas;
+    return {
+      sourceRank: areaTitleRank(areas, restoreSpec.targetUuid, restoreSpec.targetTitle),
+      anchorRank:
+        successor !== undefined ? areaTitleRank(pre.areas, successor.uuid, successor.title) : -1,
+    };
+  };
   const areaTitles = pre.areas.map((a) => a.title);
   let recovered = false;
   // A bounded, single-pass recovery: same rung-1 mechanics, no hop budget.
   const snap = await scrollUntil(ctx, (s) => {
-    const p = planDrop(s, spec, areaTitles, placement);
+    const p = planDrop(s, restoreSpec, areaTitles, placement, restoreRanks());
     if ("error" in p || s.viewport === null) return null;
     const g = grabPoint(p.source);
     if (inBand(g.y, s.viewport) && inBand(p.dropY, s.viewport)) return null;
     return s.viewport.y + s.viewport.h / 2 - (g.y + p.dropY) / 2;
   });
   if (snap !== null && snap.viewport !== null) {
-    const plan = planDrop(snap, spec, areaTitles, placement);
+    const plan = planDrop(snap, restoreSpec, areaTitles, placement, restoreRanks());
     if (!("error" in plan)) {
       const g = grabPoint(plan.source);
       if (inBand(g.y, snap.viewport) && inBand(plan.dropY, snap.viewport)) {
         const landed = await performDrag(ctx, plan);
         if (landed) {
-          const state = await pollState(ctx, (s) => positionOf(s, spec.targetUuid) === preIdx);
+          const state = await pollState(ctx, (s) => positionOf(s, displaced) === preIdx);
           recovered = state !== null;
         }
       }
     }
   }
+  const which = displaced === spec.targetUuid ? "area" : "same-titled area the drag actually moved";
   return {
     ok: false,
     recovered,
     detail: recovered
-      ? `${why}. The area was dragged back to its previous position (verified).`
-      : `${why}. RECOVERY DID NOT VERIFY: the area may be at an intermediate position after ` +
+      ? `${why}. The ${which} was dragged back to its previous position (verified).`
+      : `${why}. RECOVERY DID NOT VERIFY: the ${which} may be at an intermediate position after ` +
         `${hops} hop(s) — check the sidebar and re-run, or move it back in the app.`,
   };
 }
