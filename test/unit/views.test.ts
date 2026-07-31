@@ -684,7 +684,16 @@ describe("projectView", () => {
     expect(view.repeating.map((i) => i.title)).toEqual(["tpl"]);
     expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
     expect(view.logged.map((i) => i.title)).toEqual(["done"]);
-    expect(view.trashed.map((i) => i.title)).toEqual(["junk"]);
+    // Trashed children are excluded entirely (GUI-faithful) — no `trashed` bucket.
+    const allChildTitles = [
+      ...view.active,
+      ...view.headings.flatMap((h) => h.items),
+      ...view.scheduled.flatMap((g) => g.items),
+      ...view.someday,
+      ...view.repeating,
+      ...view.logged,
+    ].map((i) => i.title);
+    expect(allChildTitles).not.toContain("junk");
   });
 
   it("nests headed scheduled/someday/repeating children under their heading, not at project level (§9 fidelity fix)", () => {
@@ -2114,13 +2123,14 @@ describe("changesView (Phase 13)", () => {
 });
 
 describe("areaView", () => {
-  it("segments active/projects/later/logged; resolves by title; sidebar project order", () => {
+  it("segments active/projects/later; excludes logged; resolves by title; sidebar project order", () => {
     fx = buildFixtureDb();
     const area = seedArea(fx.db, "Home");
     seedTodo(fx.db, { title: "active-1", area, index: 2 });
     seedTodo(fx.db, { title: "sched", area, startDate: "2026-07-09", start: "someday" });
     seedTodo(fx.db, { title: "incub", area, start: "someday" });
     seedTodo(fx.db, { title: "done", area, status: "completed", stopDate: 100 });
+    seedTodo(fx.db, { title: "junk", area, trashed: true });
     seedProject(fx.db, { title: "proj-b", area, index: 9 });
     seedProject(fx.db, { title: "proj-a", area, index: 3 });
     seedProject(fx.db, { title: "elsewhere" });
@@ -2131,7 +2141,17 @@ describe("areaView", () => {
     expect(view.projects.map((i) => i.title)).toEqual(["proj-a", "proj-b"]);
     expect(view.scheduled[0]?.items.map((i) => i.title)).toEqual(["sched"]);
     expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
-    expect(view.logged.map((i) => i.title)).toEqual(["done"]);
+    // No `logged`/`trashed` buckets: the area logbook is `things logbook --area`,
+    // trashed rows live in `things trash`. Neither "done" nor "junk" surfaces here.
+    expect("logged" in view).toBe(false);
+    const allTitles = [
+      ...view.active,
+      ...view.scheduled.flatMap((g) => g.items),
+      ...view.someday,
+      ...view.repeating,
+    ].map((i) => i.title);
+    expect(allTitles).not.toContain("done");
+    expect(allTitles).not.toContain("junk");
   });
 
   it("throws on unknown and ambiguous area references", () => {

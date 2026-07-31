@@ -49,26 +49,19 @@ import {
 
 export interface AreaShowOpts {
   showLater?: boolean;
-  /** Commander optional-value flag: true when bare, the raw string when given a count. */
+  /**
+   * REMOVED flag, kept as a parse target so `--show-logged` earns a redirect
+   * (to `things logbook --area <ref>`) rather than a bare unknown-option error.
+   */
   showLogged?: boolean | string;
   /**
    * Per-section caps: `project` bounds the project-ROWS section, `area` the
-   * direct-to-dos section (null = uncapped). The toggled later/logged
-   * sections keep their own existing bounds.
+   * direct-to-dos section (null = uncapped). The toggled later
+   * section keeps its own existing bounds.
    */
   limits?: GroupedLimits;
   /** The user's invocation, echoed by the per-section truncation footers. */
   hintBase?: string;
-}
-
-/** Bare `--show-logged` shows this many recent entries (areas accumulate thousands). */
-const RECENT_LOGGED_DEFAULT = 15;
-
-function loggedCount(showLogged: boolean | string | undefined): number {
-  if (showLogged === undefined) return 0;
-  if (showLogged === true) return RECENT_LOGGED_DEFAULT;
-  const n = Number(showLogged);
-  return Number.isInteger(n) && n > 0 ? n : RECENT_LOGGED_DEFAULT;
 }
 
 /**
@@ -76,13 +69,14 @@ function loggedCount(showLogged: boolean | string | undefined): number {
  * to-dos. `--show-later` reveals the GUI's toggled sections — Upcoming
  * (future-scheduled projects, to-dos, and repeating templates intermixed in
  * date order) and Someday (someday projects as a leading block, then
- * someday to-dos). `--show-logged` reveals the full logbook.
+ * someday to-dos). The area logbook is NOT a view section — it is the bounded
+ * query `things logbook --area <ref>`; trashed rows live in `things trash`.
  *
  * `view` is the already-bounded card (its ACTIVE project rows and direct to-dos
- * capped; scheduled/someday project rows and the later/logged/trashed sections
- * intact) and `grouped` the per-block metadata carrying each capped section's
- * pre-cap total — so the "… N more" footers derive from metadata, never a
- * pre-cap copy of the view.
+ * capped; scheduled/someday project rows and the later section intact) and
+ * `grouped` the per-block metadata carrying each capped section's pre-cap total
+ * — so the "… N more" footers derive from metadata, never a pre-cap copy of the
+ * view.
  */
 export function renderAreaView(
   view: AreaView,
@@ -104,20 +98,18 @@ export function renderAreaView(
     ...view.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
   ].toSorted((a, b) => a.date.localeCompare(b.date));
 
-  const logged = view.logged.slice(0, loggedCount(opts.showLogged));
   const shown: Array<Todo | Project> = [
     ...activeProjects,
     ...view.active,
     ...(opts.showLater === true
       ? [...upcoming.map((u) => u.item), ...somedayProjects, ...view.someday]
       : []),
-    ...logged,
   ];
   const w = uuidDisplayWidth(shown);
   // Per-section caps (this view's sections are containers, so there is no
   // strict total limit): the project-ROWS block and the direct-to-dos block
   // truncate independently, each with its own exact-count footer. The card
-  // preamble and the toggled later/logged sections are never capped. The pre-cap
+  // preamble and the toggled later section are never capped. The pre-cap
   // totals come from the metadata; `limits` supplies the footer's doubling.
   const limits = opts.limits ?? { area: null, project: null };
   const projectsBlock = truncation.blocks?.find((b) => b.kind === "projects");
@@ -125,7 +117,7 @@ export function renderAreaView(
   const hiddenProjects = projectsBlock ? projectsBlock.total - projectsBlock.shown : 0;
   const hiddenActive = activeBlock ? activeBlock.total - activeBlock.shown : 0;
   // The `loose` pseudo-area renders like an area card but has no uuid/uri/tags
-  // and no `logbook --area` archive (the NULL area is a derived view).
+  // (the NULL area is a derived view).
   const isLoose = view.area === null;
   const areaTitle = view.area?.title ?? "Loose";
   // The user's invocation, echoed by every disclosure hint (falls back to a
@@ -188,38 +180,11 @@ export function renderAreaView(
         disclosureHint(hiddenLater, "later item", [{ command: `${base} --show-later` }]),
       );
   }
-  // The full archive belongs to `things logbook --area <ref>` — echoed
-  // ready-to-paste with the real area name, like every other drill hint. The
-  // loose pseudo-area has no `logbook --area` archive, so it reveals more with
-  // `--show-logged <n>` (the NULL area accumulates far fewer logged rows).
-  const logbookCmd = isLoose ? null : `things logbook --area ${quoteTitle(areaTitle)}`;
-  if (logged.length > 0) {
-    // Truncation is loud: areas accumulate years of history. The header keeps
-    // the shown-of-total count for orientation; the actionable drill rides a
-    // section footer (matching the other truncated sections), never the header.
-    const more = view.logged.length - logged.length;
-    const header =
-      more > 0
-        ? `── Logged (${logged.length} of ${view.logged.length}) ──`
-        : `── Logged (${view.logged.length}) ──`;
-    lines.push("", bold(header), ...logged.map(fmt));
-    if (more > 0)
-      lines.push(
-        dim(`… ${more} more — \`${logbookCmd ?? `${base} --show-logged ${view.logged.length}`}\``),
-      );
-  } else if (view.logged.length > 0) {
-    // Hidden-section placeholder: `--show-logged` reveals only the RECENT 15
-    // (areas accumulate years), so it is labeled; the logbook drill reads its
-    // own effect and needs none.
-    lines.push(
-      "",
-      disclosureHint(view.logged.length, "logged item", [
-        { label: "recent", command: `${base} --show-logged` },
-        ...(logbookCmd !== null ? [{ command: logbookCmd }] : []),
-      ]),
-    );
-  }
-  if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
+  // The area logbook is not a card section — it is the bounded query
+  // `things logbook --area <ref>` (a real area only; the loose pseudo-area
+  // accumulates no `logbook --area` archive). Trashed rows live in
+  // `things trash`. Neither renders here.
+  if (!isLoose) lines.push("", dim(`logbook: \`things logbook --area ${quoteTitle(areaTitle)}\``));
   return lines;
 }
 
@@ -248,6 +213,15 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
     usageError(
       opts,
       "--limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all",
+    );
+    return;
+  }
+  if (opts.showLogged !== undefined) {
+    // The area logbook is a bounded QUERY, not a view section: an area is an
+    // unbounded accumulator, its logbook a windowed lookup.
+    usageError(
+      opts,
+      `area logbook lives in \`things logbook --area ${shellQuote(ref)}\` (bound with --since/--until/--limit)`,
     );
     return;
   }
@@ -317,15 +291,15 @@ export function registerAreaCommands(program: Command): void {
     .description(
       "Composite area view mirroring the native UI: active projects first, then the " +
         "area's direct to-dos. --show-later adds the Upcoming (date-ordered) and " +
-        "Someday sections; --show-logged adds the full logbook. Tag filters match rows " +
-        "directly and never descend into project contents. Target by uuid or unique name, " +
-        "or the reserved word `loose` for the area-less items (the null-area composite).",
+        "Someday sections. The area logbook is not a section here — read it with " +
+        "`things logbook --area <ref>`. Tag filters match rows directly and never " +
+        "descend into project contents. Target by uuid or unique name, or the reserved " +
+        "word `loose` for the area-less items (the null-area composite).",
     )
     .option("--show-later", "include Upcoming and Someday sections")
-    .option(
-      "--show-logged [n]",
-      "include the n most recently logged items (bare flag = 15; full history via `things logbook --area`)",
-    )
+    // Removed: the area logbook is a bounded query. Kept hidden so the flag
+    // earns a redirect (to `things logbook --area <ref>`) not an unknown-option.
+    .addOption(new Option("--show-logged [n]").hideHelp())
     .option("--project-limit <n>", `maximum project rows to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--overdue", "only rows whose own deadline is past (due today is not overdue)")

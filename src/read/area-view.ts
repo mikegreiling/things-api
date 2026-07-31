@@ -1,7 +1,9 @@
 /**
  * Composite area view mirroring the native UI: the area's direct to-dos
  * (active first), its projects as rows in sidebar order, later items
- * (scheduled by date / repeating templates / someday), logged, trashed.
+ * (scheduled by date / repeating templates / someday). Trashed children are
+ * excluded entirely (GUI-faithful — §6½/PLOG1-a) and the area logbook is a
+ * bounded QUERY (`things logbook --area <ref>`), not a view section.
  * Structural twin of project-view.ts; area to-dos are never headed.
  */
 import type { DatabaseSync } from "node:sqlite";
@@ -29,8 +31,6 @@ export interface AreaView {
   someday: Todo[];
   /** Repeating template rows owned by this area (invisible in list views). */
   repeating: Todo[];
-  logged: Todo[];
-  trashed: Todo[];
 }
 
 // The area card splits its open projects into three display buckets by their
@@ -151,7 +151,7 @@ export function areaView(
 
   const todoRows = fetchTaskRows(
     db,
-    `t.type = 0 AND ${todoAreaSql}${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
+    `t.type = 0 AND t.trashed = 0 AND ${todoAreaSql}${overdueSql}${tf.sql} ORDER BY t."index" ASC`,
     [...todoAreaBinds, ...overdueBinds, ...tf.binds],
   );
   const todoTags = tagsOf(todoRows);
@@ -168,23 +168,17 @@ export function areaView(
   const scheduledRows: Array<{ date: string; ti: number; todo: Todo }> = [];
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
-  const logged: Todo[] = [];
-  const trashed: Todo[] = [];
 
   for (const { row: todoRow, todo } of todos) {
-    if (todoRow.trashed === 1) {
-      trashed.push(todo);
-      continue;
-    }
     if (todo.repeating.isTemplate) {
       repeating.push(todo);
       continue;
     }
     if (todoRow.status !== 0) {
       // Completion ≠ logged: closed-but-unswept items stay checked in the
-      // active block, like the GUI.
-      if (todo.logged) logged.push(todo);
-      else active.push(todo);
+      // active block, like the GUI. Logged rows (past the log boundary) are
+      // NOT a view section — they live in `things logbook --area <ref>`.
+      if (!todo.logged) active.push(todo);
       continue;
     }
     if (todoRow.start === 2 && todoRow.startDate === null) {
@@ -202,7 +196,6 @@ export function areaView(
     active.push(todo);
   }
 
-  logged.sort((a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0));
   const scheduled: IsoDateGroup<Todo>[] = [];
   // Within a day the UI sorts by todayIndex ASC (Upcoming drag order).
   for (const { date, todo } of scheduledRows.toSorted(
@@ -213,5 +206,5 @@ export function areaView(
     else scheduled.push({ date, items: [todo] });
   }
 
-  return { area, active, projects, scheduled, someday, repeating, logged, trashed };
+  return { area, active, projects, scheduled, someday, repeating };
 }

@@ -174,6 +174,22 @@ describe("project.reopen (P02/P05)", () => {
     expect(result.kind).toBe("blocked");
     expect(calls).toHaveLength(0);
   });
+
+  it("resolves a COMPLETED project BY NAME — reopen's non-open opt-in (its whole point)", async () => {
+    const proj = seedProject(fixture.db, { title: "Reopen Me", status: "completed" });
+    const { vector, calls } = fakeVector("url-scheme", URL_MATRIX, () => touch(proj, "status = 0"));
+    const result = await runMutation(deps([vector]), "project.reopen", { uuid: "Reopen Me" });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain(`update-project?id=${proj}&completed=false`);
+  });
+
+  it("a NON-reopen verb refuses a completed project BY NAME (open-only) with a by-uuid hint", async () => {
+    seedProject(fixture.db, { title: "Done By Name", status: "completed" });
+    const { vector } = fakeVector("url-scheme", URL_MATRIX, null);
+    await expect(
+      runMutation(deps([vector]), "project.update", { uuid: "Done By Name", title: "x" }),
+    ).rejects.toThrow(/completed project.*target it by uuid/s);
+  });
 });
 
 describe("runProjectReopen composite (P03 cascade window)", () => {

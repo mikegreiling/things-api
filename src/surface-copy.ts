@@ -59,7 +59,7 @@ export const PROJECT_LIMIT_DESC = `items shown per project block before truncati
 export const GROUPED_ALL_DESC = "show every item in every group (no per-block caps)";
 
 /** Shared `--area`/`area` view-filter description (restrict a view to one area). */
-export const AREA_FILTER_DESC = `restrict to one area: its direct items and its projects' children (${REF_FORMAT})`;
+export const AREA_FILTER_DESC = `restrict to one area: its direct items and its projects' children (${REF_FORMAT}, or \`loose\` for the area-less items)`;
 
 /**
  * The omit-empty result note appended to every read tool description: optional

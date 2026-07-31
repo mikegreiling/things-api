@@ -158,7 +158,9 @@ const GUARDS: Record<HazardId, GuardFn> = {
     const problems: string[] = [];
     if (pre.destProject !== null && pre.destProject.resolved === null) {
       problems.push(
-        pre.destProject.matches > 1 ? "project reference is ambiguous" : "project not found",
+        pre.destProject.matches > 1
+          ? "project reference is ambiguous"
+          : `project not found${pre.destProject.deadHint ?? ""}`,
       );
     }
     if (pre.destArea !== null && pre.destArea.resolved === null) {

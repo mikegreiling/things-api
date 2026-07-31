@@ -443,10 +443,11 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(projRow["stage"]).toBe("anytime");
     // The area node keeps its identity; its tags fold to names.
     expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: ["focus"] });
-    // The renamed buckets exist; the old names are gone.
-    for (const k of ["anytime", "upcoming", "someday", "logbook", "trash"])
-      expect(k in out).toBe(true);
-    for (const k of ["active", "scheduled", "repeating", "logged", "trashed"])
+    // The renamed live buckets exist; the old names are gone. An area carries NO
+    // `logbook` or `trash` bucket (the logbook is `things logbook --area`, trash
+    // is `things trash`).
+    for (const k of ["anytime", "upcoming", "someday"]) expect(k in out).toBe(true);
+    for (const k of ["active", "scheduled", "repeating", "logged", "trashed", "logbook", "trash"])
       expect(k in out).toBe(false);
   });
 
@@ -509,9 +510,11 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect("project" in anyChild).toBe(false);
     expect("area" in anyChild).toBe(false);
     expect("stage" in anyChild).toBe(false);
-    // logbook / trash buckets (renamed) carry the closed rows; old keys gone.
+    // logbook (renamed) carries the logged rows; the project view has NO `trash`
+    // bucket — trashed children live only in `things trash` (the seeded
+    // `gone-trash` row is dropped entirely).
     expect((out["logbook"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-log"]);
-    expect((out["trash"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-trash"]);
+    expect("trash" in out).toBe(false);
     for (const k of ["active", "scheduled", "repeating", "logged", "trashed"])
       expect(k in out).toBe(false);
     // Heading group reshaped to {heading, anytime, upcoming, someday}.

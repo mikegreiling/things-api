@@ -8,7 +8,7 @@ import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { AnyTask, Project, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
-import { resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
+import { deadNameMatchHint, resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, HeadingPlacement, ReorderParams } from "./operations.ts";
 
 export interface ResolvedContainer {
@@ -20,6 +20,14 @@ export interface ContainerResolution {
   resolved: ResolvedContainer | null;
   /** 0 = not found, 1 = ok, >1 = ambiguous title. */
   matches: number;
+  /**
+   * An honest not-found tail (`resolved === null && matches === 0`) when the NAME
+   * matched only non-open destination rows the resolver deliberately excludes —
+   * e.g. a completed/canceled project (which would strand an open child, PLOG1).
+   * Surfaced by H-UNKNOWN-DESTINATION so the caller learns the row exists and how
+   * to reach it (by uuid). Absent when the miss is a genuine no-match.
+   */
+  deadHint?: string;
 }
 
 export interface ReorderMember {
@@ -674,8 +682,36 @@ export function resolveArea(db: DatabaseSync, ref: ContainerRef): ContainerResol
   return resolveNamedRef(db, "TMArea", "1=1", [], ref.uuid ?? ref.title ?? "");
 }
 
+/**
+ * Resolve a project DESTINATION (`--to-project` / `--project` on add/move). NAME
+ * resolution is OPEN-only (`status = 0`) — a completed/canceled project is not a
+ * valid live destination by name: placing an open child there strands it (PLOG1,
+ * "a completed-in-place project strands children identically, one sweep later").
+ * A UUID / partial-uuid still reaches a completed project (explicit intent —
+ * `nameExtraWhere` narrows the NAME tiers only). When a name matches ONLY non-open
+ * projects, the resolution carries a `deadHint` so the destination not-found says
+ * the row exists and how to reach it (by uuid), instead of a bare "project not
+ * found".
+ */
 export function resolveProject(db: DatabaseSync, ref: ContainerRef): ContainerResolution {
-  return resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 0", [], ref.uuid ?? ref.title ?? "");
+  const key = ref.uuid ?? ref.title ?? "";
+  const r = resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 0", [], key, {
+    nameExtraWhere: "status = 0",
+  });
+  if (r.resolved === null && r.matches === 0) {
+    const completed = resolveNamedRef(
+      db,
+      "TMTask",
+      "type = 1 AND trashed = 0 AND status != 0",
+      [],
+      key,
+      {
+        prefixTier: false,
+      },
+    ).matches;
+    if (completed > 0) return { ...r, deadHint: deadNameMatchHint({ completed }) };
+  }
+  return r;
 }
 
 export function resolveHeading(

@@ -335,7 +335,18 @@ export function resolveNamedRef(
   extraWhere: string,
   extraBinds: (string | number)[],
   refRaw: string,
-  options?: { prefixTier?: boolean; scopeWhere?: string; scopeBinds?: (string | number)[] },
+  options?: {
+    prefixTier?: boolean;
+    scopeWhere?: string;
+    scopeBinds?: (string | number)[];
+    /**
+     * An extra clause AND-ed into the NAME tiers ONLY (exact/case-insensitive/
+     * normalized title) — never the uuid-exact or uuid-prefix tiers. Lets a
+     * resolver narrow name resolution (e.g. project write targets to OPEN rows)
+     * while a UUID / partial-uuid — explicit intent — still reaches every row.
+     */
+    nameExtraWhere?: string;
+  },
 ): NamedResolution {
   const ref = stripThingsUri(refRaw);
   // Container scope: an extra UNqualified membership clause AND-ed into every
@@ -343,24 +354,33 @@ export function resolveNamedRef(
   // nonexistent ref matches (none), keeping the not-found path byte-identical.
   const scopeCond = options?.scopeWhere !== undefined ? ` AND ${options.scopeWhere}` : "";
   const scopeBinds = options?.scopeBinds ?? [];
+  // The name-tier narrowing (open-only, etc.) — carries no binds, so it never
+  // shifts the placeholder order.
+  const nameCond = options?.nameExtraWhere !== undefined ? ` AND ${options.nameExtraWhere}` : "";
   type Row = { uuid: string; title: string };
-  const sel = (cond: string, extra: (string | number)[] = []): Row[] =>
+  const run = (where: string, cond: string, extra: (string | number)[]): Row[] =>
     db
-      .prepare(`SELECT uuid, title FROM ${table} WHERE ${extraWhere} AND ${cond}${scopeCond}`)
+      .prepare(
+        `SELECT uuid, title FROM ${table} WHERE ${extraWhere}${where} AND ${cond}${scopeCond}`,
+      )
       .all(...extraBinds, ...extra, ...scopeBinds) as unknown as Row[];
+  // uuid tiers use the base predicate; name tiers additionally honor nameCond.
+  const sel = (cond: string, extra: (string | number)[] = []): Row[] => run("", cond, extra);
+  const selName = (cond: string, extra: (string | number)[] = []): Row[] =>
+    run(nameCond, cond, extra);
 
   const byId = sel("uuid = ?", [ref]);
   if (byId.length === 1) return { resolved: byId[0] ?? null, matches: 1 };
 
   for (const cond of ["title = ?", "title = ? COLLATE NOCASE"]) {
-    const rows = sel(cond, [ref]);
+    const rows = selName(cond, [ref]);
     if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
     if (rows.length > 1) return { resolved: null, matches: rows.length, candidates: rows };
   }
 
   const key = normalizeNameKey(ref);
   if (key !== "") {
-    const hits = sel("title IS NOT NULL").filter((r) => normalizeNameKey(r.title) === key);
+    const hits = selName("title IS NOT NULL").filter((r) => normalizeNameKey(r.title) === key);
     if (hits.length === 1) return { resolved: hits[0] ?? null, matches: 1 };
     if (hits.length > 1) return { resolved: null, matches: hits.length, candidates: hits };
   }
@@ -426,12 +446,24 @@ function deadMatchPhrase(n: number, where: string, cmd: string): string {
   return `${n} ${where} item${n === 1 ? "" : "s"} match${n === 1 ? "es" : ""} this name — see \`${cmd}\``;
 }
 
-export function deadNameMatchHint(counts: { trashed?: number; logbook?: number }): string {
+export function deadNameMatchHint(counts: {
+  trashed?: number;
+  logbook?: number;
+  completed?: number;
+}): string {
   const parts: string[] = [];
   const t = counts.trashed ?? 0;
   const l = counts.logbook ?? 0;
+  const c = counts.completed ?? 0;
   if (t > 0) parts.push(deadMatchPhrase(t, "trashed", "things trash"));
   if (l > 0) parts.push(deadMatchPhrase(l, "logbook", "things logbook"));
+  // A completed/canceled (but not trashed) project is excluded from write-target
+  // NAME resolution — placing an open child in it strands the child (PLOG1) — but
+  // stays reachable by its uuid (explicit intent), which is the guidance here.
+  if (c > 0)
+    parts.push(
+      `${c} completed project${c === 1 ? "" : "s"} match${c === 1 ? "es" : ""} this name — target it by uuid if intended`,
+    );
   return parts.length === 0 ? "" : ` (${parts.join("; ")})`;
 }
 
@@ -448,19 +480,27 @@ export function deadNameMatchHint(counts: { trashed?: number; logbook?: number }
  * tiered {@link resolveNamedRef} matching the read side uses (shared core, not
  * a fork).
  *
- * The NAME pool is LIVE-scoped by default (`trashed = 0`, matching the read-side
- * {@link resolveProjectUuid}) — a trashed project never resolves-by-name or
- * appears as an ambiguity candidate for an ordinary write verb, and a name that
- * matches ONLY trashed rows fails not-found with a `things trash` hint rather
- * than a dead candidate. `includeTrashed` (the trash-domain `project.restore`
- * op) widens the pool to trashed rows so a restore-by-name can find and
- * disambiguate them. Fail-closed with a candidate listing on an ambiguous name.
+ * The NAME pool is LIVE + OPEN-scoped by default (`trashed = 0 AND status = 0`)
+ * — a trashed OR completed/canceled project never resolves-by-name or appears as
+ * an ambiguity candidate for an ordinary write verb. A completed project is
+ * excluded deliberately (broader than "logged", which needs the log-boundary
+ * clock this pure resolver lacks): placing an open child in it strands the child
+ * one sweep later (PLOG1). A name that matches ONLY non-open/trashed rows fails
+ * not-found with an honest hint (`things trash` / target-by-uuid) rather than a
+ * dead candidate. A UUID / partial-uuid resolves FIRST (via
+ * {@link resolveTaskUuidPrefix}, status-blind), so explicit-uuid intent still
+ * reaches a completed/logged project. `includeNonOpen` (the `project.reopen`
+ * verb — its whole point is a non-open target) widens the name pool to
+ * completed/canceled rows; `includeTrashed` (the trash-domain `project.restore`
+ * op) widens it to trashed rows so a restore-by-name can disambiguate them.
+ * Fail-closed with a candidate listing on an ambiguous name.
  */
 export function resolveProjectWriteTarget(
   db: DatabaseSync,
   refRaw: string,
   scope?: { task: ScopeClause; named: { where: string; binds: (string | number)[] } },
   includeTrashed = false,
+  includeNonOpen = false,
 ): string {
   const ref = stripThingsUri(refRaw);
   try {
@@ -470,22 +510,38 @@ export function resolveProjectWriteTarget(
     // plain not-found (or too-short) ref is not a uuid: fall to the name tiers.
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
   }
-  const liveWhere = includeTrashed ? "type = 1" : "type = 1 AND trashed = 0";
+  const liveWhere = includeTrashed
+    ? "type = 1"
+    : includeNonOpen
+      ? "type = 1 AND trashed = 0"
+      : "type = 1 AND trashed = 0 AND status = 0";
   const r = resolveNamedRef(db, "TMTask", liveWhere, [], ref, {
     prefixTier: false,
     ...(scope !== undefined && { scopeWhere: scope.named.where, scopeBinds: scope.named.binds }),
   });
   if (r.resolved !== null) return r.resolved.uuid;
   if (r.matches === 0) {
-    // Zero LIVE matches: if the name matches only trashed rows, say so (honest
-    // hint) instead of dangling a dead candidate. Skipped when the pool already
-    // includes trashed (restore) — a miss there is a genuine miss.
-    const dead = includeTrashed
-      ? 0
-      : resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 1", [], ref, { prefixTier: false })
-          .matches;
+    // Zero live+open matches: if the name matches only trashed OR completed rows,
+    // say so (honest hint) instead of dangling a dead candidate. Skipped when the
+    // pool already includes those rows — a miss there is a genuine miss.
+    const dead =
+      includeTrashed || includeNonOpen
+        ? {}
+        : {
+            trashed: resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 1", [], ref, {
+              prefixTier: false,
+            }).matches,
+            completed: resolveNamedRef(
+              db,
+              "TMTask",
+              "type = 1 AND trashed = 0 AND status != 0",
+              [],
+              ref,
+              { prefixTier: false },
+            ).matches,
+          };
     throw new ReferenceResolutionError(
-      `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)${deadNameMatchHint({ trashed: dead })}`,
+      `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)${deadNameMatchHint(dead)}`,
       { code: "not-found", ref },
     );
   }

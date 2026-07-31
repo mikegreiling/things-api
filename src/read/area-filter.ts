@@ -22,6 +22,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { IsoDate } from "../model/dates.ts";
 import { resolveAreaUuid } from "./queries.ts";
+import { isLooseRef, LOOSE_REF } from "./pseudo-area.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
 
 /**
@@ -57,6 +58,11 @@ export interface AreaScopedRead {
  * ref, carrying the standard machine-readable candidate shape.
  */
 export function resolveAreaFilter(db: DatabaseSync, ref: string): AreaFilterTarget {
+  // The reserved `loose` ref addresses the NULL area (area-less items) as a
+  // pseudo-area — no real uuid to resolve. The sentinel uuid `loose` is itself
+  // a valid read-surface ref (it round-trips), so `meta.filter.area` stays
+  // consumable. See itemInArea + the native-query loose clauses (logbook/search).
+  if (isLooseRef(ref)) return { uuid: LOOSE_REF, title: "Loose" };
   const uuid = resolveAreaUuid(db, ref);
   const row = db.prepare("SELECT title FROM TMArea WHERE uuid = ?").get(uuid) as
     | { title: string | null }
@@ -64,8 +70,14 @@ export function resolveAreaFilter(db: DatabaseSync, ref: string): AreaFilterTarg
   return { uuid, title: row?.title ?? "" };
 }
 
-/** The transitive keep-rule: the row's effective area is the target. */
+/**
+ * The transitive keep-rule: the row's EFFECTIVE area is the target. The reserved
+ * {@link LOOSE_REF} sentinel selects the area-less rows instead — an effective
+ * area of null (the row's own area is null AND, for a project child, its project
+ * carries no area either; `item.area` already IS that effective area).
+ */
 export function itemInArea(item: ListItem, areaUuid: string): boolean {
+  if (areaUuid === LOOSE_REF) return item.area == null;
   return item.area?.uuid === areaUuid;
 }
 

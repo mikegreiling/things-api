@@ -1525,7 +1525,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
     expect(stdout).toContain("Area: ⬡ Busy");
   });
 
-  it("--show-logged: shown-of-total header, drill footer with the real area ref", () => {
+  it("--show-logged is removed: refused with a redirect to `things logbook --area`; the card shows no Logged section", () => {
     fx = buildFixtureDb();
     const area = seedArea(fx.db, "Old Stuff");
     for (let i = 0; i < 3; i++) {
@@ -1536,20 +1536,27 @@ describe("cli detail views — area show per-section caps; project show uncapped
         stopDate: 1_500_000_000 + i,
       });
     }
-    // Truncated: count stays in the header, the drill rides the footer.
-    const cut = runCli(["area", "show", "Old Stuff", "--show-logged", "2", "--db", fx.path]).stdout;
-    expect(cut).toContain("── Logged (2 of 3) ──");
-    expect(cut).toContain("… 1 more — `things logbook --area 'Old Stuff'`");
-    // Complete: plain count like Trashed, no footer.
-    const all = runCli(["area", "show", "Old Stuff", "--show-logged", "9", "--db", fx.path]).stdout;
-    expect(all).toContain("── Logged (3) ──");
-    expect(all).not.toContain("more — `things logbook");
-    // Collapsed (toggle off): the hidden-section placeholder echoes the recent
-    // --show-logged reveal (labeled: it shows only 15) AND the full logbook drill.
-    const off = runCli(["area", "show", "Old Stuff", "--db", fx.path]).stdout;
-    expect(off).toContain(
-      `… 3 logged items — recent: \`things area show "Old Stuff" --show-logged\` · \`things logbook --area 'Old Stuff'\``,
-    );
+    // The flag is gone: it earns a redirect (via the error envelope), not a section.
+    const refused = runCli([
+      "area",
+      "show",
+      "Old Stuff",
+      "--show-logged",
+      "2",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    expect(refused.exitCode).toBe(2);
+    const env = JSON.parse(refused.stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.code).toBe("usage");
+    expect(env.error.message).toContain("things logbook --area");
+    // The logged rows never surface as a card section — the area logbook is the
+    // bounded query; the card carries only a one-line pointer to it.
+    const card = runCli(["area", "show", "Old Stuff", "--db", fx.path]).stdout;
+    expect(card).not.toContain("Logged");
+    expect(card).toContain("logbook: `things logbook --area 'Old Stuff'`");
   });
 
   it("disclosure hints: truncation footer indents two spaces; hidden-section placeholders stand flush (plural counts)", () => {
@@ -1575,24 +1582,18 @@ describe("cli detail views — area show per-section caps; project show uncapped
     expect(lines).toContain(`… 2 later items — \`things area show "Mixed Bag" --show-later\``);
   });
 
-  it("disclosure hints: hidden-section commands preserve the user's show-toggle flags (singular count)", () => {
+  it("disclosure hints: hidden-section commands preserve the user's content-filter flags (singular count)", () => {
     fx = buildFixtureDb();
     const area = seedArea(fx.db, "Kept Flags");
-    seedTodo(fx.db, { title: "active", area, index: 0 });
-    seedTodo(fx.db, { title: "later", area, start: "someday", index: 1 });
-    // `--show-logged 5` reveals the logged section, so the still-hidden later
-    // placeholder must echo the invocation WITH that flag, then add --show-later.
-    const lines = runCli([
-      "area",
-      "show",
-      "Kept Flags",
-      "--show-logged",
-      "5",
-      "--db",
-      fx.path,
-    ]).stdout.split("\n");
+    seedTodo(fx.db, { title: "active", area, index: 0, deadline: "2000-01-01" });
+    seedTodo(fx.db, { title: "later", area, start: "someday", index: 1, deadline: "2000-01-01" });
+    // `--overdue` scopes the view, so the still-hidden later placeholder must echo
+    // the invocation WITH that flag, then add --show-later.
+    const lines = runCli(["area", "show", "Kept Flags", "--overdue", "--db", fx.path]).stdout.split(
+      "\n",
+    );
     expect(lines).toContain(
-      `… 1 later item — \`things area show "Kept Flags" --show-logged 5 --show-later\``,
+      `… 1 later item — \`things area show "Kept Flags" --overdue --show-later\``,
     );
   });
 

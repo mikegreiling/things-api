@@ -117,3 +117,60 @@ describe("today --area (CLI/--json)", () => {
     expect(titles).toEqual(["t-alpha"]);
   });
 });
+
+describe("--area loose (the area-less filter)", () => {
+  it("anytime --area loose keeps only the area-less rows; meta.filter.area = loose", () => {
+    fx = buildFixtureDb();
+    const work = seedArea(fx.db, "Work", 0);
+    seedTodo(fx.db, { title: "loose-any" });
+    seedTodo(fx.db, { title: "work-any", area: work });
+    const { stdout, exitCode } = runCli(["anytime", "--area", "loose", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.meta.filter).toEqual({ area: { uuid: "loose", title: "Loose" } });
+    const titles = (env.data.sections as Array<{ items: { title: string }[] }>).flatMap((s) =>
+      s.items.map((i) => i.title),
+    );
+    expect(titles).toEqual(["loose-any"]);
+  });
+
+  it("logbook --area loose keeps area-less logged rows (direct + loose-project child)", () => {
+    fx = buildFixtureDb();
+    const work = seedArea(fx.db, "Work", 0);
+    const loosePrj = seedProject(fx.db, { title: "loose-prj" });
+    const STOP = 1_500_000_000;
+    seedTodo(fx.db, { title: "loose-done", status: "completed", stopDate: STOP });
+    seedTodo(fx.db, {
+      title: "loose-childdone",
+      project: loosePrj,
+      status: "completed",
+      stopDate: STOP,
+    });
+    seedTodo(fx.db, { title: "work-done", area: work, status: "completed", stopDate: STOP });
+    const { stdout, exitCode } = runCli(["logbook", "--area", "loose", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.meta.filter).toEqual({ area: { uuid: "loose", title: "Loose" } });
+    const titles = (env.data.items as Array<{ title: string }>).map((i) => i.title).toSorted();
+    expect(titles).toEqual(["loose-childdone", "loose-done"]);
+  });
+
+  it("reserved word wins over a real area named Loose, and discloses it in meta.warnings", () => {
+    fx = buildFixtureDb();
+    const shadow = seedArea(fx.db, "Loose", 0);
+    seedTodo(fx.db, { title: "loose-done", status: "completed", stopDate: 1_500_000_000 });
+    seedTodo(fx.db, {
+      title: "shadow-done",
+      area: shadow,
+      status: "completed",
+      stopDate: 1_500_000_000,
+    });
+    const { stdout } = runCli(["logbook", "--area", "loose", "--json", "--db", fx.path]);
+    const env = JSON.parse(stdout);
+    // Filters the NULL area, not the real "Loose" area.
+    expect((env.data.items as Array<{ title: string }>).map((i) => i.title)).toEqual([
+      "loose-done",
+    ]);
+    expect((env.meta.warnings as string[]).join(" ")).toContain("loose pseudo-area");
+  });
+});

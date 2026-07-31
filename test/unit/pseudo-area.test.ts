@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { areaView } from "../../src/read/area-view.ts";
-import { projectsView } from "../../src/read/views.ts";
+import { logbookView, projectsView, searchView } from "../../src/read/views.ts";
 import { classifyShowTarget } from "../../src/read/show-target.ts";
 import { isLooseRef, LOOSE_REF, shadowingLooseArea } from "../../src/read/pseudo-area.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
@@ -77,6 +77,42 @@ describe("projectsView --area loose", () => {
     seedProject(fx.db, { title: "loose-proj" });
     const projects = projectsView(fx.db, { areaUuid: "loose", now: NOW });
     expect(projects.map((p) => p.title)).toEqual(["loose-proj"]);
+  });
+});
+
+describe("logbookView --area loose (area-less logged rows)", () => {
+  it("keeps area-less direct + loose-project children; drops area'd rows (subtree-inclusive inversion)", () => {
+    fx = buildFixtureDb();
+    const work = seedArea(fx.db, "Work", 0);
+    const loosePrj = seedProject(fx.db, { title: "loose-prj" }); // area-less project
+    const workPrj = seedProject(fx.db, { title: "work-prj", area: work }); // area'd project
+    const STOP = 1_500_000_000; // 2017 — past any log boundary
+    seedTodo(fx.db, { title: "loose-direct", status: "completed", stopDate: STOP });
+    seedTodo(fx.db, {
+      title: "loose-child",
+      project: loosePrj,
+      status: "completed",
+      stopDate: STOP,
+    });
+    seedTodo(fx.db, { title: "work-direct", area: work, status: "completed", stopDate: STOP });
+    seedTodo(fx.db, { title: "work-child", project: workPrj, status: "completed", stopDate: STOP });
+    const rows = logbookView(fx.db, NOW, { area: "loose", limit: null }).map((i) => i.title);
+    expect(rows.toSorted()).toEqual(["loose-child", "loose-direct"]);
+  });
+});
+
+describe("searchView --area loose (area-less hits)", () => {
+  it("matches area-less hits (incl. loose-project children); excludes area'd hits", () => {
+    fx = buildFixtureDb();
+    const work = seedArea(fx.db, "Work", 0);
+    const loosePrj = seedProject(fx.db, { title: "loose-prj" });
+    const workPrj = seedProject(fx.db, { title: "work-prj", area: work });
+    seedTodo(fx.db, { title: "match-loose" });
+    seedTodo(fx.db, { title: "match-loosechild", project: loosePrj });
+    seedTodo(fx.db, { title: "match-work", area: work });
+    seedTodo(fx.db, { title: "match-workchild", project: workPrj });
+    const rows = searchView(fx.db, "match", { area: "loose" }, NOW).map((i) => i.title);
+    expect(rows.toSorted()).toEqual(["match-loose", "match-loosechild"]);
   });
 });
 

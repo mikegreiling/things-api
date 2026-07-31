@@ -243,7 +243,8 @@ Content scope (which items qualify):
                      (today, inbox, anytime, someday, search; and the
                      containers projects, project show, area show — by each
                      entity's OWN deadline, no recursion; not the areas list)
-  --area <ref>       restrict to one area (logbook, search)
+  --area <ref>       restrict to one area — today, anytime, someday, upcoming,
+                     logbook, search; \`loose\` selects the area-less items
   --project <ref>    restrict to one project (logbook, search)
   --type <kind>      search only: todo | project
 

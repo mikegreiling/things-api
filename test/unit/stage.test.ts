@@ -501,7 +501,6 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     view.someday.forEach(record);
     view.repeating.forEach(record);
     view.logged.forEach(record);
-    view.trashed.forEach(record);
     for (const g of view.headings) {
       g.items.forEach(record);
       g.scheduled.forEach((d) => d.items.forEach(record));
@@ -518,7 +517,6 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     checkBucket(shaped["anytime"] as Row[], "anytime");
     checkBucket(shaped["someday"] as Row[], "someday");
     checkBucket(shaped["logbook"] as Row[], "logbook");
-    checkBucket(shaped["trash"] as Row[], "trash");
     for (const g of shaped["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
     // The heading group is bucketed the same way.
     const grp = (shaped["headings"] as Array<Record<string, unknown>>)[0]!;
@@ -531,7 +529,11 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-08-01")).toBe(true);
     expect((shaped["upcoming"] as Grp[]).some((g) => g.date === null)).toBe(true); // the template
     expect((shaped["logbook"] as Row[]).length).toBe(1);
-    expect((shaped["trash"] as Row[]).length).toBe(1);
+    // Trashed children are excluded from the project view entirely — no `trash`
+    // bucket, and `c-trash` appears in no bucket (GUI-faithful, §6½/PLOG1-a).
+    expect("trash" in shaped).toBe(false);
+    const cTrash = children[6]!;
+    expect(stageOf.has(cTrash)).toBe(false);
     // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
     // upcoming group is keyed on its arrived date — Upcoming holds only future
     // dates + the date-less template group.

@@ -251,17 +251,14 @@ describe("capAreaSections (area show per-section caps)", () => {
       scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
       repeating: [],
       someday: [],
-      logged: todos(3, "l"),
-      trashed: [],
     }) as unknown as AreaView;
 
   it("caps the project-rows and direct-to-dos sections independently", () => {
     const { data, truncation } = capAreaSections(view(), { area: 4, project: 2 });
     expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
-    // Later/logged sections are containers of their own — never capped here.
+    // The later section is a container of its own — never capped here.
     expect(data.scheduled[0]?.items).toHaveLength(2);
-    expect(data.logged).toHaveLength(3);
     expect(truncation.truncated).toBe(true);
     expect(truncation.blocks).toEqual([
       { kind: "projects", ref: "a", title: "Busy", shown: 2, total: 5, limit: 2 },

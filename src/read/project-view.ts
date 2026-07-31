@@ -1,7 +1,9 @@
 /**
  * Composite project view mirroring the native UI (validated T17 + "later
  * items" findings): active items, headings with their children, later
- * (scheduled by date / repeating templates / someday), logged, trashed.
+ * (scheduled by date / repeating templates / someday), logged. Trashed
+ * children are excluded entirely (GUI-faithful — the app filters trashed
+ * children out of the project view, §6½/PLOG1-a).
  *
  * Child membership: `project = ? OR heading IN (project's headings)` — the
  * DB invariant is that headed to-dos have project = NULL (atlas §TMTask).
@@ -51,7 +53,6 @@ export interface ProjectView {
   /** UNHEADED repeating template rows owned by this project (invisible in list views). */
   repeating: Todo[];
   logged: Todo[];
-  trashed: Todo[];
   /**
    * PLOG1 (additive): count of untrashed OPEN (status=0) children this project
    * still holds while it is ITSELF completed or canceled — including once swept
@@ -144,7 +145,7 @@ export function projectView(
   const tf = tagFilter(db, filter, { container: true });
   const childRows = fetchTaskRows(
     db,
-    `t.type = 0 AND (t.project = ? OR t.heading IN (
+    `t.type = 0 AND t.trashed = 0 AND (t.project = ? OR t.heading IN (
        SELECT uuid FROM TMTask WHERE type = 2 AND project = ?
      ))${tf.sql}${overdueSql}
      ORDER BY t."index" ASC`,
@@ -164,7 +165,6 @@ export function projectView(
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
   const logged: Todo[] = [];
-  const trashed: Todo[] = [];
   // Per-heading sub-buckets, keyed by heading uuid (§9 fidelity fix): a headed
   // scheduled/someday/repeating child nests under its heading, NOT at the
   // project level.
@@ -184,10 +184,6 @@ export function projectView(
   let openChildren = 0;
 
   for (const { row, todo } of todos) {
-    if (row.trashed === 1) {
-      trashed.push(todo);
-      continue;
-    }
     const h = headingUuidOf(row);
     if (todo.repeating.isTemplate) {
       if (h !== null) pushInto(headingRepeating, h, todo);
@@ -260,7 +256,6 @@ export function projectView(
     someday,
     repeating,
     logged,
-    trashed,
     openChildrenWhileResolved: project.status === "open" ? 0 : openChildren,
   };
 }
