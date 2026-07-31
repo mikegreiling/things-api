@@ -5,8 +5,9 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { q, selectList } from "../db/schema.ts";
-import type { Ref } from "../model/entities.ts";
+import { TASK_TYPE_FROM_DB, type Ref } from "../model/entities.ts";
 import type { ChecklistRow, TaskRow } from "../model/mappers.ts";
+import { candidateRef, CANDIDATE_CAP, type CandidateRef, type CandidateType } from "./shape.ts";
 
 /** Rows that repeat via a template are normal; template rows are invisible in list views. */
 export const NOT_TEMPLATE = "(t.rt1_recurrenceRule IS NULL AND t.repeater IS NULL)";
@@ -200,34 +201,28 @@ export function noUuidMatch(entity: string, ref: string): string {
   return `no ${entity} matching uuid or partial-uuid "${ref}"`;
 }
 
-/** A disambiguation candidate for a reference-resolution failure. */
-export interface RefCandidate {
-  uuid: string;
-  title: string;
-  /** Optional context that distinguishes same-named candidates (area for a project, parent path for a tag). */
-  context?: string;
-}
-
 /**
  * A reference (uuid / partial-uuid / name) that did not resolve to exactly one
  * entity. Extends RangeError so every existing `instanceof RangeError` handler
  * keeps treating it as a usage-class failure — but the surfaces that know about
  * it (CLI --json envelope, MCP tool result) additionally lift the structured
- * `candidates` onto `error.details.candidates` so an agent can self-correct
+ * `candidates` onto `error.detail.candidates` so an agent can self-correct
  * without re-parsing the prose message. `code` mirrors the envelope error code.
  *
  * PUBLIC API — exported from src/index.ts. This is the one error the consumer
  * surfaces catch to render structured disambiguation; its `code`
- * ("not-found" | "ambiguous") and `candidates` ({@link RefCandidate}[]) are the
- * documented machine shape (docs/design/architecture.md, Consumer boundary).
+ * ("not-found" | "ambiguous") and `candidates` ({@link CandidateRef}[], the ONE
+ * fixed candidate shape) are the documented machine shape
+ * (docs/design/architecture.md, Consumer boundary). The list is capped at
+ * {@link CANDIDATE_CAP}; on overflow the `message` states the total.
  */
 export class ReferenceResolutionError extends RangeError {
   readonly code: "not-found" | "ambiguous";
   readonly ref: string;
-  readonly candidates: RefCandidate[];
+  readonly candidates: CandidateRef[];
   constructor(
     message: string,
-    opts: { code: "not-found" | "ambiguous"; ref: string; candidates?: RefCandidate[] },
+    opts: { code: "not-found" | "ambiguous"; ref: string; candidates?: CandidateRef[] },
   ) {
     super(message);
     this.name = "ReferenceResolutionError";
@@ -269,21 +264,33 @@ export function resolveTaskUuidPrefix(
     );
   }
   const upper = ref.slice(0, -1) + String.fromCharCode(ref.charCodeAt(ref.length - 1) + 1);
+  // No LIMIT: a >=6-char shared prefix makes the uuid range inherently tiny, so
+  // the full match set is cheap to fetch and its length is the exact total.
   const rows = db
     .prepare(
-      `SELECT t.uuid, t.title FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ?${scopeCond} LIMIT 6`,
+      `SELECT t.uuid, t.title, t.type FROM TMTask t WHERE t.uuid >= ? AND t.uuid < ?${scopeCond}`,
     )
-    .all(ref, upper, ...scopeBinds) as { uuid: string; title: string | null }[];
+    .all(ref, upper, ...scopeBinds) as { uuid: string; title: string | null; type: number }[];
   if (rows.length === 0) {
     throw new ReferenceResolutionError(noUuidMatch(entity, ref), { code: "not-found", ref });
   }
   if (rows.length > 1) {
-    const list = rows.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
-    throw new ReferenceResolutionError(`partial-uuid "${ref}" is ambiguous — matches: ${list}`, {
-      code: "ambiguous",
-      ref,
-      candidates: rows.map((r) => ({ uuid: r.uuid, title: r.title ?? "" })),
-    });
+    const shown = rows.slice(0, CANDIDATE_CAP);
+    const list = shown.map((r) => `${r.uuid} (${r.title ?? ""})`).join("; ");
+    const more = rows.length > CANDIDATE_CAP ? `; … ${rows.length - CANDIDATE_CAP} more` : "";
+    throw new ReferenceResolutionError(
+      `partial-uuid "${ref}" is ambiguous — ${rows.length} matches: ${list}${more} — use a full uuid`,
+      {
+        code: "ambiguous",
+        ref,
+        candidates: shown.map((r) =>
+          candidateRef(TASK_TYPE_FROM_DB[r.type] ?? "to-do", {
+            uuid: r.uuid,
+            title: r.title ?? "",
+          }),
+        ),
+      },
+    );
   }
   return rows[0]?.uuid ?? ref;
 }
@@ -394,14 +401,38 @@ function resolveUuidOrThrow(
       { code: "not-found", ref },
     );
   }
+  const all = r.candidates ?? [];
+  const capped = all.length > CANDIDATE_CAP;
   throw new ReferenceResolutionError(
-    `"${ref}" matches ${r.matches} ${kind}s — use the exact name or a uuid`,
+    `"${ref}" matches ${r.matches} ${kind}s${capped ? `; first ${CANDIDATE_CAP} shown` : ""} — use the exact name or a uuid`,
     {
       code: "ambiguous",
       ref,
-      candidates: (r.candidates ?? []).map((c) => ({ uuid: c.uuid, title: c.title })),
+      candidates: all.slice(0, CANDIDATE_CAP).map((c) => candidateRef(kind as CandidateType, c)),
     },
   );
+}
+
+/**
+ * The honest tail appended to a not-found message when a NAME resolves to ZERO
+ * LIVE entities but one or more DEAD rows (trashed, or swept to the logbook) DO
+ * match it. It tells the caller a dead row of that name exists — and where to
+ * find it — WITHOUT listing it as a candidate, so no dangling-ref operation is
+ * invited against a dead row (candidate pools stay domain-scoped to live rows).
+ * Empty when nothing dead matched; a count renders only when it is > 0.
+ */
+// "1 item matches" / "2 items match" — noun plural on >1, verb plural on ==1.
+function deadMatchPhrase(n: number, where: string, cmd: string): string {
+  return `${n} ${where} item${n === 1 ? "" : "s"} match${n === 1 ? "es" : ""} this name — see \`${cmd}\``;
+}
+
+export function deadNameMatchHint(counts: { trashed?: number; logbook?: number }): string {
+  const parts: string[] = [];
+  const t = counts.trashed ?? 0;
+  const l = counts.logbook ?? 0;
+  if (t > 0) parts.push(deadMatchPhrase(t, "trashed", "things trash"));
+  if (l > 0) parts.push(deadMatchPhrase(l, "logbook", "things logbook"));
+  return parts.length === 0 ? "" : ` (${parts.join("; ")})`;
 }
 
 /**
@@ -415,14 +446,21 @@ function resolveUuidOrThrow(
  * targeted "that is a to-do, not a project" message rather than a misleading
  * not-found. Otherwise the ref resolves as a project NAME through the SAME
  * tiered {@link resolveNamedRef} matching the read side uses (shared core, not
- * a fork) across projects (trashed included, for `project restore`), fail-
- * closed with a candidate listing on an ambiguous name so a duplicated project
- * title is disambiguated by uuid rather than guessed.
+ * a fork).
+ *
+ * The NAME pool is LIVE-scoped by default (`trashed = 0`, matching the read-side
+ * {@link resolveProjectUuid}) — a trashed project never resolves-by-name or
+ * appears as an ambiguity candidate for an ordinary write verb, and a name that
+ * matches ONLY trashed rows fails not-found with a `things trash` hint rather
+ * than a dead candidate. `includeTrashed` (the trash-domain `project.restore`
+ * op) widens the pool to trashed rows so a restore-by-name can find and
+ * disambiguate them. Fail-closed with a candidate listing on an ambiguous name.
  */
 export function resolveProjectWriteTarget(
   db: DatabaseSync,
   refRaw: string,
   scope?: { task: ScopeClause; named: { where: string; binds: (string | number)[] } },
+  includeTrashed = false,
 ): string {
   const ref = stripThingsUri(refRaw);
   try {
@@ -432,41 +470,50 @@ export function resolveProjectWriteTarget(
     // plain not-found (or too-short) ref is not a uuid: fall to the name tiers.
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
   }
-  const r = resolveNamedRef(db, "TMTask", "type = 1", [], ref, {
+  const liveWhere = includeTrashed ? "type = 1" : "type = 1 AND trashed = 0";
+  const r = resolveNamedRef(db, "TMTask", liveWhere, [], ref, {
     prefixTier: false,
     ...(scope !== undefined && { scopeWhere: scope.named.where, scopeBinds: scope.named.binds }),
   });
   if (r.resolved !== null) return r.resolved.uuid;
   if (r.matches === 0) {
+    // Zero LIVE matches: if the name matches only trashed rows, say so (honest
+    // hint) instead of dangling a dead candidate. Skipped when the pool already
+    // includes trashed (restore) — a miss there is a genuine miss.
+    const dead = includeTrashed
+      ? 0
+      : resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 1", [], ref, { prefixTier: false })
+          .matches;
     throw new ReferenceResolutionError(
-      `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)`,
+      `no project matching "${ref}" — tried uuid, partial-uuid, and name (list projects with \`things projects\`)${deadNameMatchHint({ trashed: dead })}`,
       { code: "not-found", ref },
     );
   }
-  const candidates = describeProjectCandidates(db, r.candidates ?? []);
-  const lines = candidates
+  const all = describeProjectCandidates(db, r.candidates ?? []);
+  const shown = all.slice(0, CANDIDATE_CAP);
+  const lines = shown
     .map(
-      (c) =>
-        `  ${c.uuid.slice(0, 8)} — ${c.title}${c.context !== undefined ? ` (in ${c.context})` : ""}`,
+      (c) => `  ${c.uuid.slice(0, 8)} — ${c.title}${c.area !== undefined ? ` (in ${c.area})` : ""}`,
     )
     .join("\n");
+  const more = all.length > CANDIDATE_CAP ? `\n  … ${all.length - CANDIDATE_CAP} more` : "";
   throw new ReferenceResolutionError(
-    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${lines}`,
-    { code: "ambiguous", ref, candidates },
+    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${lines}${more}`,
+    { code: "ambiguous", ref, candidates: shown },
   );
 }
 
-/** Short-uuid + area-context candidates for an ambiguous project name. */
+/** Fixed-shape candidates for an ambiguous project name, each with its area container hint. */
 function describeProjectCandidates(
   db: DatabaseSync,
   candidates: { uuid: string; title: string }[],
-): RefCandidate[] {
+): CandidateRef[] {
   const areaStmt = db.prepare(
     "SELECT a.title AS title FROM TMTask p LEFT JOIN TMArea a ON a.uuid = p.area WHERE p.uuid = ?",
   );
   return candidates.map((c) => {
     const area = (areaStmt.get(c.uuid) as { title: string | null } | undefined)?.title ?? null;
-    return { uuid: c.uuid, title: c.title, ...(area !== null && { context: area }) };
+    return candidateRef("project", { uuid: c.uuid, title: c.title, area });
   });
 }
 
@@ -559,12 +606,14 @@ export function resolveHeadingUuid(
       { code: "not-found", ref: refRaw },
     );
   }
+  const all = r.candidates ?? [];
+  const capped = all.length > CANDIDATE_CAP;
   throw new ReferenceResolutionError(
-    `${label} matches ${r.matches} headings in this project — disambiguate with a uuid`,
+    `${label} matches ${r.matches} headings in this project${capped ? `; first ${CANDIDATE_CAP} shown` : ""} — disambiguate with a uuid`,
     {
       code: "ambiguous",
       ref: refRaw,
-      candidates: (r.candidates ?? []).map((c) => ({ uuid: c.uuid, title: c.title })),
+      candidates: all.slice(0, CANDIDATE_CAP).map((c) => candidateRef("heading", c)),
     },
   );
 }

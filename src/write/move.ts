@@ -34,11 +34,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { addDaysIso, decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
-import {
-  ReferenceResolutionError,
-  resolveTaskUuidPrefix,
-  type RefCandidate,
-} from "../read/queries.ts";
+import { ReferenceResolutionError, resolveTaskUuidPrefix } from "../read/queries.ts";
+import type { CandidateRef } from "../read/shape.ts";
 import { taskMembershipClause } from "../read/scope.ts";
 import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
 import { computeReorderPre, resolveArea, resolveHeading, resolveProject } from "./pre-state.ts";
@@ -115,7 +112,7 @@ export interface MoveRefused {
   refusal: "usage" | "blocked" | "unsupported";
   detail: string;
   remediation?: string;
-  candidates?: RefCandidate[];
+  candidates?: CandidateRef[];
 }
 
 export interface MoveLegFailed {

@@ -356,6 +356,51 @@ describe("project write targets accept names (Part 1)", () => {
     expect(message).toContain("(in Work)");
   });
 
+  it("an ambiguous name caps candidates at 8 and states the total in the message", async () => {
+    for (let i = 0; i < 12; i++) seedProject(fixture.db, { title: "Many" });
+    await run(["project", "update", "Many", "--title", "X", "--json"]);
+    const env = envelope();
+    const err = env["error"] as Record<string, unknown>;
+    expect(String(err["message"])).toContain("matches 12 projects"); // total stated
+    expect(String(err["message"])).toContain("… 4 more"); // 12 − 8
+    expect((err["detail"] as { candidates: unknown[] }).candidates).toHaveLength(8); // capped
+  });
+
+  it("live-scoped pool: a trashed same-named project is NOT a resolution candidate", async () => {
+    seedProject(fixture.db, { title: "Twin" });
+    seedProject(fixture.db, { title: "Twin" });
+    const dead = seedProject(fixture.db, { title: "Twin", trashed: true });
+    await run(["project", "update", "Twin", "--title", "X", "--json"]);
+    const env = envelope();
+    const err = env["error"] as Record<string, unknown>;
+    expect(err["code"]).toBe("ambiguous");
+    const candidates = (err["detail"] as { candidates: { uuid: string }[] }).candidates;
+    expect(candidates).toHaveLength(2); // the two LIVE twins only
+    expect(candidates.map((c) => c.uuid)).not.toContain(dead); // the trashed row is omitted
+  });
+
+  it("zero live matches but a trashed row does → not-found with an honest `things trash` hint (no dead candidate)", async () => {
+    seedProject(fixture.db, { title: "Ghosted", trashed: true });
+    await run(["project", "update", "Ghosted", "--title", "X", "--json"]);
+    const env = envelope();
+    const err = env["error"] as Record<string, unknown>;
+    expect(err["code"]).toBe("not-found");
+    expect(String(err["message"])).toContain(
+      "1 trashed item matches this name — see `things trash`",
+    );
+    expect((err["detail"] as { candidates: unknown[] }).candidates).toEqual([]); // no dangling dead ref
+  });
+
+  it("the trash-domain restore op DOES resolve/suggest trashed projects by name", async () => {
+    seedProject(fixture.db, { title: "Dead", trashed: true });
+    seedProject(fixture.db, { title: "Dead", trashed: true });
+    await run(["project", "restore", "Dead", "--json"]);
+    const env = envelope();
+    const err = env["error"] as Record<string, unknown>;
+    expect(err["code"]).toBe("ambiguous"); // restore SEES both trashed twins
+    expect((err["detail"] as { candidates: unknown[] }).candidates).toHaveLength(2);
+  });
+
   it("to-do write targets stay uuid-only (Part 2 entity noun)", async () => {
     await run(["todo", "update", "Buymilk", "--title", "X", "--json"]);
     const env = envelope();

@@ -112,7 +112,7 @@
  * `status` is omitted when `open`. FULL keeps them but still applies R6, the
  * universal reshapes, and R10.
  */
-import { deriveStage, deriveWhen, whenIsProvisional, type Stage } from "./stage.ts";
+import { deriveStage, deriveWhen, whenIsProvisional, type Stage, type When } from "./stage.ts";
 import type { StartState } from "../model/entities.ts";
 
 type Obj = Record<string, unknown>;
@@ -664,4 +664,79 @@ export function shapeReadPayload(kind: string, data: unknown, full: boolean): un
   if (kind === "areas" && Array.isArray(data)) return data.map(shapeArea);
   // tags / legend / snapshot / diagnostics: not tag-carrying entity payloads.
   return data;
+}
+
+/** The disambiguation-candidate kinds an error may list (a subset of the entity kinds). */
+export type CandidateType = "to-do" | "project" | "heading" | "area" | "tag";
+
+/**
+ * The ONE fixed error-candidate shape — the presence-keyed disambiguation DTO a
+ * not-found / ambiguous resolution lists under `error.detail.candidates` (and the
+ * did-you-mean fallback under the same key). Deliberately minimal and INVARIANT
+ * across request flags: `--full` / `--all` / etc. NEVER widen it, because an
+ * error payload is the most determinism-critical surface. A candidate carries
+ * ONLY material that helps a caller pick the right entity, drawn from the SAME
+ * single-source derivations the read wire uses — never the raw internal entity
+ * (no counts, no notes, no dates, no null-stuffed keys):
+ * - `uuid` / `title` / `type` — always present (`type` names the kind).
+ * - `area` / `project` — container hint as a TITLE string, present only when set.
+ * - `stage` / `when` — the R10/R12 lifecycle words, present only for a to-do /
+ *   project candidate whose source row carries the materialized lifecycle fields
+ *   (a thin uuid+title resolver row carries neither — presence-keyed, so absent).
+ * A trashed / logged candidate needs no boolean: `stage` already reads `"trash"`
+ * / `"logbook"` for it — the same vocabulary the wire uses.
+ */
+export interface CandidateRef {
+  uuid: string;
+  title: string;
+  type: CandidateType;
+  area?: string;
+  project?: string;
+  stage?: Stage;
+  when?: When;
+}
+
+/** The fixed cap on a listed candidate array; the error `message` states the total when it overflows. */
+export const CANDIDATE_CAP = 8;
+
+/** Read a container hint — a Ref `{title}` or a plain title string — to its non-empty title, else null. */
+function candidateContainerTitle(v: unknown): string | null {
+  if (typeof v === "string") return v === "" ? null : v;
+  if (v !== null && typeof v === "object") {
+    const t = (v as Obj)["title"];
+    if (typeof t === "string" && t !== "") return t;
+  }
+  return null;
+}
+
+/**
+ * Project ONE entity — a materialized to-do/project/area/heading, or a thin
+ * `{uuid, title}` resolver row — to the fixed {@link CandidateRef}. The SINGLE
+ * source every error-candidate emit flows through (the did-you-mean fallback and
+ * every not-found/ambiguous resolver), so the candidate shape can never vary by
+ * site. Reuses the wire's own {@link stageOf}/{@link whenOf} derivations — the
+ * lifecycle words are never re-derived here.
+ */
+export function candidateRef(type: CandidateType, src: unknown): CandidateRef {
+  const s = (src ?? {}) as Obj;
+  const out: CandidateRef = {
+    uuid: typeof s["uuid"] === "string" ? (s["uuid"] as string) : "",
+    title: typeof s["title"] === "string" ? (s["title"] as string) : "",
+    type,
+  };
+  const area = candidateContainerTitle(s["area"]);
+  if (area !== null) out.area = area;
+  const project =
+    candidateContainerTitle(s["project"]) ?? candidateContainerTitle(s["headingProject"]);
+  if (project !== null) out.project = project;
+  // stage/when only for the task kinds, and only when the source carries the
+  // materialized lifecycle substrate (`start`) — a thin uuid+title resolver row
+  // does not, so the keys stay absent (presence-keyed, like the wire).
+  if ((type === "to-do" || type === "project") && typeof s["start"] === "string") {
+    const stage = stageOf(s);
+    out.stage = stage;
+    const when = whenOf(s, stage);
+    if (when !== undefined) out.when = when;
+  }
+  return out;
 }

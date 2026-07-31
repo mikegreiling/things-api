@@ -7,7 +7,14 @@
  * suggestion, and — under `--json` — stamps the candidates onto
  * `error.details.candidates` so an agent can self-correct.
  */
-import type { LiteCandidate, LiteSearchResult, ListItem } from "../index.ts";
+import {
+  candidateRef,
+  deadNameMatchHint,
+  type CandidateRef,
+  type LiteCandidate,
+  type LiteSearchResult,
+  type ListItem,
+} from "../index.ts";
 import { dim } from "./style.ts";
 import { areaMark } from "./glyphs.ts";
 import { formatItem, uuidDisplayWidth } from "./render.ts";
@@ -34,6 +41,16 @@ function searchSuggestion(query: string): string {
 }
 
 /**
+ * The error message plus the honest dead-row hint: when the name matched ZERO
+ * LIVE rows but DOES match trashed / logbook rows, name them (with counts and
+ * where to look) so the caller is not left thinking the item vanished. Shared by
+ * the human render and the `--json` envelope so both carry the same message.
+ */
+export function didYouMeanMessage(err: DidYouMeanError): string {
+  return `${err.message}${deadNameMatchHint(err.result.deadMatches ?? {})}`;
+}
+
+/**
  * Human render: the error line, then one row per candidate (areas/projects as
  * container rows, to-dos with their dim `(container)` context), a `… n more`
  * tail when the match set was capped, and always the closing search
@@ -41,7 +58,7 @@ function searchSuggestion(query: string): string {
  */
 export function renderDidYouMean(err: DidYouMeanError): string[] {
   const { candidates, total } = err.result;
-  const lines = [`error: ${err.message}`];
+  const lines = [`error: ${didYouMeanMessage(err)}`];
   if (candidates.length > 0) {
     lines.push("", dim("did you mean:"));
     const tasks = candidates.filter(
@@ -61,7 +78,13 @@ export function renderDidYouMean(err: DidYouMeanError): string[] {
   return lines;
 }
 
-/** The additive `--json` payload: the candidate entities, standard shapes. */
-export function candidatesJson(err: DidYouMeanError): unknown[] {
-  return err.result.candidates.map((c) => (c.kind === "area" ? c.area : c.task));
+/**
+ * The additive `--json` payload: each candidate projected to the ONE fixed
+ * {@link CandidateRef} disambiguation shape (never the raw internal entity — see
+ * {@link candidateRef}). The list is already capped by the lite search.
+ */
+export function candidatesJson(err: DidYouMeanError): CandidateRef[] {
+  return err.result.candidates.map((c) =>
+    c.kind === "area" ? candidateRef("area", c.area) : candidateRef(c.task.type, c.task),
+  );
 }

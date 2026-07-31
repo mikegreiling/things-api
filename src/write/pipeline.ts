@@ -419,6 +419,11 @@ export async function runMutation<K extends OperationKind>(
             scope !== undefined
               ? { task: taskScope!, named: namedProjectClause(scope) }
               : undefined,
+            // The trash-domain op widens the name pool to trashed projects so a
+            // restore-by-name can find (and disambiguate) them; every other
+            // project verb stays live-scoped (a trashed project resolves by uuid
+            // only).
+            op === "project.restore",
           )
         : resolveTaskUuidPrefix(deps.db, p["uuid"], "to-do", taskScope);
     params = { ...params, uuid };

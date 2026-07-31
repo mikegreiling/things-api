@@ -125,6 +125,7 @@ import {
   PROJECT_ANYTIME_ACTIVE,
 } from "./predicates.ts";
 import { isLooseRef } from "./pseudo-area.ts";
+import { CANDIDATE_CAP } from "./shape.ts";
 import { groupBySidebar } from "./sidebar-order.ts";
 import type { Area } from "../model/entities.ts";
 import { areasView } from "./tags.ts";
@@ -1026,6 +1027,14 @@ export interface LiteSearchResult {
   candidates: LiteCandidate[];
   /** Total matches before the cap. */
   total: number;
+  /**
+   * Present ONLY when there were ZERO live matches (`total === 0`) yet the name
+   * DOES match dead rows — trashed and/or logbook (swept-completed) to-dos /
+   * projects. The counts feed the honest not-found hint (see
+   * `deadNameMatchHint`); the dead rows are NOT listed as candidates (domain
+   * scoping — a live-only pool never invites a dangling-ref op on a dead row).
+   */
+  deadMatches?: { trashed: number; logbook: number };
 }
 
 /**
@@ -1035,8 +1044,8 @@ export interface LiteSearchResult {
  * doctrine: containers (areas, then projects) first, then to-dos; within a
  * group active rows precede someday rows, then most-recently-modified. `type`
  * scopes to a single class (the typed-namespace paths). Results are capped
- * (default 10); `total` reports the pre-cap match count so the caller can
- * append a "… n more" tail.
+ * (default {@link CANDIDATE_CAP}); `total` reports the pre-cap match count so the
+ * caller can append a "… n more" tail.
  */
 const somedayRank = (i: ListItem): number => (i.start === "someday" ? 1 : 0);
 
@@ -1052,7 +1061,7 @@ export function liteTitleSearch(
   now?: Date,
   zone?: string,
 ): LiteSearchResult {
-  const cap = options?.limit ?? 10;
+  const cap = options?.limit ?? CANDIDATE_CAP;
   const type = options?.type;
   const needle = query.toLowerCase();
 
@@ -1088,7 +1097,36 @@ export function liteTitleSearch(
     ...projects.map((task): LiteCandidate => ({ kind: "task", task })),
     ...todos.map((task): LiteCandidate => ({ kind: "task", task })),
   ];
-  return { candidates: ordered.slice(0, cap), total: ordered.length };
+  // Zero LIVE matches: probe whether the name matches DEAD rows (trashed, or
+  // swept to the logbook) so the caller gets an honest hint instead of a bare
+  // miss — the dead rows themselves never become candidates (areas can be
+  // neither trashed nor logged, so only tasks are counted).
+  let deadMatches: { trashed: number; logbook: number } | undefined;
+  if (ordered.length === 0 && type !== "area") {
+    const typeSql =
+      type === "to-do" ? "t.type = 0" : type === "project" ? "t.type = 1" : "t.type IN (0, 1)";
+    const boundary = logBoundary(db, now, zone).getTime() / 1000;
+    const row = db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN t.trashed = 1 THEN 1 ELSE 0 END) AS trashed,
+           SUM(CASE WHEN t.trashed = 0 AND t.status IN (2, 3) AND t.stopDate IS NOT NULL AND t.stopDate <= ? THEN 1 ELSE 0 END) AS logbook
+         FROM TMTask t
+         WHERE ${NOT_TEMPLATE} AND ${typeSql} AND t.title LIKE ?${LIKE_ESCAPE}`,
+      )
+      .get(boundary, `%${escapeLike(query)}%`) as {
+      trashed: number | null;
+      logbook: number | null;
+    };
+    const trashed = row.trashed ?? 0;
+    const logbook = row.logbook ?? 0;
+    if (trashed > 0 || logbook > 0) deadMatches = { trashed, logbook };
+  }
+  return {
+    candidates: ordered.slice(0, cap),
+    total: ordered.length,
+    ...(deadMatches !== undefined && { deadMatches }),
+  };
 }
 
 /**
