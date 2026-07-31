@@ -1,0 +1,87 @@
+// ORDFIN2 AXDRAG3 — sidebar AX row dump + duplicate-titled-area one-slot drag.
+// Primitives lifted from NATIVE1 / AXDRAG1 / research-axdrag2.sh.
+// Usage: osascript -l JavaScript ordfin2-ax3.jxa dumprows
+//        osascript -l JavaScript ordfin2-ax3.jxa dragdupe <nth> <up|down>   (nth = 1-based among DUPE-AREA rows)
+ObjC.import('AppKit'); ObjC.import('ApplicationServices'); ObjC.import('CoreGraphics');
+function pidOf(n){ return Application('System Events').processes.byName(n).unixId() }
+function sleep(ms){ $.NSThread.sleepForTimeInterval(ms/1000) }
+function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]) }
+function sv(el,name){ var v=attr(el,name); return v? v.js : '' }
+function frame(el){ var p=attr(el,'AXPosition'), z=attr(el,'AXSize'); if(!p||!z) return null;
+  var pd=ObjC.castRefToObject($.CFCopyDescription(p)).js, zd=ObjC.castRefToObject($.CFCopyDescription(z)).js;
+  var pm=pd.match(/x:([-0-9.]+) y:([-0-9.]+)/), zm=zd.match(/w:([-0-9.]+) h:([-0-9.]+)/);
+  return (pm&&zm)?{x:+pm[1],y:+pm[2],w:+zm[1],h:+zm[2]}:null }
+function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a }
+function findAll(el, wantRole, depth, acc){ acc=acc||[]; if(depth<0) return acc; var ch=kids(el);
+  for(var i=0;i<ch.length;i++){ if(sv(ch[i],'AXRole')===wantRole) acc.push(ch[i]); findAll(ch[i], wantRole, depth-1, acc) } return acc }
+function appEl(){ return $.AXUIElementCreateApplication(pidOf('Things3')) }
+function stdWindow(){ var ws=kids(appEl()); for(var i=0;i<ws.length;i++){ if(sv(ws[i],'AXSubrole')==='AXStandardWindow') return ws[i] } return ws.length?ws[0]:null }
+function sidebarTable(){ var w=stdWindow(); if(!w) return null; var tables=findAll(w,'AXTable',12,[]); var best=null;
+  for(var i=0;i<tables.length;i++){ var f=frame(tables[i]); if(!f) continue; if(f.w<400){ if(!best||f.w<best.f.w) best={el:tables[i],f:f} } }
+  return best?best.el:null }
+function allText(el, acc, depth){ acc=acc||[]; depth=depth==null?6:depth; if(depth<0) return acc;
+  var v=sv(el,'AXValue'); if(v) acc.push(v); var d=sv(el,'AXDescription'); if(d) acc.push(d);
+  var t=sv(el,'AXTitle'); if(t) acc.push(t); var ch=kids(el); for(var i=0;i<ch.length;i++) allText(ch[i],acc,depth-1); return acc }
+function rowsOf(t){ var out=[]; var ch=kids(t);
+  for(var r=0;r<ch.length;r++){ var role=sv(ch[r],'AXRole');
+    if(role==='AXRow'||role==='AXTableRow'){ out.push({el:ch[r], text:allText(ch[r],[],6).join('|'), f:frame(ch[r])}) } }
+  return out }
+var MOVED=5, DOWN=1, UP=2, DRAG=6;
+function mev(t,x,y,cs){ var e=$.CGEventCreateMouseEvent($(), t, $.CGPointMake(x,y), 0); if(cs) $.CGEventSetIntegerValueField(e,1,cs); return e }
+function postHID(ev){ $.CGEventPost($.kCGHIDEventTap, ev) }
+// rows whose title text carries <title> (areas are title-exposed).
+function titleRows(title){ var t=sidebarTable(); if(!t) return []; var rs=rowsOf(t); var out=[];
+  for(var i=0;i<rs.length;i++){ var segs=rs[i].text.split('|');
+    for(var j=0;j<segs.length;j++){ if(segs[j]===title||segs[j]===title+'.'){ out.push(rs[i]); break } } }
+  return out }
+function dupeRows(){ return titleRows('DUPE-AREA') }
+function run(argv){
+  var cmd=argv[0];
+  if(cmd==='dumprows'){
+    var t=sidebarTable(); if(!t) return 'NO_SIDEBAR';
+    var rs=rowsOf(t); var out=[];
+    for(var i=0;i<rs.length;i++){ out.push({i:i, text:rs[i].text, y:(rs[i].f?Math.round(rs[i].f.y):null), h:(rs[i].f?Math.round(rs[i].f.h):null)}); }
+    return JSON.stringify(out);
+  }
+  if(cmd==='dragto'){
+    // dragto <title> <nth> <absY> — drag the nth (1-based) row carrying <title> to absolute Y.
+    var title=argv[1], nth=+argv[2], ty=+argv[3];
+    var rows=titleRows(title);
+    if(nth<1||nth>rows.length) return JSON.stringify({err:'nth out of range',count:rows.length});
+    var src=rows[nth-1]; if(!src.f) return 'SRC_NO_FRAME';
+    var sx=src.f.x+src.f.w*0.5, sy=src.f.y+src.f.h/2;
+    var pre=[]; for(var k=0;k<rows.length;k++) pre.push(rows[k].f?Math.round(rows[k].f.y):null);
+    postHID(mev(MOVED,sx,sy,0)); sleep(40);
+    postHID(mev(DOWN,sx,sy,1)); sleep(160);
+    postHID(mev(DRAG,sx,sy-3,1)); sleep(40);
+    var steps=Math.max(12,Math.round(Math.abs(ty-sy)/6));
+    for(var s=1;s<=steps;s++){ postHID(mev(DRAG,sx,sy+(ty-sy)*s/steps,1)); sleep(22) }
+    postHID(mev(DRAG,sx,ty,1)); sleep(450);
+    postHID(mev(UP,sx,ty,1)); sleep(500);
+    return JSON.stringify({title:title, nth:nth, grab:{x:Math.round(sx),y:Math.round(sy)}, dropY:ty, preY:pre});
+  }
+  if(cmd==='dragdupe'){
+    var nth=+argv[1], dir=argv[2]||'down';
+    var dupes=dupeRows();
+    if(dupes.length<2) return JSON.stringify({err:'need>=2 DUPE rows, found '+dupes.length});
+    var srcIdx=nth-1; if(srcIdx<0||srcIdx>=dupes.length) return JSON.stringify({err:'nth out of range',count:dupes.length});
+    var src=dupes[srcIdx]; if(!src.f) return 'SRC_NO_FRAME';
+    var sx=src.f.x+src.f.w*0.5, sy=src.f.y+src.f.h/2;
+    // one-slot geometry: area rows interleave with spacer -> ~40px per slot (AXDRAG1 #28).
+    // DOWN drop -> targetY = neighborBelow.centerY - 40 (source-slot collapse). UP -> neighborAbove.centerY.
+    var ty;
+    if(dir==='down'){ var nb=dupes[srcIdx+1]; if(!nb||!nb.f) return 'NO_NEIGHBOR_BELOW';
+      ty=(nb.f.y+nb.f.h/2)-40; }
+    else { var na=dupes[srcIdx-1]; if(!na||!na.f) return 'NO_NEIGHBOR_ABOVE';
+      ty=(na.f.y+na.f.h/2); }
+    var pre=[]; for(var k=0;k<dupes.length;k++) pre.push(dupes[k].f?Math.round(dupes[k].f.y):null);
+    postHID(mev(MOVED,sx,sy,0)); sleep(40);
+    postHID(mev(DOWN,sx,sy,1)); sleep(160);
+    postHID(mev(DRAG,sx,sy-3,1)); sleep(40);
+    for(var s=1;s<=24;s++){ postHID(mev(DRAG,sx,sy+(ty-sy)*s/24,1)); sleep(22) }
+    postHID(mev(DRAG,sx,ty,1)); sleep(450);
+    postHID(mev(UP,sx,ty,1)); sleep(400);
+    return JSON.stringify({srcNth:nth, dir:dir, grab:{x:Math.round(sx),y:Math.round(sy)}, dropY:Math.round(ty), preY:pre});
+  }
+  return 'UNKNOWN_CMD';
+}
