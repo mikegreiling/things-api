@@ -17,16 +17,17 @@
  *      top-of-its-own-bucket in selection order); `--before`/`--after` require
  *      every movee in the anchor's bucket;
  *   5. placement honesty — "top of bucket" is GUARANTEED only where a lab-clean
- *      reorder protocol exists (REORDGAPS + BOUNCE2 + UPCORD1 + HEADSUB1): loose
- *      inbox/today/evening/someday/anytime, a project's unheaded anytime OR
- *      someday children, an area's anytime OR someday members, a heading's
- *      anytime/someday/same-day-scheduled children, any container child's evening
- *      sub-bucket, a container's same-day scheduled children, a loose future
- *      Upcoming day, area-less someday/anytime projects (see {@link
- *      reorderTargetOf} for the per-class protocol + gate). APP-DEFAULT (no
- *      protocol wired): a headed EVENING child (GUI-ambiguous axis), a direct-area
- *      scheduled-day child, a loose scheduled PROJECT row, repeating templates
- *      (§9e). The result states which class applied;
+ *      reorder protocol exists (REORDGAPS + BOUNCE2 + UPCORD1 + HEADSUB1 +
+ *      ORDFIN1): loose inbox/today/evening/someday/anytime, a project's unheaded
+ *      anytime OR someday children, an area's anytime OR someday members, a
+ *      heading's anytime/someday/same-day-scheduled children, ANY container child's
+ *      evening sub-bucket (project, area, OR headed — ORDFIN1 Arm 2b), a
+ *      container's same-day scheduled children, a loose / direct-area (ORDFIN1 Arm
+ *      3) / whole cross-container (ORDFIN1 Arm 4) future Upcoming day, area-less
+ *      someday/anytime projects (see {@link reorderTargetOf} for the per-class
+ *      protocol + gate). APP-DEFAULT (no protocol wired): a loose scheduled
+ *      PROJECT row, repeating templates (§9e). The result states which class
+ *      applied;
  *   6. compilation via the minimal-move planner (fewest legs; per-scope caps and
  *      bounce abort-honesty apply per leg).
  */
@@ -226,17 +227,20 @@ function bounceDisabledTarget(what: string): ScopeTarget {
  * anytime members; an area's someday members (SOMEBNC-area bounce — was §9f-
  * prohibited); a heading's anytime children (BOUNCE2-h forward-order bounce); a
  * container's same-day scheduled children (DAYORD-b native todayIndex re-rank);
- * a loose FUTURE Upcoming day (UPCORD1 park-sort-unpark, scope `loose-day` —
- * gated like container-day); a heading's SOMEDAY children (HEADSUB1 heading-
- * someday re-head-in-order back-insert); a heading's same-day SCHEDULED children
- * (HEADSUB1 heading-day unhead→container-day→re-head, gated like container-day);
- * a container child's EVENING sub-bucket (HEADSUB1 Arm D — the shipped `evening`
- * bounce accepts project/area children unchanged); area-less someday projects;
- * top-level anytime projects. APP-DEFAULT: a headed EVENING child (display axis
- * GUI-ambiguous); a direct-area scheduled-DAY child (area specifier unprobed); a
- * loose scheduled PROJECT row (no surface); repeating TEMPLATE rows (§9e). When
- * bounce is DISABLED the bounce-dependent classes degrade to app-default naming
- * the flag — never a destructive or unverified fallback.
+ * a loose FUTURE Upcoming day (UPCORD1 park-sort-restore, scope `loose-day` —
+ * gated like container-day); a DIRECT-AREA scheduled-DAY child (ORDFIN1 Arm 3,
+ * scope `area-day` — the same compound restoring to the area, the destructive §9f
+ * area specifier NEVER used); a whole CROSS-CONTAINER future day-group (ORDFIN1
+ * Arm 4, scope `upcoming-day` — routed in {@link repositionInPlace}, not here); a
+ * heading's SOMEDAY children (HEADSUB1 heading-someday re-head-in-order back-
+ * insert); a heading's same-day SCHEDULED children (HEADSUB1 heading-day
+ * unhead→container-day→re-head, gated like container-day); a container child's
+ * EVENING sub-bucket (HEADSUB1 Arm D + ORDFIN1 Arm 2b — the shipped `evening`
+ * bounce accepts project/area/HEADED children unchanged, heading FK preserved);
+ * area-less someday projects; top-level anytime projects. APP-DEFAULT: a loose
+ * scheduled PROJECT row (no surface); repeating TEMPLATE rows (§9e). When bounce
+ * is DISABLED the bounce-dependent classes degrade to app-default naming the flag
+ * — never a destructive or unverified fallback.
  */
 function reorderTargetOf(
   row: MoveeRow,
@@ -269,10 +273,13 @@ function reorderTargetOf(
       if (bucket === "someday") return { scope: "heading-someday", container: row.heading };
       if (containerDay) return { scope: "heading-day", container: row.heading };
       if (bucket === "evening") {
-        return {
-          scope: null,
-          reason: "a heading's evening sub-bucket (display axis GUI-ambiguous — app-default)",
-        };
+        // ORDFIN1 Arm 2b: the today↔evening bounce preserves a HEADED evening
+        // child's heading FK byte-identical (startBucket round-trips 1→0→1, today
+        // startDate kept), so the shipped `evening` bounce orders it in the Today/
+        // Evening bucket unchanged — no new machinery, and there was never a
+        // display-axis ambiguity (the earlier app-default justification was wrong).
+        // R07 reminder-loss caveat inherited from the loose evening scope.
+        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
       }
       return {
         scope: null,
@@ -309,10 +316,12 @@ function reorderTargetOf(
         // an area-direct evening child is a container child too. R07 caveat inherited.
         return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
       }
-      // A direct-area to-do's scheduled bucket: only the PROJECT specifier is
-      // lab-clean for a scheduled day (DAYORD-b); the AREA specifier's behavior
-      // on dated children is unprobed (and de-somedays someday items, §9f), so
-      // it stays app-default rather than risk it.
+      // A direct-area to-do's scheduled DAY: ORDFIN1 Arm 3 wires the `area-day`
+      // park-sort-restore compound (park each dated child into a scratch PROJECT →
+      // container-day reorder → restore to the area) — date/todayIndex/start=2/
+      // reminder/deadline preserved, area FK round-trips. The destructive AREA
+      // reorder specifier (§9f) is NEVER used. Gated like container-day.
+      if (containerDay) return { scope: "area-day", container: row.area };
       return { scope: null, reason: "a direct-area to-do's scheduled bucket (app-default)" };
     }
     // loose:
@@ -887,6 +896,115 @@ export async function runInPlaceReorder(
 // ---------------------------------------------------------------- shared core
 
 /**
+ * The single future Upcoming day every movee shares (packed startDate), or null.
+ * All movees must be scheduled to-dos on the SAME future day in the Today-bucket
+ * axis (startBucket=0) — the precondition for the `upcoming-day` cross-container
+ * compound. A row off the day (or a project/template with a null/other startDate)
+ * breaks the group and falls through to the normal single-container guard.
+ */
+function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
+  const first = rows[0];
+  if (first === undefined) return null;
+  const day = first.startDate;
+  if (day === null || day <= packedToday || first.startBucket !== 0 || first.type !== 0) {
+    return null;
+  }
+  for (const r of rows) {
+    if (r.type !== 0 || r.startBucket !== 0 || r.startDate !== day) return null;
+  }
+  return day;
+}
+
+/**
+ * Reposition a CROSS-CONTAINER future day-group via the `upcoming-day` compound
+ * (ORDFIN1 Arm 4). The whole day-group is parked into one scratch project, re-
+ * ranked, and each member restored to its captured origin; the anchor (if any)
+ * must be a member of the same day-group — it positions within the parked set, it
+ * never migrates. The compound refuses fail-closed on an unparkable member (a
+ * scheduled project row or a template on the day).
+ */
+async function runUpcomingDayReposition(
+  deps: WriteDeps,
+  op: "todo.move" | "project.move",
+  rows: MoveeRow[],
+  position: MovePosition | undefined,
+  options: WriteOptions,
+): Promise<MoveResult> {
+  const target: ScopeTarget = { scope: "upcoming-day" };
+  const movees = rows.map((r) => r.uuid);
+  const members = bucketMembers(deps, target, movees[0]);
+
+  // Anchor must share the movees' day-group (positions, never migrates).
+  if (position !== undefined && ("before" in position || "after" in position)) {
+    const anchorRef = "before" in position ? position.before : position.after;
+    const ar = resolveMovee(deps, anchorRef);
+    if (ar instanceof ReferenceResolutionError) {
+      return {
+        kind: "move-refused",
+        op,
+        refusal: "usage",
+        detail: ar.message,
+        candidates: ar.candidates,
+      };
+    }
+    if (!members.includes(ar.uuid)) {
+      return refused(
+        op,
+        "blocked",
+        `the anchor ${ar.uuid} is not in the movees' Upcoming day-group — an anchor positions, it never migrates`,
+        "pick an anchor that shares the movees' day, or use --first/--last",
+      );
+    }
+  }
+
+  const reorderUuids =
+    position === undefined
+      ? earliestSlotOrder(deps, target, movees)
+      : buildReorderOrder(deps, target, movees, position);
+  const placement = await runReorder(
+    deps,
+    { scope: "upcoming-day", uuids: reorderUuids, named: movees },
+    { ...legOptions(options), ...(options.dryRun === true && { dryRun: true }) },
+  );
+  if (options.dryRun === true) {
+    return {
+      kind: "move-dry-run",
+      op,
+      plan: {
+        movees,
+        membership: "none (in-place reposition)",
+        placement: `reorder scope=upcoming-day → ${describePosition(position)}`,
+        placementClass: "guaranteed",
+        note: dryRunNote(
+          placement,
+          "cross-container Upcoming day-group reorder (park-sort-restore)",
+        ),
+      },
+    };
+  }
+  if (placement.kind !== "ok") {
+    return {
+      kind: "move-leg-failed",
+      op,
+      detail: `the reorder leg did not complete (${placement.kind})`,
+      failed: placement,
+      completed: [],
+    };
+  }
+  return {
+    kind: "move-ok",
+    op,
+    movees: rows.map((r) => ({ uuid: r.uuid, title: r.title })),
+    membership: [],
+    placement,
+    placementClass: "guaranteed",
+    note:
+      `reordered within ${describeScope(target)} (upcoming-day scope — placement guaranteed)` +
+      touchedSuffix(placement),
+  };
+}
+
+/**
  * Reorder the given rows within their CURRENT shared container. Fails closed
  * when the rows span containers or (for --before/--after) the anchor lives
  * elsewhere or in another bucket.
@@ -904,8 +1022,19 @@ async function repositionInPlace(
   const targetOf = (r: MoveeRow): ScopeTarget =>
     reorderTargetOf(r, isTodo, packedToday, deps.config.bounceEnabled);
 
-  // One shared STRUCTURAL container (rule 2 / the cross-container guard).
+  // Cross-container future-day group → the `upcoming-day` compound (ORDFIN1 Arm
+  // 4). When to-do movees span structural containers but ALL share one future
+  // Upcoming day, they are a single cross-container day-group ordered on the shared
+  // todayIndex axis — not the normal single-container reorder. (A same-container
+  // day-group keeps structKeys.size===1 and rides its own scope: container-day /
+  // heading-day / loose-day / area-day.) A mix carrying a scheduled PROJECT row or
+  // a template is fail-closed by the compound's own membership guard.
   const keys = new Set(rows.map((r) => structuralKey(r, packedToday)));
+  if (isTodo && keys.size > 1 && sharedFutureDay(rows, packedToday) !== null) {
+    return runUpcomingDayReposition(deps, op, rows, position, options);
+  }
+
+  // One shared STRUCTURAL container (rule 2 / the cross-container guard).
   if (keys.size !== 1) {
     const where = rows.map((r) => `${r.uuid} in ${describeScope(targetOf(r))}`).join("; ");
     return refused(
@@ -1259,7 +1388,11 @@ function resolveMoveeUuid(deps: WriteDeps, ref: string): string {
  */
 function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string): string[] {
   if (target.scope === null) return [];
-  const seedsDay = target.scope === "container-day" || target.scope === "loose-day";
+  const seedsDay =
+    target.scope === "container-day" ||
+    target.scope === "loose-day" ||
+    target.scope === "area-day" ||
+    target.scope === "upcoming-day";
   const params: ReorderParams = {
     scope: target.scope,
     uuids: seedsDay && dayAnchor !== undefined ? [dayAnchor] : [],
@@ -1285,6 +1418,8 @@ function legOptions(options: WriteOptions): WriteOptions {
 function describeScope(target: ScopeTarget): string {
   if (target.scope === null) return target.reason;
   if (target.scope === "loose-day") return "the loose future-day group";
+  if (target.scope === "area-day") return "the direct-area future-day group";
+  if (target.scope === "upcoming-day") return "the cross-container Upcoming day-group";
   return target.container !== undefined
     ? `the ${target.scope} ${target.container}`
     : `the ${target.scope} list`;
