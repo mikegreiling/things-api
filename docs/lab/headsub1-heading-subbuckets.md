@@ -99,3 +99,47 @@ TART_HOME=/Volumes/Workspace/tart \
 ```
 
 No Accessibility, no VNC — all arms headless URL / `things:///json` / AppleScript. All reorder wire lists use SCRAMBLED targets so a passing result proves array order CONTROLS placement, not a no-op. Evidence (gitignored, synthetic): `lab/artifacts/headsub1-lab/report.txt`.
+
+---
+
+# HEADSUB2 — confirming two inference gaps #327 relied on (and correcting one)
+
+HEADSUB1 shipped three matrix promotions in #327. Two rested on INFERENCES it never directly probed. HEADSUB2 tests both. One inference was WRONG and the shipped scope was broken; it is corrected in the same change that files this section.
+
+One offline Tart clone (`headsub2-lab`, run 2026-07-31, Things 3.22.11, pinned clock 2026-07-05 12:00; ordering is local — no cloud account). Evening day = **2026-07-05**. Script: [`lab/scripts/research-headsub2.sh`](../../lab/scripts/research-headsub2.sh) (subcommands `setup` / `q1` / `q1fix` / `q2` / `teardown`). All headless (URL scheme + `things:///json` + AppleScript). Evidence (gitignored, synthetic): `lab/artifacts/headsub2-lab/report.txt`.
+
+**Status: RAN + BANKED.** Headlines:
+
+1. **Q1 = (b) — the shipped `heading-someday` compile was BROKEN.** Re-heading a row that is ALREADY under the target heading (`update?id=<u>&list-id=<project>&heading=<same-title>`) is a **same-heading NO-OP on `index`** — the block never reorders. HEADSUB1 proved the back-insert only for LOOSE→heading (Arm B) and unhead→re-head (Arm C), and OVER-GENERALIZED it to "re-head the already-headed block in forward order"; #327 shipped that inert compile. New oddity **[§9l](../things-app-oddities.md#9l)**. **Fixed in this change:** `runHeadingSomeday` now does the **unhead → re-head round-trip** (q1fix, proven below).
+2. **Q1 fix = the round-trip lands target.** Unhead the whole block (clean — `heading`→NULL, `index`/`start=2` preserved, Arm C), THEN re-head each in forward target order → each now-loose row genuinely BACK-INSERTS at the someday-bucket end (Arm B), so the block lands the exact scrambled target. `start=2` preserved throughout.
+3. **Q2 = CONFIRMED — the area-direct evening bounce matches the project-child law.** An area-direct this-evening to-do bounced `when=today → when=evening` FRONT-inserts deterministically (below the evening group's `todayIndex` min), with the **area FK byte-identical**, `startBucket=1`, and today `startDate` all preserved — the SAME direction and state-law as HEADSUB1 Arm D's project child and the loose evening control. #327's routing of area-direct evening children to the shipped `evening` scope is correct by more than inference now.
+
+## Verdict table (observed)
+
+| Q | Question | Verdict |
+|---|---|---|
+| **Q1**-someday | re-head 4 someday children ALREADY under one heading, in scrambled forward target order, via the shipped direct-re-head leg — does each leg back-insert (order = target) or is a same-heading re-head a no-op? | **(b) SAME-HEADING NO-OP.** Original `index` order `Q1-s1<Q1-s2<Q1-s3<Q1-s4` (idx −363/−136/−83/0) stayed **byte-identical through all four re-head legs** — the target `s3,s1,s4,s2` was never realized. `heading`=Q1S-H, `start=2` unchanged. The shipped `heading-someday` protocol (re-head-in-forward-order WITHOUT unheading) is therefore **inert** — it can never reorder an already-headed block. → oddity **§9l**; scope **fixed** this change. |
+| **Q1**-anytime | same, for 4 ANYTIME already-headed children (the direct-re-head LAW, though anytime ships on the bounce) | **(b) SAME-HEADING NO-OP, identically.** `Q1-a1<Q1-a2<Q1-a3<Q1-a4` (idx −538/−264/−91/0) unchanged through all four legs; `heading`=Q1A-H, `start=1` kept. Confirms the no-op is a property of the same-heading move itself, not of the someday class. (Within-heading anytime order is unaffected — it ships on the `someday↔anytime` bounce BOUNCE2-h, not a same-heading re-head.) |
+| **Q1**-fix | the FIX law: unhead the block (`update?list-id=<p>`), then re-head each in forward target order | **LANDS TARGET — the wireable already-headed someday sort.** Unhead all four (clean: `heading`→NULL, `project`→Q1F-P, `index` −583/−298/−169/0 preserved, `start=2` kept), then re-head in forward target order `f3,f1,f4,f2` → final `index` order **`Q1-f3(−978)<Q1-f1(−583)<Q1-f4(−459)<Q1-f2(−298)` == target**, all re-headed (`heading`=Q1F-H), `start=2` preserved. Each now-loose row back-inserts at the someday-bucket end (Arm B), so forward-order re-heads realize the target. |
+| **Q2**-area evening | an area-DIRECT this-evening to-do bounced `when=today→when=evening`: same front-insert law as the project child (Arm D)? area FK + `startBucket=1` + `startDate` preserved? | **CONFIRMED — same front-insert, state-preserving.** Single-item bounce (`Q2-ae2`) re-entered BELOW the evening group's `todayIndex` min (front-insert: `ae2<ae3<ae1`), area FK **hex byte-identical** pre/post (`37436B34…`), `startBucket=1`, `startDate` 132805248 (07-05) all kept, `project`/`heading` NULL. A FORWARD-order full-block bounce (`ae1,ae2,ae3`) produced the REVERSE final order (`ae3<ae2<ae1`) — a front-insert — matching the loose evening control (`le3<le2<le1`) run alongside. Identical to HEADSUB1 Arm D's project child: the shipped `evening` BounceSpec (`away=today, back=evening, direction=front, rankKey=todayIndex`) applies to area-direct children unchanged. Inherits the R07 reminder-loss caveat. |
+
+## The correction (Q1)
+
+**What #327 shipped:** `runHeadingSomeday` re-headed a heading's someday children in forward target order via `todo.move` (`update?list-id=<project>&heading=<title>`) on rows *already under that heading*, expecting the Arm B back-insert. Q1 proves that call is a **same-heading no-op** — the block never moves. The scope silently did nothing (it would report `ok` while leaving the order untouched, because the leg mutations "succeed").
+
+**Root cause:** HEADSUB1 measured the back-insert on two paths — a LOOSE movee arriving under a heading (Arm B) and an UNHEADED row re-headed (Arm C) — and generalized to "re-head-in-order sorts an already-headed block." It never tested a row already sitting under the target heading. The move-to-heading back-insert only fires when the heading FK actually CHANGES (§9l).
+
+**The fix (this change):** `runHeadingSomeday` now runs the **unhead → re-head round-trip** (q1fix): unhead the whole block first (clean, `index`/`start=2` preserved), then re-head each in forward target order so each now-loose row genuinely back-inserts. Two `todo.move` legs per item (unhead + re-head) instead of one, a terminal order verify, and — like `heading-day` — a mid-protocol failure leaves items UNHEADED in the project root and fails loudly. Still no experimental/bounce gate (pure URL move legs). The `heading-someday` matrix cell stays **GUARANTEED**; only the mechanism changed.
+
+## Reproduce
+
+```sh
+TART_HOME=/Volumes/Workspace/tart \
+  bash lab/scripts/research-headsub2.sh setup      # clone+boot+airgap+clock-pin+seed both questions
+  bash lab/scripts/research-headsub2.sh q1          # re-head already-headed (someday + anytime) => NO-OP (b)
+  bash lab/scripts/research-headsub2.sh q1fix       # unhead -> re-head round-trip => lands target (the fix law)
+  bash lab/scripts/research-headsub2.sh q2          # area-child evening bounce => front-insert, area FK preserved
+  bash lab/scripts/research-headsub2.sh teardown
+```
+
+All reorder wire lists use SCRAMBLED targets so a passing result proves array order CONTROLS placement. Evidence (gitignored, synthetic): `lab/artifacts/headsub2-lab/report.txt`.

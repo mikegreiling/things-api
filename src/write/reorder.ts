@@ -765,14 +765,17 @@ async function runLooseDay(
 // rides the `heading` bounce, and the evening sub-bucket stays app-default (its
 // display ordering axis is GUI-ambiguous — Arm B).
 //
-//   heading-someday: re-head the block in FORWARD target order (Arm B-someday /
-//     Arm C). Each re-head (`todo.move` list-id+heading) BACK-INSERTS the item
-//     at the heading someday-bucket end (§9h renumber), so forward-order legs
-//     land the exact target order — deterministic, `start=2` preserved. Compiles
-//     like the `heading` anytime bounce (back-insert suffix, co-touch disclosure)
-//     but with ONE re-head leg per item instead of the two-leg when= bounce, and
-//     no json collapse (re-head is a list-id move, not a when= reindex). Needs
-//     neither the experimental surface nor the bounce (pure URL move legs).
+//   heading-someday: UNHEAD the block, then RE-HEAD it in FORWARD target order
+//     (Arm B-someday / Arm C + HEADSUB2 Q1). A re-head of a row ALREADY under the
+//     target heading is a same-heading NO-OP (HEADSUB2 Q1(b) — index untouched),
+//     so the block MUST be unheaded FIRST (clean — heading→NULL, index/start=2
+//     preserved, Arm C); the re-head then BACK-INSERTS each now-loose row at the
+//     heading someday-bucket end (§9h renumber, Arm B), so forward-order re-heads
+//     land the exact target order (HEADSUB2 q1fix), `start=2` preserved. Two URL
+//     move legs per item (unhead + re-head), no json collapse (re-head is a list-
+//     id move, not a when= reindex); needs neither the experimental surface nor
+//     the bounce. (The earlier direct-re-head-only compile shipped in #327 was a
+//     silent no-op — HEADSUB2 §Q1 — corrected here.)
 //
 //   heading-day: the unhead → container-day reorder → re-head round-trip (Arm
 //     C2). The native container-day reorder RIPS a headed child's heading FK on
@@ -792,41 +795,32 @@ function headingProjectUuid(deps: WriteDeps, headingUuid: string | null): string
   return row?.project ?? null;
 }
 
-/** null = still an eligible someday child of the heading; else a problem string. */
-function checkStillHeadingSomeday(
-  deps: WriteDeps,
-  uuid: string,
-  headingUuid: string,
-): string | null {
-  const row = deps.db
-    .prepare("SELECT status, trashed, type, heading, start, startDate FROM TMTask WHERE uuid = ?")
-    .get(uuid) as
-    | {
-        status: number;
-        trashed: number;
-        type: number;
-        heading: string | null;
-        start: number;
-        startDate: number | null;
-      }
-    | undefined;
-  if (row === undefined) return "the item no longer exists";
-  if (row.trashed !== 0) return "the item was trashed";
-  if (row.status !== 0) return "the item is no longer open";
-  if (row.type !== 0) return "the item is not a to-do";
-  if (row.heading !== headingUuid) return "the to-do left the heading";
-  if (row.start !== 2 || row.startDate !== null) return "the to-do is no longer a Someday child";
-  return null;
+/** Abort payload for heading-someday: items are UNHEADED in the project root. */
+function headingSomedayAborted(
+  detail: string,
+  placed: string[],
+  remaining: string[],
+  cause: MutationResult | null,
+): ReorderResult {
+  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
 }
 
 /**
- * heading-someday: re-head the block in forward target order (HEADSUB1 Arm B-
- * someday / Arm C). Structurally the `heading` bounce's back-insert path — the
- * SUFFIX from the first named movee's target slot to the bucket end is re-headed
- * FORWARD (each appends), the untouched prefix stays above, and unnamed siblings
- * inside the suffix are co-re-headed (disclosed). The per-item leg is a single
- * `todo.move` re-head; `start=2` is preserved throughout, no experimental/bounce
- * surface is required, and there is no json collapse (re-head is a list-id move).
+ * heading-someday: the unhead → re-head round-trip (HEADSUB1 Arm B-someday / Arm
+ * C + HEADSUB2 Q1). A re-head of a row ALREADY under the target heading is a
+ * same-heading NO-OP (HEADSUB2 Q1(b) — the app leaves `index` untouched), so the
+ * block cannot be sorted by re-heading in place. The block is UNHEADED first
+ * (clean — heading→NULL, `index`/`start=2` preserved, Arm C), then RE-HEADED in
+ * forward target order — each now-loose row BACK-INSERTS at the heading someday-
+ * bucket end (§9h renumber, Arm B), so forward-order re-heads land the exact
+ * target order (HEADSUB2 q1fix). The block is the SUFFIX from the first named
+ * movee's target slot to the bucket end; the untouched prefix stays headed above
+ * (its `index` is below the re-inserted block), and unnamed siblings inside the
+ * suffix are co-unheaded + co-re-headed (disclosed as `touched`). Two `todo.move`
+ * legs per item (unhead + re-head), `start=2` preserved throughout; needs neither
+ * the experimental surface nor the bounce, and there is no json collapse (re-head
+ * is a list-id move). Non-atomic: a mid-protocol failure leaves items UNHEADED in
+ * the project root and fails loudly with placed/remaining detail.
  */
 async function runHeadingSomeday(
   deps: WriteDeps,
@@ -845,8 +839,8 @@ async function runHeadingSomeday(
   const preRanks: Record<string, unknown> = {};
   for (const m of pre.members) preRanks[m.uuid] = m.rank;
 
-  // Back-insert (like the heading bounce): re-head the SUFFIX from the first named
-  // movee's target slot to the bucket end, forward-iterating so each appends.
+  // Back-insert (like the heading bounce): the SUFFIX from the first named movee's
+  // target slot to the bucket end is unheaded then re-headed forward (each appends).
   const targetOrder = pre.wireList;
   const named = new Set(params.named ?? params.uuids);
   const movedPositions = targetOrder.map((u, i) => (named.has(u) ? i : -1)).filter((i) => i >= 0);
@@ -863,7 +857,7 @@ async function runHeadingSomeday(
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
   if (block.length > cap) {
     problems.push(
-      `${block.length} touched items exceed the cap of ${cap} (each re-head is one verified move` +
+      `${block.length} touched items exceed the cap of ${cap} (each costs an unhead + re-head leg` +
         (touchedUnnamed.length > 0
           ? `; ${touchedUnnamed.length} unnamed heading sibling(s) are co-re-headed to honor the order`
           : "") +
@@ -898,112 +892,104 @@ async function runHeadingSomeday(
         vector: "url-scheme",
         tier: 0,
         invocation:
-          `re-head ×${block.length} (back-insert, forward order` +
+          `unhead ×${block.length} → re-head ×${block.length} (back-insert, forward order` +
           (touchedUnnamed.length > 0
             ? `, touches ${touchedUnnamed.length} unnamed sibling(s)`
             : "") +
-          "): each `list-id=<project>&heading=<heading>` appends at the someday-bucket end; " +
-          "one verify per re-head",
+          "): a same-heading re-head is a no-op (HEADSUB2 Q1), so the block is unheaded first; " +
+          "each `list-id=<project>&heading=<heading>` then appends at the someday-bucket end; " +
+          "one terminal order verify",
         expectedDelta: { mode: "ordering", key: "index", sequence: block },
         hazardsChecked: ["H-REORDER-SCOPE"],
       },
     };
   }
 
-  const placed: string[] = [];
-  for (let i = 0; i < block.length; i++) {
-    const uuid = block[i] as string;
-    const memberProblem = checkStillHeadingSomeday(deps, uuid, headingUuid as string);
-    if (memberProblem !== null) {
+  const legOpts = looseDayLegOptions(options, txnId);
+
+  // 1. UNHEAD each block member (clean — heading→NULL, index/start=2 preserved).
+  //    A same-heading re-head is a NO-OP (HEADSUB2 Q1(b)), so the block MUST be
+  //    unheaded before it can be re-inserted in order.
+  const unheaded: string[] = [];
+  for (const uuid of block) {
+    const res = await runMutation(deps, "todo.move", { uuid, noHeading: true }, legOpts);
+    if (res.kind !== "ok") {
       auditSummary(
         deps,
         params,
         startedAt,
         "verify-failed:mismatch",
-        { placed: [...placed] },
-        {
-          pre: preRanks,
-          txnId,
-          actor,
-        },
+        { placed: [...unheaded] },
+        { pre: preRanks, txnId, actor },
       );
-      return {
-        kind: "bounce-aborted",
-        op: "reorder",
-        detail:
-          `aborted before re-heading ${uuid}: ${memberProblem} (Things was likely edited ` +
-          "concurrently); already-re-headed items keep their new positions",
-        placed: [...placed],
-        remaining: block.slice(i),
-        cause: null,
-      };
+      return headingSomedayAborted(
+        `unheading ${uuid} failed — ${unheaded.length} item(s) are UNHEADED in project ` +
+          `${projectUuid} and must be moved back under the heading manually`,
+        unheaded,
+        block.slice(unheaded.length),
+        res,
+      );
     }
-    const leg = await runMutation(
+    unheaded.push(uuid);
+  }
+
+  // 2. RE-HEAD each in forward target order — each now-loose row BACK-INSERTS at
+  //    the someday-bucket end (Arm B), so forward-order re-heads land the target.
+  const placed: string[] = [];
+  for (const uuid of block) {
+    const res = await runMutation(
       deps,
       "todo.move",
       { uuid, project: { uuid: projectUuid as string }, heading: headingUuid as string },
-      legOptions(options, txnId),
+      legOpts,
     );
-    if (leg.kind !== "ok") {
+    if (res.kind !== "ok") {
+      const stillUnheaded = block.filter((u) => !placed.includes(u));
       auditSummary(
         deps,
         params,
         startedAt,
         "verify-failed:mismatch",
         { placed: [...placed] },
-        {
-          pre: preRanks,
-          txnId,
-          actor,
-        },
+        { pre: preRanks, txnId, actor },
       );
-      return {
-        kind: "bounce-aborted",
-        op: "reorder",
-        detail:
-          `re-heading ${uuid} failed — it stayed in its prior position; ${placed.length} ` +
-          "item(s) already re-headed keep their new positions",
-        placed: [...placed],
-        remaining: block.slice(i),
-        cause: leg,
-      };
+      return headingSomedayAborted(
+        `re-heading ${uuid} failed — ${stillUnheaded.length} item(s) remain UNHEADED in project ` +
+          `${projectUuid} (ordered) and must be moved back under the heading manually`,
+        placed,
+        stillUnheaded,
+        res,
+      );
     }
     placed.push(uuid);
+  }
 
-    const prefixCheck = await pollUntilVerified(
-      () =>
-        evaluateDelta(
-          { mode: "ordering", key: "index", sequence: [...placed] },
-          createDbReader(deps.db),
-          { modDates: {}, fields: {} },
-        ),
-      options.verifyTimeoutMs ?? 4000,
-      deps.poller ?? {},
+  // 3. Terminal verify: the block's index order matches the target.
+  const verify = await pollUntilVerified(
+    () =>
+      evaluateDelta({ mode: "ordering", key: "index", sequence: block }, createDbReader(deps.db), {
+        modDates: {},
+        fields: {},
+      }),
+    options.verifyTimeoutMs ?? 4000,
+    deps.poller ?? {},
+  );
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...placed] },
+      { pre: preRanks, txnId, actor },
     );
-    if (prefixCheck.kind !== "ok") {
-      auditSummary(
-        deps,
-        params,
-        startedAt,
-        "verify-failed:mismatch",
-        { placed: [...placed] },
-        {
-          pre: preRanks,
-          txnId,
-          actor,
-        },
-      );
-      return {
-        kind: "bounce-aborted",
-        op: "reorder",
-        detail:
-          `re-headed items fell out of order after ${uuid} (concurrent edit?); ` +
-          "re-run once Things is idle",
-        placed: [...placed],
-        remaining: block.slice(i + 1),
-        cause: null,
-      };
-    }
+    return headingSomedayAborted(
+      "the heading someday sub-bucket did not land the requested order after re-heading; " +
+        "re-run once Things is idle",
+      placed,
+      [],
+      null,
+    );
   }
 
   const reader = createDbReader(deps.db);
