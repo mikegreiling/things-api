@@ -219,7 +219,7 @@ function scheduleBucket(row: MoveeRow, packedToday: number): string {
  *   - `prohibited` → a protocol exists but is DESTRUCTIVE (never attempt it).
  */
 type ScopeTarget =
-  | { scope: ReorderScope; container?: string }
+  | { scope: ReorderScope; container?: string; day?: number }
   | { scope: null; reason: string; prohibited?: boolean };
 
 /** An app-default target for a bounce-dependent placement while bounce is off. */
@@ -267,7 +267,16 @@ function reorderTargetOf(
   const bucket = scheduleBucket(row, packedToday);
   // A same-day (today-proper) or future scheduled day, startBucket=0 — the
   // DAYORD-b container todayIndex surface. The evening sub-bucket is distinct.
+  // NB: for a to-do an ARRIVED day (today-proper) is intercepted at the top of
+  // the isTodo block and routed to the today scope (it is a Today-view member,
+  // not a day-group member); the today-proper disjunct here only bears on the
+  // projects path below (where an arrived scheduled project stays app-default).
   const containerDay = bucket === "today" || bucket.startsWith("scheduled:");
+  // The packed scheduled day, threaded into the future day-group targets so their
+  // refusal / disclosure copy names the DATE — a day-group's identity IS its day
+  // (two rows on different days are different groups). Reached only for strictly-
+  // future scheduled rows below, so startDate is non-null there.
+  const dayField: { day?: number } = row.startDate !== null ? { day: row.startDate } : {};
   // ORDFIN2 TOMORROWLIST: a row scheduled for TOMORROW (startBucket=0) rides the
   // native one-call `list "Tomorrow"` day-sort instead of the scratch-park
   // compound (loose-day / area-day) or the project-row app-default. It re-ranks
@@ -277,49 +286,52 @@ function reorderTargetOf(
   // heading children) keep their existing native/compound paths.
   const isTomorrow = row.startBucket === 0 && row.startDate === packedTomorrowOf(packedToday);
   if (isTodo) {
+    // ARRIVED Today-view members route DATE-FIRST, before any container branch.
+    // A dated row whose day has landed (startDate <= today) is a Today member —
+    // the GUI renders arrived/today-dated rows in the TODAY view; the Upcoming
+    // day-groups hold STRICTLY FUTURE dates only. So it reorders via the shipped
+    // cross-container today/evening scopes exactly like an undated Today member,
+    // regardless of its container (loose, project-, heading-, or area-child).
+    // `scheduleBucket` already classifies arrived rows date-first (#325 — arrived
+    // → today/evening, future → scheduled:<date>), so route on its verdict
+    // (single-source, no re-derive). Only strictly-future dates fall through to
+    // the per-container day-groups below. This is the same class of bug #325 fixed
+    // in `scheduleBucket`: classifying by date-group before checking arrived-ness
+    // misrouted an arrived member into a future day-group compound.
+    if (bucket === "today") return { scope: "today" };
+    if (bucket === "evening") {
+      // Evening flag is live (startBucket=1) only while startDate == today (§9n);
+      // scheduleBucket already gates this — an arrived evening member front-inserts
+      // via the shipped `evening` bounce (container FK + startBucket=1 preserved,
+      // R07 reminder-loss caveat inherited). Same scope for loose and every child.
+      return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
+    }
     if (row.heading !== null) {
       // Within-heading order (HEADSUB1). anytime → the forward-order bounce
       // (BOUNCE2-h). someday → the re-head-in-order back-insert (heading-someday,
-      // Arm B/C — pure URL move legs, no gate). same-day scheduled → the unhead →
-      // container-day → re-head round-trip (heading-day, Arm C2 — gated like
-      // container-day at runtime, since the direct native reorder RIPS the heading
-      // FK, §9k). evening stays app-default (its display axis is GUI-ambiguous —
-      // Arm B). --before/--after against an unmoved sibling rides these scopes'
-      // co-touch (handled by the anchor path), not here.
+      // Arm B/C — pure URL move legs, no gate). FUTURE same-day scheduled → the
+      // unhead → container-day → re-head round-trip (heading-day, Arm C2 — gated
+      // like container-day at runtime, since the direct native reorder RIPS the
+      // heading FK, §9k). --before/--after against an unmoved sibling rides these
+      // scopes' co-touch (handled by the anchor path), not here.
       if (bucket === "anytime") {
         return bounceEnabled
           ? { scope: "heading", container: row.heading }
           : bounceDisabledTarget("within-heading order");
       }
       if (bucket === "someday") return { scope: "heading-someday", container: row.heading };
-      if (containerDay) return { scope: "heading-day", container: row.heading };
-      if (bucket === "evening") {
-        // ORDFIN1 Arm 2b: the today↔evening bounce preserves a HEADED evening
-        // child's heading FK byte-identical (startBucket round-trips 1→0→1, today
-        // startDate kept), so the shipped `evening` bounce orders it in the Today/
-        // Evening bucket unchanged — no new machinery, and there was never a
-        // display-axis ambiguity (the earlier app-default justification was wrong).
-        // R07 reminder-loss caveat inherited from the loose evening scope.
-        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
-      }
+      if (containerDay) return { scope: "heading-day", container: row.heading, ...dayField };
       return {
         scope: null,
         reason: `a heading's ${bucket} sub-bucket (no wired order surface for it)`,
       };
     }
     if (row.project !== null) {
-      // Project unheaded: a same-day scheduled bucket re-ranks todayIndex via the
-      // container specifier, date-preserving (DAYORD-b); the evening sub-bucket
-      // stays app-default; everything else (anytime / someday / inbox) re-ranks
-      // cleanly by index through the native project reorder (O04, SOMEORD-b).
-      if (containerDay) return { scope: "container-day", container: row.project };
-      if (bucket === "evening") {
-        // HEADSUB1 Arm D: a container child's evening sub-bucket is the SAME front-
-        // insert law as a loose evening item — the shipped `evening` bounce accepts
-        // it unchanged (project FK + startBucket=1 + startDate preserved). Inherits
-        // the R07 reminder-loss caveat the loose evening scope already carries.
-        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
-      }
+      // Project unheaded: a FUTURE same-day scheduled bucket re-ranks todayIndex via
+      // the container specifier, date-preserving (DAYORD-b); everything else
+      // (anytime / someday) re-ranks cleanly by index through the native project
+      // reorder (O04, SOMEORD-b).
+      if (containerDay) return { scope: "container-day", container: row.project, ...dayField };
       return { scope: "project", container: row.project };
     }
     if (row.area !== null) {
@@ -331,29 +343,21 @@ function reorderTargetOf(
           : bounceDisabledTarget("an area's someday order");
       }
       if (bucket === "anytime") return { scope: "area", container: row.area };
-      if (bucket === "evening") {
-        // HEADSUB1 Arm D: a container child's evening sub-bucket rides the shipped
-        // `evening` bounce (front-insert, container FK + startBucket=1 preserved);
-        // an area-direct evening child is a container child too. R07 caveat inherited.
-        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
-      }
-      // A direct-area to-do's scheduled DAY: ORDFIN1 Arm 3 wires the `area-day`
-      // park-sort-restore compound (park each dated child into a scratch PROJECT →
-      // container-day reorder → restore to the area) — date/todayIndex/start=2/
-      // reminder/deadline preserved, area FK round-trips. The destructive AREA
-      // reorder specifier (§9f) is NEVER used. Gated like container-day. When the
-      // day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
+      // A direct-area to-do's FUTURE scheduled DAY: ORDFIN1 Arm 3 wires the
+      // `area-day` park-sort-restore compound (park each dated child into a scratch
+      // PROJECT → container-day reorder → restore to the area) — date/todayIndex/
+      // start=2/reminder/deadline preserved, area FK round-trips. The destructive
+      // AREA reorder specifier (§9f) is NEVER used. Gated like container-day. When
+      // the day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
       if (containerDay)
-        return isTomorrow ? { scope: "tomorrow" } : { scope: "area-day", container: row.area };
+        return isTomorrow
+          ? { scope: "tomorrow", ...dayField }
+          : { scope: "area-day", container: row.area, ...dayField };
       return { scope: null, reason: "a direct-area to-do's scheduled bucket (app-default)" };
     }
     // loose:
     if (bucket === "inbox") return { scope: "inbox" };
     if (bucket === "someday") return { scope: "someday" };
-    if (bucket === "today") return { scope: "today" };
-    if (bucket === "evening") {
-      return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
-    }
     if (bucket === "anytime") {
       // ANYBNC reverse-order bounce for area-less loose anytime to-dos.
       return bounceEnabled
@@ -365,7 +369,7 @@ function reorderTargetOf(
     // allow-experimental like container-day (the pipeline / orchestrator explains
     // when the gate is off); NEVER routed through an area scratch (§9f). When the
     // day is tomorrow the native `list "Tomorrow"` one-call sort replaces it.
-    return isTomorrow ? { scope: "tomorrow" } : { scope: "loose-day" };
+    return isTomorrow ? { scope: "tomorrow", ...dayField } : { scope: "loose-day", ...dayField };
   }
   // projects:
   if (row.area !== null) {
@@ -983,8 +987,9 @@ async function runUpcomingDayReposition(
   position: MovePosition | undefined,
   options: WriteOptions,
   scope: "upcoming-day" | "tomorrow",
+  day: number,
 ): Promise<MoveResult> {
-  const target: ScopeTarget = { scope };
+  const target: ScopeTarget = { scope, day };
   const movees = rows.map((r) => r.uuid);
   const members = bucketMembers(deps, target, movees[0]);
 
@@ -1092,7 +1097,7 @@ async function repositionInPlace(
     // rides the native one-call `list "Tomorrow"` sort; any other future day
     // rides the scratch-park upcoming-day compound.
     const scope = sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "upcoming-day";
-    return runUpcomingDayReposition(deps, op, rows, position, options, scope);
+    return runUpcomingDayReposition(deps, op, rows, position, options, scope, sharedDay);
   }
 
   // One shared STRUCTURAL container (rule 2 / the cross-container guard).
@@ -1496,10 +1501,25 @@ function legOptions(options: WriteOptions): WriteOptions {
 
 function describeScope(target: ScopeTarget): string {
   if (target.scope === null) return target.reason;
-  if (target.scope === "loose-day") return "the loose future-day group";
-  if (target.scope === "area-day") return "the direct-area future-day group";
-  if (target.scope === "upcoming-day") return "the cross-container Upcoming day-group";
+  // A day-group's identity IS its date — name it so cross-day refusals read
+  // coherently (e.g. "the loose 2026-08-05 day-group" vs "…2026-08-07…"), never
+  // the self-contradictory date-less "the loose future-day group" on both sides.
+  const day = target.day !== undefined ? decodePackedDate(target.day) : null;
+  if (target.scope === "loose-day") {
+    return day !== null ? `the loose ${day} day-group` : "the loose future-day group";
+  }
+  if (target.scope === "area-day") {
+    return day !== null ? `the direct-area ${day} day-group` : "the direct-area future-day group";
+  }
+  if (target.scope === "upcoming-day") {
+    return day !== null
+      ? `the cross-container ${day} Upcoming day-group`
+      : "the cross-container Upcoming day-group";
+  }
   if (target.scope === "tomorrow") return "the Tomorrow day-group";
+  if ((target.scope === "container-day" || target.scope === "heading-day") && day !== null) {
+    return `the ${target.scope} ${target.container} day-group (${day})`;
+  }
   return target.container !== undefined
     ? `the ${target.scope} ${target.container}`
     : `the ${target.scope} list`;
