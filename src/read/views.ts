@@ -806,11 +806,20 @@ export function logbookView(
     binds.push(resolveProjectUuid(db, options.project));
   }
   if (options?.area !== undefined) {
-    const areaUuid = resolveAreaUuid(db, options.area);
-    where.push(
-      `(t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
-    );
-    binds.push(areaUuid, areaUuid);
+    if (isLooseRef(options.area)) {
+      // `--area loose`: the area-less logged rows — effective area is null (own
+      // area null AND no area-carrying containing project). The inversion of the
+      // real-area subtree keep-rule below.
+      where.push(
+        `t.area IS NULL AND (${EFF_PROJECT} IS NULL OR NOT EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area IS NOT NULL))`,
+      );
+    } else {
+      const areaUuid = resolveAreaUuid(db, options.area);
+      where.push(
+        `(t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
+      );
+      binds.push(areaUuid, areaUuid);
+    }
   }
   if (options?.since !== undefined) {
     where.push("t.stopDate >= ?");
@@ -1206,9 +1215,19 @@ export function searchView(
     scopeBinds.push(uuid, uuid);
   }
   if (options?.area !== undefined) {
-    const uuid = resolveAreaUuid(db, options.area);
-    scope.push("t.area = ?");
-    scopeBinds.push(uuid);
+    if (isLooseRef(options.area)) {
+      // `--area loose`: the area-less hits — effective area is null (own area
+      // null AND no area-carrying containing project). Keeps `loose` meaning one
+      // thing across every surface, even though the real-area filter here is
+      // direct-only; inbox captures (area-less) are legitimately included.
+      scope.push(
+        `t.area IS NULL AND (${EFF_PROJECT} IS NULL OR NOT EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area IS NOT NULL))`,
+      );
+    } else {
+      const uuid = resolveAreaUuid(db, options.area);
+      scope.push("t.area = ?");
+      scopeBinds.push(uuid);
+    }
   }
   const tf = tagFilter(db, options);
 

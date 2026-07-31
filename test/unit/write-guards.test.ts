@@ -195,22 +195,35 @@ describe("H-CHECKLIST-REPLACE", () => {
 });
 
 describe("H-REOPEN-RESOLVED-PROJECT", () => {
-  it("blocks adds/moves into a completed project without the ack", () => {
-    seedProject(fixture.db, { title: "Done Project", status: "completed" });
+  it("blocks adds/moves into a completed project (reached BY UUID) without the ack", () => {
+    // A completed project is not a destination by NAME any more (open-only name
+    // resolution — PLOG1); it is reachable only by uuid (explicit intent), which
+    // is exactly where this reopen hazard fires.
+    const done = seedProject(fixture.db, { title: "Done Project", status: "completed" });
     const todo = seedTodo(fixture.db, { title: "mover" });
-    expect(check("todo.add", { title: "n", project: { title: "Done Project" } })?.hazard).toBe(
+    expect(check("todo.add", { title: "n", project: { uuid: done } })?.hazard).toBe(
       "H-REOPEN-RESOLVED-PROJECT",
     );
-    expect(check("todo.move", { uuid: todo, project: { title: "Done Project" } })?.hazard).toBe(
+    expect(check("todo.move", { uuid: todo, project: { uuid: done } })?.hazard).toBe(
       "H-REOPEN-RESOLVED-PROJECT",
     );
     expect(
       check(
         "todo.add",
-        { title: "n", project: { title: "Done Project" } },
+        { title: "n", project: { uuid: done } },
         { acknowledgeProjectReopen: true },
       ),
     ).toBeNull();
+  });
+
+  it("a completed project is NOT a destination BY NAME — not-found with a by-uuid hint", () => {
+    seedProject(fixture.db, { title: "Done Project", status: "completed" });
+    const todo = seedTodo(fixture.db, { title: "mover" });
+    const block = check("todo.move", { uuid: todo, project: { title: "Done Project" } });
+    expect(block?.hazard).toBe("H-UNKNOWN-DESTINATION");
+    expect(block?.detail).toContain("project not found");
+    expect(block?.detail).toContain("1 completed project matches this name");
+    expect(block?.detail).toContain("target it by uuid if intended");
   });
 });
 

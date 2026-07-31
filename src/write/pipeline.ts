@@ -424,6 +424,10 @@ export async function runMutation<K extends OperationKind>(
             // project verb stays live-scoped (a trashed project resolves by uuid
             // only).
             op === "project.restore",
+            // Reopen's whole purpose is a non-open target, so it (alone) widens
+            // the name pool to completed/canceled projects; every other verb
+            // resolves a done project by uuid only (open-only by name — PLOG1).
+            op === "project.reopen",
           )
         : resolveTaskUuidPrefix(deps.db, p["uuid"], "to-do", taskScope);
     params = { ...params, uuid };

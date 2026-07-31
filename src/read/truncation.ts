@@ -217,7 +217,9 @@ export function previewSomedaySections(
  * rows are capped, while its future-scheduled and someday project rows always
  * survive (the card renders them under its uncapped Upcoming/Someday sections),
  * so the human view derives entirely from this bounded shape. The toggled
- * later/logged lists and the trashed bucket pass through untouched. Counts ride
+ * later list passes through untouched (the area carries no logged/trashed
+ * buckets — the logbook is `things logbook --area`, trash is `things trash`).
+ * Counts ride
  * the same grouped-block shape the sidebar catalogues emit (kind "projects" =
  * the active project-rows section). `now` classifies the schedule split.
  */

@@ -175,7 +175,6 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
       disclosureHint(view.logged.length, "logged item", [{ command: `${base} --show-logged` }]),
     );
   }
-  if (view.trashed.length) lines.push("", bold(`── Trashed (${view.trashed.length}) ──`));
   // PLOG1 discoverability advisory: a completed/canceled (incl. logged) project
   // can still hold OPEN children — the app buries them in every live view, and
   // they surface only here. A flush sibling of the disclosure-hint placeholder

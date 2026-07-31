@@ -84,6 +84,23 @@ import {
   type ViewFilter,
 } from "../../index.ts";
 
+/**
+ * The `--area loose` reserved-word disclosure, shared by every area-filtered
+ * read (today/anytime/someday/upcoming/logbook/search/projects). `loose` ALWAYS
+ * wins over a real area named "Loose"; when one shadows the reserved word, this
+ * names it (by uuid) so it stays targetable — the same semantics the composite
+ * loose view discloses (#333). Returns undefined when the ref is not the reserved
+ * word, or no real area shadows it.
+ */
+function looseAreaWarnings(
+  c: { read: { areas: () => Array<{ uuid: string; title: string }> } },
+  areaRef: string | undefined,
+): string[] | undefined {
+  if (areaRef === undefined || !isLooseRef(areaRef)) return undefined;
+  const shadow = c.read.areas().find((a) => isLooseRef(a.title));
+  return shadow !== undefined ? [looseShadowNotice(shadow.uuid)] : undefined;
+}
+
 /** Result of an `open` command: the reveal URI, and whether it was simulated. */
 export interface RevealResult {
   uri: string;
@@ -212,10 +229,12 @@ export function registerReadCommands(program: Command): void {
             // The renderer keeps This Evening honest under truncation from the
             // metadata's per-section counts; the lines are precomputed here and
             // the global footer (whole-view remainder) is appended by the driver.
+            const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: view,
               truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
+              ...(warnings !== undefined && { warnings }),
               lines: renderToday(view, truncation.sections, base, { eveningOnly }),
             };
           },
@@ -423,10 +442,12 @@ export function registerReadCommands(program: Command): void {
               areaLimit: area.limit,
               projectLimit: project.limit,
             });
+            const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: view,
               truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
+              ...(warnings !== undefined && { warnings }),
               lines: renderAnytimePreview(view, truncation, limits, base),
             };
           },
@@ -552,10 +573,12 @@ export function registerReadCommands(program: Command): void {
                     ) ?? 0),
                   0,
                 );
+            const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: view,
               truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
+              ...(warnings !== undefined && { warnings }),
               lines: renderSomedayPreview(
                 view,
                 truncation,
@@ -722,10 +745,12 @@ export function registerReadCommands(program: Command): void {
                 ),
               );
             }
+            const warnings = looseAreaWarnings(c, opts.area);
             return {
               data,
               truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
+              ...(warnings !== undefined && { warnings }),
               lines,
             };
           },
@@ -739,9 +764,12 @@ export function registerReadCommands(program: Command): void {
   program
     .command("logbook")
     .description(
-      "Completed and canceled items, most recent first, grouped under month headings " +
-        "(year appended beyond the current year). Scope with --area (direct items + its " +
-        "projects' children, heading-nested included) / --project (all children, " +
+      "Completed and canceled items, most recent first (stopDate DESC), grouped under " +
+        "month headings (year appended beyond the current year). The logbook is FLAT and " +
+        "CHRONOLOGICAL — projects and to-dos are peer rows, so a logged project and its " +
+        "individually-logged children each get their own line. Scope with --area " +
+        "(SUBTREE-INCLUSIVE: the area's direct items AND the rows inside its projects, " +
+        "heading-nested included; `loose` = the area-less rows) / --project (all children, " +
         "heading-nested included) / --tag; bound the logged date with --since/--until.",
     )
     .option("--limit <n>", LIMIT_DESC)
@@ -819,10 +847,12 @@ export function registerReadCommands(program: Command): void {
               ...tagFilterFields(opts),
               limit: effectiveLimit,
             });
+            const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: items,
               truncation,
               ...(areaFilter !== undefined && { filter: areaFilter }),
+              ...(warnings !== undefined && { warnings }),
             };
           },
           (items: ListItem[]) => renderLogbook(items),
@@ -978,11 +1008,7 @@ export function registerReadCommands(program: Command): void {
         },
         // Reserved-word disclosure: `--area loose` ALWAYS wins over a real area
         // named "Loose"; when one shadows, name it (by uuid) for targeting.
-        (c) => {
-          if (opts.area === undefined || !isLooseRef(opts.area)) return undefined;
-          const shadow = c.read.areas().find((a) => isLooseRef(a.title));
-          return shadow !== undefined ? [looseShadowNotice(shadow.uuid)] : undefined;
-        },
+        (c) => looseAreaWarnings(c, opts.area),
       );
     },
   );
@@ -1147,7 +1173,10 @@ export function registerReadCommands(program: Command): void {
         "include hierarchy descendants) / --type / --overdue (open items past their deadline).",
     )
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
-    .option("--area <ref>", "restrict to one area's direct members (uuid or unique name)")
+    .option(
+      "--area <ref>",
+      "restrict to one area's direct members (uuid or unique name, or `loose` for area-less)",
+    )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
     .option("--untagged", UNTAGGED_DESC)
@@ -1229,7 +1258,8 @@ export function registerReadCommands(program: Command): void {
             ...(opts["trashed"] === true && { trashed: true }),
             ...(all && { all: true }),
           });
-          return { data: items, truncation };
+          const warnings = looseAreaWarnings(c, opts["area"] as string | undefined);
+          return { data: items, truncation, ...(warnings !== undefined && { warnings }) };
         },
         renderSearch,
         base,

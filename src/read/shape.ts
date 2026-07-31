@@ -549,6 +549,8 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
   delete out["scheduled"];
   delete out["repeating"];
   delete out["logged"];
+  // Trashed children live only in `things trash` — never a project-view bucket.
+  // Delete defensively in case an untyped source carries the old key.
   delete out["trashed"];
   // The project card NODE keeps everything (children derive their container from
   // it), but is still an item DTO, so the universal + R10 reshapes apply.
@@ -557,8 +559,9 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
   out["upcoming"] = upcoming;
   out["someday"] = someday;
   out["headings"] = headings;
+  // A project keeps its in-context `logbook` (a project is a bounded object with
+  // a real done-state); trashed children live only in `things trash`.
   out["logbook"] = shapeList(view["logged"], cd, compact);
-  out["trash"] = shapeList(view["trashed"], cd, compact);
   return out;
 }
 
@@ -575,6 +578,9 @@ function shapeAreaView(view: Obj, compact: boolean): Obj {
   delete out["active"];
   delete out["scheduled"];
   delete out["repeating"];
+  // No `logbook` or `trash` bucket: an area's logbook is the bounded query
+  // `things logbook --area <ref>`, and trashed rows live only in `things trash`.
+  // Delete defensively in case an untyped source carries the old keys.
   delete out["logged"];
   delete out["trashed"];
   out["area"] = shapeArea(view["area"]);
@@ -583,8 +589,6 @@ function shapeAreaView(view: Obj, compact: boolean): Obj {
   out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact);
   out["upcoming"] = upcoming;
   out["someday"] = someday;
-  out["logbook"] = shapeList(view["logged"], AREA_CHILD_DROP, compact);
-  out["trash"] = shapeList(view["trashed"], AREA_CHILD_DROP, compact);
   return out;
 }
 

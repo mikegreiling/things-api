@@ -762,14 +762,18 @@ describe("derived trash — children of trashed containers (A24B shallow delete)
     expect(view.active.map((t) => t.title)).toEqual(["Recoverable"]);
   });
 
-  it("a DOUBLE-trashed to-do stays visible in `things trash` AND the project's trashed bucket (the GUI loses it entirely — oddity)", () => {
+  it("a DOUBLE-trashed to-do stays visible in `things trash`; the project view carries NO trashed bucket", () => {
     fixture = buildFixtureDb();
     const p = seedProject(fixture.db, { title: "Binned", trashed: true });
     seedTodo(fixture.db, { title: "Double-trashed", project: p, trashed: true });
     expect(trashView(fixture.db).map((i) => i.title)).toEqual(
       expect.arrayContaining(["Double-trashed", "Binned"]),
     );
-    expect(projectView(fixture.db, p, NOW).trashed.map((t) => t.title)).toEqual(["Double-trashed"]);
+    // Trashed children are excluded from the project view entirely now — no
+    // `trashed` bucket, and the trashed child surfaces in no live bucket.
+    const view = projectView(fixture.db, p, NOW);
+    expect("trashed" in view).toBe(false);
+    expect(view.active.map((t) => t.title)).not.toContain("Double-trashed");
   });
 });
 

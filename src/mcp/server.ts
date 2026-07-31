@@ -956,7 +956,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         area: z
           .string()
           .optional()
-          .describe(`Restrict to one area's direct members (${REF_FORMAT})`),
+          .describe(
+            `Restrict to one area's direct members (${REF_FORMAT}, or \`loose\` for area-less)`,
+          ),
         type: z.enum(["to-do", "project"]).optional(),
         logged: z.boolean().optional().describe("Also include completed/canceled items"),
         trashed: z.boolean().optional().describe("Also include trashed items"),
@@ -1110,7 +1112,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One area's contents: metadata plus its direct to-dos (active first), its " +
-        "projects in canonical order, later (scheduled/repeating/someday), and logged items. " +
+        "projects in canonical order, and later (scheduled/repeating/someday). The area " +
+        "logbook is not returned here — read it with list_view logbook + area; trashed " +
+        "rows live in list_view trash. " +
         `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
