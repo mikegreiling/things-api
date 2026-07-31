@@ -10,7 +10,7 @@ The capabilities that exist NOWHERE in Cultured Code's documentation, discovered
 4. **Backdating existing items**: `set completion date` / `set creation date of to do id X` rewrite history (scf2 P4b) — dead on URL (oddity 2g) and Shortcuts (P4a). Ships as `todo.backdate`.
 5. **`delete <property>` as the un-setter**: `delete parent tag of tag X` un-nests to root (P29); `delete keyboard shortcut of tag` clears the shortcut (21b A4) — where `set … to missing value`/`""` error out.
 6. **`schedule to do id <PROJECT>` works** (P14-A3 — projects inherit the `to do` class); an unwired alternative to `update-project?when=` (decision: document-only, roadmap §D). Also `schedule … for (current date)+N*days` fills the Upcoming gap (A21B).
-7. **`move <trashed to-do> to list "Inbox"` restores from Trash** (E15 — the UI's "Put Back", scriptable); `move <trashed project> to list "Anytime"` restores a project IN PLACE, restoration-faithful (P06/P07).
+7. **`move <trashed to-do> to list "Inbox"` restores from Trash** (E15 — the UI's "Put Back", scriptable); `move <trashed project> to list "Anytime"` restores a project IN PLACE, restoration-faithful (P06/P07). The inverse is the trash path for a **COMPLETED** row: **`move to do id <X> to list "Trash"` trashes a logged to-do that `delete` REFUSES** (`delete to do id <X>` → −1728 "Can't get to do id" on a `status=3` row, though `get`/`set` on it work; `delete` is silently OPEN-only — oddities §5n, SIT5). `move … to list "Trash"` covers both open and completed rows.
 
 ## URL scheme / TJSON
 
