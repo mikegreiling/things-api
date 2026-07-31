@@ -1270,14 +1270,14 @@ export function planUndo(
         number,
       ][];
       if (ranked.length === 0) return irreversible("no pre-ranks were captured");
-      // loose-day pre-ranks are todayIndex values: a tie means the prior order
-      // was genuinely undetermined, so the exact position cannot be reconstructed
-      // (the area.reorder precedent for all-tied ranks).
-      if (requested.scope === "loose-day") {
+      // loose-day / heading-day pre-ranks are todayIndex values: a tie means the
+      // prior order was genuinely undetermined, so the exact position cannot be
+      // reconstructed (the area.reorder precedent for all-tied ranks).
+      if (requested.scope === "loose-day" || requested.scope === "heading-day") {
         const values = ranked.map(([, r]) => r);
         if (new Set(values).size !== values.length) {
           return irreversible(
-            "the loose day-group's todayIndex order before this reorder was all-tied/unreadable, " +
+            "the day-group's todayIndex order before this reorder was all-tied/unreadable, " +
               "so the previous order cannot be reconstructed",
           );
         }
@@ -1289,6 +1289,17 @@ export function planUndo(
         notes.push(
           "the inverse re-runs the UPCORD1 park-sort-unpark protocol with the prior order — it " +
             "creates (and trashes) a fresh scratch project of its own",
+        );
+      }
+      if (requested.scope === "heading-day") {
+        notes.push(
+          "the inverse re-runs the HEADSUB1 unhead → container-day reorder → re-head round-trip " +
+            "with the prior order (needs allow-experimental, like the forward protocol)",
+        );
+      }
+      if (requested.scope === "heading-someday") {
+        notes.push(
+          "the inverse re-heads the block in the prior order (move-to-heading back-insert)",
         );
       }
       notes.push(

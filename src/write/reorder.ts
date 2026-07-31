@@ -258,6 +258,13 @@ export async function runReorder(
   // UPCORD1 park-sort-unpark COMPOUND (scratch project + container-day reorder).
   if (params.scope === "loose-day") return runLooseDay(deps, params, options);
 
+  // HEADSUB1 within-heading sub-bucket compounds (headsub1-heading-subbuckets.md).
+  // heading-someday re-heads the block in forward order (move-to-heading back-
+  // insert); heading-day runs the unhead → container-day reorder → re-head round-
+  // trip (the native container-day reorder alone RIPS the heading FK, §9k).
+  if (params.scope === "heading-someday") return runHeadingSomeday(deps, params, options);
+  if (params.scope === "heading-day") return runHeadingDay(deps, params, options);
+
   const strategy = resolveStrategy(deps, params);
   if (strategy.kind === "blocked") return strategy.result;
 
@@ -372,9 +379,11 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
     case "area-someday":
     case "anytime":
       return { kind: "ok", strategy: "native" };
-    // loose-day is intercepted in runReorder before resolveStrategy runs; this
-    // case exists only for switch exhaustiveness.
+    // loose-day / heading-someday / heading-day are intercepted in runReorder
+    // before resolveStrategy runs; these cases exist only for switch exhaustiveness.
     case "loose-day":
+    case "heading-someday":
+    case "heading-day":
       return { kind: "ok", strategy: "native" };
   }
 }
@@ -747,6 +756,550 @@ async function runLooseDay(
     warnings,
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
   };
+}
+
+// ----------------------------------------------------- heading sub-buckets
+//
+// HEADSUB1 (docs/lab/headsub1-heading-subbuckets.md) settled the per-class order
+// of a heading's sub-buckets. Two are wired here; the third (anytime) already
+// rides the `heading` bounce, and the evening sub-bucket stays app-default (its
+// display ordering axis is GUI-ambiguous — Arm B).
+//
+//   heading-someday: re-head the block in FORWARD target order (Arm B-someday /
+//     Arm C). Each re-head (`todo.move` list-id+heading) BACK-INSERTS the item
+//     at the heading someday-bucket end (§9h renumber), so forward-order legs
+//     land the exact target order — deterministic, `start=2` preserved. Compiles
+//     like the `heading` anytime bounce (back-insert suffix, co-touch disclosure)
+//     but with ONE re-head leg per item instead of the two-leg when= bounce, and
+//     no json collapse (re-head is a list-id move, not a when= reindex). Needs
+//     neither the experimental surface nor the bounce (pure URL move legs).
+//
+//   heading-day: the unhead → container-day reorder → re-head round-trip (Arm
+//     C2). The native container-day reorder RIPS a headed child's heading FK on
+//     the todayIndex axis too (§9k / Arm A), so a headed row must NEVER be fed to
+//     it directly — the protocol unheads the whole same-day headed sub-bucket
+//     FIRST (clean, date/todayIndex-preserving), re-ranks the now-unheaded rows
+//     via the shipped container-day scope, then re-heads each (todayIndex
+//     preserved). Gated like container-day (allow-experimental); a mid-protocol
+//     failure leaves items UNHEADED in the project root and fails loudly.
+
+/** The project a heading belongs to (its re-head destination), or null. */
+function headingProjectUuid(deps: WriteDeps, headingUuid: string | null): string | null {
+  if (headingUuid === null) return null;
+  const row = deps.db
+    .prepare("SELECT project FROM TMTask WHERE uuid = ? AND type = 2 AND trashed = 0")
+    .get(headingUuid) as { project: string | null } | undefined;
+  return row?.project ?? null;
+}
+
+/** null = still an eligible someday child of the heading; else a problem string. */
+function checkStillHeadingSomeday(
+  deps: WriteDeps,
+  uuid: string,
+  headingUuid: string,
+): string | null {
+  const row = deps.db
+    .prepare("SELECT status, trashed, type, heading, start, startDate FROM TMTask WHERE uuid = ?")
+    .get(uuid) as
+    | {
+        status: number;
+        trashed: number;
+        type: number;
+        heading: string | null;
+        start: number;
+        startDate: number | null;
+      }
+    | undefined;
+  if (row === undefined) return "the item no longer exists";
+  if (row.trashed !== 0) return "the item was trashed";
+  if (row.status !== 0) return "the item is no longer open";
+  if (row.type !== 0) return "the item is not a to-do";
+  if (row.heading !== headingUuid) return "the to-do left the heading";
+  if (row.start !== 2 || row.startDate !== null) return "the to-do is no longer a Someday child";
+  return null;
+}
+
+/**
+ * heading-someday: re-head the block in forward target order (HEADSUB1 Arm B-
+ * someday / Arm C). Structurally the `heading` bounce's back-insert path — the
+ * SUFFIX from the first named movee's target slot to the bucket end is re-headed
+ * FORWARD (each appends), the untouched prefix stays above, and unnamed siblings
+ * inside the suffix are co-re-headed (disclosed). The per-item leg is a single
+ * `todo.move` re-head; `start=2` is preserved throughout, no experimental/bounce
+ * surface is required, and there is no json collapse (re-head is a list-id move).
+ */
+async function runHeadingSomeday(
+  deps: WriteDeps,
+  params: ReorderParams,
+  options: WriteOptions,
+): Promise<ReorderResult> {
+  const startedAt = deps.now?.() ?? new Date();
+  const now = deps.now ?? (() => new Date());
+  const actor = options.actor ?? deps.config.actor;
+  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
+  const headingUuid = params.container?.uuid ?? null;
+  const projectUuid = headingProjectUuid(deps, headingUuid);
+  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
+
+  const pre = computeReorderPre(deps.db, params, headingUuid, now());
+  const preRanks: Record<string, unknown> = {};
+  for (const m of pre.members) preRanks[m.uuid] = m.rank;
+
+  // Back-insert (like the heading bounce): re-head the SUFFIX from the first named
+  // movee's target slot to the bucket end, forward-iterating so each appends.
+  const targetOrder = pre.wireList;
+  const named = new Set(params.named ?? params.uuids);
+  const movedPositions = targetOrder.map((u, i) => (named.has(u) ? i : -1)).filter((i) => i >= 0);
+  const firstMoved = movedPositions.length > 0 ? (movedPositions[0] as number) : 0;
+  const block = targetOrder.slice(firstMoved);
+  const touchedUnnamed = block.filter((u) => !named.has(u));
+
+  const problems: string[] = [];
+  if (headingUuid === null || projectUuid === null) {
+    problems.push("the heading did not resolve to a project (re-head needs the heading's project)");
+  }
+  if (params.uuids.length === 0) problems.push("no uuids given");
+  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
+  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
+  if (block.length > cap) {
+    problems.push(
+      `${block.length} touched items exceed the cap of ${cap} (each re-head is one verified move` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} unnamed heading sibling(s) are co-re-headed to honor the order`
+          : "") +
+        ")",
+    );
+  }
+  if (problems.length > 0) {
+    const result: MutationResult = {
+      kind: "blocked",
+      op: "reorder",
+      reason: "hazard",
+      hazard: "H-REORDER-SCOPE",
+      detail: `within-heading someday reorder rejected: ${problems.join("; ")}`,
+      remediation:
+        "reorder the Someday children of ONE heading (read the project first), " +
+        `at most ${cap} touched (set with \`things config set bounce-max-items\`)`,
+    };
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
+      pre: preRanks,
+      txnId,
+      actor,
+    });
+    return result;
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `re-head ×${block.length} (back-insert, forward order` +
+          (touchedUnnamed.length > 0
+            ? `, touches ${touchedUnnamed.length} unnamed sibling(s)`
+            : "") +
+          "): each `list-id=<project>&heading=<heading>` appends at the someday-bucket end; " +
+          "one verify per re-head",
+        expectedDelta: { mode: "ordering", key: "index", sequence: block },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const placed: string[] = [];
+  for (let i = 0; i < block.length; i++) {
+    const uuid = block[i] as string;
+    const memberProblem = checkStillHeadingSomeday(deps, uuid, headingUuid as string);
+    if (memberProblem !== null) {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return {
+        kind: "bounce-aborted",
+        op: "reorder",
+        detail:
+          `aborted before re-heading ${uuid}: ${memberProblem} (Things was likely edited ` +
+          "concurrently); already-re-headed items keep their new positions",
+        placed: [...placed],
+        remaining: block.slice(i),
+        cause: null,
+      };
+    }
+    const leg = await runMutation(
+      deps,
+      "todo.move",
+      { uuid, project: { uuid: projectUuid as string }, heading: headingUuid as string },
+      legOptions(options, txnId),
+    );
+    if (leg.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return {
+        kind: "bounce-aborted",
+        op: "reorder",
+        detail:
+          `re-heading ${uuid} failed — it stayed in its prior position; ${placed.length} ` +
+          "item(s) already re-headed keep their new positions",
+        placed: [...placed],
+        remaining: block.slice(i),
+        cause: leg,
+      };
+    }
+    placed.push(uuid);
+
+    const prefixCheck = await pollUntilVerified(
+      () =>
+        evaluateDelta(
+          { mode: "ordering", key: "index", sequence: [...placed] },
+          createDbReader(deps.db),
+          { modDates: {}, fields: {} },
+        ),
+      options.verifyTimeoutMs ?? 4000,
+      deps.poller ?? {},
+    );
+    if (prefixCheck.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return {
+        kind: "bounce-aborted",
+        op: "reorder",
+        detail:
+          `re-headed items fell out of order after ${uuid} (concurrent edit?); ` +
+          "re-run once Things is idle",
+        placed: [...placed],
+        remaining: block.slice(i + 1),
+        cause: null,
+      };
+    }
+  }
+
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of block) observed[uuid] = reader.rankOf(uuid, "index");
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
+  return {
+    kind: "ok",
+    op: "reorder",
+    uuid: null,
+    observed,
+    vector: "url-scheme",
+    tier: 0,
+    undoToken: txnId,
+    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
+  };
+}
+
+/** Abort payload for heading-day: items are UNHEADED in the project root. */
+function headingDayAborted(
+  detail: string,
+  placed: string[],
+  remaining: string[],
+  cause: MutationResult | null,
+): ReorderResult {
+  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
+}
+
+/**
+ * heading-day: the unhead → container-day reorder → re-head round-trip (HEADSUB1
+ * Arm C2). The native container-day reorder RIPS a headed child's heading FK on
+ * the todayIndex axis (§9k / Arm A), so the whole same-day headed sub-bucket is
+ * unheaded FIRST (clean — heading→NULL, date/todayIndex/start preserved), re-
+ * ranked via the shipped container-day scope against the real project, then re-
+ * headed (todayIndex preserved). Gated like container-day (allow-experimental).
+ * Non-atomic: a mid-protocol failure leaves items UNHEADED in the project root
+ * and fails loudly with placed/remaining detail.
+ */
+async function runHeadingDay(
+  deps: WriteDeps,
+  params: ReorderParams,
+  options: WriteOptions,
+): Promise<ReorderResult> {
+  const startedAt = deps.now?.() ?? new Date();
+  const now = deps.now ?? (() => new Date());
+  const actor = options.actor ?? deps.config.actor;
+  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
+  const headingUuid = params.container?.uuid ?? null;
+  const projectUuid = headingProjectUuid(deps, headingUuid);
+  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
+
+  // Gate: the container-day reorder leg needs the experimental native surface —
+  // fail BEFORE any side effect (no half-unheaded sub-bucket).
+  const nativeAvailable =
+    deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+  if (!nativeAvailable) {
+    const result: MutationResult = {
+      kind: "blocked",
+      op: "reorder",
+      reason: "environment",
+      detail:
+        "within-heading day ordering runs the HEADSUB1 unhead → container-day reorder → re-head " +
+        "round-trip, whose reorder leg is the experimental native container-day command — it is " +
+        "unavailable " +
+        (deps.config.allowExperimental
+          ? "(the installed Things no longer declares the private reorder command in its sdef)"
+          : "(allow-experimental is off)") +
+        ", so the protocol was NOT attempted (nothing was unheaded)",
+      remediation: deps.config.allowExperimental
+        ? "check `things doctor`; the private surface was likely removed by an app update"
+        : "enable it with `things config set allow-experimental true`",
+    };
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, { txnId, actor });
+    return result;
+  }
+
+  const pre = computeReorderPre(deps.db, params, headingUuid, now());
+  const targetOrder = pre.wireList;
+  const named = new Set(params.named ?? params.uuids);
+  const touchedUnnamed = targetOrder.filter((u) => !named.has(u));
+
+  const problems: string[] = [];
+  if (headingUuid === null || projectUuid === null) {
+    problems.push("the heading did not resolve to a project (re-head needs the heading's project)");
+  }
+  if (params.uuids.length === 0) problems.push("no uuids given");
+  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
+  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
+  if (targetOrder.length > cap) {
+    problems.push(
+      `${targetOrder.length} touched items exceed the cap of ${cap} (the whole same-day headed ` +
+        `sub-bucket is unheaded + re-headed as one unit; each costs an unhead + re-head leg` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} unnamed same-day heading sibling(s) are co-unheaded too`
+          : "") +
+        ")",
+    );
+  }
+  if (problems.length > 0) {
+    const result: MutationResult = {
+      kind: "blocked",
+      op: "reorder",
+      reason: "hazard",
+      hazard: "H-REORDER-SCOPE",
+      detail: `within-heading day reorder rejected: ${problems.join("; ")}`,
+      remediation:
+        "reorder same-day scheduled children of ONE heading that all share ONE day (mixed dates, " +
+        `templates, and non-members are refused), at most ${cap} in the sub-bucket ` +
+        "(set with `things config set bounce-max-items`)",
+    };
+    auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
+      pre: captureRanks(pre),
+      txnId,
+      actor,
+    });
+    return result;
+  }
+
+  const preRanksMap = captureRanks(pre);
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `unhead ×${targetOrder.length} → container-day reorder → re-head ×${targetOrder.length} ` +
+          (touchedUnnamed.length > 0 ? `(${touchedUnnamed.length} co-unheaded sibling(s); ` : "(") +
+          "the native container-day leg RIPS a headed row, §9k, so the sub-bucket is unheaded " +
+          "first; one terminal order verify)",
+        expectedDelta: { mode: "ordering", key: "todayIndex", sequence: targetOrder },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = looseDayLegOptions(options, txnId);
+
+  // 1. UNHEAD each same-day headed member (clean — heading→NULL, schedule kept).
+  //    After this NO member is headed, so the container-day leg can never see a
+  //    headed row (the §9k rail: computeReorderPre(container-day) also filters
+  //    `heading IS NULL`, a second guard).
+  const unheaded: string[] = [];
+  for (const uuid of targetOrder) {
+    const res = await runMutation(deps, "todo.move", { uuid, noHeading: true }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...unheaded] },
+        {
+          pre: preRanksMap,
+          txnId,
+          actor,
+        },
+      );
+      return headingDayAborted(
+        `unheading ${uuid} failed — ${unheaded.length} item(s) are UNHEADED in project ` +
+          `${projectUuid} and must be moved back under the heading manually`,
+        unheaded,
+        targetOrder.slice(unheaded.length),
+        res,
+      );
+    }
+    unheaded.push(uuid);
+  }
+
+  // 2. ONE container-day reorder against the REAL project, full target order. The
+  //    now-unheaded members re-rank date-preservingly (DAYORD-b); the project's
+  //    OTHER same-day unheaded children are co-ranked below (relative order kept).
+  const reordered = await runReorder(
+    deps,
+    {
+      scope: "container-day",
+      container: { uuid: projectUuid as string },
+      uuids: targetOrder,
+      ...(params.named !== undefined && { named: params.named }),
+    },
+    legOpts,
+  );
+  if (reordered.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...unheaded] },
+      {
+        pre: preRanksMap,
+        txnId,
+        actor,
+      },
+    );
+    return headingDayAborted(
+      `the container-day reorder against project ${projectUuid} did not complete ` +
+        `(${reordered.kind}) — all ${unheaded.length} item(s) are UNHEADED in the project root and ` +
+        "must be moved back under the heading manually",
+      unheaded,
+      [],
+      reordered.kind === "bounce-aborted" ? null : reordered,
+    );
+  }
+
+  // 3. RE-HEAD each (todayIndex preserved — the sorted key survives, Arm C2).
+  const rehead: string[] = [];
+  for (const uuid of targetOrder) {
+    const res = await runMutation(
+      deps,
+      "todo.move",
+      { uuid, project: { uuid: projectUuid as string }, heading: headingUuid as string },
+      legOpts,
+    );
+    if (res.kind !== "ok") {
+      const stillUnheaded = targetOrder.filter((u) => !rehead.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...rehead] },
+        {
+          pre: preRanksMap,
+          txnId,
+          actor,
+        },
+      );
+      return headingDayAborted(
+        `re-heading ${uuid} failed — ${stillUnheaded.length} item(s) remain UNHEADED in project ` +
+          `${projectUuid} (ordered) and must be moved back under the heading manually`,
+        rehead,
+        stillUnheaded,
+        res,
+      );
+    }
+    rehead.push(uuid);
+  }
+
+  // 4. Terminal verify: the sub-bucket's todayIndex order matches the target.
+  const verify = await pollUntilVerified(
+    () =>
+      evaluateDelta(
+        { mode: "ordering", key: "todayIndex", sequence: targetOrder },
+        createDbReader(deps.db),
+        { modDates: {}, fields: {} },
+      ),
+    options.verifyTimeoutMs ?? 4000,
+    deps.poller ?? {},
+  );
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...rehead] },
+      {
+        pre: preRanksMap,
+        txnId,
+        actor,
+      },
+    );
+    return headingDayAborted(
+      "the heading sub-bucket did not land the requested order after re-heading; " +
+        "re-run once Things is idle",
+      rehead,
+      [],
+      null,
+    );
+  }
+
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of targetOrder) observed[uuid] = reader.rankOf(uuid, "todayIndex");
+  auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanksMap, txnId, actor });
+  return {
+    kind: "ok",
+    op: "reorder",
+    uuid: null,
+    observed,
+    vector: "url-scheme",
+    tier: 0,
+    undoToken: txnId,
+    ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
+  };
+}
+
+/** todayIndex/index pre-ranks keyed by uuid (the undoable-summary capture). */
+function captureRanks(pre: ReturnType<typeof computeReorderPre>): Record<string, unknown> {
+  const ranks: Record<string, unknown> = {};
+  for (const m of pre.members) ranks[m.uuid] = m.rank;
+  return ranks;
 }
 
 // ------------------------------------------------------------------- bounce
@@ -1215,12 +1768,15 @@ function resolveContainerUuid(deps: WriteDeps, params: ReorderParams): string | 
   if (params.scope === "area") {
     return resolveArea(deps.db, params.container ?? {}).resolved?.uuid ?? null;
   }
-  // heading / area-someday / container-day: the planner passes a resolved uuid
-  // container directly (a heading uuid, an area uuid, or a project/area uuid).
+  // heading / area-someday / container-day / heading-someday / heading-day: the
+  // planner passes a resolved uuid container directly (a heading uuid, an area
+  // uuid, or a project/area uuid).
   if (
     params.scope === "heading" ||
     params.scope === "area-someday" ||
-    params.scope === "container-day"
+    params.scope === "container-day" ||
+    params.scope === "heading-someday" ||
+    params.scope === "heading-day"
   ) {
     return params.container?.uuid ?? null;
   }

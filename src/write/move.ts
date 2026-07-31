@@ -17,15 +17,16 @@
  *      top-of-its-own-bucket in selection order); `--before`/`--after` require
  *      every movee in the anchor's bucket;
  *   5. placement honesty — "top of bucket" is GUARANTEED only where a lab-clean
- *      reorder protocol exists (per the REORDGAPS verdicts,
- *      docs/lab/reordgaps-results.md): loose inbox/today/evening/someday, a
- *      project's unheaded anytime OR someday children (SOMEORD-b), an area's
- *      anytime members, area-less someday/anytime projects. APP-DEFAULT (no
- *      protocol wired): heading buckets (HEADORD-b), a container's scheduled-day
- *      bucket (DAYORD-b's todayIndex key not yet wired), area-less loose anytime
- *      (ANYBNC bounce not wired), repeating templates (§9e). PROHIBITED (a
- *      destructive protocol we never attempt): an area's someday to-dos (§9f).
- *      The result states which class applied;
+ *      reorder protocol exists (REORDGAPS + BOUNCE2 + UPCORD1 + HEADSUB1): loose
+ *      inbox/today/evening/someday/anytime, a project's unheaded anytime OR
+ *      someday children, an area's anytime OR someday members, a heading's
+ *      anytime/someday/same-day-scheduled children, any container child's evening
+ *      sub-bucket, a container's same-day scheduled children, a loose future
+ *      Upcoming day, area-less someday/anytime projects (see {@link
+ *      reorderTargetOf} for the per-class protocol + gate). APP-DEFAULT (no
+ *      protocol wired): a headed EVENING child (GUI-ambiguous axis), a direct-area
+ *      scheduled-day child, a loose scheduled PROJECT row, repeating templates
+ *      (§9e). The result states which class applied;
  *   6. compilation via the minimal-move planner (fewest legs; per-scope caps and
  *      bounce abort-honesty apply per leg).
  */
@@ -226,12 +227,16 @@ function bounceDisabledTarget(what: string): ScopeTarget {
  * prohibited); a heading's anytime children (BOUNCE2-h forward-order bounce); a
  * container's same-day scheduled children (DAYORD-b native todayIndex re-rank);
  * a loose FUTURE Upcoming day (UPCORD1 park-sort-unpark, scope `loose-day` —
- * gated like container-day); area-less someday projects; top-level anytime
- * projects. APP-DEFAULT: a headed scheduled/someday/evening child; a project/
- * area child in the evening sub-bucket; a loose scheduled PROJECT row (no
- * surface); repeating TEMPLATE rows (§9e). When bounce is DISABLED the
- * bounce-dependent classes degrade to
- * app-default naming the flag — never a destructive or unverified fallback.
+ * gated like container-day); a heading's SOMEDAY children (HEADSUB1 heading-
+ * someday re-head-in-order back-insert); a heading's same-day SCHEDULED children
+ * (HEADSUB1 heading-day unhead→container-day→re-head, gated like container-day);
+ * a container child's EVENING sub-bucket (HEADSUB1 Arm D — the shipped `evening`
+ * bounce accepts project/area children unchanged); area-less someday projects;
+ * top-level anytime projects. APP-DEFAULT: a headed EVENING child (display axis
+ * GUI-ambiguous); a direct-area scheduled-DAY child (area specifier unprobed); a
+ * loose scheduled PROJECT row (no surface); repeating TEMPLATE rows (§9e). When
+ * bounce is DISABLED the bounce-dependent classes degrade to app-default naming
+ * the flag — never a destructive or unverified fallback.
  */
 function reorderTargetOf(
   row: MoveeRow,
@@ -248,14 +253,26 @@ function reorderTargetOf(
   const containerDay = bucket === "today" || bucket.startsWith("scheduled:");
   if (isTodo) {
     if (row.heading !== null) {
-      // Within-heading order: anytime children get the forward-order bounce
-      // (BOUNCE2-h). Other heading sub-buckets stay app-default (unprobed);
-      // arbitrary --before/--after against an unmoved sibling stays refused
-      // (HEADORD-b) — handled by the anchor path, not here.
+      // Within-heading order (HEADSUB1). anytime → the forward-order bounce
+      // (BOUNCE2-h). someday → the re-head-in-order back-insert (heading-someday,
+      // Arm B/C — pure URL move legs, no gate). same-day scheduled → the unhead →
+      // container-day → re-head round-trip (heading-day, Arm C2 — gated like
+      // container-day at runtime, since the direct native reorder RIPS the heading
+      // FK, §9k). evening stays app-default (its display axis is GUI-ambiguous —
+      // Arm B). --before/--after against an unmoved sibling rides these scopes'
+      // co-touch (handled by the anchor path), not here.
       if (bucket === "anytime") {
         return bounceEnabled
           ? { scope: "heading", container: row.heading }
           : bounceDisabledTarget("within-heading order");
+      }
+      if (bucket === "someday") return { scope: "heading-someday", container: row.heading };
+      if (containerDay) return { scope: "heading-day", container: row.heading };
+      if (bucket === "evening") {
+        return {
+          scope: null,
+          reason: "a heading's evening sub-bucket (display axis GUI-ambiguous — app-default)",
+        };
       }
       return {
         scope: null,
@@ -269,7 +286,11 @@ function reorderTargetOf(
       // cleanly by index through the native project reorder (O04, SOMEORD-b).
       if (containerDay) return { scope: "container-day", container: row.project };
       if (bucket === "evening") {
-        return { scope: null, reason: "a project child's evening sub-bucket (app-default)" };
+        // HEADSUB1 Arm D: a container child's evening sub-bucket is the SAME front-
+        // insert law as a loose evening item — the shipped `evening` bounce accepts
+        // it unchanged (project FK + startBucket=1 + startDate preserved). Inherits
+        // the R07 reminder-loss caveat the loose evening scope already carries.
+        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
       }
       return { scope: "project", container: row.project };
     }
@@ -282,6 +303,12 @@ function reorderTargetOf(
           : bounceDisabledTarget("an area's someday order");
       }
       if (bucket === "anytime") return { scope: "area", container: row.area };
+      if (bucket === "evening") {
+        // HEADSUB1 Arm D: a container child's evening sub-bucket rides the shipped
+        // `evening` bounce (front-insert, container FK + startBucket=1 preserved);
+        // an area-direct evening child is a container child too. R07 caveat inherited.
+        return bounceEnabled ? { scope: "evening" } : bounceDisabledTarget("evening-section order");
+      }
       // A direct-area to-do's scheduled bucket: only the PROJECT specifier is
       // lab-clean for a scheduled day (DAYORD-b); the AREA specifier's behavior
       // on dated children is unprobed (and de-somedays someday items, §9f), so

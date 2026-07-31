@@ -805,7 +805,8 @@ export function computeReorderPre(
     params.scope === "today" ||
     params.scope === "evening" ||
     params.scope === "container-day" ||
-    params.scope === "loose-day"
+    params.scope === "loose-day" ||
+    params.scope === "heading-day"
       ? "todayIndex"
       : "index";
 
@@ -1036,6 +1037,57 @@ export function computeReorderPre(
             uuid,
             "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
               "so loose future-day ordering cannot include it",
+          );
+        }
+      }
+      break;
+    }
+    case "heading-someday": {
+      // A heading's SOMEDAY children, ranked on "index" (HEADSUB1 Arm B-someday /
+      // Arm C). Re-heading the block in forward target order BACK-INSERTS each
+      // deterministically (start=2 preserved) — the move-to-heading sort. Same
+      // bucket shape as the `heading` anytime scope, `start=2` instead of `start=1`.
+      members = select(
+        "type = 0 AND heading = ? AND start = 2 AND startDate IS NULL",
+        [containerUuid ?? ""],
+        `"index"`,
+      );
+      break;
+    }
+    case "heading-day": {
+      // A heading's SAME-DAY SCHEDULED children, ranked on todayIndex (HEADSUB1
+      // Arm C2). The day is read off the first requested uuid (the planner
+      // guarantees one bucket, rule 4). The native container-day reorder RIPS the
+      // heading FK (§9k), so this sub-bucket is delivered by the unhead → container-
+      // day reorder → re-head round-trip in reorder.ts; here we just enumerate the
+      // WHOLE same-day headed sub-bucket (the unit unheaded + re-headed together).
+      const firstUuid = params.uuids[0];
+      const first =
+        firstUuid !== undefined
+          ? (db
+              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+          : undefined;
+      if (first?.startDate != null && first.startBucket === 0) {
+        members = select(
+          "type = 0 AND heading = ? AND startBucket = 0 AND startDate = ?",
+          [containerUuid ?? "", first.startDate],
+          "todayIndex",
+        );
+      }
+      // A repeating TEMPLATE gets the §9e teaching reason (the container-day leg
+      // SKIPS template rows) rather than the generic non-member reason.
+      for (const uuid of params.uuids) {
+        const t = db
+          .prepare(
+            "SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ? AND type = 0",
+          )
+          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
+        if (t !== undefined && (t.rule !== null || t.repeater !== null)) {
+          rejectedCandidates.set(
+            uuid,
+            "is a repeating template — the container-day reorder SKIPS template rows (oddity §9e), " +
+              "so within-heading day ordering cannot include it",
           );
         }
       }

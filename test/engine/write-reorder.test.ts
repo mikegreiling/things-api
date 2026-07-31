@@ -1503,6 +1503,479 @@ describe("loose-day scope (UPCORD1 park-sort-unpark protocol)", () => {
   });
 });
 
+// ----------------------------------- heading sub-buckets (HEADSUB1 promotions)
+
+interface HeadingMoveOpParams {
+  uuid: string;
+  project?: { uuid: string };
+  heading?: string;
+  noHeading?: boolean;
+  uuids?: string[];
+}
+
+/**
+ * Re-head sim (heading-someday): a `todo.move` with a heading param BACK-INSERTS
+ * the movee at the heading someday-bucket end (index = current max + step), the
+ * heading FK set + project NULL + start=2 kept (HEADSUB1 Arm B-someday). Reads
+ * the structured op/opParams, never the compiled URL.
+ */
+function reheadVector() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "url-scheme",
+    matrix: { "todo.move": { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as HeadingMoveOpParams;
+      if (inv.op === "todo.move" && p.heading !== undefined) {
+        const max = fixture.db
+          .prepare(
+            `SELECT MAX("index") AS m FROM TMTask WHERE heading = ? AND start = 2
+             AND startDate IS NULL AND trashed = 0 AND status = 0 AND uuid != ?`,
+          )
+          .get(p.heading, p.uuid) as { m: number | null };
+        fixture.db
+          .prepare(
+            `UPDATE TMTask SET heading = ?, project = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          )
+          .run(p.heading, (max.m ?? 0) + 10, modClock++, p.uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+describe("heading-someday scope (HEADSUB1 re-head-in-order back-insert)", () => {
+  function seedSomedayHeading() {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const s1 = seedTodo(fixture.db, { title: "s1", heading, start: "someday", index: 10 });
+    const s2 = seedTodo(fixture.db, { title: "s2", heading, start: "someday", index: 20 });
+    const s3 = seedTodo(fixture.db, { title: "s3", heading, start: "someday", index: 30 });
+    return { proj, heading, s1, s2, s3 };
+  }
+
+  it("realizes the exact requested order via forward-order re-heads, start=2 preserved", async () => {
+    const { heading, s1, s2, s3 } = seedSomedayHeading();
+    const { vector, calls } = reheadVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "heading-someday",
+      container: { uuid: heading },
+      uuids: [s3, s1, s2],
+      named: [s3, s1, s2],
+    });
+    expect(result.kind).toBe("ok");
+    // One re-head leg per member, forward order (no when= bounce, no json collapse).
+    expect(calls).toEqual(["todo.move", "todo.move", "todo.move"]);
+    expect(ascending(ranks([s3, s1, s2], `"index"`))).toBe(true);
+    for (const u of [s1, s2, s3]) {
+      const row = fixture.db.prepare("SELECT start, heading FROM TMTask WHERE uuid = ?").get(u) as {
+        start: number;
+        heading: string;
+      };
+      expect(row.start).toBe(2); // NOT de-somedayed
+      expect(row.heading).toBe(heading);
+    }
+  });
+
+  it("a NAMED subset re-heads only the suffix from its first slot, co-touching unnamed siblings", async () => {
+    const { heading, s1, s2, s3 } = seedSomedayHeading();
+    const { vector, calls } = reheadVector();
+    // Place s3 LAST: full target order with the block spliced at the end.
+    const result = await runReorder(deps([vector]), {
+      scope: "heading-someday",
+      container: { uuid: heading },
+      uuids: [s1, s2, s3],
+      named: [s3],
+    });
+    expect(result.kind).toBe("ok");
+    // Only s3 is re-headed (block = suffix from its slot = just [s3]); no co-touch.
+    expect(calls).toEqual(["todo.move"]);
+    if (result.kind === "ok") expect(result.touched).toBeUndefined();
+    expect(ascending(ranks([s1, s2, s3], `"index"`))).toBe(true);
+  });
+
+  it("discloses co-re-headed siblings when the named block sits above them", async () => {
+    const { heading, s1, s2, s3 } = seedSomedayHeading();
+    const { vector, calls } = reheadVector();
+    // Named s1 first: block = [s1, s2, s3] (suffix from slot 0); s2,s3 co-touched.
+    const result = await runReorder(deps([vector]), {
+      scope: "heading-someday",
+      container: { uuid: heading },
+      uuids: [s1],
+      named: [s1],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls).toHaveLength(3);
+    if (result.kind === "ok") expect(result.touched).toEqual([s2, s3]);
+  });
+
+  it("caps the touched block by bounce-max-items", async () => {
+    const { heading, s1 } = seedSomedayHeading();
+    const { vector, calls } = reheadVector();
+    const result = await runReorder(
+      deps([vector], { config: { ...config(true), bounceMaxItems: 2 } }),
+      {
+        scope: "heading-someday",
+        container: { uuid: heading },
+        uuids: [s1],
+        named: [s1],
+      },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 2");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("dry-run describes the re-head legs without executing", async () => {
+    const { heading, s1, s2, s3 } = seedSomedayHeading();
+    const { vector, calls } = reheadVector();
+    const result = await runReorder(
+      deps([vector]),
+      { scope: "heading-someday", container: { uuid: heading }, uuids: [s3, s1, s2] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("re-head ×3");
+      expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "index" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("undo round-trip restores the prior someday order (re-heads in prior order)", async () => {
+    const { heading, s1, s2, s3 } = seedSomedayHeading();
+    const fwd = await runReorder(deps([reheadVector().vector]), {
+      scope: "heading-someday",
+      container: { uuid: heading },
+      uuids: [s3, s1, s2],
+      named: [s3, s1, s2],
+    });
+    expect(fwd.kind).toBe("ok");
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const inv = await runReorder(
+      deps([reheadVector().vector]),
+      plan.steps[0]?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    // Restored to the original relative order s1 < s2 < s3.
+    expect(ascending(ranks([s1, s2, s3], `"index"`))).toBe(true);
+  });
+});
+
+/**
+ * heading-day sim: unhead (`noHeading`) clears the heading + re-asserts the
+ * heading's project, keeping index/todayIndex/startDate; the container-day
+ * reorder (native) re-ranks todayIndex ascending in the sent order (DAYORD-b);
+ * re-head sets the heading FK, todayIndex preserved (HEADSUB1 Arm C2).
+ */
+function headingDayVectors() {
+  const calls: string[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: { "todo.move": { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as HeadingMoveOpParams;
+      if (inv.op === "todo.move") {
+        if (p.noHeading === true) {
+          const cur = fixture.db
+            .prepare("SELECT heading FROM TMTask WHERE uuid = ?")
+            .get(p.uuid) as {
+            heading: string | null;
+          };
+          const projRow =
+            cur.heading !== null
+              ? (fixture.db
+                  .prepare("SELECT project FROM TMTask WHERE uuid = ?")
+                  .get(cur.heading) as {
+                  project: string | null;
+                })
+              : { project: null };
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET heading = NULL, project = ?, userModificationDate = ? WHERE uuid = ?",
+            )
+            .run(projRow.project, modClock++, p.uuid);
+        } else if (p.heading !== undefined) {
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET heading = ?, project = NULL, userModificationDate = ? WHERE uuid = ?",
+            )
+            .run(p.heading, modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as HeadingMoveOpParams;
+      if (inv.op === "reorder") {
+        let rank = 1;
+        for (const uuid of p.uuids ?? []) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex = ?, userModificationDate = ? WHERE uuid = ?")
+            .run(rank++, modClock++, uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
+function seedHeadedDay(heading: string, title: string, todayIndex: number): string {
+  return seedTodo(fixture.db, {
+    title,
+    heading,
+    start: "someday", // app-true future-scheduled (start=2 + future startDate)
+    startDate: FUTURE_ISO,
+    todayIndex,
+  });
+}
+
+describe("heading-day scope (HEADSUB1 unhead → container-day → re-head round-trip)", () => {
+  it("realizes the target todayIndex order without ever feeding a headed row to container-day", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 30);
+    const d2 = seedHeadedDay(heading, "d2", 20);
+    const d3 = seedHeadedDay(heading, "d3", 10);
+    // A pre-existing UNHEADED same-day project child (co-ranked, not re-headed).
+    const u1 = seedTodo(fixture.db, {
+      title: "u1",
+      project: proj,
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 5,
+    });
+    const { vectors, calls } = headingDayVectors();
+    // Request d1,d3 (block); d2 is a co-unheaded heading sibling.
+    const result = await runReorder(deps(vectors), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [d1, d3],
+      named: [d1, d3],
+    });
+    expect(result.kind).toBe("ok");
+    // targetOrder = [d1, d3] + [d2] = [d1, d3, d2]. Legs: unhead×3, reorder, rehead×3.
+    expect(calls).toEqual([
+      "todo.move",
+      "todo.move",
+      "todo.move",
+      "reorder",
+      "todo.move",
+      "todo.move",
+      "todo.move",
+    ]);
+    expect(ascending(ranks([d1, d3, d2]))).toBe(true);
+    // All three are re-headed back under H; u1 stays a direct unheaded child.
+    for (const u of [d1, d2, d3]) {
+      const row = fixture.db.prepare("SELECT heading FROM TMTask WHERE uuid = ?").get(u) as {
+        heading: string;
+      };
+      expect(row.heading).toBe(heading);
+    }
+    const u1row = fixture.db
+      .prepare("SELECT heading, project FROM TMTask WHERE uuid = ?")
+      .get(u1) as {
+      heading: string | null;
+      project: string;
+    };
+    expect(u1row.heading).toBeNull();
+    expect(u1row.project).toBe(proj);
+    if (result.kind === "ok") expect(result.touched).toEqual([d2]); // co-unheaded sibling
+  });
+
+  it("§9k RAIL: computeReorderPre(container-day) can NEVER select a headed row", () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 30);
+    const d2 = seedHeadedDay(heading, "d2", 20);
+    const u1 = seedTodo(fixture.db, {
+      title: "u1",
+      project: proj,
+      start: "someday",
+      startDate: FUTURE_ISO,
+      todayIndex: 5,
+    });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "container-day", container: { uuid: proj }, uuids: [u1] },
+      proj,
+      NOW,
+    );
+    const members = pre.members.map((m) => m.uuid);
+    expect(members).toContain(u1);
+    expect(members).not.toContain(d1);
+    expect(members).not.toContain(d2);
+  });
+
+  it("is gated by allow-experimental (the container-day leg) — nothing is unheaded", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 10);
+    const { vectors, calls } = headingDayVectors();
+    const result = await runReorder(deps(vectors, { config: config(false) }), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [d1],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.reason).toBe("environment");
+      expect(result.detail).toContain("allow-experimental is off");
+      expect(result.detail).toContain("nothing was unheaded");
+    }
+    expect(calls).toHaveLength(0);
+    // The child is still headed (untouched).
+    const row = fixture.db.prepare("SELECT heading FROM TMTask WHERE uuid = ?").get(d1) as {
+      heading: string;
+    };
+    expect(row.heading).toBe(heading);
+  });
+
+  it("refuses mixed future dates (the off-day member is a non-member)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 10);
+    const d2 = seedTodo(fixture.db, {
+      title: "d2",
+      heading,
+      start: "someday",
+      startDate: "2026-07-11", // a DIFFERENT future day
+      todayIndex: 20,
+    });
+    const { vectors, calls } = headingDayVectors();
+    const result = await runReorder(deps(vectors), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [d1, d2],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("not an open member");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a repeating TEMPLATE child naming §9e", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const t = seedTodo(fixture.db, {
+      title: "tmpl",
+      heading,
+      start: "active",
+      startDate: FUTURE_ISO,
+      todayIndex: 10,
+      recurrenceRule: true,
+    });
+    const { vectors, calls } = headingDayVectors();
+    const result = await runReorder(deps(vectors), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [t],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("§9e");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("caps the sub-bucket by bounce-max-items (unhead + re-head legs count)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const ds = Array.from({ length: 4 }, (_, i) => seedHeadedDay(heading, `d${i}`, (i + 1) * 10));
+    const { vectors, calls } = headingDayVectors();
+    const result = await runReorder(
+      deps(vectors, { config: { ...config(true), bounceMaxItems: 3 } }),
+      { scope: "heading-day", container: { uuid: heading }, uuids: ds },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 3");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails loudly (items UNHEADED) when a re-head leg fails mid-protocol", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 20);
+    const d2 = seedHeadedDay(heading, "d2", 10);
+    const { vectors } = headingDayVectors();
+    // Fail the FIRST re-head (todo.move with a heading), after unhead×2 + reorder.
+    const urlFake = vectors[0] as WriteVector;
+    const inner = urlFake.execute.bind(urlFake);
+    urlFake.execute = async (inv) => {
+      const p = inv.opParams as HeadingMoveOpParams;
+      if (inv.op === "todo.move" && p.heading !== undefined) {
+        return { exitCode: 1, stdout: "", stderr: "boom" };
+      }
+      return inner(inv);
+    };
+    const result = await runReorder(deps(vectors), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [d1, d2],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.detail).toContain("UNHEADED");
+      expect(result.detail).toContain(proj);
+    }
+  });
+
+  it("undo round-trip restores the prior day order (re-runs the round-trip)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 30);
+    const d2 = seedHeadedDay(heading, "d2", 20);
+    const d3 = seedHeadedDay(heading, "d3", 10); // prior order d3 < d2 < d1
+    const fwd = await runReorder(deps(headingDayVectors().vectors), {
+      scope: "heading-day",
+      container: { uuid: heading },
+      uuids: [d1, d3],
+      named: [d1, d3],
+    });
+    expect(fwd.kind).toBe("ok");
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const inv = await runReorder(
+      deps(headingDayVectors().vectors),
+      plan.steps[0]?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    // Restored to the original relative order d3 < d2 < d1.
+    expect(ascending(ranks([d3, d2, d1]))).toBe(true);
+  });
+
+  it("dry-run describes the round-trip without unheading", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const d1 = seedHeadedDay(heading, "d1", 20);
+    const d2 = seedHeadedDay(heading, "d2", 10);
+    const { vectors, calls } = headingDayVectors();
+    const result = await runReorder(
+      deps(vectors),
+      { scope: "heading-day", container: { uuid: heading }, uuids: [d1, d2] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("unhead ×2");
+      expect(result.plan.invocation).toContain("re-head ×2");
+      expect(result.plan.expectedDelta).toMatchObject({ mode: "ordering", key: "todayIndex" });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("BOUNCEJSON collapse eligibility (§9i placement-leg mechanism)", () => {
   // The `things:///json` one-array collapse works ONLY when the placement (back)
   // leg is `when=anytime` into a loose/heading-container bucket (oddities §9i,
