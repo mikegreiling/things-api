@@ -1020,8 +1020,10 @@ export function computeReorderPre(
       // the day's global min), so every same-day member is enumerated — an
       // untouched project row is just an unrequested member (co-bounced + disclosed
       // as `touched`), never a strand. The day is read off the first requested
-      // uuid. Templates are excluded by NOT_TEMPLATE_ROW; an area-DIRECT project row
-      // is NOT a member (only area-less project rows are proven, DAYBNC).
+      // uuid. Templates are excluded by NOT_TEMPLATE_ROW. Members are type IN (0,1):
+      // area-DIRECT project rows are now proven dated-bounce members too (SIT5
+      // AREAPROJDAY — the update-project when= legs preserve the area FK through the
+      // round-trip and re-enter at the day's global todayIndex min).
       const firstUuid = params.uuids[0];
       const first =
         firstUuid !== undefined
@@ -1031,34 +1033,23 @@ export function computeReorderPre(
           : undefined;
       if (first?.startDate != null && first.startBucket === 0) {
         members = select(
-          "(type = 0 OR (type = 1 AND area IS NULL)) AND startBucket = 0 AND startDate = ?",
+          "type IN (0, 1) AND startBucket = 0 AND startDate = ?",
           [first.startDate],
           "todayIndex",
         );
       }
       // A requested TEMPLATE gets the §9e/§1 teaching reason (a dated when= leg
-      // CRASHES a template); a requested area-DIRECT project row gets the unproven-
-      // cell reason (only area-less project rows are proven on the dated bounce).
+      // CRASHES a template). Area-direct project rows are members (SIT5 AREAPROJDAY).
       for (const uuid of params.uuids) {
         const t = db
-          .prepare(
-            "SELECT type, area, rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?",
-          )
-          .get(uuid) as
-          | { type: number; area: string | null; rule: unknown; repeater: unknown }
-          | undefined;
+          .prepare("SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?")
+          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
         if (t === undefined) continue;
         if (t.rule !== null || t.repeater !== null) {
           rejectedCandidates.set(
             uuid,
             "is a repeating template — sending it a dated when= leg CRASHES the app (oddity §9e/§1), " +
               "so dated ordering cannot include it",
-          );
-        } else if (t.type === 1 && t.area !== null) {
-          rejectedCandidates.set(
-            uuid,
-            "is a scheduled project inside an area — only area-less project rows are proven on the " +
-              "dated bounce (SIT4 DAYBNC); order it within its area via scope 'area'",
           );
         }
       }

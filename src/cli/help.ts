@@ -84,7 +84,10 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   tag: { args: "<verb>", desc: "add, rename, nest, delete tags" },
   batch: { args: "[file]", desc: "run many changes from a JSONL script" },
   undo: { args: "", desc: "reverse recent changes made through this tool" },
-  reorder: { args: "<ids…>", desc: "reorder items within a list or container" },
+  reorder: {
+    args: "<refs…>",
+    desc: "rearrange items in place; --in for a dual-axis set",
+  },
   // Setup & diagnostics
   config: { args: "<verb>", desc: "show, get, or set configuration keys" },
   doctor: { args: "", desc: "check environment health and pending setup" },
@@ -365,44 +368,44 @@ A few operations need the bundled Shortcuts: \`things setup shortcuts\`.`,
 
   move: `MOVE vs REORDER — membership vs arrangement
 
-Two distinct verbs, kept apart on purpose:
   move    changes WHAT an item belongs to (a to-do's project/area/heading; a
           project's area).
   reorder changes only the ARRANGEMENT of items already sharing a container —
           never membership. Unmentioned siblings keep their order.
 
 things todo move <refs…> [destination] [position]   (pick one destination)
-  --to-project <ref>   into a project's unheaded block
-  --to-heading <sel>   under a heading (in --to-project, else the shared project)
-  --to-area <ref>      into an area
-  --no-heading         leave the heading, STAY in the project
-  --loose              the total sever: leave heading, project, AND area
-  --inbox              back to the Inbox (removes the schedule)
-  No --detach (removed) and no --no-area on a to-do — its area is inherited from
-  its project, so use --loose (or move the project).
+  --to-project <ref> · --to-heading <sel> · --to-area <ref>  place into a container
+  --no-heading  leave heading, keep project    --loose  sever heading+project+area
+  --inbox  back to the Inbox (drops schedule)
+  No --detach (removed); no --no-area on a to-do (area is inherited — use --loose).
+  Mixed-stage selection: --first/--last apply PER sub-bucket; --before/--after need
+  every movee in the anchor's sub-bucket, else refused.
 
-things todo reorder <refs…> [position]
-  Bare (no position): assemble the to-dos as one block at the EARLIEST one's
-  current slot, in argument order (--first NOT implied). Partial selections fine.
+things reorder <refs…> [position] [--in <target>]
+  One kind-neutral in-place verb (replaces the old \`todo reorder\` and the raw
+  \`reorder --scope\`). Bare (no position): assemble the items as one block at the
+  EARLIEST slot, argument order (--first NOT implied); partial fine. Takes to-dos +
+  the project rows Today/Evening/day lists intermix. A Today/Evening member sits on
+  TWO axes (view + container index) — a set coherent on both is refused; --in picks
+  it: today|evening|anytime|someday|inbox, or a project/area/heading ref. A container
+  index on a Today member works only for the native project/area re-rank; a bounce-
+  only index (heading/loose) refuses (it would de-Today).
 
 things project move <refs…> [--to-area <ref> | --no-area] [position]
-  --no-area is a project's complete detach; --loose is a to-do word, refused here.
+  --no-area is a project's detach (--loose is a to-do word, refused). A position here
+  reorders projects in their sidebar/area/someday order.
 
-Positions (both verbs): --first · --last · --before <ref> · --after <ref>. An
-anchor POSITIONS but never MIGRATES — --before/--after need items already in the
-anchor's container and bucket; a cross-container or cross-bucket anchor fails
-closed (name a destination flag if you meant to MOVE). Selection order = landing
-order: reverse for free by naming them backwards.
+Positions: --first · --last · --before <ref> · --after <ref>. An anchor POSITIONS,
+never MIGRATES — it needs items already in its container+bucket; a cross-container/
+bucket anchor fails closed. Selection order = landing order (reverse by naming back).
 
-PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED wherever a lab-
-clean protocol exists — loose inbox/today/evening/someday/anytime, a project's or
-area's members (anytime AND someday), a heading's anytime/someday children, ANY
-container child's evening slot (to-do OR project), and area-less someday/anytime
-projects. A whole FUTURE day-group (loose/direct-area/headed/cross-container, incl.
-area-less scheduled PROJECT rows on ANY day) sorts on the shared day axis: one native
-call for TOMORROW or a single unheaded project, else the dated when= bounce. Most
-day/evening/someday orders bounce; --before/--after co-touches siblings (listed); caps
-via bounce-max-items (30); flags=false refuse. App-default: an AREA project's day slot.`,
+PLACEMENT HONESTY. "Top of bucket in selection order" is GUARANTEED where a lab-clean
+protocol exists — loose inbox/today/evening/someday/anytime, project/area members
+(anytime+someday), a heading's anytime/someday children, any container child's evening
+slot, and area-less someday/anytime projects. A whole FUTURE day-group (any container,
+incl. scheduled PROJECT rows — area'd too) sorts on the shared day axis: one native call
+for TOMORROW / a single unheaded project, else the dated when= bounce. Day/evening/
+someday orders bounce; --before/--after co-touches siblings; caps 30; flags=false refuse.`,
 
   repeating: `REPEATING — rules for recurring to-dos and projects
 

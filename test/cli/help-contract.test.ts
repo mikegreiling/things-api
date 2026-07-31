@@ -551,19 +551,22 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--limit <n>");
   });
 
-  it("reorder: experimental gate, bounce cap, scope restrictions", () => {
+  it("reorder: in-place kind-neutral verb, --in axis disambiguation, no --scope", () => {
     const help = helpFor("reorder");
-    expect(help).toContain("EXPERIMENTAL");
-    expect(help).toContain("allow-experimental");
+    expect(help).toContain("IN PLACE");
+    expect(help).toContain("never changes membership");
+    expect(help).toContain("EARLIEST");
+    expect(help).toContain("intermix");
+    expect(help).toContain("--in <target>");
+    expect(help).toContain("ambiguous");
     expect(help).toContain("bounce");
-    expect(help).toContain("Evening and projects");
-    expect(help).toContain("bounce-only");
-    expect(help).toContain("children follow");
     expect(help).toContain("project move-heading");
-    expect(help).toContain("--scope <scope>");
-    expect(help).toContain("--strategy <name>");
+    expect(help).toContain("area reorder");
+    expect(help).toContain("--before <ref>");
     expect(help).toContain("--dry-run");
-    expect(help).toContain("never mixed");
+    // The old raw scope surface is gone.
+    expect(help).not.toContain("--scope <scope>");
+    expect(help).not.toContain("--strategy <name>");
   });
 
   it("todo restore: trashed-only precondition + de-schedule caveat", () => {
@@ -585,12 +588,11 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("placement class");
   });
 
-  it("todo reorder: in-place rearrange, earliest-slot, partial-selection friendly", () => {
-    const help = helpFor("todo", "reorder");
-    expect(help).toContain("IN PLACE");
-    expect(help).toContain("never changes membership");
-    expect(help).toContain("EARLIEST");
-    expect(help).toContain("keep their own order");
+  it("todo reorder is DELETED — reorder is now the top-level kind-neutral verb", () => {
+    // Phase B: `todo reorder` and the raw `reorder --scope` are removed outright
+    // (ALPHA-CONTRACT clean break); the promoted `reorder` verb replaces both.
+    expect(() => helpFor("todo", "reorder")).toThrow("no command: todo reorder");
+    expect(() => helpFor("reorder")).not.toThrow();
   });
 
   it("project move: to-area destination or --no-area (spec §5)", () => {

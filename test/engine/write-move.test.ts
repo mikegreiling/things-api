@@ -1350,9 +1350,19 @@ describe("regression: ARRIVED container children are Today members, not day-grou
   // arrived/today-dated rows in TODAY; the Upcoming day-groups hold STRICTLY
   // FUTURE dates only. NOW = 2026-07-05; "2026-07-03" is a 2-day-past arrival.
 
-  /** The reorder scope an in-place reorder of these movees routes to (dry-run). */
-  async function routedScope(uuids: string[]): Promise<string> {
-    const r = await runInPlaceReorder(deps(), "todo.move", { uuids }, { dryRun: true });
+  /**
+   * The reorder scope an in-place reorder of these movees routes to (dry-run). An
+   * arrived container child is DUAL-AXIS (the view's todayIndex slot AND its
+   * container's native index slot), so `--in <view>` disambiguates to the view axis
+   * asserted here — the arrived-vs-day-group classification is exactly what it pins.
+   */
+  async function routedScope(uuids: string[], inTarget?: string): Promise<string> {
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
     if (r.kind !== "move-dry-run") throw new Error(`expected move-dry-run, got ${r.kind}`);
     return r.plan.placement;
   }
@@ -1366,7 +1376,7 @@ describe("regression: ARRIVED container children are Today members, not day-grou
       startDate: "2026-07-03",
       todayIndex: 1,
     });
-    const placement = await routedScope([arrived]);
+    const placement = await routedScope([arrived], "today");
     expect(placement).toContain("scope=today");
     expect(placement).not.toContain("area-day");
   });
@@ -1380,7 +1390,7 @@ describe("regression: ARRIVED container children are Today members, not day-grou
       evening: true, // startBucket=1 → This Evening (live only while date == today, §9n)
       todayIndex: 1,
     });
-    expect(await routedScope([eve])).toContain("scope=evening");
+    expect(await routedScope([eve], "evening")).toContain("scope=evening");
   });
 
   it("a today-dated project child routes to the today scope, NOT container-day", async () => {
@@ -1392,7 +1402,7 @@ describe("regression: ARRIVED container children are Today members, not day-grou
       startDate: "2026-07-05", // today (arrived)
       todayIndex: 1,
     });
-    const placement = await routedScope([child]);
+    const placement = await routedScope([child], "today");
     expect(placement).toContain("scope=today");
     expect(placement).not.toContain("container-day");
   });
@@ -1518,9 +1528,20 @@ describe("scope composition (#276): an out-of-scope anchor reads as not-found", 
 });
 
 describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () => {
-  /** The reorder scope an in-place reorder of these movees routes to (dry-run). */
-  async function routedScope(uuids: string[]): Promise<string> {
-    const r = await runInPlaceReorder(deps(), "todo.move", { uuids }, { dryRun: true });
+  /**
+   * The reorder scope an in-place reorder of these movees routes to (dry-run). A
+   * NATIVE-index child (project/area) that is an Evening member is DUAL-AXIS (the
+   * evening view AND its container index), so `--in evening` disambiguates to the
+   * view axis the evening tests assert; a HEADING child's index axis is a bounce
+   * (not Today-flag-safe) so it is single-axis and needs no `--in`.
+   */
+  async function routedScope(uuids: string[], inTarget?: string): Promise<string> {
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
     if (r.kind !== "move-dry-run") throw new Error(`expected move-dry-run, got ${r.kind}`);
     return r.plan.placement;
   }
@@ -1599,7 +1620,7 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
       evening: true,
       todayIndex: 10,
     });
-    expect(await routedScope([e1])).toContain("scope=evening");
+    expect(await routedScope([e1], "evening")).toContain("scope=evening");
   });
 
   it("an AREA-child evening item routes to the shipped evening bounce (Arm D)", async () => {
@@ -1611,7 +1632,7 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
       evening: true,
       todayIndex: 10,
     });
-    expect(await routedScope([e1])).toContain("scope=evening");
+    expect(await routedScope([e1], "evening")).toContain("scope=evening");
   });
 
   it("child-evening degrades to app-default when bounce is disabled (never a destructive fallback)", async () => {
@@ -1624,7 +1645,14 @@ describe("HEADSUB1 planner routing (heading sub-buckets + child evening)", () =>
       todayIndex: 10,
     });
     const noBounce = deps({ config: { ...config(), bounceEnabled: false } });
-    const r = await runInPlaceReorder(noBounce, "todo.move", { uuids: [e1] }, { dryRun: true });
+    // --in evening resolves the dual-axis ambiguity (evening view vs the project
+    // index) so the routing reaches the bounce-disabled degrade being asserted.
+    const r = await runInPlaceReorder(
+      noBounce,
+      "todo.move",
+      { uuids: [e1], in: "evening" },
+      { dryRun: true },
+    );
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") expect(r.detail).toContain("bounce");
   });
@@ -1847,5 +1875,248 @@ describe("SIT4 dated `day` bounce planner routing", () => {
     });
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") expect(r.detail).toContain("day-group");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: `reorder --in` axis disambiguation (dual-axis Today/Evening members)
+// ---------------------------------------------------------------------------
+
+describe("reorder --in axis disambiguation (dual-axis Today/Evening members)", () => {
+  const dryReorder = (uuids: string[], inTarget?: string) =>
+    runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
+
+  it("refuses a dual-axis set (same-project Today members) with NO --in, naming both spellings", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 2,
+    });
+    const r = await dryReorder([a, b]);
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("ambiguous");
+      expect(r.remediation).toContain("--in today");
+      expect(r.remediation).toContain('--in "Work"');
+    }
+  });
+
+  it("--in today and --in <project> compile DIFFERENT axes on the SAME rows", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 2,
+    });
+    const view = await dryReorder([a, b], "today");
+    expect(view.kind).toBe("move-dry-run");
+    if (view.kind === "move-dry-run") expect(view.plan.placement).toContain("scope=today");
+    const index = await dryReorder([a, b], "Work");
+    expect(index.kind).toBe("move-dry-run");
+    if (index.kind === "move-dry-run") expect(index.plan.placement).toContain("scope=project");
+  });
+
+  it("--in naming a container the rows are NOT in is a usage error", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    seedProject(fixture.db, { title: "Other" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const r = await dryReorder([a], "Other");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("not in it");
+    }
+  });
+
+  it("--in today when the items are NOT Today members is a clear error", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active" }); // loose anytime
+    const b = seedTodo(fixture.db, { title: "b", start: "active" });
+    const r = await dryReorder([a, b], "today");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.detail).toContain("not Today members");
+  });
+
+  it("a cross-container Today set is UNAMBIGUOUS (no --in needed) → today", async () => {
+    const p1 = seedProject(fixture.db, { title: "P1" });
+    const p2 = seedProject(fixture.db, { title: "P2" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: p1,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: p2,
+      startDate: "2026-07-05",
+      todayIndex: 2,
+    });
+    const r = await dryReorder([a, b]);
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
+  });
+
+  it("a loose-only Today set is UNAMBIGUOUS (its index axis is a de-Today bounce, not an honest alternative) → today", async () => {
+    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
+    const b = seedTodo(fixture.db, { title: "b", startDate: "2026-07-05", todayIndex: 2 });
+    const r = await dryReorder([a, b]);
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
+  });
+
+  it("--in <heading> on Today members is refused (de-Today hazard — a heading index is a bounce)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const a = seedTodo(fixture.db, { title: "a", heading, startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dryReorder([a], "H");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("de-Today");
+    }
+  });
+
+  it("--in anytime on a loose Today member is refused (de-Today hazard)", async () => {
+    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dryReorder([a], "anytime");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("de-Today");
+    }
+  });
+
+  it("--in loose is a usage error (a read view, not a reorder bucket)", async () => {
+    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dryReorder([a], "loose");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("not valid");
+    }
+  });
+
+  it("--in <project> RE-RANKS Today members on the container index, preserving the Today flag", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+      index: 10,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      startDate: "2026-07-05",
+      todayIndex: 2,
+      index: 20,
+    });
+    // Put b before a on the PROJECT index axis (not the Today view).
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [b, a], in: "Work" });
+    expect(r.kind).toBe("move-ok");
+    expect(indexOrder([b])[0]!).toBeLessThan(indexOrder([a])[0]!);
+    // The Today flag survived (native index re-rank writes only "index").
+    const arow = fixture.db
+      .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+      .get(a) as { startDate: number; startBucket: number };
+    expect(arow.startBucket).toBe(0);
+    expect(arow.startDate).toBe(TODAY_PACKED);
+  });
+
+  it("a plain anytime project child reorders with NO --in (single-axis, unchanged)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "active", index: 20 });
+    const r = await dryReorder([a, b]);
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=project");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: mixed-stage `todo move` position semantics (spec §4 rule 4)
+// ---------------------------------------------------------------------------
+
+describe("mixed-stage todo move position semantics", () => {
+  it("--before/--after on a selection spanning stage sub-buckets is refused pre-move", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const anchor = seedTodo(fixture.db, {
+      title: "anchor",
+      project: proj,
+      start: "active",
+      index: 5,
+    });
+    const anytimeItem = seedTodo(fixture.db, { title: "any", start: "active" });
+    const todayItem = seedTodo(fixture.db, {
+      title: "tod",
+      startDate: "2026-07-05",
+      todayIndex: 1,
+    });
+    const r = await runTodoMove(deps(), {
+      uuids: [anytimeItem, todayItem],
+      destination: { kind: "project", ref: { uuid: proj } },
+      position: { after: anchor },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.detail).toContain("spans stage sub-buckets");
+    }
+  });
+
+  it("--first on a mixed-stage move places each stage-group in ITS bucket (per sub-bucket)", async () => {
+    const area = seedArea(fixture.db, "A");
+    // An anytime and a someday to-do moved into the area together: they land in
+    // DIFFERENT sub-buckets (area index vs area-someday bounce), so --first applies
+    // per sub-bucket. Pre-seed one resident in each bucket so the placement has a
+    // bucket to sort into.
+    seedTodo(fixture.db, { title: "resAny", area, start: "active", index: 100 });
+    seedTodo(fixture.db, { title: "resSome", area, start: "someday", index: 200 });
+    const anytimeItem = seedTodo(fixture.db, { title: "any", start: "active", index: 1 });
+    const somedayItem = seedTodo(fixture.db, { title: "some", start: "someday", index: 2 });
+    const r = await runTodoMove(deps(), {
+      uuids: [anytimeItem, somedayItem],
+      destination: { kind: "area", ref: { uuid: area } },
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.note).toContain("PER sub-bucket");
+      // Both landed in the area (membership) in their respective buckets.
+      const any = fixture.db
+        .prepare("SELECT area, start FROM TMTask WHERE uuid = ?")
+        .get(anytimeItem) as { area: string; start: number };
+      const some = fixture.db
+        .prepare("SELECT area, start FROM TMTask WHERE uuid = ?")
+        .get(somedayItem) as { area: string; start: number };
+      expect(any.area).toBe(area);
+      expect(some.area).toBe(area);
+    }
   });
 });
