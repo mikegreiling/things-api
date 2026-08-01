@@ -89,7 +89,16 @@ export type BounceKind =
   | "heading"
   | "area-someday"
   | "anytime"
-  | "project-someday";
+  | "project-someday"
+  // SIT7 SOMEBACK — the non-experimental `someday`-scope fallback (front-insert).
+  // The URL `anytime↔someday` `when=` round-trip front-inserts BOTH loose someday
+  // to-dos AND area-less someday projects at the loose someday `index` min, so a
+  // reverse-target dispatch lands the exact order (per-type leg op: todo.update /
+  // update-project). Someday rows carry no Today star (the de-Today hazard is moot)
+  // and a deadline-someday round-trip is byte-safe, so the cheap bounce is the
+  // complete safe backup. Wired ONLY when the native anchor-stack (ORD-3) is
+  // unavailable (allow-experimental off OR the sdef canary fails).
+  | "someday";
 
 interface BounceSpec {
   /**
@@ -263,6 +272,21 @@ function bounceSpecOf(kind: BounceKind): BounceSpec {
         legOp: "todo.update",
         jsonCollapsible: false,
       };
+    // SIT7 SOMEBACK: loose someday to-dos AND area-less someday projects FRONT-insert
+    // at the loose someday index min via the anytime↔someday round-trip (reverse-order
+    // dispatch). Per-type leg op (todo.update / update-project) — the first MIXED-kind
+    // fixed-bucket bounce, mirroring the day/evening per-type legs. Someday placement
+    // leg -> json index-INERT (§9i b): URL loop only (never collapsible).
+    case "someday":
+      return {
+        away: "anytime",
+        back: "someday",
+        dated: false,
+        direction: "front",
+        rankKey: "index",
+        legOp: "per-type",
+        jsonCollapsible: false,
+      };
   }
 }
 
@@ -314,13 +338,81 @@ export async function runReorder(
   if (strategy.strategy === "native") {
     return runMutation(deps, "reorder", params, { ...options, vector: "applescript" });
   }
-  return runBounce(deps, params, strategy.bounceKind, options);
+  const result =
+    strategy.strategy === "bounce"
+      ? await runBounce(deps, params, strategy.bounceKind, options)
+      : await runMoveFallback(deps, params, strategy.fallback, options);
+  // SIT7 disclosure: when the private reorder surface is unavailable the scope
+  // ran a degraded-but-guaranteed non-experimental fallback — say so, so the
+  // caller never silently mistakes a fallback for the native placement.
+  if (strategy.fallbackNote !== undefined && result.kind === "ok") {
+    return { ...result, warnings: [...(result.warnings ?? []), strategy.fallbackNote] };
+  }
+  return result;
 }
+
+/** The three move-based SIT7 fallbacks (park + re-enter). See {@link runMoveFallback}. */
+type FallbackKind = "inbox-park" | "proj-root" | "area-back";
 
 type StrategyDecision =
   | { kind: "ok"; strategy: "native" }
-  | { kind: "ok"; strategy: "bounce"; bounceKind: BounceKind }
+  | { kind: "ok"; strategy: "bounce"; bounceKind: BounceKind; fallbackNote?: string }
+  | { kind: "ok"; strategy: "fallback"; fallback: FallbackKind; fallbackNote: string }
   | { kind: "blocked"; result: MutationResult };
+
+/**
+ * Why the native `_private_experimental_ reorder` command is unavailable, for the
+ * fallback disclosure note. Either the config gate is off or the sdef canary
+ * failed — the two triggers {@link resolveStrategy} routes a fallback for.
+ */
+function nativeUnavailableReason(deps: WriteDeps): string {
+  return deps.config.allowExperimental
+    ? "the app no longer declares the private reorder command (sdef canary failed)"
+    : "allow-experimental is off";
+}
+
+/** The fallback disclosure warning — which protocol ran, and why native could not. */
+function fallbackNoteFor(deps: WriteDeps, protocol: string): string {
+  return (
+    `reordered via the non-experimental ${protocol} fallback because the native reorder ` +
+    `is unavailable (${nativeUnavailableReason(deps)})`
+  );
+}
+
+/** A blocked result for a move-based SIT7 fallback while the shared move gate is off. */
+function moveFallbackDisabled(what: string): { kind: "blocked"; result: MutationResult } {
+  return {
+    kind: "blocked",
+    result: {
+      kind: "blocked",
+      op: "reorder",
+      reason: "environment",
+      detail:
+        `${what} falls back to a park + re-enter MOVE protocol (the native reorder is ` +
+        "unavailable), which shares the bounce gate and is disabled (bounce-enabled=false) — " +
+        "it was NOT attempted (no destructive or unverified fallback exists)",
+      remediation:
+        "re-enable it with `things config set bounce-enabled true`" +
+        " (each moved item costs a park + re-enter leg), or turn allow-experimental back on",
+    },
+  };
+}
+
+/** Gate a move-based SIT7 fallback on bounce-enabled (the shared multi-leg move gate). */
+function fallbackOk(
+  deps: WriteDeps,
+  what: string,
+  kind: FallbackKind,
+  protocol: string,
+): StrategyDecision {
+  if (!deps.config.bounceEnabled) return moveFallbackDisabled(what);
+  return {
+    kind: "ok",
+    strategy: "fallback",
+    fallback: kind,
+    fallbackNote: fallbackNoteFor(deps, protocol),
+  };
+}
 
 /** A blocked result for a bounce-dependent placement while bounce is disabled. */
 function bounceDisabled(what: string): { kind: "blocked"; result: MutationResult } {
@@ -343,6 +435,22 @@ function bounceDisabled(what: string): { kind: "blocked"; result: MutationResult
 function bounceOk(deps: WriteDeps, what: string, kind: BounceKind): StrategyDecision {
   if (!deps.config.bounceEnabled) return bounceDisabled(what);
   return { kind: "ok", strategy: "bounce", bounceKind: kind };
+}
+
+/**
+ * A when=-bounce SIT7 fallback (SOMEBACK someday, or a dated `day` bounce standing
+ * in for container-day/tomorrow): a bounce that ALSO carries the fallback disclosure
+ * note, because it ran only because the native surface was unavailable.
+ */
+function bounceFallbackOk(
+  deps: WriteDeps,
+  what: string,
+  kind: BounceKind,
+  protocol: string,
+): StrategyDecision {
+  const d = bounceOk(deps, what, kind);
+  if (d.kind !== "ok" || d.strategy !== "bounce") return d;
+  return { ...d, fallbackNote: fallbackNoteFor(deps, protocol) };
 }
 
 function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecision {
@@ -376,16 +484,18 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
         "omit --strategy (container-day defaults to native)",
       );
     }
-    if (
-      params.scope === "project" ||
-      params.scope === "area" ||
-      params.scope === "inbox" ||
-      params.scope === "someday"
-    ) {
+    // `someday` DOES have a when= bounce twin (SIT7 SOMEBACK) — route explicit
+    // --strategy bounce to it. project/area/inbox have no when= surface (their
+    // SIT7 fallbacks are MOVE protocols, planner-selected only).
+    if (params.scope === "someday") {
+      return bounceOk(deps, "loose someday order", "someday");
+    }
+    if (params.scope === "project" || params.scope === "area" || params.scope === "inbox") {
       return blocked(
         "bounce can only reorder the Today/Evening sections, top-level projects, within-heading, " +
-          "area-someday, and area-less anytime — its primitive is a when= round-trip, which does " +
-          "not move this scope's order",
+          "area-someday, area-less anytime, and loose someday — its primitive is a when= round-trip, " +
+          "which does not move this scope's order (use the native strategy, or omit --strategy to let " +
+          "the non-experimental MOVE fallback run when native is unavailable)",
         "use the native strategy (requires `things config set allow-experimental true`)",
       );
     }
@@ -401,23 +511,48 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
       return nativeAvailable
         ? { kind: "ok", strategy: "native" }
         : bounceOk(deps, "Today-section order", "today");
+    // SIT7 AUTOMATIC FALLBACKS — every native-only reorder scope degrades to a
+    // proven non-experimental protocol when the private surface is unavailable
+    // (allow-experimental off OR the sdef canary fails), rather than fail-explain.
     case "project":
-      // SOMEORD-b native is primary; SOMEBNC-project forward-order bounce is the
-      // documented ALTERNATE, used only when the native command is unavailable
-      // and every requested member is a someday child (reordgaps-results.md).
-      if (!nativeAvailable && somedayProjectChildren(deps, params)) {
-        return bounceOk(deps, "within-project someday order", "project-someday");
-      }
-      return { kind: "ok", strategy: "native" };
+      // PROJROOT (fallback 3): park the unheaded children to a scratch project, then
+      // re-home `list-id=<P>` in FORWARD target order (back-insert). One protocol for
+      // ALL rows (flagged or not) — the move round-trip is proven flag-safe (SIT7).
+      return nativeAvailable
+        ? { kind: "ok", strategy: "native" }
+        : fallbackOk(deps, "within-project child order", "proj-root", "PROJROOT");
     case "area":
+      // AREABACK (fallback 4): park members out, re-home `list-id=`/`area-id=<area>`
+      // in REVERSE target order (front-insert), area FK preserved. Flag-safe move.
+      return nativeAvailable
+        ? { kind: "ok", strategy: "native" }
+        : fallbackOk(deps, "an area's member order", "area-back", "AREABACK");
     case "inbox":
+      // INBOXBACK (fallback 1): park each row into a scratch project, then re-enter
+      // via `move … to list "Inbox"` in REVERSE target order (front-insert, restores
+      // start=0). A same-list `move … to "Inbox"` is a no-op, so park-first is required.
+      return nativeAvailable
+        ? { kind: "ok", strategy: "native" }
+        : fallbackOk(deps, "Inbox order", "inbox-park", "INBOXBACK");
     case "someday":
+      // SOMEBACK (fallback 2): the anytime↔someday when= bounce front-inserts loose
+      // someday to-dos AND area-less someday projects (reverse-target, per-type leg).
+      return nativeAvailable
+        ? { kind: "ok", strategy: "native" }
+        : bounceFallbackOk(deps, "loose someday order", "someday", "SOMEBACK");
     case "container-day":
     case "tomorrow":
-      // Native-only scopes: let the pipeline explain precisely why native is
-      // unavailable (planner: experimental gate; canary: sdef change). `tomorrow`
-      // is the ORDFIN2 one-call `list "Tomorrow"` day-sort (TOMORROWLIST).
-      return { kind: "ok", strategy: "native" };
+      // Fallback 5: the dated `day` bounce (ORD-6 DAYBNC) reaches every same-day child
+      // via a pure-URL cross-date round-trip — a non-experimental stand-in for both
+      // the container-day native re-rank and the one-call `list "Tomorrow"` sort.
+      return nativeAvailable
+        ? { kind: "ok", strategy: "native" }
+        : bounceFallbackOk(
+            deps,
+            params.scope === "tomorrow" ? "Tomorrow order" : "a container's scheduled-day order",
+            "day",
+            "dated-day-bounce",
+          );
     // bounce-only scopes handled by bounceEntry above; unreachable here.
     case "evening":
     case "day":
@@ -433,46 +568,11 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
   }
 }
 
-/**
- * True when every requested uuid is an open, non-trashed, un-headed SOMEDAY
- * (start=2) child of the params' project container — the precondition for the
- * SOMEBNC-project forward-order bounce fallback.
- */
-function somedayProjectChildren(deps: WriteDeps, params: ReorderParams): boolean {
-  if (params.uuids.length === 0) return false;
-  const projectUuid = resolveProject(deps.db, params.container ?? {}).resolved?.uuid;
-  if (projectUuid === undefined) return false;
-  for (const uuid of params.uuids) {
-    const row = deps.db
-      .prepare(
-        "SELECT type, trashed, status, project, heading, start, startDate FROM TMTask WHERE uuid = ?",
-      )
-      .get(uuid) as
-      | {
-          type: number;
-          trashed: number;
-          status: number;
-          project: string | null;
-          heading: string | null;
-          start: number;
-          startDate: number | null;
-        }
-      | undefined;
-    if (
-      row === undefined ||
-      row.type !== 0 ||
-      row.trashed !== 0 ||
-      row.status !== 0 ||
-      row.project !== projectUuid ||
-      row.heading !== null ||
-      row.start !== 2 ||
-      row.startDate !== null
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
+// (The SOMEBNC-project someday-only bounce fallback for the `project` scope is
+// SUPERSEDED by PROJROOT — the SIT7 park + re-home MOVE round-trip that reorders
+// ALL of a project's unheaded children flag-safely, one protocol for every row.
+// The `project-someday` BounceKind survives as the §9i json-collapse classification
+// pin, but it is no longer selected by resolveStrategy.)
 
 // ----------------------------------------------------- compound leg options
 //
@@ -752,7 +852,12 @@ async function runBounce(
   const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
   const containerUuid = resolveContainerUuid(deps, params);
   const wantsContainer =
-    bounceKind === "heading" || bounceKind === "area-someday" || bounceKind === "project-someday";
+    bounceKind === "heading" ||
+    bounceKind === "area-someday" ||
+    bounceKind === "project-someday" ||
+    // SIT7 fallback routing: `container-day` degrades to the dated `day` bounce
+    // (fallback 5) and legitimately carries its project/area container.
+    params.scope === "container-day";
 
   // The two `when=` leg values. A fixed-bucket bounce uses the spec's keywords; the
   // DATED `day` bounce (SIT4 DAYBNC) derives them from the movees' shared day —
@@ -867,6 +972,15 @@ async function runBounce(
     problems.push("container is only valid for the heading / area-someday / project scopes");
   if (params.uuids.length === 0) problems.push("no uuids given");
   if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
+  // SIT7 SOMEBACK: the someday bounce is same-type only (loose to-dos front-insert on a
+  // different axis than area-less projects — a mixed wire list is unprobed), mirroring
+  // the native someday anchor-stack's same-type rule.
+  if (pre.mixedTypes) {
+    problems.push(
+      "a someday reorder must be all to-dos OR all projects (same-type only) — a mixed member set " +
+        "is unprobed",
+    );
+  }
   for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
   if (legOp === "todo.update") {
     for (const uuid of pre.projectMembers) {
@@ -1846,6 +1960,778 @@ function countAreaMembers(deps: WriteDeps, areaUuid: string): number {
   return row.n;
 }
 
+/** A row's type (0 = to-do, 1 = project, 2 = heading), or null when it is gone. */
+function rowTypeOf(deps: WriteDeps, uuid: string): number | null {
+  const row = deps.db.prepare("SELECT type FROM TMTask WHERE uuid = ?").get(uuid) as
+    | { type: number }
+    | undefined;
+  return row?.type ?? null;
+}
+
+// -------------------------------------------- SIT7 automatic MOVE fallbacks
+//
+// The non-experimental park + re-enter protocols the native-only reorder scopes
+// degrade to when the private `_private_experimental_ reorder` command is
+// unavailable (allow-experimental off OR the sdef canary fails) — the LIVE
+// automatic backups SIT7 proved (docs/lab/sit7-backup-laws.md). Every leg is a
+// URL/AppleScript MOVE (`list-id=`/`area-id=`/`move … to list "Inbox"`) — NO
+// when= leg, NO private reorder surface — so the Today/Evening flag + reminder +
+// deadline + FKs all survive the sort. Re-entry geometry follows the destination's
+// CONTAINMENT class (SIT7's general law): LOOSE-like buckets FRONT-insert (reverse
+// target dispatch), CONTAINERS BACK-insert (forward target dispatch):
+//   - INBOXBACK (inbox): park each row into a scratch PROJECT, then re-enter
+//       `move … to list "Inbox"` in REVERSE target order — FRONT-inserts and
+//       RESTORES start=0 (a same-list `move … to "Inbox"` is a no-op, so park-first
+//       is mandatory — the inbox cousin of §9l).
+//   - PROJROOT (project): park each unheaded child into a scratch PROJECT, then
+//       re-home `list-id=<P>` in FORWARD target order — BACK-inserts at the project-
+//       root max (a project root behaves like a heading container). ONE protocol for
+//       ALL rows (flagged or not) — the move round-trip is proven flag-safe.
+//   - AREABACK (area): park each member OUT (a to-do into a scratch PROJECT, a project
+//       into a scratch AREA), then re-home to the area in REVERSE target order —
+//       FRONT-inserts at the area's member min (an area behaves like a loose bucket),
+//       the area FK preserved.
+// They share the SIT6 move family's gate (bounce-enabled) and cap (bounce-max-items),
+// pre-ranks (undo via a single inverse reorder), named-scratch abort disclosure,
+// verify-empty teardown (AREADEL — never trash/delete a non-empty scratch), and
+// placement-honesty `touched` disclosure. Non-atomic: a mid-protocol failure leaves
+// rows in a disclosed transient state and fails loudly with placed/remaining detail.
+
+/**
+ * Compute the touched run + build the {@link SwapCtx} for a SIT7 move fallback,
+ * validate scope membership, and dispatch to the matching protocol. Unlike the
+ * SIT6 flag-swap (whose movees are flag-EXCLUDED from `pre.members`), the SIT7
+ * fallbacks operate on TRUE scope members, so duplicates/rejected/mixed-type are
+ * validated here exactly as the bounce path validates them.
+ */
+async function runMoveFallback(
+  deps: WriteDeps,
+  params: ReorderParams,
+  fallback: FallbackKind,
+  options: WriteOptions,
+): Promise<ReorderResult> {
+  const startedAt = deps.now?.() ?? new Date();
+  const now = deps.now ?? (() => new Date());
+  const actor = options.actor ?? deps.config.actor;
+  const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
+  const containerUuid = resolveContainerUuid(deps, params);
+  const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
+  const pre = computeReorderPre(deps.db, params, containerUuid, now());
+
+  // proj-root BACK-inserts (forward dispatch → suffix from the first named slot);
+  // inbox/area FRONT-insert (reverse dispatch → prefix to the last named slot).
+  const direction: "front" | "back" = fallback === "proj-root" ? "back" : "front";
+  const targetOrder = pre.wireList;
+  const named = new Set(params.named ?? params.uuids);
+  const movedPositions = targetOrder.map((u, i) => (named.has(u) ? i : -1)).filter((i) => i >= 0);
+  const firstMoved = movedPositions.length > 0 ? (movedPositions[0] as number) : 0;
+  const lastMoved =
+    movedPositions.length > 0 ? (movedPositions[movedPositions.length - 1] as number) : 0;
+  const coBounce =
+    direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
+  const touchedUnnamed = coBounce.filter((u) => !named.has(u));
+  const ctx: SwapCtx = {
+    coBounce,
+    containerUuid,
+    txnId,
+    actor,
+    touchedUnnamed,
+    startedAt,
+    options,
+    cap,
+  };
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  const problems: string[] = [];
+  if (params.uuids.length === 0) problems.push("no uuids given");
+  if (pre.duplicates.length > 0) problems.push(`duplicated uuid(s): ${pre.duplicates.join(", ")}`);
+  for (const r of pre.rejected) problems.push(`${r.uuid} ${r.reason}`);
+  if (pre.mixedTypes) {
+    problems.push(
+      "an area reorder must be all to-dos OR all projects — a mixed member set is unprobed",
+    );
+  }
+  if (problems.length > 0) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `reorder request rejected: ${problems.join("; ")}`,
+      "read the scope first and pass only its eligible members, at most " +
+        `${cap} for the fallback protocol (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  switch (fallback) {
+    case "inbox-park":
+      return runInboxPark(deps, params, ctx);
+    case "proj-root":
+      return runProjectRoot(deps, params, ctx);
+    case "area-back":
+      return runAreaBack(deps, params, ctx);
+  }
+}
+
+/**
+ * INBOXBACK (SIT7) — Inbox order without the private surface: create a scratch
+ * PROJECT, PARK every touched row into it (`list-id=<scratch>` flips start 0→1
+ * transiently), then re-enter `move to do id X to list "Inbox"` in REVERSE target
+ * order — each re-entry FRONT-INSERTS at the inbox `index` min AND RESTORES start=0
+ * (project→NULL), so a reverse-target dispatch lands the exact order. The inbox
+ * return leg is AppleScript-only (`move … to list "Inbox"`; #356) — pinned here.
+ * Verify the scratch is EMPTY, then TRASH it. Non-atomic: a mid-fail leaves rows
+ * PARKED in the NAMED scratch project (recovery text); never trashes a non-empty
+ * scratch (AREADEL).
+ */
+async function runInboxPark(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  if (coBounce.length > cap) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `Inbox order fallback rejected: ${coBounce.length} touched items exceed the cap of ${cap} ` +
+        `(each costs a park + Inbox-return leg${touchedUnnamed.length > 0 ? `; ${touchedUnnamed.length} co-touched inbox sibling(s)` : ""})`,
+      `reorder at most ${cap} inbox to-dos (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `INBOXBACK scratch project + park ×${coBounce.length} + Inbox-return ×${coBounce.length} ` +
+          `(front-insert, reverse target order${touchedUnnamed.length > 0 ? `, touches ${touchedUnnamed.length} unnamed sibling(s)` : ""}; ` +
+          'trash the empty scratch): a same-list `move … to "Inbox"` is a no-op, so each row is ' +
+          "parked into a scratch project then re-entered to the Inbox to front-insert (restoring " +
+          "start=0); one terminal order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+  const scratchTitle = `things-api reorder-inbox ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch PROJECT.
+  const add = await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `could not create the scratch project "${scratchTitle}" — nothing was parked; no changes were made`,
+      [],
+      coBounce,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each touched row into the scratch project (any order).
+  const parked: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `parking ${uuid} into scratch project ${scratch} failed — ${parked.length} item(s) are PARKED ` +
+          `there (${scratch}) and must be moved back to the Inbox manually; the scratch project was ` +
+          "NOT trashed",
+        parked,
+        coBounce.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. RE-ENTER `move … to list "Inbox"` (AppleScript-only, #356) in REVERSE target
+  //    order — front-insert restores start=0 and lands the target order.
+  const dispatch = coBounce.toReversed();
+  const returned: string[] = [];
+  for (const uuid of dispatch) {
+    const res = await runMutation(
+      deps,
+      "todo.move",
+      { uuid, inbox: true },
+      { ...legOpts, vector: "applescript" },
+    );
+    if (res.kind !== "ok") {
+      const stillParked = dispatch.filter((u) => !returned.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...returned] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `returning ${uuid} to the Inbox from scratch project ${scratch} failed — ${stillParked.length} ` +
+          `item(s) remain PARKED in ${scratch} and must be moved back to the Inbox manually; the ` +
+          "scratch project was NOT trashed",
+        returned,
+        stillParked,
+        res,
+      );
+    }
+    returned.push(uuid);
+  }
+
+  // 4. Verify the scratch is EMPTY, then trash it (NEVER trash a non-empty scratch).
+  const remaining = countProjectChildren(deps, scratch);
+  if (remaining > 0) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...returned] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `the scratch project ${scratch} still holds ${remaining} parked item(s) after the Inbox return — ` +
+        "refusing to trash it (trashing a non-empty scratch would send them to the Trash, AREADEL); " +
+        `move them back to the Inbox and delete ${scratch} manually`,
+      returned,
+      [],
+      null,
+    );
+  }
+  const del = await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
+  const scratchTrashed = del.kind === "ok";
+
+  // 5. Terminal verify: the inbox order matches the target.
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...returned] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the Inbox did not land the requested order after the return (scratch project " +
+        `${scratch} was ${scratchTrashed ? "trashed" : "left in place"}); re-run once Things is idle`,
+      returned,
+      [],
+      null,
+    );
+  }
+
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx, [
+    `scratch project ${scratch} was created for the reorder and ` +
+      (scratchTrashed
+        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
+        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
+  ]);
+}
+
+/**
+ * PROJROOT (SIT7) — a project's unheaded children without the private surface: create
+ * a scratch PROJECT, PARK every touched child into it (`list-id=<scratch>`), then
+ * re-home to the original project (`list-id=<P>`, no heading) in FORWARD target order
+ * — each re-home BACK-INSERTS at the project-root `index` max (a project root behaves
+ * like a heading container), so a forward-target dispatch lands the exact order. ONE
+ * protocol for ALL rows (flagged or not) — the move round-trip is proven flag-safe.
+ * Verify the scratch is EMPTY, then TRASH it. Non-atomic: a mid-fail leaves children
+ * PARKED in the NAMED scratch project (recovery text).
+ */
+async function runProjectRoot(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, containerUuid, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  if (containerUuid === null) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      "the project did not resolve (the re-home leg needs the project container)",
+      "pass the project by uuid or a unique title (`--project`)",
+    );
+  }
+  if (coBounce.length > cap) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `within-project order fallback rejected: ${coBounce.length} touched items exceed the cap of ${cap} ` +
+        `(each costs a park + re-home leg${touchedUnnamed.length > 0 ? `; ${touchedUnnamed.length} co-touched child sibling(s)` : ""})`,
+      `reorder at most ${cap} of a project's unheaded children (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `PROJROOT scratch project + park ×${coBounce.length} + re-home ×${coBounce.length} ` +
+          `(flag-safe back-insert, forward target order${touchedUnnamed.length > 0 ? `, touches ${touchedUnnamed.length} unnamed sibling(s)` : ""}; ` +
+          "trash the empty scratch): the private reorder is unavailable, so each child is parked into a " +
+          "scratch project then re-homed to the project root to back-insert at its end; one terminal " +
+          "order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+  const scratchTitle = `things-api reorder-project ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch PROJECT.
+  const add = await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `could not create the scratch project "${scratchTitle}" — nothing was parked; no changes were made`,
+      [],
+      coBounce,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each child into the scratch project (any order).
+  const parked: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `parking ${uuid} into scratch project ${scratch} failed — ${parked.length} child(ren) are PARKED ` +
+          `there (${scratch}) and must be moved back to project ${containerUuid} manually; the scratch ` +
+          "project was NOT trashed",
+        parked,
+        coBounce.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. RE-HOME to the project root in FORWARD target order — back-insert lands the target.
+  const rehomed: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(
+      deps,
+      "todo.move",
+      { uuid, project: { uuid: containerUuid } },
+      legOpts,
+    );
+    if (res.kind !== "ok") {
+      const stillParked = coBounce.filter((u) => !rehomed.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...rehomed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `re-homing ${uuid} to project ${containerUuid} from scratch project ${scratch} failed — ` +
+          `${stillParked.length} child(ren) remain PARKED in ${scratch} and must be moved back to ` +
+          `project ${containerUuid} manually; the scratch project was NOT trashed`,
+        rehomed,
+        stillParked,
+        res,
+      );
+    }
+    rehomed.push(uuid);
+  }
+
+  // 4. Verify the scratch is EMPTY, then trash it (NEVER trash a non-empty scratch).
+  const remaining = countProjectChildren(deps, scratch);
+  if (remaining > 0) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...rehomed] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `the scratch project ${scratch} still holds ${remaining} parked child(ren) after re-homing — ` +
+        "refusing to trash it (trashing a non-empty scratch would send them to the Trash, AREADEL); " +
+        `move them back to project ${containerUuid} and delete ${scratch} manually`,
+      rehomed,
+      [],
+      null,
+    );
+  }
+  const del = await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
+  const scratchTrashed = del.kind === "ok";
+
+  // 5. Terminal verify: the project-root order matches the target.
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...rehomed] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the project's children did not land the requested order after re-homing (scratch project " +
+        `${scratch} was ${scratchTrashed ? "trashed" : "left in place"}); re-run once Things is idle`,
+      rehomed,
+      [],
+      null,
+    );
+  }
+
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx, [
+    `scratch project ${scratch} was created for the reorder and ` +
+      (scratchTrashed
+        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
+        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
+  ]);
+}
+
+/**
+ * AREABACK (SIT7) — an area's members without the private surface. Park each member
+ * OUT of the area (a to-do into a scratch PROJECT, a project into a scratch AREA),
+ * then re-home to the area (`list-id=<area>` for a to-do, `area-id=<area>` for a
+ * project) in REVERSE target order — each re-home FRONT-INSERTS at the area's member
+ * `index` min (an area behaves like a loose bucket) with the area FK preserved, so a
+ * reverse-target dispatch lands the exact order, flag-safe. The area scope is uniform-
+ * type (mixed sets are rejected upstream), so the whole run is one kind. Verify the
+ * scratch is EMPTY, then trash/delete it (the area delete supplies its own
+ * H-PERMANENT-DELETE acknowledgement internally — created + verified-empty this txn).
+ * Non-atomic: a mid-fail leaves members PARKED in the NAMED scratch container.
+ */
+async function runAreaBack(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, containerUuid, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  if (containerUuid === null) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      "the area did not resolve (the re-home leg needs the area container)",
+      "pass the area by uuid or a unique title (`--area`)",
+    );
+  }
+  const isProjects = rowTypeOf(deps, coBounce[0] as string) === 1;
+  const noun = isProjects ? "project" : "to-do";
+  if (coBounce.length > cap) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `an area's member order fallback rejected: ${coBounce.length} touched items exceed the cap of ${cap} ` +
+        `(each costs a park + re-home leg${touchedUnnamed.length > 0 ? `; ${touchedUnnamed.length} co-touched area sibling(s)` : ""})`,
+      `reorder at most ${cap} of an area's members (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `AREABACK scratch ${isProjects ? "area" : "project"} + park ×${coBounce.length} + re-home ×${coBounce.length} ` +
+          `(flag-safe front-insert, reverse target order${touchedUnnamed.length > 0 ? `, touches ${touchedUnnamed.length} unnamed sibling(s)` : ""}; ` +
+          `${isProjects ? "delete" : "trash"} the empty scratch): the private reorder is unavailable, so each ` +
+          `${noun} is parked out then re-homed to the area to front-insert at its member min (area FK ` +
+          "preserved); one terminal order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+  const scratchTitle = `things-api reorder-area ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch container (a PROJECT to hold to-dos / an AREA to hold projects).
+  const add = isProjects
+    ? await runMutation(deps, "area.add", { title: scratchTitle }, legOpts)
+    : await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `could not create the scratch ${isProjects ? "area" : "project"} "${scratchTitle}" — nothing was ` +
+        "parked; no changes were made",
+      [],
+      coBounce,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each member OUT of the area into the scratch container (any order).
+  const parked: string[] = [];
+  for (const uuid of coBounce) {
+    const res = isProjects
+      ? await runMutation(deps, "project.move", { uuid, area: { uuid: scratch } }, legOpts)
+      : await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `parking ${noun} ${uuid} into scratch ${isProjects ? "area" : "project"} ${scratch} failed — ` +
+          `${parked.length} ${noun}(s) are PARKED there (${scratch}) and must be moved back to area ` +
+          `${containerUuid} manually; the scratch was NOT ${isProjects ? "deleted" : "trashed"}`,
+        parked,
+        coBounce.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. RE-HOME to the area in REVERSE target order — front-insert lands the target.
+  const dispatch = coBounce.toReversed();
+  const rehomed: string[] = [];
+  for (const uuid of dispatch) {
+    const res = isProjects
+      ? await runMutation(deps, "project.move", { uuid, area: { uuid: containerUuid } }, legOpts)
+      : await runMutation(deps, "todo.move", { uuid, area: { uuid: containerUuid } }, legOpts);
+    if (res.kind !== "ok") {
+      const stillParked = dispatch.filter((u) => !rehomed.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...rehomed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `re-homing ${noun} ${uuid} to area ${containerUuid} from scratch ${scratch} failed — ` +
+          `${stillParked.length} ${noun}(s) remain PARKED in ${scratch} and must be moved back to ` +
+          `area ${containerUuid} manually; the scratch was NOT ${isProjects ? "deleted" : "trashed"}`,
+        rehomed,
+        stillParked,
+        res,
+      );
+    }
+    rehomed.push(uuid);
+  }
+
+  // 4. Verify the scratch is EMPTY, then trash/delete it (NEVER teardown a non-empty scratch).
+  const remaining = isProjects
+    ? countAreaMembers(deps, scratch)
+    : countProjectChildren(deps, scratch);
+  if (remaining > 0) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...rehomed] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `the scratch ${isProjects ? "area" : "project"} ${scratch} still holds ${remaining} parked ` +
+        `${noun}(s) after re-homing — refusing to ${isProjects ? "delete" : "trash"} it (that would ` +
+        `${isProjects ? "trash its members and shallow-trash their children" : "send them to the Trash"}, ` +
+        `AREADEL); move them back to area ${containerUuid} and remove ${scratch} manually`,
+      rehomed,
+      [],
+      null,
+    );
+  }
+  // The area delete supplies H-PERMANENT-DELETE internally (created + verified-empty
+  // this txn); H-AREA-NOT-EMPTY cannot trip (a non-empty scratch aborts above).
+  const del = isProjects
+    ? await runMutation(
+        deps,
+        "area.delete",
+        { target: scratch },
+        { ...legOpts, dangerouslyPermanent: true },
+      )
+    : await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
+  const scratchRemoved = del.kind === "ok";
+
+  // 5. Terminal verify: the area's member order matches the target.
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...rehomed] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the area's members did not land the requested order after re-homing (scratch " +
+        `${scratch} was ${scratchRemoved ? (isProjects ? "deleted" : "trashed") : "left in place"}); ` +
+        "re-run once Things is idle",
+      rehomed,
+      [],
+      null,
+    );
+  }
+
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx, [
+    `scratch ${isProjects ? "area" : "project"} ${scratch} was created for the reorder and ` +
+      (scratchRemoved
+        ? `${isProjects ? "deleted" : "moved to the Trash"} (verified empty first — the protocol never ` +
+          `${isProjects ? "deletes a non-empty area" : "trashes a non-empty scratch"})`
+        : `could NOT be ${isProjects ? "deleted" : "trashed"} (${del.kind}) — it remains empty; remove it manually`),
+  ]);
+}
+
 /**
  * The url-scheme dispatch surface for a leg op — the vector the json collapse
  * opens its `things:///json` array through. In tests this is the injected fake
@@ -2114,6 +3000,16 @@ function checkStillMember(
       if (row.start !== 1 || row.startDate !== null) {
         return "the to-do is no longer a plain Anytime item";
       }
+      return null;
+    // SIT7 SOMEBACK: a loose someday to-do OR an area-less someday project. Both
+    // front-insert on the shared loose someday index axis via the per-type bounce.
+    case "someday":
+      if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
+      if (row.start !== 2 || row.startDate !== null) return "the item is no longer a Someday item";
+      if (row.type === 0 && (row.project !== null || row.area !== null || row.heading !== null)) {
+        return "the to-do is no longer a loose Someday item (it gained a container)";
+      }
+      if (row.type === 1 && row.area !== null) return "the project moved into an area";
       return null;
     case "today":
     case "evening": {

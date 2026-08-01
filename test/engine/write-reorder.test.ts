@@ -1247,51 +1247,314 @@ describe("container-day scope (DAYORD-b native todayIndex, date-preserving)", ()
   });
 });
 
-describe("project scope: SOMEBNC-project bounce fallback (native unavailable)", () => {
-  it("uses a FORWARD-order bounce when experimental is off and members are all someday", async () => {
+// ------------------------------------------------- SIT7 automatic MOVE fallbacks
+//
+// FAITHFUL SIT7 move sims: every leg is a URL/AppleScript MOVE preserving the flag +
+// reminder + deadline + FKs (it never writes start/startDate/startBucket/todayIndex/
+// reminderTime/deadline), the re-entry legs implementing the SIT7 index geometry.
+
+/**
+ * PROJROOT / project-root move sim (SIT7 PROJROOT): `todo.move project=X` BACK-INSERTS
+ * the row at project X's root `index` max (a project root is a container). Models BOTH
+ * the park-into-scratch AND the re-home-to-P legs with the ONE law (moving a to-do into
+ * any project root back-inserts there). project.add mints the scratch; project.delete
+ * trashes it.
+ */
+function projRootVectors() {
+  const calls: string[] = [];
+  const db = fixture.db;
+  const nowEpoch = Math.floor(NOW.getTime() / 1000);
+  const yes = { support: "yes" as const, disruption: 0 as const, validation: "validated" as const };
+  const url: WriteVector = {
+    id: "url-scheme",
+    matrix: { "todo.move": { ...yes }, "project.add": { ...yes } },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (inv.op === "project.add") {
+        const p = inv.opParams as { title: string };
+        seedProject(db, {
+          title: p.title,
+          start: "active",
+          creationDate: nowEpoch,
+          modificationDate: nowEpoch,
+        });
+      } else if (inv.op === "todo.move") {
+        const p = inv.opParams as { uuid: string; project?: { uuid: string } };
+        if (p.project !== undefined) {
+          const max = db
+            .prepare(
+              `SELECT MAX("index") AS m FROM TMTask WHERE project = ? AND heading IS NULL
+               AND trashed = 0 AND status = 0 AND uuid != ?`,
+            )
+            .get(p.project.uuid, p.uuid) as { m: number | null };
+          db.prepare(
+            `UPDATE TMTask SET project = ?, heading = NULL, area = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          ).run(p.project.uuid, (max.m ?? 0) + 1, modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const osa: WriteVector = {
+    id: "applescript",
+    matrix: { "project.delete": { ...yes } },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (inv.op === "project.delete") {
+        const p = inv.opParams as { uuid: string };
+        db.prepare("UPDATE TMTask SET trashed = 1, userModificationDate = ? WHERE uuid = ?").run(
+          modClock++,
+          p.uuid,
+        );
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { url, osa, calls };
+}
+
+/**
+ * INBOXBACK / AREABACK move sim (SIT7): models the re-entry front-inserts.
+ *   - `todo.move inbox` FRONT-inserts at the inbox `index` min + RESTORES start=0.
+ *   - `todo.move area=X` FRONT-inserts at area X's to-do member `index` min.
+ *   - `project.move area=X` FRONT-inserts at area X's project member `index` min.
+ *   - `todo.move project=X` / `project.move area=<scratch>` PARK (no index change beyond
+ *     the container FK) — the park law is that scratch parking preserves relative order.
+ * project.add / area.add mint the scratch; project.delete / area.delete remove it.
+ */
+function sit7BackVectors(opts: { failAt?: { op: string; nth: number } } = {}) {
+  const calls: string[] = [];
+  const db = fixture.db;
+  const nowEpoch = Math.floor(NOW.getTime() / 1000);
+  const yes = { support: "yes" as const, disruption: 0 as const, validation: "validated" as const };
+  // Shared op counter across BOTH vectors — a leg's Nth occurrence fails on demand.
+  const opCount = new Map<string, number>();
+  const failNow = (op: string): boolean => {
+    const n = (opCount.get(op) ?? 0) + 1;
+    opCount.set(op, n);
+    return opts.failAt !== undefined && opts.failAt.op === op && opts.failAt.nth === n;
+  };
+  const failExec = { exitCode: 1, stdout: "", stderr: "simulated leg failure" };
+  const frontMinTodoInbox = (): number => {
+    const r = db
+      .prepare(
+        `SELECT MIN("index") AS m FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0
+         AND start = 0 AND project IS NULL AND area IS NULL AND heading IS NULL`,
+      )
+      .get() as { m: number | null };
+    return (r.m ?? 0) - 1;
+  };
+  const frontMinAreaTodo = (area: string): number => {
+    const r = db
+      .prepare(
+        `SELECT MIN("index") AS m FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0 AND area = ? AND heading IS NULL`,
+      )
+      .get(area) as { m: number | null };
+    return (r.m ?? 0) - 1;
+  };
+  const frontMinAreaProj = (area: string): number => {
+    const r = db
+      .prepare(
+        `SELECT MIN("index") AS m FROM TMTask WHERE type = 1 AND trashed = 0 AND status = 0 AND area = ?`,
+      )
+      .get(area) as { m: number | null };
+    return (r.m ?? 0) - 1;
+  };
+  // Shared `todo.move` applier — registered on BOTH the url and applescript vectors,
+  // because the INBOXBACK Inbox-return leg is PINNED to applescript (#356) while the
+  // park / area-re-home legs route to url. Both surfaces model the same move law.
+  const applyTodoMove = (inv: { opParams?: unknown }): void => {
+    const p = inv.opParams as {
+      uuid: string;
+      project?: { uuid: string };
+      area?: { uuid: string };
+      inbox?: boolean;
+    };
+    if (p.inbox === true) {
+      db.prepare(
+        `UPDATE TMTask SET start = 0, startDate = NULL, startBucket = 0, project = NULL, area = NULL, heading = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+      ).run(frontMinTodoInbox(), modClock++, p.uuid);
+    } else if (p.area !== undefined) {
+      const areaUuid = p.area.uuid;
+      db.prepare(
+        `UPDATE TMTask SET area = ?, project = NULL, heading = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+      ).run(areaUuid, frontMinAreaTodo(areaUuid), modClock++, p.uuid);
+    } else if (p.project !== undefined) {
+      // Park into scratch (no index reindex — parking preserves relative order).
+      db.prepare(
+        `UPDATE TMTask SET project = ?, heading = NULL, area = NULL, userModificationDate = ? WHERE uuid = ?`,
+      ).run(p.project.uuid, modClock++, p.uuid);
+    }
+  };
+  const url: WriteVector = {
+    id: "url-scheme",
+    matrix: { "todo.move": { ...yes }, "project.move": { ...yes }, "project.add": { ...yes } },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (inv.op !== undefined && failNow(inv.op)) return failExec;
+      if (inv.op === "project.add") {
+        const p = inv.opParams as { title: string };
+        seedProject(db, {
+          title: p.title,
+          start: "active",
+          creationDate: nowEpoch,
+          modificationDate: nowEpoch,
+        });
+      } else if (inv.op === "todo.move") {
+        applyTodoMove(inv);
+      } else if (inv.op === "project.move") {
+        const p = inv.opParams as { uuid: string; area?: { uuid: string } };
+        if (p.area !== undefined) {
+          // Distinguish re-home to the target area (front-insert) from park to scratch.
+          // Both set the area FK; the terminal verify only checks the re-home target.
+          db.prepare(
+            `UPDATE TMTask SET area = ?, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          ).run(p.area.uuid, frontMinAreaProj(p.area.uuid), modClock++, p.uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const osa: WriteVector = {
+    id: "applescript",
+    matrix: {
+      "todo.move": { ...yes },
+      "area.add": { ...yes },
+      "area.delete": { ...yes },
+      "project.delete": { ...yes },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (inv.op !== undefined && failNow(inv.op)) return failExec;
+      if (inv.op === "todo.move") {
+        applyTodoMove(inv);
+      } else if (inv.op === "area.add") {
+        const p = inv.opParams as { title: string };
+        seedArea(db, p.title);
+      } else if (inv.op === "area.delete") {
+        const p = inv.opParams as { target: string };
+        db.prepare("DELETE FROM TMArea WHERE uuid = ?").run(p.target);
+      } else if (inv.op === "project.delete") {
+        const p = inv.opParams as { uuid: string };
+        db.prepare("UPDATE TMTask SET trashed = 1, userModificationDate = ? WHERE uuid = ?").run(
+          modClock++,
+          p.uuid,
+        );
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { url, osa, calls };
+}
+
+describe("project scope: PROJROOT move fallback (SIT7 — native unavailable)", () => {
+  it("park + re-home (forward, back-insert) lands the order for ALL rows, flag preserved", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
-    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "someday", index: 10 });
-    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "someday", index: 20 });
-    const c = seedTodo(fixture.db, { title: "c", project: proj, start: "someday", index: 30 });
-    const { vector, calls } = indexBounceVector();
-    const result = await runReorder(deps([vector], { config: config(false) }), {
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "active", index: 10 });
+    // b is Today-flagged + reminder + deadline (PROJROOT is one flag-safe protocol for all rows).
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: -9,
+      reminder: "09:00",
+      deadline: "2026-07-10",
+      index: 20,
+    });
+    const c = seedTodo(fixture.db, { title: "c", project: proj, start: "active", index: 30 });
+    const { url, osa, calls } = projRootVectors();
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
       scope: "project",
       container: { uuid: proj },
       uuids: [c, a, b],
+      named: [c, a, b],
     });
     expect(result.kind).toBe("ok");
-    // Forward order (back-insert): first bounced is c, legs when=anytime→when=someday.
-    expect(calls[0]).toContain(`id=${c}`);
-    expect(calls[0]).toContain("when=anytime");
-    expect(calls[1]).toContain("when=someday");
+    // scratch project + park ×3 + re-home ×3 + trash — NO when= leg.
+    expect(calls).toContain("project.add");
+    expect(calls.filter((op) => op === "todo.move")).toHaveLength(6);
+    expect(calls).toContain("project.delete");
     expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
-    for (const u of [a, b, c]) {
-      const row = fixture.db.prepare("SELECT start, project FROM TMTask WHERE uuid = ?").get(u) as {
-        start: number;
-        project: string;
-      };
-      expect(row.start).toBe(2);
-      expect(row.project).toBe(proj);
+    const row = fixture.db
+      .prepare(
+        "SELECT start, startDate, todayIndex, reminderTime, deadline, project FROM TMTask WHERE uuid = ?",
+      )
+      .get(b) as {
+      start: number;
+      startDate: number | null;
+      todayIndex: number;
+      reminderTime: number | null;
+      deadline: number | null;
+      project: string;
+    };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.todayIndex).toBe(-9);
+    expect(row.reminderTime).not.toBeNull();
+    expect(row.deadline).not.toBeNull();
+    expect(row.project).toBe(proj);
+    // Disclosure: the ok result names the non-experimental fallback.
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("PROJROOT"))).toBe(true);
     }
   });
 
-  it("does NOT fall back to bounce when a non-someday member is present (native stays primary)", async () => {
+  it("dry-run describes the PROJROOT legs without executing", async () => {
     const proj = seedProject(fixture.db, { title: "P" });
-    const anytime = seedTodo(fixture.db, {
-      title: "at",
-      project: proj,
-      start: "active",
-      index: 10,
-    });
-    const { vector } = indexBounceVector();
-    const result = await runReorder(deps([vector], { config: config(false) }), {
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "active", index: 10 });
+    const { url, osa, calls } = projRootVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: config(false) }),
+      { scope: "project", container: { uuid: proj }, uuids: [a] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("PROJROOT");
+      expect(result.plan.invocation).toContain("re-home");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("caps the touched block by bounce-max-items", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "active", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", project: proj, start: "active", index: 30 });
+    const { url, osa, calls } = projRootVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: { ...config(false), bounceMaxItems: 2 } }),
+      { scope: "project", container: { uuid: proj }, uuids: [c, a, b], named: [c, a, b] },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("cap of 2");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("aborts loudly if a re-home leg fails — children left PARKED in the scratch", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "active", index: 20 });
+    const { url, osa, calls } = projRootVectors();
+    // Fail the 3rd todo.move (2 parks done, first re-home fails).
+    let n = 0;
+    const failing: WriteVector = {
+      ...url,
+      async execute(inv) {
+        if (inv.op === "todo.move" && ++n === 3) return { exitCode: 1, stdout: "", stderr: "fail" };
+        return url.execute(inv);
+      },
+    };
+    const result = await runReorder(deps([failing, osa], { config: config(false) }), {
       scope: "project",
       container: { uuid: proj },
-      uuids: [anytime],
+      uuids: [a, b],
+      named: [a, b],
     });
-    // Native is unavailable (experimental off) and the fallback does not apply →
-    // the pipeline reports the native surface unsupported, never a silent bounce.
-    expect(result.kind).toBe("unsupported");
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") expect(result.detail).toContain("PARKED");
+    expect(calls).not.toContain("project.delete");
   });
 });
 
@@ -1690,18 +1953,34 @@ describe('tomorrow scope (ORDFIN2 TOMORROWLIST one-call `list "Tomorrow"` day-so
     expect(ascending(ranks([t2, proj, t1]))).toBe(true);
   });
 
-  it("is gated by allow-experimental (no native call)", async () => {
-    const t1 = seedTomorrow("t1", 10);
-    const { vector, calls } = nativeVector("todayIndex");
+  it("falls back to the dated day bounce when experimental is off (SIT7 fallback 5)", async () => {
+    const t1 = seedTomorrow("t1", 30);
+    const t2 = seedTomorrow("t2", 10);
+    const t3 = seedTomorrow("t3", 20);
+    const { vector, calls } = datedBounceVector();
     const result = await runReorder(deps([vector], { config: config(false) }), {
       scope: "tomorrow",
-      uuids: [t1],
+      uuids: [t2, t3, t1],
+      named: [t2, t3, t1],
     });
-    expect(result.kind).toBe("unsupported");
-    if (result.kind === "unsupported") {
-      expect(result.considered[0]?.why).toContain("allow-experimental");
+    // The native `list "Tomorrow"` surface is unavailable; the pure-URL dated day
+    // bounce (ORD-6 DAYBNC) reaches the whole next-day group instead. Reverse-target
+    // front-insert dispatch lands the exact order — NO native reorder call.
+    expect(result.kind).toBe("ok");
+    expect(calls.some((c) => c.includes('list "Tomorrow"'))).toBe(false);
+    expect(calls.some((c) => c.includes("when=2026-07-06"))).toBe(true);
+    expect(ascending(ranks([t2, t3, t1]))).toBe(true);
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
     }
-    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps the native `list "Tomorrow"` surface when experimental is on', async () => {
+    const t1 = seedTomorrow("t1", 10);
+    const { vector, calls } = nativeVector("todayIndex");
+    const result = await runReorder(deps([vector]), { scope: "tomorrow", uuids: [t1] });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain('list "Tomorrow"');
   });
 });
 
@@ -2339,6 +2618,457 @@ describe("flag-safe protocol undo (pre-ranks invertible via re-run)", () => {
     expect(ascending(ranks([pf, p2, p3], `"index"`))).toBe(true);
   });
 });
+
+// -------------------------------------------- SIT7 SOMEBACK / INBOXBACK / AREABACK
+
+/**
+ * SOMEBACK someday-bounce sim (SIT7): the anytime↔someday `when=` round-trip. The
+ * `when=someday` placement leg FRONT-inserts at the loose someday `index` min for the
+ * row's KIND (loose to-do OR area-less project — per-type leg op), start=2 preserved;
+ * `when=anytime` is the transient away leg (start=1, no reindex).
+ */
+function somedayBounceVector() {
+  const calls: string[] = [];
+  const db = fixture.db;
+  const apply = (id: string, when: string): void => {
+    const row = db.prepare("SELECT type FROM TMTask WHERE uuid = ?").get(id) as { type: number };
+    const start = when === "someday" ? 2 : 1;
+    db.prepare(
+      "UPDATE TMTask SET start = ?, startDate = NULL, userModificationDate = ? WHERE uuid = ?",
+    ).run(start, modClock++, id);
+    if (when === "someday") {
+      const where =
+        row.type === 1
+          ? "type = 1 AND area IS NULL AND start = 2 AND startDate IS NULL"
+          : "type = 0 AND project IS NULL AND area IS NULL AND heading IS NULL AND start = 2 AND startDate IS NULL";
+      const min = db
+        .prepare(
+          `SELECT MIN("index") AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND uuid != ? AND ${where}`,
+        )
+        .get(id) as { m: number | null };
+      db.prepare(`UPDATE TMTask SET "index" = ?, userModificationDate = ? WHERE uuid = ?`).run(
+        (min.m ?? 0) - 1,
+        modClock++,
+        id,
+      );
+    }
+  };
+  const vector: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.payload);
+      const url = new URL(inv.payload);
+      apply(url.searchParams.get("id") ?? "", url.searchParams.get("when") ?? "");
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+describe("someday scope: SOMEBACK bounce fallback (SIT7 — native unavailable)", () => {
+  it("front-inserts loose someday to-dos via a REVERSE-order anytime↔someday bounce", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "someday", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", start: "someday", index: 30 });
+    const { vector, calls } = somedayBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "someday",
+      uuids: [c, a, b],
+      named: [c, a, b],
+    });
+    expect(result.kind).toBe("ok");
+    // Reverse (front-insert): first bounced is b, legs when=anytime→when=someday.
+    expect(calls[0]).toContain(`id=${b}`);
+    expect(calls[0]).toContain("when=anytime");
+    expect(calls[1]).toContain("when=someday");
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        startDate: number | null;
+      };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBeNull();
+    }
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("SOMEBACK"))).toBe(true);
+    }
+  });
+
+  it("front-inserts area-less someday PROJECTS via the per-type (update-project) bounce", async () => {
+    const p1 = seedProject(fixture.db, { title: "P1", start: "someday", index: 10 });
+    const p2 = seedProject(fixture.db, { title: "P2", start: "someday", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", start: "someday", index: 30 });
+    const { vector } = somedayBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "someday",
+      uuids: [p3, p1, p2],
+      named: [p3, p1, p2],
+    });
+    expect(result.kind).toBe("ok");
+    expect(ascending(ranks([p3, p1, p2], `"index"`))).toBe(true);
+    for (const u of [p1, p2, p3]) {
+      const row = fixture.db
+        .prepare("SELECT start, type, area FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        type: number;
+        area: string | null;
+      };
+      expect(row.start).toBe(2);
+      expect(row.type).toBe(1);
+      expect(row.area).toBeNull();
+    }
+  });
+
+  it("explicit --strategy bounce routes to SOMEBACK too", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "someday", index: 20 });
+    const { vector } = somedayBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "someday",
+      strategy: "bounce",
+      uuids: [b, a],
+      named: [b, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(ascending(ranks([b, a], `"index"`))).toBe(true);
+  });
+
+  it("rejects a mixed to-do + project someday set", async () => {
+    const todo = seedTodo(fixture.db, { title: "t", start: "someday", index: 1 });
+    const proj = seedProject(fixture.db, { title: "sp", start: "someday", index: 2 });
+    const { vector } = somedayBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "someday",
+      uuids: [todo, proj],
+      named: [todo, proj],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("same-type");
+  });
+});
+
+describe("inbox scope: INBOXBACK move fallback (SIT7 — native unavailable)", () => {
+  const seedInbox = (title: string, index: number) =>
+    seedTodo(fixture.db, { title, start: "inbox", index });
+
+  it("park + Inbox-return (reverse) front-inserts, restores start=0, lands the order", async () => {
+    const a = seedInbox("a", 10);
+    const b = seedInbox("b", 20);
+    const c = seedInbox("c", 30);
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
+      scope: "inbox",
+      uuids: [c, a, b],
+      named: [c, a, b],
+    });
+    expect(result.kind).toBe("ok");
+    // scratch project + park ×3 + Inbox-return ×3 + trash — NO when= leg.
+    expect(calls).toContain("project.add");
+    expect(calls.filter((op) => op === "todo.move")).toHaveLength(6);
+    expect(calls).toContain("project.delete");
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+    for (const u of [a, b, c]) {
+      const row = fixture.db
+        .prepare("SELECT start, project, area, heading FROM TMTask WHERE uuid = ?")
+        .get(u) as {
+        start: number;
+        project: string | null;
+        area: string | null;
+        heading: string | null;
+      };
+      expect(row.start).toBe(0); // start=0 restored
+      expect(row.project).toBeNull();
+      expect(row.area).toBeNull();
+      expect(row.heading).toBeNull();
+    }
+    if (result.kind === "ok")
+      expect(result.warnings?.some((w) => w.includes("INBOXBACK"))).toBe(true);
+  });
+
+  it("dry-run describes the INBOXBACK legs without executing", async () => {
+    const a = seedInbox("a", 10);
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: config(false) }),
+      { scope: "inbox", uuids: [a] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("INBOXBACK");
+      expect(result.plan.invocation).toContain("Inbox-return");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("aborts cleanly if the scratch project cannot be created — nothing parked", async () => {
+    const a = seedInbox("a", 10);
+    const b = seedInbox("b", 20);
+    const { url, osa, calls } = sit7BackVectors({ failAt: { op: "project.add", nth: 1 } });
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
+      scope: "inbox",
+      uuids: [a, b],
+      named: [a, b],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") expect(result.detail).toContain("no changes were made");
+    // No rows parked, no scratch trashed.
+    expect(calls).not.toContain("todo.move");
+    expect(calls).not.toContain("project.delete");
+    // Inbox order untouched.
+    expect(ranks([a, b], `"index"`)).toEqual([10, 20]);
+  });
+
+  it("aborts loudly if a park leg fails — rows left PARKED in the named scratch", async () => {
+    const a = seedInbox("a", 10);
+    const b = seedInbox("b", 20);
+    // Fail the 2nd todo.move overall (park #2) — a park failure strands rows in the scratch.
+    const { url, osa, calls } = sit7BackVectors({ failAt: { op: "todo.move", nth: 2 } });
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
+      scope: "inbox",
+      uuids: [a, b],
+      named: [a, b],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") expect(result.detail).toContain("PARKED");
+    expect(calls).not.toContain("project.delete");
+  });
+});
+
+describe("area scope: AREABACK move fallback (SIT7 — native unavailable)", () => {
+  it("to-dos: park to scratch project + re-home (reverse) front-inserts, area FK + flag kept", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "active", index: 10 });
+    // b is Today-flagged + reminder + deadline (the move round-trip is flag-safe).
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      area,
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: -9,
+      reminder: "09:00",
+      deadline: "2026-07-10",
+      index: 20,
+    });
+    const c = seedTodo(fixture.db, { title: "c", area, start: "active", index: 30 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
+      scope: "area",
+      container: { uuid: area },
+      uuids: [c, a, b],
+      named: [c, a, b],
+    });
+    expect(result.kind).toBe("ok");
+    // scratch project + park ×3 + re-home ×3 + trash — NO when= leg.
+    expect(calls).toContain("project.add");
+    expect(calls.filter((op) => op === "todo.move")).toHaveLength(6);
+    expect(calls).toContain("project.delete");
+    expect(ascending(ranks([c, a, b], `"index"`))).toBe(true);
+    const row = fixture.db
+      .prepare(
+        "SELECT start, startDate, todayIndex, reminderTime, deadline, area FROM TMTask WHERE uuid = ?",
+      )
+      .get(b) as {
+      start: number;
+      startDate: number | null;
+      todayIndex: number;
+      reminderTime: number | null;
+      deadline: number | null;
+      area: string;
+    };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.todayIndex).toBe(-9);
+    expect(row.reminderTime).not.toBeNull();
+    expect(row.deadline).not.toBeNull();
+    expect(row.area).toBe(area);
+    if (result.kind === "ok")
+      expect(result.warnings?.some((w) => w.includes("AREABACK"))).toBe(true);
+  });
+
+  it("projects: park to scratch AREA + re-home (reverse) front-inserts, area FK kept, scratch deleted", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const p1 = seedProject(fixture.db, { title: "P1", area, index: 10 });
+    const p2 = seedProject(fixture.db, { title: "P2", area, index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", area, index: 30 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(deps([url, osa], { config: config(false) }), {
+      scope: "area",
+      container: { uuid: area },
+      uuids: [p3, p1, p2],
+      named: [p3, p1, p2],
+    });
+    expect(result.kind).toBe("ok");
+    // scratch AREA + park ×3 + re-home ×3 + area delete — project.move legs.
+    expect(calls).toContain("area.add");
+    expect(calls.filter((op) => op === "project.move")).toHaveLength(6);
+    expect(calls).toContain("area.delete");
+    expect(ascending(ranks([p3, p1, p2], `"index"`))).toBe(true);
+    for (const u of [p1, p2, p3]) {
+      const row = fixture.db.prepare("SELECT area, type FROM TMTask WHERE uuid = ?").get(u) as {
+        area: string;
+        type: number;
+      };
+      expect(row.area).toBe(area);
+      expect(row.type).toBe(1);
+    }
+  });
+
+  it("dry-run describes the AREABACK legs without executing", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "active", index: 10 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: config(false) }),
+      { scope: "area", container: { uuid: area }, uuids: [a] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("AREABACK");
+      expect(result.plan.invocation).toContain("re-home");
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("container-day scope: dated day-bounce fallback (SIT7 — native unavailable)", () => {
+  it("degrades to the pure-URL dated bounce when experimental is off", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-10",
+      todayIndex: 30,
+    });
+    const b = seedTodo(fixture.db, {
+      title: "b",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-10",
+      todayIndex: 10,
+    });
+    const c = seedTodo(fixture.db, {
+      title: "c",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-10",
+      todayIndex: 20,
+    });
+    const { vector, calls } = datedBounceVector();
+    const result = await runReorder(deps([vector], { config: config(false) }), {
+      scope: "container-day",
+      container: { uuid: proj },
+      uuids: [b, c, a],
+      named: [b, c, a],
+    });
+    expect(result.kind).toBe("ok");
+    expect(calls.some((c2) => c2.includes("when=2026-07-10"))).toBe(true);
+    expect(ascending(ranks([b, c, a]))).toBe(true);
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("dated-day-bounce"))).toBe(true);
+    }
+  });
+});
+
+describe("SIT7 fallback routing (experimental on → native, off / canary-fail → fallback)", () => {
+  it("inbox: experimental ON runs the native reorder command", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), { scope: "inbox", uuids: [b, a] });
+    expect(result.kind).toBe("ok");
+    expect(calls[0]).toContain('list "Inbox"');
+    expect(calls[0]).toContain("with ids");
+  });
+
+  it("inbox: sdef canary FAIL (experimental on) still routes to INBOXBACK", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const { url, osa, calls } = sit7BackVectors();
+    // allowExperimental=true but the sdef canary fails → native unavailable.
+    const result = await runReorder(
+      deps([url, osa], { config: config(true), sdefProbe: () => false }),
+      {
+        scope: "inbox",
+        uuids: [b, a],
+        named: [b, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    expect(calls).toContain("project.add"); // INBOXBACK ran, not the native command
+    expect(ascending(ranks([b, a], `"index"`))).toBe(true);
+  });
+
+  it("area: sdef canary FAIL routes to AREABACK", async () => {
+    const area = seedArea(fixture.db, "Work");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "active", index: 20 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: config(true), sdefProbe: () => false }),
+      {
+        scope: "area",
+        container: { uuid: area },
+        uuids: [b, a],
+        named: [b, a],
+      },
+    );
+    expect(result.kind).toBe("ok");
+    expect(calls).toContain("project.add");
+    expect(ascending(ranks([b, a], `"index"`))).toBe(true);
+  });
+
+  it("the move fallbacks require bounce-enabled (shared move gate)", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const { url, osa, calls } = sit7BackVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: { ...config(false), bounceEnabled: false } }),
+      { scope: "inbox", uuids: [a] },
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("bounce-enabled=false");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("SIT7 fallback undo (pre-ranks invertible via re-run)", () => {
+  it("INBOXBACK undo restores the prior inbox order", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "inbox", index: 20 });
+    const c = seedTodo(fixture.db, { title: "c", start: "inbox", index: 30 });
+    const fwd = await runReorder(deps(sit7Pair(), { config: config(false) }), {
+      scope: "inbox",
+      uuids: [c, a, b],
+      named: [c, a, b],
+    });
+    expect(fwd.kind).toBe("ok");
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const inv = await runReorder(
+      deps(sit7Pair(), { config: config(false) }),
+      plan.steps[0]?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    expect(ascending(ranks([a, b, c], `"index"`))).toBe(true);
+  });
+});
+
+/** A fresh SIT7 back-fake pair (helper for undo round-trips). */
+function sit7Pair(): WriteVector[] {
+  const { url, osa } = sit7BackVectors();
+  return [url, osa];
+}
 
 /** Both flag-safe fake vectors as a fresh pair (helper for undo round-trips). */
 function twoVectors(): WriteVector[] {
