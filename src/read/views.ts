@@ -843,6 +843,30 @@ export function logbookView(
   return materialize(db, rows, boundary, encodePackedDate(localToday(now, zone)));
 }
 
+/**
+ * A cheap COUNT of one area's logged rows — the SAME subtree-inclusive scope
+ * (own area OR containing project's area) and log-move boundary logbookView
+ * applies, without materializing a single row. Feeds the `area show` TTY card's
+ * live logbook-footer count; real areas only (the loose pseudo-area accumulates
+ * no `logbook --area` archive).
+ */
+export function areaLoggedCount(
+  db: DatabaseSync,
+  areaUuid: string,
+  now?: Date,
+  zone?: string,
+): number {
+  const boundary = logBoundary(db, now, zone);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM TMTask t
+       WHERE ${LIVE} AND t.status IN (2, 3) AND t.stopDate <= ?
+         AND (t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
+    )
+    .get(boundary.getTime() / 1000, areaUuid, areaUuid) as { n: number };
+  return row.n;
+}
+
 export function trashView(
   db: DatabaseSync,
   now?: Date,
@@ -978,7 +1002,7 @@ export interface SearchOptions extends ViewFilter {
   limit?: number | null;
   /** Restrict to one project's children (headed children included). */
   project?: string;
-  /** Restrict to one area's direct members. */
+  /** Restrict to one area's subtree (direct members plus its projects' children). Uuid or unique name. */
   area?: string;
   type?: "to-do" | "project";
   /** Include completed/canceled items (default: open only). */
@@ -1217,16 +1241,21 @@ export function searchView(
   if (options?.area !== undefined) {
     if (isLooseRef(options.area)) {
       // `--area loose`: the area-less hits — effective area is null (own area
-      // null AND no area-carrying containing project). Keeps `loose` meaning one
-      // thing across every surface, even though the real-area filter here is
-      // direct-only; inbox captures (area-less) are legitimately included.
+      // null AND no area-carrying containing project). The inversion of the
+      // real-area subtree keep-rule below; inbox captures (area-less) are
+      // legitimately included.
       scope.push(
         `t.area IS NULL AND (${EFF_PROJECT} IS NULL OR NOT EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area IS NOT NULL))`,
       );
     } else {
+      // Real-area filter is SUBTREE-INCLUSIVE (own area OR containing project's
+      // area) — the same effective-area shape logbookView uses, so every --area
+      // view scopes to the whole subtree, not just an area's direct members.
       const uuid = resolveAreaUuid(db, options.area);
-      scope.push("t.area = ?");
-      scopeBinds.push(uuid);
+      scope.push(
+        `(t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
+      );
+      scopeBinds.push(uuid, uuid);
     }
   }
   const tf = tagFilter(db, options);

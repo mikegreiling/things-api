@@ -19,7 +19,10 @@ import {
   upcomingView,
 } from "../../src/read/views.ts";
 import { projectView } from "../../src/read/project-view.ts";
+import type { AreaView } from "../../src/read/area-view.ts";
+import type { Truncation } from "../../src/contracts.ts";
 import { byUuid } from "../../src/read/detail.ts";
+import { renderAreaView } from "../../src/cli/commands/area.ts";
 import { renderProjectView } from "../../src/cli/commands/project.ts";
 import { renderDetail } from "../../src/cli/commands/todo.ts";
 import {
@@ -1188,5 +1191,38 @@ describe("viewHeaderLines (view title preamble)", () => {
     // Non-TTY here, so bold/dim are identity — assert the plain shape.
     expect(viewHeaderLines("anytime")).toEqual(["Anytime (things:///show?id=anytime)", ""]);
     expect(viewHeaderLines("inbox")).toEqual(["Inbox (things:///show?id=inbox)", ""]);
+  });
+});
+
+// A minimal empty area card — the footer is driven purely by `loggedCount`.
+const emptyArea = (title: string): AreaView => ({
+  area: { uuid: "area-1", title, visible: true, tags: [] },
+  active: [],
+  projects: [],
+  scheduled: [],
+  someday: [],
+  repeating: [],
+});
+const EMPTY_TRUNC: Truncation = { shown: 0, total: 0, limit: null, truncated: false };
+
+describe("renderAreaView logbook footer (live count)", () => {
+  const trunc = EMPTY_TRUNC;
+
+  it("groups thousands, pluralizes, and omits the line at zero / when absent", () => {
+    // Non-TTY here, so dim() is identity — assert the plain footer line.
+    expect(renderAreaView(emptyArea("Health"), trunc, { loggedCount: 4217 })).toContain(
+      "4,217 logged items — `things logbook --area 'Health'`",
+    );
+    // Singular noun for exactly one.
+    expect(renderAreaView(emptyArea("Health"), trunc, { loggedCount: 1 })).toContain(
+      "1 logged item — `things logbook --area 'Health'`",
+    );
+    // Zero and absent both hide the footer entirely — no pointer to an empty log.
+    expect(renderAreaView(emptyArea("Health"), trunc, { loggedCount: 0 }).join("\n")).not.toContain(
+      "logbook --area",
+    );
+    expect(renderAreaView(emptyArea("Health"), trunc, {}).join("\n")).not.toContain(
+      "logbook --area",
+    );
   });
 });

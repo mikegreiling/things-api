@@ -50,11 +50,6 @@ import {
 export interface AreaShowOpts {
   showLater?: boolean;
   /**
-   * REMOVED flag, kept as a parse target so `--show-logged` earns a redirect
-   * (to `things logbook --area <ref>`) rather than a bare unknown-option error.
-   */
-  showLogged?: boolean | string;
-  /**
    * Per-section caps: `project` bounds the project-ROWS section, `area` the
    * direct-to-dos section (null = uncapped). The toggled later
    * section keeps its own existing bounds.
@@ -62,6 +57,13 @@ export interface AreaShowOpts {
   limits?: GroupedLimits;
   /** The user's invocation, echoed by the per-section truncation footers. */
   hintBase?: string;
+  /**
+   * The live count of the area's logged rows (subtree-inclusive, past the
+   * log-move boundary — the same population `things logbook --area <ref>`
+   * returns). Drives the TTY logbook footer's count; omitted / 0 hides the line.
+   * TTY-only — the JSON area-view shape never carries it.
+   */
+  loggedCount?: number | undefined;
 }
 
 /**
@@ -183,8 +185,17 @@ export function renderAreaView(
   // The area logbook is not a card section — it is the bounded query
   // `things logbook --area <ref>` (a real area only; the loose pseudo-area
   // accumulates no `logbook --area` archive). Trashed rows live in
-  // `things trash`. Neither renders here.
-  if (!isLoose) lines.push("", dim(`logbook: \`things logbook --area ${quoteTitle(areaTitle)}\``));
+  // `things trash`. The footer carries a LIVE count of that archive; it is
+  // omitted entirely when the area has logged nothing (count 0 → no pointer).
+  const loggedCount = opts.loggedCount ?? 0;
+  if (!isLoose && loggedCount > 0) {
+    lines.push(
+      "",
+      dim(
+        `${loggedCount.toLocaleString("en-US")} logged item${loggedCount === 1 ? "" : "s"} — \`things logbook --area ${quoteTitle(areaTitle)}\``,
+      ),
+    );
+  }
   return lines;
 }
 
@@ -213,15 +224,6 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
     usageError(
       opts,
       "--limit is not available on area show — cap sections with --area-limit / --project-limit, or pass --all",
-    );
-    return;
-  }
-  if (opts.showLogged !== undefined) {
-    // The area logbook is a bounded QUERY, not a view section: an area is an
-    // unbounded accumulator, its logbook a windowed lookup.
-    usageError(
-      opts,
-      `area logbook lives in \`things logbook --area ${shellQuote(ref)}\` (bound with --since/--until/--limit)`,
     );
     return;
   }
@@ -277,7 +279,12 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
         data: bounded.view,
         truncation: bounded.truncation,
         ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
-        lines: renderAreaView(bounded.view, bounded.truncation, { ...opts, limits, hintBase }),
+        lines: renderAreaView(bounded.view, bounded.truncation, {
+          ...opts,
+          limits,
+          hintBase,
+          loggedCount: bounded.loggedCount,
+        }),
       };
     },
     () => [],
@@ -297,9 +304,6 @@ export function registerAreaCommands(program: Command): void {
         "word `loose` for the area-less items (the null-area composite).",
     )
     .option("--show-later", "include Upcoming and Someday sections")
-    // Removed: the area logbook is a bounded query. Kept hidden so the flag
-    // earns a redirect (to `things logbook --area <ref>`) not an unknown-option.
-    .addOption(new Option("--show-logged [n]").hideHelp())
     .option("--project-limit <n>", `maximum project rows to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--area-limit <n>", `maximum direct to-dos to show (default ${AREA_PREVIEW_LIMIT})`)
     .option("--overdue", "only rows whose own deadline is past (due today is not overdue)")
