@@ -263,7 +263,8 @@ const EXPECTED_TOOLS = [
   // generic + discovery
   "run_operation",
   "batch",
-  "reorder", // now also the sidebar-area reorder (scope=areas)
+  "reorder", // planner-form in-place reorder (mirrors `things reorder`)
+  "reorder_areas", // sidebar-area reorder (mirrors `things area reorder`)
   "undo",
   "capabilities",
   "doctor",
@@ -418,6 +419,67 @@ describe("things MCP server", () => {
     });
   });
 
+  describe("loose pseudo-area shadow disclosure (meta.warnings parity, #333/#346)", () => {
+    // When a real area named "Loose" shadows the reserved `loose` ref, the reads
+    // that address the null area must disclose it (by uuid) in meta.warnings, the
+    // same advisory the CLI surfaces — so an MCP consumer can still target it.
+    it("read_view --area loose warns when a real 'Loose' area shadows the reserved word", async () => {
+      const shadow = seedArea(fixture.db, "Loose", 0);
+      seedTodo(fixture.db, { title: "orphan", startDate: "2026-07-05" }); // an area-less Today row
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "anytime", area: "loose" },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const warnings = warningsOf(result);
+      expect(warnings?.some((w) => w.includes("loose pseudo-area") && w.includes(shadow))).toBe(
+        true,
+      );
+    });
+
+    it("read_view --area loose emits no shadow warning when nothing shadows it", async () => {
+      seedArea(fixture.db, "Real Area", 0);
+      seedTodo(fixture.db, { title: "orphan", startDate: "2026-07-05" });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "read_view",
+        arguments: { view: "anytime", area: "loose" },
+      });
+      expect(warningsOf(result)).toBeUndefined();
+    });
+
+    it("search --area loose threads the same shadow disclosure", async () => {
+      const shadow = seedArea(fixture.db, "Loose", 0);
+      seedTodo(fixture.db, { title: "findme" });
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "search",
+        arguments: { query: "findme", area: "loose" },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const warnings = warningsOf(result);
+      expect(warnings?.some((w) => w.includes("loose pseudo-area") && w.includes(shadow))).toBe(
+        true,
+      );
+    });
+
+    it("get_area loose surfaces the area-view's own placement notice", async () => {
+      const shadow = seedArea(fixture.db, "Loose", 0);
+      seedTodo(fixture.db, { title: "orphan" }); // an area-less to-do (the loose composite)
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({
+        name: "get_area",
+        arguments: { ref: "loose" },
+      });
+      expect(result.isError ?? false).toBe(false);
+      const warnings = warningsOf(result);
+      expect(warnings?.some((w) => w.includes("loose pseudo-area") && w.includes(shadow))).toBe(
+        true,
+      );
+    });
+  });
+
   describe("consumer timezone (per-call tz)", () => {
     // One instant, two calendars two days apart: Kiritimati (UTC+14) is Jul 3,
     // Midway (UTC-11) is Jul 1. A startDate of Jul 2 is thus a past-or-today
@@ -538,8 +600,7 @@ describe("things MCP server", () => {
         name: "update",
         arguments: { kind: "todo", uuid, title: "renamed", dry_run: true },
       }),
-    ) as { kind: string; op: string };
-    expect(outcome.kind).toBe("dry-run");
+    ) as { op: string };
     expect(outcome.op).toBe("todo.update");
   });
 
@@ -1060,8 +1121,13 @@ describe("things MCP server", () => {
       arguments: { title: "From MCP" },
     });
     expect(result.isError ?? false).toBe(false);
-    const outcome = textOf(result) as { kind: string; uuid: string };
-    expect(outcome.kind).toBe("ok");
+    const outcome = textOf(result) as { op: string; uuid: string };
+    // ok framing (phase 2): the content block carries no `kind`/`result`
+    // discriminator (call success is the tool result's own not-an-error signal),
+    // but the library payload fields pass straight through.
+    expect("kind" in outcome).toBe(false);
+    expect("result" in outcome).toBe(false);
+    expect(outcome.op).toBe("todo.add");
     expect(outcome.uuid).toBe("MCP-NEW");
     expect(calls[0]).toContain("things:///add?title=From%20MCP");
   });
@@ -1094,9 +1160,8 @@ describe("things MCP server", () => {
       name: "add_todo",
       arguments: { title: "Plan me", dry_run: true },
     });
-    const outcome = textOf(result) as { kind: string; plan: { invocation: string } };
-    expect(outcome.kind).toBe("dry-run");
-    expect(outcome.plan.invocation).toContain("things:///add?title=Plan%20me");
+    const outcome = textOf(result) as { op: string; invocation: string };
+    expect(outcome.invocation).toContain("things:///add?title=Plan%20me");
     expect(calls).toHaveLength(0);
   });
 
@@ -1117,7 +1182,6 @@ describe("things MCP server", () => {
           arguments: { scope: "todo", uuid, status, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe(op);
     }
 
@@ -1152,11 +1216,10 @@ describe("things MCP server", () => {
         name: "edit_checklist",
         arguments: { uuid, action: "add", title: "step one", dry_run: true },
       }),
-    ) as { kind: string; op: string; plan: { invocation: string } };
-    expect(outcome.kind).toBe("dry-run");
+    ) as { op: string; invocation: string };
     // The granular edit is audited as its own op; its delivery is the rewrite.
     expect(outcome.op).toBe("todo.edit-checklist-item");
-    expect(outcome.plan.invocation).toContain("things:///json");
+    expect(outcome.invocation).toContain("things:///json");
 
     const missing = await client.callTool({
       name: "edit_checklist",
@@ -1183,7 +1246,6 @@ describe("things MCP server", () => {
           arguments: { kind: "item", uuid, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe(op);
     }
     const unknown = await client.callTool({
@@ -1223,8 +1285,7 @@ describe("things MCP server", () => {
           dry_run: true,
         },
       }),
-    ) as { kind: string; op: string };
-    expect(completed.kind).toBe("dry-run");
+    ) as { op: string };
     expect(completed.op).toBe("project.complete");
   });
 
@@ -1590,8 +1651,9 @@ describe("things MCP server", () => {
         arguments: { kind: "todo", uuid, title: "renamed", dry_run: true },
       });
       expect(result.isError ?? false).toBe(false);
-      const outcome = textOf(result) as { kind: string };
-      expect(outcome.kind).toBe("dry-run");
+      // Permitted (not tier-blocked): a dry-run plan comes back, carrying the op.
+      const outcome = textOf(result) as { op: string };
+      expect(outcome.op).toBe("todo.update");
     });
   });
 
@@ -1647,8 +1709,8 @@ describe("things MCP server", () => {
         name: "batch",
         arguments: { ops: [{ op: "trash.empty", params: {} }], dry_run: true },
       });
-      const blockedResults = textOf(blocked) as { outcome: { kind: string } }[];
-      expect(blockedResults[0]?.outcome.kind).toBe("blocked");
+      const blockedResults = textOf(blocked) as { outcome: string }[];
+      expect(blockedResults[0]?.outcome).toBe("blocked");
 
       const allowed = await client.callTool({
         name: "batch",
@@ -1657,8 +1719,8 @@ describe("things MCP server", () => {
           dry_run: true,
         },
       });
-      const allowedResults = textOf(allowed) as { outcome: { kind: string } }[];
-      expect(allowedResults[0]?.outcome.kind).toBe("dry-run");
+      const allowedResults = textOf(allowed) as { outcome: string }[];
+      expect(allowedResults[0]?.outcome).toBe("dry-run");
     });
   });
 
@@ -1703,8 +1765,9 @@ describe("things MCP server", () => {
     });
   });
 
-  // Each element of a batch result is { index, op, outcome: { kind } }; a
-  // failure that is not the last op leaves the rest "skipped" under fail_fast.
+  // Each batch line is FLATTENED to the wire shape (parity with the CLI JSONL):
+  // { index, op, outcome: "<tag>", ...hoisted variant fields }. A failure that is
+  // not the last op leaves the rest "skipped" under fail_fast.
   describe("batch — op cast + per-op option mapping", () => {
     it("runs several ops in order, each independently (dry-run)", async () => {
       await connect([fakeVector(null).vector]);
@@ -1719,9 +1782,9 @@ describe("things MCP server", () => {
             dry_run: true,
           },
         }),
-      ) as { index: number; op: string; outcome: { kind: string } }[];
+      ) as { index: number; op: string; outcome: string }[];
       expect(results.map((r) => r.op)).toEqual(["todo.add", "todo.add"]);
-      expect(results.map((r) => r.outcome.kind)).toEqual(["dry-run", "dry-run"]);
+      expect(results.map((r) => r.outcome)).toEqual(["dry-run", "dry-run"]);
     });
 
     it("fail_fast skips every op after the first failure", async () => {
@@ -1742,9 +1805,9 @@ describe("things MCP server", () => {
             dry_run: true,
           },
         }),
-      ) as { outcome: { kind: string } }[];
-      expect(results[0]?.outcome.kind).toBe("blocked");
-      expect(results[1]?.outcome.kind).toBe("skipped");
+      ) as { outcome: string }[];
+      expect(results[0]?.outcome).toBe("blocked");
+      expect(results[1]?.outcome).toBe("skipped");
     });
 
     it("maps a second snake_case per-op acknowledgement (checklist reset) into the engine", async () => {
@@ -1761,8 +1824,8 @@ describe("things MCP server", () => {
             dry_run: true,
           },
         }),
-      ) as { outcome: { kind: string } }[];
-      expect(blocked[0]?.outcome.kind).toBe("blocked");
+      ) as { outcome: string }[];
+      expect(blocked[0]?.outcome).toBe("blocked");
 
       const allowed = textOf(
         await client.callTool({
@@ -1778,8 +1841,8 @@ describe("things MCP server", () => {
             dry_run: true,
           },
         }),
-      ) as { outcome: { kind: string } }[];
-      expect(allowed[0]?.outcome.kind).toBe("dry-run");
+      ) as { outcome: string }[];
+      expect(allowed[0]?.outcome).toBe("dry-run");
     });
 
     it("mirrors the op_id field and surfaces the batch summary block (undo_token)", async () => {
@@ -1804,8 +1867,8 @@ describe("things MCP server", () => {
       });
       // First content block: the per-op results (existing array shape, plus the
       // additive opId echo).
-      const results = textOf(result) as { outcome: { kind: string }; opId?: string }[];
-      expect(results[0]?.outcome.kind).toBe("ok");
+      const results = textOf(result) as { outcome: string; opId?: string }[];
+      expect(results[0]?.outcome).toBe("ok");
       expect(results[0]?.opId).toBe("mirror-1");
       // Second content block: the batch summary additions (undo the whole batch).
       const content = (result as { content: { text: string }[] }).content;
@@ -1826,15 +1889,15 @@ describe("things MCP server", () => {
             dry_run: true,
           },
         }),
-      ) as { outcome: { kind: string; detail?: string } }[];
+      ) as { outcome: string; detail?: string }[];
       // The duplicate line is invalid; the first is skipped — nothing runs.
-      expect(results.map((r) => r.outcome.kind)).toEqual(["skipped", "invalid"]);
-      expect(results[1]?.outcome.detail).toMatch(/duplicate tempId "x"/);
+      expect(results.map((r) => r.outcome)).toEqual(["skipped", "invalid"]);
+      expect(results[1]?.detail).toMatch(/duplicate tempId "x"/);
     });
   });
 
-  describe("reorder — scope-specific validation", () => {
-    it("plans a Today reorder without mutating (dry-run)", async () => {
+  describe("reorder — planner form + sidebar areas", () => {
+    it("plans a Today reorder without mutating (dry-run); the plan is the content block (no discriminator)", async () => {
       const a = seedTodo(fixture.db, { title: "T-a", startDate: "2026-07-05", todayIndex: 0 });
       const b = seedTodo(fixture.db, { title: "T-b", startDate: "2026-07-05", todayIndex: 1 });
       // allow-experimental now defaults on, so today prefers the native re-rank;
@@ -1845,81 +1908,100 @@ describe("things MCP server", () => {
         fakeVector(null).vector,
         fakeVector(null, { id: "applescript", ops: ["reorder"] }).vector,
       ]);
-      const outcome = textOf(
+      const result = await client.callTool({
+        name: "reorder",
+        arguments: { refs: [b, a], dry_run: true },
+      });
+      expect(result.isError ?? false).toBe(false);
+      // Phase-2 framing: a dry-run content block IS the plan — no `kind`/`result`.
+      const plan = textOf(result) as { placement: string; placementClass: string };
+      expect("kind" in plan).toBe(false);
+      expect(plan.placement).toContain("scope=today");
+    });
+
+    it("passes the library dual-axis refusal through, and resolves it when `in` names the axis", async () => {
+      // Two same-project Today members are coherent on BOTH the Today axis and the
+      // project's index axis — a bare reorder is refused (library planner), and the
+      // refusal reaches the MCP consumer as a blocked tool error naming both axes.
+      const proj = seedProject(fixture.db, { title: "Work" });
+      const a = seedTodo(fixture.db, {
+        title: "a",
+        project: proj,
+        startDate: "2026-07-05",
+        todayIndex: 1,
+      });
+      const b = seedTodo(fixture.db, {
+        title: "b",
+        project: proj,
+        startDate: "2026-07-05",
+        todayIndex: 2,
+      });
+      await connect([
+        fakeVector(null).vector,
+        fakeVector(null, { id: "applescript", ops: ["reorder"] }).vector,
+      ]);
+      const refused = await client.callTool({
+        name: "reorder",
+        arguments: { refs: [a, b], dry_run: true },
+      });
+      expect(refused.isError).toBe(true);
+      const err = textOf(refused) as { code: string; message: string };
+      expect(err.code).toBe("blocked");
+      expect(err.message).toContain("ambiguous");
+
+      // `in: today` compiles the cross-container Today axis; `in: "Work"` the
+      // project's own index axis — DIFFERENT plans on the SAME rows.
+      const view = textOf(
         await client.callTool({
           name: "reorder",
-          arguments: { scope: "today", uuids: [b, a], dry_run: true },
+          arguments: { refs: [a, b], in: "today", dry_run: true },
         }),
-      ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
-      expect(outcome.op).toBe("reorder");
+      ) as { placement: string };
+      expect(view.placement).toContain("scope=today");
+      const index = textOf(
+        await client.callTool({
+          name: "reorder",
+          arguments: { refs: [a, b], in: "Work", dry_run: true },
+        }),
+      ) as { placement: string };
+      expect(index.placement).toContain("scope=project");
     });
 
-    it("refuses a native strategy on the bounce-only evening scope", async () => {
-      const ev = seedTodo(fixture.db, { title: "E-a", startDate: "2026-07-05", evening: true });
-      await connect([fakeVector(null).vector]);
-      const result = await client.callTool({
-        name: "reorder",
-        arguments: { scope: "evening", uuids: [ev], strategy: "native" },
-      });
-      expect(result.isError).toBe(true);
-      const err = textOf(result) as { code: string; remediation: string };
-      expect(err.code).toBe("blocked:H-REORDER-SCOPE");
-      expect(err.remediation.length).toBeGreaterThan(0);
-    });
-
-    it("rejects a container on a scope that takes none (Today)", async () => {
-      const a = seedTodo(fixture.db, { title: "T-c", startDate: "2026-07-05" });
-      await connect([fakeVector(null).vector]);
-      const result = await client.callTool({
-        name: "reorder",
-        arguments: { scope: "today", uuids: [a], container: "somewhere" },
-      });
-      expect(result.isError).toBe(true);
-      expect((textOf(result) as { code: string }).code).toBe("blocked:H-REORDER-SCOPE");
-      expect((textOf(result) as { message: string }).message).toContain("container is only valid");
-    });
-
-    it("scope areas reorders the sidebar areas, gates the drive, and demands exactly one destination", async () => {
+    it("reorder_areas repositions a sidebar area, gates the drive, and demands exactly one destination", async () => {
       const target = seedArea(fixture.db, "Move Me", 0);
       seedArea(fixture.db, "Anchor", 1);
       await connect([fakeVector(null, { id: "ui", ops: ["area.reorder"] }).vector]);
+      // Without the drive ack the ui-vector op blocks (H-UI-DRIVE, a pre-vector hazard).
       const blocked = await client.callTool({
-        name: "reorder",
-        arguments: { scope: "areas", target, position: "last" },
+        name: "reorder_areas",
+        arguments: { target, last: true },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
+      // With the ack it plans through the area.reorder op (plan carries `op`).
       const outcome = textOf(
         await client.callTool({
-          name: "reorder",
-          arguments: {
-            scope: "areas",
-            target,
-            position: "last",
-            dangerously_drive_gui: true,
-            dry_run: true,
-          },
+          name: "reorder_areas",
+          arguments: { target, last: true, dangerously_drive_gui: true, dry_run: true },
         }),
-      ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
+      ) as { op: string };
       expect(outcome.op).toBe("area.reorder");
 
-      // exactly-one-destination is enforced by the area.reorder op (RangeError → usage)
+      // Two destinations is a usage error (enforced in the tool).
       const twoDest = await client.callTool({
-        name: "reorder",
-        arguments: { scope: "areas", target, before: "a", after: "b", dangerously_drive_gui: true },
+        name: "reorder_areas",
+        arguments: { target, before: "a", last: true, dangerously_drive_gui: true },
       });
       expect(twoDest.isError).toBe(true);
       expect((textOf(twoDest) as { code: string }).code).toBe("usage");
 
-      // scope areas without a target is a usage error
-      const noTarget = await client.callTool({
-        name: "reorder",
-        arguments: { scope: "areas", dangerously_drive_gui: true },
+      // No destination at all is also a usage error.
+      const noDest = await client.callTool({
+        name: "reorder_areas",
+        arguments: { target, dangerously_drive_gui: true },
       });
-      expect(noTarget.isError).toBe(true);
-      expect((textOf(noTarget) as { code: string }).code).toBe("usage");
+      expect(noDest.isError).toBe(true);
+      expect((textOf(noDest) as { code: string }).code).toBe("usage");
     });
   });
 
@@ -1933,7 +2015,6 @@ describe("things MCP server", () => {
           arguments: { action: "add_heading", project, title: "Phase 1", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.add-heading");
 
       const unknown = await client.callTool({
@@ -1962,7 +2043,6 @@ describe("things MCP server", () => {
           arguments: { action: "rename_heading", project, heading, title: "new", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.rename-heading");
     });
 
@@ -2022,7 +2102,6 @@ describe("things MCP server", () => {
           arguments: { uuid, dangerously_drive_gui: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.convert-to-project");
     });
   });
@@ -2060,7 +2139,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.make-repeating");
     });
 
@@ -2087,7 +2165,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.reschedule-repeat");
     });
 
@@ -2112,7 +2189,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.pause-repeat");
 
       // a rule action with no frequency/interval is a usage error naming what's missing
@@ -2155,7 +2231,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.reschedule-repeat");
     });
 
@@ -2180,7 +2255,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.resume-repeat");
     });
 
@@ -2208,7 +2282,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.make-repeating");
     });
 
@@ -2240,7 +2313,6 @@ describe("things MCP server", () => {
           },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.add-repeating");
 
       const wrongScope = await client.callTool({
@@ -2265,7 +2337,6 @@ describe("things MCP server", () => {
       const outcome = textOf(
         await client.callTool({ name: "add_area", arguments: { title: "Garage", dry_run: true } }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("area.add");
 
       const blocked = await client.callTool({
@@ -2285,7 +2356,6 @@ describe("things MCP server", () => {
           arguments: { kind: "area", uuid: area, title: "New Area", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("area.update");
 
       const empty = await client.callTool({
@@ -2314,7 +2384,6 @@ describe("things MCP server", () => {
           arguments: { kind: "area", uuid: area, dangerously_permanent: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("area.delete");
     });
 
@@ -2323,7 +2392,6 @@ describe("things MCP server", () => {
       const outcome = textOf(
         await client.callTool({ name: "add_tag", arguments: { title: "focus", dry_run: true } }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("tag.add");
     });
 
@@ -2336,7 +2404,6 @@ describe("things MCP server", () => {
           arguments: { kind: "tag", uuid: tag, title: "in-progress", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("tag.update");
 
       const conflict = await client.callTool({
@@ -2372,7 +2439,6 @@ describe("things MCP server", () => {
           arguments: { kind: "tag", uuid: solo, dangerously_permanent: true, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("tag.delete");
     });
   });
@@ -2386,7 +2452,6 @@ describe("things MCP server", () => {
           arguments: { title: "Launch", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("project.add");
     });
 
@@ -2399,9 +2464,12 @@ describe("things MCP server", () => {
           name: "move_project",
           arguments: { uuids: [project], to_area: area, dry_run: true },
         }),
-      ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("move-dry-run");
-      expect(outcome.op).toBe("project.move");
+      ) as { placementClass: string; note: string };
+      // Move dry-run framing (phase 2): the content block IS the move plan — the
+      // placement-honesty fields pass through, with no `kind`/`result` discriminator.
+      expect("kind" in outcome).toBe(false);
+      expect(outcome.placementClass).toBeDefined();
+      expect(outcome.note.length).toBeGreaterThan(0);
 
       for (const args of [
         { uuids: [project] }, // bare
@@ -2424,7 +2492,6 @@ describe("things MCP server", () => {
         const outcome = textOf(
           await client.callTool({ name: "duplicate_item", arguments: { uuid, dry_run: true } }),
         ) as { kind: string; op: string };
-        expect(outcome.kind).toBe("dry-run");
         expect(outcome.op).toBe(op);
       }
     });
@@ -2442,7 +2509,6 @@ describe("things MCP server", () => {
         const outcome = textOf(
           await client.callTool({ name: "restore_item", arguments: { uuid, dry_run: true } }),
         ) as { kind: string; op: string };
-        expect(outcome.kind).toBe("dry-run");
         expect(outcome.op).toBe(op);
       }
     });
@@ -2493,7 +2559,6 @@ describe("things MCP server", () => {
           arguments: { title: "did it", completion_date: "2026-01-15", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.add-logged");
 
       const bad = await client.callTool({
@@ -2517,7 +2582,6 @@ describe("things MCP server", () => {
           arguments: { uuid, completion_date: "2026-01-01", dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.backdate");
 
       const empty = await client.callTool({
@@ -2544,7 +2608,6 @@ describe("things MCP server", () => {
           arguments: { uuid: withReminder, dry_run: true },
         }),
       ) as { kind: string; op: string };
-      expect(outcome.kind).toBe("dry-run");
       expect(outcome.op).toBe("todo.clear-dated-reminder");
 
       const blocked = await client.callTool({
