@@ -745,6 +745,71 @@ describe("detach family membership (spec §5)", () => {
   });
 });
 
+/**
+ * Inbox-return transport pin (regression). The `--inbox` destination compiles ONLY
+ * to AppleScript (`move to do id X to list "Inbox"`; url-scheme `update` has no
+ * Inbox target), yet BOTH vectors claim `todo.move` in the matrix and url-scheme
+ * wins the tier-0 registry tie. So the membership leg must pin applescript — else
+ * the planner routes the inbox leg to url-scheme and `spec.compile` throws the
+ * "planner bug" unsupportedVector (the guest e2e's "move back to Inbox" step caught
+ * this live). Two non-simulating fakes (both claiming todo.move, url-scheme FIRST so
+ * it would win an unpinned tie) prove the leg lands on applescript.
+ */
+function inboxReturnVectors() {
+  const calls: { vector: string; op: string | undefined }[] = [];
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: { "todo.move": { support: "yes", disruption: 0, validation: "validated" } },
+    async execute(inv) {
+      calls.push({ vector: "url-scheme", op: inv.op });
+      // url-scheme has no Inbox target — reaching here means the leg was NOT pinned.
+      throw new Error("url-scheme received the inbox move — leg was not pinned to applescript");
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: { "todo.move": { support: "partial", disruption: 0, validation: "validated" } },
+    async execute(inv) {
+      calls.push({ vector: "applescript", op: inv.op });
+      const p = inv.opParams as { uuid: string };
+      fixture.db
+        .prepare(
+          "UPDATE TMTask SET start=0, startDate=NULL, project=NULL, area=NULL, heading=NULL, userModificationDate=? WHERE uuid=?",
+        )
+        .run(modClock++, p.uuid);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
+describe("inbox return — transport pin (regression: planner bug)", () => {
+  it("routes the inbox leg to applescript, de-scheduling the to-do (never url-scheme)", async () => {
+    const { vectors, calls } = inboxReturnVectors();
+    const proj = seedProject(fixture.db, { title: "P" });
+    const t = seedTodo(fixture.db, { title: "T", project: proj, start: "active" });
+    const r = await runTodoMove(deps({ vectors }), {
+      uuids: [t],
+      destination: { kind: "inbox" },
+    });
+    expect(r.kind).toBe("move-ok");
+    // Dispatched via applescript ONLY — url-scheme was never reached.
+    expect(calls).toEqual([{ vector: "applescript", op: "todo.move" }]);
+    const row = fixture.db
+      .prepare("SELECT start, startDate, project, area, heading FROM TMTask WHERE uuid = ?")
+      .get(t) as {
+      start: number;
+      startDate: number | null;
+      project: string | null;
+      area: string | null;
+      heading: string | null;
+    };
+    expect(row.start).toBe(0);
+    expect(row.startDate).toBeNull();
+    expect(row.project).toBeNull();
+  });
+});
+
 describe("mixed-bucket membership move (rule 4 — membership always legal)", () => {
   it("moves an anytime + a someday to-do into an area; both land (membership legal)", async () => {
     const area = seedArea(fixture.db, "Dest");
