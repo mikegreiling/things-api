@@ -37,14 +37,23 @@ Entities, relationships, and how the sidebar views are computed over them, as ex
 
 `things projects`/`areas`/`tags` list containers; `things projects <ref>` / `things areas <ref>` / `things show <ref>` show one item's full detail — notes, checklist, effective tags — which the compact list rows do NOT display.
 
-### Reading view membership from JSON
+### Reading view membership from JSON — `stage` and `when`
 
-When reasoning about which view an item belongs to from `--json`, key on the fields together, not on a single hint:
+Reads decompose an item's position onto two derived, presence-keyed words (they REPLACED the old `start`/`startDate`/`logged`/`trashed`/`todaySection` wire fields, which no longer appear):
 
-- `start: "inbox"` → Inbox; `start: "someday"` → Someday; `start: "active"` with no `startDate` → Anytime.
-- A dated open item belongs to **Today** when dated for `meta.clock.today`, otherwise **Upcoming** when future-dated.
-- `todaySection` only describes placement WITHIN Today (e.g. `evening`); it is NOT evidence that an undated item is in Today.
-- Completed/canceled items are in the Logbook and trashed items in Trash, regardless of a stale-looking `logged` field.
+- **`stage`** — the sidebar BUCKET: `inbox | upcoming | anytime | someday | logbook | trash`. Read view membership off it directly. It is dropped inside a section/catalogue that already states it (the stage-pure `inbox`/`anytime`/`someday`/`logbook`/`trash` lists and the `today` view's sections) and kept everywhere it is not implied (the mixed `upcoming` catalogue, `search`, `changes`, the projects/areas listings, and `detail`).
+- **`when`** — the TIME POSITION: `today | evening | a future ISO date`, or absent (unscheduled and not in Today). `evening` implies today. Someday is a bucket, never a `when`.
+- The two are DIFFERENT facts. A due deadline pulls an UNDATED row into Today: it reads `when: "today"` and derives `stage: "anytime"` — the app re-files a deadline-pulled Inbox/Someday row into Anytime at pull time (R13/BANNER1b), so it drops out of the Inbox/Someday lists and joins Anytime while its `when` reads `today`. Completed/canceled → `stage: "logbook"`, trashed → `stage: "trash"`, regardless of any other hint.
+- `provisional: true` marks a Today member the app has not yet materialized — see [banner.md](banner.md).
+
+## Tiers — compact vs full (absence is meaningful)
+
+Every row comes back at one of two densities, selected by view kind + flag, never by a caller-supplied field list:
+
+- **Compact** (the list default) keeps identity + structural + non-default facts. A field at its default is OMITTED, so absence = the default: no `status` = open, no `checklist` = none, no `todos` = no child to-dos, no `when` = not in Today and unscheduled, no `provisional` = materialized. The full `notes` string is dropped and replaced by presence-keyed `hasNotes: true`; `startDate`, `created`, and `modified` are dropped.
+- **Full** (`show`/`detail`, or a list forced with `--full`) is the whole record — the complete `notes`, the raw `startDate` substrate behind `when`, the checklist `items` array, and timestamps.
+- Compact rows still carry the useful summaries: `checklist:{open,total}` on a to-do, `todos:{open,total}` on a project (app-maintained leaf-action counts — never headings, checklist items, or trashed rows), and `match:{field,text}` on a `search` hit whose match was NOT the title (`field` ∈ `heading | notes | checklist`).
+- **Container absence rule:** inside a single-container node (a project/area card, an `anytime`/`someday` section, a heading group) an item omits any ancestry the node already states, so absent `project`/`area`/`heading` there means *inherited from the enclosing node*. A mixed list (`inbox`/`today`/`search`/`changes`) still names each row's own `project`/`area` (the `heading` ref is compact-dropped outside a project view; `--full` keeps it).
 
 ## Filters over views
 
