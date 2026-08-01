@@ -72,6 +72,7 @@ const CONFIG: ThingsApiConfig = {
   actor: "mike",
   auditEnabled: true,
   acceptedFingerprint: null,
+  certifiedAppVersion: null,
   allowExperimental: true,
   bounceEnabled: true,
   bounceMaxItems: 30,

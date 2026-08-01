@@ -25,6 +25,17 @@ export interface ThingsApiConfig {
   /** User-accepted drifted fingerprint (loud escape hatch; see design §6). */
   acceptedFingerprint: string | null;
   /**
+   * The Things app version the behavioral LAWS (docs/reference/assumption-register.md)
+   * were last certified against. Set when a baseline ships or by an explicit
+   * `things config set certified-app-version <X>`. The schema fingerprint cannot
+   * see BEHAVIORAL drift (an app update can move an insertion law with zero schema
+   * delta), so `things doctor` compares this against the installed version and
+   * emits a PASSIVE, non-blocking notice on a mismatch, pointing at the drift
+   * suite. Null when never certified (no notice). Precedent: the skill-version
+   * passive drift notice (src/cli/skill-check.ts).
+   */
+  certifiedAppVersion: string | null;
+  /**
    * Allow capabilities that ride the app's PRIVATE, UNDOCUMENTED sdef reorder
    * command (default true). This is a private vendor surface, NOT a half-baked
    * "experimental" one: every write is verify-per-write, fingerprint-gated, and
@@ -121,6 +132,7 @@ interface ConfigFile {
   actor?: string;
   auditEnabled?: boolean;
   acceptedFingerprint?: string;
+  certifiedAppVersion?: string;
   allowExperimental?: boolean;
   bounceEnabled?: boolean;
   bounceMaxItems?: number;
@@ -183,6 +195,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ThingsApiConfi
     actor: env["THINGS_API_ACTOR"] ?? file.actor ?? `${username}@cli`,
     auditEnabled: auditEnv ?? file.auditEnabled ?? true,
     acceptedFingerprint: file.acceptedFingerprint ?? null,
+    certifiedAppVersion: file.certifiedAppVersion ?? null,
     allowExperimental: experimentalEnv ?? file.allowExperimental ?? true,
     bounceEnabled: bounceEnabledEnv ?? file.bounceEnabled ?? true,
     bounceMaxItems: bounceMaxItemsEnv ?? file.bounceMaxItems ?? 30,
@@ -293,6 +306,12 @@ export function describeConfig(env: NodeJS.ProcessEnv = process.env): ConfigKeyV
       "accepted-fingerprint",
       cfg.acceptedFingerprint,
       file.acceptedFingerprint !== undefined,
+      false,
+    ),
+    view(
+      "certified-app-version",
+      cfg.certifiedAppVersion,
+      file.certifiedAppVersion !== undefined,
       false,
     ),
     view(

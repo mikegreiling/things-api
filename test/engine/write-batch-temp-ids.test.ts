@@ -40,6 +40,7 @@ const CONFIG: ThingsApiConfig = {
   actor: "batch-actor",
   auditEnabled: true,
   acceptedFingerprint: null,
+  certifiedAppVersion: null,
   allowExperimental: false,
   bounceEnabled: true,
   bounceMaxItems: 30,

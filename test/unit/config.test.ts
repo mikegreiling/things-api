@@ -161,3 +161,19 @@ describe("describeConfig provenance reflects the winning layer", () => {
     expect(keys).toContain("host");
   });
 });
+
+describe("certified-app-version (behavioral-drift baseline)", () => {
+  it("defaults to null (never certified) and round-trips a stored value", () => {
+    expect(loadConfig(env()).certifiedAppVersion).toBeNull();
+    expect(sourceOf("certified-app-version", env())).toBe("default");
+    saveConfigKey("certifiedAppVersion", "3.22.11", env());
+    expect(loadConfig(env()).certifiedAppVersion).toBe("3.22.11");
+    expect(sourceOf("certified-app-version", env())).toBe("stored");
+  });
+
+  it("clears back to null when set to null", () => {
+    saveConfigKey("certifiedAppVersion", "3.22.11", env());
+    saveConfigKey("certifiedAppVersion", null, env());
+    expect(loadConfig(env()).certifiedAppVersion).toBeNull();
+  });
+});

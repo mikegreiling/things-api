@@ -2577,8 +2577,8 @@ export function registerWriteCommands(program: Command): void {
     .command("set <key> <value>")
     .description(
       "Persist a config key: profile | maxDisruption | actor | auditEnabled | " +
-        "accepted-fingerprint | allow-experimental | bounce-enabled | bounce-max-items | " +
-        "ui-enabled | scope",
+        "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
+        "bounce-max-items | ui-enabled | scope",
     )
     .action((key: string, value: string) => {
       const map: Record<string, string> = {
@@ -2587,6 +2587,7 @@ export function registerWriteCommands(program: Command): void {
         actor: "actor",
         auditEnabled: "auditEnabled",
         "accepted-fingerprint": "acceptedFingerprint",
+        "certified-app-version": "certifiedAppVersion",
         "allow-experimental": "allowExperimental",
         "bounce-enabled": "bounceEnabled",
         "bounce-max-items": "bounceMaxItems",

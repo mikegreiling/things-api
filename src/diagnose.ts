@@ -104,6 +104,21 @@ export interface DiagnoseReport {
   };
   app: {
     installed: boolean;
+    /** Installed app version (CFBundleShortVersionString); null when unreadable. */
+    version: string | null;
+    /**
+     * The app version the behavioral LAWS were last certified against
+     * (config `certified-app-version`); null when never set.
+     */
+    certifiedVersion: string | null;
+    /**
+     * True when the installed version is known, a certified version is set, and
+     * they differ — a PASSIVE signal that the behavioral laws
+     * (docs/reference/assumption-register.md) may have moved with zero schema
+     * delta. Non-blocking: writes stay enabled; doctor emits a notice pointing
+     * at the drift suite. False when unset/unknown/matching.
+     */
+    behavioralDrift: boolean;
   };
   writes: {
     enabled: boolean;
@@ -344,7 +359,15 @@ export function diagnose(dbPath?: string, options: DiagnoseOptions = {}): Diagno
         detail: status.kind === "drift" ? status.detail : [],
         extraColumns,
       },
-      app: { installed: existsSync(THINGS_APP) },
+      app: {
+        installed: existsSync(THINGS_APP),
+        version: currentEnv.thingsVersion,
+        certifiedVersion: config.certifiedAppVersion,
+        behavioralDrift:
+          currentEnv.thingsVersion !== null &&
+          config.certifiedAppVersion !== null &&
+          currentEnv.thingsVersion !== config.certifiedAppVersion,
+      },
       writes: {
         enabled: writesEnabled,
         reason: accepted

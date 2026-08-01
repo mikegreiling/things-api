@@ -39,6 +39,7 @@ function config(uiEnabled: boolean): ThingsApiConfig {
     actor: "test-actor",
     auditEnabled: true,
     acceptedFingerprint: null,
+    certifiedAppVersion: null,
     allowExperimental: false,
     bounceEnabled: true,
     bounceMaxItems: 30,

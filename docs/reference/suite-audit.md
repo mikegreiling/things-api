@@ -2,6 +2,8 @@
 
 Part of the hardening pass (roadmap §G → §F): when a new Things version drops, `lab:regress` + the guest e2e are the behavioral safety net — so every shipped operation kind must appear in at least one recurring, autonomously-runnable check. Audited 2026-07-09 against `src/write/operations.ts` (34 op kinds), `lab/suites/*.json` (8 suites), and `lab/guest/e2e-write-smoke.sh`.
 
+**Policy (extended 2026-07-31):** an op ships with a recurring live check — and a **LAW** ships with a **register row + lock**. The behavioral assumptions shipped mutations rest on are catalogued in [assumption-register.md](assumption-register.md), one row per law with its recurring lock (suite row / e2e step / unit pin) and any runtime canary; re-certifying after a Things update = walk that register (drift-runbook step 3). Ops answer "does the surface still exist"; laws answer "does the surface still BEHAVE the documented way" — the schema fingerprint sees neither.
+
 ## Covered (27/34 op kinds in the guest e2e, most also suite-backed)
 
 `todo.add` `todo.update` `todo.complete` `todo.reopen` `todo.move` `todo.set-tags` `todo.replace-checklist` `todo.delete` `todo.duplicate` `todo.restore` `project.add` `project.update` `project.complete` `project.cancel` `project.reopen` `project.move` `project.delete` `project.duplicate` `project.restore` `area.add` `area.update` `area.delete` `tag.add` `tag.update` `tag.delete` `trash.empty` `reorder` (all eight scopes since the §C additions)
@@ -51,6 +53,15 @@ The BOUNCEJSON collapse (a bounce whose placement leg is `when=anytime` into a l
 - **O18** (`order.bounce-json-collapse`): self-seeds a project + heading + 4 anytime children (`O-BJHc1..4`, seed order 1<2<3<4) via ONE `things:///json` new-project payload; the command is ONE `things:///json` update array interleaving `[{when:someday},{when:anytime}]` per item in the SCRAMBLED target order `c2,c4,c1,c3`; asserts the resulting `index` order is `c2<c4<c1<c3` (array order CONTROLS placement — the scramble proves it is not a no-op), the heading FK is preserved 4/4, and every child is back at `start=1`. Created its own targets (no new seeds).
 
 Verified GREEN in a fresh clone: run **`o-20260728-064802`**, all 17 o-suite probes `ok` (O18 `supported`, tier 0).
+
+## o-suite ASSUMPTION-REGISTER rows — ADDED 2026-07-31 (register lock-gap closure)
+
+The assumption-register hardening pass ([assumption-register.md](assumption-register.md)) found three shipped ORDERING laws whose only recurring lock was an ENGINE test (a compiler check against a fake executor — blind to app-behavior drift). Each got an o-suite wire row so the release canary re-certifies the real app behavior, not just our emitter:
+- **O19** (`order.dated-day-bounce`, register ORD-6): the SIT4/SIT5 DATED cross-container day bounce. Self-seeds a day-D (2026-07-19) group (loose to-do, a loose to-do carrying reminder+deadline, an AREA-DIRECT child, an area-less PROJECT row), bounces them in reverse target order via `update?when=D+1`→`when=D` (`update-project` for the project row), and asserts the exact cross-container `todayIndex` order (ordering waitSql) PLUS the preservation set — bare `when=<date>` carries reminderTime + deadline (§2e/R21, the decisive contrast with the evening bounce §9n), keeps the area FK (AREAPROJDAY membership), and re-dates project rows. Backs the `day` reorder scope.
+- **O20** (`order.tomorrow-list`, register ORD-7): the ORDFIN2/SIT3 one-call `list "Tomorrow"` day-sort. Self-seeds a cross-container tomorrow (2026-07-06) group (loose, area child, project row, HEADED child) and reorders with a SCRAMBLED wire, asserting the sent order landed AND that the headed child's heading FK is byte-identical (project stays NULL — §9k does NOT extend to Tomorrow, TOMORROWHEAD), the project row is accepted inline, and no §9g re-date fires. Backs the `tomorrow` scope.
+- **O21** (`order.evening-headed-bounce`, register ORD-11): the ORDFIN1 Arm 2b today↔evening bounce on a HEADED evening child. Self-seeds a headed This-Evening child (project+heading via json), runs the shipped evening BounceSpec legs, and asserts the heading FK byte-identical + `startBucket` round-trips 1→0→1 + today's `startDate` kept. Backs the `evening` scope's headed-child guarantee.
+
+All three self-seed (no new golden seeds), dispatch raw wire (URL / json / private AppleScript reorder) exactly as the campaign docs, and assert placement via the O07/O17 ordering-`waitSql` idiom + preservation via `fieldUnchanged`/`fieldEquals`. **Not yet run against the golden in this change** (see the assumption-register PR notes) — the maintainer runs `npm run lab:regress` to certify GREEN on the next sweep; any delta reconciles per drift-runbook step 3.
 
 ## ui-vector ops — coverage model is per-version CERTIFICATION, not lab:regress (noted 2026-07-15)
 
