@@ -89,8 +89,12 @@ describe("install-skill: built-in copy fallback", () => {
     const h = newHome();
     const before = bundledSkillVersion();
     installSkill({}, fallbackDeps(h));
-    expect(bundledSkillVersion()).toBe(before); // repo placeholder untouched
-    expect(before).toBe("0.0.0-dev");
+    expect(bundledSkillVersion()).toBe(before); // repo copy untouched (the invariant)
+    // `before` is normally the committed `0.0.0-dev` placeholder, but at release
+    // time the workflow stamps the working tree with the real version before
+    // `npm publish` re-runs `check` (prepublishOnly) — so assert only that the
+    // stamp is a well-formed version, not the specific placeholder. Both parse.
+    expect(parseSemver(before)).not.toBeNull();
   });
 
   it("re-add cleanly overwrites: stale content and orphan files are removed", () => {
