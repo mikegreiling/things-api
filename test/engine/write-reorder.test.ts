@@ -55,6 +55,7 @@ function config(allowExperimental: boolean): ThingsApiConfig {
     actor: "test-actor",
     auditEnabled: true,
     acceptedFingerprint: null,
+    certifiedAppVersion: null,
     allowExperimental,
     bounceEnabled: true,
     bounceMaxItems: 30,

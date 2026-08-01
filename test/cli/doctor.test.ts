@@ -311,3 +311,66 @@ describe("doctor CLI — orphaned-intent advisory line", () => {
     expect(out).not.toContain("were started but their result was not recorded");
   });
 });
+
+describe("doctor — behavioral-drift notice (certified-app-version)", () => {
+  let configDir: string;
+  const backup = process.env["THINGS_API_CONFIG_DIR"];
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "things-api-doctor-behav-"));
+    process.env["THINGS_API_CONFIG_DIR"] = configDir;
+  });
+  afterEach(() => {
+    if (backup === undefined) delete process.env["THINGS_API_CONFIG_DIR"];
+    else process.env["THINGS_API_CONFIG_DIR"] = backup;
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  function writeCertified(version: string | null): void {
+    writeFileSync(
+      join(configDir, "config.json"),
+      `${JSON.stringify(version === null ? {} : { certifiedAppVersion: version })}\n`,
+    );
+  }
+
+  it("flags behavioralDrift when the installed version differs from certified", () => {
+    fixture = buildFixtureDb();
+    writeCertified("3.22.11");
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, { ...TUPLE_A, thingsVersion: "3.22.12" }),
+    });
+    expect(report?.app.version).toBe("3.22.12");
+    expect(report?.app.certifiedVersion).toBe("3.22.11");
+    expect(report?.app.behavioralDrift).toBe(true);
+    // Non-blocking: the behavioral mismatch never disables writes.
+    expect(report?.writes.enabled).toBe(true);
+  });
+
+  it("does NOT flag drift when installed matches certified", () => {
+    fixture = buildFixtureDb();
+    writeCertified("3.22.11");
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, { ...TUPLE_A, thingsVersion: "3.22.11" }),
+    });
+    expect(report?.app.behavioralDrift).toBe(false);
+  });
+
+  it("does NOT flag drift when no certified version is set (never certified)", () => {
+    fixture = buildFixtureDb();
+    writeCertified(null);
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, { ...TUPLE_A, thingsVersion: "3.22.12" }),
+    });
+    expect(report?.app.certifiedVersion).toBeNull();
+    expect(report?.app.behavioralDrift).toBe(false);
+  });
+
+  it("does NOT flag drift when the installed version is unreadable", () => {
+    fixture = buildFixtureDb();
+    writeCertified("3.22.11");
+    const { report } = diagnose(fixture.path, {
+      environment: fixedTracker(null, { ...TUPLE_A, thingsVersion: null }),
+    });
+    expect(report?.app.version).toBeNull();
+    expect(report?.app.behavioralDrift).toBe(false);
+  });
+});

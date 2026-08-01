@@ -105,7 +105,17 @@ export function registerDoctor(program: Command): void {
             `db version:  ${report.db.databaseVersion ?? "unknown"}`,
             `fingerprint: ${report.fingerprint.status} (${report.fingerprint.value.slice(0, 23)}…)`,
             ...report.fingerprint.detail.map((d) => `  drift: ${d}`),
-            `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}`,
+            `app:         ${report.app.installed ? "installed" : "NOT INSTALLED"}${
+              report.app.version !== null ? ` (Things ${report.app.version})` : ""
+            }`,
+            ...(report.app.behavioralDrift
+              ? [
+                  `behavioral:  Things ${report.app.version} installed; behavioral laws last ` +
+                    `certified against ${report.app.certifiedVersion} — run the drift suite to ` +
+                    "re-certify (docs/lab/drift-runbook.md). Schema fingerprint is unaffected; " +
+                    "writes stay enabled",
+                ]
+              : []),
             `writes:      ${report.writes.enabled ? "enabled" : "DISABLED"} — ${report.writes.reason}`,
             `scope:       ${report.scope.detail}`,
             `experimental: ${report.experimental.reason}`,

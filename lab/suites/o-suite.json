@@ -919,30 +919,347 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-BJHc1" },
+            "where": {
+              "title": "O-BJHc1"
+            },
             "field": "start",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-BJHc2" },
+            "where": {
+              "title": "O-BJHc2"
+            },
             "field": "start",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-BJHc3" },
+            "where": {
+              "title": "O-BJHc3"
+            },
             "field": "start",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-BJHc4" },
+            "where": {
+              "title": "O-BJHc4"
+            },
             "field": "start",
             "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O19",
+      "operation": "order.dated-day-bounce",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "DAYBNC (SIT4/SIT5): the DATED cross-container day bounce (re-when to D+1 then back to D) FRONT-inserts each row at day D's GLOBAL todayIndex minimum across containers, so a REVERSE-target dispatch lands the exact order. Seeds a day-D (2026-07-19) group — a loose to-do, a loose to-do carrying reminder+deadline, an AREA-DIRECT child (AREAPROJDAY membership), and an area-less PROJECT row — and bounces them in reverse target order (dispatch L1,A,L2,P -> order P,L2,A,L1). Locks the placement (ordering waitSql) AND the preservation set: bare when=<date> carries reminderTime + deadline (§2e/R21, the decisive contrast with the evening bounce §9n), keeps the area FK (area-direct membership), and re-dates project rows too. Backs the `day` reorder scope.",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-DD-L1&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DD-L1' AND startDate=132807040 AND start=2"
+        },
+        {
+          "openUrl": "things:///add?title=O-DD-L2&when=2026-07-19@09:00&deadline=2026-07-24"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DD-L2' AND startDate=132807040 AND reminderTime IS NOT NULL AND deadline IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///add?title=O-DD-A&when=2026-07-19&list=LAB-AREA-A"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DD-A' AND startDate=132807040 AND area IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-DD-P&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DD-P' AND type=1 AND startDate=132807040"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-L1}&auth-token={ctx:token}&when=2026-07-20"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-L1' AND startDate=132807168"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-L1}&auth-token={ctx:token}&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-L1' AND startDate=132807040"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-A}&auth-token={ctx:token}&when=2026-07-20"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-A' AND startDate=132807168"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-A}&auth-token={ctx:token}&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-A' AND startDate=132807040"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-L2}&auth-token={ctx:token}&when=2026-07-20"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-L2' AND startDate=132807168"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DD-L2}&auth-token={ctx:token}&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-L2' AND startDate=132807040"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:O-DD-P}&auth-token={ctx:token}&when=2026-07-20"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-P' AND startDate=132807168"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:O-DD-P}&auth-token={ctx:token}&when=2026-07-19"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DD-P' AND startDate=132807040"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-DD-P') < (SELECT todayIndex FROM TMTask WHERE title='O-DD-L2') AND (SELECT todayIndex FROM TMTask WHERE title='O-DD-L2') < (SELECT todayIndex FROM TMTask WHERE title='O-DD-A') AND (SELECT todayIndex FROM TMTask WHERE title='O-DD-A') < (SELECT todayIndex FROM TMTask WHERE title='O-DD-L1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DD-L1"
+            },
+            "fields": ["startDate", "start"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DD-L2"
+            },
+            "fields": ["startDate", "start", "reminderTime", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DD-A"
+            },
+            "fields": ["startDate", "start", "area"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DD-P"
+            },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DD-P"
+            },
+            "fields": ["startDate", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O20",
+      "operation": "order.tomorrow-list",
+      "vector": "applescript",
+      "appState": "running-background",
+      "title": "TOMORROWLIST + TOMORROWHEAD (ORDFIN2 Arm 2 / SIT3): ONE `_private_experimental_ reorder to dos in list \"Tomorrow\"` re-ranks the whole next-day (2026-07-06) group on todayIndex in the sent order, ACCEPTS a scheduled PROJECT row inline (O12 analog), preserves startDate/start/FKs (NO §9g re-date), and is HEADING-SAFE — a headed child in the wire keeps its heading FK byte-identical, project stays NULL (§9k does NOT extend to the Tomorrow list). Seeds a cross-container tomorrow group (loose, area child, project row, headed child) and reorders with a SCRAMBLED wire so a passing order proves the call CONTROLS placement. Backs the `tomorrow` reorder scope.",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-TM-HP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-TM-HH%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-TM-HH' AND type=2"
+        },
+        {
+          "openUrl": "things:///add?title=O-TM-H&when=2026-07-06&list=O-TM-HP&heading=O-TM-HH"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-TM-H' AND startDate=132805376 AND heading=(SELECT uuid FROM TMTask WHERE title='O-TM-HH' AND type=2)"
+        },
+        {
+          "openUrl": "things:///add?title=O-TM-L&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-TM-L' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=O-TM-A&when=2026-07-06&list=LAB-AREA-A"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-TM-A' AND startDate=132805376 AND area IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-TM-P&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-TM-P' AND type=1 AND startDate=132805376"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Tomorrow\" with ids \"{uuid:O-TM-H},{uuid:O-TM-L},{uuid:O-TM-P},{uuid:O-TM-A}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-TM-H') < (SELECT todayIndex FROM TMTask WHERE title='O-TM-L') AND (SELECT todayIndex FROM TMTask WHERE title='O-TM-L') < (SELECT todayIndex FROM TMTask WHERE title='O-TM-P') AND (SELECT todayIndex FROM TMTask WHERE title='O-TM-P') < (SELECT todayIndex FROM TMTask WHERE title='O-TM-A')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-TM-H"
+            },
+            "fields": ["heading", "project", "startDate", "start"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-TM-A"
+            },
+            "fields": ["startDate", "start", "area"]
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-TM-P"
+            },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-TM-P"
+            },
+            "fields": ["startDate", "start"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-TM-L"
+            },
+            "fields": ["startDate", "start"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O21",
+      "operation": "order.evening-headed-bounce",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "EVEHEAD (ORDFIN1 Arm 2b): the today↔evening bounce on a HEADED evening child preserves the heading FK BYTE-IDENTICAL and round-trips startBucket 1->0->1 keeping today's startDate — so the shipped `evening` reorder scope orders a headed child in the Today/Evening bucket unchanged. Seeds a headed child (project+heading via json, child attached, flagged This-Evening), then runs the shipped evening BounceSpec legs (when=today then when=evening) and asserts the heading FK unchanged + startBucket back to 1 + start=1 + today startDate kept. Backs the `evening` scope's headed-child guarantee.",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-EV-HP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-EV-HH%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-EV-HH' AND type=2"
+        },
+        {
+          "openUrl": "things:///add?title=O-EV-C&list=O-EV-HP&heading=O-EV-HH"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-EV-C' AND heading=(SELECT uuid FROM TMTask WHERE title='O-EV-HH' AND type=2)"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-EV-C}&auth-token={ctx:token}&when=evening"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-EV-C' AND startBucket=1 AND startDate=132805248 AND heading IS NOT NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-EV-C}&auth-token={ctx:token}&when=today"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-EV-C' AND startBucket=0"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-EV-C}&auth-token={ctx:token}&when=evening"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-EV-C' AND startBucket=1"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-EV-C"
+            },
+            "field": "startBucket",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-EV-C"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-EV-C"
+            },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-EV-C"
+            },
+            "fields": ["heading"]
           }
         ]
       }

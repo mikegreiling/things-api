@@ -162,12 +162,13 @@ describe("config get (all keys)", () => {
     expect(env["kind"]).toBe("config");
     const data = (env["data"] as { items: { key: string; source: string }[] }).items;
     expect(Array.isArray(data)).toBe(true);
-    expect(data).toHaveLength(11);
+    expect(data).toHaveLength(12);
     expect(data.map((e) => e.key)).toContain("ui-enabled");
     expect(data.map((e) => e.key)).toContain("scope");
     expect(data.map((e) => e.key)).toContain("host");
     expect(data.map((e) => e.key)).toContain("bounce-enabled");
     expect(data.map((e) => e.key)).toContain("bounce-max-items");
+    expect(data.map((e) => e.key)).toContain("certified-app-version");
     // With no stored file and no env: settable keys sit at their default,
     // while host and the profile-derived maxDisruption report derived.
     const byKey = Object.fromEntries(data.map((e) => [e.key, e.source]));

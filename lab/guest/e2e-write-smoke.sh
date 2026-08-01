@@ -238,6 +238,13 @@ echo "== deletes =="
 run_step 0 "todo delete -> trash (applescript)" todo delete "$UUID"
 run_step 0 "area add (applescript)" area add "E2E-AREA"
 run_step 0 "area delete (permanent, acknowledged)" area delete "E2E-AREA" --dangerously-permanent
+# WG-3 (assumption-register): a NON-EMPTY area refuses fail-closed (H-AREA-NOT-EMPTY)
+# unless --allow-non-empty. Seed an area with a live to-do, prove the refusal, then
+# clear it — the live lock for the area-delete guard + AREADEL child-fate copy.
+run_step 0 "area add for non-empty guard" area add "E2E-AREA-NE"
+run_step 0 "seed a live to-do in the area" todo add "E2E-AREA-NE-C1" --area "E2E-AREA-NE"
+run_step 4 "non-empty area delete refuses without --allow-non-empty (H-AREA-NOT-EMPTY)" area delete "E2E-AREA-NE" --dangerously-permanent
+run_step 0 "non-empty area delete clears with --allow-non-empty" area delete "E2E-AREA-NE" --dangerously-permanent --allow-non-empty
 run_step 0 "tag delete (permanent, acknowledged)" tag delete e2e-tag --dangerously-permanent
 
 echo "== guard checks against the live app =="
