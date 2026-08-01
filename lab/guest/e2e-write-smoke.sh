@@ -60,7 +60,7 @@ run_step 0 "project complete with verified auto-complete cascade" project comple
 echo "== phase 14b: project move / duplicate / notes modes, todo restore =="
 run_step 0 "project add for tier-2 ops" project add "E2E-T2PROJ" --area LAB-AREA-A --todo "E2E-T2-CHILD"
 T2PROJ=$(json_get "d['data']['uuid']")
-run_step 0 "project move to another area (E14)" project move "$T2PROJ" --area LAB-AREA-B
+run_step 0 "project move to another area (E14)" project move "$T2PROJ" --to-area LAB-AREA-B
 run_step 0 "project append-notes (E18, newline-joined)" project update "$T2PROJ" --append-notes "ptail"
 run_step 0 "project prepend-notes (E18)" project update "$T2PROJ" --prepend-notes "phead"
 run_step 0 "project duplicate incl. children (E17, copy discovered)" project duplicate "$T2PROJ"
@@ -77,13 +77,13 @@ run_step 0 "cancel with verified auto-cancel cascade (P01)" project cancel "$P19
 run_step 0 "reopen canceled=false + cascade restore (P05/P03)" project reopen "$P19" --restore-children
 run_step 0 "complete with auto-complete cascade" project complete "$P19" --children auto-complete
 run_step 0 "reopen completed=false + cascade restore (P02)" project reopen "$P19" --restore-children
-run_step 0 "detach project from its area (P24)" project move "$P19" --detach
+run_step 0 "detach project from its area (P24)" project move "$P19" --no-area
 run_step 0 "delete project to the Trash" project delete "$P19"
 run_step 0 "restore project IN PLACE (P06)" project restore "$P19"
 run_step 4 "project restore requires a TRASHED target (guard)" project restore "$P19"
 run_step 0 "seed scheduled to-do in the project" todo add "E2E-DETACH" --project "$P19" --when 2026-07-14
 DET=$(json_get "d['data']['uuid']")
-run_step 0 "detach keeps the schedule (P21/P22)" todo move "$DET" --detach
+run_step 0 "detach keeps the schedule (P21/P22)" todo move "$DET" --loose
 run_step 0 "seed to-do for granular checklist" todo add "E2E-CLIST"
 CL=$(json_get "d['data']['uuid']")
 run_step 0 "wholesale checklist (fresh)" todo checklist "$CL" --item "Alpha" --item "Bravo"
@@ -95,61 +95,74 @@ run_step 0 "tag subtree: child" tag add e2e-sub-child --parent e2e-sub-parent
 run_step 4 "parent-tag delete blocked without subtree ack (P16 guard)" tag delete e2e-sub-parent --dangerously-permanent
 run_step 0 "parent-tag delete with subtree ack" tag delete e2e-sub-parent --dangerously-permanent --acknowledge-subtree
 
-echo "== reorder (native experimental + bounce) =="
+# Phase-B reorder grammar: kind-neutral `things reorder <refs…> [--in <target>]`
+# for to-dos; `things project move <refs…> <position>` for standalone project
+# order. The native re-rank is on by default (allow-experimental defaults true),
+# so no enabling step. To-do reorders infer their scope from the operands; a
+# Today/Evening set is DUAL-AXIS (view vs container index) and REFUSES without --in.
+echo "== reorder: to-do grammar (--in axis) + project move order =="
 run_step 0 "seed today R1" todo add "E2E-R1" --when today
 R1=$(json_get "d['data']['uuid']")
 run_step 0 "seed today R2" todo add "E2E-R2" --when today
 R2=$(json_get "d['data']['uuid']")
 run_step 0 "seed today R3" todo add "E2E-R3" --when today
 R3=$(json_get "d['data']['uuid']")
-run_step 6 "native reorder is gated until allow-experimental" reorder --scope today --strategy native "$R3" "$R1"
-STEP=$((STEP + 1))
-if things config set allow-experimental true >/dev/null 2>&1; then
-  echo "ok   [$STEP] enable allow-experimental"
-else
-  echo "FAIL [$STEP] enable allow-experimental"
-  FAILURES=$((FAILURES + 1))
-fi
-run_step 0 "native today reorder (partial list, verified ordering)" reorder --scope today "$R3" "$R1"
+# Dual-axis refusal: a loose Today set is ambiguous (Today view vs the flag-safe
+# loose Anytime index, SIT6 LOOSEPARK) — REFUSED without --in (blocked, exit 4).
+run_step 4 "loose Today reorder REFUSES without --in (dual-axis ambiguity)" reorder "$R3" "$R1"
+# --in disambiguation success: name the Today view axis → native todayIndex re-rank.
+run_step 0 "today reorder with --in today (native re-rank, partial list)" reorder "$R3" "$R1" --in today
+# Flag-aware routing newly expressible (Phase B): --in anytime reorders the loose
+# Anytime index via the flag-safe LOOSEPARK MOVE protocol, preserving the Today flag.
+run_step 0 "loose Today reorder with --in anytime (flag-safe LOOSEPARK)" reorder "$R3" "$R1" --in anytime
 run_step 0 "seed evening RE1" todo add "E2E-RE1" --when evening
 RE1=$(json_get "d['data']['uuid']")
 run_step 0 "seed evening RE2" todo add "E2E-RE2" --when evening
 RE2=$(json_get "d['data']['uuid']")
-run_step 4 "today reorder rejects evening members (O03 guard)" reorder --scope today "$RE1" "$R1"
-run_step 0 "evening bounce reorder (verified when= round-trips)" reorder --scope evening "$RE2" "$RE1"
+# --in today over a mixed today+evening set: the evening member is not a Today
+# member on that axis, so it is refused (blocked, exit 4).
+run_step 4 "today axis rejects an evening member (mixed views, --in today)" reorder "$RE1" "$R1" --in today
+run_step 0 "evening reorder with --in evening (bounce round-trip)" reorder "$RE2" "$RE1" --in evening
 run_step 0 "seed project for ordering" project add "E2E-RPROJ"
 RPROJ=$(json_get "d['data']['uuid']")
 run_step 0 "seed project child P1" todo add "E2E-RP1" --project "$RPROJ"
 RP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed project child P2" todo add "E2E-RP2" --project "$RPROJ"
 RP2=$(json_get "d['data']['uuid']")
-run_step 0 "native project reorder (uuid specifier)" reorder --scope project --project "$RPROJ" "$RP2" "$RP1"
+# Project CHILDREN (to-dos) share one container + anytime bucket → single-axis, bare.
+run_step 0 "project-child reorder (bare, single container)" reorder "$RP2" "$RP1"
 run_step 0 "seed area project AP1" project add "E2E-AP1" --area LAB-AREA-A
 AP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed area project AP2" project add "E2E-AP2" --area LAB-AREA-A
 AP2=$(json_get "d['data']['uuid']")
-run_step 0 "native area reorder of PROJECTS (O14)" reorder --scope area --area LAB-AREA-A "$AP2" "$AP1"
+# Standalone PROJECT order is `project move` with a position (native area re-rank, O14).
+run_step 0 "area project reorder via project move --first (O14)" project move "$AP2" "$AP1" --first
 run_step 0 "seed area to-do for mixed check" todo add "E2E-AT1" --area LAB-AREA-A
 AT1=$(json_get "d['data']['uuid']")
-run_step 4 "mixed to-do+project area reorder is rejected (guard)" reorder --scope area --area LAB-AREA-A "$AT1" "$AP1"
+# Mixing a to-do and a project is a homogeneous-kinds USAGE error now (exit 2).
+run_step 2 "mixed to-do+project reorder is a homogeneous-kinds error" reorder "$AT1" "$AP1"
 
-echo "== reorder scopes: inbox / someday / projects + project move-heading (§C) =="
+echo "== reorder: inbox / someday to-dos + someday/sidebar projects + move-heading (§C) =="
 run_step 0 "seed inbox I1" todo add "E2E-I1"
 I1=$(json_get "d['data']['uuid']")
 run_step 0 "seed inbox I2" todo add "E2E-I2"
 I2=$(json_get "d['data']['uuid']")
-run_step 0 "native inbox reorder (A6 reversed wire convention)" reorder --scope inbox "$I2" "$I1"
+# Inbox to-dos are single-axis (no view) → bare reorder (A6 reversed wire convention).
+run_step 0 "native inbox reorder (bare)" reorder "$I2" "$I1"
 run_step 0 "seed someday S1" todo add "E2E-S1" --when someday
 S1=$(json_get "d['data']['uuid']")
 run_step 0 "seed someday S2" todo add "E2E-S2" --when someday
 S2=$(json_get "d['data']['uuid']")
-run_step 0 "native someday reorder of loose to-dos (P6h/P8)" reorder --scope someday "$S2" "$S1"
+# Someday to-dos are single-axis → bare reorder (P6h/P8).
+run_step 0 "native someday reorder of loose to-dos (bare)" reorder "$S2" "$S1"
 run_step 0 "seed someday project SP1 (area-less)" project add "E2E-SP1" --when someday
 SP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed someday project SP2 (area-less)" project add "E2E-SP2" --when someday
 SP2=$(json_get "d['data']['uuid']")
-run_step 0 "native someday reorder of PROJECTS (P9e descending stack)" reorder --scope someday "$SP2" "$SP1"
-run_step 4 "mixed someday to-do+project reorder is rejected (guard)" reorder --scope someday "$S1" "$SP1"
+# Someday PROJECTS reorder via project move --first (P9e descending stack).
+run_step 0 "someday project reorder via project move --first (P9e)" project move "$SP2" "$SP1" --first
+# Mixing a someday to-do and a someday project is a homogeneous-kinds usage error (exit 2).
+run_step 2 "mixed someday to-do+project reorder is a homogeneous-kinds error" reorder "$S1" "$SP1"
 # Headings seed via the json URL (HX0: heading items inside a NEW project's
 # payload create real type=2 rows — the only headless create path).
 open -g 'things:///json?data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-HPROJ%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-H1%22%7D%7D%2C%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22E2E-H2%22%7D%7D%5D%7D%7D%5D'
@@ -174,7 +187,8 @@ run_step 0 "seed top-level project TP1" project add "E2E-TP1"
 TP1=$(json_get "d['data']['uuid']")
 run_step 0 "seed top-level project TP2" project add "E2E-TP2"
 TP2=$(json_get "d['data']['uuid']")
-run_step 0 "bounce reorder of top-level sidebar PROJECTS (someday round-trip)" reorder --scope projects "$TP2" "$TP1"
+# Top-level sidebar PROJECTS reorder via project move --first (someday-bounce round-trip).
+run_step 0 "sidebar project reorder via project move --first (bounce)" project move "$TP2" "$TP1" --first
 
 echo "== suite-audit gap closure: cancel / backdate / add-logged / project tags / heading ops =="
 run_step 0 "seed to-do for cancel" todo add "E2E-CANCELME"
@@ -185,11 +199,11 @@ run_step 0 "complete it for backdating" todo complete "$CXL"
 run_step 0 "todo backdate (completion + creation, applescript)" todo backdate "$CXL" --completed-on 2025-01-15 --created-on 2024-06-01
 run_step 0 "todo add-logged (json at-creation import)" todo add-logged "E2E-LOGGED" --completed-on 2025-03-01 --created-on 2025-02-01
 run_step 0 "project tags (full replacement)" project tags "$RPROJ" --set lab-tag-1
-run_step 0 "heading rename (applescript by-id)" heading rename "$H1" "E2E-H1-RENAMED"
+run_step 0 "heading rename (project rename-heading, by-uuid sel)" project rename-heading "$HPROJ" "$H1" --to "E2E-H1-RENAMED"
 run_step 0 "seed a child under the heading" todo add "E2E-HCHILD" --project "$HPROJ" --heading "E2E-H1-RENAMED"
-run_step 4 "heading archive requires a children policy (open child)" heading archive "$H1"
-run_step 0 "heading archive with complete cascade" heading archive "$H1" --children complete
-run_step 0 "heading unarchive with child restore (<2s window)" heading unarchive "$H1" --restore-children
+run_step 4 "heading archive requires a children policy (open child)" project archive-heading "$HPROJ" "$H1"
+run_step 0 "heading archive with complete cascade" project archive-heading "$HPROJ" "$H1" --children complete
+run_step 0 "heading unarchive with child restore (<2s window)" project unarchive-heading "$HPROJ" "$H1" --restore-children
 
 echo "== phase 9b: reminders, notes modes, duplicate, entity updates =="
 run_step 0 "todo add with reminder (emitter: 10:05 -> 10:05am)" todo add "E2E-REM" --when today --reminder 10:05
@@ -218,7 +232,8 @@ cat > /tmp/e2e-batch.jsonl <<'EOB'
 EOB
 run_step 0 "batch: two verified adds via JSONL" batch /tmp/e2e-batch.jsonl
 run_step 0 "changes --since shows the batch adds" changes --since "$SINCE"
-if ! json_get "len([i for i in d['data'] if i['title'].startswith('E2E-B')])" | grep -q "^2$"; then
+# `changes` data is the R1/R2 items-wrapper shape: {items: [...]}, not a bare list.
+if ! json_get "len([i for i in d['data']['items'] if i['title'].startswith('E2E-B')])" | grep -q "^2$"; then
   echo "FAIL changes did not include both batch adds"
   FAILURES=$((FAILURES + 1))
 fi

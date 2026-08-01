@@ -41,6 +41,7 @@ import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
 import { computeReorderPre, resolveArea, resolveHeading, resolveProject } from "./pre-state.ts";
 import type { ContainerRef, ReorderParams, ReorderScope, TodoMoveParams } from "./operations.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
+import type { VectorId } from "./vectors/types.ts";
 import { runMutation } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
 
@@ -955,6 +956,9 @@ export async function runTodoMove(
   const membership: MutationResult[] = [];
   for (const leg of legParams.legs) {
     const res = await runMutation(deps, "todo.move", leg.params, {
+      // A leg-pinned vector is the fallback transport (inbox → applescript); an
+      // explicit caller --vector still wins because legOptions spreads after it.
+      ...(leg.vector !== undefined && { vector: leg.vector }),
       ...legOptions(options),
       ...(options.dryRun === true && { dryRun: true }),
     });
@@ -1003,7 +1007,14 @@ function preflightAnchor(
 }
 
 interface MembershipPlan {
-  legs: { uuid: string; params: TodoMoveParams }[];
+  // A leg may pin its transport when only ONE vector can compile its param shape:
+  // the inbox return compiles solely to AppleScript (`move to do id X to list
+  // "Inbox"`; the url-scheme `update` has no Inbox target), yet both vectors claim
+  // `todo.move` in the matrix and url-scheme wins the tier-0 registry tie — so
+  // without this pin the planner routes the inbox leg to url-scheme and its compile
+  // throws the "planner bug" unsupportedVector. The loose / no-heading shapes need
+  // no pin: they compile only to url-scheme, which is already the default winner.
+  legs: { uuid: string; params: TodoMoveParams; vector?: VectorId }[];
 }
 
 /** Build one todo.move leg per movee for the requested destination. */
@@ -1088,7 +1099,9 @@ function membershipLeg(
         legs.push({ uuid: r.uuid, params: { uuid: r.uuid, area: dest.ref } });
         break;
       case "inbox":
-        legs.push({ uuid: r.uuid, params: { uuid: r.uuid, inbox: true } });
+        // Inbox return compiles only to AppleScript — pin the transport so the
+        // planner does not route it to url-scheme (the tier-0 registry-tie winner).
+        legs.push({ uuid: r.uuid, params: { uuid: r.uuid, inbox: true }, vector: "applescript" });
         break;
       case "no-heading":
         legs.push({ uuid: r.uuid, params: { uuid: r.uuid, noHeading: true } });
