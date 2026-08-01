@@ -754,6 +754,13 @@ export interface Acknowledgements {
   /** Confirm that deleting a parent tag permanently deletes ALL of its descendant tags. */
   acknowledgeTagSubtree?: boolean;
   /**
+   * Confirm deleting a NON-EMPTY area. Deleting an area sends its contained
+   * to-dos AND projects (with their children) to the Trash and permanently
+   * destroys the area itself; by default the delete refuses when the area still
+   * holds any project or to-do, so nothing is trashed by surprise.
+   */
+  allowNonEmptyArea?: boolean;
+  /**
    * Confirm a GUI-driven ("ui" vector) operation: it drives the LOCAL Things
    * app through the Accessibility API, may foreground Things and briefly take
    * over UI focus on this machine, and requires an unlocked session. The

@@ -2112,10 +2112,15 @@ export function registerWriteCommands(program: Command): void {
       .command("delete <ref>")
       .description(
         "Delete an area PERMANENTLY — areas do not go to the Trash, so this cannot be " +
-          "undone; requires --dangerously-permanent. The area's to-dos move to the Trash; " +
-          "its projects remain, no longer assigned to any area.",
+          "undone; requires --dangerously-permanent. Deleting an area moves its to-dos and " +
+          "projects to the Trash, so a non-empty area is refused unless you pass " +
+          "--allow-non-empty; empty the area first to keep its contents.",
       )
-      .option("--dangerously-permanent", "accept permanent, unrecoverable deletion"),
+      .option("--dangerously-permanent", "accept permanent, unrecoverable deletion")
+      .option(
+        "--allow-non-empty",
+        "delete the area together with its contents (its to-dos and projects move to the Trash)",
+      ),
   ).action(async (target: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     await runWrite(opts, (c) =>
       c.write.deleteArea(
@@ -2123,6 +2128,9 @@ export function registerWriteCommands(program: Command): void {
         writeOptionsFrom(opts, {
           ...(opts["dangerouslyPermanent"] !== undefined && {
             dangerouslyPermanent: opts["dangerouslyPermanent"] as boolean,
+          }),
+          ...(opts["allowNonEmpty"] !== undefined && {
+            allowNonEmptyArea: opts["allowNonEmpty"] as boolean,
           }),
         }),
       ),

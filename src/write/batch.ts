@@ -57,6 +57,8 @@ export interface BatchOp {
     acknowledgeProjectReopen?: boolean;
     dangerouslyPermanent?: boolean;
     acknowledgeTagSubtree?: boolean;
+    /** Delete a non-empty area together with its contents (area.delete). */
+    allowNonEmptyArea?: boolean;
     /**
      * Acknowledge a GUI-driven op (make-repeating, convert-to-project, …) — the
      * second of its two keys. Required for any ui-drive op (several of which are
@@ -525,6 +527,9 @@ export async function runBatch(
       }),
       ...(entry.options?.acknowledgeTagSubtree !== undefined && {
         acknowledgeTagSubtree: entry.options.acknowledgeTagSubtree,
+      }),
+      ...(entry.options?.allowNonEmptyArea !== undefined && {
+        allowNonEmptyArea: entry.options.allowNonEmptyArea,
       }),
       ...(entry.options?.dangerouslyDriveGui !== undefined && {
         dangerouslyDriveGui: entry.options.dangerouslyDriveGui,

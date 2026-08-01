@@ -366,10 +366,10 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--acknowledge-subtree");
   });
 
-  it("area delete: to-dos trashed, projects orphaned", () => {
+  it("area delete: contents trashed + non-empty refusal flag", () => {
     const help = helpFor("area", "delete");
-    expect(help).toContain("to-dos move to the Trash");
-    expect(help).toContain("projects remain");
+    expect(help).toContain("to-dos and projects to the Trash");
+    expect(help).toContain("--allow-non-empty");
   });
 
   it("doctor: exit-code contract + setup guidance", () => {

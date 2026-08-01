@@ -23,6 +23,7 @@ export const HAZARD_IDS = [
   "H-UNKNOWN-DESTINATION",
   "H-AMBIGUOUS-HEADING",
   "H-PERMANENT-DELETE",
+  "H-AREA-NOT-EMPTY",
   "H-REORDER-SCOPE",
   "H-REMINDER-SCOPE",
   "H-TAG-SUBTREE-DELETE",
@@ -454,6 +455,32 @@ const GUARDS: Record<HazardId, GuardFn> = {
       remediation:
         "re-parent the children first (things tag update <child> --parent <new>), or pass " +
         "acknowledgeTagSubtree (--acknowledge-subtree) to delete the whole subtree",
+    };
+  },
+  "H-AREA-NOT-EMPTY": ({ op, pre, acks }) => {
+    if (op !== "area.delete") return null;
+    const members = pre.areaMembers;
+    // Null = area did not resolve (H-UNKNOWN-DESTINATION owns that); an empty
+    // area proceeds (subject only to the permanent-delete acknowledgement).
+    if (members === null) return null;
+    if (members.projects === 0 && members.todos === 0) return null;
+    if (acks.allowNonEmptyArea === true) return null;
+    const parts: string[] = [];
+    if (members.projects > 0) {
+      parts.push(`${members.projects} project${members.projects === 1 ? "" : "s"}`);
+    }
+    if (members.todos > 0) {
+      parts.push(`${members.todos} to-do${members.todos === 1 ? "" : "s"}`);
+    }
+    return {
+      hazard: "H-AREA-NOT-EMPTY",
+      detail:
+        `the area is not empty — it contains ${parts.join(" and ")}; deleting the area sends ` +
+        "its to-dos AND its projects (with their own children) to the Trash (A25B/AREADEL) and " +
+        "permanently destroys the area itself — this cannot be undone",
+      remediation:
+        "move or delete the area's projects and to-dos first (empty the area), or pass " +
+        "allowNonEmptyArea (--allow-non-empty) to delete the area together with its contents",
     };
   },
   "H-PERMANENT-DELETE": ({ op, acks }) => {

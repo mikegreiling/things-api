@@ -556,6 +556,9 @@ export async function runMutation<K extends OperationKind>(
       ...(options.acknowledgeTagSubtree !== undefined && {
         acknowledgeTagSubtree: options.acknowledgeTagSubtree,
       }),
+      ...(options.allowNonEmptyArea !== undefined && {
+        allowNonEmptyArea: options.allowNonEmptyArea,
+      }),
       ...(options.dangerouslyDriveGui !== undefined && {
         dangerouslyDriveGui: options.dangerouslyDriveGui,
       }),

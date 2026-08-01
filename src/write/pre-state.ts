@@ -62,6 +62,14 @@ export interface ReorderPre {
   wireList: string[];
 }
 
+/** area.delete: live member census of the area (non-trashed direct rows). */
+export interface AreaMemberCounts {
+  /** Projects whose area FK is this area (trashed = 0). */
+  projects: number;
+  /** Direct to-dos in the area (trashed = 0, any status). */
+  todos: number;
+}
+
 export interface PreState {
   /** Primary target for uuid-addressed operations. */
   target: AnyTask | null;
@@ -94,6 +102,13 @@ export interface PreState {
   entityTarget: ContainerResolution | null;
   /** tag.delete: descendant tags that a delete would CASCADE onto (P16). */
   childTags: string[];
+  /**
+   * area.delete: live (non-trashed) member counts, direct to-dos and projects
+   * carrying the area's FK. A non-empty area's delete trashes its to-dos and
+   * takes its projects with it (A25/A25B), so the delete refuses unless the
+   * caller allows it. Null for non-area ops (and when the area did not resolve).
+   */
+  areaMembers: AreaMemberCounts | null;
   /** project.complete / project.cancel: children by pre-status. */
   openChildren: Todo[];
   canceledChildren: Todo[];
@@ -196,6 +211,7 @@ export function emptyPreState(): PreState {
     parentTag: null,
     entityTarget: null,
     childTags: [],
+    areaMembers: null,
     openChildren: [],
     canceledChildren: [],
     completedChildren: [],
@@ -791,6 +807,27 @@ export function childTagTitles(db: DatabaseSync, tagUuid: string): string[] {
     )
     .all(tagUuid, tagUuid) as { title: string }[];
   return rows.map((r) => r.title);
+}
+
+/**
+ * Live member census for `area.delete` (A25/A25B). Counts the area's non-trashed
+ * DIRECT members: to-dos carrying the area FK (any status — a logged to-do is
+ * still trashed by the delete) and projects carrying the area FK. Deleting a
+ * non-empty area trashes the to-dos and takes the projects with it, so the guard
+ * uses these counts to refuse fail-closed unless the caller allows it.
+ */
+export function areaMemberCounts(db: DatabaseSync, areaUuid: string): AreaMemberCounts {
+  const todos = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM TMTask WHERE type = 0 AND trashed = 0 AND area = ?")
+      .get(areaUuid) as { n: number }
+  ).n;
+  const projects = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM TMTask WHERE type = 1 AND trashed = 0 AND area = ?")
+      .get(areaUuid) as { n: number }
+  ).n;
+  return { projects, todos };
 }
 
 export function trashedCount(db: DatabaseSync): number {
