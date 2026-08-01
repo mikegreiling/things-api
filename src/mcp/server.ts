@@ -1,9 +1,12 @@
 /**
  * MCP surface over ThingsClient — the third thin layer (CLI, library, MCP),
- * all consuming the same client. Tools return the SAME JSON objects the
- * library returns (and the CLI wraps in --json envelopes); mutation failures
- * surface as MCP tool errors carrying the machine-readable code + the
- * remediation text the guards produce. Nothing here contains Things logic.
+ * all consuming the same client. Read tools return the library's JSON objects
+ * verbatim; mutation/move tools frame their result the same way the CLI's wire
+ * envelope does (docs/contract.md) — a success drops the internal discriminator
+ * (via mutationWireData), a dry-run emits the bare plan, and batch lines flatten
+ * to the string-`outcome` JSONL shape. Mutation failures surface as MCP tool
+ * errors carrying the machine-readable code + the remediation text the guards
+ * produce. Nothing here contains Things logic.
  *
  * Tool descriptions and the server instructions follow the consumer-voice
  * contract in docs/design/surface-copy.md: behavior and side effects only,
@@ -20,7 +23,6 @@ import {
   AREA_LIMIT_DESC,
   AREA_PREVIEW_LIMIT,
   blockedCode,
-  BOUNCE_MAX_ITEMS,
   capabilitiesTable,
   DATE_FORMAT,
   DEFAULT_LIST_LIMIT,
@@ -28,9 +30,12 @@ import {
   FILTER_CONTRACT,
   FULL_DESC,
   hasTagPresence,
+  isLooseRef,
   isValidTimeZone,
   LIMIT_DESC,
+  looseShadowNotice,
   MCP_WHEN_LABELS,
+  mutationWireData,
   noUuidMatch,
   omitEmpty,
   OMIT_EMPTY_NOTE,
@@ -51,6 +56,7 @@ import {
   validateViewArgs,
   verifyFailedCode,
   WHEN_VALUES,
+  type BatchItemResult,
   type BatchOp,
   type ChecklistEdit,
   type DisruptionTier,
@@ -66,6 +72,7 @@ import {
   type ProjectMoveRequest,
   type RepeatFrequency,
   type RepeatRuleParams,
+  type ReorderRequest,
   type ReorderResult,
   type TodoMoveDestination,
   type TodoMoveRequest,
@@ -232,12 +239,20 @@ function usage(message: string): ToolResult {
   return errorResult({ code: "usage", message });
 }
 
-/** Map a mutation outcome to an MCP result (errors carry remediation). */
+/**
+ * Map a mutation outcome to an MCP result (errors carry remediation). Framing
+ * mirrors the CLI wire (docs/contract.md, phase-2 alignment): a SUCCESS drops
+ * the internal success discriminator via {@link mutationWireData} (call success
+ * is the tool result's own not-an-error signal — the payload carries no `kind`),
+ * and a dry-run returns the bare plan (the CLI's `mutation-plan` data). Failures
+ * stay tool errors carrying the machine-readable code.
+ */
 function mutationResult(result: MutationResult | ReorderResult): ToolResult {
   switch (result.kind) {
     case "ok":
+      return jsonResult(mutationWireData(result));
     case "dry-run":
-      return jsonResult(result);
+      return jsonResult(result.plan);
     case "blocked":
       return errorResult({
         code: blockedCode(result),
@@ -267,12 +282,19 @@ function mutationResult(result: MutationResult | ReorderResult): ToolResult {
   }
 }
 
-/** Map a move/reorder orchestrator outcome to an MCP result (spec §4/§7). */
+/**
+ * Map a move/reorder orchestrator outcome to an MCP result (spec §4/§7). Framing
+ * mirrors {@link mutationResult}: a `move-ok` drops the internal discriminator
+ * (the placement-honesty `note` and every `membership`/`placement` field — with
+ * their own `touched`/`warnings` disclosures — pass through), and a dry-run
+ * returns the bare plan.
+ */
 function moveResult(result: MoveResult): ToolResult {
   switch (result.kind) {
     case "move-ok":
+      return jsonResult(mutationWireData(result));
     case "move-dry-run":
-      return jsonResult(result);
+      return jsonResult(result.plan);
     case "move-refused":
       return errorResult({
         code: result.refusal,
@@ -287,6 +309,29 @@ function moveResult(result: MoveResult): ToolResult {
         remediation: `completed ${result.completed.length} leg(s) before the failure`,
       });
   }
+}
+
+/**
+ * Flatten one batch line to the wire shape (docs/contract.md — the JSONL grammar
+ * shared with the CLI): the internal `outcome` union object collapses to one
+ * level. `outcome` becomes its tag as a plain string (`"ok"`, `"blocked"`,
+ * `"dry-run"`, `"already-applied"`, …), and every variant field (uuid, detail,
+ * plan, expected, observed, …) sits as a sibling of the line-level keys. The
+ * outcome's own `op` duplicates the line-level `op`, so it is dropped — no
+ * variant field name collides with a line-level key.
+ */
+function flattenBatchLine(r: BatchItemResult): Record<string, unknown> {
+  const { index, op, outcome, tempId, boundUuid, opId } = r;
+  const { kind, op: _outcomeOp, ...variant } = outcome;
+  return {
+    index,
+    op,
+    outcome: kind,
+    ...variant,
+    ...(tempId !== undefined && { tempId }),
+    ...(boundUuid !== undefined && { boundUuid }),
+    ...(opId !== undefined && { opId }),
+  };
 }
 
 /** Build a MovePosition from the shared MCP position args (null when none). */
@@ -447,6 +492,20 @@ const createTagsShape = {
 };
 
 const containerRef = (ref: string): { uuid: string; title: string } => ({ uuid: ref, title: ref });
+
+/**
+ * The `loose` reserved-word disclosure for the area-filtered read tools
+ * (read_view, search — the same advisory the CLI surfaces, #333/#346). `loose`
+ * ALWAYS addresses the null area; when a real area named "Loose" shadows the
+ * reserved word this names it (by uuid) so it stays targetable. Returns
+ * undefined when the ref is not the reserved word, or nothing shadows it.
+ * (get_area reads its disclosure from the area-view result's own `notice`.)
+ */
+function looseAreaWarnings(c: ThingsClient, areaRef: string | undefined): string[] | undefined {
+  if (areaRef === undefined || !isLooseRef(areaRef)) return undefined;
+  const shadow = c.read.areas().find((a) => isLooseRef(a.title));
+  return shadow !== undefined ? [looseShadowNotice(shadow.uuid)] : undefined;
+}
 
 /** Cap on project titles inlined into the server instructions. */
 const INSTRUCTIONS_MAX_PROJECTS = 100;
@@ -648,11 +707,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
    * same note the CLI prints), so a consumer sees when the Things database no
    * longer matches the validated schema and its data may be incomplete. No
    * block is added when the schema checks out or the read itself errored.
+   *
+   * `extraWarnings` folds in the read's own advisories (the `loose` reserved-word
+   * shadow disclosure, an area-view's placement `notice`) so they reach the
+   * consumer in the SAME `meta.warnings` array the CLI surfaces — schema warnings
+   * first, then the read-specific notices.
    */
   const readGuard = async (
     fn: () => Promise<ToolResult> | ToolResult,
     tz?: string,
     extraMeta?: () => Record<string, unknown> | undefined,
+    extraWarnings?: () => string[] | undefined,
   ): Promise<ToolResult> => {
     const result = await guard(fn);
     if (result.isError === true) return result;
@@ -668,11 +733,20 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     } catch {
       warnings = [];
     }
+    // Read-specific advisories the handler resolved (loose-shadow / area notice)
+    // — merged AFTER the schema warnings, defensive against a DB read throwing.
+    let readNotices: string[] = [];
+    try {
+      readNotices = extraWarnings?.() ?? [];
+    } catch {
+      readNotices = [];
+    }
+    const allWarnings = [...warnings, ...readNotices];
     // Extra additive meta the handler resolved during the read (e.g. the active
     // `area` filter) — evaluated AFTER fn ran, so a value it populated is seen.
     const extra = extraMeta?.() ?? {};
     const meta = {
-      ...(warnings.length > 0 && { warnings }),
+      ...(allWarnings.length > 0 && { warnings: allWarnings }),
       ...(clock !== undefined && { clock }),
       ...extra,
     };
@@ -933,6 +1007,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         },
         args.tz,
         () => (filterMeta !== undefined ? { filter: filterMeta } : undefined),
+        () => looseAreaWarnings(getClient(), args.area),
       );
     },
   );
@@ -974,42 +1049,47 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       annotations: READ_ONLY,
     },
     async (args) =>
-      readGuard(() => {
-        const badZone = badTz(args.tz);
-        if (badZone !== null) return badZone;
-        // Tag-conflict AND the overdue/status-widening incompatibility both
-        // derive from the shared contract (search: statusWidening = true).
-        const validated = validateViewArgs(
-          "search",
-          {
-            ...tagPresence(args),
-            overdue: args.overdue,
-            logged: args.logged,
-            trashed: args.trashed,
-            all: args.all,
-          },
-          {
-            untaggedConflict: MCP_UNTAGGED_CONFLICT,
-            overdueRejected: "overdue does not apply to search",
-            overdueStatusWiden:
-              "overdue lists open items; it does not combine with logged/trashed/all",
-          },
-        );
-        if (!validated.ok) return usage(validated.message);
-        const limit = resolveLimit(args);
-        const { items, truncation } = getClient().read.search(args.query, {
-          limit,
-          ...validated.filter,
-          ...(args.tz !== undefined && { zone: args.tz }),
-          ...(args.project !== undefined && { project: args.project }),
-          ...(args.area !== undefined && { area: args.area }),
-          ...(args.type !== undefined && { type: args.type }),
-          ...(args.logged === true && { logged: true }),
-          ...(args.trashed === true && { trashed: true }),
-          ...(args.all === true && { all: true }),
-        });
-        return truncatedResult(shapeReadPayload("search", items, args.full === true), truncation);
-      }, args.tz),
+      readGuard(
+        () => {
+          const badZone = badTz(args.tz);
+          if (badZone !== null) return badZone;
+          // Tag-conflict AND the overdue/status-widening incompatibility both
+          // derive from the shared contract (search: statusWidening = true).
+          const validated = validateViewArgs(
+            "search",
+            {
+              ...tagPresence(args),
+              overdue: args.overdue,
+              logged: args.logged,
+              trashed: args.trashed,
+              all: args.all,
+            },
+            {
+              untaggedConflict: MCP_UNTAGGED_CONFLICT,
+              overdueRejected: "overdue does not apply to search",
+              overdueStatusWiden:
+                "overdue lists open items; it does not combine with logged/trashed/all",
+            },
+          );
+          if (!validated.ok) return usage(validated.message);
+          const limit = resolveLimit(args);
+          const { items, truncation } = getClient().read.search(args.query, {
+            limit,
+            ...validated.filter,
+            ...(args.tz !== undefined && { zone: args.tz }),
+            ...(args.project !== undefined && { project: args.project }),
+            ...(args.area !== undefined && { area: args.area }),
+            ...(args.type !== undefined && { type: args.type }),
+            ...(args.logged === true && { logged: true }),
+            ...(args.trashed === true && { trashed: true }),
+            ...(args.all === true && { all: true }),
+          });
+          return truncatedResult(shapeReadPayload("search", items, args.full === true), truncation);
+        },
+        args.tz,
+        undefined,
+        () => looseAreaWarnings(getClient(), args.area),
+      ),
   );
 
   server.registerTool(
@@ -1113,8 +1193,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "One area's contents: metadata plus its direct to-dos (active first), its " +
         "projects in canonical order, and later (scheduled/repeating/someday). The area " +
-        "logbook is not returned here — read it with list_view logbook + area; trashed " +
-        "rows live in list_view trash. " +
+        "logbook is not returned here — read it with read_view logbook + area; trashed " +
+        "rows live in read_view trash. " +
         `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
@@ -1146,25 +1226,36 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       },
       annotations: READ_ONLY,
     },
-    async (args) =>
-      readGuard(() => {
-        const badZone = badTz(args.tz);
-        if (badZone !== null) return badZone;
-        if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
-        const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
-        const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
-        if (areaLimit === "conflict" || projectLimit === "conflict") {
-          return usage("pass at most one of area_limit/project_limit / all");
-        }
-        const { view, truncation } = getClient().read.areaView(args.ref, {
-          overdue: args.overdue === true,
-          ...tagFilterFields(tagPresence(args)),
-          ...(args.tz !== undefined && { zone: args.tz }),
-          areaLimit,
-          projectLimit,
-        });
-        return groupedResult(shapeReadPayload("area-view", view, args.full === true), truncation);
-      }, args.tz),
+    async (args) => {
+      // The `loose` pseudo-area shadow disclosure the area-view read resolves —
+      // captured after fn runs and folded into meta.warnings (parity with the
+      // CLI's `area show loose` notice).
+      let areaNotice: string | undefined;
+      return readGuard(
+        () => {
+          const badZone = badTz(args.tz);
+          if (badZone !== null) return badZone;
+          if (tagFlagConflict(tagPresence(args))) return usage(MCP_UNTAGGED_CONFLICT);
+          const areaLimit = resolveCap(args.area_limit, args.all, AREA_PREVIEW_LIMIT);
+          const projectLimit = resolveCap(args.project_limit, args.all, AREA_PREVIEW_LIMIT);
+          if (areaLimit === "conflict" || projectLimit === "conflict") {
+            return usage("pass at most one of area_limit/project_limit / all");
+          }
+          const { view, truncation, notice } = getClient().read.areaView(args.ref, {
+            overdue: args.overdue === true,
+            ...tagFilterFields(tagPresence(args)),
+            ...(args.tz !== undefined && { zone: args.tz }),
+            areaLimit,
+            projectLimit,
+          });
+          areaNotice = notice;
+          return groupedResult(shapeReadPayload("area-view", view, args.full === true), truncation);
+        },
+        args.tz,
+        undefined,
+        () => (areaNotice !== undefined ? [areaNotice] : undefined),
+      );
+    },
   );
 
   server.registerTool(
@@ -2626,15 +2717,18 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ...(args.fail_fast === true && { failFast: true }),
           actor: mcpActor(),
         });
-        // First block: the per-op results (existing shape, untouched). Second
-        // block (additive): the batch chaining/undo summary, present only when
-        // the batch minted a token or bound temp ids.
+        // First block: the per-op results, each FLATTENED to the wire shape (a
+        // string `outcome` with the variant fields hoisted — parity with the CLI
+        // JSONL stream, docs/contract.md). Second block (additive): the batch
+        // chaining/undo summary, present only when the batch minted a token or
+        // bound temp ids.
+        const lines = batchResult.results.map(flattenBatchLine);
         const hasSummary =
           batchResult.undoToken !== undefined || Object.keys(batchResult.tempIdMapping).length > 0;
-        if (!hasSummary) return jsonResult(batchResult.results);
+        if (!hasSummary) return jsonResult(lines);
         return {
           content: [
-            { type: "text", text: JSON.stringify(batchResult.results) },
+            { type: "text", text: JSON.stringify(lines) },
             {
               type: "text",
               text: JSON.stringify({
@@ -2651,59 +2745,69 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Reorder a whole LIST or container by scope: Today, This Evening, the Inbox, Someday " +
-        "(loose to-dos or area-less someday projects — one kind per call), a " +
-        "project's to-dos, an area, or the top-level projects (scope=projects — " +
-        "each project takes a brief someday/anytime round-trip) — the given uuids move " +
-        "to the TOP in the given order; unlisted items keep their relative order below. " +
-        "To rearrange an arbitrary BLOCK of to-dos/projects in place (anchored at the earliest " +
-        "one's slot, partial-selection friendly, before/after an anchor), call move_todo / " +
-        "move_project with a position and no destination instead — MOVE changes membership, " +
-        "REORDER only arrangement. " +
-        "To reorder a project's HEADINGS (children follow) use the heading tool's " +
-        "move_heading action instead. " +
-        "Today/inbox/someday/project/area ordering must first be enabled once " +
-        "via `things config set allow-experimental true`. This Evening and " +
-        `scope=projects handle at most ${BOUNCE_MAX_ITEMS} items per call. An area's ` +
-        "to-dos and projects are ordered separately — one kind per call. " +
-        "scope=areas instead moves the sidebar areas themselves: give target plus exactly " +
-        "one of before/after/position, and pass dangerously_drive_gui (it drives the local " +
-        "Things app). Every other scope takes uuids.",
+        "Rearrange to-dos IN PLACE within the list or container and the bucket they already " +
+        "share — this REARRANGES, never changes what an item belongs to (to change membership " +
+        "use move_todo / move_project). The refs order is the resulting order; unmentioned " +
+        "siblings keep theirs. Bare (no position) assembles the named items as a block at the " +
+        "EARLIEST one's current slot (partial-selection friendly); first/last/before/after " +
+        "position the block instead. Refs that span different containers or buckets are refused. " +
+        "A Today or This Evening member also holds a slot in its own container, so a set that is " +
+        "coherent on BOTH axes is ambiguous — pass `in` to name the axis (the refusal names both " +
+        "choices). The project rows the Today/Evening/day lists intermix with to-dos may be " +
+        "reordered alongside them. Ordering the Today, Inbox, or Someday lists, a project's " +
+        "to-dos, or an area must first be enabled once via `things config set allow-experimental " +
+        "true`. To reorder a project's HEADINGS (children follow) use the heading tool's " +
+        "move_heading action; to reorder sidebar AREAS use reorder_areas.",
       inputSchema: {
-        scope: z.enum([
-          "today",
-          "evening",
-          "inbox",
-          "someday",
-          "project",
-          "area",
-          "projects",
-          "areas",
-        ]),
-        container: z
+        refs: z
+          .array(z.string())
+          .describe("The items to rearrange, in the order they should land (may be a subset)"),
+        ...positionShape,
+        in: z
           .string()
           .optional()
-          .describe(`Project/area (${REF_FORMAT}) — required for those scopes`),
-        uuids: z
-          .array(z.string())
-          .optional()
           .describe(
-            "Desired order, top first (may be a subset) — required for every scope but areas",
+            "Disambiguate the axis of a Today/This Evening set: today | evening | anytime | " +
+              "someday | inbox, or a project/area/heading ref (uuid or unique title)",
           ),
-        strategy: z.enum(["native", "bounce"]).optional(),
-        target: z.string().optional().describe(`scope areas: the area to move (${REF_FORMAT})`),
+        ...dryRunShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const position = movePositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of first/last/before/after");
+        const request: ReorderRequest = {
+          uuids: args.refs,
+          ...(position !== undefined && { position }),
+          ...(args.in !== undefined && { in: args.in }),
+        };
+        return moveResult(await getClient().write.reorderTodos(request, writeOptions(args)));
+      }),
+  );
+
+  server.registerTool(
+    "reorder_areas",
+    {
+      description:
+        "Move a sidebar area to a new position in the area order (target by uuid or unique " +
+        "name). Pass exactly one destination: before/after another area, or first/last. This " +
+        "visibly drives the local Things app (the window comes forward and the sidebar may " +
+        "scroll) and must be turned on first with `things config set ui-enabled true`; the " +
+        "area's projects and to-dos are untouched.",
+      inputSchema: {
+        target: z.string().describe(`the area to move (${REF_FORMAT})`),
         before: z
           .string()
           .optional()
-          .describe(`scope areas: place it immediately above this area (${REF_FORMAT})`),
+          .describe(`place it immediately above this area (${REF_FORMAT})`),
         after: z
           .string()
           .optional()
-          .describe(`scope areas: place it immediately below this area (${REF_FORMAT})`),
-        position: z
-          .enum(["first", "last"])
-          .optional()
-          .describe("scope areas: move it to the top or bottom of the area list"),
+          .describe(`place it immediately below this area (${REF_FORMAT})`),
+        first: z.boolean().optional().describe("move it to the top of the area list"),
+        last: z.boolean().optional().describe("move it to the bottom of the area list"),
         ...driveGuiShape,
         ...dryRunShape,
       },
@@ -2711,29 +2815,22 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        if (args.scope === "areas") {
-          if (args.target === undefined) return usage('scope "areas" requires target');
-          return mutationResult(
-            await getClient().write.run(
-              "area.reorder",
-              {
-                target: args.target,
-                ...(args.before !== undefined && { before: args.before }),
-                ...(args.after !== undefined && { after: args.after }),
-                ...(args.position !== undefined && { position: args.position }),
-              },
-              writeOptions(args),
-            ),
-          );
-        }
-        if (args.uuids === undefined) return usage(`scope "${args.scope}" requires uuids`);
+        const chosen = [
+          args.before !== undefined,
+          args.after !== undefined,
+          args.first === true,
+          args.last === true,
+        ].filter(Boolean).length;
+        if (chosen !== 1) return usage("pass exactly one of before / after / first / last");
         return mutationResult(
-          await getClient().write.reorder(
+          await getClient().write.run(
+            "area.reorder",
             {
-              scope: args.scope,
-              uuids: args.uuids,
-              ...(args.container !== undefined && { container: containerRef(args.container) }),
-              ...(args.strategy !== undefined && { strategy: args.strategy }),
+              target: args.target,
+              ...(args.before !== undefined && { before: args.before }),
+              ...(args.after !== undefined && { after: args.after }),
+              ...(args.first === true && { position: "first" as const }),
+              ...(args.last === true && { position: "last" as const }),
             },
             writeOptions(args),
           ),

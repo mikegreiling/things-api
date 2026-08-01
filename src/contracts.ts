@@ -383,8 +383,9 @@ export function errorEnvelope(error: ErrorEnvelope["error"], meta: EnvelopeMeta)
  * `move-plan` kinds), so nothing is lost by dropping it. The library keeps the
  * idiomatic `kind` discriminator on its in-memory
  * `MutationResult`/`ReorderResult`/`MoveResult` unions; it simply never appears
- * on the wire. The CLI emits through it today; the MCP mutation path still
- * emits the internal shape until its phase-2 framing sweep.
+ * on the wire. BOTH consumer surfaces emit through it: the CLI (`mutation-result`
+ * / `move-result` envelopes) and the MCP mutation/move content block (phase-2
+ * framing sweep, 2026-07-31) — a dry-run routes to the bare `plan` on both.
  */
 export function mutationWireData<T extends { kind: string }>(ok: T): Omit<T, "kind"> {
   const { kind: _kind, ...rest } = ok;
