@@ -1019,12 +1019,12 @@ export function registerReadCommands(program: Command): void {
       "List all areas with their direct tags, or — given a ref — show that one area " +
         "(exactly like `things area show <ref>`: its projects and direct to-dos). The " +
         "reserved ref `loose` shows the area-less items (the null-area composite). " +
-        "--show-later / --show-logged / --area-limit / --project-limit / the tag filters " +
-        "apply only when showing one area.",
+        "--show-later / --area-limit / --project-limit / the tag filters " +
+        "apply only when showing one area. The area logbook is the bounded query " +
+        "`things logbook --area <ref>`, not a card section.",
     )
     .option("--all", "show every area (no default restriction applies)")
     .option("--show-later", "showing one area: include its Upcoming and Someday sections")
-    .option("--show-logged [n]", "showing one area: include the n most recent logged items")
     .option("--project-limit <n>", "showing one area: maximum project rows to show")
     .option("--area-limit <n>", "showing one area: maximum direct to-dos to show")
     .option(
@@ -1175,7 +1175,7 @@ export function registerReadCommands(program: Command): void {
     .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
     .option(
       "--area <ref>",
-      "restrict to one area's direct members (uuid or unique name, or `loose` for area-less)",
+      "restrict to one area's subtree — its direct items plus its projects' children (uuid or unique name, or `loose` for area-less)",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)

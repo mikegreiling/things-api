@@ -243,6 +243,7 @@ export function registerShowCommands(program: Command): void {
                   ...opts,
                   limits,
                   hintBase,
+                  loggedCount: bounded.loggedCount,
                 }),
               };
             }

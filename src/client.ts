@@ -34,6 +34,7 @@ import { classifyShowTarget, type ShowTarget } from "./read/show-target.ts";
 import { areasView, tagsView } from "./read/tags.ts";
 import {
   anytimeView,
+  areaLoggedCount,
   changesView,
   inboxView,
   liteTitleSearch,
@@ -274,6 +275,14 @@ export interface BoundedAreaView {
    * Surfaced by the consumers as a `meta.warnings` advisory.
    */
   notice?: string;
+  /**
+   * The live count of the area's logged rows (subtree-inclusive, past the
+   * log-move boundary — the population `things logbook --area <ref>` returns).
+   * Present for a real area, absent for the `loose` pseudo-area. A DISPLAY
+   * sibling of `view`: it feeds the TTY card's logbook footer and never enters
+   * the JSON area-view `data`.
+   */
+  loggedCount?: number;
 }
 
 /** Resolve a flat-view row cap (omitted → default 50; null or all → unbounded). */
@@ -1028,10 +1037,18 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         // Reserved-word disclosure: `loose` ALWAYS wins over a real area named
         // "Loose"; when one shadows, name it (by uuid) so it stays targetable.
         const shadow = isLooseRef(ref) ? shadowingLooseArea(conn.db) : undefined;
+        // The live logbook-footer count — a real area only (the loose
+        // pseudo-area accumulates no `logbook --area` archive). A display
+        // sibling of the view; never part of the JSON `data`.
+        const loggedCount =
+          data.area !== null
+            ? areaLoggedCount(conn.db, data.area.uuid, now(), zoneOf(o))
+            : undefined;
         return {
           view: data,
           truncation,
           ...(shadow !== undefined && { notice: looseShadowNotice(shadow) }),
+          ...(loggedCount !== undefined && { loggedCount }),
         };
       },
       areas: () => {

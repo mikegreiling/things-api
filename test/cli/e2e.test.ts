@@ -1525,38 +1525,46 @@ describe("cli detail views — area show per-section caps; project show uncapped
     expect(stdout).toContain("Area: ⬡ Busy");
   });
 
-  it("--show-logged is removed: refused with a redirect to `things logbook --area`; the card shows no Logged section", () => {
+  it("--show-logged is removed entirely: an unknown option on `area show` and `areas <ref>` (no redirect stub)", () => {
     fx = buildFixtureDb();
-    const area = seedArea(fx.db, "Old Stuff");
-    for (let i = 0; i < 3; i++) {
-      seedTodo(fx.db, {
-        title: `done ${i}`,
-        area,
-        status: "completed",
-        stopDate: 1_500_000_000 + i,
-      });
+    seedArea(fx.db, "Old Stuff");
+    // The flag never existed: it earns a bare unknown-option error, not the
+    // #346 muscle-memory redirect (which is deleted from the codebase).
+    for (const argv of [
+      ["area", "show", "Old Stuff", "--show-logged", "2"],
+      ["areas", "Old Stuff", "--show-logged"],
+    ]) {
+      const res = runCliErr([...argv, "--db", fx!.path]);
+      expect(res.stderr).toContain("unknown option '--show-logged'");
+      expect(res.stderr).not.toContain("area logbook lives in");
     }
-    // The flag is gone: it earns a redirect (via the error envelope), not a section.
-    const refused = runCli([
-      "area",
-      "show",
-      "Old Stuff",
-      "--show-logged",
-      "2",
-      "--json",
-      "--db",
-      fx.path,
-    ]);
-    expect(refused.exitCode).toBe(2);
-    const env = JSON.parse(refused.stdout);
-    expect(env.ok).toBe(false);
-    expect(env.error.code).toBe("usage");
-    expect(env.error.message).toContain("things logbook --area");
-    // The logged rows never surface as a card section — the area logbook is the
-    // bounded query; the card carries only a one-line pointer to it.
-    const card = runCli(["area", "show", "Old Stuff", "--db", fx.path]).stdout;
+  });
+
+  it("area show TTY footer carries a LIVE logged count (subtree-inclusive); omitted at zero", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Archive");
+    const proj = seedProject(fx.db, { title: "Old Project", area });
+    // Two DIRECT logged to-dos plus one logged to-do NESTED in the area's
+    // project — the subtree-inclusive count (the logbookView predicate) sees
+    // all three, exactly the population `things logbook --area` would return.
+    seedTodo(fx.db, { title: "d1", area, status: "completed", stopDate: 1_500_000_000 });
+    seedTodo(fx.db, { title: "d2", area, status: "canceled", stopDate: 1_500_000_001 });
+    seedTodo(fx.db, {
+      title: "nested done",
+      project: proj,
+      status: "completed",
+      stopDate: 1_500_000_002,
+    });
+    const card = runCli(["area", "show", "Archive", "--db", fx.path]).stdout;
+    // The logged rows are never a card section — only the one-line live pointer.
     expect(card).not.toContain("Logged");
-    expect(card).toContain("logbook: `things logbook --area 'Old Stuff'`");
+    expect(card).toContain("3 logged items — `things logbook --area 'Archive'`");
+
+    // An area with nothing logged shows NO footer line at all (count 0 → hidden).
+    seedArea(fx.db, "Fresh");
+    const empty = runCli(["area", "show", "Fresh", "--db", fx.path]).stdout;
+    expect(empty).not.toContain("logged item");
+    expect(empty).not.toContain("things logbook --area");
   });
 
   it("disclosure hints: truncation footer indents two spaces; hidden-section placeholders stand flush (plural counts)", () => {

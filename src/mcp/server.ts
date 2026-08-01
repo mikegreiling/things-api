@@ -957,7 +957,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .string()
           .optional()
           .describe(
-            `Restrict to one area's direct members (${REF_FORMAT}, or \`loose\` for area-less)`,
+            `Restrict to one area's subtree — its direct items plus its projects' children (${REF_FORMAT}, or \`loose\` for area-less)`,
           ),
         type: z.enum(["to-do", "project"]).optional(),
         logged: z.boolean().optional().describe("Also include completed/canceled items"),

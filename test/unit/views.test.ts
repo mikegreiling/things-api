@@ -1465,11 +1465,16 @@ describe("searchView (Phase 12 ergonomics)", () => {
         .toSorted(),
     ).toEqual(["widget kickoff", "widget spec"]);
     expect(searchView(fx.db, "widget", { project: "Widget launch" })).toHaveLength(2);
+    // --area is SUBTREE-INCLUSIVE (the same effective-area shape logbook uses):
+    // the area's direct items PLUS its projects' children — including the
+    // heading-nested one. So `Widget launch` (project in the area), `widget for
+    // home` (direct area to-do), `widget spec` (child of that project) and
+    // `widget kickoff` (headed child of that project) all match.
     expect(
       searchView(fx.db, "widget", { area })
         .map((i) => i.title)
         .toSorted(),
-    ).toEqual(["Widget launch", "widget for home"]);
+    ).toEqual(["Widget launch", "widget for home", "widget kickoff", "widget spec"]);
     expect(searchView(fx.db, "widget", { tag: "focus" }).map((i) => i.title)).toEqual([
       "widget spec",
     ]);
