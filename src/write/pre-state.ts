@@ -5,7 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
-import type { AnyTask, Project, TaskStatus, TaskType, Todo } from "../model/entities.ts";
+import type { AnyTask, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { deadNameMatchHint, resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
@@ -1273,8 +1273,4 @@ export function todayEveningFlagOf(
   if (row.start !== 1 && row.start !== 2) return null; // inbox (start=0)
   if (row.startDate === null || row.startDate > packedToday) return null; // someday / anytime / future
   return row.startBucket === 1 && row.startDate === packedToday ? "evening" : "today";
-}
-
-export function projectOf(task: AnyTask | null): Project | null {
-  return task !== null && task.type === "project" ? task : null;
 }
