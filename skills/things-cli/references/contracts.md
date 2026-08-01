@@ -4,29 +4,35 @@ The apiVersion-stable contracts that hold regardless of which binary version you
 
 ## JSON envelope
 
-Every `--json` response is an envelope `{ ok, data, meta }`:
+Every `--json` response is an envelope `{ apiVersion, ok, kind, data, meta }`:
 
-- Results are in `.data` (usually `.data[]`), **never** `.items`. Item UUIDs are in `.uuid`, not `.id`.
-- Check `meta.truncation` (and `meta.grouped`) before concluding "no match" or "that's everything": if `shown < total`, raise `--limit` or narrow the filter rather than assuming you saw everything.
-- List/search rows are **summaries**: their `tags` field is not necessarily the complete effective set, and placement can be partial. Use `things show <ref> --json` when notes, checklist, placement, or inherited/effective tags matter.
+- Results are in `.data`, in exactly one of four wrappers named by `kind`: `.data.item` (one entity), `.data.view` (an area/project card), `.data.items` (a flat list), or `.data.sections` (a list split into named sections). Never `.items` at the top level. Item UUIDs are in `.uuid`, not `.id`; emitted UUIDs are always full.
+- Check `meta.truncation.truncated` before concluding "no match" or "that's everything": it is `true` exactly when any row was hidden (`shown < total`, or any grouped block capped). Raise `--limit`/`--all` or narrow the filter rather than assuming you saw everything.
+- List/search rows are compact **summaries**: their `tags` field is not necessarily the complete effective set, and placement can be partial. Use `things show <ref> --json` when notes, checklist, placement, or inherited/effective tags matter.
 
 ## Exit codes (writes are verified after they land)
 
+A value once assigned keeps its meaning forever — the codes are never renumbered.
+
 - `0` — the change landed and was verified.
+- `1` — unexpected (an internal error / bug): stop and report.
 - `2` — usage error: fix your invocation and retry.
 - `3` — verify-failed: the change did NOT stick; the message carries the reason and usually the remediation.
-- other — unexpected; stop and report.
+- `4` — blocked: refused before it touched the app (a guard/hazard, scope, lock, …); the message names the flag or fix.
+- `5` — drift-blocked: the database schema fingerprint no longer matches; writes are held until re-certified.
+- `6` — unsupported: no available write surface performs this operation.
+- `7` — environment: database not found, Things not installed, or a permission problem.
 
-A nonzero exit is informative, not a dead end — it means the write did not silently half-apply, so you are never left guessing whether it took. Read the message; it usually names the fix.
+A nonzero exit is informative, not a dead end — it means the write did not silently half-apply, so you are never left guessing whether it took. Read the message; it usually names the fix. The error `code`, the candidate/dead-row contract, and the hazard acknowledgments are in [errors.md](errors.md).
 
 ## Safety & recovery
 
 - `--dry-run` previews the exact plan (operation, target, expected change) for ANY write without executing — use it for anything destructive, bulk, or unfamiliar.
 - `things undo` reverses recent changes made through this tool (its own audit trail, not arbitrary app history). Prefer a targeted fix when you know it; undo is the safety net.
-- Deletes are TRASHES: `todo delete` moves to Trash and is restorable (`todo restore`). Emptying the trash is permanent and requires explicit user intent — don't do it unless asked.
-- Ambiguous refs FAIL with the candidates listed — retry with a UUID or a unique prefix. Never guess between candidates for a destructive action; inspect details or ask.
+- To-do/project deletes are TRASHES: `todo delete` moves to Trash and is restorable (`todo restore`). Emptying the trash is permanent and requires explicit user intent — don't do it unless asked. AREAS are the exception — an area does not go to the Trash, so deleting one is permanent (`--dangerously-permanent`), and a non-empty area also needs `--allow-non-empty` (see [errors.md](errors.md)).
+- Ambiguous refs FAIL with the candidates listed — retry with a UUID or a unique prefix. Never guess between candidates for a destructive action; inspect details or ask. The full candidate shape and dead-row hints are in [errors.md](errors.md).
 - Referenced containers and tags must already exist. Create nested structures **outside-in** (area → project → heading → to-do), and prefer each newly returned UUID as the next reference so duplicate titles cannot redirect placement.
-- Some operations are disruptive (may move focus in the app) and require `--allow-disruptive`, **including their dry runs**. `things capabilities` lists each operation's support and any preconditions.
+- Some operations are disruptive and require an explicit flag, **including their dry runs**: `--allow-disruptive` permits an op that briefly steals window focus; an op that visibly DRIVES the Things UI needs both `--allow-disruptive` and `--allow-very-disruptive` (the two-key gate). `things capabilities` lists each operation's support and any preconditions.
 - If a request needs a capability the tool reports as unsupported, say so plainly rather than improvising through unrelated commands.
 
 ## Bulk creation (contract summary)
@@ -41,7 +47,7 @@ A nonzero exit is informative, not a dead end — it means the write did not sil
 `things batch` runs a JSONL script (one `{"op","params",…}` per line) sequentially and independently — no transactions; a failure does not roll back earlier lines. Three fields make multi-step work reliable:
 
 - **`tempId` (chaining):** a line that CREATES something (a to-do, project, area, heading, repeater — never `tag.add`) can carry `"tempId":"proj1"`; a LATER line references that new uuid as `"$proj1"` in any id/container field. Dotted forms reach a repeater's parts: `"$proj1.instance"` (the visible occurrence), `"$proj1.replaced"` (the original). This is how you "create a project, then file to-dos into it" in one submission without knowing the uuid up front. Handles are `[A-Za-z0-9_-]{1,32}` and unique per batch; an unknown or forward `$ref` fails just that line.
-- **`opId` (safe retry):** carry a stable `"opId"` per line so resubmitting a batch after an ambiguous failure does not double-create — a line matching an earlier success is reported `already-applied`, not re-run.
+- **`opId` (safe retry):** carry a stable `"opId"` per line so resubmitting a batch after an ambiguous failure does not double-create — a line matching an earlier success is reported `already-applied`, not re-run. The single-op analogue is `--op-id <key>` (MCP `op_id`) on ONE mutation: a resubmission with a matched key returns the original success (`alreadyApplied: true`, the original `uuid`/`undoToken`) instead of running again. The variadic `move`/`reorder` are multi-leg compounds and REFUSE `--op-id` — express their idempotency as `things batch` with a per-line `opId`.
 - **Undo the whole batch:** the trailing summary line returns `tempIdMapping` (handle → uuid) and `undoToken`; `things undo --txn <undoToken>` reverses the entire submission as one unit.
 
 ## Recurrence (contract summary)

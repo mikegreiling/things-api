@@ -68,8 +68,17 @@ describe("install-skill: built-in copy fallback", () => {
     for (const loc of skillLocations(h)) {
       const md = join(loc.dir, "SKILL.md");
       expect(existsSync(md), loc.label).toBe(true);
-      // References travel too (recursive copy).
-      expect(existsSync(join(loc.dir, "references", "contracts.md")), loc.label).toBe(true);
+      // Every bundled reference travels too (recursive copy).
+      for (const ref of [
+        "contracts.md",
+        "model.md",
+        "gui.md",
+        "ordering.md",
+        "errors.md",
+        "banner.md",
+      ]) {
+        expect(existsSync(join(loc.dir, "references", ref)), `${loc.label}: ${ref}`).toBe(true);
+      }
       expect(installedSkillVersion(loc.dir), loc.label).toBe(BIN);
     }
     // The report names both destinations as written.

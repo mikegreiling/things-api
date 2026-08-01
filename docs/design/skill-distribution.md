@@ -1,6 +1,6 @@
 # Skill distribution & the CLI↔skill version ratchet
 
-Status: **EXECUTING** (skill-v2 shipped #246; distribution phase 2 landing now). Decided 2026-07-20, Mike + session "things-skill-loop". Phase progress: phase 1 (skill-v2 demarcation) **DONE** (#246, paired sweep validated); phase 2 (distribution — `install-skill`, help footer, README, `skills/` in `files`) **DONE**; phase 3 (ratchet — publish-time stamp, CLI drift notice, skill `minSupported`) **DONE**. Bench context in `bench/ROADMAP.md`; the refinement evidence cited here lives in `bench/results/` and `bench/ledger/`.
+Status: **DONE** (all phases shipped; awaiting release). Decided 2026-07-20, Mike + session "things-skill-loop". Phase progress: phase 1 (skill-v2 demarcation) **DONE** (#246, paired sweep validated); phase 2 (distribution — `install-skill`, help footer, README, `skills/` in `files`) **DONE**; phase 3 (ratchet — publish-time stamp, CLI drift notice, skill `minSupported`) **DONE**; phase 4 (re-sweep + refinement round — lean `SKILL.md` + progressive-disclosure dossiers, full move/reorder + banner/liveness + error-contract curriculum re-verified against the live CLI over ≥3 loops, `minSupported` raised to 0.12.0) **DONE**. Bench context in `bench/ROADMAP.md`; the refinement evidence cited here lives in `bench/results/` and `bench/ledger/`.
 
 ## Goal
 
