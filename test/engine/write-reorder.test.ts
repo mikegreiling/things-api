@@ -724,6 +724,114 @@ describe("projects scope (P8e sidebar bounce)", () => {
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") expect(result.detail).toContain("NO native surface");
   });
+
+  // SIT6 PROJSTAR — the when=someday → when=anytime projects bounce OVERWRITES a
+  // Today/Evening flag (someday nulls startDate; anytime leaves start=1, sd=NULL —
+  // star gone). Mirror the to-do side de-Today refusal (move.ts): refuse fail-
+  // closed before any leg rather than silently de-starring the project.
+  it("refuses a Today-flagged project movee (de-Today, SIT6 PROJSTAR)", async () => {
+    const pf = seedProject(fixture.db, {
+      title: "PF",
+      startDate: TODAY_ISO,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
+    const { vector, calls } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2, p3] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REORDER-SCOPE");
+      expect(result.detail).toContain('"PF" (Today)');
+      expect(result.detail).toContain("de-Today hazard");
+    }
+    // Fail-closed: NOT one leg dispatched, and the star is intact.
+    expect(calls).toHaveLength(0);
+    const row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(pf) as { start: number; startDate: number | null };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+  });
+
+  it("refuses a This-Evening-flagged project movee (de-Today)", async () => {
+    const pf = seedProject(fixture.db, {
+      title: "PE",
+      startDate: TODAY_ISO,
+      evening: true,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const { vector, calls } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.hazard).toBe("H-REORDER-SCOPE");
+      expect(result.detail).toContain('"PE" (This Evening)');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses when a co-bounced (unnamed) sibling carries the flag", async () => {
+    // `named` is the requested subset; `uuids` is the full target order. A flagged
+    // project the round-trip would re-enter as a co-bounced sibling is refused too.
+    const pf = seedProject(fixture.db, {
+      title: "PF",
+      startDate: TODAY_ISO,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p1 = seedProject(fixture.db, { title: "P1", index: 20 });
+    const { vector, calls } = projectBounceVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "projects",
+      uuids: [pf, p1],
+      named: [p1],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain('"PF" (Today, co-bounced sibling)');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an unrelated Today-flagged project does not block reordering the plain set", async () => {
+    // A flagged project that is NOT touched (not a member, not requested) must not
+    // trip the guard — only the projects actually re-entered by the bounce matter.
+    seedProject(fixture.db, { title: "PF", startDate: TODAY_ISO, index: 5, todayIndex: -5 });
+    const p1 = seedProject(fixture.db, { title: "P1", index: 10 });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
+    const { vector } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [p2, p3, p1] });
+    expect(result.kind).toBe("ok");
+  });
+
+  it("pins the de-Today refusal copy", async () => {
+    const pf = seedProject(fixture.db, {
+      title: "PF",
+      startDate: TODAY_ISO,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const { vector } = projectBounceVector();
+    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toBe(
+        "reordering top-level projects runs a when=someday → when=anytime bounce whose legs " +
+          'OVERWRITE the Today/Evening flag (de-Today hazard), and 1 touched project(s) carry it: "PF" ' +
+          "(Today) — refused rather than silently stripping the flag",
+      );
+      expect(result.remediation).toBe(
+        "reschedule the flagged project(s) off Today/Evening first, then reorder (a flag-safe " +
+          "park → native reorder → detach alternative is proven but not yet wired)",
+      );
+    }
+  });
 });
 
 /**

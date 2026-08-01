@@ -1249,6 +1249,32 @@ function rowStartDate(db: DatabaseSync, uuid: string): number | null {
   return row?.startDate ?? null;
 }
 
+/**
+ * A row's live Today/Evening flag — `"today"`, `"evening"`, or `null` — read
+ * from the SAME marker the `today`/`evening` reorder membership uses
+ * ({@link computeReorderPre}, O01/O03/§9n): an ARRIVED scheduled row
+ * (`start IN (1,2)` AND `startDate <= today`) carries the flag — `evening` at
+ * raw `startBucket=1` (a live evening flag expires daily, so a stale past-dated
+ * bucket-1 row reads `today` proper), `today` otherwise. Someday, anytime,
+ * inbox, and future-scheduled rows carry NO flag. Single-sourced here so any
+ * de-Today guard (e.g. the `projects` bounce's de-star refusal in reorder.ts)
+ * keys off the one marker and can never drift from the membership query.
+ */
+export function todayEveningFlagOf(
+  db: DatabaseSync,
+  uuid: string,
+  now: Date,
+): "today" | "evening" | null {
+  const packedToday = encodePackedDate(localToday(now));
+  const row = db
+    .prepare("SELECT start, startDate, startBucket FROM TMTask WHERE uuid = ?")
+    .get(uuid) as { start: number; startDate: number | null; startBucket: number } | undefined;
+  if (row === undefined) return null;
+  if (row.start !== 1 && row.start !== 2) return null; // inbox (start=0)
+  if (row.startDate === null || row.startDate > packedToday) return null; // someday / anytime / future
+  return row.startBucket === 1 && row.startDate === packedToday ? "evening" : "today";
+}
+
 export function projectOf(task: AnyTask | null): Project | null {
   return task !== null && task.type === "project" ? task : null;
 }
