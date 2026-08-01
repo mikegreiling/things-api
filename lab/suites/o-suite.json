@@ -1557,6 +1557,472 @@
           }
         ]
       }
+    },
+    {
+      "id": "O25",
+      "operation": "order.inboxback",
+      "vector": "applescript",
+      "appState": "running-background",
+      "title": "INBOXBACK (SIT7): the non-experimental `inbox`-scope fallback — PARK each inbox row into a scratch PROJECT (update?list-id=SCR; start flips 0->1 transiently) then re-enter via AppleScript `move to do id X to list \"Inbox\"` in REVERSE target order FRONT-INSERTS each at the inbox index min AND RESTORES start=0 (project->NULL), landing the exact target WITHOUT the private reorder surface. A same-list `move ... to \"Inbox\"` is a NO-OP, so park-first is mandatory. Seeds three inbox to-dos and sorts to scrambled target IB3<IB1<IB2 via park x3 + Inbox-return in reverse (IB2,IB1,IB3). Locks the front-insert placement AND the start=0 restoration. Backs the `inbox` automatic fallback (reorder.ts runInboxPark).",
+      "setup": [
+        { "openUrl": "things:///add-project?title=O-IBSCR" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IBSCR' AND type=1" },
+        { "openUrl": "things:///add?title=O-IB1" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB1' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-IB2" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB2' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-IB3" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB3' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-IB1}&list-id={uuid:O-IBSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-IB2}&list-id={uuid:O-IBSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-IB3}&list-id={uuid:O-IBSCR}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-IB1','O-IB2','O-IB3') AND project=(SELECT uuid FROM TMTask WHERE title='O-IBSCR' AND type=1))=3"
+        },
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:O-IB2}\" to list \"Inbox\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:O-IB1}\" to list \"Inbox\""
+        },
+        {
+          "osascript": "tell application \"Things3\" to move to do id \"{uuid:O-IB3}\" to list \"Inbox\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-IB3') < (SELECT \"index\" FROM TMTask WHERE title='O-IB1') AND (SELECT \"index\" FROM TMTask WHERE title='O-IB1') < (SELECT \"index\" FROM TMTask WHERE title='O-IB2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-IB1','O-IB2','O-IB3') AND start=0 AND project IS NULL)=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-IB1" },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-IB2" },
+            "field": "start",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-IB3" },
+            "field": "start",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "O26",
+      "operation": "order.someback-todos",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "SOMEBACK to-dos (SIT7): the non-experimental `someday`-scope fallback for loose someday to-dos — the URL anytime<->someday when= round-trip (update?when=anytime then when=someday) FRONT-INSERTS each at the loose someday index min in dispatch order, so a REVERSE-target dispatch lands the exact order, start=2 preserved. Seeds three loose someday to-dos and sorts to scrambled target SB3<SB1<SB2 via the bounce in reverse (SB2,SB1,SB3). Backs the `someday` automatic fallback (reorder.ts SOMEBACK bounce).",
+      "setup": [
+        { "openUrl": "things:///add?title=O-SB1&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB1' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-SB2&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB2' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-SB3&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB3' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
+        }
+      ],
+      "commands": [
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=anytime" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=1" },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=someday" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=2" },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=anytime" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=1" },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=someday" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=2" },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=anytime" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=1" },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=someday" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=2" },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SB3') < (SELECT \"index\" FROM TMTask WHERE title='O-SB1') AND (SELECT \"index\" FROM TMTask WHERE title='O-SB1') < (SELECT \"index\" FROM TMTask WHERE title='O-SB2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SB1" },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SB2" },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SB3" },
+            "field": "start",
+            "value": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "O27",
+      "operation": "order.someback-projects",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "SOMEBACK projects (SIT7): the `someday` fallback for area-less someday PROJECTS — the per-type update-project?when=anytime then when=someday round-trip FRONT-INSERTS each at the loose someday index min (start=2 preserved), so a REVERSE-target dispatch lands the exact order (notably a FRONT-insert, unlike the native someday anchor-stack's project-DESCEND ORD-3). Seeds three area-less someday projects and sorts to scrambled target SP3<SP1<SP2 via the update-project bounce in reverse (SP2,SP1,SP3).",
+      "setup": [
+        { "openUrl": "things:///add-project?title=O-SPB1&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB1' AND type=1 AND start=2 AND area IS NULL"
+        },
+        { "openUrl": "things:///add-project?title=O-SPB2&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB2' AND type=1 AND start=2 AND area IS NULL"
+        },
+        { "openUrl": "things:///add-project?title=O-SPB3&when=someday" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB3' AND type=1 AND start=2 AND area IS NULL"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB2}&when=anytime"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=1" },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB2}&when=someday"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=2" },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB1}&when=anytime"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=1" },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB1}&when=someday"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=2" },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB3}&when=anytime"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=1" },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB3}&when=someday"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=2" },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SPB3') < (SELECT \"index\" FROM TMTask WHERE title='O-SPB1') AND (SELECT \"index\" FROM TMTask WHERE title='O-SPB1') < (SELECT \"index\" FROM TMTask WHERE title='O-SPB2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SPB1" },
+            "field": "start",
+            "value": 2
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SPB2" },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-SPB3" },
+            "field": "area",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "O28",
+      "operation": "order.projroot",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "PROJROOT (SIT7): the non-experimental `project`-scope fallback for a project's unheaded children — PARK each child into a scratch PROJECT (update?list-id=SCR) then re-home to the original project (update?list-id=P) in FORWARD target order BACK-INSERTS each at the project-root index max (a project root behaves like a container), landing the exact target WITHOUT the private reorder surface. ONE flag-safe protocol for all rows. Seeds a project with three anytime children, one Today-flagged (O-PRc2), and sorts to target pc1<pc2<pc3 via park x3 + re-home forward. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the `project` automatic fallback (reorder.ts runProjectRoot).",
+      "setup": [
+        { "openUrl": "things:///add-project?title=O-PRP" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1" },
+        { "openUrl": "things:///add-project?title=O-PRSCR" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRSCR' AND type=1" },
+        { "openUrl": "things:///add?title=O-PRc1&list=O-PRP&when=anytime" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc1' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-PRc2&list=O-PRP&when=anytime" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc2' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-PRc3&list=O-PRP&when=anytime" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc3' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
+        },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc2}&when=today" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc2' AND start=1 AND startDate=132805248"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc1}&list-id={uuid:O-PRSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc2}&list-id={uuid:O-PRSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc3}&list-id={uuid:O-PRSCR}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-PRc1','O-PRc2','O-PRc3') AND project=(SELECT uuid FROM TMTask WHERE title='O-PRSCR' AND type=1))=3"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc1}&list-id={uuid:O-PRP}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc2}&list-id={uuid:O-PRP}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc3}&list-id={uuid:O-PRP}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-PRc1') < (SELECT \"index\" FROM TMTask WHERE title='O-PRc2') AND (SELECT \"index\" FROM TMTask WHERE title='O-PRc2') < (SELECT \"index\" FROM TMTask WHERE title='O-PRc3')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-PRc1','O-PRc2','O-PRc3') AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL)=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-PRc2" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-PRc2" },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-PRc1" },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O29",
+      "operation": "order.areaback-todos",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "AREABACK to-dos (SIT7): the non-experimental `area`-scope fallback for direct area to-dos — PARK each into a scratch PROJECT (update?list-id=SCR) then re-home to the area (update?list-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's member index min (an area behaves like a loose bucket), the area FK preserved, landing the exact target WITHOUT the private reorder surface. Seeds three direct area to-dos in LAB-AREA-A, one Today-flagged (O-ABt2), and sorts to scrambled target ABt3<ABt1<ABt2 via park x3 + re-home in reverse (ABt2,ABt1,ABt3). Locks the front-insert placement AND the Today-star + area-FK preservation. Backs the `area` automatic fallback (reorder.ts runAreaBack).",
+      "setup": [
+        { "openUrl": "things:///add-project?title=O-ABSCR" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABSCR' AND type=1" },
+        { "openUrl": "things:///add?title=O-ABt1&when=anytime&list=LAB-AREA-A" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt1' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-ABt2&when=anytime&list=LAB-AREA-A" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt2' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
+        },
+        { "openUrl": "things:///add?title=O-ABt3&when=anytime&list=LAB-AREA-A" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt3' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
+        },
+        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt2}&when=today" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt2' AND start=1 AND startDate=132805248"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt1}&list-id={uuid:O-ABSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt2}&list-id={uuid:O-ABSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt3}&list-id={uuid:O-ABSCR}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-ABt1','O-ABt2','O-ABt3') AND project=(SELECT uuid FROM TMTask WHERE title='O-ABSCR' AND type=1))=3"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt2}&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt1}&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt3}&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-ABt3') < (SELECT \"index\" FROM TMTask WHERE title='O-ABt1') AND (SELECT \"index\" FROM TMTask WHERE title='O-ABt1') < (SELECT \"index\" FROM TMTask WHERE title='O-ABt2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-ABt1','O-ABt2','O-ABt3') AND area='{seed:LAB-AREA-A}' AND project IS NULL AND heading IS NULL)=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABt2" },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABt2" },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABt2" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-A"
+          }
+        ]
+      }
+    },
+    {
+      "id": "O30",
+      "operation": "order.areaback-projects",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "AREABACK projects (SIT7): the `area` fallback for in-area PROJECTS (O14's backup) — PARK each project into a scratch AREA (update-project?area-id=SCR) then re-home to the area (update-project?area-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's project index min (area FK preserved), so a reverse-target dispatch lands the exact order. Seeds three in-area projects in LAB-AREA-B and sorts to scrambled target ABp3<ABp1<ABp2 via park x3 + re-home in reverse (ABp2,ABp1,ABp3).",
+      "setup": [
+        { "openUrl": "things:///add-project?title=O-ABp1&area-id={seed:LAB-AREA-B}" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp1' AND type=1 AND area='{seed:LAB-AREA-B}'"
+        },
+        { "openUrl": "things:///add-project?title=O-ABp2&area-id={seed:LAB-AREA-B}" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp2' AND type=1 AND area='{seed:LAB-AREA-B}'"
+        },
+        { "openUrl": "things:///add-project?title=O-ABp3&area-id={seed:LAB-AREA-B}" },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp3' AND type=1 AND area='{seed:LAB-AREA-B}'"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp1}&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp2}&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp3}&area-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-ABp1','O-ABp2','O-ABp3') AND area='{seed:LAB-AREA-A}')=3"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp2}&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp1}&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-ABp3}&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-ABp3') < (SELECT \"index\" FROM TMTask WHERE title='O-ABp1') AND (SELECT \"index\" FROM TMTask WHERE title='O-ABp1') < (SELECT \"index\" FROM TMTask WHERE title='O-ABp2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-ABp1','O-ABp2','O-ABp3') AND area='{seed:LAB-AREA-B}')=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABp1" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-B"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABp2" },
+            "field": "type",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "O-ABp3" },
+            "field": "area",
+            "value": "@seed:LAB-AREA-B"
+          }
+        ]
+      }
     }
   ]
 }
