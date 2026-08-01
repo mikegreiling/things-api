@@ -44,6 +44,8 @@
  * direct class must NEVER collapse (json is index-inert there — a collapse
  * would silently fail to reorder).
  */
+import { randomBytes } from "node:crypto";
+
 import type { AuditRecord } from "../audit/schema.ts";
 import { addDaysIso, decodePackedDate, localToday, encodePackedDate } from "../model/dates.ts";
 import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
@@ -822,56 +824,41 @@ async function runBounce(
     direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
   const touchedUnnamed = coBounce.filter((u) => !named.has(u));
 
-  // De-Today refusal (SIT6 PROJSTAR). The `projects` bounce is a when=someday →
-  // when=anytime round-trip: the someday leg nulls startDate (start 1→2), the
-  // anytime leg only flips start back to 1 — the Today/Evening flag is never
-  // restored, so a flagged project is silently DE-STARRED. Mirror the to-do side
-  // de-Today refusal (move.ts): when ANY touched project (a named movee OR a
-  // co-bounced sibling the round-trip would re-enter) carries the flag, refuse
-  // fail-closed rather than silently stripping it. The `projects` sidebar order
-  // has no Today-flag-safe native surface (P17 native writes are dead), so refusal
-  // is the correct behavior until the flag-safe PROJPARK protocol (park into a
-  // scratch area → native reorder → detach — SIT6, protocol-proven, not yet wired)
-  // replaces the bounce; this refusal is expected to become that protocol swap.
-  if (bounceKind === "projects") {
-    const flagged = coBounce
-      .map((uuid) => ({ uuid, view: todayEveningFlagOf(deps.db, uuid, now()) }))
-      .filter((r): r is { uuid: string; view: "today" | "evening" } => r.view !== null);
-    if (flagged.length > 0) {
-      const titleOf = (uuid: string): string => {
-        const row = deps.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as
-          | { title: string | null }
-          | undefined;
-        return row?.title ?? uuid;
-      };
-      const named2 = new Set(params.named ?? params.uuids);
-      const list = flagged
-        .map(
-          (f) =>
-            `"${titleOf(f.uuid)}" (${f.view === "today" ? "Today" : "This Evening"}` +
-            (named2.has(f.uuid) ? "" : ", co-bounced sibling") +
-            ")",
-        )
-        .join(", ");
-      const result: MutationResult = {
-        kind: "blocked",
-        op: "reorder",
-        reason: "hazard",
-        hazard: "H-REORDER-SCOPE",
-        detail:
-          `reordering top-level projects runs a when=someday → when=anytime bounce whose legs ` +
-          `OVERWRITE the Today/Evening flag (de-Today hazard), and ${flagged.length} touched ` +
-          `project(s) carry it: ${list} — refused rather than silently stripping the flag`,
-        remediation:
-          "reschedule the flagged project(s) off Today/Evening first, then reorder (a flag-safe " +
-          "park → native reorder → detach alternative is proven but not yet wired)",
-      };
-      auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
-        pre: preRanks,
+  // FLAG-AWARE protocol routing (SIT6). The three json-collapsible index bounces
+  // (`heading` BOUNCE2-h, `anytime` ANYBNC, `projects` P8e) are when=someday →
+  // when=anytime round-trips whose `when=` legs OVERWRITE the Today/Evening flag:
+  // the someday leg nulls startDate (start 1→2), the anytime leg only flips start
+  // back to 1, so a flagged movee is silently DE-Todayed (PROJSTAR de-star). Each
+  // has a lab-proven flag-safe MOVE twin on the same `index` axis (SIT6): route
+  // the WHOLE touched set through it whenever ANY touched row carries the flag —
+  //   heading  → HEADMOVE  (unhead → re-head in forward target order; back-insert),
+  //   anytime  → LOOSEPARK (park into a scratch PROJECT → unpark in reverse target;
+  //                         front-insert),
+  //   projects → PROJPARK  (park into a scratch AREA → detach in reverse target;
+  //                         front-insert).
+  // Every leg is a URL move (`list-id=`/`area-id=`), NO when= leg and NO private
+  // reorder surface, so the flag / reminder / deadline / FKs all survive. An
+  // all-UNFLAGGED touched set keeps the cheaper bounce below. Detection is
+  // `todayEveningFlagOf` over the full touched set (the coBounce run), the same
+  // single-source marker #351 used. This SUPERSEDES #351's `projects` de-Today
+  // refusal for flagged movees; a refusal remains only when the protocol itself is
+  // unavailable (cap exceeded), raised inside the protocol.
+  if (bounceKind === "heading" || bounceKind === "anytime" || bounceKind === "projects") {
+    const flagged = coBounce.some((uuid) => todayEveningFlagOf(deps.db, uuid, now()) !== null);
+    if (flagged) {
+      const ctx: SwapCtx = {
+        coBounce,
+        containerUuid,
         txnId,
         actor,
-      });
-      return result;
+        touchedUnnamed,
+        startedAt,
+        options,
+        cap,
+      };
+      if (bounceKind === "heading") return runHeadMove(deps, params, ctx);
+      if (bounceKind === "anytime") return runLoosePark(deps, params, ctx);
+      return runProjPark(deps, params, ctx);
     }
   }
 
@@ -1125,6 +1112,738 @@ async function runBounce(
     // Co-bounced siblings the anchor placement re-inserted (honest disclosure).
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
   };
+}
+
+// ------------------------------------------------ flag-safe MOVE protocols
+//
+// The de-Today-free twins of the three json-collapsible index bounces (SIT6,
+// docs/lab/sit6-flagsafe-index-protocols.md). Each rides ONLY URL move legs
+// (`list-id=`/`area-id=`) — no when= leg, no private reorder surface — so the
+// Today/Evening flag + reminder + deadline + FKs survive the sort. The bounce
+// orchestrator routes the WHOLE touched set (`coBounce`) through the matching
+// protocol whenever ANY touched row carries the flag; otherwise the cheaper
+// bounce runs. They share the bounce's gate (bounce-enabled) and cap
+// (bounce-max-items) — the closest existing multi-leg-quiet-compound gate, since
+// they are neither the native private surface nor a when= round-trip. Non-atomic
+// like the heading-someday / former day compounds: a mid-protocol failure leaves
+// rows in a disclosed transient state (unheaded in the project root, or parked in
+// the NAMED scratch container) and fails loudly with placed/remaining detail.
+
+/** Shared context the bounce orchestrator hands a flag-safe protocol. */
+interface SwapCtx {
+  /** The touched run in TARGET order (named movees + co-touched siblings). */
+  coBounce: string[];
+  /** The heading uuid for HEADMOVE; null for the loose/projects protocols. */
+  containerUuid: string | null;
+  txnId: string;
+  actor: string;
+  touchedUnnamed: string[];
+  startedAt: Date;
+  options: WriteOptions;
+  cap: number;
+}
+
+/** A unique-enough scratch-container title suffix (opId-ish). */
+function scratchSuffix(startedAt: Date): string {
+  return `${startedAt.getTime().toString(36)}-${randomBytes(3).toString("hex")}`;
+}
+
+/**
+ * Pre-ranks over the FULL touched set on the `index` axis — the flag-carrying
+ * movees are NOT scope members (a Today flag makes startDate non-null, so the
+ * bounce's `pre.members` excludes them), so the undoable summary must capture
+ * every coBounce row's prior `index` directly, not just `pre.members`.
+ */
+function captureIndexRanks(deps: WriteDeps, uuids: string[]): Record<string, unknown> {
+  const reader = createDbReader(deps.db);
+  const pre: Record<string, unknown> = {};
+  for (const uuid of uuids) pre[uuid] = reader.rankOf(uuid, "index");
+  return pre;
+}
+
+/** Abort payload for a flag-safe protocol (placed/remaining + recovery detail). */
+function swapAborted(
+  detail: string,
+  placed: string[],
+  remaining: string[],
+  cause: MutationResult | null,
+): ReorderResult {
+  return { kind: "bounce-aborted", op: "reorder", detail, placed, remaining, cause };
+}
+
+/** A H-REORDER-SCOPE block from a flag-safe protocol (records the summary). */
+function swapBlocked(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+  preRanks: Record<string, unknown>,
+  detail: string,
+  remediation: string,
+): MutationResult {
+  const result: MutationResult = {
+    kind: "blocked",
+    op: "reorder",
+    reason: "hazard",
+    hazard: "H-REORDER-SCOPE",
+    detail,
+    remediation,
+  };
+  auditSummary(deps, params, ctx.startedAt, "blocked:H-REORDER-SCOPE", null, {
+    pre: preRanks,
+    txnId: ctx.txnId,
+    actor: ctx.actor,
+  });
+  return result;
+}
+
+/** Terminal ordering verify over the touched run on the `index` axis. */
+async function verifyIndexOrder(deps: WriteDeps, coBounce: string[], options: WriteOptions) {
+  return pollUntilVerified(
+    () =>
+      evaluateDelta(
+        { mode: "ordering", key: "index", sequence: coBounce },
+        createDbReader(deps.db),
+        {
+          modDates: {},
+          fields: {},
+        },
+      ),
+    options.verifyTimeoutMs ?? 4000,
+    deps.poller ?? {},
+  );
+}
+
+/** The OK result shape shared by the three protocols. */
+function swapOk(
+  deps: WriteDeps,
+  coBounce: string[],
+  ctx: SwapCtx,
+  warnings?: string[],
+): MutationResult {
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, "index");
+  return {
+    kind: "ok",
+    op: "reorder",
+    uuid: null,
+    observed,
+    vector: "url-scheme",
+    tier: 0,
+    undoToken: ctx.txnId,
+    ...(warnings !== undefined && warnings.length > 0 && { warnings }),
+    ...(ctx.touchedUnnamed.length > 0 && { touched: ctx.touchedUnnamed }),
+  };
+}
+
+/**
+ * HEADMOVE (SIT6) — a heading's flag-carrying anytime children: UNHEAD the whole
+ * touched run (clean — heading→NULL, `index` + flag preserved), then RE-HEAD it in
+ * FORWARD target order — each now-loose row BACK-INSERTS past the heading-bucket
+ * `index` max, so forward-order re-heads land the exact order (the shipped
+ * `heading-someday` mechanism, now for the ANYTIME class + proven flag-safe). Two
+ * `todo.move` URL legs per item (`list-id=<p>` then `list-id=<p>&heading=<h>`), no
+ * when= leg, no json collapse. Non-atomic: a mid-fail leaves rows UNHEADED in the
+ * project root, disclosed (same discipline as heading-someday).
+ */
+async function runHeadMove(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, containerUuid, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const headingUuid = containerUuid;
+  const projectUuid = headingProjectUuid(deps, headingUuid);
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  const problems: string[] = [];
+  if (headingUuid === null || projectUuid === null) {
+    problems.push("the heading did not resolve to a project (re-head needs the heading's project)");
+  }
+  if (coBounce.length > cap) {
+    problems.push(
+      `${coBounce.length} touched items exceed the cap of ${cap} (each costs an unhead + re-head leg` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} unnamed heading sibling(s) are co-moved to honor the order`
+          : "") +
+        ")",
+    );
+  }
+  if (problems.length > 0) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `within-heading flag-safe reorder rejected: ${problems.join("; ")}`,
+      "reorder the anytime children of ONE heading (read the project first), " +
+        `at most ${cap} touched (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `HEADMOVE unhead ×${coBounce.length} → re-head ×${coBounce.length} (flag-safe back-insert, ` +
+          `forward order${touchedUnnamed.length > 0 ? `, touches ${touchedUnnamed.length} unnamed sibling(s)` : ""}): ` +
+          "a flagged movee's when= bounce would de-Today it, so each child is unheaded (index + flag " +
+          "preserved) then re-headed to append at the heading-bucket end; one terminal order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+
+  // 1. UNHEAD each touched member (clean — heading→NULL, index + flag preserved).
+  const unheaded: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(deps, "todo.move", { uuid, noHeading: true }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...unheaded] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `unheading ${uuid} failed — ${unheaded.length} item(s) are UNHEADED in project ` +
+          `${projectUuid} and must be moved back under the heading manually`,
+        unheaded,
+        coBounce.slice(unheaded.length),
+        res,
+      );
+    }
+    unheaded.push(uuid);
+  }
+
+  // 2. RE-HEAD in forward target order (each now-loose row back-inserts at the end).
+  const placed: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(
+      deps,
+      "todo.move",
+      { uuid, project: { uuid: projectUuid as string }, heading: headingUuid as string },
+      legOpts,
+    );
+    if (res.kind !== "ok") {
+      const stillUnheaded = coBounce.filter((u) => !placed.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...placed] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `re-heading ${uuid} failed — ${stillUnheaded.length} item(s) remain UNHEADED in project ` +
+          `${projectUuid} (ordered) and must be moved back under the heading manually`,
+        placed,
+        stillUnheaded,
+        res,
+      );
+    }
+    placed.push(uuid);
+  }
+
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...placed] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the heading did not land the requested order after re-heading; re-run once Things is idle",
+      placed,
+      [],
+      null,
+    );
+  }
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx);
+}
+
+/**
+ * LOOSEPARK (SIT6) — flag-carrying area-less loose anytime to-dos: create a scratch
+ * PROJECT, PARK every touched row into it (any order), then UNPARK in REVERSE target
+ * order — each unpark (`list-id=` empty) FRONT-INSERTS at the loose Anytime `index`
+ * min in dispatch order, so a reverse-target dispatch lands the exact order (the
+ * central SIT6 law; NO in-scratch reorder needed). Verify the scratch is EMPTY, then
+ * TRASH it (shallow project trash). Non-atomic: a mid-fail leaves rows PARKED in the
+ * NAMED scratch project (recovery text); the scratch is NEVER trashed while non-empty
+ * (AREADEL — that would Trash the parked rows).
+ */
+async function runLoosePark(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  if (coBounce.length > cap) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `area-less loose anytime flag-safe reorder rejected: ${coBounce.length} touched items exceed ` +
+        `the cap of ${cap} (each costs a park + unpark leg` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} co-touched loose sibling(s)`
+          : "") +
+        ")",
+      `reorder at most ${cap} loose Anytime to-dos (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `LOOSEPARK scratch project + park ×${coBounce.length} + unpark ×${coBounce.length} ` +
+          `(flag-safe front-insert, reverse target order` +
+          (touchedUnnamed.length > 0
+            ? `, touches ${touchedUnnamed.length} unnamed sibling(s)`
+            : "") +
+          "; trash the empty scratch): a flagged movee's when= bounce would de-Today it, so each row " +
+          "is parked into a scratch project then unparked to front-insert at the loose min; one terminal " +
+          "order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+  const scratchTitle = `things-api reorder-anytime ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch PROJECT.
+  const add = await runMutation(deps, "project.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `could not create the scratch project "${scratchTitle}" — nothing was parked; no changes were made`,
+      [],
+      coBounce,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each touched row into the scratch project (any order).
+  const parked: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(deps, "todo.move", { uuid, project: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `parking ${uuid} into scratch project ${scratch} failed — ${parked.length} item(s) are PARKED ` +
+          `there (${scratch}) and must be moved back to the loose Anytime list manually; the scratch ` +
+          "project was NOT trashed",
+        parked,
+        coBounce.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. UNPARK in REVERSE target order — front-insert lands the target order.
+  const dispatch = coBounce.toReversed();
+  const unparked: string[] = [];
+  for (const uuid of dispatch) {
+    const res = await runMutation(deps, "todo.move", { uuid, loose: true }, legOpts);
+    if (res.kind !== "ok") {
+      const stillParked = dispatch.filter((u) => !unparked.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...unparked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `unparking ${uuid} from scratch project ${scratch} failed — ${stillParked.length} item(s) ` +
+          `remain PARKED in ${scratch} and must be moved back to the loose Anytime list manually; the ` +
+          "scratch project was NOT trashed",
+        unparked,
+        stillParked,
+        res,
+      );
+    }
+    unparked.push(uuid);
+  }
+
+  // 4. Verify the scratch is EMPTY, then trash it (NEVER trash a non-empty scratch).
+  const remaining = countProjectChildren(deps, scratch);
+  if (remaining > 0) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...unparked] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `the scratch project ${scratch} still holds ${remaining} parked item(s) after unparking — ` +
+        "refusing to trash it (trashing a non-empty scratch would send them to the Trash, AREADEL); " +
+        `move them back to the loose Anytime list and delete ${scratch} manually`,
+      unparked,
+      [],
+      null,
+    );
+  }
+  const del = await runMutation(deps, "project.delete", { uuid: scratch }, legOpts);
+  const scratchTrashed = del.kind === "ok";
+
+  // 5. Terminal verify: the loose Anytime order matches the target.
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...unparked] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the loose Anytime list did not land the requested order after unparking (scratch project " +
+        `${scratch} was ${scratchTrashed ? "trashed" : "left in place"}); re-run once Things is idle`,
+      unparked,
+      [],
+      null,
+    );
+  }
+
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx, [
+    `scratch project ${scratch} was created for the reorder and ` +
+      (scratchTrashed
+        ? "moved to the Trash (verified empty first — the protocol never trashes a non-empty scratch)"
+        : `could NOT be trashed (${del.kind}) — it remains in your project list empty; delete it manually`),
+  ]);
+}
+
+/**
+ * PROJPARK (SIT6) — flag-carrying area-less sidebar projects: create a scratch AREA,
+ * PARK each project into it (`area-id=` leg), then DETACH in REVERSE target order —
+ * each detach (`area-id=` empty) FRONT-INSERTS at the area-less project `index` min in
+ * dispatch order, so a reverse-target dispatch lands the exact order (stars intact).
+ * Verify the scratch area is EMPTY, then DELETE it — the delete supplies its own
+ * H-PERMANENT-DELETE acknowledgement INTERNALLY (this transaction created the area and
+ * has just verified it empty); it NEVER deletes a non-empty area (AREADEL would Trash
+ * the parked projects + shallow-trash their children). Replaces the #351 de-Today
+ * refusal for flagged movees. Non-atomic: a mid-fail leaves projects PARKED in the
+ * NAMED scratch area (recovery text).
+ */
+async function runProjPark(
+  deps: WriteDeps,
+  params: ReorderParams,
+  ctx: SwapCtx,
+): Promise<ReorderResult> {
+  const { coBounce, txnId, actor, touchedUnnamed, startedAt, options, cap } = ctx;
+  const preRanks = captureIndexRanks(deps, coBounce);
+
+  if (coBounce.length > cap) {
+    return swapBlocked(
+      deps,
+      params,
+      ctx,
+      preRanks,
+      `top-level projects flag-safe reorder rejected: ${coBounce.length} touched items exceed the cap ` +
+        `of ${cap} (each costs a park + detach leg` +
+        (touchedUnnamed.length > 0
+          ? `; ${touchedUnnamed.length} co-touched sidebar sibling(s)`
+          : "") +
+        ")",
+      `reorder at most ${cap} top-level projects (set with \`things config set bounce-max-items\`)`,
+    );
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op: "reorder",
+      plan: {
+        op: "reorder",
+        vector: "url-scheme",
+        tier: 0,
+        invocation:
+          `PROJPARK scratch area + park ×${coBounce.length} + detach ×${coBounce.length} ` +
+          `(flag-safe front-insert, reverse target order` +
+          (touchedUnnamed.length > 0
+            ? `, touches ${touchedUnnamed.length} unnamed sibling(s)`
+            : "") +
+          "; delete the empty scratch area): a flagged project's when= bounce would de-star it, so each " +
+          "project is parked into a scratch area then detached to front-insert at the sidebar min; one " +
+          "terminal order verify",
+        expectedDelta: { mode: "ordering", key: "index", sequence: coBounce },
+        hazardsChecked: ["H-REORDER-SCOPE"],
+      },
+    };
+  }
+
+  const legOpts = compoundLegOptions(options, txnId);
+  const scratchTitle = `things-api reorder-projects ${scratchSuffix(startedAt)}`;
+
+  // 1. Create the scratch AREA.
+  const add = await runMutation(deps, "area.add", { title: scratchTitle }, legOpts);
+  if (add.kind !== "ok" || add.uuid === null) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `could not create the scratch area "${scratchTitle}" — nothing was parked; no changes were made`,
+      [],
+      coBounce,
+      add.kind === "ok" ? null : add,
+    );
+  }
+  const scratch = add.uuid;
+
+  // 2. PARK each project into the scratch area (any order).
+  const parked: string[] = [];
+  for (const uuid of coBounce) {
+    const res = await runMutation(deps, "project.move", { uuid, area: { uuid: scratch } }, legOpts);
+    if (res.kind !== "ok") {
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...parked] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `parking project ${uuid} into scratch area ${scratch} failed — ${parked.length} project(s) are ` +
+          `PARKED there (${scratch}) and must be moved back to the sidebar manually; the scratch area was ` +
+          "NOT deleted",
+        parked,
+        coBounce.slice(parked.length),
+        res,
+      );
+    }
+    parked.push(uuid);
+  }
+
+  // 3. DETACH in REVERSE target order — front-insert lands the target order.
+  const dispatch = coBounce.toReversed();
+  const detached: string[] = [];
+  for (const uuid of dispatch) {
+    const res = await runMutation(deps, "project.move", { uuid, noArea: true }, legOpts);
+    if (res.kind !== "ok") {
+      const stillParked = dispatch.filter((u) => !detached.includes(u));
+      auditSummary(
+        deps,
+        params,
+        startedAt,
+        "verify-failed:mismatch",
+        { placed: [...detached] },
+        {
+          pre: preRanks,
+          txnId,
+          actor,
+        },
+      );
+      return swapAborted(
+        `detaching project ${uuid} from scratch area ${scratch} failed — ${stillParked.length} ` +
+          `project(s) remain PARKED in ${scratch} and must be moved back to the sidebar manually; the ` +
+          "scratch area was NOT deleted",
+        detached,
+        stillParked,
+        res,
+      );
+    }
+    detached.push(uuid);
+  }
+
+  // 4. Verify the scratch area is EMPTY, then delete it (NEVER delete a non-empty area).
+  const remaining = countAreaMembers(deps, scratch);
+  if (remaining > 0) {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...detached] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      `the scratch area ${scratch} still holds ${remaining} parked project(s) after detaching — ` +
+        "refusing to delete it (deleting a non-empty area TRASHES its projects and shallow-trashes their " +
+        `children, AREADEL); move them back to the sidebar and delete ${scratch} manually`,
+      detached,
+      [],
+      null,
+    );
+  }
+  // The delete supplies H-PERMANENT-DELETE internally (created + verified-empty this
+  // txn); H-AREA-NOT-EMPTY does not trip on the verified-empty area. Never
+  // acknowledge H-AREA-NOT-EMPTY — a non-empty area aborts above, never deletes.
+  const del = await runMutation(
+    deps,
+    "area.delete",
+    { target: scratch },
+    { ...legOpts, dangerouslyPermanent: true },
+  );
+  const scratchDeleted = del.kind === "ok";
+
+  // 5. Terminal verify: the sidebar order matches the target.
+  const verify = await verifyIndexOrder(deps, coBounce, options);
+  if (verify.kind !== "ok") {
+    auditSummary(
+      deps,
+      params,
+      startedAt,
+      "verify-failed:mismatch",
+      { placed: [...detached] },
+      {
+        pre: preRanks,
+        txnId,
+        actor,
+      },
+    );
+    return swapAborted(
+      "the top-level projects did not land the requested order after detaching (scratch area " +
+        `${scratch} was ${scratchDeleted ? "deleted" : "left in place"}); re-run once Things is idle`,
+      detached,
+      [],
+      null,
+    );
+  }
+
+  auditSummary(deps, params, startedAt, "ok", swapObserved(deps, coBounce), {
+    pre: preRanks,
+    txnId,
+    actor,
+  });
+  return swapOk(deps, coBounce, ctx, [
+    `scratch area ${scratch} was created for the reorder and ` +
+      (scratchDeleted
+        ? "deleted (verified empty first — the protocol never deletes a non-empty area)"
+        : `could NOT be deleted (${del.kind}) — it remains in your sidebar empty; delete it manually`),
+  ]);
+}
+
+/** Observed `index` ranks over the touched run (for the audit summary). */
+function swapObserved(deps: WriteDeps, coBounce: string[]): Record<string, unknown> {
+  const reader = createDbReader(deps.db);
+  const observed: Record<string, unknown> = {};
+  for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, "index");
+  return observed;
+}
+
+/** Live (open, non-trashed) direct child count of a project (scratch emptiness). */
+function countProjectChildren(deps: WriteDeps, projectUuid: string): number {
+  const row = deps.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 0 AND status = 0 AND " +
+        "(project = ? OR heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?))",
+    )
+    .get(projectUuid, projectUuid) as { n: number };
+  return row.n;
+}
+
+/** Live member count of an area (direct to-dos + projects) — scratch emptiness. */
+function countAreaMembers(deps: WriteDeps, areaUuid: string): number {
+  const row = deps.db
+    .prepare("SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 0 AND status = 0 AND area = ?")
+    .get(areaUuid) as { n: number };
+  return row.n;
 }
 
 /**

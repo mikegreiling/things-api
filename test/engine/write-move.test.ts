@@ -1247,10 +1247,13 @@ describe("regression: dated start=2 rows classify as scheduled, never someday", 
       startDate: "2026-07-05",
       todayIndex: 2,
     });
+    // These loose arrived rows are now DUAL-AXIS (Today view + loose Anytime index
+    // via the SIT6 LOOSEPARK protocol), so --in today names the view axis being
+    // asserted (the point of this test is the arrived → today classification).
     const r = await runInPlaceReorder(
       deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
       "todo.move",
-      { uuids: [b, a], position: { at: "first" } },
+      { uuids: [b, a], position: { at: "first" }, in: "today" },
     );
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") expect(r.note).toContain("today");
@@ -1983,34 +1986,53 @@ describe("reorder --in axis disambiguation (dual-axis Today/Evening members)", (
     if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
   });
 
-  it("a loose-only Today set is UNAMBIGUOUS (its index axis is a de-Today bounce, not an honest alternative) → today", async () => {
+  it("a loose-only Today set is now DUAL-AXIS (LOOSEPARK makes the anytime index honest) → ambiguous", async () => {
+    // SIT6: the loose Anytime index axis is now a flag-safe alternative (LOOSEPARK),
+    // so a loose Today set is genuinely ambiguous between the Today view and the
+    // anytime index — refuse and offer BOTH spellings (was silently → today).
     const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
     const b = seedTodo(fixture.db, { title: "b", startDate: "2026-07-05", todayIndex: 2 });
     const r = await dryReorder([a, b]);
-    expect(r.kind).toBe("move-dry-run");
-    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=today");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("ambiguous");
+      expect(r.remediation).toContain("--in today");
+      expect(r.remediation).toContain("--in anytime");
+    }
   });
 
-  it("--in <heading> on Today members is refused (de-Today hazard — a heading index is a bounce)", async () => {
+  it("--in <heading> on flagged members SWAPS to the flag-safe HEADMOVE (was refused)", async () => {
+    // SIT6: forcing the heading index axis on a Today member is honest now — the
+    // planner routes the flagged set through the unhead→re-head HEADMOVE protocol.
     const proj = seedProject(fixture.db, { title: "P" });
     const heading = seedHeading(fixture.db, { title: "H", project: proj });
-    const a = seedTodo(fixture.db, { title: "a", heading, startDate: "2026-07-05", todayIndex: 1 });
-    const r = await dryReorder([a], "H");
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("blocked");
-      expect(r.detail).toContain("de-Today");
-    }
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      heading,
+      startDate: "2026-07-05",
+      todayIndex: 1,
+      index: 10,
+    });
+    const b = seedTodo(fixture.db, { title: "b", heading, start: "active", index: 20 });
+    const r = await dryReorder([a, b], "H");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=heading");
   });
 
-  it("--in anytime on a loose Today member is refused (de-Today hazard)", async () => {
-    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
-    const r = await dryReorder([a], "anytime");
-    expect(r.kind).toBe("move-refused");
-    if (r.kind === "move-refused") {
-      expect(r.refusal).toBe("blocked");
-      expect(r.detail).toContain("de-Today");
-    }
+  it("--in anytime on loose flagged members SWAPS to the flag-safe LOOSEPARK (was refused)", async () => {
+    // SIT6: the loose Anytime index axis is flag-safe (LOOSEPARK), so --in anytime
+    // on a loose Today member is honored, not refused.
+    const a = seedTodo(fixture.db, {
+      title: "a",
+      startDate: "2026-07-05",
+      todayIndex: 1,
+      index: 10,
+    });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 });
+    const r = await dryReorder([a, b], "anytime");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=anytime");
   });
 
   it("--in loose is a usage error (a read view, not a reorder bucket)", async () => {

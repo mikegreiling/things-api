@@ -726,11 +726,12 @@ describe("projects scope (P8e sidebar bounce)", () => {
     if (result.kind === "blocked") expect(result.detail).toContain("NO native surface");
   });
 
-  // SIT6 PROJSTAR — the when=someday → when=anytime projects bounce OVERWRITES a
+  // SIT6 PROJPARK — the when=someday → when=anytime projects bounce OVERWRITES a
   // Today/Evening flag (someday nulls startDate; anytime leaves start=1, sd=NULL —
-  // star gone). Mirror the to-do side de-Today refusal (move.ts): refuse fail-
-  // closed before any leg rather than silently de-starring the project.
-  it("refuses a Today-flagged project movee (de-Today, SIT6 PROJSTAR)", async () => {
+  // star gone). When ANY touched project carries the flag, the planner SWAPS the
+  // bounce for the flag-safe park-into-scratch-AREA → detach protocol (replacing
+  // #351's refusal); only a cap-exceeded set still refuses.
+  it("routes a Today-flagged project movee through PROJPARK, star preserved (SIT6)", async () => {
     const pf = seedProject(fixture.db, {
       title: "PF",
       startDate: TODAY_ISO,
@@ -739,24 +740,38 @@ describe("projects scope (P8e sidebar bounce)", () => {
     });
     const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
     const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
-    const { vector, calls } = projectBounceVector();
-    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2, p3] });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") {
-      expect(result.hazard).toBe("H-REORDER-SCOPE");
-      expect(result.detail).toContain('"PF" (Today)');
-      expect(result.detail).toContain("de-Today hazard");
-    }
-    // Fail-closed: NOT one leg dispatched, and the star is intact.
-    expect(calls).toHaveLength(0);
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(deps([url, osa]), {
+      scope: "projects",
+      uuids: [p3, pf, p2],
+      named: [p3, pf, p2],
+    });
+    expect(result.kind).toBe("ok");
+    // Scratch AREA + park ×3 + detach ×3 + area delete — NO when= leg dispatched.
+    expect(calls).toContain("area.add");
+    expect(calls.filter((c) => c === "project.move")).toHaveLength(6);
+    expect(calls).toContain("area.delete");
+    // Exact target order on index, star (start=1, today startDate, todayIndex) intact.
+    expect(ascending(ranks([p3, pf, p2], `"index"`))).toBe(true);
     const row = fixture.db
-      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
-      .get(pf) as { start: number; startDate: number | null };
+      .prepare("SELECT start, startDate, startBucket, todayIndex, area FROM TMTask WHERE uuid = ?")
+      .get(pf) as {
+      start: number;
+      startDate: number | null;
+      startBucket: number;
+      todayIndex: number;
+      area: string | null;
+    };
     expect(row.start).toBe(1);
     expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.todayIndex).toBe(-5);
+    expect(row.area).toBeNull();
+    // The scratch area was verified empty then deleted — none linger.
+    const areas = fixture.db.prepare("SELECT COUNT(*) AS n FROM TMArea").get() as { n: number };
+    expect(areas.n).toBe(0);
   });
 
-  it("refuses a This-Evening-flagged project movee (de-Today)", async () => {
+  it("routes a This-Evening-flagged project movee through PROJPARK (evening flag kept)", async () => {
     const pf = seedProject(fixture.db, {
       title: "PE",
       startDate: TODAY_ISO,
@@ -765,19 +780,24 @@ describe("projects scope (P8e sidebar bounce)", () => {
       todayIndex: -5,
     });
     const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
-    const { vector, calls } = projectBounceVector();
-    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2] });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") {
-      expect(result.hazard).toBe("H-REORDER-SCOPE");
-      expect(result.detail).toContain('"PE" (This Evening)');
-    }
-    expect(calls).toHaveLength(0);
+    const { url, osa } = flagSafeVectors();
+    const result = await runReorder(deps([url, osa]), {
+      scope: "projects",
+      uuids: [pf, p2],
+      named: [pf, p2],
+    });
+    expect(result.kind).toBe("ok");
+    const row = fixture.db
+      .prepare("SELECT start, startDate, startBucket FROM TMTask WHERE uuid = ?")
+      .get(pf) as { start: number; startDate: number | null; startBucket: number };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.startBucket).toBe(1); // still This Evening
   });
 
-  it("refuses when a co-bounced (unnamed) sibling carries the flag", async () => {
+  it("swaps to PROJPARK when a co-bounced (unnamed) sibling carries the flag", async () => {
     // `named` is the requested subset; `uuids` is the full target order. A flagged
-    // project the round-trip would re-enter as a co-bounced sibling is refused too.
+    // project the round-trip would re-enter as a co-bounced sibling triggers the swap.
     const pf = seedProject(fixture.db, {
       title: "PF",
       startDate: TODAY_ISO,
@@ -785,32 +805,37 @@ describe("projects scope (P8e sidebar bounce)", () => {
       todayIndex: -5,
     });
     const p1 = seedProject(fixture.db, { title: "P1", index: 20 });
-    const { vector, calls } = projectBounceVector();
-    const result = await runReorder(deps([vector]), {
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(deps([url, osa]), {
       scope: "projects",
       uuids: [pf, p1],
       named: [p1],
     });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") {
-      expect(result.detail).toContain('"PF" (Today, co-bounced sibling)');
-    }
-    expect(calls).toHaveLength(0);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.touched).toEqual([pf]);
+    expect(calls).toContain("area.add");
+    const row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(pf) as { start: number; startDate: number | null };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
   });
 
-  it("an unrelated Today-flagged project does not block reordering the plain set", async () => {
+  it("an unrelated Today-flagged project keeps the plain set on the cheaper bounce", async () => {
     // A flagged project that is NOT touched (not a member, not requested) must not
-    // trip the guard — only the projects actually re-entered by the bounce matter.
+    // trigger the swap — only the projects actually re-entered by the bounce matter.
     seedProject(fixture.db, { title: "PF", startDate: TODAY_ISO, index: 5, todayIndex: -5 });
     const p1 = seedProject(fixture.db, { title: "P1", index: 10 });
     const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
     const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
-    const { vector } = projectBounceVector();
+    const { vector, calls } = projectBounceVector();
     const result = await runReorder(deps([vector]), { scope: "projects", uuids: [p2, p3, p1] });
     expect(result.kind).toBe("ok");
+    // Cheaper when= bounce (project.update legs), NOT the PROJPARK move family.
+    expect(calls.length).toBeGreaterThan(0);
   });
 
-  it("pins the de-Today refusal copy", async () => {
+  it("a cap-exceeded flagged set still refuses (PROJPARK unavailable)", async () => {
     const pf = seedProject(fixture.db, {
       title: "PF",
       startDate: TODAY_ISO,
@@ -818,20 +843,46 @@ describe("projects scope (P8e sidebar bounce)", () => {
       todayIndex: -5,
     });
     const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
-    const { vector } = projectBounceVector();
-    const result = await runReorder(deps([vector]), { scope: "projects", uuids: [pf, p2] });
+    const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(
+      deps([url, osa], { config: { ...config(true), bounceMaxItems: 2 } }),
+      { scope: "projects", uuids: [p3, pf, p2], named: [p3, pf, p2] },
+    );
     expect(result.kind).toBe("blocked");
     if (result.kind === "blocked") {
-      expect(result.detail).toBe(
-        "reordering top-level projects runs a when=someday → when=anytime bounce whose legs " +
-          'OVERWRITE the Today/Evening flag (de-Today hazard), and 1 touched project(s) carry it: "PF" ' +
-          "(Today) — refused rather than silently stripping the flag",
-      );
-      expect(result.remediation).toBe(
-        "reschedule the flagged project(s) off Today/Evening first, then reorder (a flag-safe " +
-          "park → native reorder → detach alternative is proven but not yet wired)",
-      );
+      expect(result.hazard).toBe("H-REORDER-SCOPE");
+      expect(result.detail).toContain("exceed the cap of 2");
     }
+    // Fail-closed: no scratch area created, star intact.
+    expect(calls).toHaveLength(0);
+    const row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(pf) as { start: number; startDate: number | null };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+  });
+
+  it("dry-run describes the PROJPARK legs without executing", async () => {
+    const pf = seedProject(fixture.db, {
+      title: "PF",
+      startDate: TODAY_ISO,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(
+      deps([url, osa]),
+      { scope: "projects", uuids: [pf, p2], named: [pf, p2] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("PROJPARK");
+      expect(result.plan.invocation).toContain("detach");
+    }
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -1724,6 +1775,179 @@ function reheadVector() {
   return { vector, calls, legKinds };
 }
 
+/**
+ * Flag-safe MOVE protocol sims (SIT6): FAITHFUL to the HEADMOVE / LOOSEPARK /
+ * PROJPARK laws — every leg is a URL/AppleScript MOVE that preserves the flag +
+ * reminder + deadline (it never writes start/startDate/startBucket/todayIndex/
+ * reminderTime/deadline), and the re-entry legs implement the index geometry:
+ *   - unpark (`todo.move loose`) FRONT-inserts at the loose Anytime index min;
+ *   - detach (`project.move noArea`) FRONT-inserts at the area-less project min;
+ *   - re-head (`todo.move project+heading`) BACK-inserts past the heading max;
+ *   - unhead (`todo.move noHeading`) keeps index; park keeps index.
+ * project.add mints the scratch project (creationDate stamped at NOW so the
+ * create-probe finds it); area.add mints the scratch area; project.delete trashes;
+ * area.delete removes the area row. Reads structured op/opParams, never the URL.
+ */
+function flagSafeVectors(
+  opts: { failAt?: { op: string; nth: number }; strayAfterUnpark?: number } = {},
+) {
+  const calls: string[] = [];
+  const db = fixture.db;
+  const nowEpoch = Math.floor(NOW.getTime() / 1000);
+  const okExec = { exitCode: 0, stdout: "", stderr: "" };
+  const failExec = { exitCode: 1, stdout: "", stderr: "simulated leg failure" };
+  const yes = {
+    support: "yes" as const,
+    disruption: 0 as const,
+    validation: "validated" as const,
+  };
+  const opCount = new Map<string, number>();
+  let scratchProject: string | null = null;
+  let unparkCount = 0;
+  const bump = (op: string): number => {
+    const n = (opCount.get(op) ?? 0) + 1;
+    opCount.set(op, n);
+    return n;
+  };
+  const url: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.move": { ...yes },
+      "project.move": { ...yes },
+      "project.add": { ...yes },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (
+        opts.failAt !== undefined &&
+        inv.op === opts.failAt.op &&
+        bump(inv.op) === opts.failAt.nth
+      ) {
+        return failExec;
+      }
+      if (inv.op === "project.add") {
+        const p = inv.opParams as { title: string };
+        scratchProject = seedProject(db, {
+          title: p.title,
+          start: "active",
+          creationDate: nowEpoch,
+          modificationDate: nowEpoch,
+        });
+      } else if (inv.op === "todo.move") {
+        const p = inv.opParams as {
+          uuid: string;
+          project?: { uuid: string };
+          heading?: string;
+          loose?: boolean;
+          noHeading?: boolean;
+        };
+        if (p.loose === true) {
+          const min = db
+            .prepare(
+              `SELECT MIN("index") AS m FROM TMTask WHERE type = 0 AND trashed = 0 AND status = 0
+               AND project IS NULL AND area IS NULL AND heading IS NULL`,
+            )
+            .get() as { m: number | null };
+          db.prepare(
+            `UPDATE TMTask SET project = NULL, area = NULL, heading = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          ).run((min.m ?? 0) - 1, modClock++, p.uuid);
+          unparkCount++;
+          if (opts.strayAfterUnpark === unparkCount && scratchProject !== null) {
+            // Simulate a concurrent edit that parks a foreign row into the scratch
+            // AFTER all touched rows have unparked — the emptiness guard must catch it.
+            seedTodo(db, {
+              title: "STRAY",
+              project: scratchProject,
+              start: "active",
+              index: 5,
+            });
+          }
+        } else if (p.noHeading === true) {
+          const cur = db.prepare("SELECT heading FROM TMTask WHERE uuid = ?").get(p.uuid) as {
+            heading: string | null;
+          };
+          const proj =
+            cur.heading !== null
+              ? (
+                  db.prepare("SELECT project FROM TMTask WHERE uuid = ?").get(cur.heading) as {
+                    project: string | null;
+                  }
+                ).project
+              : null;
+          db.prepare(
+            `UPDATE TMTask SET heading = NULL, project = ?, area = NULL, userModificationDate = ? WHERE uuid = ?`,
+          ).run(proj, modClock++, p.uuid);
+        } else if (p.heading !== undefined) {
+          const max = db
+            .prepare(
+              `SELECT MAX("index") AS m FROM TMTask WHERE heading = ? AND trashed = 0 AND status = 0 AND uuid != ?`,
+            )
+            .get(p.heading, p.uuid) as { m: number | null };
+          db.prepare(
+            `UPDATE TMTask SET heading = ?, project = NULL, area = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          ).run(p.heading, (max.m ?? 0) + 1, modClock++, p.uuid);
+        } else if (p.project !== undefined) {
+          db.prepare(
+            `UPDATE TMTask SET project = ?, heading = NULL, area = NULL, userModificationDate = ? WHERE uuid = ?`,
+          ).run(p.project.uuid, modClock++, p.uuid);
+        }
+      } else if (inv.op === "project.move") {
+        const p = inv.opParams as { uuid: string; area?: { uuid: string }; noArea?: boolean };
+        if (p.noArea === true) {
+          const min = db
+            .prepare(
+              `SELECT MIN("index") AS m FROM TMTask WHERE type = 1 AND trashed = 0 AND status = 0 AND area IS NULL`,
+            )
+            .get() as { m: number | null };
+          db.prepare(
+            `UPDATE TMTask SET area = NULL, "index" = ?, userModificationDate = ? WHERE uuid = ?`,
+          ).run((min.m ?? 0) - 1, modClock++, p.uuid);
+        } else if (p.area !== undefined) {
+          db.prepare(`UPDATE TMTask SET area = ?, userModificationDate = ? WHERE uuid = ?`).run(
+            p.area.uuid,
+            modClock++,
+            p.uuid,
+          );
+        }
+      }
+      return okExec;
+    },
+  };
+  const osa: WriteVector = {
+    id: "applescript",
+    matrix: {
+      "area.add": { ...yes },
+      "area.delete": { ...yes },
+      "project.delete": { ...yes },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      if (
+        opts.failAt !== undefined &&
+        inv.op === opts.failAt.op &&
+        bump(inv.op) === opts.failAt.nth
+      ) {
+        return failExec;
+      }
+      if (inv.op === "area.add") {
+        const p = inv.opParams as { title: string };
+        seedArea(db, p.title);
+      } else if (inv.op === "area.delete") {
+        const p = inv.opParams as { target: string };
+        db.prepare("DELETE FROM TMArea WHERE uuid = ?").run(p.target);
+      } else if (inv.op === "project.delete") {
+        const p = inv.opParams as { uuid: string };
+        db.prepare("UPDATE TMTask SET trashed = 1, userModificationDate = ? WHERE uuid = ?").run(
+          modClock++,
+          p.uuid,
+        );
+      }
+      return okExec;
+    },
+  };
+  return { url, osa, calls, scratch: () => scratchProject };
+}
+
 describe("heading-someday scope (HEADSUB2 unhead → re-head-in-order back-insert)", () => {
   function seedSomedayHeading() {
     const proj = seedProject(fixture.db, { title: "P" });
@@ -1872,3 +2096,252 @@ describe("BOUNCEJSON collapse eligibility (§9i placement-leg mechanism)", () =>
     expect(bounceJsonCollapsible("projects")).toBe(false);
   });
 });
+
+// ------------------------------- flag-safe MOVE protocols (SIT6 HEADMOVE/LOOSEPARK)
+//
+// When a touched set on one of the three json-collapsible index bounces carries a
+// Today/Evening flag, the planner SWAPS the de-Today bounce for the lab-proven
+// flag-safe MOVE twin (unhead→re-head / park→unpark / park→detach). The unflagged
+// path keeps the cheaper bounce — proven by every existing bounce test above, which
+// has no flagged rows and must NOT be grabbed by the swap. (PROJPARK is covered in
+// the projects-scope block above.)
+
+describe("HEADMOVE (SIT6 — flagged within-heading anytime children)", () => {
+  function seedFlaggedHeading() {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project: proj });
+    const c1 = seedTodo(fixture.db, { title: "c1", heading, start: "active", index: 10 });
+    // c2 is Today-flagged (start=1, startDate=today) + reminder + deadline.
+    const c2 = seedTodo(fixture.db, {
+      title: "c2",
+      heading,
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: -9,
+      reminder: "09:00",
+      deadline: "2026-07-10",
+      index: 20,
+    });
+    const c3 = seedTodo(fixture.db, { title: "c3", heading, start: "active", index: 30 });
+    return { proj, heading, c1, c2, c3 };
+  }
+
+  it("routes a flagged mixed set through unhead→re-head, flag+reminder+deadline preserved", async () => {
+    const { heading, c1, c2, c3 } = seedFlaggedHeading();
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(deps([url, osa]), {
+      scope: "heading",
+      container: { uuid: heading },
+      uuids: [c2, c3, c1],
+      named: [c2, c3, c1],
+    });
+    expect(result.kind).toBe("ok");
+    // Unhead ×3 then re-head ×3 — six todo.move legs, NO when= / json leg.
+    expect(calls).toEqual(Array(6).fill("todo.move"));
+    expect(ascending(ranks([c2, c3, c1], `"index"`))).toBe(true);
+    const row = fixture.db
+      .prepare(
+        "SELECT start, startDate, todayIndex, reminderTime, deadline, heading FROM TMTask WHERE uuid = ?",
+      )
+      .get(c2) as {
+      start: number;
+      startDate: number | null;
+      todayIndex: number;
+      reminderTime: number | null;
+      deadline: number | null;
+      heading: string | null;
+    };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.todayIndex).toBe(-9);
+    expect(row.reminderTime).not.toBeNull();
+    expect(row.deadline).not.toBeNull();
+    expect(row.heading).toBe(heading);
+  });
+
+  it("dry-run describes the HEADMOVE legs without executing", async () => {
+    const { heading, c1, c2, c3 } = seedFlaggedHeading();
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(
+      deps([url, osa]),
+      { scope: "heading", container: { uuid: heading }, uuids: [c2, c3, c1], named: [c2, c3, c1] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("HEADMOVE");
+      expect(result.plan.invocation).toContain("re-head");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("aborts loudly if a re-head leg fails — rows left UNHEADED in the project root", async () => {
+    const { heading, c1, c2, c3 } = seedFlaggedHeading();
+    // Fail the 5th todo.move (3 unhead + rehead #2).
+    const { url, osa } = flagSafeVectors({ failAt: { op: "todo.move", nth: 5 } });
+    const result = await runReorder(deps([url, osa]), {
+      scope: "heading",
+      container: { uuid: heading },
+      uuids: [c2, c3, c1],
+      named: [c2, c3, c1],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.detail).toContain("UNHEADED");
+    }
+    void c1;
+  });
+});
+
+describe("LOOSEPARK (SIT6 — flagged area-less loose anytime to-dos)", () => {
+  function seedFlaggedLoose() {
+    const l1 = seedTodo(fixture.db, { title: "l1", start: "active", index: 10 });
+    const l2 = seedTodo(fixture.db, {
+      title: "l2",
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: -9,
+      reminder: "09:00",
+      deadline: "2026-07-10",
+      index: 20,
+    });
+    const l3 = seedTodo(fixture.db, { title: "l3", start: "active", index: 30 });
+    return { l1, l2, l3 };
+  }
+
+  it("routes a flagged set through park→unpark (reverse target), star preserved, scratch trashed", async () => {
+    const { l1, l2, l3 } = seedFlaggedLoose();
+    const { url, osa, calls } = flagSafeVectors();
+    const result = await runReorder(deps([url, osa]), {
+      scope: "anytime",
+      uuids: [l3, l1, l2],
+      named: [l3, l1, l2],
+    });
+    expect(result.kind).toBe("ok");
+    // Scratch project + park ×3 + unpark ×3 + project trash — NO when= leg.
+    expect(calls).toContain("project.add");
+    expect(calls.filter((c) => c === "todo.move")).toHaveLength(6);
+    expect(calls).toContain("project.delete");
+    expect(ascending(ranks([l3, l1, l2], `"index"`))).toBe(true);
+    const row = fixture.db
+      .prepare(
+        "SELECT start, startDate, todayIndex, reminderTime, deadline, project FROM TMTask WHERE uuid = ?",
+      )
+      .get(l2) as {
+      start: number;
+      startDate: number | null;
+      todayIndex: number;
+      reminderTime: number | null;
+      deadline: number | null;
+      project: string | null;
+    };
+    expect(row.start).toBe(1);
+    expect(row.startDate).toBe(PACKED_TODAY);
+    expect(row.todayIndex).toBe(-9);
+    expect(row.reminderTime).not.toBeNull();
+    expect(row.deadline).not.toBeNull();
+    expect(row.project).toBeNull(); // unparked back to loose
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("Trash"))).toBe(true);
+    }
+  });
+
+  it("refuses to trash a NON-empty scratch (teardown verify-empty; AREADEL guard)", async () => {
+    const { l1, l2, l3 } = seedFlaggedLoose();
+    // A concurrent edit parks a foreign row into the scratch after the 3rd unpark.
+    const { url, osa, calls } = flagSafeVectors({ strayAfterUnpark: 3 });
+    const result = await runReorder(deps([url, osa]), {
+      scope: "anytime",
+      uuids: [l3, l1, l2],
+      named: [l3, l1, l2],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.detail).toContain("still holds 1 parked item");
+      expect(result.detail).toContain("refusing to trash");
+    }
+    // The scratch was NEVER trashed (no project.delete leg ran).
+    expect(calls).not.toContain("project.delete");
+  });
+
+  it("aborts loudly if a park leg fails — rows left PARKED in the named scratch", async () => {
+    const { l1, l2, l3 } = seedFlaggedLoose();
+    // Fail the 2nd todo.move (park #2); parks precede unparks.
+    const { url, osa, calls } = flagSafeVectors({ failAt: { op: "todo.move", nth: 2 } });
+    const result = await runReorder(deps([url, osa]), {
+      scope: "anytime",
+      uuids: [l3, l1, l2],
+      named: [l3, l1, l2],
+    });
+    expect(result.kind).toBe("bounce-aborted");
+    if (result.kind === "bounce-aborted") {
+      expect(result.detail).toContain("PARKED");
+    }
+    expect(calls).not.toContain("project.delete");
+    void l1;
+    void l2;
+    void l3;
+  });
+});
+
+describe("flag-safe protocol undo (pre-ranks invertible via re-run)", () => {
+  it("LOOSEPARK undo restores the prior loose Anytime order", async () => {
+    const l1 = seedTodo(fixture.db, { title: "l1", start: "active", index: 10 });
+    const l2 = seedTodo(fixture.db, {
+      title: "l2",
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: -9,
+      index: 20,
+    });
+    const l3 = seedTodo(fixture.db, { title: "l3", start: "active", index: 30 });
+    const fwd = await runReorder(deps(twoVectors()), {
+      scope: "anytime",
+      uuids: [l3, l1, l2],
+      named: [l3, l1, l2],
+    });
+    expect(fwd.kind).toBe("ok");
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const inv = await runReorder(
+      deps(twoVectors()),
+      plan.steps[0]?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    // Restored to the original relative order l1 < l2 < l3.
+    expect(ascending(ranks([l1, l2, l3], `"index"`))).toBe(true);
+  });
+
+  it("PROJPARK undo restores the prior sidebar order", async () => {
+    const pf = seedProject(fixture.db, {
+      title: "PF",
+      startDate: TODAY_ISO,
+      index: 10,
+      todayIndex: -5,
+    });
+    const p2 = seedProject(fixture.db, { title: "P2", index: 20 });
+    const p3 = seedProject(fixture.db, { title: "P3", index: 30 });
+    const fwd = await runReorder(deps(twoVectors()), {
+      scope: "projects",
+      uuids: [p3, pf, p2],
+      named: [p3, pf, p2],
+    });
+    expect(fwd.kind).toBe("ok");
+    const summary = auditRecords.find((r) => r.op === "reorder" && r.txn?.role === "summary");
+    const plan = planUndo(summary as NonNullable<typeof summary>, NOW);
+    expect(plan.kind).toBe("invertible");
+    const inv = await runReorder(
+      deps(twoVectors()),
+      plan.steps[0]?.params as unknown as ReorderParams,
+    );
+    expect(inv.kind).toBe("ok");
+    expect(ascending(ranks([pf, p2, p3], `"index"`))).toBe(true);
+  });
+});
+
+/** Both flag-safe fake vectors as a fresh pair (helper for undo round-trips). */
+function twoVectors(): WriteVector[] {
+  const { url, osa } = flagSafeVectors();
+  return [url, osa];
+}

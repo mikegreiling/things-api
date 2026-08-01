@@ -449,17 +449,35 @@ const IN_AXES: readonly InAxis[] = ["today", "evening", "anytime", "someday", "i
  */
 function indexAxisTargetOf(row: MoveeRow, bounceEnabled: boolean): ScopeTarget {
   const asAnytime: MoveeRow = { ...row, start: 1, startDate: null, startBucket: 0 };
-  return reorderTargetOf(asAnytime, true, 0, bounceEnabled);
+  // Classify by the row's REAL kind — a project's index axis is its area / the
+  // sidebar (`projects`), NOT the loose Anytime to-do list. Conflating them (an
+  // isTodo=true hardcode) makes a mixed to-do+project Today block look like ONE
+  // shared loose index bucket and spuriously "dual-axis ambiguous".
+  return reorderTargetOf(asAnytime, row.type === 0, 0, bounceEnabled);
 }
 
 /**
- * True when a row's INDEX-axis target preserves the Today/Evening flag — the
- * NATIVE project/area `index` re-rank writes only `index` (startBucket/startDate
- * kept). A bounce index axis (heading child, loose Anytime) overwrites the flag
- * via its when= legs, so it is NOT Today-flag-safe.
+ * True when a row's INDEX-axis target preserves the Today/Evening flag. TWO
+ * flag-safe families:
+ *   - the NATIVE project/area `index` re-rank writes only `index` (startBucket/
+ *     startDate kept — sit3 EVEPROJ / DAYORD-b);
+ *   - the SIT6 flag-safe MOVE protocols route a FLAGGED touched set off the
+ *     de-Today bounce onto the URL move family (heading→HEADMOVE, loose anytime→
+ *     LOOSEPARK, area-less sidebar projects→PROJPARK), which preserve the flag +
+ *     reminder + deadline. So the heading / anytime / projects index axes are now
+ *     honest alternatives for a Today/Evening member too.
+ * This is consulted only where the index target's scope is non-null; when bounce
+ * is disabled those scopes degrade to `{ scope: null }` upstream, so no unsafe
+ * bounce is ever offered.
  */
 function indexAxisTodaySafe(target: ScopeTarget): boolean {
-  return target.scope === "project" || target.scope === "area";
+  return (
+    target.scope === "project" ||
+    target.scope === "area" ||
+    target.scope === "heading" ||
+    target.scope === "anytime" ||
+    target.scope === "projects"
+  );
 }
 
 /** A row's Today/Evening view, or null when it is not an arrived view member. */
@@ -543,7 +561,9 @@ function parseInTarget(deps: WriteDeps, raw: string, rows: MoveeRow[]): ParsedIn
   };
 }
 
-type AxisResolution = { targetOf: (r: MoveeRow) => ScopeTarget } | { refused: MoveRefused };
+type AxisResolution =
+  | { targetOf: (r: MoveeRow) => ScopeTarget; indexAxis?: boolean }
+  | { refused: MoveRefused };
 
 /**
  * Resolve the reorder AXIS for a `things reorder` set per `--in` (the ratified
@@ -616,6 +636,19 @@ function resolveReorderAxis(
         };
       }
       // anytime | someday | inbox — a loose list axis.
+      // `--in anytime` on genuinely-LOOSE Today/Evening members is now HONEST: the
+      // SIT6 LOOSEPARK protocol reorders the loose Anytime `index` axis via URL
+      // move legs, preserving the flag (no de-Today). Route the whole (possibly
+      // mixed flagged+plain) loose set to the anytime index scope. someday/inbox
+      // have NO flag-safe twin, so a view member on those still de-Todays → refused.
+      if (
+        axis === "anytime" &&
+        bounceEnabled &&
+        rows.every((r) => indexAxisContainerOf(r) === null) &&
+        rows.some((r) => viewOf(r, packedToday) !== null)
+      ) {
+        return { targetOf: indexClassifier, indexAxis: true };
+      }
       if (view !== null) {
         return {
           refused: refused(
@@ -623,7 +656,10 @@ function resolveReorderAxis(
             "blocked",
             `--in ${axis} would order ${view === "today" ? "Today" : "This Evening"} members on ` +
               `the loose ${axis} axis, whose when= legs OVERWRITE the Today/Evening flag ` +
-              "(de-Today hazard) — refused rather than silently stripping it",
+              "(de-Today hazard) — refused rather than silently stripping it" +
+              (axis === "anytime"
+                ? " (the flag-safe LOOSEPARK path needs every item genuinely loose and bounce-enabled)"
+                : ""),
             `reorder them in the view with --in ${view}, or reschedule them off Today first`,
           ),
         };
@@ -674,28 +710,27 @@ function resolveReorderAxis(
             "blocked",
             `--in "${inTarget}" would order these ${view === "today" ? "Today" : "This Evening"} ` +
               `members on ${describeScope(forced)}, a when= bounce whose legs OVERWRITE the ` +
-              "Today/Evening flag (de-Today hazard) — only a native project/area index re-rank is " +
-              "Today-flag-safe, so it is refused rather than silently stripping the flag",
+              "Today/Evening flag (de-Today hazard); no flag-safe protocol reaches that bucket, so it " +
+              "is refused rather than silently stripping the flag",
             `reorder them in the view with --in ${view}, or reschedule them off Today first`,
           ),
         };
       }
     }
-    return { targetOf: indexClassifier };
+    return { targetOf: indexClassifier, indexAxis: true };
   }
 
-  // No --in: refuse only when BOTH axes are honest — a view AND a Today-safe native
-  // container index. A bounce-only index axis (heading child, loose Anytime) is not
-  // an honest alternative (it de-Todays), so the view stays the sole reading; a
-  // cross-container set has no shared index axis. Non-view sets pass straight
-  // through single-axis. This replaces the old silent always-Today resolution.
+  // No --in: refuse only when BOTH axes are honest — a shared view AND a flag-safe
+  // container index (native project/area re-rank OR a SIT6 flag-safe MOVE protocol,
+  // heading/anytime/projects). The two readings are genuinely ambiguous, so name
+  // one with --in. This replaces the old silent always-Today resolution.
   if (
+    rows.length >= 2 &&
     view !== null &&
     indexTarget !== null &&
     indexTarget.scope !== null &&
     indexAxisTodaySafe(indexTarget)
   ) {
-    const label = containerLabel(deps, indexTarget.container ?? "");
     return {
       refused: refused(
         op,
@@ -703,11 +738,36 @@ function resolveReorderAxis(
         `these items are ${view === "today" ? "Today" : "This Evening"} members that also share ` +
           `${describeScope(indexTarget)} — the reorder is ambiguous between the ${view} view ` +
           "(todayIndex slots) and the container (index slots); say which with --in",
-        `--in ${view} to reorder the ${view} view, or --in "${label}" to reorder within the container`,
+        `--in ${view} to reorder the ${view} view, or ${inSpellingFor(deps, indexTarget)} to reorder within the container`,
       ),
     };
   }
+  // A MIXED dual-axis set (some Today/Evening-flagged, some plain, all sharing one
+  // flag-safe container index) is NOT ambiguous: the plain members are not view
+  // members, so there is no shared view to reorder them in — the container index is
+  // the only coherent reading. Auto-route it there (a flag-safe MOVE protocol keeps
+  // the flagged members' flag). Without this the flagged members classify to the
+  // today view while the plain ones classify to the container, and the set would
+  // spuriously "span containers".
+  if (
+    rows.length >= 2 &&
+    view === null &&
+    indexTarget !== null &&
+    indexTarget.scope !== null &&
+    indexAxisTodaySafe(indexTarget) &&
+    coherence.some((r) => viewOf(r, packedToday) !== null)
+  ) {
+    return { targetOf: indexClassifier, indexAxis: true };
+  }
   return { targetOf: base };
+}
+
+/** The `--in` spelling that names an index target (a loose axis, or a container). */
+function inSpellingFor(deps: WriteDeps, target: ScopeTarget): string {
+  if (target.scope === null) return "--in <container>"; // unreachable: only real index targets reach here
+  if (target.scope === "anytime") return "--in anytime";
+  if (target.container !== undefined) return `--in "${containerLabel(deps, target.container)}"`;
+  return `--in ${target.scope}`;
 }
 
 /**
@@ -1440,6 +1500,13 @@ async function repositionInPlace(
   const axis = resolveReorderAxis(deps, op, rows, inTarget, packedToday, verb, position);
   if ("refused" in axis) return axis.refused;
   const targetOf = axis.targetOf;
+  // On a forced/auto INDEX axis (a dual-axis set reordered within its container),
+  // the display-bucket coherence guards below are the WRONG check: the members
+  // share ONE container `index` order even though a flagged member renders in the
+  // Today/Evening view. The target-span guard still enforces the single shared
+  // container; only the per-display-bucket splits are relaxed (a SIT6 flag-safe
+  // protocol reorders the whole run, flag preserved).
+  const indexAxis = axis.indexAxis === true;
 
   // A shared FUTURE day-group (single- OR cross-container) rides the global
   // todayIndex axis, not the normal single-container reorder: the SIT4 dated `day`
@@ -1494,13 +1561,16 @@ async function repositionInPlace(
     );
   }
 
-  // All movees must share ONE bucket (rule 4 single-bucket-strict).
+  // All movees must share ONE bucket (rule 4 single-bucket-strict) — EXCEPT on a
+  // forced/auto index axis, where a dual-axis set legitimately spans display
+  // buckets (a flagged member in Today + plain members in Anytime) yet shares one
+  // container index order.
   const buckets = new Map<string, string[]>();
   for (const r of rows) {
     const b = scheduleBucket(r, packedToday);
     buckets.set(b, [...(buckets.get(b) ?? []), r.uuid]);
   }
-  if (buckets.size > 1) {
+  if (buckets.size > 1 && !indexAxis) {
     const listed = [...buckets.entries()].map(([b, u]) => `${b}: ${u.join(", ")}`).join("; ");
     return refused(
       op,
@@ -1544,9 +1614,11 @@ async function repositionInPlace(
         "move the items into the anchor's container explicitly, or pick an anchor that shares it",
       );
     }
+    // On the index axis the anchor need only share the container (checked above via
+    // containerKey) — display buckets legitimately differ for a dual-axis set.
     const anchorBucket = scheduleBucket(anchorRow, packedToday);
     const movBucket = [...buckets.keys()][0];
-    if (anchorBucket !== movBucket) {
+    if (!indexAxis && anchorBucket !== movBucket) {
       return refused(
         op,
         "blocked",
