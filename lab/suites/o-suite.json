@@ -1263,6 +1263,300 @@
           }
         ]
       }
+    },
+    {
+      "id": "O22",
+      "operation": "order.headmove",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "HEADMOVE (SIT6): the flag-safe within-heading anytime sort — UNHEAD each child (list-id=P, index+flag preserved) then RE-HEAD in FORWARD target order (list-id=P&heading=H) BACK-INSERTS each past the heading-bucket max, landing the exact order WITHOUT the de-Today when= bounce. Seeds a heading with three anytime children, one Today-flagged (O-HMc2), and sorts to scrambled target c2<c3<c1 via unhead x3 + re-head x3. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the flag-aware `heading` protocol swap (reorder.ts runHeadMove).",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-HMP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-HMH%22%7D%7D%5D%7D%7D%5D"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-HMH' AND type=2"
+        },
+        {
+          "openUrl": "things:///add?title=O-HMc1&list=O-HMP&heading=O-HMH&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-HMc1' AND heading=(SELECT uuid FROM TMTask WHERE title='O-HMH' AND type=2)"
+        },
+        {
+          "openUrl": "things:///add?title=O-HMc2&list=O-HMP&heading=O-HMH&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-HMc2' AND heading=(SELECT uuid FROM TMTask WHERE title='O-HMH' AND type=2)"
+        },
+        {
+          "openUrl": "things:///add?title=O-HMc3&list=O-HMP&heading=O-HMH&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-HMc3' AND heading=(SELECT uuid FROM TMTask WHERE title='O-HMH' AND type=2)"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc2}&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-HMc2' AND start=1 AND startDate=132805248"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc1}&list-id={uuid:O-HMP}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc2}&list-id={uuid:O-HMP}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc3}&list-id={uuid:O-HMP}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title LIKE 'O-HMc%' AND heading IS NULL)=3"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc2}&list-id={uuid:O-HMP}&heading=O-HMH"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc3}&list-id={uuid:O-HMP}&heading=O-HMH"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-HMc1}&list-id={uuid:O-HMP}&heading=O-HMH"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-HMc2') < (SELECT \"index\" FROM TMTask WHERE title='O-HMc3') AND (SELECT \"index\" FROM TMTask WHERE title='O-HMc3') < (SELECT \"index\" FROM TMTask WHERE title='O-HMc1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title LIKE 'O-HMc%' AND heading=(SELECT uuid FROM TMTask WHERE title='O-HMH' AND type=2))=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-HMc2"
+            },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-HMc2"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-HMc1"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-HMc3"
+            },
+            "field": "start",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "O23",
+      "operation": "order.loosepark",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "LOOSEPARK (SIT6): the flag-safe loose-anytime sort — PARK each movee into a scratch PROJECT (list-id=SCR) then UNPARK (list-id= empty) in REVERSE target order FRONT-INSERTS each at the loose Anytime index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-Today when= bounce. Seeds three loose anytime to-dos, one Today-flagged (O-LP2), and sorts to scrambled target LP3<LP1<LP2 via park x3 + unpark in reverse (LP2,LP1,LP3). Locks the front-insert placement AND the Today-star preservation. Backs the flag-aware `anytime` protocol swap (reorder.ts runLoosePark).",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-LPSCR"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LPSCR' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-LP1&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LP1' AND start=1 AND startDate IS NULL AND project IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=O-LP2&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LP2' AND start=1 AND startDate IS NULL AND project IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=O-LP3&when=anytime"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LP3' AND start=1 AND startDate IS NULL AND project IS NULL"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP2}&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-LP2' AND start=1 AND startDate=132805248"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP1}&list-id={uuid:O-LPSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP2}&list-id={uuid:O-LPSCR}"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP3}&list-id={uuid:O-LPSCR}"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-LP1','O-LP2','O-LP3') AND project=(SELECT uuid FROM TMTask WHERE title='O-LPSCR'))=3"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP2}&list-id="
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP1}&list-id="
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-LP3}&list-id="
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-LP3') < (SELECT \"index\" FROM TMTask WHERE title='O-LP1') AND (SELECT \"index\" FROM TMTask WHERE title='O-LP1') < (SELECT \"index\" FROM TMTask WHERE title='O-LP2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-LP1','O-LP2','O-LP3') AND project IS NULL)=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LP2"
+            },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LP2"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-LP2"
+            },
+            "field": "project",
+            "value": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "O24",
+      "operation": "order.projpark-detach",
+      "vector": "url",
+      "appState": "running-background",
+      "title": "PROJPARK detach (SIT6): the flag-safe sidebar-projects sort — DETACH each area'd project (area-id= empty) in REVERSE target order FRONT-INSERTS each at the area-less project index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-star when= bounce. Seeds three area'd projects (parked at create-time in LAB-AREA-A), one Today-flagged (O-PP2), and sorts to scrambled target PP3<PP1<PP2 via detach in reverse (PP2,PP1,PP3). Locks the detach front-insert placement AND the Today-star preservation on a project row. Backs the flag-aware `projects` protocol swap (reorder.ts runProjPark), superseding the #351 de-Today refusal.",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-PP1&area=LAB-AREA-A"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PP1' AND type=1 AND area IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-PP2&area=LAB-AREA-A"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PP2' AND type=1 AND area IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-PP3&area=LAB-AREA-A"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PP3' AND type=1 AND area IS NOT NULL"
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-PP2}&when=today"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PP2' AND start=1 AND startDate=132805248"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-PP2}&area-id="
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-PP1}&area-id="
+        },
+        {
+          "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-PP3}&area-id="
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-PP3') < (SELECT \"index\" FROM TMTask WHERE title='O-PP1') AND (SELECT \"index\" FROM TMTask WHERE title='O-PP1') < (SELECT \"index\" FROM TMTask WHERE title='O-PP2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT COUNT(*) FROM TMTask WHERE title IN ('O-PP1','O-PP2','O-PP3') AND area IS NULL)=3"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PP2"
+            },
+            "field": "startDate",
+            "value": 132805248
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PP2"
+            },
+            "field": "start",
+            "value": 1
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PP2"
+            },
+            "field": "area",
+            "value": null
+          }
+        ]
+      }
     }
   ]
 }

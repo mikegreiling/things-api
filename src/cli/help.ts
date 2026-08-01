@@ -388,9 +388,9 @@ things reorder <refs…> [position] [--in <target>]
   EARLIEST slot, argument order (--first NOT implied); partial fine. Takes to-dos +
   the project rows Today/Evening/day lists intermix. A Today/Evening member sits on
   TWO axes (view + container index) — a set coherent on both is refused; --in picks
-  it: today|evening|anytime|someday|inbox, or a project/area/heading ref. A container
-  index on a Today member works only for the native project/area re-rank; a bounce-
-  only index (heading/loose) refuses (it would de-Today).
+  it: today|evening|anytime|someday|inbox, or a project/area/heading ref. Forcing the
+  container index on a Today/Evening member now PRESERVES the flag — a flag-safe move
+  protocol routes it off the de-Today bounce (only the someday/inbox loose axes refuse).
 
 things project move <refs…> [--to-area <ref> | --no-area] [position]
   --no-area is a project's detach (--loose is a to-do word, refused). A position here

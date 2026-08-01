@@ -1908,9 +1908,11 @@ describe("things MCP server", () => {
         fakeVector(null).vector,
         fakeVector(null, { id: "applescript", ops: ["reorder"] }).vector,
       ]);
+      // A loose Today set is now DUAL-AXIS (the loose Anytime index is flag-safe via
+      // SIT6 LOOSEPARK), so name the view axis explicitly — `in: today`.
       const result = await client.callTool({
         name: "reorder",
-        arguments: { refs: [b, a], dry_run: true },
+        arguments: { refs: [b, a], dry_run: true, in: "today" },
       });
       expect(result.isError ?? false).toBe(false);
       // Phase-2 framing: a dry-run content block IS the plan — no `kind`/`result`.
