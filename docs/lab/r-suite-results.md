@@ -1,5 +1,7 @@
 # R-suite results — reminders campaign
 
+**Environment:** `things-lab-golden-v1` · Things 3.22.11 (trial build 32211007) · macOS 15.6 guest · pinned clock 2026-07-05 · schema fingerprint verified at bootstrap each run.
+
 Suite: [lab/suites/r-suite.json](../../lab/suites/r-suite.json) (16 probes, R01–R16). Locked 2026-07-04 after discovery + acceptance ×2 identical (`r-20260704-022520` / `r-20260704-022655`). All tier 0 except the quarantined crash probe. Every probe locks the EXACT stored `reminderTime` int, so any parser or codec change in a future Things build fails the suite loudly.
 
 ## The codec (atlas item CLOSED)

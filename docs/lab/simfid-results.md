@@ -1,5 +1,7 @@
 # SIMFID — simulator-fidelity replay suite
 
+**Certified against:** `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05 (the RSIM clock). Re-run each golden rebuild ([drift-runbook](drift-runbook.md) step 5); this is a living re-certification suite, not a frozen snapshot — the standing below is host-side run `simfid-20260722-201525` + clone leg `simfid-20260722-200229`.
+
 **What it is.** SIMFID certifies [`src/write/vectors/simulator.ts`](../../src/write/vectors/simulator.ts) against the REAL Things app, op by op. For every simulator-covered op it compares two row-level DB deltas — the op replayed on the host through the full write pipeline with the simulator vector, and the same op driven through the guest CLI against the real app — after NORMALIZING away the differences that are not fidelity facts (uuids, wall-clock jitter, list positions), with declared TOLERANCES for the app's probe-proven nondeterminism. A residual difference is a **divergence the suite REPORTS** (a simulator bug OR newly-discovered app behaviour); SIMFID never edits the appliers. This is the automation of exactly the class of bug caught by hand on 2026-07-17 (the inbox-promotion filing semantics).
 
 Spec: [probe-backlog §C](probe-backlog.md) (SIMFID). Laws + tolerances: [rsim-results.md](rsim-results.md). Wired into the drift runbook step 5 (re-certify after every golden rebuild).

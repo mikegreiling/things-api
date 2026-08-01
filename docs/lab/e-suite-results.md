@@ -1,5 +1,7 @@
 # E-suite results — editing-completeness campaign
 
+**Environment:** `things-lab-golden-v1` · Things 3.22.11 (trial build 32211007) · macOS 15.6 guest · pinned clock 2026-07-05 · schema fingerprint verified at bootstrap each run.
+
 Suite: [lab/suites/e-suite.json](../../lab/suites/e-suite.json) (10 probes, E01–E10). Locked 2026-07-04 after discovery (one adjustment: E08 → unsupported) + acceptance ×2 identical. All tier 0, app running in background, no crashes. Closes the "cheap editing gaps" batch from [docs/gaps.md](../gaps.md).
 
 | Probe | Finding | Verdict |

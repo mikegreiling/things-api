@@ -2,6 +2,10 @@
 
 The harness executes **probe suites** (JSON, `lab/suites/`) against a fresh clone of the frozen golden image and judges every probe against locked expectations. It is the machine that produced/re-validates the capability matrix, and later the CI regression gate (any verdict/tier delta = a Things update moved the write surface).
 
+## Version-stamping (mandatory policy)
+
+Every campaign/evidence doc in `docs/lab/` MUST state, in its header, the Things version it was probed under **and** the golden id it ran against (e.g. `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05). This is not optional decoration — it is the provenance that makes a result re-checkable when a later app build moves the surface. **Evidence docs are IMMUTABLE snapshots:** they are never re-stamped or version-amended when a law is re-confirmed under a new golden — a re-confirmation accrues in the living ledger ([assumption-register](../reference/assumption-register.md), *Confirmed under* column), never by editing the historical evidence. The register is the one doc whose version list grows; every other campaign doc names exactly the golden it was born under.
+
 ## Running
 
 ```sh
