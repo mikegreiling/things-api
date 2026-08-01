@@ -48,7 +48,7 @@ import type { AuditRecord } from "../audit/schema.ts";
 import { addDaysIso, decodePackedDate, localToday, encodePackedDate } from "../model/dates.ts";
 import type { ReorderParams, ReorderScope, WhenValue } from "./operations.ts";
 import { resolveTaskUuidPrefix } from "../read/queries.ts";
-import { computeReorderPre, resolveArea, resolveProject } from "./pre-state.ts";
+import { computeReorderPre, resolveArea, resolveProject, todayEveningFlagOf } from "./pre-state.ts";
 import { sdefDeclaresPrivateReorder } from "./experimental.ts";
 import {
   fingerprintLabel,
@@ -821,6 +821,59 @@ async function runBounce(
   const coBounce =
     direction === "back" ? targetOrder.slice(firstMoved) : targetOrder.slice(0, lastMoved + 1);
   const touchedUnnamed = coBounce.filter((u) => !named.has(u));
+
+  // De-Today refusal (SIT6 PROJSTAR). The `projects` bounce is a when=someday →
+  // when=anytime round-trip: the someday leg nulls startDate (start 1→2), the
+  // anytime leg only flips start back to 1 — the Today/Evening flag is never
+  // restored, so a flagged project is silently DE-STARRED. Mirror the to-do side
+  // de-Today refusal (move.ts): when ANY touched project (a named movee OR a
+  // co-bounced sibling the round-trip would re-enter) carries the flag, refuse
+  // fail-closed rather than silently stripping it. The `projects` sidebar order
+  // has no Today-flag-safe native surface (P17 native writes are dead), so refusal
+  // is the correct behavior until the flag-safe PROJPARK protocol (park into a
+  // scratch area → native reorder → detach — SIT6, protocol-proven, not yet wired)
+  // replaces the bounce; this refusal is expected to become that protocol swap.
+  if (bounceKind === "projects") {
+    const flagged = coBounce
+      .map((uuid) => ({ uuid, view: todayEveningFlagOf(deps.db, uuid, now()) }))
+      .filter((r): r is { uuid: string; view: "today" | "evening" } => r.view !== null);
+    if (flagged.length > 0) {
+      const titleOf = (uuid: string): string => {
+        const row = deps.db.prepare("SELECT title FROM TMTask WHERE uuid = ?").get(uuid) as
+          | { title: string | null }
+          | undefined;
+        return row?.title ?? uuid;
+      };
+      const named2 = new Set(params.named ?? params.uuids);
+      const list = flagged
+        .map(
+          (f) =>
+            `"${titleOf(f.uuid)}" (${f.view === "today" ? "Today" : "This Evening"}` +
+            (named2.has(f.uuid) ? "" : ", co-bounced sibling") +
+            ")",
+        )
+        .join(", ");
+      const result: MutationResult = {
+        kind: "blocked",
+        op: "reorder",
+        reason: "hazard",
+        hazard: "H-REORDER-SCOPE",
+        detail:
+          `reordering top-level projects runs a when=someday → when=anytime bounce whose legs ` +
+          `OVERWRITE the Today/Evening flag (de-Today hazard), and ${flagged.length} touched ` +
+          `project(s) carry it: ${list} — refused rather than silently stripping the flag`,
+        remediation:
+          "reschedule the flagged project(s) off Today/Evening first, then reorder (a flag-safe " +
+          "park → native reorder → detach alternative is proven but not yet wired)",
+      };
+      auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
+        pre: preRanks,
+        txnId,
+        actor,
+      });
+      return result;
+    }
+  }
 
   const problems: string[] = [];
   if (params.container !== undefined && !wantsContainer)
