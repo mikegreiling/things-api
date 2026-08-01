@@ -1,5 +1,7 @@
 # ANYORD — the Anytime aggregate-reorder wire convention, settled
 
+**Environment:** `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05 · offline airgapped clone (run `things-run-notesmd-anyord-20260723-135451`).
+
 Run `things-run-notesmd-anyord-20260723-135451` (offline pinned clone; `lab/scripts/research-anyord.sh`), settling the UNSETTLED Anytime loose-to-do reorder convention (up-next §0 item 4; P7b vs P8d disagreed — see [o-suite-results.md](o-suite-results.md) §P7-P9 and the P13 non-determinism note). Also produces the Anytime ordering-semantics map the §6 sort-ergonomics design round needs.
 
 **Seed.** 7 loose **anytime** to-dos (`start=1`, `startDate NULL`), spread across ≥2 areas + area-less: `AO-A1/A2/A3` in LAB-AREA-A, `AO-B1/B2` in LAB-AREA-B, `AO-X1/X2` area-less. Reorders sent via the private AppleScript command `_private_experimental_ reorder to dos in list "Anytime" with ids "<csv-uuids>"`.

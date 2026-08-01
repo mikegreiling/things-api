@@ -1,5 +1,7 @@
 # NOTESMD — what markdown does the Things notes field render?
 
+**Environment:** `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05 · offline airgapped VNC clone (run `things-run-notesmd-anyord-20260723-135451`).
+
 Run `things-run-notesmd-anyord-20260723-135451` (offline pinned clone; `lab/scripts/research-notesmd.sh`), per up-next §6 NOTESMD step 1. Mike's live-GUI observations (notes render `_italic_`, `**bold**`, links show label+url, bare URLs auto-linkify, `- [ ]` presumably inert) needed to be evidence, not folklore.
 
 **Method.** URL-scheme seeded ONE to-do (`NOTESMD-TODO`) and ONE project (`NOTESMD-PROJECT`), both with the same 593-byte synthetic note exercising the full plausible vocabulary, then opened each card and screenshotted the rendered note (VNC; framebuffer 2048×1536). Evidence (gitignored, synthetic): `lab/artifacts/things-run-notesmd-anyord-20260723-135451/nm-04-todo-open2.png` (to-do card) + `nm-06-project-view.png` (project header). **The to-do and project render the note identically** — one renderer.

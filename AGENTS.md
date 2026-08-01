@@ -7,6 +7,7 @@
 - **[docs/gaps.md](docs/gaps.md)** — roadmap: one entry per phase, updated when a phase lands.
 - **[docs/roadmap.md](docs/roadmap.md)** — durable parked-work plan (survives compaction): decided-but-unbuilt items, distribution/onboarding, doctrine decisions. Update when a parked item lands or a new one is deferred.
 - **[docs/reference/](docs/reference/README.md)** — the evidence compendium: probe-id index ([README](docs/reference/README.md)), [novel-paths.md](docs/reference/novel-paths.md) (add each newly discovered working path), [suite-audit.md](docs/reference/suite-audit.md) (update when ops or suites change).
+- **Probe evidence is version-stamped** — every `docs/lab/` campaign doc names the Things version + golden it was probed under (immutable snapshot, per [docs/lab/harness.md](docs/lab/harness.md) version-stamping policy); version *confirmations* under a new golden live in the assumption register's *Confirmed under* column ([docs/reference/assumption-register.md](docs/reference/assumption-register.md)), never by editing the evidence.
 - **[bench/](bench/README.md)** — the AGENTBENCH mini-project: [bench/ROADMAP.md](bench/ROADMAP.md) (state + round history — update in the SAME change as any bench work), [bench/CONSTITUTION.md](bench/CONSTITUTION.md) (invariants — changes require Mike's explicit sign-off), [bench/ledger/](bench/ledger/README.md) (append-only per-arm knowledge ledgers).
 - **CHANGELOG.md** — every user-visible change goes under `## Unreleased`.
 

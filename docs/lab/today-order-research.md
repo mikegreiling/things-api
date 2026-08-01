@@ -1,5 +1,7 @@
 # Today ordering & membership — UI-oracle research (Phase 10c)
 
+**Environment:** `things-lab-golden-v1` · Things 3.22.11 · golden pin 2026-07-05, booted +2 days to 2026-07-07 to manufacture stale `todayIndexReferenceDate` cohorts (runs `things-run-todayorder-20260704-021325` / `-021640`).
+
 **Method.** The UI's own ordering is readable via AppleScript (`get id of to dos of list "Today"` — a pure read against a running app). Two reproducing VM runs used a golden clone booted **two days past** the golden's pin date (2026-07-07 vs 07-05) to manufacture stale `todayIndexReferenceDate` cohorts, promoted upcoming seeds, spawned repeat instances, freshly-added items, and deadline-membership edge probes. Live reconciliation then confirmed the model against the real library. Script: [lab/scripts/research-today-order.sh](../../lab/scripts/research-today-order.sh); artifacts `things-run-todayorder-20260704-021325` / `-021640` (UI order + DB backup each).
 
 ## The membership rule
