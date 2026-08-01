@@ -305,6 +305,70 @@ describe("H-PERMANENT-DELETE", () => {
   });
 });
 
+describe("H-AREA-NOT-EMPTY", () => {
+  it("refuses a non-empty area delete with the member counts and both remediations", () => {
+    const area = seedArea(fixture.db, "Work");
+    seedProject(fixture.db, { title: "P1", area });
+    seedProject(fixture.db, { title: "P2", area });
+    seedProject(fixture.db, { title: "P3", area });
+    for (let i = 0; i < 12; i++) seedTodo(fixture.db, { title: `t${i}`, area });
+    const block = check("area.delete", { target: "Work" });
+    expect(block?.hazard).toBe("H-AREA-NOT-EMPTY");
+    expect(block?.detail).toContain("3 projects and 12 to-dos");
+    expect(block?.remediation).toContain("--allow-non-empty");
+    expect(block?.remediation).toContain("empty the area");
+  });
+
+  it("uses singular nouns and lists only the member kinds present in the count", () => {
+    const projOnly = seedArea(fixture.db, "ProjOnly");
+    seedProject(fixture.db, { title: "solo", area: projOnly });
+    // Singular "1 project", and the count clause (up to the first ";") names no to-do.
+    const projCount = check("area.delete", { target: "ProjOnly" })?.detail.split(";")[0] ?? "";
+    expect(projCount).toContain("1 project");
+    expect(projCount).not.toContain("to-do");
+
+    const todoOnly = seedArea(fixture.db, "TodoOnly");
+    seedTodo(fixture.db, { title: "solo", area: todoOnly });
+    const todoCount = check("area.delete", { target: "TodoOnly" })?.detail.split(";")[0] ?? "";
+    expect(todoCount).toContain("1 to-do");
+    expect(todoCount).not.toContain("project");
+  });
+
+  it("counts non-trashed members of any status; trashed rows do not count", () => {
+    const area = seedArea(fixture.db, "Mixed");
+    seedTodo(fixture.db, { title: "logged", area, status: "completed" });
+    seedTodo(fixture.db, { title: "gone", area, trashed: true });
+    // A completed (logbook) to-do is still live in the area; the trashed one is not.
+    const block = check("area.delete", { target: "Mixed" });
+    expect(block?.hazard).toBe("H-AREA-NOT-EMPTY");
+    expect(block?.detail).toContain("1 to-do");
+  });
+
+  it("passing allowNonEmptyArea clears THIS gate (leaving only the permanent-delete ack)", () => {
+    const area = seedArea(fixture.db, "Work");
+    seedProject(fixture.db, { title: "P", area });
+    // allow-non-empty satisfied → the next gate (permanent delete) is what remains.
+    expect(check("area.delete", { target: "Work" }, { allowNonEmptyArea: true })?.hazard).toBe(
+      "H-PERMANENT-DELETE",
+    );
+    // Both acknowledgements → the delete proceeds.
+    expect(
+      check(
+        "area.delete",
+        { target: "Work" },
+        { allowNonEmptyArea: true, dangerouslyPermanent: true },
+      ),
+    ).toBeNull();
+  });
+
+  it("an EMPTY area never trips this gate — only the permanent-delete ack stands", () => {
+    seedArea(fixture.db, "Empty");
+    // No allow-non-empty needed; the sole remaining gate is the permanent-delete ack.
+    expect(check("area.delete", { target: "Empty" })?.hazard).toBe("H-PERMANENT-DELETE");
+    expect(check("area.delete", { target: "Empty" }, { dangerouslyPermanent: true })).toBeNull();
+  });
+});
+
 describe("H-HEADING-CHILDREN", () => {
   it("requires a children policy when open children exist; passes when drained or resolved", () => {
     const proj = seedProject(fixture.db, { title: "P" });

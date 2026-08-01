@@ -632,6 +632,7 @@ interface WriteOptionArgs {
   acknowledge_project_reopen?: boolean | undefined;
   dangerously_permanent?: boolean | undefined;
   acknowledge_tag_subtree?: boolean | undefined;
+  allow_non_empty_area?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
   create_tags?: boolean | undefined;
   /** Per-call IANA zone (write tools that accept `when`): normalizes today/evening to the zone. */
@@ -674,6 +675,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     ...(args.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
     ...(args.dangerously_permanent === true && { dangerouslyPermanent: true }),
     ...(args.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+    ...(args.allow_non_empty_area === true && { allowNonEmptyArea: true }),
     ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
     ...(args.create_tags === true && { createTags: true }),
     ...(args.tz !== undefined && { zone: args.tz }),
@@ -1862,8 +1864,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "kind item: moves a to-do or project to the Trash (recoverable via restore_item until " +
         "the Trash is emptied; a deleted project takes its to-dos with it; not available for " +
         "repeating to-dos). kind area: PERMANENT — areas do not go to the Trash, so this cannot " +
-        "be undone and requires dangerously_permanent; the area's to-dos move to the Trash and " +
-        "its projects remain, no longer assigned to any area. kind tag: PERMANENT — requires " +
+        "be undone and requires dangerously_permanent; deleting an area moves its to-dos and " +
+        "projects to the Trash, so a non-empty area is refused unless you pass " +
+        "allow_non_empty_area (empty it first to keep its contents). kind tag: PERMANENT — requires " +
         "dangerously_permanent; the tag is removed from every item, and if it has nested child " +
         "tags they are ALL permanently deleted with it — pass acknowledge_tag_subtree to confirm.",
       inputSchema: {
@@ -1875,6 +1878,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("kind area/tag: confirm permanent, unrecoverable deletion"),
+        allow_non_empty_area: z
+          .boolean()
+          .optional()
+          .describe(
+            "kind area: delete a non-empty area together with its contents (its to-dos and projects move to the Trash)",
+          ),
         acknowledge_tag_subtree: z
           .boolean()
           .optional()
@@ -2623,6 +2632,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("Required for area/tag delete and trash.empty (PERMANENT, no Trash)"),
+        allow_non_empty_area: z
+          .boolean()
+          .optional()
+          .describe("area.delete: delete a non-empty area together with its contents"),
         ...dryRunShape,
         ...opIdShape,
       },
@@ -2677,6 +2690,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                   acknowledge_project_reopen: z.boolean().optional(),
                   dangerously_permanent: z.boolean().optional(),
                   acknowledge_tag_subtree: z.boolean().optional(),
+                  allow_non_empty_area: z.boolean().optional(),
                   dangerously_drive_gui: z.boolean().optional(),
                 })
                 .optional(),
@@ -2701,6 +2715,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(o?.acknowledge_project_reopen === true && { acknowledgeProjectReopen: true }),
             ...(o?.dangerously_permanent === true && { dangerouslyPermanent: true }),
             ...(o?.acknowledge_tag_subtree === true && { acknowledgeTagSubtree: true }),
+            ...(o?.allow_non_empty_area === true && { allowNonEmptyArea: true }),
             ...(o?.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
             ...(ceiling !== undefined && { maxDisruption: ceiling }),
           };

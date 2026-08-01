@@ -2387,6 +2387,40 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("area.delete");
     });
 
+    it("delete kind area refuses a non-empty area until allow_non_empty_area (then plans, dry-run)", async () => {
+      const area = seedArea(fixture.db, "Busy");
+      seedProject(fixture.db, { title: "P", area });
+      seedTodo(fixture.db, { title: "t", area });
+      await connect([fakeVector(null, { id: "applescript", ops: ["area.delete"] }).vector]);
+
+      // Even under --dry-run with the permanent ack, a non-empty area refuses
+      // fail-closed — the guard surfaces before any plan, like every other guard.
+      const blocked = await client.callTool({
+        name: "delete",
+        arguments: { kind: "area", uuid: area, dangerously_permanent: true, dry_run: true },
+      });
+      expect(blocked.isError).toBe(true);
+      const err = textOf(blocked) as { code: string; message: string; remediation: string };
+      expect(err.code).toBe("blocked:H-AREA-NOT-EMPTY");
+      expect(err.message).toContain("1 project and 1 to-do");
+      expect(err.remediation).toContain("--allow-non-empty");
+
+      // allow_non_empty_area threads through the param; with both acks it plans.
+      const outcome = textOf(
+        await client.callTool({
+          name: "delete",
+          arguments: {
+            kind: "area",
+            uuid: area,
+            allow_non_empty_area: true,
+            dangerously_permanent: true,
+            dry_run: true,
+          },
+        }),
+      ) as { op: string };
+      expect(outcome.op).toBe("area.delete");
+    });
+
     it("add_tag plans a create (dry-run)", async () => {
       await connect([fakeVector(null, { id: "applescript", ops: ["tag.add"] }).vector]);
       const outcome = textOf(

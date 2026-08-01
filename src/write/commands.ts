@@ -27,6 +27,7 @@ import type {
   WhenValue,
 } from "./operations.ts";
 import {
+  areaMemberCounts,
   childTagTitles,
   classifyHeadingConvert,
   classifyHeadingDissolve,
@@ -1160,10 +1161,13 @@ const areaAdd: CommandSpec<"area.add"> = {
 
 const areaDelete: CommandSpec<"area.delete"> = {
   op: "area.delete",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-PERMANENT-DELETE"],
+  hazards: ["H-UNKNOWN-DESTINATION", "H-AREA-NOT-EMPTY", "H-PERMANENT-DELETE"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.entityTarget = resolveArea(db, { title: params.target, uuid: params.target });
+    if (pre.entityTarget.resolved !== null) {
+      pre.areaMembers = areaMemberCounts(db, pre.entityTarget.resolved.uuid);
+    }
     return pre;
   },
   expectedDelta(pre) {
