@@ -403,7 +403,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
         detail:
           "evening reorder is bounce-only: the native command would silently clear " +
           "startBucket on every listed item (O03)",
-        remediation: "use write.reorder / `things reorder --scope evening` (bounce strategy)",
+        remediation: "use write.reorder / `things reorder <refs…> --in evening` (bounce strategy)",
       };
     }
     if (

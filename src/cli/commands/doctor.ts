@@ -14,8 +14,7 @@ import {
   type EnvelopeMeta,
 } from "../../index.ts";
 
-// Back-compat aliases for pre-seam consumers of the CLI module.
-export type DoctorReport = DiagnoseReport;
+// Back-compat alias for pre-seam consumers of the CLI module.
 export const runDoctor: (dbPath?: string) => DiagnoseResult = diagnose;
 
 function environmentLine(env: DiagnoseReport["environment"]): string {
