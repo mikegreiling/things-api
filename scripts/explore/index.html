@@ -459,6 +459,14 @@
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ command }),
           });
+          if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) {
+            const text = await res.text();
+            throw new Error(
+              res.status === 403
+                ? "signed out — reopen the ?key= URL from the server output (each restart mints a new key)"
+                : `server error ${res.status}: ${text.slice(0, 200)}`,
+            );
+          }
           const r = await res.json();
           $("meta").hidden = false;
           const status = $("status");
