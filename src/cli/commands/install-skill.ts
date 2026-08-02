@@ -53,8 +53,8 @@ interface LocationReport {
   label: string;
   dir: string;
   installedVersion: string | null;
-  /** up-to-date | behind | differs | legacy | absent (check); written (install copy). */
-  status: "up-to-date" | "behind" | "differs" | "legacy" | "absent" | "written";
+  /** up-to-date | behind | differs | legacy | absent (check); written (install copy); would-write (dry-run). */
+  status: "up-to-date" | "behind" | "differs" | "legacy" | "absent" | "written" | "would-write";
 }
 
 interface InstallSkillData {
@@ -308,8 +308,38 @@ export function registerInstallSkill(program: Command): void {
     .option("--check", "report installed vs this binary's skill version without writing")
     .option("--project", "install into the current project (.agents) instead of globally")
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action((opts: { check?: boolean; project?: boolean; json?: boolean }) => {
+    .action((opts: { check?: boolean; project?: boolean; json?: boolean; dryRun?: boolean }) => {
       const started = Date.now();
+      // Universal `--dry-run` (../dry-run.ts): install-skill writes local files
+      // (not the Things DB), so it honors the flag with an honest preview — name
+      // every location it WOULD write, touch nothing, exit 0. (`--check` remains
+      // the version-comparison inspector; --dry-run previews the install itself.)
+      if (opts.dryRun === true) {
+        const rows: LocationReport[] = skillLocations(resolveHome()).map((loc) => ({
+          label: loc.label,
+          dir: loc.dir,
+          installedVersion: installedSkillVersion(loc.dir),
+          status: "would-write",
+        }));
+        const data: InstallSkillData = {
+          mode: "install",
+          path: "simulated",
+          global: opts.project !== true,
+          binaryVersion: CLI_VERSION,
+          locations: rows,
+          detail: `dry run: would install the things-cli agent skill (version ${CLI_VERSION}) — nothing was written`,
+        };
+        if (opts.json === true) {
+          process.stdout.write(
+            `${JSON.stringify(okEnvelope("install-skill", data, meta(started)))}\n`,
+          );
+        } else {
+          const lines = [data.detail, "", ...rows.map((r) => `  ${r.label}: ${r.dir}`)];
+          process.stdout.write(`${lines.join("\n")}\n`);
+        }
+        process.exitCode = ExitCode.Ok;
+        return;
+      }
       const { data, exitCode } = installSkill(opts, {
         home: resolveHome(),
         binaryVersion: CLI_VERSION,

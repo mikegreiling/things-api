@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 
-import { loadMcpServer, type DisruptionTier } from "../../index.ts";
+import { ExitCode, loadMcpServer, type DisruptionTier } from "../../index.ts";
 
 export function registerMcp(program: Command): void {
   program
@@ -35,7 +35,21 @@ export function registerMcp(program: Command): void {
         allowDisruptive?: boolean;
         allowVeryDisruptive?: boolean;
         scope?: string;
+        dryRun?: boolean;
       }) => {
+        // Universal `--dry-run` (../dry-run.ts) means "guarantee nothing
+        // changes". `mcp` serves a live surface whose tools make changes on
+        // demand, with nothing to plan up front — so there is no honest preview.
+        // Refuse loudly rather than launch a server that silently ignores the
+        // promise (its controls are --scope and the disruption ceilings instead).
+        if (opts.dryRun === true) {
+          process.stderr.write(
+            "error: things mcp does not support --dry-run — it serves a live surface whose tools " +
+              "make changes on request; scope it with --scope to confine what it can touch\n",
+          );
+          process.exitCode = ExitCode.Usage;
+          return;
+        }
         // LAZY imports: the MCP SDK + zod load only when `things mcp` actually
         // runs. Every other CLI command must work in environments that ship a
         // minimal dependency set (the guest e2e bundle carries only commander).

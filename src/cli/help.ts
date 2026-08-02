@@ -181,6 +181,9 @@ export function renderTopLevelHelp(program: Command, width: number): string {
     `${"  --json".padEnd(col)}emit {apiVersion, ok, kind, data, meta}; payload=.data; entity id=.uuid (not .id)`,
   );
   lines.push(`${"  --db <path>".padEnd(col)}read from an explicit database path`);
+  lines.push(
+    `${"  --dry-run".padEnd(col)}accepted everywhere: a read returns normal output, a write previews the change`,
+  );
   lines.push(`${"  -h, --help".padEnd(col)}help for things, or for any <command>`);
   lines.push(`${"  -V, --version".padEnd(col)}print the version (${CLI_VERSION})`);
   lines.push("");
@@ -212,7 +215,7 @@ const AGENT_NOTE_BULLETS: readonly string[] = [
   "No command ever prompts interactively; operations with cascading or permanent effects require explicit flags documented in their --help.",
   "Discover the full operation catalog with: things capabilities --json",
   "Symbols & colors in list output: run `things legend` (add --json for the table).",
-  "Every write supports --dry-run: preview the planned change and its expected effect without executing anything.",
+  "Every command accepts --dry-run — it guarantees nothing changes: a read returns its normal output unchanged, a write previews the planned change and its expected effect without executing anything.",
   "Failures are loud: a change that does not take effect exits 3; refused changes exit 4 with machine-readable remediation.",
   "An agent skill is available: `things install-skill`. On human output the tool reads your installed skill under ~/.agents and ~/.claude and notes (once, on stderr) when it is well behind this binary; silence it with THINGS_API_NO_SKILL_CHECK=1.",
 ];
