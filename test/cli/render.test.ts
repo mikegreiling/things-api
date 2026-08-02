@@ -325,18 +325,24 @@ describe("things projects — sidebar mirror", () => {
 });
 
 describe("project title rows", () => {
-  it("area show styles project rows as titles and suppresses the area name", () => {
+  it("area show renders project rows DE-GUTTERED (plain, no gutter) and suppresses the area name", () => {
     fixture = buildFixtureDb();
     seedHobbies(fixture);
-    // The renderers are exercised through renderSections above; here just
-    // assert the formatItem contract directly for the title form.
+    // The PROJECTS section of an `area show` is a pure-container block: its rows
+    // are PLAIN (no projectTitle — area show does not treat projects as headings)
+    // and DE-GUTTERED — the title IS the ref, so no uuid column (per-section law).
     const [section] = anytimeView(fixture.db, NOW);
     const project = section?.items.find((i) => i.type === "project");
     expect(project).toBeDefined();
     if (!project || !project.area) return;
-    const line = formatItem(project, 8, { projectTitle: true, suppressArea: project.area.uuid });
-    // uuid column, circle glyph, styled title, ratio chip — no (Hobbies).
-    expect(line).toMatch(/^proj-\d+ {2}\( \) Firmware Updates ‹\d+(?:\/\d+)?›$/);
+    const line = formatItem(project, 0, {
+      noGutter: true,
+      selfRef: { kind: "project" },
+      suppressArea: project.area.uuid,
+    });
+    // No uuid gutter, circle glyph, styled title, ratio chip — no (Hobbies); a
+    // unique title round-trips (no promoter armed here) so it stays bare.
+    expect(line).toMatch(/^\( \) Firmware Updates ‹\d+(?:\/\d+)?›$/);
   });
 });
 

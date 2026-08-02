@@ -18,6 +18,7 @@ import {
   disclosureHint,
   fusedTitleSuffix,
   renderAnytimePreview,
+  renderContainerList,
   renderLegend,
   renderList,
   renderLogbook,
@@ -999,7 +1000,10 @@ export function registerReadCommands(program: Command): void {
         // unscoped it mirrors the sidebar with ⬡ area headers.
         (items) => {
           if (opts.area === undefined) return renderProjectsSidebar(items, hints);
-          const lines = renderList(items);
+          // Scoped to one area the list is a FLAT homogeneous container listing:
+          // de-gutter it under the same per-section law as the sidebar (the
+          // `(Area)` suffix stays — no header names the scope here).
+          const lines = renderContainerList(items);
           const hidden = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
           if (hidden > 0) {
             // Hidden-section placeholder: the reveal command echoes the user's

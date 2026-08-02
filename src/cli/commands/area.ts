@@ -137,7 +137,19 @@ export function renderAreaView(
   // underline; only ANYTIME treats projects as headings. So a project renders
   // exactly like any other row here — no projectTitle opt.
   const fmt = (i: Todo | Project) => formatItem(i, w, { suppressArea: view.area?.uuid ?? null });
-  const fmtProject = fmt;
+  // The ACTIVE-projects section and the Someday-projects block are provably
+  // ALL-container blocks (per-SECTION de-gutter law): drop the uuid gutter — a
+  // project's TITLE is its first-class ref — and promote a colliding live twin
+  // to the fused `Title [8char]` suffix (the shared round-trip predicate). The
+  // direct-to-dos block and the mixed Upcoming section keep their gutters (they
+  // contain to-dos), so those rows still route through `fmt`. Width stays `w`
+  // (computed over the whole card) so the guttered to-do rows are byte-identical.
+  const fmtProject = (i: Todo | Project) =>
+    formatItem(i, 0, {
+      suppressArea: view.area?.uuid ?? null,
+      noGutter: true,
+      selfRef: { kind: "project" },
+    });
 
   // Card header: glyph + name, the GUI's share link (carries the uuid — it
   // pastes back into any ref argument), then labeled meta lines. The opened

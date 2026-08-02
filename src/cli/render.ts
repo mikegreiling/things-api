@@ -486,6 +486,22 @@ export function renderList(items: ListItem[]): string[] {
 }
 
 /**
+ * A FLAT homogeneous CONTAINER listing (`things projects --area <ref>`): every
+ * row is a project, so — like the `things projects` sidebar — the rows shed the
+ * uuid gutter (a project's TITLE is its first-class ref) and a colliding live
+ * twin promotes to the fused `Title [8charPrefix]` suffix (the shared round-trip
+ * predicate). Unlike the sidebar there is no `── ⬡ Area ──` header naming the
+ * scope, so the `(Area)` context suffix is NOT suppressed — it stays the sole
+ * area label on each row. The counterpart to {@link renderList} for a provably
+ * all-container flat list (mixed/to-do flat lists keep their gutters there).
+ */
+export function renderContainerList(items: ListItem[]): string[] {
+  return items.length === 0
+    ? ["(empty)"]
+    : items.map((i) => formatItem(i, 0, { noGutter: true, selfRef: { kind: "project" } }));
+}
+
+/**
  * The Today-view per-row mark: a provisional Today member fills the after-the-box
  * mark slot with a yellow `•` (see {@link renderToday}). Derived through
  * {@link entityProvisional}, the SAME law the wire emit boundary uses.
@@ -805,11 +821,17 @@ export function renderSections(sections: SidebarSection[], star = false): string
       if (item.type === "project") {
         openProject = item.uuid;
         blank();
+        // A group-HEADING render (underlined project title heading its children)
+        // is a HEADER, not a row: de-gutter it and promote a colliding live twin
+        // to the fused `[8char]` suffix (same law as renderAnytimePreview). Child
+        // to-do rows below keep their gutters (width stays `w`).
         lines.push(
-          formatItem(item, w, {
+          formatItem(item, 0, {
             projectTitle: true,
             suppressArea: section.area?.uuid ?? null,
             mark,
+            noGutter: true,
+            selfRef: { kind: "project" },
           }),
         );
       } else {
@@ -955,8 +977,19 @@ export function renderAnytimePreview(
     }
     for (const { project, items: children } of projects) {
       blank();
+      // A group-HEADING render (an underlined project title that heads its own
+      // children) is a HEADER, not a row: de-gutter it — the title IS its ref —
+      // and promote a colliding live twin to the fused `[8char]` suffix (shared
+      // predicate). Its child to-do rows below KEEP their gutters (width stays
+      // `w`, so those rows are byte-identical).
       lines.push(
-        formatItem(project, w, { projectTitle: true, suppressArea, mark: todayMark(project) }),
+        formatItem(project, 0, {
+          projectTitle: true,
+          suppressArea,
+          mark: todayMark(project),
+          noGutter: true,
+          selfRef: { kind: "project" },
+        }),
       );
       for (const item of children) {
         lines.push(
@@ -1053,8 +1086,12 @@ export function renderSomedayPreview(
       lines.push(bold("── From active projects ──"));
       for (const group of trailing) {
         blank();
+        // A group-HEADING render (underlined project title heading its children)
+        // is a HEADER, not a row: de-gutter it — the title IS its ref — and fuse
+        // the `[8char]` suffix on a non-round-tripping title (shared predicate).
+        // The child to-do rows below keep their gutters (width stays `w`).
         lines.push(
-          `${dim(uuidCol(group.project.uuid, w))}  ${underline(projectTitleAccent(group.project.title))}`,
+          `${underline(projectTitleAccent(group.project.title))}${fusedTitleSuffix(group.project, "project")}`,
         );
         for (const item of group.items) {
           lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));

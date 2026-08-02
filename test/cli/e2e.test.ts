@@ -2790,19 +2790,24 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
   });
 });
 
-// The ratified per-view law (mg/degutter-container-listings): a HOMOGENEOUS
-// container listing (areas / projects) drops its uuid gutter — a container's
+// The ratified per-SECTION law (mg/degutter-container-listings): a section or
+// block whose rows are ALL containers drops its uuid gutter — a container's
 // TITLE is its first-class ref — and promotes a colliding LIVE twin to the fused
-// `Title [8charPrefix]` suffix (the shared round-trip predicate). Heading section-
-// headers inside a project view follow the same law, project-scoped. Item rows,
-// mixed views, trash and logbook keep their gutters (a to-do's uuid is its only
-// write handle; trashed/logged titles do not name-resolve). Explicit realistic
-// uuids so the twins' 8-char display prefixes are distinct (real Things uuids are
-// 22-char base62); the render promoter arms only on a TTY, so these run runTty.
+// `Title [8charPrefix]` suffix (the shared round-trip predicate). This fires per
+// pure-container SECTION, not per whole view: the `things areas`/`things projects`
+// listings, `things projects --area <ref>` (flat), the PROJECTS section of an
+// `area show`, and the group-HEADING renders in `project show`/`anytime` (an
+// underlined title heading its own children — a header, not a row) all shed the
+// gutter. Any section that INTERMIXES to-do rows keeps the gutter on every row in
+// it, project rows included (an area's direct to-dos, anytime children, today,
+// inbox, upcoming, trash, logbook, search) — a to-do's uuid is its only write
+// handle; trashed/logged titles do not name-resolve. Explicit realistic uuids so
+// the twins' 8-char display prefixes are distinct (real Things uuids are 22-char
+// base62); the render promoter arms only on a TTY, so these run runTty.
 /** Normalize the sole timing-variable envelope field so two runs compare byte-for-byte. */
 const norm = (s: string): string => s.replace(/"elapsedMs":\d+/g, '"elapsedMs":0');
 
-describe("container listings de-gutter (TTY per-view law)", () => {
+describe("container listings de-gutter (TTY per-section law)", () => {
   // 22-char base62 uuids with distinct 8-char prefixes.
   const SPLIT_A = "SpA1tQwErTy6gHi7jKl8mn";
   const SPLIT_B = "SpB2tZxCvBn6gHi7jKl8mn";
@@ -2926,6 +2931,87 @@ describe("container listings de-gutter (TTY per-view law)", () => {
     expect(logbook.find((l) => l.includes("shipped"))?.startsWith(loggedUuid.slice(0, 8))).toBe(
       true,
     );
+  });
+
+  it("area show: the PROJECTS section de-gutters (fused on colliding twins); the to-do section KEEPS gutters", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    const focus = seedTag(fx.db, "focus");
+    const solo = seedProject(fx.db, {
+      title: "New Stuff",
+      area: family,
+      index: 1,
+      untrashedLeafActionsCount: 8,
+      openUntrashedLeafActionsCount: 8,
+    });
+    tagTask(fx.db, solo, focus);
+    seedProject(fx.db, { title: "Split", area: family, index: 2, uuid: SPLIT_A });
+    seedProject(fx.db, { title: "Split", area: family, index: 3, uuid: SPLIT_B });
+    const todoUuid = "Td1oQwErTy6gHi7jKl8mn0";
+    seedTodo(fx.db, { title: "call plumber", area: family, index: 4, uuid: todoUuid });
+
+    const out = runTty(["area", "show", "Family", "--db", fx.path]).split("\n");
+    // Project ROWS are de-guttered: bare `( ) Title ‹n/m›`, count chip + tag
+    // intact, the area name suppressed (the card header names it), no uuid gutter.
+    const soloLine = out.find((l) => l.includes("New Stuff"));
+    expect(soloLine).toBe("( ) New Stuff ‹8/8› #focus");
+    expect(soloLine).not.toContain(solo);
+    // A colliding live twin promotes to its own fused prefix (ahead of the chip).
+    const splitLines = out.filter((l) => l.includes("Split"));
+    expect(splitLines).toContain(`( ) Split [${SPLIT_A.slice(0, 8)}] ‹0›`);
+    expect(splitLines).toContain(`( ) Split [${SPLIT_B.slice(0, 8)}] ‹0›`);
+    // The direct-to-dos section below KEEPS its gutter (it contains to-dos).
+    const todoLine = out.find((l) => l.includes("call plumber"));
+    expect(todoLine?.startsWith(todoUuid.slice(0, 8))).toBe(true);
+  });
+
+  it("projects --area <ref>: the flat listing de-gutters, keeping the (Area) suffix (no header names the scope)", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    const solo = seedProject(fx.db, { title: "New Stuff", area: family, index: 1 });
+    seedProject(fx.db, { title: "Dup", area: family, index: 2, uuid: DUP_A });
+    seedProject(fx.db, { title: "Dup", area: family, index: 3, uuid: DUP_B });
+
+    const out = runTty(["projects", "--area", "Family", "--db", fx.path]).split("\n");
+    const soloLine = out.find((l) => l.includes("New Stuff"));
+    // De-guttered, but the (Family) context stays — it is the sole area label
+    // here (unlike the sidebar, no `── ⬡ Family ──` header precedes these rows).
+    expect(soloLine).toBe("( ) New Stuff ‹0› (Family)");
+    expect(soloLine).not.toContain(solo);
+    const dupLines = out.filter((l) => l.includes("Dup"));
+    expect(dupLines).toContain(`( ) Dup [${DUP_A.slice(0, 8)}] ‹0› (Family)`);
+    expect(dupLines).toContain(`( ) Dup [${DUP_B.slice(0, 8)}] ‹0› (Family)`);
+  });
+
+  it("anytime: project HEADINGS de-gutter (fused on twins); direct + child to-do rows KEEP gutters", () => {
+    fx = buildFixtureDb();
+    const work = seedArea(fx.db, "Work", 1);
+    const directUuid = "Lo0seQwErTy6gHi7jKl8mn";
+    seedTodo(fx.db, { title: "loose direct", area: work, index: 0, uuid: directUuid });
+    const alpha = seedProject(fx.db, {
+      title: "Dup",
+      area: work,
+      index: 1,
+      uuid: DUP_A,
+      untrashedLeafActionsCount: 1,
+      openUntrashedLeafActionsCount: 1,
+    });
+    const childUuid = "Ch1ldQwErTy6gHi7jKl8mn";
+    seedTodo(fx.db, { title: "child one", area: work, project: alpha, index: 2, uuid: childUuid });
+    seedProject(fx.db, { title: "Dup", area: work, index: 3, uuid: DUP_B });
+
+    const out = runTty(["anytime", "--db", fx.path]).split("\n");
+    // The project heading (an underlined title heading its children) is a HEADER:
+    // de-guttered, with the fused suffix on the within-view title collision.
+    const headings = out.filter((l) => l.trimEnd().endsWith("‹1/1›") || l.includes("Dup ["));
+    expect(out.some((l) => l.startsWith(`( ) Dup [${DUP_A.slice(0, 8)}]`))).toBe(true);
+    expect(out.some((l) => l.startsWith(`( ) Dup [${DUP_B.slice(0, 8)}]`))).toBe(true);
+    expect(headings.every((l) => !/^[0-9A-Za-z]{8} /.test(l))).toBe(true);
+    // The area's DIRECT to-do and the project's CHILD to-do both KEEP their gutter.
+    expect(out.find((l) => l.includes("loose direct"))?.startsWith(directUuid.slice(0, 8))).toBe(
+      true,
+    );
+    expect(out.find((l) => l.includes("child one"))?.startsWith(childUuid.slice(0, 8))).toBe(true);
   });
 
   it("--json is byte-identical regardless of TTY for areas and projects (de-gutter is human-only)", () => {
