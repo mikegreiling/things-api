@@ -2789,3 +2789,163 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect(search.data.items[0].stage).toBe("trash");
   });
 });
+
+// The ratified per-view law (mg/degutter-container-listings): a HOMOGENEOUS
+// container listing (areas / projects) drops its uuid gutter — a container's
+// TITLE is its first-class ref — and promotes a colliding LIVE twin to the fused
+// `Title [8charPrefix]` suffix (the shared round-trip predicate). Heading section-
+// headers inside a project view follow the same law, project-scoped. Item rows,
+// mixed views, trash and logbook keep their gutters (a to-do's uuid is its only
+// write handle; trashed/logged titles do not name-resolve). Explicit realistic
+// uuids so the twins' 8-char display prefixes are distinct (real Things uuids are
+// 22-char base62); the render promoter arms only on a TTY, so these run runTty.
+/** Normalize the sole timing-variable envelope field so two runs compare byte-for-byte. */
+const norm = (s: string): string => s.replace(/"elapsedMs":\d+/g, '"elapsedMs":0');
+
+describe("container listings de-gutter (TTY per-view law)", () => {
+  // 22-char base62 uuids with distinct 8-char prefixes.
+  const SPLIT_A = "SpA1tQwErTy6gHi7jKl8mn";
+  const SPLIT_B = "SpB2tZxCvBn6gHi7jKl8mn";
+  const DUP_A = "DpA1tQwErTy6gHi7jKl8mn";
+  const DUP_B = "DpB2tZxCvBn6gHi7jKl8mn";
+
+  it("areas listing: no gutter, ⬡ + title, tags intact; fused suffix ONLY on colliding twins", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    tagArea(fx.db, family, seedTag(fx.db, "home"));
+    seedArea(fx.db, "Split", 2, SPLIT_A);
+    seedArea(fx.db, "Split", 3, SPLIT_B);
+
+    const out = runTty(["areas", "--db", fx.path]).split("\n");
+    const familyLine = out.find((l) => l.includes("Family"));
+    expect(familyLine).toBe("⬡ Family #home"); // no gutter, tag kept, no bracket
+    const splitLines = out.filter((l) => l.includes("Split"));
+    expect(splitLines).toHaveLength(2);
+    // Each colliding twin promotes to its OWN 8-char prefix — the disambiguator.
+    expect(splitLines).toContain(`⬡ Split [${SPLIT_A.slice(0, 8)}]`);
+    expect(splitLines).toContain(`⬡ Split [${SPLIT_B.slice(0, 8)}]`);
+    // A unique title never carries a bracket, and no row shows a raw uuid.
+    expect(familyLine).not.toContain("[");
+    expect(out.join("\n")).not.toContain(family);
+  });
+
+  it("projects listing: no gutter, box + mark + count + tags intact; fused suffix on colliding live twins", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    const focus = seedTag(fx.db, "focus");
+    const solo = seedProject(fx.db, {
+      title: "New Stuff",
+      area: family,
+      index: 1,
+      untrashedLeafActionsCount: 8,
+      openUntrashedLeafActionsCount: 8,
+    });
+    tagTask(fx.db, solo, focus);
+    seedProject(fx.db, { title: "Dup", area: family, index: 2, uuid: DUP_A });
+    seedProject(fx.db, { title: "Dup", area: family, index: 3, uuid: DUP_B });
+
+    const out = runTty(["projects", "--db", fx.path]).split("\n");
+    const soloLine = out.find((l) => l.includes("New Stuff"));
+    // De-guttered: opens at the project box, carries count chip + tag, no bracket.
+    expect(soloLine?.startsWith("( ) New Stuff")).toBe(true);
+    expect(soloLine).toContain("8/8");
+    expect(soloLine).toContain("#focus");
+    expect(soloLine).not.toContain(solo); // no uuid gutter
+    expect(soloLine).not.toContain("[");
+    const dupLines = out.filter((l) => l.includes("Dup"));
+    expect(dupLines).toHaveLength(2);
+    // Each colliding live twin carries its own 8-char prefix right after the
+    // title (the fused suffix rides ahead of the count chip).
+    expect(dupLines.some((l) => l.startsWith(`( ) Dup [${DUP_A.slice(0, 8)}]`))).toBe(true);
+    expect(dupLines.some((l) => l.startsWith(`( ) Dup [${DUP_B.slice(0, 8)}]`))).toBe(true);
+  });
+
+  it("liveness-scoped: a TRASHED same-title twin does NOT trigger the fused suffix", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    // One LIVE "Solo" and a TRASHED "Solo": the live one is the sole write target,
+    // so its title round-trips → bare, no bracket (the predicate is live-scoped).
+    seedProject(fx.db, { title: "Solo", area: family, index: 1, uuid: "So1oQwErTy6gHi7jKl8mn0" });
+    seedProject(fx.db, { title: "Solo", area: family, index: 2, trashed: true });
+
+    const out = runTty(["projects", "--db", fx.path]).split("\n");
+    const soloLines = out.filter((l) => l.includes("Solo"));
+    expect(soloLines).toHaveLength(1); // the trashed twin is absent from the listing
+    expect(soloLines[0]?.startsWith("( ) Solo")).toBe(true);
+    expect(soloLines[0]).not.toContain("["); // bare — no fused suffix
+  });
+
+  it("heading section-headers: de-guttered, fused suffix on within-project collision; CHILD rows keep gutters", () => {
+    fx = buildFixtureDb();
+    const host = seedProject(fx.db, { title: "Host", index: 1, uuid: "Ho5tQwErTy6gHi7jKl8mn0" });
+    const backlog = seedHeading(fx.db, { title: "Backlog", project: host, index: 1 });
+    const child = seedTodo(fx.db, {
+      title: "task a",
+      project: host,
+      heading: backlog,
+      index: 1,
+      uuid: "Ch1ldQwErTy6gHi7jKl8mn",
+    });
+    const dup1 = seedHeading(fx.db, { title: "Dup", project: host, index: 2, uuid: DUP_A });
+    seedTodo(fx.db, { title: "task b", project: host, heading: dup1, index: 2 });
+    const dup2 = seedHeading(fx.db, { title: "Dup", project: host, index: 3, uuid: DUP_B });
+    seedTodo(fx.db, { title: "task c", project: host, heading: dup2, index: 3 });
+
+    const out = runTty(["project", "show", host, "--db", fx.path]).split("\n");
+    // A unique heading title is bare (no gutter, no bracket).
+    expect(out).toContain("Backlog");
+    // Within-project title collision promotes each heading to its own prefix.
+    expect(out).toContain(`Dup [${DUP_A.slice(0, 8)}]`);
+    expect(out).toContain(`Dup [${DUP_B.slice(0, 8)}]`);
+    // CHILD to-do rows KEEP their uuid gutter (a to-do's uuid is its only handle).
+    const childLine = out.find((l) => l.includes("task a"));
+    expect(childLine?.startsWith(child.slice(0, 8))).toBe(true);
+  });
+
+  it("regression: mixed / trash / logbook rows keep their uuid gutter (per-view law lock)", () => {
+    fx = buildFixtureDb();
+    const inboxUuid = "InBoxQwErTy6gHi7jKl8mn";
+    const trashUuid = "TrAshQwErTy6gHi7jKl8mn";
+    const loggedUuid = "LoGgdQwErTy6gHi7jKl8mn";
+    seedTodo(fx.db, { title: "loose task", uuid: inboxUuid, start: "inbox" });
+    seedTodo(fx.db, { title: "gone", uuid: trashUuid, trashed: true });
+    seedTodo(fx.db, {
+      title: "shipped",
+      uuid: loggedUuid,
+      status: "completed",
+      stopDate: new Date().getTime() / 1000,
+    });
+
+    const inbox = runTty(["inbox", "--db", fx.path]).split("\n");
+    expect(inbox.find((l) => l.includes("loose task"))?.startsWith(inboxUuid.slice(0, 8))).toBe(
+      true,
+    );
+    const trash = runTty(["trash", "--db", fx.path]).split("\n");
+    expect(trash.find((l) => l.includes("gone"))?.startsWith(trashUuid.slice(0, 8))).toBe(true);
+    const logbook = runTty(["logbook", "--db", fx.path]).split("\n");
+    expect(logbook.find((l) => l.includes("shipped"))?.startsWith(loggedUuid.slice(0, 8))).toBe(
+      true,
+    );
+  });
+
+  it("--json is byte-identical regardless of TTY for areas and projects (de-gutter is human-only)", () => {
+    fx = buildFixtureDb();
+    const family = seedArea(fx.db, "Family", 1);
+    seedArea(fx.db, "Split", 2, SPLIT_A);
+    seedArea(fx.db, "Split", 3, SPLIT_B);
+    seedProject(fx.db, { title: "Dup", area: family, index: 1, uuid: DUP_A });
+    seedProject(fx.db, { title: "Dup", area: family, index: 2, uuid: DUP_B });
+
+    // The only timing-variable field is meta.elapsedMs; normalize it, then the
+    // TTY (promoter armed) and non-TTY envelopes must be byte-for-byte identical.
+    const areasJson = norm(runTty(["areas", "--json", "--db", fx.path]));
+    const projectsJson = norm(runTty(["projects", "--json", "--db", fx.path]));
+    expect(areasJson).toBe(norm(runCli(["areas", "--json", "--db", fx.path]).stdout));
+    expect(projectsJson).toBe(norm(runCli(["projects", "--json", "--db", fx.path]).stdout));
+    // Full uuids survive in JSON (never the 8-char display prefix) — no fused
+    // suffix leaked into the wire, and no title carries a display bracket.
+    expect(areasJson).toContain(SPLIT_A);
+    expect(projectsJson).toContain(DUP_A);
+    expect(projectsJson).not.toContain(`[${DUP_A.slice(0, 8)}]`);
+  });
+});

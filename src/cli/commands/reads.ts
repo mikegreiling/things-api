@@ -16,6 +16,7 @@ import { areaMark, LEGEND, shortDate } from "../glyphs.ts";
 import {
   formatItem,
   disclosureHint,
+  fusedTitleSuffix,
   renderAnytimePreview,
   renderLegend,
   renderList,
@@ -27,8 +28,6 @@ import {
   renderToday,
   renderUpcoming,
   stripAnsi,
-  uuidCol,
-  uuidDisplayWidth,
   type LaterHints,
 } from "../render.ts";
 import {
@@ -1081,13 +1080,16 @@ export function registerReadCommands(program: Command): void {
       opts,
       "areas",
       (c) => c.read.areas(),
-      (data) => {
-        const w = uuidDisplayWidth(data);
-        return data.map(
+      // De-guttered listing: an area's TITLE is its first-class ref (name
+      // resolution + the liveness law), so the uuid gutter is redundant. The
+      // fused `[8charPrefix]` rides ONLY when the title would not round-trip —
+      // the SAME promotion predicate the JSON `*Uuid` emission and the inline
+      // container hints use (fusedTitleSuffix), never a fork.
+      (data) =>
+        data.map(
           (a) =>
-            `${dim(uuidCol(a.uuid, w))}  ${areaMark()} ${a.title}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
-        );
-      },
+            `${areaMark()} ${a.title}${fusedTitleSuffix(a, "area")}${a.tags.length ? ` ${dim(`#${a.tags.map((t) => t.title).join(" #")}`)}` : ""}`,
+        ),
     );
   });
 

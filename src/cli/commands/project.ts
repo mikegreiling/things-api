@@ -23,7 +23,13 @@ import {
 import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
 import { invocation, runRead, withClient } from "../read-driver.ts";
-import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
+import {
+  disclosureHint,
+  formatItem,
+  fusedTitleSuffix,
+  quoteTitle,
+  uuidDisplayWidth,
+} from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
 import { canonicalRef } from "../canonical-ref.ts";
 import { getInvocation, setInvocationCanonical } from "../resolve-invocation.ts";
@@ -160,13 +166,15 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   const looseRows = [...view.active, ...looseLater];
   if (looseRows.length > 0) lines.push("", ...looseRows.map(fmt));
   for (const group of view.headings) {
-    // Headings are the GUI's dim in-project subheads, not structural
-    // sections — rendered like item rows (their uuid IS addressable:
-    // heading rename/archive), title dim+underlined.
+    // Headings are the GUI's dim in-project subheads, not structural sections.
+    // De-guttered: a heading's TITLE is its first-class ref (project-scoped name
+    // resolution — rename/archive), so the uuid gutter is redundant; a within-
+    // project title collision promotes to the fused `[8char]` suffix instead
+    // (the project-scoped promotion predicate). Title stays dim+underlined.
     const members = [...group.items, ...(laterByHeading.get(group.heading.uuid) ?? [])];
     lines.push(
       "",
-      `${dim(uuidCol(group.heading.uuid, w))}  ${dim(underline(group.heading.title))}`,
+      `${dim(underline(group.heading.title))}${fusedTitleSuffix(group.heading, "heading", view.project.uuid)}`,
       ...(members.length > 0 ? members.map(fmt) : ["(none)"]),
     );
   }
@@ -199,10 +207,17 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
     // Archived-heading groups: an active-styled section header (HEADARC2-A) with
     // its children nested (the group header supplies the heading — no per-child
     // hint). Rendered after the flat rows (a defensible ordering, not GUI-probed).
+    // De-guttered like the LIVE heading headers above (mg/degutter-container-
+    // listings, per-section law extended to the logged region): an archived
+    // heading's TITLE is still its first-class project-scoped ref (rename/
+    // unarchive resolve it — resolveHeadingRef filters only trashed, not
+    // archived), so the gutter is redundant; a within-project title collision
+    // promotes to the fused `[8char]` suffix. Its logged CHILD to-do rows keep
+    // gutters (a to-do's uuid is its only handle).
     for (const group of view.loggedHeadings) {
       lines.push(
         "",
-        `${dim(uuidCol(group.heading.uuid, w))}  ${dim(underline(group.heading.title))}`,
+        `${dim(underline(group.heading.title))}${fusedTitleSuffix(group.heading, "heading", view.project.uuid)}`,
         ...(group.items.length > 0 ? group.items.map(fmt) : ["(none)"]),
       );
     }

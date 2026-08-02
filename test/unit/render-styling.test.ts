@@ -350,6 +350,50 @@ describe("inline container-hint promotion (color on)", () => {
   });
 });
 
+describe("de-guttered container-listing rows (noGutter + selfRef)", () => {
+  it("drops the uuid gutter and promotes a NON-round-tripping own title to the fused suffix", async () => {
+    const { formatItem } = await render();
+    const { setRenderRefPromoter } = await import("../../src/cli/ref-render.ts");
+    // Only "Twin" fails to round-trip (a colliding live twin); "Solo" is unique.
+    setRenderRefPromoter({ roundTrips: (_k, title) => title !== "Twin" });
+    try {
+      const twin = formatItem(project({ uuid: "Tw1nAaBc2dEf4gHi6jKl8m", title: "Twin" }), 8, {
+        noGutter: true,
+        selfRef: { kind: "project" },
+      });
+      const plain = stripSgr(twin);
+      // No gutter: the row opens at the project box, never the uuid.
+      expect(plain).not.toContain("Tw1nAaBc2");
+      expect(plain.startsWith("( )")).toBe(true);
+      // The fused `[8char]` suffix rides right after the title.
+      expect(plain).toContain("Twin [Tw1nAaBc]");
+
+      const solo = formatItem(project({ uuid: "So1oAaBc2dEf4gHi6jKl8m", title: "Solo" }), 8, {
+        noGutter: true,
+        selfRef: { kind: "project" },
+      });
+      const soloPlain = stripSgr(solo);
+      expect(soloPlain.startsWith("( )")).toBe(true);
+      expect(soloPlain).toContain("Solo");
+      // A unique title round-trips → bare, no fused suffix.
+      expect(soloPlain).not.toContain("[So1oAaBc");
+    } finally {
+      setRenderRefPromoter(null);
+    }
+  });
+
+  it("noGutter without selfRef is a bare de-guttered row (no promotion at all)", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(project({ uuid: "AbCdEfGh2dEf4gHi6jKl8m", title: "Whatever" }), 8, {
+      noGutter: true,
+    });
+    const plain = stripSgr(line);
+    expect(plain.startsWith("( )")).toBe(true);
+    expect(plain).not.toContain("AbCdEfGh");
+    expect(plain).not.toContain("[");
+  });
+});
+
 describe("width fitting + styling interplay (color on)", () => {
   it("truncates inside the SGR run — the clip/ellipsis boundary never splits an escape", async () => {
     const w = await width();

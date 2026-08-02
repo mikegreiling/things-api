@@ -18,6 +18,7 @@ import {
   type GroupedLimits,
   type ListItem,
   type Project,
+  type RefKind,
   type SectionCount,
   type SidebarSection,
   REF_PREFIX_LEN,
@@ -131,10 +132,46 @@ export interface FormatOpts {
    * among open ones stays dim/dim-strike. Never changes the status GLYPHS.
    */
   resolvedNormal?: boolean;
+  /**
+   * De-gutter this row: drop the left uuid column entirely. For a HOMOGENEOUS
+   * CONTAINER listing (`things projects`) whose title IS the row's first-class
+   * ref (name resolution + the liveness law), the uuid gutter is redundant. To-do
+   * rows and mixed views never pass this — a to-do's uuid is its only write
+   * handle, and mixed views keep a per-view aligned gutter on every row.
+   */
+  noGutter?: boolean;
+  /**
+   * Promote this container ROW's OWN title to the fused `Title [8charPrefix]`
+   * when it would not round-trip — the disambiguating write handle a de-guttered
+   * row needs (duplicate-titled live twins each show their prefix). Uses the SAME
+   * promotion predicate as JSON `*Uuid` emission and the inline container hint
+   * ({@link fusedTitleSuffix}); the kind scopes the round-trip resolver.
+   */
+  selfRef?: { kind: RefKind };
 }
 
 /** Wraps a `#a #b` tag form in the row's dim styling (incl. its leading space). */
 const styleTags = (form: string): string => ` ${dim(form)}`;
+
+/**
+ * The dim ` [8charPrefix]` a CONTAINER LISTING row (`things areas`/`things
+ * projects`) or a heading section-header appends to its OWN title when that title
+ * would NOT round-trip through its resolver — the disambiguating write handle a
+ * de-guttered row needs. Consults the SAME render promoter (./ref-render.ts) and
+ * `roundTrips` predicate the JSON `*Uuid` promotion and the inline container hint
+ * ({@link promotedRefBracket}) use, so the three can never disagree. Empty (bare
+ * title) when the promoter is unset (non-TTY / tests / no DB) or the title
+ * resolves back cleanly. `projectUuid` scopes the project-local heading resolver.
+ */
+export function fusedTitleSuffix(
+  ref: { uuid: string; title: string },
+  kind: RefKind,
+  projectUuid?: string,
+): string {
+  const p = renderRefPromoter();
+  if (p === null || p.roundTrips(kind, ref.title, ref.uuid, projectUuid)) return "";
+  return dim(` [${ref.uuid.slice(0, REF_PREFIX_LEN)}]`);
+}
 
 /**
  * The inline `[8charPrefix]` a container hint promotes when its bare title would
@@ -289,8 +326,15 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   // box + meta chips), the fixed tail markers, the collapsible tags, the CLI-
   // only container, and the full deadline. `styleTags` wraps a `#a #b` form in
   // the row's dim styling (incl. its leading space); the fitter folds the list.
-  const left = `${dim(shownUuid)}  ${box}${meta.length > 0 ? ` ${meta.join(" ")}` : ""}`;
-  const tailStr = tail.length > 0 ? ` ${tail.join(" ")}` : "";
+  // A de-guttered container listing drops the left uuid column (the title IS the
+  // ref); every other view keeps it (a to-do's uuid is its only write handle).
+  const gutter = opts.noGutter === true ? "" : `${dim(shownUuid)}  `;
+  const left = `${gutter}${box}${meta.length > 0 ? ` ${meta.join(" ")}` : ""}`;
+  // A de-guttered container row promotes its OWN title to the fused `[8char]`
+  // suffix when it would not round-trip (shared predicate). It rides the FIXED
+  // tail — the disambiguator survives width truncation like the tail markers do.
+  const selfSuffix = opts.selfRef !== undefined ? fusedTitleSuffix(item, opts.selfRef.kind) : "";
+  const tailStr = `${selfSuffix}${tail.length > 0 ? ` ${tail.join(" ")}` : ""}`;
   const ctxStr = context === "" ? "" : dim(context);
   const tagNames = item.tags.map((t) => t.title);
   const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${deadline}`;
@@ -585,7 +629,10 @@ export interface LaterHints {
  * its projects beneath (the redundant `(Area)` suffix suppressed). Items
  * arrive from projectsView already in sidebar order — this only inserts the
  * headers. Denser than renderSections on purpose: no title styling and no
- * blank line per project (every row here IS a project). With `hints`,
+ * blank line per project (every row here IS a project). Rows carry NO uuid
+ * gutter — a project's TITLE is its first-class ref (name resolution + the
+ * liveness law), so a colliding live twin promotes to the fused `Title [8char]`
+ * suffix instead (the shared promotion predicate). With `hints`,
  * default-hidden later projects are never silent: each group trails a muted
  * `…n later projects` count (a later-only area still gets its header), and
  * the output ends with the flag that reveals them.
@@ -594,7 +641,6 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
   const total = hints?.groups.reduce((n, g) => n + g.hidden, 0) ?? 0;
   if (items.length === 0 && total === 0 && (hints === undefined || hints.groups.length === 0))
     return ["(empty)"];
-  const w = uuidDisplayWidth(items);
   const byGroup = new Map<string | null, ListItem[]>();
   for (const item of items) {
     const key = item.area?.uuid ?? null;
@@ -620,7 +666,12 @@ export function renderProjectsSidebar(items: ListItem[], hints?: LaterHints): st
     }
     lines.push(
       ...rows.map((item) =>
-        formatItem(item, w, {
+        formatItem(item, 0, {
+          // A homogeneous project listing: the project TITLE is the row's
+          // first-class ref, so drop the uuid gutter and promote colliding
+          // live twins to the fused `[8char]` suffix (shared predicate).
+          noGutter: true,
+          selfRef: { kind: "project" },
           suppressArea: group.area?.uuid ?? null,
           // Projects can live in Today/This-Evening (probe O12) — pip them
           // exactly like a to-do row would be in a today-aware view.
