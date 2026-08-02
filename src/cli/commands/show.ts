@@ -27,6 +27,7 @@ import {
   setInvocationCanonical,
   SHOW_KEYWORDS,
 } from "../resolve-invocation.ts";
+import { canonicalRef } from "../canonical-ref.ts";
 import { renderAreaView, type AreaShowOpts } from "./area.ts";
 import { renderProjectView, showToggleFlags } from "./project.ts";
 import { renderDetail } from "./todo.ts";
@@ -49,27 +50,31 @@ import {
 } from "../tag-filters.ts";
 
 /**
- * The canonical typed command a loose/bare reference resolved to, for the
- * normalized-form echo. Uses the resolved TYPE plus the reference the user
- * gave: a name stays a name (`things area show "Hobbies"`), a uuid prefix
- * stays that prefix (every typed show accepts prefixes), a share link is
- * stripped to its id, and a heading (resolved to its project) echoes the
- * project uuid so the command is runnable.
+ * The canonical typed command a loose/bare reference resolved to — the base for
+ * both the normalized-form echo (`≡`) and the disclosure-footer suggestions.
+ * `canonicalRefStr` is the ALREADY-shell-quoted canonical ref of the resolved
+ * entity (../canonical-ref.ts): a container's bare round-tripping title, or its
+ * fused `Title [prefix]` when the bare title would not round-trip; a to-do's
+ * uuid/partial-uuid (a to-do has no round-trippable title). The heading case
+ * folds in — its target is the containing PROJECT, whose canonical ref is passed.
+ * The loose router's --show-later/--show-logged/--overdue/tag flags only ride the
+ * area/project cards — never echoed onto `todo show`, which lacks them.
  */
-function typedShowCommand(t: ShowTarget, ref: string, opts: ProjectShowFlags): string {
-  const cmd = t.kind === "area" ? "area show" : t.kind === "project" ? "project show" : "todo show";
-  const echoRef = t.viaHeading === true ? t.uuid : stripThingsUri(ref);
-  // The loose router's --show-later/--show-logged/--overdue/tag flags only apply
-  // to the area/project cards — never echo them onto `todo show`, which lacks them.
+function typedShowCommand(
+  kind: ShowTarget["kind"],
+  canonicalRefStr: string,
+  opts: ProjectShowFlags,
+): string {
+  const cmd = kind === "area" ? "area show" : kind === "project" ? "project show" : "todo show";
   const flags =
-    t.kind === "to-do"
+    kind === "to-do"
       ? []
       : [
           ...showToggleFlags(opts),
           opts.overdue === true && "--overdue",
           ...tagInvocationParts(opts),
         ];
-  return invocation(cmd, [shellQuote(echoRef), ...flags]);
+  return invocation(cmd, [canonicalRefStr, ...flags]);
 }
 
 type ProjectShowFlags = {
@@ -177,11 +182,6 @@ export function registerShowCommands(program: Command): void {
         );
         if (!projectCap.ok) return;
         const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
-        const hintBase = invocation("show", [
-          shellQuote(ref),
-          ...showToggleFlags(opts),
-          opts.overdue === true && "--overdue",
-        ]);
         runRead<ShowPayload>(
           opts,
           "show",
@@ -203,15 +203,28 @@ export function registerShowCommands(program: Command): void {
                   : err.message;
               throw new DidYouMeanError(message, ref, c.read.liteTitleSearch(ref));
             }
-            // Record the canonical typed command for the echo + resolvedCommand,
-            // but only for the routing sugars (a loose show by name is not one).
-            if (isRoutingSugar(t, ref)) setInvocationCanonical(typedShowCommand(t, ref, opts));
-            // Projects and to-do cards are uncapped: headings are true
-            // containers, so no strict total limit applies.
             const overdue = opts.overdue === true;
             const tagFilter = tagFilterFields(opts);
+            const promoter = c.refPromoter();
+            // The canonical typed command a container resolved to is BOTH the echo
+            // (recorded only for the routing sugars — a loose show by name is not
+            // one) and the disclosure-footer hintBase, so every footer speaks the
+            // SAME verb-coherent command the echo teaches (point 4). Its ref is the
+            // resolved entity's canonical ref (bare round-tripping title, else the
+            // fused `Title [prefix]`), never the raw string the user typed.
+            const echoIfSugar = (canonical: string): void => {
+              if (isRoutingSugar(t, ref)) setInvocationCanonical(canonical);
+            };
+            // Projects and to-do cards are uncapped: headings are true
+            // containers, so no strict total limit applies.
             if (t.kind === "project") {
               const view = c.read.projectView(t.uuid, { overdue, ...tagFilter });
+              const hintBase = typedShowCommand(
+                "project",
+                canonicalRef(promoter, "project", view.project),
+                opts,
+              );
+              echoIfSugar(hintBase);
               // --all reveals the project card's hidden later rows (charter),
               // matching `things project show … --all`.
               const projectOpts = {
@@ -235,6 +248,15 @@ export function registerShowCommands(program: Command): void {
                 areaLimit: areaCap.limit,
                 projectLimit: projectCap.limit,
               });
+              // The `loose` pseudo-area (null area) echoes the reserved word; a
+              // real area its canonical ref (bare title, or fused `Title [prefix]`).
+              const area = bounded.view.area;
+              const hintBase = typedShowCommand(
+                "area",
+                area === null ? "loose" : canonicalRef(promoter, "area", area),
+                opts,
+              );
+              echoIfSugar(hintBase);
               // Identical to `things area show` (kind area-view, data `{view}`).
               return {
                 data: bounded.view,
@@ -250,7 +272,11 @@ export function registerShowCommands(program: Command): void {
               };
             }
             // A to-do/heading detail unifies with the typed detail (kind detail,
-            // data `{item}`; item.type discriminates).
+            // data `{item}`; item.type discriminates). A to-do has no
+            // round-trippable title, so its echo keeps the uuid/partial-uuid the
+            // user pasted (a share link stripped to its id) — already the shortest
+            // re-resolvable ref; the detail card carries no footer.
+            echoIfSugar(typedShowCommand("to-do", shellQuote(stripThingsUri(ref)), opts));
             const detail = c.read.byUuid(t.uuid);
             return { data: detail, kind: "detail", lines: renderDetail(detail) };
           },

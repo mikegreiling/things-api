@@ -22,9 +22,11 @@ import {
 } from "../glyphs.ts";
 import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
-import { invocation, runRead, shellQuote, withClient } from "../read-driver.ts";
+import { invocation, runRead, withClient } from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidCol, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
+import { canonicalRef } from "../canonical-ref.ts";
+import { getInvocation, setInvocationCanonical } from "../resolve-invocation.ts";
 import {
   addTagFilterOptions,
   CONTAINER_TAG_HINT,
@@ -224,19 +226,14 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
   const opts: ProjectShowOpts & { json?: boolean; db?: string } = {
     ...rawOpts,
     showLater: rawOpts.showLater === true || rawOpts.all === true,
-    hintBase: invocation("project show", [
-      shellQuote(ref),
-      ...showToggleFlags(rawOpts),
-      overdue && "--overdue",
-      ...tagInvocationParts(rawOpts),
-    ]),
   };
   runRead(
     opts,
     "project-view",
     (c) => {
+      let view: ProjectView;
       try {
-        return { data: c.read.projectView(ref, { overdue, ...tagFilter }) };
+        view = c.read.projectView(ref, { overdue, ...tagFilter });
       } catch (err) {
         // An ambiguity is surfaced verbatim — its own candidate list IS the
         // disambiguation (count and list coherent by construction). A not-found
@@ -251,8 +248,25 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
         }
         throw err;
       }
+      // The disclosure footers (and, for the plural/namespace sugar, the `≡`
+      // echo) speak the entity's CANONICAL ref — a bare round-tripping title,
+      // else the fused `Title [prefix]` — never the raw string the user typed.
+      // The typed `project show` carries no echo (its classify canonical stays
+      // null); the `projects <ref>` / `project <ref>` sugars set one at classify
+      // time, refined here to the canonical ref.
+      const cref = canonicalRef(c.refPromoter(), "project", view.project);
+      const hintBase = invocation("project show", [
+        cref,
+        ...showToggleFlags(rawOpts),
+        overdue && "--overdue",
+        ...tagInvocationParts(rawOpts),
+      ]);
+      if (getInvocation()?.canonical !== null) {
+        setInvocationCanonical(invocation("project show", [cref]));
+      }
+      return { data: view, lines: renderProjectView(view, { ...opts, hintBase }) };
     },
-    (d) => renderProjectView(d, opts),
+    () => [],
   );
 }
 

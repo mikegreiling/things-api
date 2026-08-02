@@ -10,16 +10,11 @@ import { Option } from "commander";
 
 import { openInThings, revealLine } from "./reads.ts";
 import { renderNow, renderZone } from "../clock.ts";
-import {
-  invocation,
-  parseCap,
-  runRead,
-  shellQuote,
-  usageError,
-  withClient,
-} from "../read-driver.ts";
+import { invocation, parseCap, runRead, usageError, withClient } from "../read-driver.ts";
 import { disclosureHint, formatItem, quoteTitle, uuidDisplayWidth } from "../render.ts";
 import { DidYouMeanError } from "../did-you-mean.ts";
+import { canonicalRef } from "../canonical-ref.ts";
+import { getInvocation, setInvocationCanonical } from "../resolve-invocation.ts";
 import { showToggleFlags } from "./project.ts";
 import {
   AREA_PREVIEW_LIMIT,
@@ -247,12 +242,6 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
   const overdue = opts.overdue === true;
   const tagFilter = tagFilterFields(opts);
   const limits: GroupedLimits = { area: areaCap.limit, project: projectCap.limit };
-  const hintBase = invocation("area show", [
-    shellQuote(ref),
-    ...showToggleFlags(opts),
-    overdue && "--overdue",
-    ...tagInvocationParts(opts),
-  ]);
   runRead<AreaView>(
     opts,
     "area-view",
@@ -277,6 +266,23 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
           );
         }
         throw err;
+      }
+      // The disclosure footers (and, for the plural/namespace sugar, the `≡`
+      // echo) speak the area's CANONICAL ref — a bare round-tripping title, else
+      // the fused `Title [prefix]`; the `loose` pseudo-area (null area) keeps the
+      // reserved word. The typed `area show` carries no echo (classify canonical
+      // stays null); the `areas <ref>` / `area <ref>` sugars refine their
+      // classify-time canonical to this ref here.
+      const area = bounded.view.area;
+      const cref = area === null ? "loose" : canonicalRef(c.refPromoter(), "area", area);
+      const hintBase = invocation("area show", [
+        cref,
+        ...showToggleFlags(opts),
+        overdue && "--overdue",
+        ...tagInvocationParts(opts),
+      ]);
+      if (getInvocation()?.canonical !== null) {
+        setInvocationCanonical(invocation("area show", [cref]));
       }
       return {
         data: bounded.view,
