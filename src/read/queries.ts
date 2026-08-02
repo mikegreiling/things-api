@@ -455,6 +455,15 @@ function acceptedForms(prefixTier: boolean): string {
   return prefixTier ? "tried uuid, partial-uuid, and name" : "tried uuid and name";
 }
 
+/**
+ * The single-kind ambiguous-name refusal copy shared by the read resolvers
+ * (`"X" matches N projects — use the exact name or a uuid`). `kind` is the
+ * singular noun; the plural `s` is appended here so the count agrees.
+ */
+function ambiguousNameMessage(ref: string, count: number, kind: string, capped: boolean): string {
+  return `"${ref}" matches ${count} ${kind}s${capped ? `; first ${CANDIDATE_CAP} shown` : ""} — use the exact name or a uuid`;
+}
+
 function resolveUuidOrThrow(
   db: DatabaseSync,
   table: string,
@@ -473,9 +482,8 @@ function resolveUuidOrThrow(
     );
   }
   const all = r.candidates ?? [];
-  const capped = all.length > CANDIDATE_CAP;
   throw new ReferenceResolutionError(
-    `"${ref}" matches ${r.matches} ${kind}s${capped ? `; first ${CANDIDATE_CAP} shown` : ""} — use the exact name or a uuid`,
+    ambiguousNameMessage(ref, r.matches, kind, all.length > CANDIDATE_CAP),
     {
       code: "ambiguous",
       ref,
@@ -628,10 +636,92 @@ export function resolveTagUuid(db: DatabaseSync, ref: string): string {
   return resolveUuidOrThrow(db, "TMTag", "1=1", ref, "tag", "things tags");
 }
 
+/** Options shared by the read-side project resolvers (a name-tier narrowing subset). */
+interface ReadProjectOptions {
+  prefixTier?: boolean;
+  scopeWhere?: string;
+  scopeBinds?: (string | number)[];
+}
+
+/** Count (and, when unique, resolve) a NAME against the TRASHED project pool only. */
+function trashedProjectNameMatches(
+  db: DatabaseSync,
+  ref: string,
+  options?: ReadProjectOptions,
+): NamedResolution {
+  return resolveNamedRef(db, "TMTask", "type = 1 AND trashed = 1", [], ref, {
+    prefixTier: false,
+    ...(options?.scopeWhere !== undefined && {
+      scopeWhere: options.scopeWhere,
+      scopeBinds: options.scopeBinds,
+    }),
+  });
+}
+
+/**
+ * A read-side PROJECT NAME resolution verdict under the liveness law (never
+ * throws) — the shared core behind the throwing {@link resolveProjectUuid}
+ * (`project show`) and the cross-kind {@link classifyShowTarget} router.
+ *
+ * The uuid / partial-uuid tiers reach EVERY project row (explicit intent stays
+ * able to view a trashed project by id); the NAME tiers resolve against LIVE
+ * (untrashed) rows only, so a dead twin never shadows a live one nor inflates
+ * an ambiguity count. When the live pool is empty, the TRASHED pool is consulted
+ * for the reads-only ergonomic fallback: a UNIQUELY-named trashed project still
+ * resolves by name (the render discloses it — the card's own `(trashed)` marker
+ * / `stage: "trash"`), while several dead twins report honestly instead.
+ */
+export interface ReadProjectVerdict {
+  /** The resolved winner — a live unique, a uuid/partial-uuid, or the unique-dead fallback; else null. */
+  resolved: { uuid: string; title: string } | null;
+  /** ALL live name-matching rows at the deciding tier (0, 1, or many). */
+  liveRows: { uuid: string; title: string }[];
+  /** 0 / 1 / >1 — the LIVE match count (the ambiguity count when > 1). */
+  liveMatches: number;
+  /** Count of TRASHED-name twins — feeds the disclosure tail / dead-hint. */
+  trashedMatches: number;
+}
+
+export function readProjectNameVerdict(
+  db: DatabaseSync,
+  ref: string,
+  options?: ReadProjectOptions,
+): ReadProjectVerdict {
+  // uuid/partial-uuid tiers span every project (`type = 1`); name tiers narrow
+  // to LIVE rows via `nameExtraWhere` — the same split the write side uses.
+  const live = resolveNamedRef(db, "TMTask", "type = 1", [], ref, {
+    ...options,
+    nameExtraWhere: "trashed = 0",
+  });
+  if (live.resolved !== null)
+    return {
+      resolved: live.resolved,
+      liveRows: [live.resolved],
+      liveMatches: 1,
+      trashedMatches: 0,
+    };
+  if (live.matches > 1)
+    return {
+      resolved: null,
+      liveRows: live.candidates ?? [],
+      liveMatches: live.matches,
+      // Disclose extra trashed twins WITHOUT folding them into the count.
+      trashedMatches: trashedProjectNameMatches(db, ref, options).matches,
+    };
+  // Zero live name/uuid matches: the trashed pool decides the ergonomic fallback.
+  const dead = trashedProjectNameMatches(db, ref, options);
+  if (dead.resolved !== null)
+    return { resolved: dead.resolved, liveRows: [], liveMatches: 0, trashedMatches: dead.matches };
+  return { resolved: null, liveRows: [], liveMatches: 0, trashedMatches: dead.matches };
+}
+
 /**
  * Write destinations stay strict (a trashed project is not a valid target);
  * READ surfaces pass `trashed: true` so a project in the Trash can still be
- * viewed — its would-be-recovered children are only visible there.
+ * viewed. Under `trashed: true` the read-side liveness law applies: an explicit
+ * uuid / partial-uuid reaches any project, but a NAME resolves against LIVE rows
+ * only (a dead same-name twin never shadows a live one), with the reads-only
+ * unique-dead fallback + trash disclosure ({@link readProjectNameVerdict}).
  */
 export function resolveProjectUuid(
   db: DatabaseSync,
@@ -643,15 +733,49 @@ export function resolveProjectUuid(
     scopeBinds?: (string | number)[];
   },
 ): string {
-  return resolveUuidOrThrow(
-    db,
-    "TMTask",
-    options?.trashed === true ? "type = 1" : "type = 1 AND trashed = 0",
-    ref,
-    "project",
-    "things projects",
-    options,
+  if (options?.trashed !== true) {
+    // The non-widening read pool: name AND uuid tiers are LIVE-only (a trashed
+    // project is invisible even by uuid here) — the filter/scope/write-target
+    // callers, unchanged.
+    return resolveUuidOrThrow(
+      db,
+      "TMTask",
+      "type = 1 AND trashed = 0",
+      ref,
+      "project",
+      "things projects",
+      options,
+    );
+  }
+  const v = readProjectNameVerdict(db, ref, options);
+  if (v.resolved !== null) return v.resolved.uuid;
+  if (v.liveMatches > 1) {
+    const shown = v.liveRows.slice(0, CANDIDATE_CAP);
+    throw new ReferenceResolutionError(
+      ambiguousNameMessage(ref, v.liveMatches, "project", v.liveRows.length > CANDIDATE_CAP) +
+        trashDisclosureTail(v.trashedMatches),
+      { code: "ambiguous", ref, candidates: shown.map((c) => candidateRef("project", c)) },
+    );
+  }
+  // Zero live matches (a unique dead row would have resolved above), so a
+  // non-empty trash count here is always the several-dead-twins case.
+  throw new ReferenceResolutionError(
+    `no project matching "${ref}" — ${acceptedForms(options.prefixTier !== false)} (list projects with \`things projects\`)${deadNameMatchHint({ trashed: v.trashedMatches })}`,
+    { code: "not-found", ref },
   );
+}
+
+/**
+ * The disclosure tail appended to a read-side project ambiguity when the
+ * uuid-reachable pool holds additional TRASHED twins of the ambiguous name. The
+ * ambiguity COUNT stays over live rows (coherent with the rendered candidate
+ * list); the dead ones are disclosed separately rather than inflating it. Empty
+ * when none are trashed.
+ */
+export function trashDisclosureTail(deadCount: number): string {
+  return deadCount === 0
+    ? ""
+    : `; also matched: ${deadCount} in the trash — \`things trash\` lists them, a uuid reaches one directly`;
 }
 
 export function resolveAreaUuid(

@@ -18,11 +18,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import {
-  resolveAreaUuid,
-  resolveProjectUuid,
+  deadNameMatchHint,
+  readProjectNameVerdict,
+  ReferenceResolutionError,
+  resolveNamedRef,
   resolveTaskUuidPrefix,
   stripThingsUri,
+  trashDisclosureTail,
 } from "./queries.ts";
+import { candidateRef, CANDIDATE_CAP } from "./shape.ts";
 import { isLooseRef, LOOSE_REF } from "./pseudo-area.ts";
 import {
   namedAreaClause,
@@ -85,36 +89,62 @@ export function classifyShowTarget(
     if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
     if (!(err instanceof RangeError)) throw err;
   }
-  try {
-    return {
-      kind: "area",
-      uuid: resolveAreaUuid(db, stripped, {
-        prefixTier: false,
-        ...(areaClause !== undefined && {
-          scopeWhere: areaClause.where,
-          scopeBinds: areaClause.binds,
-        }),
-      }),
-    };
-  } catch {
-    // fall through to project-name resolution
-  }
-  try {
-    return {
-      kind: "project",
-      uuid: resolveProjectUuid(db, stripped, {
-        prefixTier: false,
-        ...(projectClause !== undefined && {
-          scopeWhere: projectClause.where,
-          scopeBinds: projectClause.binds,
-        }),
-      }),
-    };
-  } catch (err) {
-    // An ambiguous project name lists its candidates — surface that verbatim.
-    if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
-    throw new RangeError(
-      `no to-do, project, or area matches "${ref}" (tags and checklist items have no show view)`,
+  // NAME phase — resolve across AREAS and PROJECTS (live pools). Precedence for a
+  // UNIQUE winner is unchanged (uuid handled above → area → project). But when
+  // the subject is AMBIGUOUS at one kind while another kind ALSO carries live
+  // name matches, the refusal MERGES the live candidates across kinds: the
+  // bare-shorthand's namespace spans to-dos, areas, AND projects, so it must
+  // never show fewer options than the narrower namespaced command would.
+  const areaRes = resolveNamedRef(db, "TMArea", "1=1", [], stripped, {
+    prefixTier: false,
+    ...(areaClause !== undefined && { scopeWhere: areaClause.where, scopeBinds: areaClause.binds }),
+  });
+  // An area that uniquely resolves wins outright (an area outranks a same-named
+  // project — the documented chain).
+  if (areaRes.resolved !== null) return { kind: "area", uuid: areaRes.resolved.uuid };
+
+  const proj = readProjectNameVerdict(db, stripped, {
+    prefixTier: false,
+    ...(projectClause !== undefined && {
+      scopeWhere: projectClause.where,
+      scopeBinds: projectClause.binds,
+    }),
+  });
+  const areaRows = areaRes.matches > 1 ? (areaRes.candidates ?? []) : [];
+
+  // Area not ambiguous (zero live matches) → a UNIQUE project wins: a live twin,
+  // or the reads-only unique-dead fallback (the render discloses a trashed one
+  // via the card's own `(trashed)` marker / `stage: "trash"`).
+  if (areaRows.length === 0 && proj.resolved !== null)
+    return { kind: "project", uuid: proj.resolved.uuid };
+
+  // Neither kind yields a unique winner. If ANY live candidates exist across the
+  // two kinds, refuse with the merged list; a single kind reuses the per-kind
+  // ambiguity copy, both kinds name the split.
+  const areaN = areaRows.length;
+  const projN = proj.liveRows.length;
+  if (areaN + projN > 0) {
+    const merged = [
+      ...areaRows.map((r) => candidateRef("area", r)),
+      ...proj.liveRows.map((r) => candidateRef("project", r)),
+    ];
+    const parts: string[] = [];
+    if (areaN > 0) parts.push(`${areaN} area${areaN === 1 ? "" : "s"}`);
+    if (projN > 0) parts.push(`${projN} project${projN === 1 ? "" : "s"}`);
+    const capTail = merged.length > CANDIDATE_CAP ? `; first ${CANDIDATE_CAP} shown` : "";
+    const disambig =
+      areaN > 0 && projN > 0
+        ? "use `things area show` / `things project show`, or a ref below"
+        : "use the exact name or a uuid";
+    throw new ReferenceResolutionError(
+      `"${ref}" matches ${parts.join(" and ")}${capTail} — ${disambig}${trashDisclosureTail(proj.trashedMatches)}`,
+      { code: "ambiguous", ref, candidates: merged.slice(0, CANDIDATE_CAP) },
     );
   }
+  // Nothing matched by name. When only DEAD project twins matched (several — a
+  // unique dead one resolves above), disclose them with the honest hint.
+  throw new ReferenceResolutionError(
+    `no to-do, project, or area matches "${ref}" (tags and checklist items have no show view)${deadNameMatchHint({ trashed: proj.trashedMatches })}`,
+    { code: "not-found", ref },
+  );
 }

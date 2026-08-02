@@ -17,6 +17,12 @@ The shape is **flag-invariant**: `--full` / `--all` never widen it (an error pay
 
 **Live-scoped pool + dead-row hints.** By default candidates are LIVE rows only — a trashed or logged row never appears as a "did you mean". A trash/logbook-domain op (e.g. `project restore`) widens its own pool to that domain. When a name matches ZERO live rows but a DEAD row exists, the `message` gains an honest tail ("1 trashed item matches this name — see `things trash`", or the logbook equivalent) and `candidates` stays `[]` — no dangling-ref invitation. A write whose only name-match is a completed/logged project resolves to nothing by name (target it by uuid if intended); this prevents stranding an open child inside an invisible done project.
 
+**Read-side liveness (project name resolution).** The SAME live-only law governs names on the read side, so `things "X"` (the bare-ref shorthand) and `things project show X` always agree, and an ambiguity's count always matches its candidate list. A NAME resolves against live (untrashed) rows only; an explicit uuid / partial-uuid still reaches a trashed project (viewing one by id is unchanged). Three read-only consequences:
+
+- **Unique-dead fallback.** A name matching zero live rows but exactly ONE trashed project resolves to it and the view discloses it (the card's `(trashed)` marker / the JSON node's `stage: "trash"`). Several trashed-only twins → not-found with the dead-row hint above.
+- **Trash disclosure on ambiguity.** `"X" matches N projects` counts only live rows (equal to the candidate list); extra trashed twins are disclosed — `… also matched: N in the trash — \`things trash\` lists them, a uuid reaches one directly` — never folded into the count. The error `code` is `ambiguous`, with the live candidates under `detail.candidates`.
+- **Cross-kind merge.** The shorthand's namespace spans to-dos, areas, and projects. A unique winner follows the chain uuid → area → project; but an AMBIGUOUS subject with live matches at more than one kind refuses with the candidates MERGED across kinds (each carries its `type`) — `"X" matches 2 areas and 3 projects — use \`things area show\` / \`things project show\`, or a ref below` — so the shorthand never hides an option the narrower command would show.
+
 Never guess between candidates for a destructive action — inspect details or ask.
 
 ## Guarded writes and their acknowledgments
