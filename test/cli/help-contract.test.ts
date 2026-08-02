@@ -259,15 +259,17 @@ describe("plural list views accept a ref (true synonym of show, with the canonic
     expect(plural.exitCode).toBe(0);
     // The rendered BODY is byte-identical (a true synonym, not a reimplementation).
     expect(JSON.parse(plural.stdout).data).toEqual(JSON.parse(singular.stdout).data);
-    // The plural form echoes the canonical SINGULAR command; the singular is
-    // already canonical and echoes nothing.
-    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe(`things area show ${areaId}`);
+    // The plural form echoes the canonical SINGULAR command with the entity's
+    // CANONICAL ref — the uuid input resolves to `Hobbies`, whose bare title
+    // round-trips, so the echo teaches the title. The singular is already
+    // canonical and echoes nothing.
+    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe("things area show Hobbies");
     expect(JSON.parse(singular.stdout).meta.resolvedCommand).toBeUndefined();
     // An explicit `show` verb is forgiven and routes identically.
     const verb = runCli(["areas", "show", areaId, "--db", fx.path, "--json"]);
     expect(verb.exitCode).toBe(0);
     expect(JSON.parse(verb.stdout).data).toEqual(JSON.parse(singular.stdout).data);
-    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe(`things area show ${areaId}`);
+    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe("things area show Hobbies");
     // Bare plural still lists — echo-free.
     const list = runCli(["areas", "--db", fx.path, "--json"]);
     expect(JSON.parse(list.stdout).kind).toBe("areas");
@@ -283,12 +285,14 @@ describe("plural list views accept a ref (true synonym of show, with the canonic
     const singular = runCli(["project", "show", projId, "--db", fx.path, "--json"]);
     expect(plural.exitCode).toBe(0);
     expect(JSON.parse(plural.stdout).data).toEqual(JSON.parse(singular.stdout).data);
-    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe(`things project show ${projId}`);
+    // The uuid input resolves to `Astro City`, whose bare title round-trips (a
+    // spaced title is shell-quoted).
+    expect(JSON.parse(plural.stdout).meta.resolvedCommand).toBe('things project show "Astro City"');
     expect(JSON.parse(singular.stdout).meta.resolvedCommand).toBeUndefined();
     const verb = runCli(["projects", "show", projId, "--db", fx.path, "--json"]);
     expect(verb.exitCode).toBe(0);
     expect(JSON.parse(verb.stdout).data).toEqual(JSON.parse(singular.stdout).data);
-    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe(`things project show ${projId}`);
+    expect(JSON.parse(verb.stdout).meta.resolvedCommand).toBe('things project show "Astro City"');
     const list = runCli(["projects", "--db", fx.path, "--json"]);
     expect(JSON.parse(list.stdout).kind).toBe("projects");
     expect(JSON.parse(list.stdout).meta.resolvedCommand).toBeUndefined();

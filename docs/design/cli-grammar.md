@@ -101,17 +101,30 @@ When — and only when — an invocation arrives via a sugar form, the TTY rende
 ≡ things area show "Website redesign"
 ```
 
-The subject is rendered with the same shell-safe quoting as the truncation footers (`shellQuote`): a plain word is left bare (`≡ things area show Hobbies`), a name with spaces or shell metacharacters is quoted. It fires for the routing sugars:
+The subject is the resolved entity's **canonical ref** (see below) — never the raw string the user typed — shell-quoted with the same rule as the truncation footers (`shellQuote`): a plain word is left bare (`≡ things area show Hobbies`), a name with spaces or shell metacharacters is double-quoted. It fires for the routing sugars:
 
-- **bare noun** — `things Hobbies` → `≡ things area show Hobbies`
-- **namespace implied-show** — `things area Hobbies` → `≡ things area show Hobbies`
-- **plural collection synonym** — `things areas Hobbies` / `things areas show Hobbies` → `≡ things area show Hobbies`
+- **bare noun** — `things new STUFF` → `≡ things area show "New Stuff"` (the ref is corrected to the stored title)
+- **namespace implied-show** — `things area hobbies` → `≡ things area show Hobbies`
+- **plural collection synonym** — `things areas <uuid>` / `things areas show <uuid>` → `≡ things area show Hobbies` (the uuid resolves to its round-tripping title)
 - **keyword-in-show** — `things show anytime` → `≡ things anytime`
 - **section sugar** — `things evening` / `things show evening` → `≡ things today --evening`
-- **uuid routing** — `things <uuid>` / `things show <uuid>` → `≡ things todo show <uuid>`
+- **uuid routing (to-do)** — `things <uuid>` / `things show <uuid>` → `≡ things todo show <uuid>` (a to-do has no round-trippable title, so it keeps the uuid/partial-uuid)
 - **share-link** — `things things:///show?id=<uuid>` → `≡ things todo show <uuid>`
 
 It does **not** fire for canonical invocations (`things inbox`, `things area show Hobbies` — nothing was normalized), nor for a loose `show` given a plain **name** (`things show Hobbies` — the verb was already typed and the name is already visible; only bare-noun promotes a name). The echo is strictly an interactive affordance: **never on non-TTY output** (so `things Hobbies | grep` stays clean) and **never in `--json`**.
+
+### Canonical ref
+
+The ref inside every echo — and every TTY *suggestion* that embeds a container ref (the truncation/disclosure footers, e.g. `… 6 later items — \`things area show "New Stuff" --show-later\``) — is the resolved entity's **canonical ref**, computed from the SAME round-trip promotion predicate the JSON `*Uuid` promotion and the inline container mentions consult (`makeRefPromoter` / `titleRoundTrips`, one predicate, no fork):
+
+- the entity's **exact title, bare**, when that title round-trips through its own resolver back to this entity — so a case-wrong input (`new STUFF`) is corrected (`"New Stuff"`), and a decorated input whose brackets were unnecessary (`"New Stuff [StRTjZ2x]"`) is taught the shorter bare form;
+- otherwise the **fused form** `Title [8charPrefix]` (`fusedRef`), which re-resolves through the uuid-prefix tier of the typed command — so a ref whose bare title would collide with an ambiguous live twin echoes the fused form that pins THIS entity.
+
+By construction every echoed/suggested command re-resolves to the same entity. **To-dos are exempt**: a to-do is never resolvable by title (its fused form has no read path), so the loose router keeps echoing the uuid/partial-uuid it was given — already the shortest re-resolvable ref. When resolution **fails**, nothing is recorded — the raw did-you-mean error stands, no echo rides along.
+
+**Suggested-command verb coherence.** A footer that embeds a container ref speaks the SAME canonical verb the echo teaches, when its flags are valid there: the loose `show` unifies onto the resolved `area show` / `project show` (`things Busy --area-limit 3` footers read `things area show Busy --area-limit 6`, not `things show Busy …`), because `--show-later` / `--show-logged` / `--area-limit` / `--project-limit` are all valid on the typed cards.
+
+**The invocation name stays the literal `things`** in every echo and suggestion — a deliberate decision. Reconstructing the actual wrapper invocation (`npx -y things-api …`, a shell alias, an absolute bin path) is impossible from inside the process: argv begins at the resolved bin, so the original spelling is already gone. `things` is the documented canonical name; a copy-paste works whenever `things` is on PATH (the install target), and is the clearest teaching form otherwise.
 
 ## `meta.resolvedCommand` (`--json`, additive)
 

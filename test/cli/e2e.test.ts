@@ -1465,19 +1465,103 @@ describe("cli normalized-form echo + meta.resolvedCommand", () => {
     const areaId = seedArea(fx.db, "Hobbies");
     const projId = seedProject(fx.db, { title: "Astro City", index: 1 });
     const path = fx.path;
-    // `things areas <ref>` echoes `≡ things area show <ref>` (singular is canonical).
-    expect(runTty(["areas", areaId, "--db", path])).toContain(`≡ things area show ${areaId}`);
+    // `things areas <uuid>` echoes `≡ things area show <canonical ref>`: the uuid
+    // input resolves to the area whose bare title round-trips, so the echo teaches
+    // the shorter title form (singular is canonical).
+    expect(runTty(["areas", areaId, "--db", path])).toContain("≡ things area show Hobbies");
     // The explicit `show` verb is forgiven — same echo.
-    expect(runTty(["areas", "show", areaId, "--db", path])).toContain(
-      `≡ things area show ${areaId}`,
+    expect(runTty(["areas", "show", areaId, "--db", path])).toContain("≡ things area show Hobbies");
+    // `things projects <uuid>` echoes `≡ things project show <canonical ref>` (a
+    // spaced title is shell-quoted).
+    expect(runTty(["projects", projId, "--db", path])).toContain(
+      '≡ things project show "Astro City"',
     );
-    // `things projects <ref>` echoes `≡ things project show <ref>`.
-    expect(runTty(["projects", projId, "--db", path])).toContain(`≡ things project show ${projId}`);
     expect(runTty(["projects", "show", projId, "--db", path])).toContain(
-      `≡ things project show ${projId}`,
+      '≡ things project show "Astro City"',
     );
     // The bare plural list form echoes nothing.
     expect(runTty(["areas", "--db", path])).not.toContain("≡ things");
+  });
+});
+
+describe("cli canonical-ref echoes + suggestions render the resolved entity's ref", () => {
+  // (a) A case-wrong ref echoes the entity's stored title, corrected.
+  it("a case-wrong bare ref echoes the corrected canonical title", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "New Stuff", index: 1 });
+    const env = JSON.parse(runCli(["New StUfF", "--json", "--db", fx.path]).stdout);
+    expect(env.data.view.project.title).toBe("New Stuff");
+    expect(env.meta.resolvedCommand).toBe('things project show "New Stuff"');
+    // and it renders on a TTY.
+    expect(runTty(["New StUfF", "--db", fx.path])).toContain('≡ things project show "New Stuff"');
+  });
+
+  // (b) A decorated input whose brackets were unnecessary echoes the BARE title,
+  //     teaching the shorter form (the bare title round-trips on its own).
+  it("a decorated input with unnecessary brackets echoes the bare title", () => {
+    fx = buildFixtureDb();
+    const uuid = seedProject(fx.db, { title: "New Stuff", uuid: "nu5t2ff10000", index: 1 });
+    const decorated = `New Stuff [${uuid.slice(0, 8)}]`;
+    const env = JSON.parse(runCli([decorated, "--json", "--db", fx.path]).stdout);
+    expect(env.data.view.project.uuid).toBe(uuid);
+    // The brackets are dropped — the bare title alone resolves back to this project.
+    expect(env.meta.resolvedCommand).toBe('things project show "New Stuff"');
+  });
+
+  // (c) A uuid input whose bare title would NOT round-trip (ambiguous live twins)
+  //     echoes the fused `Title [8charPrefix]`, and that fused form re-resolves.
+  it("a uuid input with ambiguous live twin titles echoes the fused ref", () => {
+    fx = buildFixtureDb();
+    const a = seedProject(fx.db, { title: "Twin", uuid: "aa11bb22cc33", index: 1 });
+    seedProject(fx.db, { title: "Twin", uuid: "dd44ee55ff66", index: 2 });
+    const fused = `Twin [${a.slice(0, 8)}]`;
+    const env = JSON.parse(runCli([a, "--json", "--db", fx.path]).stdout);
+    expect(env.data.view.project.uuid).toBe(a);
+    expect(env.meta.resolvedCommand).toBe(`things project show "${fused}"`);
+    // By construction the echoed command re-resolves to the SAME twin.
+    const round = JSON.parse(runCli(["project", "show", fused, "--json", "--db", fx.path]).stdout);
+    expect(round.data.view.project.uuid).toBe(a);
+  });
+
+  // (d) A disclosure footer carries the corrected ref AND unifies onto the
+  //     resolved verb (point 4): `things <name>` → `things project show …`.
+  it("a footer suggestion carries the corrected ref on the coherent verb", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "New Stuff", index: 1 });
+    seedTodo(fx.db, { title: "active", project: proj, index: 0 });
+    seedTodo(fx.db, { title: "later", project: proj, start: "someday", index: 1 });
+    const lines = runCli(["new STUFF", "--db", fx.path]).stdout;
+    expect(lines).toContain('things project show "New Stuff" --show-later');
+    // The loose `show` verb never leaks into the footer.
+    expect(lines).not.toContain("things show");
+  });
+
+  // (e) Shell-quoting of a title with spaces and a double quote stays
+  //     copy-pasteable (the shared shell-quote rule) and re-resolves.
+  it("shell-quotes a title with spaces and a double quote", () => {
+    fx = buildFixtureDb();
+    const uuid = seedProject(fx.db, { title: 'Quote "Me" Project', index: 1 });
+    const env = JSON.parse(runCli([uuid, "--json", "--db", fx.path]).stdout);
+    expect(env.meta.resolvedCommand).toBe('things project show "Quote \\"Me\\" Project"');
+    // The quoted form pastes back (shell strips the quoting) to the same project.
+    const round = JSON.parse(
+      runCli(["project", "show", 'Quote "Me" Project', "--json", "--db", fx.path]).stdout,
+    );
+    expect(round.data.view.project.uuid).toBe(uuid);
+  });
+
+  // (f) A FAILED resolution changes nothing — no canonical is recorded, so the
+  //     raw did-you-mean error stands and no echo/resolvedCommand rides along.
+  it("a failed resolution leaves the raw echo untouched (no resolvedCommand)", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "New Stuff", index: 1 });
+    const out = runCliErr(["frobnicate", "--db", fx.path]);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr).toContain('no command or item named "frobnicate"');
+    expect(out.stdout).not.toContain("≡");
+    const env = JSON.parse(runCli(["frobnicate", "--json", "--db", fx.path]).stdout);
+    expect(env.ok).toBe(false);
+    expect(env.meta?.resolvedCommand).toBeUndefined();
   });
 });
 
@@ -1715,9 +1799,11 @@ describe("cli detail views — area show per-section caps; project show uncapped
     expect(json.kind).toBe("area-view");
     expect(json.data.view.projects).toHaveLength(30);
     expect(json.meta.truncation.truncated).toBe(true);
-    // …and via the bare shorthand, knobs intact (footer echoes `things show …`).
+    // …and via the bare shorthand, knobs intact. The footer speaks the CANONICAL,
+    // verb-coherent command (point 4): the loose `show` unifies onto the resolved
+    // `area show`, with the area's canonical ref (`Busy` round-trips → bare).
     const tty = runCli(["Busy", "--area-limit", "3", "--db", fx.path]);
-    expect(tty.stdout).toContain("… 32 more to-dos — `things show Busy --area-limit 6`");
+    expect(tty.stdout).toContain("… 32 more to-dos — `things area show Busy --area-limit 6`");
   });
 });
 
@@ -1972,8 +2058,10 @@ describe("cli namespace implied-show (item 2)", () => {
   it("meta.resolvedCommand + normalized echo ride along like other sugar", () => {
     fx = buildFixtureDb();
     seedArea(fx.db, "Hobbies");
+    // The canonical echo carries the entity's CANONICAL ref — the case-wrong
+    // input `hobbies` is corrected to the stored title `Hobbies` (it round-trips).
     const env = JSON.parse(runCli(["area", "hobbies", "--json", "--db", fx.path]).stdout);
-    expect(env.meta.resolvedCommand).toBe("things area show hobbies");
+    expect(env.meta.resolvedCommand).toBe("things area show Hobbies");
     // trailing flags pass through
     expect(runCli(["area", "hobbies", "--show-later", "--json", "--db", fx.path]).exitCode).toBe(0);
   });
