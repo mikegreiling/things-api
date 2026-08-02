@@ -30,11 +30,22 @@ const IDENTITY_KEYS: ReadonlySet<string> = new Set(["uuid", "type", "title", "na
 
 type Obj = Record<string, unknown>;
 
-/** A to-do/project/heading row: uuid + a task-type discriminant. */
+/**
+ * A to-do/project/heading row: uuid + a task-type discriminant. `type` is
+ * PRESENCE-KEYED on the shaped wire — omitted on a to-do (absent `type` = to-do,
+ * the same convention the wire uses), present for project/heading — so a
+ * type-less row with a uuid + title (and no competing `visible` area
+ * discriminant) IS a to-do here. Shaping runs before this transform, so the
+ * type has already been dropped by the time we prune.
+ */
 function isTaskEntity(o: Obj): boolean {
+  const t = o["type"];
+  if (t === "to-do" || t === "project" || t === "heading") return true;
   return (
+    t === undefined &&
     typeof o["uuid"] === "string" &&
-    (o["type"] === "to-do" || o["type"] === "project" || o["type"] === "heading")
+    typeof o["title"] === "string" &&
+    typeof o["visible"] !== "boolean"
   );
 }
 

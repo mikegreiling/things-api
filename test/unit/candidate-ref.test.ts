@@ -88,7 +88,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
     // container hints are TITLE strings, not Ref objects
     expect(c["area"]).toBe("Home");
     expect(c["project"]).toBe("Roof");
-    expect(c["type"]).toBe("to-do");
+    expect(c).not.toHaveProperty("type"); // absent `type` = to-do
     expect(c["stage"]).toBe("anytime"); // active + undated
   });
 

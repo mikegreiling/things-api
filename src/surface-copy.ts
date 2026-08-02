@@ -71,6 +71,15 @@ export const OMIT_EMPTY_NOTE =
   "Optional fields are omitted from the result when empty; a missing field means unset, empty, or default (read it the same as a null or empty value).";
 
 /**
+ * The container-ref rule appended to every read tool description: how the flat
+ * `area`/`project`/`heading` refs read, and the absent-`type`-means-to-do
+ * convention. Behavior-only (docs/design/surface-copy.md) — a consumer reads it
+ * to know how to act on a returned ref and how to tell a to-do apart.
+ */
+export const REF_RULE_NOTE =
+  "A container ref (area/project/heading) comes back as a bare title string; a sibling areaUuid/projectUuid/headingUuid rides alongside only when the title alone would not resolve back to that exact item. To act on a ref, pass its uuid sibling when present, else the title; for unattended pipelines or stored refs, request full and key on the uuids. An absent type field means to-do (type is present for project, heading, area, and tag).";
+
+/**
  * The read-path schema advisory, surfaced on the envelope `meta.warnings` (and
  * to STDERR in human CLI output): a one-line, actionable note when the Things
  * database no longer matches the schema this build was validated against, so a

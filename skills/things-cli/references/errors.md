@@ -6,7 +6,7 @@ A failed `--json` call carries `ok: false`, `kind: "error"`, and an `error` obje
 
 When a name or partial-uuid resolves to more than one row, or to none, `error.detail.candidates` offers a disambiguation list so you self-correct without another round-trip. Each entry is ONE fixed, slim shape:
 
-- `uuid`, `title`, and `type` (`"to-do" | "project" | "heading" | "area" | "tag"`) — always.
+- `uuid` and `title` — always. `type` (`"project" | "heading" | "area" | "tag"`) — present for those kinds only; **absent `type` = to-do** (the same convention the item wire uses).
 - A container hint `area` and/or `project` as a TITLE string — only when set.
 - `stage` / `when` (the same derivations as the item wire) — only for a to-do/project candidate whose row carries them. A trashed/logged candidate needs no boolean: `stage` already reads `"trash"` / `"logbook"`.
 - NOTHING else — no notes, counts, dates, or raw fields.
