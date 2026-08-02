@@ -7,7 +7,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { q, selectList } from "../db/schema.ts";
 import { TASK_TYPE_FROM_DB, type Ref } from "../model/entities.ts";
 import type { ChecklistRow, TaskRow } from "../model/mappers.ts";
-import { candidateRef, CANDIDATE_CAP, type CandidateRef, type CandidateType } from "./shape.ts";
+import {
+  candidateRef,
+  CANDIDATE_CAP,
+  type CandidateRef,
+  type CandidateType,
+  type RefKind,
+  type RefPromoter,
+} from "./shape.ts";
 
 /** Rows that repeat via a template are normal; template rows are invisible in list views. */
 export const NOT_TEMPLATE = "(t.rt1_recurrenceRule IS NULL AND t.repeater IS NULL)";
@@ -672,6 +679,80 @@ export function resolveHeadingUuid(
       candidates: all.slice(0, CANDIDATE_CAP).map((c) => candidateRef("heading", c)),
     },
   );
+}
+
+/**
+ * Resolve a container ref's bare TITLE through the REAL resolver for its kind,
+ * returning the sole resolved uuid or null (not-found OR ambiguous → null). This
+ * is the emit-side promotion judgment behind the JSON round-trip law (the flat
+ * `area`/`project`/`heading` refs promote a `*Uuid` sibling exactly when their
+ * bare title would NOT round-trip): it is the RESOLVER'S OWN judgment, not a
+ * re-derived uniqueness query, so it inherits every quirk of the write path —
+ * notably projects resolve through {@link resolveProjectWriteTarget} (the
+ * uuid-prefix tier runs FIRST, over the live+open write-target pool, so a title
+ * that is a valid unique uuid-prefix of ANOTHER task resolves to that task, not
+ * this project → does not round-trip → promotes; logged/trashed/completed
+ * same-titled twins never resolve by name, so they never trigger promotion).
+ * Areas resolve over all areas ({@link resolveAreaUuid}); headings within their
+ * project ({@link resolveHeadingRef}, `type = 2 AND trashed = 0 AND project = ?`).
+ * A thrown {@link ReferenceResolutionError} (not-found / ambiguous) is caught and
+ * read as "did not resolve" → null.
+ */
+function resolveTitleForRoundTrip(
+  db: DatabaseSync,
+  kind: RefKind,
+  title: string,
+  projectUuid?: string,
+): string | null {
+  try {
+    if (kind === "area") return resolveAreaUuid(db, title);
+    if (kind === "project") return resolveProjectWriteTarget(db, title);
+    if (projectUuid === undefined) return null; // heading round-trip needs its project scope
+    return resolveHeadingRef(db, projectUuid, title).resolved?.uuid ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Does a container ref's bare TITLE round-trip through its own resolver, in its
+ * own scope, back to THIS entity's uuid? The single predicate the emit boundary
+ * consults for the JSON round-trip law — true only when the sole resolution is
+ * `entityUuid` (not-found / ambiguous / a different entity all → false, i.e. the
+ * title must promote its uuid sibling). See {@link resolveTitleForRoundTrip}.
+ */
+export function titleRoundTrips(
+  db: DatabaseSync,
+  kind: RefKind,
+  title: string,
+  entityUuid: string,
+  projectUuid?: string,
+): boolean {
+  return resolveTitleForRoundTrip(db, kind, title, projectUuid) === entityUuid;
+}
+
+/**
+ * Build the {@link RefPromoter} the read-shaping transform ({@link shapeReadPayload})
+ * consults to decide flat-ref uuid promotion, memoized per (kind, title, scope)
+ * for ONE response emission so a large view never re-runs a resolution it has
+ * already made. A fresh promoter (fresh memo) per response — the consumer
+ * surfaces build one via the client. The memo caches the RESOLVED uuid (or null),
+ * independent of the comparison target, so twin entities sharing a title share
+ * the one resolution.
+ */
+export function makeRefPromoter(db: DatabaseSync): RefPromoter {
+  const memo = new Map<string, string | null>();
+  const resolve = (kind: RefKind, title: string, projectUuid?: string): string | null => {
+    const key = `${kind} ${projectUuid ?? ""} ${title}`;
+    if (memo.has(key)) return memo.get(key) ?? null;
+    const uuid = resolveTitleForRoundTrip(db, kind, title, projectUuid);
+    memo.set(key, uuid);
+    return uuid;
+  };
+  return {
+    roundTrips: (kind, title, entityUuid, projectUuid) =>
+      resolve(kind, title, projectUuid) === entityUuid,
+  };
 }
 
 /**

@@ -1042,7 +1042,7 @@ describe("things MCP server", () => {
     >;
     // Identity always present.
     expect(item["uuid"]).toBe(uuid);
-    expect(item["type"]).toBe("to-do");
+    expect("type" in item).toBe(false); // absent `type` = to-do
     expect(item["title"]).toBe("bare mcp item");
     // Empty optional fields are absent (absent = unset), mirroring the CLI.
     for (const gone of ["deadline", "startDate", "reminder", "area", "project", "tags"]) {

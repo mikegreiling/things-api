@@ -222,7 +222,12 @@ export function runRead<T>(
       // Omit-empty applies to the entity/data payload only (contracts.md); the
       // envelope meta/truncation is untouched, and the human render below keeps
       // the full, unpruned `data`.
-      const shaped = shapeReadPayload(effectiveKind, data, opts.full === true);
+      const shaped = shapeReadPayload(
+        effectiveKind,
+        data,
+        opts.full === true,
+        client.refPromoter(),
+      );
       process.stdout.write(
         `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped)), meta))}\n`,
       );

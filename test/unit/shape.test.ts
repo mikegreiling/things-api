@@ -75,7 +75,8 @@ const first = (out: unknown): Obj => (out as Obj[])[0]!;
 describe("shapeReadPayload — R7 compact tier (flat list)", () => {
   it("compact keeps identity + structural facts; start/logged/trashed gone, stage kept on mixed", () => {
     const row = first(shapeReadPayload("search", [todo()], false)); // search = mixed → keep stage
-    for (const k of ["uuid", "title", "type"]) expect(k in row).toBe(true);
+    for (const k of ["uuid", "title"]) expect(k in row).toBe(true);
+    expect("type" in row).toBe(false); // absent `type` = to-do
     for (const k of ["tags"]) expect(k in row).toBe(true);
     // R10: the three lifecycle fields are gone; the one derived word replaces them.
     expect("start" in row).toBe(false);
@@ -281,15 +282,19 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
         true,
       ),
     );
-    expect(row["project"]).toEqual({ uuid: "proj-1", title: "Q3" });
+    // Flattened to a bare title; full tier forces the projectUuid sibling.
+    expect(row["project"]).toBe("Q3");
+    expect(row["projectUuid"]).toBe("proj-1");
     expect("headingProject" in row).toBe(false);
   });
 
-  it("compact drops the heading ref on a mixed list; full keeps it", () => {
+  it("compact drops the heading ref on a mixed list; full keeps it (flat title + headingUuid)", () => {
     const compact = first(shapeReadPayload("search", [todo()], false));
     expect("heading" in compact).toBe(false);
+    expect("headingUuid" in compact).toBe(false);
     const full = first(shapeReadPayload("search", [todo()], true));
-    expect(full["heading"]).toEqual({ uuid: "head-1", title: "Phase 1" });
+    expect(full["heading"]).toBe("Phase 1");
+    expect(full["headingUuid"]).toBe("head-1"); // FULL tier emits the uuid sibling unconditionally
   });
 });
 

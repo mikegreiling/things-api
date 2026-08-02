@@ -46,6 +46,7 @@ import {
   PROJECT_LIMIT_DESC,
   PROJECT_PREVIEW_LIMIT,
   REF_FORMAT,
+  REF_RULE_NOTE,
   ReferenceResolutionError,
   REMINDER_FORMAT,
   schemaWarnings,
@@ -787,7 +788,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         `area_limit (default ${AREA_PREVIEW_LIMIT}) per area block, and on anytime ` +
         `project_limit (default ${PROJECT_PREVIEW_LIMIT}) per project block. ` +
         "all: true lifts every cap; the result's second block reports the counts. " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
         ...tagFilterShape,
@@ -928,11 +931,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(shapeReadPayload("today", view, full), truncation);
+              return truncatedResult(
+                shapeReadPayload("today", view, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "inbox": {
               const { items, truncation } = c.read.inbox({ ...filter, ...zone, limit });
-              return truncatedResult(shapeReadPayload("inbox", items, full), truncation);
+              return truncatedResult(
+                shapeReadPayload("inbox", items, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "anytime": {
               const {
@@ -947,7 +956,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit,
               });
               filterMeta = fm;
-              return groupedResult(shapeReadPayload("anytime", view, full), truncation);
+              return groupedResult(
+                shapeReadPayload("anytime", view, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "upcoming": {
               const {
@@ -962,7 +974,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(shapeReadPayload("upcoming", items, full), truncation);
+              return truncatedResult(
+                shapeReadPayload("upcoming", items, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "someday": {
               const active = showActiveProjectItems;
@@ -985,7 +1000,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 projectLimit: typeof active === "number" ? active : null,
               });
               filterMeta = fm;
-              return groupedResult(shapeReadPayload("someday", view, full), truncation);
+              return groupedResult(
+                shapeReadPayload("someday", view, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "logbook": {
               const {
@@ -999,11 +1017,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
-              return truncatedResult(shapeReadPayload("logbook", items, full), truncation);
+              return truncatedResult(
+                shapeReadPayload("logbook", items, full, c.refPromoter()),
+                truncation,
+              );
             }
             case "trash": {
               const { items, truncation } = c.read.trash({ ...zone, limit });
-              return truncatedResult(shapeReadPayload("trash", items, full), truncation);
+              return truncatedResult(
+                shapeReadPayload("trash", items, full, c.refPromoter()),
+                truncation,
+              );
             }
           }
         },
@@ -1021,7 +1045,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Find items by title/notes substring. Returns open, untrashed items by default; " +
         "include more with logged/trashed/all. Scope with project/area/tag — scope " +
         "references must name existing items. " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         query: z.string(),
         ...tagFilterShape,
@@ -1086,7 +1112,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             ...(args.trashed === true && { trashed: true }),
             ...(args.all === true && { all: true }),
           });
-          return truncatedResult(shapeReadPayload("search", items, args.full === true), truncation);
+          return truncatedResult(
+            shapeReadPayload("search", items, args.full === true, getClient().refPromoter()),
+            truncation,
+          );
         },
         args.tz,
         undefined,
@@ -1101,7 +1130,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "List items created or modified since a moment — including trashed, logged, and " +
         "repeating items (inspect each item's fields to tell them apart). Edits to tags, " +
         "areas, and checklist items do not mark the containing item as modified. " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         since: z.string().describe("ISO date-time, e.g. 2026-07-06T08:00:00"),
         ...limitShape,
@@ -1124,7 +1155,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           limit,
           ...(args.tz !== undefined && { zone: args.tz }),
         });
-        return truncatedResult(shapeReadPayload("changes", items, args.full === true), truncation);
+        return truncatedResult(
+          shapeReadPayload("changes", items, args.full === true, getClient().refPromoter()),
+          truncation,
+        );
       }, args.tz),
   );
 
@@ -1135,7 +1169,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Full detail for one item by uuid: notes, schedule, reminder, deadline, tags " +
         "(direct and inherited), checklist with per-item state, repeat schedule, and its " +
         "project/area/heading. " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: { uuid: z.string() },
       annotations: READ_ONLY,
     },
@@ -1144,7 +1180,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const item = getClient().read.byUuid(args.uuid);
         return item === null
           ? errorResult({ code: "not-found", message: noUuidMatch("item", args.uuid) })
-          : readResult(shapeReadPayload("detail", item, false));
+          : readResult(shapeReadPayload("detail", item, false, getClient().refPromoter()));
       }),
   );
 
@@ -1155,7 +1191,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "One project's full contents: metadata plus its to-dos grouped under their headings. " +
         "The tag filters keep only the child to-dos matching by their own tags (a heading left " +
         "with none is dropped). " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         uuid: z.string().describe("Project uuid or unique name"),
         ...tagOnlyShape,
@@ -1184,6 +1222,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.tz !== undefined && { zone: args.tz }),
             }),
             args.full === true,
+            getClient().refPromoter(),
           ),
         );
       }, args.tz),
@@ -1200,7 +1239,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         ref: z.string().describe("Area uuid or unique name"),
         ...tagOnlyShape,
@@ -1251,7 +1292,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             projectLimit,
           });
           areaNotice = notice;
-          return groupedResult(shapeReadPayload("area-view", view, args.full === true), truncation);
+          return groupedResult(
+            shapeReadPayload("area-view", view, args.full === true, getClient().refPromoter()),
+            truncation,
+          );
         },
         args.tz,
         undefined,
@@ -1267,7 +1311,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "List every project, area, or tag (tags include their parent-tag nesting). Use to " +
         "refresh the inventory summarized in the server instructions. The tag filters scope " +
         "the projects list by each project's own tags (areas/tags reject them). " +
-        OMIT_EMPTY_NOTE,
+        OMIT_EMPTY_NOTE +
+        " " +
+        REF_RULE_NOTE,
       inputSchema: {
         kind: z.enum(["projects", "areas", "tags"]),
         ...tagOnlyShape,
@@ -1322,6 +1368,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 ? c.read.areas()
                 : c.read.tags(),
             args.full === true,
+            c.refPromoter(),
           ),
         );
       }, args.tz),

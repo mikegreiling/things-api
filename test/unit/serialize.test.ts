@@ -128,6 +128,37 @@ describe("omitEmpty — entity field omission", () => {
   });
 });
 
+describe("omitEmpty — a type-less to-do row (absent type = to-do)", () => {
+  // The shaped wire omits `type` on a to-do (present for project/heading), so
+  // omit-empty must still recognize a type-less uuid+title row as a task entity
+  // and prune its empty optional fields — a `visible` boolean would mark an area.
+  it("prunes empties on a to-do whose `type` was already dropped by shaping", () => {
+    const out = omitEmpty({
+      uuid: "todo-9",
+      title: "no type key",
+      notes: "",
+      area: null,
+      project: null,
+      tags: [],
+      stopped: null,
+    }) as Record<string, unknown>;
+    for (const gone of ["notes", "area", "project", "tags", "stopped"]) {
+      expect(gone in out).toBe(false);
+    }
+    expect(out["uuid"]).toBe("todo-9");
+    expect(out["title"]).toBe("no type key");
+  });
+
+  it("still treats a `visible`-bearing type-less row as an AREA, not a to-do", () => {
+    const out = omitEmpty({ uuid: "a-1", title: "Home", visible: false, tags: [] }) as Record<
+      string,
+      unknown
+    >;
+    expect(out["visible"]).toBe(false); // real false kept (area discriminant)
+    expect("tags" in out).toBe(false); // empty array pruned
+  });
+});
+
 describe("omitEmpty — inheritedTags reversal guard", () => {
   it("omits inheritedTags when empty", () => {
     const out = omitEmpty(minimalTodo()) as Record<string, unknown>;

@@ -117,6 +117,63 @@ import type { StartState } from "../model/entities.ts";
 
 type Obj = Record<string, unknown>;
 
+/** The container-ref kinds whose bare title is round-trip-tested for uuid promotion. */
+export type RefKind = "area" | "project" | "heading";
+
+/**
+ * The emit-side promotion oracle: does a container ref's bare TITLE round-trip
+ * through its own resolver, in its own scope, back to THIS entity? Built by
+ * {@link makeRefPromoter} (src/read/queries.ts) over the live DB — it runs the
+ * REAL resolution path for the kind (areas = all areas; projects = the live+open
+ * write-target pool, uuid-prefix tier first; headings = within `projectUuid`)
+ * and returns true only when the sole resolution is this uuid; not-found or
+ * ambiguous is false. Memoized per (kind, title, scope) within one response
+ * emission. When a promoter is absent (a DB-less unit shaping), the default
+ * assumes every title round-trips — bare titles, no uuid siblings.
+ */
+export interface RefPromoter {
+  roundTrips(kind: RefKind, title: string, entityUuid: string, projectUuid?: string): boolean;
+}
+
+/** The DB-less default: assume every title round-trips (bare title, no uuid sibling). */
+const ALWAYS_ROUND_TRIPS: RefPromoter = { roundTrips: () => true };
+
+/** The uuid of a `{uuid,title}` container Ref, or undefined for a non-object / string. */
+function refUuid(v: unknown): string | undefined {
+  if (v !== null && typeof v === "object" && typeof (v as Obj)["uuid"] === "string") {
+    return (v as Obj)["uuid"] as string;
+  }
+  return undefined;
+}
+
+/**
+ * Flatten ONE container ref `o[key]` from a `{uuid,title}` object to its bare
+ * TITLE string, adding a flat sibling `o[uuidKey]` = the full uuid ONLY when the
+ * round-trip law demands it: `forceUuid` (the FULL/detail tier — uuid siblings
+ * unconditional) OR the bare title does not resolve back to this exact entity
+ * (`!promoter.roundTrips`). A null/absent ref, or one already flattened to a
+ * string, is left untouched. The container's `isRepeatingTemplate` marker (a
+ * TTY-render disambiguator on the internal entity) does not survive the flatten
+ * — the human render reads the unshaped entity, so only the JSON copy loses it.
+ */
+function flattenRef(
+  o: Obj,
+  key: string,
+  uuidKey: string,
+  kind: RefKind,
+  forceUuid: boolean,
+  promoter: RefPromoter,
+  projectUuid?: string,
+): void {
+  const ref = o[key];
+  if (ref === null || typeof ref !== "object") return; // absent, or already a bare string
+  const r = ref as Obj;
+  const uuid = typeof r["uuid"] === "string" ? (r["uuid"] as string) : "";
+  const title = typeof r["title"] === "string" ? (r["title"] as string) : "";
+  o[key] = title;
+  if (forceUuid || !promoter.roundTrips(kind, title, uuid, projectUuid)) o[uuidKey] = uuid;
+}
+
 /** What a given view context drops from an item: redundant ancestry + R10 bucket/marker implications. */
 interface ItemDrop {
   project?: boolean;
@@ -279,7 +336,7 @@ function whenOf(s: Obj, stage: Stage): ReturnType<typeof deriveWhen> {
  * (`changeKind` on a changes row, `match` on a search hit) pass through
  * untouched. Non-task values (areas, tags, refs, headings) are returned as-is.
  */
-function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
+function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: RefPromoter): unknown {
   if (src === null || typeof src !== "object") return src;
   const s = src as Obj;
   const type = s["type"];
@@ -342,6 +399,22 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
   if (drop.area === true) delete o["area"];
   if (drop.heading === true) delete o["heading"];
 
+  // Absent `type` = to-do — omit it on to-do rows (project/heading keep theirs).
+  if (o["type"] === "to-do") delete o["type"];
+
+  // Flatten the surviving container refs to bare TITLE strings, adding a flat
+  // `*Uuid` sibling per the round-trip law (FULL tier: unconditional; compact:
+  // only when the title would not resolve back to this entity). The owning
+  // project's uuid — captured BEFORE `project` is flattened — scopes the heading
+  // round-trip (headings resolve within their project). The `heading` ref is
+  // compact-dropped below, so it is flattened only on the FULL tier.
+  const forceUuid = !compact;
+  const projectUuid = refUuid(o["project"]);
+  flattenRef(o, "project", "projectUuid", "project", forceUuid, promoter);
+  flattenRef(o, "area", "areaUuid", "area", forceUuid, promoter);
+  if (!compact)
+    flattenRef(o, "heading", "headingUuid", "heading", forceUuid, promoter, projectUuid);
+
   // R12 — FULL/DETAIL keep the raw `startDate` beside `when` as the SUBSTRATE
   // (`startDate` = what is stored, `when` = where it sits). COMPACT drops it below
   // (the position `when` carries is what a list needs).
@@ -362,15 +435,20 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean): unknown {
 }
 
 /** Map a plain array of items with the item shaper. */
-function shapeList(items: unknown, drop: ItemDrop, compact: boolean): unknown {
+function shapeList(
+  items: unknown,
+  drop: ItemDrop,
+  compact: boolean,
+  promoter: RefPromoter,
+): unknown {
   if (!Array.isArray(items)) return items;
-  return items.map((i) => shapeItem(i, drop, compact));
+  return items.map((i) => shapeItem(i, drop, compact, promoter));
 }
 
 /** Copy `base` and overwrite `items` with the shaped list (avoids spread-in-map). */
-function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean): Obj {
+function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean, promoter: RefPromoter): Obj {
   const out: Obj = { ...base };
-  out["items"] = shapeList(base["items"], drop, compact);
+  out["items"] = shapeList(base["items"], drop, compact, promoter);
   return out;
 }
 
@@ -405,13 +483,14 @@ function rebucketChildren(
   children: unknown[],
   drop: ItemDrop,
   compact: boolean,
+  promoter: RefPromoter,
 ): { anytime: unknown[]; upcoming: WireDateGroup[]; someday: unknown[] } {
   const anytime: unknown[] = [];
   const someday: unknown[] = [];
   const datedByKey = new Map<string, unknown[]>();
   const datedOrder: string[] = [];
   const restingTemplates: unknown[] = [];
-  const shape = (c: unknown) => shapeItem(c, drop, compact);
+  const shape = (c: unknown) => shapeItem(c, drop, compact, promoter);
   for (const raw of children) {
     if (raw === null || typeof raw !== "object") continue;
     const c = raw as Child;
@@ -507,7 +586,7 @@ const NO_DROP: ItemDrop = {};
 const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
 /** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
-function shapeProjectView(view: Obj, compact: boolean): Obj {
+function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   const cd = PROJECT_CHILD_DROP;
   const hd = HEADING_MEMBER_DROP;
   const shapeHeadingGroup = (g: unknown): unknown => {
@@ -528,7 +607,7 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
       ...asArray(grp["someday"]),
       ...asArray(grp["repeating"]),
     ];
-    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact);
+    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact, promoter);
     out["anytime"] = anytime;
     out["upcoming"] = upcoming;
     out["someday"] = someday;
@@ -543,7 +622,7 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
     ...asArray(view["someday"]),
     ...asArray(view["repeating"]),
   ];
-  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact);
+  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact, promoter);
   const out: Obj = { ...view };
   delete out["active"];
   delete out["scheduled"];
@@ -554,26 +633,31 @@ function shapeProjectView(view: Obj, compact: boolean): Obj {
   delete out["trashed"];
   // The project card NODE keeps everything (children derive their container from
   // it), but is still an item DTO, so the universal + R10 reshapes apply.
-  out["project"] = shapeItem(view["project"], NO_DROP, false);
+  out["project"] = shapeItem(view["project"], NO_DROP, false, promoter);
   out["anytime"] = anytime;
   out["upcoming"] = upcoming;
   out["someday"] = someday;
   out["headings"] = headings;
   // A project keeps its in-context `logbook` (a project is a bounded object with
   // a real done-state); trashed children live only in `things trash`.
-  out["logbook"] = shapeList(view["logged"], cd, compact);
+  out["logbook"] = shapeList(view["logged"], cd, compact, promoter);
   return out;
 }
 
 /** Shape every collection bucket of an area view; the area node keeps its identity (tags folded). */
-function shapeAreaView(view: Obj, compact: boolean): Obj {
+function shapeAreaView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   const looseMembers = [
     ...asArray(view["active"]),
     ...flattenGroups(view["scheduled"]),
     ...asArray(view["someday"]),
     ...asArray(view["repeating"]),
   ];
-  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, AREA_CHILD_DROP, compact);
+  const { anytime, upcoming, someday } = rebucketChildren(
+    looseMembers,
+    AREA_CHILD_DROP,
+    compact,
+    promoter,
+  );
   const out: Obj = { ...view };
   delete out["active"];
   delete out["scheduled"];
@@ -586,7 +670,7 @@ function shapeAreaView(view: Obj, compact: boolean): Obj {
   out["area"] = shapeArea(view["area"]);
   out["anytime"] = anytime;
   // The projects list is a mixed listing of the area's project rows — keep stage.
-  out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact);
+  out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact, promoter);
   out["upcoming"] = upcoming;
   out["someday"] = someday;
   return out;
@@ -601,19 +685,24 @@ function shapeArea(src: unknown): unknown {
 }
 
 /** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied `when`). */
-function shapeTodayView(view: Obj, compact: boolean): Obj {
+function shapeTodayView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   return {
     ...view,
-    today: shapeList(view["today"], TODAY_SECTION_DROP, compact),
-    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact),
+    today: shapeList(view["today"], TODAY_SECTION_DROP, compact, promoter),
+    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact, promoter),
   };
 }
 
 /** Shape sidebar sections (anytime/someday catalogues) with the section's drop spec. */
-function shapeSections(sections: unknown, drop: ItemDrop, compact: boolean): unknown {
+function shapeSections(
+  sections: unknown,
+  drop: ItemDrop,
+  compact: boolean,
+  promoter: RefPromoter,
+): unknown {
   if (!Array.isArray(sections)) return sections;
   return sections.map((s) =>
-    s === null || typeof s !== "object" ? s : withShapedItems(s as Obj, drop, compact),
+    s === null || typeof s !== "object" ? s : withShapedItems(s as Obj, drop, compact, promoter),
   );
 }
 
@@ -643,26 +732,35 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
  * mutated (shallow copies throughout), so the human-render path keeps the full
  * entities.
  */
-export function shapeReadPayload(kind: string, data: unknown, full: boolean): unknown {
+export function shapeReadPayload(
+  kind: string,
+  data: unknown,
+  full: boolean,
+  promoter?: RefPromoter,
+): unknown {
+  // The ref-promotion oracle drives the round-trip law for flat container refs.
+  // Absent (a DB-less unit shaping): assume every title round-trips — bare
+  // titles, no uuid siblings. Production always passes the client's promoter.
+  const p = promoter ?? ALWAYS_ROUND_TRIPS;
   // `detail` is the FULL record and drops no ancestry / stage / `when`.
-  if (kind === "detail") return shapeItem(data, NO_DROP, false);
+  if (kind === "detail") return shapeItem(data, NO_DROP, false, p);
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);
-  if (flatDrop !== undefined) return shapeList(data, flatDrop, compact);
+  if (flatDrop !== undefined) return shapeList(data, flatDrop, compact, p);
   if (kind === "today" && data !== null && typeof data === "object") {
-    return shapeTodayView(data as Obj, compact);
+    return shapeTodayView(data as Obj, compact, p);
   }
   if (kind === "anytime" && Array.isArray(data)) {
-    return shapeSections(data, ANYTIME_SECTION_DROP, compact); // stage-pure → drop stage
+    return shapeSections(data, ANYTIME_SECTION_DROP, compact, p); // stage-pure → drop stage
   }
   if (kind === "someday" && Array.isArray(data)) {
-    return shapeSections(data, SOMEDAY_SECTION_DROP, compact); // stage-pure → drop stage
+    return shapeSections(data, SOMEDAY_SECTION_DROP, compact, p); // stage-pure → drop stage
   }
   if (kind === "area-view" && data !== null && typeof data === "object") {
-    return shapeAreaView(data as Obj, compact);
+    return shapeAreaView(data as Obj, compact, p);
   }
   if (kind === "project-view" && data !== null && typeof data === "object") {
-    return shapeProjectView(data as Obj, compact);
+    return shapeProjectView(data as Obj, compact, p);
   }
   // The `areas` listing carries Area entities whose tags fold to names.
   if (kind === "areas" && Array.isArray(data)) return data.map(shapeArea);
@@ -682,7 +780,9 @@ export type CandidateType = "to-do" | "project" | "heading" | "area" | "tag";
  * ONLY material that helps a caller pick the right entity, drawn from the SAME
  * single-source derivations the read wire uses — never the raw internal entity
  * (no counts, no notes, no dates, no null-stuffed keys):
- * - `uuid` / `title` / `type` — always present (`type` names the kind).
+ * - `uuid` / `title` — always present.
+ * - `type` — names the kind, EXCEPT to-do: absent `type` = to-do (present for
+ *   `project` / `heading` / `area` / `tag`), the same convention the item wire uses.
  * - `area` / `project` — container hint as a TITLE string, present only when set.
  * - `stage` / `when` — the R10/R12 lifecycle words, present only for a to-do /
  *   project candidate whose source row carries the materialized lifecycle fields
@@ -693,7 +793,8 @@ export type CandidateType = "to-do" | "project" | "heading" | "area" | "tag";
 export interface CandidateRef {
   uuid: string;
   title: string;
-  type: CandidateType;
+  /** The kind — omitted for a to-do (absent `type` = to-do), present otherwise. */
+  type?: CandidateType;
   area?: string;
   project?: string;
   stage?: Stage;
@@ -726,8 +827,9 @@ export function candidateRef(type: CandidateType, src: unknown): CandidateRef {
   const out: CandidateRef = {
     uuid: typeof s["uuid"] === "string" ? (s["uuid"] as string) : "",
     title: typeof s["title"] === "string" ? (s["title"] as string) : "",
-    type,
   };
+  // Absent `type` = to-do — emit it only for the other kinds.
+  if (type !== "to-do") out.type = type;
   const area = candidateContainerTitle(s["area"]);
   if (area !== null) out.area = area;
   const project =

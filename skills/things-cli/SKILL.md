@@ -34,6 +34,8 @@ Reads decompose an item's position onto two derived, presence-keyed words (they 
 
 Commands take a `<ref>`: a UUID, a unique UUID prefix (≥ 6 chars), a Things share link, or a (unique) title. Ambiguous refs fail with the candidates listed — pick one and retry ([references/errors.md](references/errors.md) has the candidate/dead-row/hazard contract). Discover UUIDs via any read command; add `--json` for stable machine output (UUIDs are in `.uuid`; emitted UUIDs are always full).
 
+**Container refs and the `type` shorthand in `--json`.** A row's container ref (`area`/`project`/`heading`) is a bare **title string**; a flat sibling `areaUuid` / `projectUuid` / `headingUuid` appears **only when that title alone would not resolve back** to the exact same item (a duplicate title, or a title that shadows a UUID). **To act on a ref, pass `.areaUuid // .area`** (same for project/heading) — the uuid when present, else the title. For unattended pipelines or stored refs, use `--full` and key on the uuids (the full tier always emits the `*Uuid` siblings). And **absent `type` = to-do** — a row omits `type` when it is a to-do; it is present for `project`, `heading`, `area`, and `tag`.
+
 ## Stable contracts
 
 These hold regardless of the binary version; see [references/contracts.md](references/contracts.md) for the full text.

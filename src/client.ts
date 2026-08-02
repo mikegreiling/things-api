@@ -21,11 +21,13 @@ import type { AnyTask, Area, Project, Tag } from "./model/entities.ts";
 import { auditDir, mutationLockPath } from "./paths.ts";
 import { byUuid } from "./read/detail.ts";
 import {
+  makeRefPromoter,
   resolveAreaUuid,
   resolveHeadingUuid,
   resolveProjectUuid,
   resolveTaskUuidPrefix,
 } from "./read/queries.ts";
+import type { RefPromoter } from "./read/shape.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { isLooseRef, looseShadowNotice, shadowingLooseArea } from "./read/pseudo-area.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
@@ -344,6 +346,14 @@ export interface ThingsClient {
     project(ref: string): { uuid: string; title: string };
     heading(projectUuid: string, sel: string): { uuid: string; title: string };
   };
+  /**
+   * A fresh {@link RefPromoter} (fresh memo) the consumer surfaces hand to
+   * {@link shapeReadPayload} so the flat `area`/`project`/`heading` refs promote
+   * a `*Uuid` sibling exactly when their bare title would not resolve back — the
+   * JSON round-trip law. Build one per response emission (the memo is scoped to
+   * that one shaping pass).
+   */
+  refPromoter(): RefPromoter;
   read: {
     /**
      * The Today list (Today + This Evening split) with the sidebar badge,
@@ -886,6 +896,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       // project ref was scope-checked), so no extra clause is threaded here.
       heading: (projectUuid, sel) => resolveHeadingUuid(conn.db, projectUuid, sel),
     },
+    refPromoter: () => makeRefPromoter(conn.db),
     read: {
       // The list views own their bounding: run the full filtered query, then
       // truncate to the resolved cap (default 50 / per-block 30·3) — the exact

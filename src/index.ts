@@ -186,7 +186,7 @@ export { ReferenceResolutionError } from "./read/queries.ts";
 // a not-found/ambiguous resolution and the did-you-mean fallback list under
 // `error.detail.candidates`. See src/read/shape.ts.
 export { candidateRef, CANDIDATE_CAP } from "./read/shape.ts";
-export type { CandidateRef, CandidateType } from "./read/shape.ts";
+export type { CandidateRef, CandidateType, RefKind, RefPromoter } from "./read/shape.ts";
 
 // Container-scoped sandbox: the pinned-scope shape (surfaced as `meta.scope` and
 // `client.scope`) and the fail-closed error a bad `--scope` raises. See
@@ -237,6 +237,10 @@ export * from "./surface-copy.ts";
 // Pure model/read helpers the presentation layers reuse.
 export { omitEmpty } from "./model/serialize.ts";
 export { shapeReadPayload } from "./read/shape.ts";
+// The emit-side ref-promotion oracle for the JSON round-trip law: build one over
+// the live DB (memoized per response) and hand it to shapeReadPayload; the
+// consumer surfaces get theirs from `client.refPromoter()`.
+export { makeRefPromoter, titleRoundTrips } from "./read/queries.ts";
 export { localToday } from "./model/dates.ts";
 export { templateStatus } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";
