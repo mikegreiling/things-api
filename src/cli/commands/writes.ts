@@ -2580,7 +2580,7 @@ export function registerWriteCommands(program: Command): void {
         "accepted-fingerprint | certified-app-version | allow-experimental | bounce-enabled | " +
         "bounce-max-items | ui-enabled | scope",
     )
-    .action((key: string, value: string) => {
+    .action((key: string, value: string, opts: { dryRun?: boolean }) => {
       const map: Record<string, string> = {
         profile: "profile",
         maxDisruption: "maxDisruption",
@@ -2609,6 +2609,14 @@ export function registerWriteCommands(program: Command): void {
               target === "uiEnabled"
             ? value === "true"
             : value;
+      // Universal `--dry-run` (../dry-run.ts): `config set` writes local config
+      // state (not the Things DB), so it honors the flag with an honest preview —
+      // the key is still validated above, but nothing is persisted. Exit 0.
+      if (opts.dryRun === true) {
+        process.stdout.write(`DRY RUN would set ${key} = ${String(parsed)} (nothing written)\n`);
+        process.exitCode = ExitCode.Ok;
+        return;
+      }
       saveConfigKey(target as never, parsed);
       process.stdout.write(`set ${key} = ${String(parsed)}\n`);
       // A stored scope jails EVERY process on this host — including this

@@ -5,8 +5,11 @@
  * endpoint that executes `bin/things.js` with a tokenized argv (never a
  * shell). Reads on the allowlist run verbatim; EVERY other command gets
  * `--dry-run` force-appended server-side, so a mutation typed into the box can
- * only ever produce a plan. `--json` is implied. The echoed argv in every
- * response shows exactly what ran, forced flags included.
+ * only ever produce a plan. Since `--dry-run` is now a UNIVERSAL flag (accepted
+ * by every command; a no-op on reads), force-appending it to a read this
+ * allowlist doesn't recognize is harmless — that command just runs normally
+ * instead of erroring on an unknown option. `--json` is implied. The echoed argv
+ * in every response shows exactly what ran, forced flags included.
  *
  * Binds to 127.0.0.1 by default. With `--public` it binds 0.0.0.0 for LAN
  * access (phone/tablet on the same network) and gates every request behind a
@@ -69,8 +72,9 @@ export function tokenize(input: string): string[] {
 
 /**
  * Read commands that run VERBATIM (plus implied --json). Everything not
- * matched here is forced through --dry-run. Kept in sync with the CLI
- * registry by a unit test (test/unit/explore.test.ts).
+ * matched here is forced through --dry-run — harmless even for a read this list
+ * misses, since --dry-run is universal and a no-op on reads. Kept in sync with
+ * the CLI registry by a unit test (test/unit/explore.test.ts).
  */
 export const READ_VIEWS: readonly string[] = [
   "inbox",

@@ -22,6 +22,7 @@ import { registerSnapshot } from "./commands/snapshot.ts";
 import { registerTodoCommands } from "./commands/todo.ts";
 import { registerWriteCommands } from "./commands/writes.ts";
 import { resolveInvocation } from "./resolve-invocation.ts";
+import { applyUniversalDryRun } from "./dry-run.ts";
 import { runVerbHint } from "./verb-hint.ts";
 import { detectMoveHint, runMoveHint } from "./move-hint.ts";
 import { setRenderClock } from "./clock.ts";
@@ -55,6 +56,12 @@ export function buildProgram(): Command {
   // improved excess-argument message names the command and its usage line.
   registerHelp(program);
   installExcessArgsHelp(program);
+  // Universal `--dry-run` (docs/design/cli-grammar.md): last, so EVERY command
+  // registered above — reads, local-side-effect commands, and any future one —
+  // inherits the flag. The write verbs already declare their own visible flag
+  // and are skipped; the rest gain a hidden one (reads ignore it and stay
+  // byte-identical; the side-effect commands' actions honor it).
+  applyUniversalDryRun(program);
   return program;
 }
 

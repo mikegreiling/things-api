@@ -72,17 +72,26 @@ export function registerSetup(program: Command): void {
     )
     .option("--check", "report which shortcuts are installed without opening anything")
     .option("--json", "emit versioned JSON envelope on stdout")
-    .action((opts: { check?: boolean; json?: boolean }) => {
+    .action((opts: { check?: boolean; json?: boolean; dryRun?: boolean }) => {
       const started = Date.now();
       const state = shortcutProxies();
       const opened: string[] = [];
       let exitCode: number = ExitCode.Ok;
       let detail = state.detail;
 
-      if (opts.check !== true && state.missing.length > 0 && simFenceActive()) {
-        // Under the simulator fence: report the install sheets as simulated
-        // rather than opening them, so a bench run never touches the host app.
-        detail = "simulated: install sheets were not opened (the Shortcuts app was not touched)";
+      // Universal `--dry-run` (../dry-run.ts): opening an install sheet is a
+      // local side effect (it drives the Shortcuts app), so the flag honors the
+      // "nothing changes" promise — report what WOULD be opened, open nothing.
+      // The bench simulator fence takes the same no-side-effect path.
+      if (
+        opts.check !== true &&
+        state.missing.length > 0 &&
+        (simFenceActive() || opts.dryRun === true)
+      ) {
+        detail =
+          opts.dryRun === true
+            ? `dry run: would open ${state.missing.length} install sheet${state.missing.length === 1 ? "" : "s"} in the Shortcuts app — nothing was opened`
+            : "simulated: install sheets were not opened (the Shortcuts app was not touched)";
       } else if (opts.check !== true && state.missing.length > 0) {
         for (const name of state.missing) {
           const file = join(SHORTCUTS_DIR, `${name}.shortcut`);

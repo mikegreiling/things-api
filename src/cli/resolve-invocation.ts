@@ -16,6 +16,7 @@
 import type { Command } from "commander";
 
 import { shellQuote } from "./shell-quote.ts";
+import { stripInertDryRun } from "./dry-run.ts";
 
 /**
  * The type namespaces whose `show` verb takes a reference and may be omitted:
@@ -173,14 +174,22 @@ export function setInvocationCanonical(canonical: string): void {
  */
 export function resolveInvocation(program: Command, args: string[]): ResolvedInvocation {
   current = classify(program, args);
+  // Universal `--dry-run` (./dry-run.ts): drop the flag from the normalized argv
+  // when its target command does not consume it (the root, a bare namespace
+  // group, or the `trash` view) — there it is an inert no-op, and dropping it
+  // keeps "accepted everywhere" true without commander erroring on an option
+  // those non-leaf nodes deliberately never declare.
+  current.argv = stripInertDryRun(program, current.argv);
   return current;
 }
 
 /**
  * Skip over LEADING GLOBAL-STYLE FLAGS to find the token being classified, so
- * `things --json Hobbies` routes exactly like `things Hobbies --json`. Only
- * the global read options are recognized here — `--json` (boolean) and `--db`
- * (value-taking: its value is skipped too, never misread as the subject).
+ * `things --json Hobbies` routes exactly like `things Hobbies --json`. Only the
+ * universal boolean globals are recognized here — `--json` and `--dry-run` — plus
+ * `--db` (value-taking: its value is skipped too, never misread as the subject).
+ * `--dry-run` is accepted by every command (see ./dry-run.ts), so a leading one
+ * must survive normalization onto the resolved command exactly as `--json` does.
  * Any other leading flag returns null — an unknown flag keeps the plain
  * fall-through to commander (which reports it), rather than guessing whether
  * the next token is that flag's value or the subject.
@@ -190,7 +199,7 @@ export function indexPastLeadingFlags(args: string[]): number | null {
   while (i < args.length) {
     const tok = args[i] ?? "";
     if (!tok.startsWith("-")) return i;
-    if (tok === "--json") {
+    if (tok === "--json" || tok === "--dry-run") {
       i += 1;
     } else if (tok === "--db") {
       i += 2; // skip the flag AND its value

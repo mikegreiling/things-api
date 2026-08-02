@@ -117,13 +117,21 @@ export interface RevealResult {
  * a synthetic uuid in the operator's real app is always a bug (2026-07-17
  * incident: a bare `--db <fixture>` invocation popped a "list does not
  * exist" modal in the live app).
+ *
+ * `dryRun` withholds the reveal for the universal `--dry-run` flag (../dry-run.ts):
+ * foregrounding the app is a local side effect, so "guarantee nothing changes"
+ * returns the URI it WOULD have opened without opening it.
  */
-export function openInThings(uuid: string, dbPath?: string): RevealResult {
+export function openInThings(uuid: string, dbPath?: string, dryRun?: boolean): RevealResult {
   const uri = `things:///show?id=${uuid}`;
   const fixtureCandidates = [dbPath, process.env["THINGS_DB"]].filter(
     (p): p is string => p !== undefined && p.trim() !== "",
   );
-  if (simFenceActive() || fixtureCandidates.some((p) => dbCarriesBenchMarker(p))) {
+  if (
+    dryRun === true ||
+    simFenceActive() ||
+    fixtureCandidates.some((p) => dbCarriesBenchMarker(p))
+  ) {
     return { uri, simulated: true };
   }
   execFileSync("/usr/bin/open", [uri]);

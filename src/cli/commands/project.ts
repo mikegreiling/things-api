@@ -274,7 +274,7 @@ export function registerProjectCommands(program: Command): void {
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: { json?: boolean; db?: string }) => {
+    .action((ref: string, opts: { json?: boolean; db?: string; dryRun?: boolean }) => {
       withClient(
         opts,
         "open",
@@ -284,7 +284,7 @@ export function registerProjectCommands(program: Command): void {
             const what = t.viaHeading === true ? "heading" : t.kind;
             throw new RangeError(`"${ref}" is a ${what}, not a project (try \`things open\`)`);
           }
-          return openInThings(t.uuid, opts.db);
+          return openInThings(t.uuid, opts.db, opts.dryRun);
         },
         (d) => [revealLine(d)],
       );

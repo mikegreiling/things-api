@@ -270,7 +270,7 @@ export function registerShowCommands(program: Command): void {
     )
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
-    .action((ref: string, opts: { json?: boolean; db?: string }) => {
+    .action((ref: string, opts: { json?: boolean; db?: string; dryRun?: boolean }) => {
       const lower = ref.toLowerCase();
       // The loose pseudo-area is a derived view (READ only) — it has no app
       // screen to open; refuse by name, not a generic no-such-resource error.
@@ -317,8 +317,8 @@ export function registerShowCommands(program: Command): void {
         "open",
         (c) =>
           keyword !== null
-            ? openInThings(keyword, opts.db)
-            : openInThings(c.read.showTarget(ref).uuid, opts.db),
+            ? openInThings(keyword, opts.db, opts.dryRun)
+            : openInThings(c.read.showTarget(ref).uuid, opts.db, opts.dryRun),
         (d) => [revealLine(d)],
       );
     });
