@@ -3,7 +3,13 @@
  */
 import type { Command } from "commander";
 
-import { FULL_DESC, localToday, type ProjectView, type Todo } from "../../index.ts";
+import {
+  FULL_DESC,
+  localToday,
+  ReferenceResolutionError,
+  type ProjectView,
+  type Todo,
+} from "../../index.ts";
 import { bold, dim, green, underline } from "../style.ts";
 import {
   countChip,
@@ -232,8 +238,11 @@ export function runProjectShow(ref: string, rawOpts: ProjectShowActionOpts): voi
       try {
         return { data: c.read.projectView(ref, { overdue, ...tagFilter }) };
       } catch (err) {
-        // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
-        if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+        // An ambiguity is surfaced verbatim — its own candidate list IS the
+        // disambiguation (count and list coherent by construction). A not-found
+        // gets a type-scoped did-you-mean instead.
+        if (err instanceof ReferenceResolutionError && err.code === "ambiguous") throw err;
+        if (err instanceof RangeError) {
           throw new DidYouMeanError(
             err.message,
             ref,

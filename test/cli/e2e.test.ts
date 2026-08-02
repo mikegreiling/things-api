@@ -2097,6 +2097,70 @@ describe("cli did-you-mean fallback (item 4)", () => {
   });
 });
 
+describe("cli read-side liveness law (project name resolution)", () => {
+  it("repro: shorthand AND `project show` resolve a live twin identically, ignoring trashed twins", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "New Stuff", index: 1, uuid: "livenewstuff0000000001" });
+    for (const t of ["NEW STUFF", "new stuff", "New STUFF", "NEW stuff"])
+      seedProject(fx.db, { title: t, trashed: true });
+    const sh = JSON.parse(runCli(["New StUfF", "--json", "--db", fx.path]).stdout);
+    const canon = JSON.parse(
+      runCli(["project", "show", "New StUfF", "--json", "--db", fx.path]).stdout,
+    );
+    expect(sh.ok).toBe(true);
+    expect(canon.ok).toBe(true);
+    expect(sh.data.view.project.uuid).toBe("livenewstuff0000000001");
+    expect(canon.data.view.project.uuid).toBe("livenewstuff0000000001");
+  });
+
+  it("ambiguity coherence: both surfaces refuse code=ambiguous, count == candidates, + trash disclosure", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "Dup", index: 1 });
+    seedProject(fx.db, { title: "Dup", index: 2 });
+    seedProject(fx.db, { title: "Dup", trashed: true });
+    seedProject(fx.db, { title: "Dup", trashed: true });
+    for (const argv of [["Dup"], ["project", "show", "Dup"]]) {
+      const env = JSON.parse(runCli([...argv, "--json", "--db", fx.path]).stdout);
+      expect(env.error.code).toBe("ambiguous");
+      expect(env.error.message).toContain('"Dup" matches 2 projects');
+      expect(env.error.message).toContain("also matched: 2 in the trash");
+      expect(env.error.detail.candidates).toHaveLength(2);
+      expect(
+        env.error.detail.candidates.every((c: { type?: string }) => c.type === "project"),
+      ).toBe(true);
+    }
+  });
+
+  it("unique-dead read fallback: a lone trashed project is viewable by name (card marked trashed)", () => {
+    fx = buildFixtureDb();
+    seedProject(fx.db, { title: "Ghosted", trashed: true, uuid: "ghost000000000000000a1" });
+    const env = JSON.parse(runCli(["Ghosted", "--json", "--db", fx.path]).stdout);
+    expect(env.ok).toBe(true);
+    expect(env.data.view.project.uuid).toBe("ghost000000000000000a1");
+    // The disclosure rides the render: the JSON project node reads stage "trash".
+    expect(env.data.view.project.stage).toBe("trash");
+    const human = runCliErr(["project", "show", "Ghosted", "--db", fx.path]);
+    expect(human.stdout).toContain("(trashed)");
+  });
+
+  it("cross-kind: a shorthand subject ambiguous across areas + projects merges its candidates verbatim", () => {
+    fx = buildFixtureDb();
+    seedArea(fx.db, "Split");
+    seedArea(fx.db, "Split");
+    seedProject(fx.db, { title: "Split", index: 1 });
+    seedProject(fx.db, { title: "Split", index: 2 });
+    seedProject(fx.db, { title: "Split", index: 3 });
+    const env = JSON.parse(runCli(["Split", "--json", "--db", fx.path]).stdout);
+    expect(env.error.code).toBe("ambiguous");
+    // No did-you-mean wrap — the resolver's own merged list is authoritative.
+    expect(env.error.message).toContain('"Split" matches 2 areas and 3 projects');
+    expect(env.error.message).not.toContain("no command or item named");
+    const cands = env.error.detail.candidates as { type?: string }[];
+    expect(cands.filter((c) => c.type === "area")).toHaveLength(2);
+    expect(cands.filter((c) => c.type === "project")).toHaveLength(3);
+  });
+});
+
 describe("cli sugar routing tiers (refinements B/C)", () => {
   it("dash + case normalization resolves quote-free: `restore-astro-city-cabinet`", () => {
     fx = buildFixtureDb();

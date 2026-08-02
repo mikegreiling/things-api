@@ -23,6 +23,17 @@ Worked examples (Mike's cases):
 - Areas `Family` and `FaMiLy`, ref `family`: tier 0/1 miss; tier 2 matches **both** → ambiguity error.
 - Same areas, ref `Family`: tier 1 (exact) matches only `Family` → resolves, definitively, ignoring `FaMiLy`. "Get the casing exactly right and it always wins."
 
+### Read-side liveness law (names resolve against LIVE rows only)
+
+One law governs the trash dimension on the read side, so the bare-ref shorthand (`things "X"`) and the canonical `things project show X` can never disagree, and an ambiguity's count can never diverge from the candidate list it renders:
+
+- **Name tiers resolve against LIVE (untrashed) rows only.** An explicit **uuid / partial-uuid** (explicit intent) still reaches a trashed project — viewing a trashed project by id is unchanged — but a **name** never resolves to, nor is shadowed by, a dead same-name twin. Mechanically this is `resolveNamedRef`'s `nameExtraWhere` narrowing the name tiers to `trashed = 0` while the uuid tiers keep the wide pool (the same split `resolveProjectWriteTarget` uses on the write side). Projects are the only read-side name-resolvable kind with a trash dimension (areas cannot be trashed; to-do titles do not resolve on the read side at all).
+- **Reads-only ergonomic fallback.** When a name matches **zero live rows but exactly one trashed project**, a read surface resolves to it (so a uniquely-named trashed project stays viewable by name) and the render discloses it — the card's `(trashed)` marker, or the JSON node's `stage: "trash"`. **Several** trashed-only twins → not-found with the honest dead-row hint (`… trashed items match this name — see \`things trash\``), never a dead candidate. The write side is unaffected: a write target still refuses a trashed-only name.
+- **Count / list coherence.** An ambiguity's `matches N` counts the **same live pool** its candidate list renders (equal by construction). Additional trashed twins in the uuid-reachable pool are **disclosed** — `… also matched: N in the trash — \`things trash\` lists them, a uuid reaches one directly` — rather than inflating the count.
+- **Bare-shorthand cross-kind candidates.** `classifyShowTarget`'s namespace spans to-dos, areas, and projects. Precedence for a UNIQUE winner is the documented chain (uuid → area → project). But when a name is **ambiguous at one kind while another kind also has live name matches**, the refusal MERGES the live candidates across kinds (each carries its `type`), naming the split: `"X" matches 2 areas and 3 projects — use \`things area show\` / \`things project show\`, or a ref below`. The shorthand thus never shows fewer options than the narrower namespaced command would.
+
+The CLI read surfaces route an ambiguity by the resolution error's `code === "ambiguous"` (not a message-word match), so the resolver's own candidate list surfaces verbatim under error `code: "ambiguous"`; only a genuine not-found falls through to the did-you-mean title search.
+
 ### Leading emoji / symbols are significant (by design, unopinionated)
 
 Normalization folds only **case, whitespace, and dashes** — it never strips emoji, symbols, or other punctuation. Consequence: a name that begins with an emoji must be typed *with* that emoji to match. This is not an opinion about what a leading emoji *means*; it is simply "we fold equivalent spellings, we do not delete characters."

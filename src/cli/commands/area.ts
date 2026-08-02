@@ -31,6 +31,7 @@ import {
   isScheduledProjectRow,
   isSomedayProjectRow,
   localToday,
+  ReferenceResolutionError,
   type AreaView,
   type BoundedAreaView,
   type GroupedLimits,
@@ -265,8 +266,10 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
           projectLimit: projectCap.limit,
         });
       } catch (err) {
-        // Not-found gets a type-scoped did-you-mean; ambiguity is verbatim.
-        if (err instanceof RangeError && !err.message.includes("ambiguous")) {
+        // An ambiguity is surfaced verbatim (its candidates ARE the list); a
+        // not-found gets a type-scoped did-you-mean.
+        if (err instanceof ReferenceResolutionError && err.code === "ambiguous") throw err;
+        if (err instanceof RangeError) {
           throw new DidYouMeanError(
             err.message,
             ref,

@@ -13,6 +13,7 @@ import {
   GROUPED_ALL_DESC,
   isLooseRef,
   LOOSE_OPEN_REFUSAL,
+  ReferenceResolutionError,
   stripThingsUri,
   type AnyTask,
   type AreaView,
@@ -189,8 +190,9 @@ export function registerShowCommands(program: Command): void {
             try {
               t = c.read.showTarget(ref);
             } catch (err) {
-              // An ambiguous reference lists its candidates — surface verbatim.
-              if (err instanceof RangeError && err.message.includes("ambiguous")) throw err;
+              // An ambiguous reference lists its candidates (a cross-kind subject
+              // merges its area + project matches) — surface verbatim.
+              if (err instanceof ReferenceResolutionError && err.code === "ambiguous") throw err;
               if (!(err instanceof Error)) throw err;
               // Not-found: fall back to a lite title-search (did-you-mean),
               // untyped/mixed for the loose forms. A bare-noun invocation
