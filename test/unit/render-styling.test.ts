@@ -315,6 +315,41 @@ describe("template-container marker (↻ prefix on the muted container)", () => 
   });
 });
 
+describe("inline container-hint promotion (color on)", () => {
+  it("promotes the container uuid prefix `(Title [8char])` when the title would not round-trip", async () => {
+    const { formatItem } = await render();
+    const { setRenderRefPromoter } = await import("../../src/cli/ref-render.ts");
+    // A fake promoter: only "Groceries" fails to round-trip (a colliding twin).
+    setRenderRefPromoter({ roundTrips: (_k, title) => title !== "Groceries" });
+    try {
+      const promoted = formatItem(
+        todo({ title: "milk", project: { uuid: "Pr0jc7Ab2dEf4gHi6jKl8m", title: "Groceries" } }),
+        8,
+      );
+      expect(stripSgr(promoted)).toContain("(Groceries [Pr0jc7Ab])");
+      // A unique container round-trips → bare hint, no bracket.
+      const bare = formatItem(
+        todo({ title: "eggs", project: { uuid: "One0ffAb2dEf4gHi6jKl8m", title: "One-off" } }),
+        8,
+      );
+      expect(stripSgr(bare)).toContain("(One-off)");
+      expect(stripSgr(bare)).not.toContain("[One0ffAb");
+    } finally {
+      setRenderRefPromoter(null);
+    }
+  });
+
+  it("without a promoter (non-TTY / no DB) the hint stays the bare (title)", async () => {
+    const { formatItem } = await render();
+    const line = formatItem(
+      todo({ title: "milk", project: { uuid: "Pr0jc7Ab2dEf4gHi6jKl8m", title: "Groceries" } }),
+      8,
+    );
+    expect(stripSgr(line)).toContain("(Groceries)");
+    expect(stripSgr(line)).not.toContain("[Pr0jc7Ab");
+  });
+});
+
 describe("width fitting + styling interplay (color on)", () => {
   it("truncates inside the SGR run — the clip/ellipsis boundary never splits an escape", async () => {
     const w = await width();

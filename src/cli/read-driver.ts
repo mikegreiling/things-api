@@ -8,6 +8,7 @@
 import { getInvocation } from "./resolve-invocation.ts";
 import { dim } from "./style.ts";
 import { viewHeaderLines } from "./render.ts";
+import { setRenderRefPromoter } from "./ref-render.ts";
 import {
   candidatesJson,
   DidYouMeanError,
@@ -177,6 +178,11 @@ export function runRead<T>(
   let client: ThingsClient | null = null;
   try {
     client = openThings(opts.db ? { dbPath: opts.db } : {});
+    // Arm the render-time ref promoter so human list rows can promote an inline
+    // container hint's uuid prefix (TTY only — the JSON path never calls the
+    // renderers). Grouped views render inside `fn`, so this must precede it;
+    // cleared in `finally`. The `--json` envelope shapes its own refs separately.
+    if (!opts.json) setRenderRefPromoter(client.refPromoter());
     const fp = client.fingerprint();
     // Reads never block on a schema change — they warn (design decision). The
     // note reuses the same cached fingerprint the write path gates on.
@@ -326,6 +332,7 @@ export function runRead<T>(
     }
     process.exitCode = isEnv ? ExitCode.Environment : ExitCode.Unexpected;
   } finally {
+    setRenderRefPromoter(null); // never leak a closed-DB promoter past this read
     client?.close();
   }
 }

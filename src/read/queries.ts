@@ -317,6 +317,29 @@ export function normalizeNameKey(s: string): string {
 
 const BASE62 = /^[0-9A-Za-z]+$/;
 
+/**
+ * The DECORATED-REF form `Title [ref]` — a bare title with the machine-stable
+ * uuid/partial-uuid pinned in trailing brackets (the fused form every TTY
+ * candidate renders, `Title [8charPrefix]`). The title half is a COMMENT
+ * (ignored), so a stale copy still resolves after a rename; the bracket is the
+ * ref, resolved through the uuid/partial-uuid tier. Greedy `.*` so the LAST
+ * bracket wins (`"Family [Sub] [TC9yozLk]"` → `TC9yozLk`). The empty-title form
+ * `" [J2kPq9Ws]"` (a titleless heading) is legal — `(.*)` matches empty. Because
+ * `$`-anchored so the LAST bracket always wins. The space before `[` is OPTIONAL
+ * because {@link stripThingsUri} trims the ref first, so the empty-title form
+ * `" [J2kPq9Ws]"` (a titleless heading) arrives as the bare `[J2kPq9Ws]` — both
+ * resolve. The bracket is 4–22 base62 chars; a segment shorter than the 6-char
+ * partial-uuid floor simply fails to resolve (the FORM is recognized, the
+ * resolution is the real uuid/partial-uuid tier's).
+ */
+const DECORATED_REF = /^(.*?) ?\[([0-9A-Za-z]{4,22})\]$/;
+
+/** The fused TTY ref form `Title [8charPrefix]` — the round-trippable decorated ref every candidate renders. */
+export const REF_PREFIX_LEN = 8;
+export function fusedRef(title: string, uuid: string): string {
+  return `${title} [${uuid.slice(0, REF_PREFIX_LEN)}]`;
+}
+
 export interface NamedResolution {
   resolved: { uuid: string; title: string } | null;
   /** 0 = not found, 1 = ok, >1 = ambiguous at the deciding tier. */
@@ -401,6 +424,27 @@ export function resolveNamedRef(
     const rows = sel("uuid >= ? AND uuid < ?", [ref, upper]);
     if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
     if (rows.length > 1) return { resolved: null, matches: rows.length, candidates: rows };
+  }
+
+  // The DECORATED-REF tier — LAST, after exact/case/normalized title and the
+  // uuid/partial-uuid tiers all miss. `Title [ref]`: the title is ignored and the
+  // bracketed segment resolves through the uuid/partial-uuid tier (uuid-exact,
+  // then a >=6-char partial-uuid prefix). Runs regardless of `prefixTier` — the
+  // bracket is EXPLICIT ref intent (a rendered fused ref), like a bare uuid. A
+  // literal title `Title [ref]` outranks this by construction (exact-title is an
+  // earlier tier). Scope/extraWhere apply (uuid-tier `sel`, not the name tiers).
+  const decorated = DECORATED_REF.exec(ref);
+  if (decorated !== null) {
+    const inner = decorated[2] ?? "";
+    const exactRows = sel("uuid = ?", [inner]);
+    if (exactRows.length === 1) return { resolved: exactRows[0] ?? null, matches: 1 };
+    if (inner.length >= 6) {
+      const upper =
+        inner.slice(0, -1) + String.fromCharCode(inner.charCodeAt(inner.length - 1) + 1);
+      const rows = sel("uuid >= ? AND uuid < ?", [inner, upper]);
+      if (rows.length === 1) return { resolved: rows[0] ?? null, matches: 1 };
+      if (rows.length > 1) return { resolved: null, matches: rows.length, candidates: rows };
+    }
   }
 
   return { resolved: null, matches: 0 };
@@ -554,14 +598,14 @@ export function resolveProjectWriteTarget(
   }
   const all = describeProjectCandidates(db, r.candidates ?? []);
   const shown = all.slice(0, CANDIDATE_CAP);
+  // The fused ref form `Title [8charPrefix]` — the bracketed prefix pastes back
+  // as a decorated ref that resolves straight to this project.
   const lines = shown
-    .map(
-      (c) => `  ${c.uuid.slice(0, 8)} — ${c.title}${c.area !== undefined ? ` (in ${c.area})` : ""}`,
-    )
+    .map((c) => `  ${fusedRef(c.title, c.uuid)}${c.area !== undefined ? ` (in ${c.area})` : ""}`)
     .join("\n");
   const more = all.length > CANDIDATE_CAP ? `\n  … ${all.length - CANDIDATE_CAP} more` : "";
   throw new ReferenceResolutionError(
-    `"${ref}" matches ${r.matches} projects — disambiguate with a uuid or partial-uuid:\n${lines}${more}`,
+    `"${ref}" matches ${r.matches} projects — disambiguate with a ref below:\n${lines}${more}`,
     { code: "ambiguous", ref, candidates: shown },
   );
 }
@@ -670,13 +714,17 @@ export function resolveHeadingUuid(
     );
   }
   const all = r.candidates ?? [];
-  const capped = all.length > CANDIDATE_CAP;
+  const shown = all.slice(0, CANDIDATE_CAP);
+  // The fused ref form `Title [8charPrefix]` per candidate — a titleless heading
+  // reads ` [prefix]`, which pastes back as its decorated ref.
+  const lines = shown.map((c) => `  ${fusedRef(c.title, c.uuid)}`).join("\n");
+  const more = all.length > CANDIDATE_CAP ? `\n  … ${all.length - CANDIDATE_CAP} more` : "";
   throw new ReferenceResolutionError(
-    `${label} matches ${r.matches} headings in this project${capped ? `; first ${CANDIDATE_CAP} shown` : ""} — disambiguate with a uuid`,
+    `${label} matches ${r.matches} headings in this project — disambiguate with a ref below:\n${lines}${more}`,
     {
       code: "ambiguous",
       ref: refRaw,
-      candidates: all.slice(0, CANDIDATE_CAP).map((c) => candidateRef("heading", c)),
+      candidates: shown.map((c) => candidateRef("heading", c)),
     },
   );
 }

@@ -13,6 +13,9 @@ A `--area` / `--tag` / project-container reference is resolved by walking tiers 
 | 2. Case-insensitive | `title = ref COLLATE NOCASE` | `family` → `Family` (when no other case-variant exists) |
 | 3. Normalized | NFC + case-fold + strip all whitespace and dashes/hyphens; **nothing else removed** | `on-hold` → `On Hold`; `familyjennifer` → `Family - Jennifer` |
 | 4. UUID prefix | ref is ≥6 base-62 chars and a unique uuid prefix | `7Ck4hA` |
+| 5. Decorated ref | `Title [ref]` — the bracketed segment (`[0-9A-Za-z]{4,22}`) resolves through the uuid/partial-uuid tier; the title half is an ignored comment | `Groceries [7Ck4hA12]` |
+
+**Decorated ref (tier 5, LAST).** The fused form every TTY candidate renders (`Title [8charPrefix]`) is itself a valid input ref, so a copied candidate pastes straight back. The bracket is the machine-stable ref; the title is a *comment* (ignored), so a stale copy still resolves after a rename. It runs LAST — a *literal* title like `Family [7Ck4hA12]` wins at tier 1 by construction, so the decoration is never mistaken for a real bracketed title. The empty-title form `[prefix]` (a titleless heading — its fused form ` [prefix]` trims the leading space) is legal. A bracket below the 6-char partial-uuid floor parses as the form but does not resolve. This tier lives in the shared `resolveNamedRef` core, so EVERY ref slot inherits it (CLI flags, `--to-project`/`--to-heading`/`--area`, MCP args, library refs), independent of whether a given slot enables the bare uuid-prefix tier.
 
 Worked examples (Mike's cases):
 
