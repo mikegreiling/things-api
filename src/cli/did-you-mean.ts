@@ -10,11 +10,14 @@
 import {
   candidateRef,
   deadNameMatchHint,
+  localToday,
+  REF_PREFIX_LEN,
   type CandidateRef,
   type LiteCandidate,
   type LiteSearchResult,
   type ListItem,
 } from "../index.ts";
+import { renderZone } from "./clock.ts";
 import { dim } from "./style.ts";
 import { areaMark } from "./glyphs.ts";
 import { formatItem, uuidDisplayWidth } from "./render.ts";
@@ -65,10 +68,25 @@ export function renderDidYouMean(err: DidYouMeanError): string[] {
       (c): c is Extract<LiteCandidate, { kind: "task" }> => c.kind === "task",
     );
     const w = uuidDisplayWidth(tasks.map((c) => c.task));
+    // Duplicate-titled project/to-do candidates get a `· started <date>` tail so
+    // a human can tell recurring twins apart (TTY only — the JSON candidate
+    // payload is unchanged). Count titles among the task candidates only.
+    const titleCounts = new Map<string, number>();
+    for (const c of tasks) titleCounts.set(c.task.title, (titleCounts.get(c.task.title) ?? 0) + 1);
     for (const c of candidates) {
-      if (c.kind === "area")
-        lines.push(`  ${areaMark()} ${c.area.title} ${dim(`(${c.area.uuid})`)}`);
-      else lines.push(`  ${formatItem(c.task as ListItem, w)}`);
+      if (c.kind === "area") {
+        // Fused ref form `Title [8charPrefix]` (dim bracket) — pastes back as a
+        // decorated ref that resolves to this area.
+        lines.push(
+          `  ${areaMark()} ${c.area.title} ${dim(`[${c.area.uuid.slice(0, REF_PREFIX_LEN)}]`)}`,
+        );
+      } else {
+        const started =
+          (titleCounts.get(c.task.title) ?? 0) > 1
+            ? ` ${dim(`· started ${localToday(c.task.created, renderZone())}`)}`
+            : "";
+        lines.push(`  ${formatItem(c.task as ListItem, w)}${started}`);
+      }
     }
     if (total > candidates.length) {
       lines.push(dim(`  … ${total - candidates.length} more — \`${searchSuggestion(err.query)}\``));

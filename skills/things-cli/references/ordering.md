@@ -39,6 +39,7 @@ A `--before`/`--after` anchor only says WHERE in a bucket — it never moves the
 A Today/Evening member has TWO order slots: its slot in the Today VIEW (`todayIndex`) and its slot in its own CONTAINER (`index` — a project/area/heading child, or the loose Anytime bucket). When a set (and its anchor) is coherent on BOTH axes and no `--in` is given, the reorder is REFUSED with a message naming both readings and their exact `--in` spellings — this replaces any silent always-Today guess.
 
 - `--in` accepts `today | evening | anytime | someday | inbox`, or a project/area/heading ref (uuid or unique title). `loose` is refused (it is a read view, not a bucket).
+  - The container form of `--in` is POLYMORPHIC — it tries project → area → heading — so a heading whose title is shadowed by a project or area of the same name would resolve to the wrong kind. Pin it with the heading's **decorated ref** `Heading [ref]` (or a bare uuid). Decorated refs (`Title [ref]`) work in every `<ref>` slot: the bracketed uuid/partial-uuid resolves and the title is an ignored comment. A literal title that really contains brackets still wins over the bracket parse (exact-title resolves first).
 - Forcing the container index axis on a Today/Evening member PRESERVES the Today/Evening flag — a flag-safe move protocol routes it off the de-Today path. Only the someday/inbox loose axes still refuse a flagged member (their re-entry cannot preserve the flag).
 
 ## Mixed-stage move placement

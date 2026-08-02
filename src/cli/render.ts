@@ -20,10 +20,12 @@ import {
   type Project,
   type SectionCount,
   type SidebarSection,
+  REF_PREFIX_LEN,
   type TodayView,
   type Truncation,
 } from "../index.ts";
 import { renderNow, renderZone } from "./clock.ts";
+import { renderRefPromoter } from "./ref-render.ts";
 import { bold, dim, strike, underline } from "./style.ts";
 import {
   areaMark,
@@ -127,6 +129,22 @@ export interface FormatOpts {
 const styleTags = (form: string): string => ` ${dim(form)}`;
 
 /**
+ * The inline `[8charPrefix]` a container hint promotes when its bare title would
+ * NOT round-trip — the SAME predicate the JSON `*Uuid` promotion uses (the render
+ * promoter, ./ref-render.ts). Empty (bare `(title)`) when the promoter is unset
+ * (non-TTY / tests / no DB) or the title resolves back cleanly. A project/area
+ * container never carries a heading scope, so `projectUuid` stays undefined.
+ */
+function promotedRefBracket(
+  ref: { uuid: string; title: string },
+  kind: "project" | "area",
+): string {
+  const p = renderRefPromoter();
+  if (p === null || p.roundTrips(kind, ref.title, ref.uuid)) return "";
+  return ` [${ref.uuid.slice(0, REF_PREFIX_LEN)}]`;
+}
+
+/**
  * One item line:
  * `<uuid-prefix>  <box> [★|⏾] [logged-date] [‹chip›] <title> [‹n›] [⍾] [≡] [≔] (container) #tags [⚑ deadline]`.
  * Repeating templates seat ↻ INSIDE the box (`[↻]`/`(↻)`) rather than as a
@@ -208,12 +226,14 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
         ? ""
         : // The ↻ prefix (containerLabel) marks a container that is a repeating
           // TEMPLATE project — the whole `(…)` run is dimmed below, so the mark
-          // rides the muted container styling. Areas never carry the flag.
-          ` (${containerLabel(container.title, container.isRepeatingTemplate === true)})`
+          // rides the muted container styling. Areas never carry the flag. The
+          // fused uuid-prefix rides when the title would not round-trip (shared
+          // promotion predicate — the same one JSON `*Uuid` promotion uses).
+          ` (${containerLabel(container.title, container.isRepeatingTemplate === true)}${promotedRefBracket(container, "project")})`
       : item.area
         ? item.area.uuid === opts.suppressArea
           ? ""
-          : ` (${item.area.title})`
+          : ` (${item.area.title}${promotedRefBracket(item.area, "area")})`
         : "";
   // width 0 (the default) means "no column" — show the full uuid untouched.
   const shownUuid = uuidWidth > 0 ? uuidCol(item.uuid, uuidWidth) : item.uuid;

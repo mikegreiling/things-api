@@ -241,6 +241,9 @@ export { shapeReadPayload } from "./read/shape.ts";
 // the live DB (memoized per response) and hand it to shapeReadPayload; the
 // consumer surfaces get theirs from `client.refPromoter()`.
 export { makeRefPromoter, titleRoundTrips } from "./read/queries.ts";
+// The fused TTY ref form `Title [8charPrefix]` (round-trippable as a decorated
+// input ref) the consumer surfaces render for every disambiguation candidate.
+export { fusedRef, REF_PREFIX_LEN } from "./read/queries.ts";
 export { localToday } from "./model/dates.ts";
 export { templateStatus } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";
