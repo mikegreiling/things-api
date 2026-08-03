@@ -625,14 +625,48 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // focus directly (the project's own focus is inherited by all, suppressed).
     const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(direct.stdout).data.view.anytime.map((i: { title: string }) => i.title),
+      JSON.parse(direct.stdout).data.view.items.map((i: { title: string }) => i.title),
     ).toEqual(["child-focus"]);
     // --untagged (direct-only) keeps the child with no direct tag, even though
     // it inherits focus from the project.
     const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(untagged.stdout).data.view.anytime.map((i: { title: string }) => i.title),
+      JSON.parse(untagged.stdout).data.view.items.map((i: { title: string }) => i.title),
     ).toEqual(["child-bare"]);
+  });
+
+  it("project show --json: live children are ONE flat items[] (index order) with heading refs; no stage buckets", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "Ship it", uuid: "SHIP" });
+    seedTodo(fx.db, { project: "SHIP", title: "loose-now", index: 0 });
+    seedTodo(fx.db, { project: "SHIP", title: "loose-later", startDate: "2030-01-01", index: 1 });
+    seedHeading(fx.db, { project: "SHIP", title: "Phase 1", uuid: "PH1", index: 2 });
+    seedTodo(fx.db, { heading: "PH1", project: null, title: "headed-now", index: 3 });
+    const env = JSON.parse(runCli(["project", "show", proj, "--json", "--db", fx.path]).stdout);
+    const view = env.data.view;
+    // ONE flat items[] in index order — headed + unheaded interleaved.
+    expect(view.items.map((i: { title: string }) => i.title)).toEqual([
+      "loose-now",
+      "loose-later",
+      "headed-now",
+    ]);
+    // The dissolved stage/date buckets are gone from the wire.
+    for (const k of ["anytime", "upcoming", "someday"]) expect(k in view).toBe(false);
+    // stage + when kept per row; a future row reads its date.
+    const later = view.items.find((i: { title: string }) => i.title === "loose-later");
+    expect(later.stage).toBe("upcoming");
+    expect(later.when).toBe("2030-01-01");
+    // A headed row carries its heading ref (title); unheaded rows omit it.
+    const headed = view.items.find((i: { title: string }) => i.title === "headed-now");
+    expect(headed.heading).toBe("Phase 1");
+    expect("heading" in view.items.find((i: { title: string }) => i.title === "loose-now")).toBe(
+      false,
+    );
+    // headings[] is the memberless catalog (its members ride the row refs).
+    expect(view.headings.map((g: { heading: { title: string } }) => g.heading.title)).toEqual([
+      "Phase 1",
+    ]);
+    expect("items" in view.headings[0]).toBe(false);
   });
 
   it("area show --tag filters both row kinds by direct tag; no recursion into projects", () => {
@@ -1791,7 +1825,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const json = JSON.parse(
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
-    expect(json.data.view.anytime).toHaveLength(60);
+    expect(json.data.view.items).toHaveLength(60);
     expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
@@ -2416,8 +2450,13 @@ describe("overdue in container views (cli)", () => {
       runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
     );
     expect(env.data.view.project.title).toBe("Launch");
-    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
-    // Phase 2 collapsed (no surviving child); Phase 1 kept.
+    // The flat items[] holds the surviving overdue children (loose + headed); the
+    // due-today row is filtered out.
+    expect(env.data.view.items.map((i: { title: string }) => i.title).toSorted()).toEqual([
+      "loose-overdue",
+      "p1-overdue",
+    ]);
+    // Phase 2 collapsed (no surviving child); Phase 1 kept in the catalog.
     expect(env.data.view.headings).toHaveLength(1);
     expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
     // The TTY render omits the collapsed heading entirely.
