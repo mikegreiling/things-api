@@ -1420,7 +1420,7 @@ describe("things MCP server", () => {
     ) as {
       project: { title: string };
       items: { title: string; heading?: string | null }[];
-      headings: { heading: { title: string } }[];
+      headings: { title: string }[];
     };
     expect(view.project.title).toBe("MCP Launch");
     // The flat items[] carries the surviving overdue children — loose AND headed;
@@ -1428,8 +1428,9 @@ describe("things MCP server", () => {
     expect(view.items.map((i) => i.title).toSorted()).toEqual(["loose-overdue", "p1-overdue"]);
     // The headed overdue row carries its heading ref; the empty Phase 2 collapses.
     expect(view.items.find((i) => i.title === "p1-overdue")?.heading).toBe("Phase 1");
+    // headings[] is the flat catalog — Phase 2 (no surviving child) collapsed.
     expect(view.headings).toHaveLength(1);
-    expect(view.headings[0]?.heading.title).toBe("Phase 1");
+    expect(view.headings[0]?.title).toBe("Phase 1");
   });
 
   it("get_area overdue filters loose to-dos AND child projects; no recursion", async () => {

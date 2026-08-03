@@ -9,6 +9,7 @@ import {
   seedChecklistItem,
   seedHeading,
   seedProject,
+  seedSettings,
   seedTag,
   seedTodo,
   tagArea,
@@ -662,11 +663,57 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     expect("heading" in view.items.find((i: { title: string }) => i.title === "loose-now")).toBe(
       false,
     );
-    // headings[] is the memberless catalog (its members ride the row refs).
-    expect(view.headings.map((g: { heading: { title: string } }) => g.heading.title)).toEqual([
-      "Phase 1",
-    ]);
-    expect("items" in view.headings[0]).toBe(false);
+    // headings[] is the flat catalog [{uuid,title,archived?}] (members ride refs).
+    expect(view.headings).toEqual([{ uuid: "PH1", title: "Phase 1" }]);
+  });
+
+  it("project show --json: headings[] is the flat catalog (incl. archived); logbook absorbs archived-heading children; no logbookHeadings", () => {
+    fx = buildFixtureDb();
+    // Manual boundary at yesterday noon → a stopDate before it is SWEPT.
+    const NOW_EPOCH = Math.floor(Date.now() / 1000);
+    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
+    seedProject(fx.db, { title: "Rel", uuid: "REL" });
+    seedHeading(fx.db, { project: "REL", title: "Live H", uuid: "LH", index: 0 });
+    seedTodo(fx.db, { heading: "LH", project: null, title: "live-child", index: 1 });
+    // A SWEPT archived heading + a swept child + a stranded OPEN child.
+    seedHeading(fx.db, {
+      project: "REL",
+      title: "Swept H",
+      uuid: "SH",
+      status: "completed",
+      stopDate: NOW_EPOCH - 200000,
+      index: 2,
+    });
+    seedTodo(fx.db, {
+      heading: "SH",
+      project: null,
+      title: "swept-done",
+      status: "completed",
+      stopDate: NOW_EPOCH - 210000,
+      index: 3,
+    });
+    seedTodo(fx.db, { heading: "SH", project: null, title: "swept-open", index: 4 });
+    const view = JSON.parse(
+      runCli(["project", "show", "REL", "--show-logged", "--json", "--db", fx.path]).stdout,
+    ).data.view;
+    // Flat catalog: BOTH headings, index order, the swept one carrying `archived`.
+    expect(view.headings.map((h: { title: string }) => h.title)).toEqual(["Live H", "Swept H"]);
+    const sweptCat = view.headings.find((h: { title: string }) => h.title === "Swept H");
+    expect(typeof sweptCat.archived).toBe("string");
+    expect("archived" in view.headings.find((h: { title: string }) => h.title === "Live H")).toBe(
+      false,
+    );
+    // The archived heading's children are in the FLAT logbook, each carrying the
+    // heading ref; the open stranded child keeps stage `anytime`. No logbookHeadings.
+    expect("logbookHeadings" in view).toBe(false);
+    const logTitles = view.logbook.map((i: { title: string }) => i.title);
+    expect(logTitles).toContain("swept-done");
+    expect(logTitles).toContain("swept-open");
+    const open = view.logbook.find((i: { title: string }) => i.title === "swept-open");
+    expect(open.heading).toBe("Swept H");
+    expect(open.stage).toBe("anytime");
+    // The stranded-open advisory rides the wire.
+    expect(view.openChildrenUnderArchivedHeading).toBe(1);
   });
 
   it("area show --tag filters both row kinds by direct tag; no recursion into projects", () => {
@@ -2458,7 +2505,7 @@ describe("overdue in container views (cli)", () => {
     ]);
     // Phase 2 collapsed (no surviving child); Phase 1 kept in the catalog.
     expect(env.data.view.headings).toHaveLength(1);
-    expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
+    expect(env.data.view.headings[0].title).toBe("Phase 1");
     // The TTY render omits the collapsed heading entirely.
     const tty = runCli(["project", "show", "Launch", "--overdue", "--db", fx.path]).stdout;
     expect(tty).toContain("Phase 1");

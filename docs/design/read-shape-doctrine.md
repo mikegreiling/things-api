@@ -134,9 +134,9 @@ Order: sidebar (area rank → active-first → drag order); `--later` appends sc
 
 Order: `TMArea.index` (sidebar rank). This listing is the natural home for the area-rank axis §3.3/§3.4/§3.10 depend on.
 
-### 3.12 `project-view` (`data: { view }`) — **PR 2 landed (children dissolve); PR 3 planned (headings catalog + logbook flatten)**
+### 3.12 `project-view` (`data: { view }`) — **landed (PRs 2–3)**
 
-PR 2 has dissolved the unheaded + per-heading stage sub-buckets into one flat `items[]` (index order, each headed row carrying its `heading` ref); `headings[]` is now the memberless catalog of live-heading nodes (`[{heading:{uuid,title,archived?}}]`), and `logbook` / `logbookHeadings` are unchanged pending PR 3 (which unwraps `headings[]` to `[{uuid,title,archived?}]`, merges swept archived headings in, and dissolves `logbookHeadings` into the flat `logbook`).
+The end-state shape is live: PR 2 dissolved the unheaded + per-heading stage sub-buckets into one flat `items[]` (index order, each headed row carrying its `heading` ref); PR 3 flattened `headings[]` to the catalog `[{uuid,title,archived?}]` (ALL headings — live + swept archived — in index order, collapsing empties under a content scope), dissolved `logbookHeadings`, and merged all swept children into ONE flat `logbook` (`stopDate DESC`, each carrying its `heading` ref, `stage` KEPT since the bucket is mixed — it can hold an odd open child stranded under an archived heading).
 
 Current buckets: `project` (card node) · `anytime[]` · `upcoming[{date,items}]` · `someday[]` (all UNHEADED) · `headings[{heading:{uuid,title,archived?}, anytime[], upcoming[{date,items}], someday[]}]` (live heading groups with per-heading stage sub-buckets) · `logbook[]` (flat swept rows) · `logbookHeadings[{heading, items[]}]` (archived-heading groups) · `openChildrenWhileResolved` · `openChildrenUnderArchivedHeading`.
 
@@ -247,7 +247,7 @@ Ordered so each step is independently green and self-merged before the next (ALP
 
 1. **`mg/today-dissolve` — today dissolve (§3.1) + this doctrine doc.** `sections` → flat `items[]` + `when`; `badge` → `meta.counts`; the "badge" vocabulary purge; the TTY redesign (clean header + counts at top). **Landed.**
 2. **`mg/project-children-dissolve` — project-view children dissolve (§3.12).** Unheaded + per-heading stage sub-buckets → one flat `items[]` in project index order, every row carrying `stage`/`when`/`heading` ref; `headings[]` becomes the memberless live-heading catalog. TTY byte-stable (the library retains the structured groups for the GUI-faithful projection — it owns the clock + `todayIndex`; the wire is flat). **Landed.**
-3. **`mg/headings-catalog-logbook-flatten` — headings catalog + logbook flatten (§3.12, rulings #C3/#C3a/#C4).** `headings[]` → index-ordered catalog `[{uuid,title,archived?}]`; `logbookHeadings` dissolves; single flat `logbook` bucket (stopDate DESC) absorbing archived-heading children. All HEADARC2 TTY invariants preserved (byte-stable).
+3. **`mg/headings-catalog-logbook-flatten` — headings catalog + logbook flatten (§3.12, rulings #C3/#C3a/#C4).** `headings[]` → index-ordered catalog `[{uuid,title,archived?}]` (all headings, live + swept archived); `logbookHeadings` dissolves; single flat `logbook` bucket (stopDate DESC) absorbing archived-heading children, each with its `heading` ref, `stage` kept (mixed). All HEADARC2 TTY invariants preserved (byte-stable — the library keeps its structured logged-region grouping for the projection). **Landed.**
 4. **`mg/area-view-dissolve` — area-view dissolve (§3.13).** Direct `anytime`/`upcoming`/`someday` → one flat `items[]`; `projects[]` KEPT (sidebar-rank axis). TTY byte-stable.
 5. **`mg/ordering-contract-docs` — ordering contract + skill sweep (ruling #C6).** Document every kept bucket's ordering in [../contract.md](../contract.md) (+ envelope schema description strings); flag presentation-derived orders as such; sweep [contracts.md](contracts.md) and the skill for the new shapes across all five PRs; fix the §5o "the desktop GUI is stricter" lede to platform-accurate wording.
 

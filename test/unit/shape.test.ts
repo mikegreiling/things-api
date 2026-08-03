@@ -496,15 +496,13 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
           headingProject: { uuid: "proj-1", title: "Q3" },
         }),
       ],
-      headings: [
+      headingCatalog: [
         {
-          heading: {
-            uuid: "head-1",
-            type: "heading",
-            title: "Phase 1",
-            status: "open",
-            project: { uuid: "proj-1", title: "Q3" },
-          },
+          uuid: "head-1",
+          type: "heading",
+          title: "Phase 1",
+          status: "open",
+          project: { uuid: "proj-1", title: "Q3" },
         },
       ],
       logged: [
@@ -549,38 +547,55 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(headed["stage"]).toBe("anytime");
     // An unheaded row carries no heading ref.
     expect(items.find((i) => i["uuid"] === "loose-anytime")!["heading"]).toBeNull();
-    // headings[] is the memberless catalog: each entry its heading node only.
-    const grp = (out["headings"] as Obj[])[0]!;
-    expect(Object.keys(grp)).toEqual(["heading"]);
-    const headNode = grp["heading"] as Obj;
+    // headings[] is the FLAT catalog: each entry is {uuid,title,archived?}.
+    const headNode = (out["headings"] as Obj[])[0]!;
     expect("project" in headNode).toBe(false);
     expect("type" in headNode).toBe(false); // positional: always a heading
     expect("status" in headNode).toBe(false);
     expect("archived" in headNode).toBe(false); // open heading
     expect(headNode["uuid"]).toBe("head-1");
     expect(headNode["title"]).toBe("Phase 1");
-    // logbook (flat swept rows) unchanged — KEEPS its heading ref, drops project/stage.
+    // logbook (flat swept rows) — KEEPS its heading ref + stage (mixed bucket),
+    // drops project/area.
     const logRow = (out["logbook"] as Obj[])[0]!;
     expect(logRow["heading"]).toBe("Phase 1");
     expect(logRow["headingUuid"]).toBe("head-1");
     expect("project" in logRow).toBe(false);
-    expect("stage" in logRow).toBe(false);
-    expect(out["logbookHeadings"]).toEqual([]);
-    for (const k of ["logged", "loggedHeadings", "trashed", "trash"]) expect(k in out).toBe(false);
+    expect(logRow["stage"]).toBe("logbook");
+    // logbookHeadings is gone from the wire; the catalog + flat logbook subsume it.
+    for (const k of [
+      "logged",
+      "loggedHeadings",
+      "logbookHeadings",
+      "headingCatalog",
+      "trashed",
+      "trash",
+    ])
+      expect(k in out).toBe(false);
     // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
     expect((out["project"] as Obj)["stage"]).toBe("anytime");
   });
 
-  it("project-view: a swept ARCHIVED heading becomes a logbookHeadings group with `archived` + nested children", () => {
+  it("project-view: a swept ARCHIVED heading is a catalog entry with `archived`; its children fold into the flat logbook (doctrine #C3a/#C4)", () => {
     const view = {
       project: project(),
-      active: [],
-      scheduled: [],
-      someday: [],
-      repeating: [],
+      items: [],
+      // The catalog carries the archived heading (index order, all headings).
+      headingCatalog: [
+        {
+          uuid: "arch-1",
+          type: "heading",
+          title: "Done Phase",
+          status: "completed",
+          stopped: new Date("2026-07-20T12:00:00.000Z"),
+          project: { uuid: "proj-1", title: "Q3" },
+        },
+      ],
       headings: [],
       logged: [],
+      // The library still groups the archived-heading children (for the byte-stable
+      // TTY); the shaper folds them into the flat logbook.
       loggedHeadings: [
         {
           heading: {
@@ -596,10 +611,11 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
               uuid: "swept-child",
               status: "completed",
               logged: true,
+              stopped: new Date("2026-07-20T10:00:00.000Z"),
               heading: { uuid: "arch-1", title: "Done Phase" },
               headingProject: { uuid: "proj-1", title: "Q3" },
             }),
-            // The odd OPEN child a Put-Back stranded (HEADARC2-C) — rendered.
+            // The odd OPEN child a Put-Back stranded (HEADARC2-C) — kept visible.
             todo({
               uuid: "odd-open",
               status: "open",
@@ -613,29 +629,29 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       openChildrenUnderArchivedHeading: 1,
     };
     const out = shapeReadPayload("project-view", view, false) as Obj;
-    const groups = out["logbookHeadings"] as Obj[];
-    expect(groups).toHaveLength(1);
-    const g = groups[0]!;
-    const head = g["heading"] as Obj;
-    // The archived heading NODE: type/status/project dropped; `archived` present
-    // (a Date, serialized to a full ISO datetime like `stopped`).
+    // logbookHeadings is GONE from the wire.
+    expect("logbookHeadings" in out).toBe(false);
+    // The archived heading is a FLAT catalog entry carrying `archived` (a Date,
+    // full ISO datetime like `stopped`); type/status/project dropped.
+    const head = (out["headings"] as Obj[])[0]!;
     expect("type" in head).toBe(false);
     expect("status" in head).toBe(false);
     expect("project" in head).toBe(false);
     expect(head["uuid"]).toBe("arch-1");
     expect(head["title"]).toBe("Done Phase");
-    expect(head["archived"]).toBeInstanceOf(Date);
     expect((head["archived"] as Date).toISOString()).toBe("2026-07-20T12:00:00.000Z");
-    // Group children: project/area/heading dropped (group states the heading),
-    // but stage KEPT (mixed — the odd open child is stage `anytime`, not logbook).
-    const items = g["items"] as Obj[];
-    expect(items.map((i) => i["uuid"])).toEqual(["swept-child", "odd-open"]);
-    for (const i of items) {
-      expect("heading" in i).toBe(false);
+    // Its children folded into the flat logbook — stopDate DESC (open odd child
+    // last), each CARRYING its heading ref now (the flat list, no group header),
+    // project dropped, stage KEPT (mixed: logbook + the anytime odd child).
+    const logbook = out["logbook"] as Obj[];
+    expect(logbook.map((i) => i["uuid"])).toEqual(["swept-child", "odd-open"]);
+    for (const i of logbook) {
+      // Compact + the round-trip promoter default → bare title, no headingUuid sibling.
+      expect(i["heading"]).toBe("Done Phase");
       expect("project" in i).toBe(false);
     }
-    expect(items[0]!["stage"]).toBe("logbook");
-    expect(items[1]!["stage"]).toBe("anytime"); // the odd open child, kept visible
+    expect(logbook[0]!["stage"]).toBe("logbook");
+    expect(logbook[1]!["stage"]).toBe("anytime"); // the odd open child, kept visible
     // The odd-state advisory count rides the wire.
     expect(out["openChildrenUnderArchivedHeading"]).toBe(1);
   });
