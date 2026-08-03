@@ -791,6 +791,69 @@ describe("archived headings — trinary live/logged split (HEADARC/HEADARC2)", (
     const lines = renderProjectView(view, {}).join("\n");
     expect(lines).toContain("buried under an archived heading — invisible in the app's live views");
   });
+
+  // HEADARC3 (Things 3.22.11, GUI-probed): both the flat project logged region
+  // and an archived-heading group order their children by stopDate DESC —
+  // most-recently-completed first, INCLUDING the within-day tiebreak (two
+  // same-day completions sort by completion instant, NOT by index). The fixture
+  // mirrors the probe: children created in index order A,B,C,D,E but completed
+  // B,C,A then D,E (D before E same "day") — so a stopDate-DESC law renders
+  // E,D,A,C,B while an index-ASC law would render A,B,C,D,E.
+  const HA3 = {
+    // index order A<B<C<D<E; stopDate order B<C<A<D<E (all swept, D/E adjacent).
+    A: { index: 0, stopDate: SWEPT + 30 },
+    B: { index: 1, stopDate: SWEPT + 10 },
+    C: { index: 2, stopDate: SWEPT + 20 },
+    D: { index: 3, stopDate: SWEPT + 40 },
+    E: { index: 4, stopDate: SWEPT + 41 },
+  } as const;
+
+  it("HEADARC3: flat project logged region orders swept children stopDate DESC (same-day tiebreak by instant, not index)", () => {
+    fixture = buildFixtureDb();
+    seedManualBoundary(fixture);
+    const project = seedProject(fixture.db, { title: "Sprint" });
+    // An OPEN heading — its swept children fall to the FLAT project logged region.
+    const open = seedHeading(fixture.db, { title: "Foo", project, index: 0 });
+    for (const [title, { index, stopDate }] of Object.entries(HA3)) {
+      seedTodo(fixture.db, {
+        title,
+        heading: open,
+        project: null,
+        status: "completed",
+        stopDate,
+        index,
+      });
+    }
+    const view = projectView(fixture.db, project, NOW);
+    expect(view.logged.map((i) => i.title)).toEqual(["E", "D", "A", "C", "B"]);
+  });
+
+  it("HEADARC3: archived-heading group orders its children stopDate DESC (same-day tiebreak by instant, not index)", () => {
+    fixture = buildFixtureDb();
+    seedManualBoundary(fixture);
+    const project = seedProject(fixture.db, { title: "Sprint" });
+    // A SWEPT archived heading — its children group under it in the logged region.
+    const swept = seedHeading(fixture.db, {
+      title: "Foo",
+      project,
+      status: "completed",
+      stopDate: SWEPT + 99,
+      index: 0,
+    });
+    for (const [title, { index, stopDate }] of Object.entries(HA3)) {
+      seedTodo(fixture.db, {
+        title,
+        heading: swept,
+        project: null,
+        status: "completed",
+        stopDate,
+        index,
+      });
+    }
+    const view = projectView(fixture.db, project, NOW);
+    expect(view.loggedHeadings.map((g) => g.heading.title)).toEqual(["Foo"]);
+    expect(view.loggedHeadings[0]!.items.map((i) => i.title)).toEqual(["E", "D", "A", "C", "B"]);
+  });
 });
 
 describe("inherited-tags display (todo show / project show)", () => {
