@@ -37,6 +37,7 @@ import {
   viewHeaderLines,
 } from "../../src/cli/render.ts";
 import { truncateToday } from "../../src/read/truncation.ts";
+import { entityWhen } from "../../src/read/stage.ts";
 import { parsePeriodEnd, parsePeriodStart } from "../../src/cli/period.ts";
 import {
   areaMark,
@@ -869,7 +870,7 @@ describe("derived trash — children of trashed containers (A24B shallow delete)
 
     expect(upcomingView(fixture.db, NOW).map((i) => i.title)).toEqual([]);
     const today = todayView(fixture.db, NOW);
-    expect([...today.today, ...today.evening].map((i) => i.title)).toEqual([]);
+    expect(today.items.map((i) => i.title)).toEqual([]);
     expect(anytimeView(fixture.db, NOW).flatMap((s) => s.items.map((i) => i.title))).toEqual([]);
     expect(searchView(fixture.db, "Derived-trash")).toEqual([]);
     // --trashed widens search back to the whole chain.
@@ -1073,13 +1074,18 @@ describe("renderToday (things today split)", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 1, 1);
     const lines = renderToday(full, undefined, base);
-    const todayHeader = lines.find((l) => l.includes("Today (badge:"));
+    const todayHeader = lines.find((l) => /── .*Today ──/.test(l));
     const eveningHeader = lines.find((l) => l.includes("This Evening"));
     // Membership glyph lives in the header now (yellow ★ / blue ⏾; color is
-    // OFF here so the helpers render the bare marks).
+    // OFF here so the helpers render the bare marks). The header is CLEAN — the
+    // counts ride the card-style metadata lines at the top, not the header.
     expect(todayHeader).toContain(todayStar());
+    expect(todayHeader).not.toContain("due/overdue");
     expect(eveningHeader).toContain(eveningMoon());
-    // …and is gone from the item rows (the header implies it).
+    // The counts render as card-style metadata lines at the very top.
+    expect(lines[0]).toContain("due/overdue:");
+    expect(lines[1]).toContain("other:");
+    // …and the membership glyph is gone from the item rows (the header implies it).
     expect(lines.find((l) => l.includes("day 0"))).not.toContain("★");
     expect(lines.find((l) => l.includes("night 0"))).not.toContain("⏾");
   });
@@ -1101,7 +1107,7 @@ describe("renderToday (things today split)", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 5, 4); // total 9
     const { data, truncation } = truncateToday(full, 3); // 3 today, 0 evening → all 4 evening hidden
-    expect(data.evening).toHaveLength(0);
+    expect(data.items.filter((i) => entityWhen(i) === "evening")).toHaveLength(0);
     const lines = renderToday(data, truncation.sections, base);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
     expect(lines).not.toContain("(empty)");
@@ -1115,8 +1121,8 @@ describe("renderToday (things today split)", () => {
     const lines = renderToday(full, undefined, base);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
     expect(lines).not.toContain("(empty)");
-    // Today still renders its rows under the ★ badge header.
-    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(true);
+    // Today still renders its rows under the clean ★ header.
+    expect(lines.some((l) => /── .*Today ──/.test(l))).toBe(true);
     expect(lines.filter((l) => /day \d/.test(l))).toHaveLength(2);
   });
 
@@ -1129,11 +1135,11 @@ describe("renderToday (things today split)", () => {
     expect(lines.some((l) => l.includes("evening items —"))).toBe(false);
   });
 
-  it("an empty Today section keeps its honest `(empty)` under the badge header", () => {
+  it("an empty Today section keeps its honest `(empty)` under the clean header", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 0, 0);
     const lines = renderToday(full, undefined, base);
-    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(true);
+    expect(lines.some((l) => /── .*Today ──/.test(l))).toBe(true);
     expect(lines).toContain("(empty)");
     expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
   });
@@ -1186,18 +1192,23 @@ describe("renderToday (things today split)", () => {
     );
   });
 
-  it("--evening puts the This Evening header first — no leading blank line", () => {
+  it("--evening puts the This Evening header directly after the counts — no leading blank line", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 2);
     const lines = renderToday(full, undefined, base, { eveningOnly: true });
-    expect(lines[0]).toContain("This Evening");
+    // The counts metadata lines lead; the header follows them directly (no blank,
+    // no Today block, since --evening filters Today out).
+    const evIdx = lines.findIndex((l) => l.includes("This Evening"));
+    expect(evIdx).toBeGreaterThan(0);
+    expect(lines[evIdx - 1]).not.toBe(""); // the count line, not a blank separator
+    expect(lines.slice(0, evIdx).some((l) => l.includes("due/overdue:"))).toBe(true);
   });
 
   it("--evening renders ONLY the This Evening block — no Today header, no `(empty)`", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 2);
     const lines = renderToday(full, undefined, base, { eveningOnly: true });
-    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(false);
+    expect(lines.some((l) => /── .*Today ──/.test(l))).toBe(false);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(true);
     expect(lines.filter((l) => /night \d/.test(l))).toHaveLength(2);
     // The filtered-out Today section never leaves an `(empty)` placeholder.
@@ -1209,7 +1220,7 @@ describe("renderToday (things today split)", () => {
     fixture = buildFixtureDb();
     const full = build(fixture, 3, 0);
     const lines = renderToday(full, undefined, base, { eveningOnly: true });
-    expect(lines.some((l) => l.includes("Today (badge:"))).toBe(false);
+    expect(lines.some((l) => /── .*Today ──/.test(l))).toBe(false);
     expect(lines.some((l) => l.includes("This Evening"))).toBe(false);
     expect(lines).toContain("(empty)");
   });

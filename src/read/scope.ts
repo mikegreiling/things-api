@@ -217,8 +217,8 @@ export function filterSectionsByScope(
 }
 
 /**
- * Filter the Today split to in-scope rows, RECOMPUTING the badge over the
- * surviving OPEN members so it never counts a dropped (out-of-scope) row — the
+ * Filter the today view to in-scope rows, RECOMPUTING the counts over the
+ * surviving OPEN members so they never count a dropped (out-of-scope) row — the
  * same treatment `filterTodayByArea` gives the area filter.
  */
 export function filterTodayByScope(
@@ -226,9 +226,8 @@ export function filterTodayByScope(
   scope: ResolvedScope,
   todayIso: IsoDate,
 ): TodayView {
-  const today = view.today.filter((i) => inScopeItem(i, scope));
-  const evening = view.evening.filter((i) => inScopeItem(i, scope));
-  const open = [...today, ...evening].filter((i) => i.status === "open");
+  const items = view.items.filter((i) => inScopeItem(i, scope));
+  const open = items.filter((i) => i.status === "open");
   const dueOrOverdue = open.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
-  return { today, evening, badge: { dueOrOverdue, other: open.length - dueOrOverdue } };
+  return { items, counts: { dueOrOverdue, other: open.length - dueOrOverdue } };
 }

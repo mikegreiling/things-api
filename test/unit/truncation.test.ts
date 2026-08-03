@@ -20,6 +20,7 @@ import {
 import type { AreaView } from "../../src/read/area-view.ts";
 import type { GroupBlock } from "../../src/contracts.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
+import { entityWhen } from "../../src/read/stage.ts";
 
 /** Minimal ListItem stand-ins — truncation only inspects type/uuid/refs. */
 const items = (n: number, prefix = "u"): ListItem[] =>
@@ -74,17 +75,43 @@ describe("truncateList", () => {
   });
 });
 
-describe("truncateToday", () => {
-  const view = (todayN: number, eveningN: number): TodayView => ({
-    today: items(todayN),
-    evening: items(eveningN, "e"),
-    badge: { dueOrOverdue: 1, other: 2 },
-  });
+// The today view is one flat `items[]`; the render sections are the `when`
+// subsets, so the stand-ins must carry markers entityWhen classifies (evening
+// ⊃ today). Comparator order for the test is today-proper then This-Evening.
+const todayStandIn = (uuid: string): ListItem =>
+  ({
+    uuid,
+    type: "to-do",
+    status: "open",
+    trashed: false,
+    logged: false,
+    start: "active",
+    startDate: "2026-07-02",
+    today: true,
+    repeating: { isTemplate: false },
+    project: null,
+    headingProject: null,
+  }) as unknown as ListItem;
+const eveningStandIn = (uuid: string): ListItem =>
+  ({ ...todayStandIn(uuid), evening: true }) as unknown as ListItem;
+const todayViewOf = (todayN: number, eveningN: number): TodayView => ({
+  items: [
+    ...Array.from({ length: todayN }, (_, i) => todayStandIn(`u${i}`)),
+    ...Array.from({ length: eveningN }, (_, i) => eveningStandIn(`e${i}`)),
+  ],
+  counts: { dueOrOverdue: 1, other: 2 },
+});
+const eveningShownCount = (data: TodayView) =>
+  data.items.filter((i) => entityWhen(i) === "evening").length;
 
-  it("counts the cut across Today then This Evening in render order", () => {
+describe("truncateToday", () => {
+  const view = todayViewOf;
+  const eveningShown = eveningShownCount;
+
+  it("counts the cut across Today then This Evening in comparator order", () => {
     const { data, truncation } = truncateToday(view(4, 4), 6);
-    expect(data.today).toHaveLength(4);
-    expect(data.evening).toHaveLength(2);
+    expect(data.items).toHaveLength(6);
+    expect(eveningShown(data)).toBe(2);
     expect(truncation).toEqual({
       shown: 6,
       total: 8,
@@ -95,14 +122,14 @@ describe("truncateToday", () => {
         { key: "evening", shown: 2, total: 4 },
       ],
     });
-    // The whole-view badge summary is preserved.
-    expect(data.badge).toEqual({ dueOrOverdue: 1, other: 2 });
+    // The whole-view counts summary is preserved.
+    expect(data.counts).toEqual({ dueOrOverdue: 1, other: 2 });
   });
 
-  it("a limit smaller than Today trims Evening to nothing", () => {
+  it("a limit smaller than the Today run trims Evening to nothing", () => {
     const { data, truncation } = truncateToday(view(10, 5), 3);
-    expect(data.today).toHaveLength(3);
-    expect(data.evening).toEqual([]);
+    expect(data.items).toHaveLength(3);
+    expect(eveningShown(data)).toBe(0);
     expect(truncation.total).toBe(15);
     expect(truncation.shown).toBe(3);
   });
