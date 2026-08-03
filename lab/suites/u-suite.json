@@ -679,6 +679,69 @@
       }
     },
     {
+      "id": "U21",
+      "title": "moving an open to-do under an ARCHIVED heading reopens the heading (WG-6)",
+      "vector": "url",
+      "operation": "heading.reopen-via-moved-child",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22U21-PROJ%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22U21-H%22%7D%7D%2C%7B%22type%22%3A%22to-do%22%2C%22attributes%22%3A%7B%22title%22%3A%22U21-C1%22%7D%7D%5D%7D%7D%5D"
+        },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U21-PROJ' AND type=1 AND trashed=0" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U21-H' AND type=2 AND trashed=0" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U21-C1' AND trashed=0" },
+        { "openUrl": "things:///add?title=U21-M&list-id={uuid:U21-PROJ}" },
+        { "waitSql": "SELECT uuid FROM TMTask WHERE title='U21-M' AND trashed=0" },
+        {
+          "osascript": "tell application \"Things3\" to set status of to do id \"{uuid:U21-H}\" to completed"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U21-H' AND type=2 AND status=3" },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U21-C1' AND status=3" }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:U21-M}&auth-token={ctx:token}&list-id={uuid:U21-PROJ}&heading=U21-H"
+        },
+        { "waitSql": "SELECT 1 FROM TMTask WHERE title='U21-H' AND type=2 AND status=0" }
+      ],
+      "settleSeconds": 3,
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U21-H", "type": 2 },
+            "field": "status",
+            "value": 0
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U21-H", "type": 2 },
+            "field": "stopDate",
+            "value": null
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U21-M" },
+            "field": "heading",
+            "value": "@uuidOf:TMTask:title=U21-H"
+          },
+          {
+            "kind": "fieldEquals",
+            "table": "TMTask",
+            "where": { "title": "U21-C1" },
+            "field": "status",
+            "value": 3
+          }
+        ]
+      }
+    },
+    {
       "id": "U12B",
       "legacyRef": "T12",
       "title": "non-scheduling mutation (title) on a repeating template succeeds",
