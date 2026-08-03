@@ -249,6 +249,9 @@ export function mapHeading(row: TaskRow, refs: RefResolver): Heading {
     // stored as completed too — oddity 6a). Needed by consumers AND by the
     // archive/unarchive result checks.
     status: mapStatus(row),
+    // The archive timestamp — the read wire emits it as presence-keyed
+    // `archived` on a heading GROUP node (status "completed" ⇒ archived).
+    stopped: decodeEpochReal(row.stopDate),
     project: refs(row.project),
   };
 }

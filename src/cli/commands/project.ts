@@ -100,17 +100,31 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   const laterByHeading = new Map<string, Todo[]>(
     view.headings.map((g) => [g.heading.uuid, laterOf(g)]),
   );
+  // The logged region has two parts: the flat swept rows (children of OPEN
+  // headings + un-headed), and the archived-heading GROUPS (HEADARC2-A). Both
+  // are revealed only by --show-logged; the flat list honors the optional count.
+  const showLogged = opts.showLogged !== undefined;
   const logged = loggedSlice(view, opts.showLogged);
+  const loggedGroups = showLogged ? view.loggedHeadings : [];
+  const loggedGroupItems = loggedGroups.flatMap((g) => g.items);
   const everyItem = [
     ...view.active,
     ...looseLater,
     ...view.headings.flatMap((g) => [...g.items, ...(laterByHeading.get(g.heading.uuid) ?? [])]),
     ...logged,
+    ...loggedGroupItems,
   ];
-  const w = uuidDisplayWidth([...everyItem, ...view.headings.map((g) => g.heading)]);
+  const w = uuidDisplayWidth([
+    ...everyItem,
+    ...view.headings.map((g) => g.heading),
+    ...loggedGroups.map((g) => g.heading),
+  ]);
   // Rows inside this view never repeat the project's own name.
   const fmt = (i: (typeof everyItem)[number]) =>
     formatItem(i, w, { suppressProject: view.project.uuid });
+  // A flat logged row hints its (open) HEADING instead of the project.
+  const fmtLogged = (i: Todo) =>
+    formatItem(i, w, { suppressProject: view.project.uuid, headingContext: true });
   // Card header, GUI order: title row (circle, progress chip, area context),
   // share link, then labeled when/deadline/tags lines and the full note.
   // The opened resource shows its tags green (GUI: list pills are gray).
@@ -169,18 +183,35 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
         disclosureHint(hiddenLater, "later item", [{ command: `${base} --show-later` }]),
       );
   }
-  if (logged.length > 0) {
+  // The logged count the GUI's "Show N logged items" toggle reports: the flat
+  // swept rows PLUS, per archived-heading group, the heading itself (a logged
+  // item) and each of its children (HEADARC2-A: heading + 2 children = 3).
+  const loggedGroupCount = view.loggedHeadings.reduce((n, g) => n + 1 + g.items.length, 0);
+  const totalLogged = view.logged.length + loggedGroupCount;
+  if (showLogged && totalLogged > 0) {
+    const shownCount = logged.length + loggedGroupCount;
     const header =
-      logged.length < view.logged.length
-        ? `── Logged (${logged.length} of ${view.logged.length}) ──`
-        : `── Logged (${view.logged.length}) ──`;
-    lines.push("", bold(header), ...logged.map(fmt));
-  } else if (view.logged.length > 0) {
+      shownCount < totalLogged
+        ? `── Logged (${shownCount} of ${totalLogged}) ──`
+        : `── Logged (${totalLogged}) ──`;
+    lines.push("", bold(header));
+    if (logged.length > 0) lines.push(...logged.map(fmtLogged));
+    // Archived-heading groups: an active-styled section header (HEADARC2-A) with
+    // its children nested (the group header supplies the heading — no per-child
+    // hint). Rendered after the flat rows (a defensible ordering, not GUI-probed).
+    for (const group of view.loggedHeadings) {
+      lines.push(
+        "",
+        `${dim(uuidCol(group.heading.uuid, w))}  ${dim(underline(group.heading.title))}`,
+        ...(group.items.length > 0 ? group.items.map(fmt) : ["(none)"]),
+      );
+    }
+  } else if (totalLogged > 0) {
     // Bare `--show-logged` is the FULL project logbook, so the command reads
     // its own effect — no label needed.
     lines.push(
       "",
-      disclosureHint(view.logged.length, "logged item", [{ command: `${base} --show-logged` }]),
+      disclosureHint(totalLogged, "logged item", [{ command: `${base} --show-logged` }]),
     );
   }
   // PLOG1 discoverability advisory: a completed/canceled (incl. logged) project
@@ -195,6 +226,17 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
       "",
       dim(
         `contains ${n} unfinished to-do${n === 1 ? "" : "s"} — invisible in the app's live views`,
+      ),
+    );
+  } else if (view.openChildrenUnderArchivedHeading > 0) {
+    // HEADARC2-C: an OPEN project can still bury an open child under an ARCHIVED
+    // heading (a GUI Put-Back strands it there without reopening the heading) —
+    // invisible in every live view, reachable only via the logged region here.
+    const n = view.openChildrenUnderArchivedHeading;
+    lines.push(
+      "",
+      dim(
+        `contains ${n} unfinished to-do${n === 1 ? "" : "s"} buried under an archived heading — invisible in the app's live views`,
       ),
     );
   }

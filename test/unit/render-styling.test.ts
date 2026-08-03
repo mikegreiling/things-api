@@ -308,6 +308,7 @@ describe("template-container marker (↻ prefix on the muted container)", () => 
       type: "heading",
       title: "Prep",
       status: "open",
+      stopped: null,
       project: { uuid: "p1", title: "Weekly review", isRepeatingTemplate: true },
     });
     const projectLine = lines.find((l) => stripSgr(l).includes("project:"));

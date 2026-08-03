@@ -659,6 +659,139 @@ describe("PLOG1 — stranded open children of a resolved project", () => {
   });
 });
 
+// logInterval 4 (manual) with manualLogDate as the boundary: a stopDate AFTER
+// it is unswept (stays live), a stopDate BEFORE it is swept (logged region).
+const seedManualBoundary = (fx: FixtureDb) =>
+  fx.db
+    .prepare(
+      "INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, 1783000000)",
+    )
+    .run();
+const UNSWEPT = 1_784_000_000; // after the boundary
+const SWEPT = 1_782_000_000; // before the boundary
+
+describe("archived headings — trinary live/logged split (HEADARC/HEADARC2)", () => {
+  it("keeps an archived-but-UNSWEPT heading in the live headings; moves a SWEPT one to loggedHeadings", () => {
+    fixture = buildFixtureDb();
+    seedManualBoundary(fixture);
+    const project = seedProject(fixture.db, { title: "Sprint" });
+    const unswept = seedHeading(fixture.db, {
+      title: "Unswept",
+      project,
+      status: "completed",
+      stopDate: UNSWEPT,
+      index: 0,
+    });
+    seedTodo(fixture.db, {
+      title: "unswept child",
+      heading: unswept,
+      project: null,
+      status: "completed",
+      stopDate: UNSWEPT,
+    });
+    const swept = seedHeading(fixture.db, {
+      title: "Swept",
+      project,
+      status: "completed",
+      stopDate: SWEPT,
+      index: 1,
+    });
+    seedTodo(fixture.db, {
+      title: "swept child",
+      heading: swept,
+      project: null,
+      status: "completed",
+      stopDate: SWEPT,
+    });
+
+    const view = projectView(fixture.db, project, NOW);
+    // The archived-UNSWEPT heading stays LIVE, carrying its archive timestamp.
+    expect(view.headings.map((g) => g.heading.title)).toEqual(["Unswept"]);
+    expect(view.headings[0]!.heading.status).toBe("completed");
+    expect(view.headings[0]!.heading.stopped).not.toBeNull();
+    // Its completed-unswept child stays checked in place inside the live group.
+    expect(view.headings[0]!.items.map((i) => i.title)).toEqual(["unswept child"]);
+    // The SWEPT archived heading moves into the logged-region group.
+    expect(view.loggedHeadings.map((g) => g.heading.title)).toEqual(["Swept"]);
+    expect(view.loggedHeadings[0]!.items.map((i) => i.title)).toEqual(["swept child"]);
+    // Group children are NOT flat logged rows.
+    expect(view.logged).toEqual([]);
+  });
+
+  it("renders a swept archived-heading group under --show-logged, and flat logged rows hint their open heading", () => {
+    fixture = buildFixtureDb();
+    seedManualBoundary(fixture);
+    const project = seedProject(fixture.db, { title: "Sprint" });
+    // An OPEN heading whose swept child becomes a FLAT logged row (heading hint).
+    const open = seedHeading(fixture.db, { title: "Live Phase", project, index: 0 });
+    seedTodo(fixture.db, {
+      title: "swept under open",
+      heading: open,
+      project: null,
+      status: "completed",
+      stopDate: SWEPT,
+    });
+    // A SWEPT archived heading → a logged-region GROUP with its child nested.
+    const swept = seedHeading(fixture.db, {
+      title: "Archived Phase",
+      project,
+      status: "completed",
+      stopDate: SWEPT,
+      index: 1,
+    });
+    seedTodo(fixture.db, {
+      title: "grouped win",
+      heading: swept,
+      project: null,
+      status: "completed",
+      stopDate: SWEPT,
+    });
+
+    const view = projectView(fixture.db, project, NOW);
+    // Hidden by default: one disclosure hint counting flat (1) + group heading (1)
+    // + its child (1) = 3; the archived heading is NOT on screen.
+    const hidden = renderProjectView(view, {}).join("\n");
+    expect(hidden).toContain("3 logged items");
+    expect(hidden).not.toContain("Archived Phase");
+    // Shown: the flat row hints its OPEN heading; the archived heading renders as
+    // a section header with its child nested (no per-child hint).
+    const shown = renderProjectView(view, { showLogged: true }).join("\n");
+    expect(shown).toContain("Logged");
+    expect(shown).toContain("(Live Phase)"); // flat row's heading hint
+    expect(shown).toContain("Archived Phase"); // group section header
+    expect(shown).toContain("grouped win");
+  });
+
+  it("counts an open child buried under a swept archived heading (odd state) and warns on an OPEN project's card", () => {
+    fixture = buildFixtureDb();
+    seedManualBoundary(fixture);
+    const project = seedProject(fixture.db, { title: "Sprint" }); // OPEN project
+    const swept = seedHeading(fixture.db, {
+      title: "Archived Phase",
+      project,
+      status: "completed",
+      stopDate: SWEPT,
+    });
+    seedTodo(fixture.db, {
+      title: "grouped win",
+      heading: swept,
+      project: null,
+      status: "completed",
+      stopDate: SWEPT,
+    });
+    // The odd child a GUI Put-Back stranded: OPEN, still under the archived heading.
+    seedTodo(fixture.db, { title: "stranded open", heading: swept, project: null, status: "open" });
+
+    const view = projectView(fixture.db, project, NOW);
+    expect(view.openChildrenUnderArchivedHeading).toBe(1);
+    expect(view.openChildrenWhileResolved).toBe(0); // the project itself is open
+    // The stranded open child is rendered inside the group (not filtered out).
+    expect(view.loggedHeadings[0]!.items.map((i) => i.title)).toContain("stranded open");
+    const lines = renderProjectView(view, {}).join("\n");
+    expect(lines).toContain("buried under an archived heading — invisible in the app's live views");
+  });
+});
+
 describe("inherited-tags display (todo show / project show)", () => {
   it("todo show: renders an `inherited:` line with plain tag names (no provenance chip)", () => {
     fixture = buildFixtureDb();
