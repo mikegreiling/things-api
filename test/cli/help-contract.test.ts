@@ -698,6 +698,9 @@ describe("surface copy contract (docs/design/surface-copy.md)", () => {
     /\baudit\b/i,
     /\b(?:unprobed|probed|unvalidated|validated)\b/i,
     /\bsdef\b/,
+    // "badge" is GUI-chrome vocabulary — the read-shape doctrine forbids
+    // describing how the app looks; the today counts are self-explanatory data.
+    /\bbadge\b/i,
   ];
 
   it("no --help string leaks internals", () => {

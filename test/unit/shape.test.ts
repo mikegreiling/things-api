@@ -354,19 +354,20 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
     expect(full["startDate"]).toBe("2026-08-01"); // full/detail keep startDate beside when
   });
 
-  it("`when` drops inside the today view's own sections (the section key states it)", () => {
+  it("`when` is KEPT on the today view's flat items; stage dropped (stage-pure)", () => {
+    // The today view is one flat `items[]` interleaving Today-proper and
+    // This-Evening members, so each row must carry `when` (the render section is
+    // derived from it, not a wire bucket). Stage is still dropped — R13 makes
+    // every Today member stage `anytime`, so the flat list is stage-PURE.
     const view = {
-      today: [todo({ today: true })],
-      evening: [todo({ uuid: "todo-e", today: true, evening: true })],
-      badge: { dueOrOverdue: 0, other: 2 },
+      items: [todo({ today: true }), todo({ uuid: "todo-e", today: true, evening: true })],
+      counts: { dueOrOverdue: 0, other: 2 },
     };
-    const out = shapeReadPayload("today", view, false) as Obj;
-    const t = (out["today"] as Obj[])[0]!;
-    const e = (out["evening"] as Obj[])[0]!;
-    expect("when" in t).toBe(false); // section key states today
-    expect("when" in e).toBe(false); // section key states evening
-    // R13: every Today member derives stage `anytime`, so the today sections are
-    // stage-PURE and the field is DROPPED (was kept as "mixed" pre-R13).
+    const out = shapeReadPayload("today", view, false) as Obj[];
+    const t = out[0]!;
+    const e = out[1]!;
+    expect(t["when"]).toBe("today"); // kept — this row is Today-proper
+    expect(e["when"]).toBe("evening"); // kept — this row is This-Evening
     expect("stage" in t).toBe(false);
     expect("stage" in e).toBe(false);
   });

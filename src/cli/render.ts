@@ -449,13 +449,23 @@ export function renderList(items: ListItem[]): string[] {
 const provisionalRowOpts = (i: ListItem): FormatOpts =>
   entityProvisional(i) ? { mark: provisionalPip() } : {};
 
+/** A today row's This-Evening membership — the SAME `when` axis the wire carries. */
+const isEveningRow = (i: ListItem): boolean => entityWhen(i) === "evening";
+
 /**
- * The `things today` split. The membership glyph lives in the SECTION HEADER,
- * not on every row — a yellow ★ in the Today header (which also carries the
- * sidebar badge split) and a blue ⏾ in the This Evening header — so the rows
- * drop the redundant per-item marker (the same convention that suppresses a
- * `(project)` context inside that project's own view). Every OTHER view keeps
- * the per-row ★/⏾, where the marker still carries information.
+ * The `things today` view. The wire is one flat `items[]` of Today members; the
+ * TTY re-projects the GUI's two render sections from each row's `when` — a
+ * Today-proper block (`when: "today"`) and a This-Evening block
+ * (`when: "evening"`). The whole-view `counts` aggregate (the app's sidebar
+ * count) renders at the TOP as card-style metadata lines (indented `key: value`,
+ * the same convention `things project show` / `things area show` use), so the
+ * section header itself stays clean (`── ★ Today ──`).
+ *
+ * The membership glyph lives in the SECTION HEADER, not on every row — a yellow ★
+ * in the Today header and a blue ⏾ in the This Evening header — so the rows drop
+ * the redundant per-item marker (the same convention that suppresses a
+ * `(project)` context inside that project's own view). Every OTHER view keeps the
+ * per-row ★/⏾, where the marker still carries information.
  *
  * A PROVISIONAL Today member (the wire's presence-keyed `provisional`, BANNER1
  * law — a Today entrant the app has not yet materialized, banner-counted until
@@ -488,30 +498,40 @@ export function renderToday(
   base: string,
   options?: { eveningOnly?: boolean },
 ): string[] {
-  // Pre-cap totals from the truncation metadata; fall back to the shown view's
+  // The two render sections are re-projected from each row's `when` (the SAME
+  // axis the wire carries), so the TTY split can never disagree with the JSON.
+  const todayRows = view.items.filter((i) => !isEveningRow(i));
+  const eveningRows = view.items.filter(isEveningRow);
+  // Pre-cap totals from the truncation metadata; fall back to the shown rows'
   // own lengths when a caller hands an unbounded view with no section counts.
-  const todayTotal = sections?.find((s) => s.key === "today")?.total ?? view.today.length;
-  const eveningTotal = sections?.find((s) => s.key === "evening")?.total ?? view.evening.length;
-  const w = uuidDisplayWidth([...view.today, ...view.evening]);
+  const todayTotal = sections?.find((s) => s.key === "today")?.total ?? todayRows.length;
+  const eveningTotal = sections?.find((s) => s.key === "evening")?.total ?? eveningRows.length;
+  const w = uuidDisplayWidth(view.items);
   const eveningOnly = options?.eveningOnly === true;
-  const lines: string[] = eveningOnly
-    ? []
-    : [
-        `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${view.badge.dueOrOverdue} due/overdue · ${view.badge.other} other) ──`)}`,
-        ...(view.today.length === 0
-          ? ["(empty)"]
-          : view.today.map((i) => formatItem(i, w, provisionalRowOpts(i)))),
-      ];
+  // The whole-view counts, at the TOP as card-style metadata lines (the
+  // project/area-show header convention). A `0` is meaningful, so both always show.
+  const lines: string[] = [
+    `  ${dim("due/overdue:")} ${view.counts.dueOrOverdue}`,
+    `  ${dim("other:")} ${view.counts.other}`,
+  ];
+  if (!eveningOnly) {
+    lines.push(
+      `${bold("──")} ${todayStar()} ${bold("Today ──")}`,
+      ...(todayRows.length === 0
+        ? ["(empty)"]
+        : todayRows.map((i) => formatItem(i, w, provisionalRowOpts(i)))),
+    );
+  }
   if (eveningTotal > 0) {
     // A blank line before the header matches every other grouped renderer's
     // section spacing — but only when the Today section rendered above it. In
-    // --evening mode the header is the first line, so no leading blank.
+    // --evening mode the header follows the count lines directly, no blank.
     if (!eveningOnly) lines.push("");
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
-    for (const i of view.evening) lines.push(formatItem(i, w, provisionalRowOpts(i)));
-    const hidden = eveningTotal - view.evening.length;
+    for (const i of eveningRows) lines.push(formatItem(i, w, provisionalRowOpts(i)));
+    const hidden = eveningTotal - eveningRows.length;
     if (hidden > 0) {
-      const more = view.evening.length > 0 ? "more " : "";
+      const more = eveningRows.length > 0 ? "more " : "";
       const count = `${hidden} ${more}evening item${hidden === 1 ? "" : "s"}`;
       // Normal Today view: the global truncation footer already carries the
       // quantity levers (a bigger --limit / --all), so this hint is a pure

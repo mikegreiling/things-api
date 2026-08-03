@@ -21,6 +21,7 @@ import {
   inboxView,
   isTodayMember,
   liteTitleSearch,
+  type ListItem,
   logbookView,
   projectsView,
   searchView,
@@ -28,6 +29,7 @@ import {
   todayView,
   upcomingView,
 } from "../../src/read/views.ts";
+import { entityWhen } from "../../src/read/stage.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import {
   seedArea,
@@ -46,6 +48,13 @@ const NOW_EPOCH = NOW.getTime() / 1000;
 
 /** Flattens grouped anytime/someday sections back to items for membership checks. */
 const flat = (sections: SidebarSection[]) => sections.flatMap((s) => s.items);
+
+// The today view is now one flat `items[]`; the Today-proper / This-Evening
+// render sections are the `when` subsets (the SAME axis the wire + TTY split on).
+const todayProper = (view: { items: ListItem[] }) =>
+  view.items.filter((i) => entityWhen(i) !== "evening");
+const eveningOf = (view: { items: ListItem[] }) =>
+  view.items.filter((i) => entityWhen(i) === "evening");
 
 let fx: FixtureDb;
 afterEach(() => fx?.close());
@@ -68,8 +77,8 @@ describe("todayView", () => {
     seedTodo(fx.db, { title: "template", startDate: "2026-07-02", recurrenceRule: true });
 
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["t2", "t1", "pending-promotion"]);
-    expect(view.evening.map((i) => i.title)).toEqual(["e1"]);
+    expect(todayProper(view).map((i) => i.title)).toEqual(["t2", "t1", "pending-promotion"]);
+    expect(eveningOf(view).map((i) => i.title)).toEqual(["e1"]);
   });
 
   it("expires stale This Evening assignments back into Today proper (live-verified 2026-07-02)", () => {
@@ -85,13 +94,13 @@ describe("todayView", () => {
     seedTodo(fx.db, { title: "tonight", startDate: "2026-07-02", evening: true, todayIndex: 2 });
 
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["stale-evening"]);
-    expect(view.evening.map((i) => i.title)).toEqual(["tonight"]);
+    expect(todayProper(view).map((i) => i.title)).toEqual(["stale-evening"]);
+    expect(eveningOf(view).map((i) => i.title)).toEqual(["tonight"]);
     // raw assignment stays visible on the entity for both
-    expect(view.today[0]?.todaySection).toBe("evening");
+    expect(todayProper(view)[0]?.todaySection).toBe("evening");
   });
 
-  it("badge mirrors the sidebar: deadline due/overdue vs other", () => {
+  it("counts mirror the sidebar: deadline due/overdue vs other", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "overdue-dl", startDate: "2026-07-01", deadline: "2026-06-30" });
     seedTodo(fx.db, { title: "due-today", startDate: "2026-07-01", deadline: "2026-07-02" });
@@ -99,10 +108,10 @@ describe("todayView", () => {
     seedTodo(fx.db, { title: "no-dl", startDate: "2026-07-01" });
 
     const view = todayView(fx.db, NOW);
-    expect(view.badge).toEqual({ dueOrOverdue: 2, other: 2 });
+    expect(view.counts).toEqual({ dueOrOverdue: 2, other: 2 });
   });
 
-  it("eveningOnly keeps the view shape: today empty, evening populated, badge over evening", () => {
+  it("eveningOnly returns only evening members; counts over evening", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "day", startDate: "2026-07-02" });
     seedTodo(fx.db, { title: "night", startDate: "2026-07-02", evening: true });
@@ -114,10 +123,10 @@ describe("todayView", () => {
     });
 
     const view = todayView(fx.db, NOW, { eveningOnly: true });
-    expect(view.today).toEqual([]);
-    expect(view.evening.map((i) => i.title).toSorted()).toEqual(["night", "night-due"]);
-    // Badge counts only the evening members (mirrors the tag filter's badge).
-    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(todayProper(view)).toEqual([]);
+    expect(view.items.map((i) => i.title).toSorted()).toEqual(["night", "night-due"]);
+    // Counts cover only the evening members (mirrors the tag filter's treatment).
+    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("a DUE deadline pulls items into Today, even from the Inbox (UI-oracle 2026-07-04)", () => {
@@ -146,12 +155,12 @@ describe("todayView", () => {
       deadlineSuppressionDate: "2026-06-20",
     });
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title).toSorted()).toEqual([
-      "deadline-only",
-      "inbox-due",
-      "old-suppression",
-    ]);
-    expect(view.badge.dueOrOverdue).toBe(3);
+    expect(
+      todayProper(view)
+        .map((i) => i.title)
+        .toSorted(),
+    ).toEqual(["deadline-only", "inbox-due", "old-suppression"]);
+    expect(view.counts.dueOrOverdue).toBe(3);
   });
 
   it("orders by entry cohort (referenceDate DESC), then todayIndex, then uuid", () => {
@@ -196,7 +205,13 @@ describe("todayView", () => {
       todayIndexReferenceDate: "2026-07-02",
     });
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["new-1", "tie-a", "tie-b", "old-a", "old-b"]);
+    expect(todayProper(view).map((i) => i.title)).toEqual([
+      "new-1",
+      "tie-a",
+      "tie-b",
+      "old-a",
+      "old-b",
+    ]);
   });
 
   // GUI-parity ruling 2026-07-14 (Mike): Today shows CHECKED-BUT-UNSWEPT rows —
@@ -218,15 +233,15 @@ describe("todayView", () => {
 
     // Before the sweep: the checked row keeps its comparator slot (todayIndex).
     const before = todayView(fx.db, NOW);
-    expect(before.today.map((i) => i.title)).toEqual(["open-a", "checked", "open-b"]);
-    const checked = before.today.find((i) => i.title === "checked");
+    expect(todayProper(before).map((i) => i.title)).toEqual(["open-a", "checked", "open-b"]);
+    const checked = todayProper(before).find((i) => i.title === "checked");
     expect(checked?.status).toBe("completed"); // JSON surfaces the real status
     expect(checked?.logged).toBe(false); // unswept, so not logged
 
     // Advance the boundary past the checked row's stopDate → it is swept away.
     fx.db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH + 60);
     const after = todayView(fx.db, NOW);
-    expect(after.today.map((i) => i.title)).toEqual(["open-a", "open-b"]);
+    expect(todayProper(after).map((i) => i.title)).toEqual(["open-a", "open-b"]);
   });
 
   it("keeps a CANCELED-but-unswept row in place too (both closed statuses)", () => {
@@ -241,20 +256,20 @@ describe("todayView", () => {
       stopDate: NOW_EPOCH,
     });
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toEqual(["open", "dropped"]);
-    expect(view.today.find((i) => i.title === "dropped")?.status).toBe("canceled");
+    expect(todayProper(view).map((i) => i.title)).toEqual(["open", "dropped"]);
+    expect(todayProper(view).find((i) => i.title === "dropped")?.status).toBe("canceled");
   });
 
-  it("badge counts OPEN members only — a checked-unswept row is listed but does not move it", () => {
+  it("counts cover OPEN members only — a checked-unswept row is listed but does not move them", () => {
     fx = buildFixtureDb();
     seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
     // One open due-today item (red), one open item (gray).
     seedTodo(fx.db, { title: "due", startDate: "2026-07-01", deadline: "2026-07-02" });
     seedTodo(fx.db, { title: "plain", startDate: "2026-07-02" });
     const baseline = todayView(fx.db, NOW);
-    expect(baseline.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(baseline.counts).toEqual({ dueOrOverdue: 1, other: 1 });
     // Adding a checked-unswept row — even one carrying a due deadline — must not
-    // move the badge (the GUI badge counts remaining work).
+    // move the counts (the sidebar count reflects remaining work).
     seedTodo(fx.db, {
       title: "checked-due",
       startDate: "2026-07-02",
@@ -263,8 +278,8 @@ describe("todayView", () => {
       stopDate: NOW_EPOCH,
     });
     const view = todayView(fx.db, NOW);
-    expect(view.today.map((i) => i.title)).toContain("checked-due");
-    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(todayProper(view).map((i) => i.title)).toContain("checked-due");
+    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("a checked-but-unswept EVENING item stays in the This Evening section", () => {
@@ -278,10 +293,10 @@ describe("todayView", () => {
       stopDate: NOW_EPOCH,
     });
     const view = todayView(fx.db, NOW);
-    expect(view.evening.map((i) => i.title)).toEqual(["tonight-done"]);
-    expect(view.today).toEqual([]);
-    // A checked evening row still contributes nothing to the badge.
-    expect(view.badge).toEqual({ dueOrOverdue: 0, other: 0 });
+    expect(eveningOf(view).map((i) => i.title)).toEqual(["tonight-done"]);
+    expect(todayProper(view)).toEqual([]);
+    // A checked evening row still contributes nothing to the counts.
+    expect(view.counts).toEqual({ dueOrOverdue: 0, other: 0 });
   });
 });
 
@@ -852,7 +867,7 @@ describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
     tagTask(fx.db, todo, housekeeping);
     tagTask(fx.db, todo, recurring);
 
-    const item = todayView(fx.db, NOW).today.find((i) => i.title === "Replace CPAP mask");
+    const item = todayView(fx.db, NOW).items.find((i) => i.title === "Replace CPAP mask");
     expect(item?.tags.map((t) => t.title)).toEqual(["recurring", "home", "housekeeping"]);
   });
 
@@ -872,7 +887,7 @@ describe("canonical tag order (TMTag index, ratified 2026-07-14)", () => {
     tagTask(fx.db, todo, alpha);
     tagTask(fx.db, todo, zeta);
 
-    const item = todayView(fx.db, NOW).today.find((i) => i.title === "tied");
+    const item = todayView(fx.db, NOW).items.find((i) => i.title === "tied");
     expect(item?.tags.map((t) => t.title)).toEqual(["zeta", "alpha"]);
   });
 
@@ -929,7 +944,7 @@ describe("tag-filtered list views (Phase 10)", () => {
   it("today: matches direct + inherited through project/area/heading, excludes the rest", () => {
     seedTagChain();
     const view = todayView(fx.db, NOW, { tag: "focus" });
-    const titles = [...view.today, ...view.evening].map((i) => i.title).toSorted();
+    const titles = view.items.map((i) => i.title).toSorted();
     // "P" itself is area-tagged too (projects are list items in Today).
     expect(titles).toEqual(["P", "direct", "via-area", "via-heading", "via-project"]);
   });
@@ -937,8 +952,8 @@ describe("tag-filtered list views (Phase 10)", () => {
   it("resolves by uuid too, and unfiltered views are unchanged", () => {
     const { tag } = seedTagChain();
     const viaUuid = todayView(fx.db, NOW, { tag });
-    expect(viaUuid.today.map((i) => i.title)).toContain("direct");
-    expect(todayView(fx.db, NOW).today.map((i) => i.title)).toContain("unrelated");
+    expect(viaUuid.items.map((i) => i.title)).toContain("direct");
+    expect(todayView(fx.db, NOW).items.map((i) => i.title)).toContain("unrelated");
   });
 
   it("throws loudly on unknown or ambiguous tag references", () => {
@@ -979,13 +994,13 @@ describe("tag-hierarchy descendants (Phase 12)", () => {
     tagTask(fx.db, unrelated, sibling);
 
     const titles = todayView(fx.db, NOW, { tag: "errands" })
-      .today.map((i) => i.title)
+      .items.map((i) => i.title)
       .toSorted();
     expect(titles).toEqual(["direct", "via-child", "via-grandchild"]);
     // Filtering by the CHILD does not match parent-tagged items (downward only).
     expect(
       todayView(fx.db, NOW, { tag: "groceries" })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["via-child", "via-grandchild"]);
   });
@@ -1024,16 +1039,16 @@ describe('untagged filter (GUI "No Tag")', () => {
   it("today: keeps only genuinely bare items, dropping direct + every inherited hop", () => {
     seedUntaggedWorld();
     const titles = todayView(fx.db, NOW, { untagged: true })
-      .today.map((i) => i.title)
+      .items.map((i) => i.title)
       .toSorted();
     expect(titles).toEqual(["wid bare", "wid in-bare-area", "wid in-bare-project"]);
   });
 
   it("is the exact inversion of --tag on the same view (partition, no overlap)", () => {
     seedUntaggedWorld();
-    const all = todayView(fx.db, NOW).today.map((i) => i.title);
-    const tagged = todayView(fx.db, NOW, { tag: "focus" }).today.map((i) => i.title);
-    const untagged = todayView(fx.db, NOW, { untagged: true }).today.map((i) => i.title);
+    const all = todayView(fx.db, NOW).items.map((i) => i.title);
+    const tagged = todayView(fx.db, NOW, { tag: "focus" }).items.map((i) => i.title);
+    const untagged = todayView(fx.db, NOW, { untagged: true }).items.map((i) => i.title);
     // Every Today row is in exactly one side; the two sides are disjoint and cover all.
     expect([...tagged, ...untagged].toSorted()).toEqual([...all].toSorted());
     expect(tagged.filter((t) => untagged.includes(t))).toEqual([]);
@@ -1210,7 +1225,7 @@ describe("overdue filter (open items past their deadline)", () => {
     seedTodo(fx.db, { title: "today-due", start: "active", deadline: "2026-07-02" });
     seedTodo(fx.db, { title: "today-sched", start: "active", startDate: "2026-07-02" });
     const view = todayView(fx.db, NOW, { overdue: true });
-    expect([...view.today, ...view.evening].map((i) => i.title)).toEqual(["today-overdue"]);
+    expect(view.items.map((i) => i.title)).toEqual(["today-overdue"]);
   });
 
   it("inbox: an UNSUPPRESSED overdue capture is deadline-PULLED out (R13); a suppressed one stays and --overdue keeps it", () => {
@@ -1763,7 +1778,7 @@ describe("tag descendant closure safety", () => {
     const item = seedTodo(fx.db, { title: "cycled", startDate: "2026-07-02" });
     tagTask(fx.db, item, b);
     const view = todayView(fx.db, NOW, { tag: "cycle-a" });
-    expect(view.today.map((i) => i.title)).toEqual(["cycled"]);
+    expect(view.items.map((i) => i.title)).toEqual(["cycled"]);
   });
 });
 
@@ -1778,12 +1793,12 @@ describe("exact-tag filtering (Phase 12c)", () => {
     tagTask(fx.db, viaChild, child);
 
     expect(
-      todayView(fx.db, NOW, { tag: "errands", exactTag: true }).today.map((i) => i.title),
+      todayView(fx.db, NOW, { tag: "errands", exactTag: true }).items.map((i) => i.title),
     ).toEqual(["direct"]);
     // Default (descendants) still matches both.
     expect(
       todayView(fx.db, NOW, { tag: "errands" })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["direct", "via-child"]);
     // exactTag still honors area/project INHERITANCE (orthogonal dimension).
@@ -1792,7 +1807,7 @@ describe("exact-tag filtering (Phase 12c)", () => {
     seedTodo(fx.db, { title: "via-area", area, startDate: "2026-07-02" });
     expect(
       todayView(fx.db, NOW, { tag: "errands", exactTag: true })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["direct", "via-area"]);
     // And search takes it through SearchOptions.
@@ -1829,7 +1844,7 @@ describe("flat-view tag filters stay inheritance-inclusive (regression)", () => 
     // (it inherits focus from its area).
     expect(
       todayView(fx.db, NOW, { tags: ["focus"] })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["P", "direct", "via-area", "via-heading", "via-project"]);
   });
@@ -1847,13 +1862,13 @@ describe("flat-view tag filters stay inheritance-inclusive (regression)", () => 
     // area-inherited-parent row (A kept — inheritance-inclusive).
     expect(
       todayView(fx.db, NOW, { tags: ["errands"] })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["direct-child", "inherited-parent"]);
     // --exact-tag drops descendant expansion (B): the descendant-only child no
     // longer matches; the area-inherited exact-parent row still does.
     expect(
-      todayView(fx.db, NOW, { tags: ["errands"], exactTag: true }).today.map((i) => i.title),
+      todayView(fx.db, NOW, { tags: ["errands"], exactTag: true }).items.map((i) => i.title),
     ).toEqual(["inherited-parent"]);
   });
 
@@ -1869,7 +1884,7 @@ describe("flat-view tag filters stay inheritance-inclusive (regression)", () => 
     seedTodo(fx.db, { title: "bare", startDate: D });
     // Flat --untagged: no tag at all, direct OR inherited — the inherited-only
     // row (it inherits focus from its area) drops; only the truly bare row stays.
-    expect(todayView(fx.db, NOW, { untagged: true }).today.map((i) => i.title)).toEqual(["bare"]);
+    expect(todayView(fx.db, NOW, { untagged: true }).items.map((i) => i.title)).toEqual(["bare"]);
   });
 });
 
@@ -1886,13 +1901,13 @@ describe("multi-tag AND (repeatable, intersection)", () => {
     tagTask(fx.db, fooOnly, foo);
     const barOnly = seedTodo(fx.db, { title: "bar-only", startDate: D });
     tagTask(fx.db, barOnly, bar);
-    expect(todayView(fx.db, NOW, { tags: ["foo", "bar"] }).today.map((i) => i.title)).toEqual([
+    expect(todayView(fx.db, NOW, { tags: ["foo", "bar"] }).items.map((i) => i.title)).toEqual([
       "both",
     ]);
     // A single ref is unchanged (the foo set is both + foo-only).
     expect(
       todayView(fx.db, NOW, { tags: ["foo"] })
-        .today.map((i) => i.title)
+        .items.map((i) => i.title)
         .toSorted(),
     ).toEqual(["both", "foo-only"]);
   });
