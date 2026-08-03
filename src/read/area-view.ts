@@ -21,6 +21,17 @@ import { tagFilter, type ViewFilter } from "./views.ts";
 export interface AreaView {
   /** The area, or `null` for the `loose` pseudo-area (the NULL-area composite). */
   area: Area | null;
+  /**
+   * ALL live (non-logbook) DIRECT to-dos of the area, in `index` order, each
+   * carrying `stage` + `when` — the flat wire representation (read-shape doctrine
+   * §3.13's area-view `items[]`). Area direct to-dos are never headed and never
+   * project-nested, so they are fully self-describing once `area` (the card
+   * states it) is dropped. The structured buckets below (`active`, `scheduled`,
+   * `someday`, `repeating`) re-group the SAME to-dos into the GUI render layout
+   * for the byte-stable TTY (the library owns the clock + `todayIndex`).
+   * `projects[]` is the SEPARATE order axis (sidebar rank) and is NOT folded in.
+   */
+  items: Todo[];
   /** Open, unscheduled/current direct to-dos, by index. */
   active: Todo[];
   /** The area's open projects in sidebar order (someday projects included). */
@@ -206,5 +217,10 @@ export function areaView(
     else scheduled.push({ date, items: [todo] });
   }
 
-  return { area, active, projects, scheduled, someday, repeating };
+  // The flat wire `items[]`: every LIVE direct to-do in area index order (the
+  // `todos` fetch is already `ORDER BY index ASC`). Excludes swept logged rows
+  // (the area view has no logbook section — they live in `things logbook --area`).
+  const items = todos.map((t) => t.todo).filter((td) => !td.logged);
+
+  return { area, items, active, projects, scheduled, someday, repeating };
 }

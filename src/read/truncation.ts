@@ -269,8 +269,16 @@ export function capAreaSections(
       limit: limits.area,
     });
   }
+  // The flat wire `items[]` mirrors the same cut: drop exactly the open/current
+  // direct to-dos the `active` cap removed (the "area" block reports them), so the
+  // wire item list and the truncation agree. The scheduled/someday/repeating
+  // direct to-dos always survive (they are the "later" rows the TTY toggles).
+  const droppedActive = new Set(
+    view.active.slice(active.length).map((t) => (t as { uuid: string }).uuid),
+  );
+  const items = view.items.filter((t) => !droppedActive.has((t as { uuid: string }).uuid));
   return {
-    data: { ...view, projects, active },
+    data: { ...view, projects, active, items },
     truncation: groupedTruncation(blocks, truncated),
   };
 }

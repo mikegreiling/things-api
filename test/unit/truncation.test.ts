@@ -273,6 +273,8 @@ describe("capAreaSections (area show per-section caps)", () => {
   const view = () =>
     ({
       area: { uuid: "a", title: "Busy" },
+      // The flat wire list: all direct to-dos (the 7 active + 2 scheduled), index order.
+      items: [...todos(7, "t"), ...todos(2, "s")],
       projects: todos(5, "p"),
       active: todos(7, "t"),
       scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
@@ -284,6 +286,16 @@ describe("capAreaSections (area show per-section caps)", () => {
     const { data, truncation } = capAreaSections(view(), { area: 4, project: 2 });
     expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
+    // The flat wire items[] drops exactly the 3 capped-out active rows (t4..t6);
+    // the 2 scheduled "later" rows always survive → 4 + 2 = 6.
+    expect(data.items.map((t) => (t as { uuid: string }).uuid)).toEqual([
+      "t0",
+      "t1",
+      "t2",
+      "t3",
+      "s0",
+      "s1",
+    ]);
     // The later section is a container of its own — never capped here.
     expect(data.scheduled[0]?.items).toHaveLength(2);
     expect(truncation.truncated).toBe(true);
@@ -297,6 +309,7 @@ describe("capAreaSections (area show per-section caps)", () => {
     const { data, truncation } = capAreaSections(view(), { area: null, project: null });
     expect(data.projects).toHaveLength(5);
     expect(data.active).toHaveLength(7);
+    expect(data.items).toHaveLength(9); // all direct to-dos survive
     expect(truncation.truncated).toBe(false);
     expect(
       (truncation.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),

@@ -426,11 +426,22 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect("stage" in sItem).toBe(false); // stage-pure catalogue → dropped
   });
 
-  it("area-view: children buckets drop area+stage; the projects list keeps stage; card node kept", () => {
+  it("area-view: direct to-dos dissolve into one flat items[] (drop area, keep stage/when); projects[] keeps stage (doctrine §3.13)", () => {
     const view = {
       area: { uuid: "area-1", title: "Work", visible: true, tags: [{ title: "focus" }] },
-      active: [todo()],
+      // A direct to-do (area FK, no project/heading) + a future-scheduled one.
+      items: [
+        todo({ uuid: "d-now", heading: null, headingProject: null, project: null }),
+        todo({
+          uuid: "d-sched",
+          startDate: "2026-08-01",
+          heading: null,
+          headingProject: null,
+          project: null,
+        }),
+      ],
       projects: [project()],
+      active: [],
       scheduled: [],
       someday: [],
       repeating: [],
@@ -438,22 +449,34 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       trashed: [],
     };
     const out = shapeReadPayload("area-view", view, true) as Obj;
-    // active → anytime bucket (stage anytime); area + stage dropped.
-    const child = (out["anytime"] as Obj[])[0]!;
-    expect("area" in child).toBe(false);
-    expect("stage" in child).toBe(false);
-    expect(child["project"]).toBeDefined();
+    // ONE flat items[] — stage KEPT (mixed), when kept, area dropped.
+    const items = out["items"] as Obj[];
+    expect(items.map((i) => i["uuid"])).toEqual(["d-now", "d-sched"]);
+    const now = items[0]!;
+    expect("area" in now).toBe(false);
+    expect(now["stage"]).toBe("anytime");
+    const sched = items[1]!;
+    expect(sched["stage"]).toBe("upcoming");
+    expect(sched["when"]).toBe("2026-08-01");
     // the projects list keeps stage (mixed listing), drops area.
     const projRow = (out["projects"] as Obj[])[0]!;
     expect("area" in projRow).toBe(false);
     expect(projRow["stage"]).toBe("anytime");
     // The area node keeps its identity; its tags fold to names.
     expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: ["focus"] });
-    // The renamed live buckets exist; the old names are gone. An area carries NO
-    // `logbook` or `trash` bucket (the logbook is `things logbook --area`, trash
-    // is `things trash`).
-    for (const k of ["anytime", "upcoming", "someday"]) expect(k in out).toBe(true);
-    for (const k of ["active", "scheduled", "repeating", "logged", "trashed", "logbook", "trash"])
+    // The dissolved stage buckets are gone; an area carries NO logbook/trash bucket.
+    for (const k of [
+      "anytime",
+      "upcoming",
+      "someday",
+      "active",
+      "scheduled",
+      "repeating",
+      "logged",
+      "trashed",
+      "logbook",
+      "trash",
+    ])
       expect(k in out).toBe(false);
   });
 

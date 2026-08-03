@@ -1341,6 +1341,7 @@ describe("viewHeaderLines (view title preamble)", () => {
 // A minimal empty area card — the footer is driven purely by `loggedCount`.
 const emptyArea = (title: string): AreaView => ({
   area: { uuid: "area-1", title, visible: true, tags: [] },
+  items: [],
   active: [],
   projects: [],
   scheduled: [],
