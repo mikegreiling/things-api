@@ -147,6 +147,15 @@ function refUuid(v: unknown): string | undefined {
 }
 
 /**
+ * Whether a still-unflattened container Ref carries the repeating-TEMPLATE mark.
+ * Only project/container refs ever set it (area/heading refs never do — see
+ * entities.Ref), so this reads true only for a template PROJECT container.
+ */
+function refIsTemplate(v: unknown): boolean {
+  return v !== null && typeof v === "object" && (v as Obj)["isRepeatingTemplate"] === true;
+}
+
+/**
  * Flatten ONE container ref `o[key]` from a `{uuid,title}` object to its bare
  * TITLE string, adding a flat sibling `o[uuidKey]` = the full uuid ONLY when the
  * round-trip law demands it: `forceUuid` (the FULL/detail tier — uuid siblings
@@ -154,7 +163,9 @@ function refUuid(v: unknown): string | undefined {
  * (`!promoter.roundTrips`). A null/absent ref, or one already flattened to a
  * string, is left untouched. The container's `isRepeatingTemplate` marker (a
  * TTY-render disambiguator on the internal entity) does not survive the flatten
- * — the human render reads the unshaped entity, so only the JSON copy loses it.
+ * — the human render reads the unshaped entity. {@link shapeItem} re-emits that
+ * fact for the JSON container PROJECT as the flat presence-keyed sibling
+ * `projectIsTemplate: true` BEFORE this flatten runs.
  */
 function flattenRef(
   o: Obj,
@@ -410,6 +421,16 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   // compact-dropped below, so it is flattened only on the FULL tier.
   const forceUuid = !compact;
   const projectUuid = refUuid(o["project"]);
+  // The container PROJECT's repeating-TEMPLATE fact — the JSON twin of the TTY ↻
+  // glyph (src/cli/render.ts). flattenRef discards the internal ref's
+  // `isRepeatingTemplate` marker, so re-emit it here as a flat presence-keyed
+  // sibling of the `project` ref (never `false`), riding wherever `project`
+  // rides. A heading-nested row already merged its owning project into `project`
+  // above, so direct AND headed template children mark; the R6 project-drop
+  // above already removed `project` where the view implies it, so a project-view
+  // child carries no orphaned marker. Both tiers — it is a correctness signal,
+  // not detail. Only project refs ever carry the flag (area/heading never do).
+  if (refIsTemplate(o["project"])) o["projectIsTemplate"] = true;
   flattenRef(o, "project", "projectUuid", "project", forceUuid, promoter);
   flattenRef(o, "area", "areaUuid", "area", forceUuid, promoter);
   if (!compact)

@@ -11,7 +11,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { makeRefPromoter } from "../../src/read/queries.ts";
+import {
+  makeHeadingProjectResolver,
+  makeRefPromoter,
+  makeRefResolver,
+} from "../../src/read/queries.ts";
 import { shapeReadPayload, type RefPromoter } from "../../src/read/shape.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedHeading, seedProject, seedTodo } from "../fixtures/seed.ts";
@@ -170,6 +174,53 @@ describe("heading round-trip — per-project scope (the shared predicate)", () =
     expect(full["headingUuid"]).toBe(backC); // FULL forces it
     expect(full["project"]).toBe("Beta");
     expect(full["projectUuid"]).toBe(p2); // FULL forces the project sibling too
+  });
+});
+
+describe("projectIsTemplate — resolver-stamped ref survives the flatten (end-to-end)", () => {
+  it("a TEMPLATE-project child marks AND promotes projectUuid; the same-titled occurrence child does neither", () => {
+    // A repeating project = a hidden TEMPLATE blueprint + a same-titled visible
+    // occurrence. Both resolve by the shared title, so the bare title is ambiguous
+    // (projectUuid promotes on BOTH) — and only the template ref is marked.
+    const tmpl = seedProject(fx.db, { title: "Weekly Review", recurrenceRule: true });
+    const occ = seedProject(fx.db, { title: "Weekly Review" });
+    const head = seedHeading(fx.db, { title: "Section", project: tmpl });
+    const refs = makeRefResolver(fx.db);
+    const headingProject = makeHeadingProjectResolver(fx.db);
+
+    // Direct template child: resolved ref carries the mark → projectIsTemplate rides.
+    const direct = first(
+      shapeReadPayload("search", [todo({ project: refs(tmpl) })], false, promoter),
+    );
+    expect(direct["project"]).toBe("Weekly Review");
+    expect(direct["projectIsTemplate"]).toBe(true);
+    expect(direct["projectUuid"]).toBe(tmpl); // same-title collision → promoted
+
+    // Heading-nested template child: the owning-project resolver marks the ref too.
+    const nested = first(
+      shapeReadPayload(
+        "search",
+        [
+          todo({
+            project: null,
+            heading: { uuid: head, title: "Section" },
+            headingProject: headingProject(head),
+          }),
+        ],
+        false,
+        promoter,
+      ),
+    );
+    expect(nested["project"]).toBe("Weekly Review");
+    expect(nested["projectIsTemplate"]).toBe(true);
+
+    // The same-titled OCCURRENCE child: unmarked ref → no marker (still promotes).
+    const occurrence = first(
+      shapeReadPayload("search", [todo({ project: refs(occ) })], false, promoter),
+    );
+    expect(occurrence["project"]).toBe("Weekly Review");
+    expect(occurrence).not.toHaveProperty("projectIsTemplate");
+    expect(occurrence["projectUuid"]).toBe(occ);
   });
 });
 
