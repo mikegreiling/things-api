@@ -1204,11 +1204,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_project",
     {
       description:
-        "One project's full contents: metadata plus its to-dos grouped under their headings. " +
-        "Open headings (and archived ones not yet swept to the logbook) stay live, carrying " +
-        "archived once archived; a swept archived heading moves into the logged region as a " +
-        "group with its children. The tag filters keep only the child to-dos matching by their " +
-        "own tags (a heading left with none is dropped). " +
+        "One project's full contents: metadata, its live child to-dos as one flat list (items, " +
+        "in index order — each carrying its stage, when, and, when it lives under a heading, " +
+        "its heading ref), the heading catalog (headings — every heading in index order, " +
+        "carrying archived once archived), and its logged children (logbook, most recent " +
+        "first, each carrying its heading ref). Reconstruct a heading's members by filtering " +
+        "items (or logbook) on the heading ref. The tag filters keep only the child to-dos " +
+        "matching by their own tags (a heading left with none is dropped). " +
         OMIT_EMPTY_NOTE +
         " " +
         REF_RULE_NOTE,
@@ -1250,11 +1252,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_area",
     {
       description:
-        "One area's contents: metadata plus its direct to-dos (active first), its " +
-        "projects in canonical order, and later (scheduled/repeating/someday). The area " +
-        "logbook is not returned here — read it with read_view logbook + area; trashed " +
-        "rows live in read_view trash. " +
-        `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
+        "One area's contents: metadata plus its direct to-dos as one flat list (items, in " +
+        "index order — each row carrying its stage and when) and its projects in canonical " +
+        "order (projects). The area logbook is not returned here — read it with read_view " +
+        "logbook + area; trashed rows live in read_view trash. " +
+        `The project rows and the open/current direct to-dos are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
         OMIT_EMPTY_NOTE +
