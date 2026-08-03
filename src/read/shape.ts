@@ -190,6 +190,13 @@ interface ItemDrop {
   project?: boolean;
   area?: boolean;
   heading?: boolean;
+  /**
+   * KEEP + flatten the `heading` ref even in the COMPACT tier (which otherwise
+   * drops it everywhere). Set for the project-view LOGBOOK rows, whose GUI hint
+   * IS the heading (a swept child of an OPEN heading labels its heading, the
+   * two-view asymmetry — the global Logbook labels the PROJECT instead).
+   */
+  keepHeading?: boolean;
   /** Drop the `stage` field — the enclosing view/section states it. */
   stage?: boolean;
   /** Drop the derived `when` field — the today view's section key states it (R12). */
@@ -405,6 +412,13 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   // R13 — the provisional banner marker (never dropped; presence-keyed).
   if (provisional) o["provisional"] = true;
 
+  // The owning project's uuid scopes the heading round-trip (headings resolve
+  // within their project). Captured BEFORE the R6 project-drop so a project-view
+  // LOGBOOK row — whose `project` is dropped as redundant, yet which KEEPS its
+  // heading ref (drop.keepHeading) — can still promote its `headingUuid` in the
+  // project's scope.
+  const projectUuid = refUuid(o["project"]);
+
   // R6 — drop redundant ancestry (both tiers).
   if (drop.project === true) delete o["project"];
   if (drop.area === true) delete o["area"];
@@ -415,12 +429,10 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
 
   // Flatten the surviving container refs to bare TITLE strings, adding a flat
   // `*Uuid` sibling per the round-trip law (FULL tier: unconditional; compact:
-  // only when the title would not resolve back to this entity). The owning
-  // project's uuid — captured BEFORE `project` is flattened — scopes the heading
-  // round-trip (headings resolve within their project). The `heading` ref is
-  // compact-dropped below, so it is flattened only on the FULL tier.
+  // only when the title would not resolve back to this entity). The `heading`
+  // ref is compact-dropped below (except drop.keepHeading), so it is flattened
+  // on the FULL tier OR when a logbook row explicitly keeps it.
   const forceUuid = !compact;
-  const projectUuid = refUuid(o["project"]);
   // The container PROJECT's repeating-TEMPLATE fact — the JSON twin of the TTY ↻
   // glyph (src/cli/render.ts). flattenRef discards the internal ref's
   // `isRepeatingTemplate` marker, so re-emit it here as a flat presence-keyed
@@ -433,7 +445,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   if (refIsTemplate(o["project"])) o["projectIsTemplate"] = true;
   flattenRef(o, "project", "projectUuid", "project", forceUuid, promoter);
   flattenRef(o, "area", "areaUuid", "area", forceUuid, promoter);
-  if (!compact)
+  if (!compact || drop.keepHeading === true)
     flattenRef(o, "heading", "headingUuid", "heading", forceUuid, promoter, projectUuid);
 
   // R12 — FULL/DETAIL keep the raw `startDate` beside `when` as the SUBSTRATE
@@ -450,8 +462,9 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   delete o["notes"];
   if (notes !== "") o["hasNotes"] = true;
   // The heading ref is compact-dropped everywhere (the GUI shows the project,
-  // never the heading, outside a project view). Full tier / detail keep it.
-  delete o["heading"];
+  // never the heading, outside a project view). Full tier / detail keep it; a
+  // project-view logbook row (drop.keepHeading) keeps it too — flattened above.
+  if (drop.keepHeading !== true) delete o["heading"];
   return o;
 }
 
@@ -575,6 +588,26 @@ const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, stage: true };
 /** Heading-group members drop the heading ref too (the group states it). */
 const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
+/**
+ * Project-view LOGBOOK (flat logged) rows: drop project/area (the card states
+ * them) + the bucket-implied stage (all rows are logged), but KEEP the heading
+ * ref (drop.keepHeading) — a swept child of an OPEN heading carries its heading
+ * as the GUI hint (the in-project logged toggle labels the HEADING; the global
+ * Logbook labels the PROJECT — the two-view asymmetry, HEADARC2-B).
+ */
+const PROJECT_LOGBOOK_DROP: ItemDrop = {
+  project: true,
+  area: true,
+  stage: true,
+  keepHeading: true,
+};
+/**
+ * Members of an ARCHIVED-heading GROUP in the logged region (HEADARC2-A): drop
+ * project/area + the heading ref (the group header states it). `stage` is KEPT —
+ * the group is stage-MIXED (mostly `logbook`, but may hold the odd OPEN child a
+ * Put-Back stranded, HEADARC2-C), so the header does not provably state it.
+ */
+const LOGGED_HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true };
 /** Area-view child-item buckets drop their area (the card states it) + the bucket-implied stage. */
 const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 /** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
@@ -606,6 +639,34 @@ const NO_DROP: ItemDrop = {};
  */
 const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
+/**
+ * Shape a heading GROUP node (the `headings[].heading` / `loggedHeadings[].heading`
+ * keyed sub-object). The type is triply implied by position, and a heading has no
+ * open/canceled/completed vocabulary the reader needs — so:
+ * - DROP `type` (positional: this slot is always a heading; the "absent type =
+ *   to-do" convention is scoped to ROWS/candidates, never this keyed sub-object);
+ * - DROP `project` (the card states it);
+ * - REPLACE `status` with the presence-keyed `archived` (the stopDate, an ISO
+ *   date-time following the `stopped`/logged-row convention) — emitted ONLY when
+ *   the heading is archived (status "completed"), OMITTED when open. Region
+ *   membership (live `headings` vs the logged region) expresses sweep state; the
+ *   node carries only whether-and-when it was archived.
+ */
+function shapeHeadingNode(src: unknown): unknown {
+  if (src === null || typeof src !== "object") return src;
+  const h = { ...(src as Obj) };
+  delete h["project"];
+  delete h["type"];
+  const isArchived = h["status"] !== undefined && h["status"] !== "open";
+  const stopped = h["stopped"];
+  delete h["status"];
+  delete h["stopped"];
+  // Presence-keyed `archived` — the ISO archive timestamp (past-participle twin of
+  // `stopped`/`created`/`modified`), full-datetime serialization like `stopped`.
+  if (isArchived && stopped != null) h["archived"] = stopped;
+  return h;
+}
+
 /** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
 function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   const cd = PROJECT_CHILD_DROP;
@@ -614,14 +675,7 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
     if (g === null || typeof g !== "object") return g;
     const grp = g as Obj;
     const out: Obj = {};
-    // The heading NODE itself drops its `project` ref — the card states it.
-    if (grp["heading"] !== null && typeof grp["heading"] === "object") {
-      const h = { ...(grp["heading"] as Obj) };
-      delete h["project"];
-      out["heading"] = h;
-    } else {
-      out["heading"] = grp["heading"];
-    }
+    out["heading"] = shapeHeadingNode(grp["heading"]);
     const members = [
       ...asArray(grp["items"]),
       ...flattenGroups(grp["scheduled"]),
@@ -633,6 +687,17 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
     out["upcoming"] = upcoming;
     out["someday"] = someday;
     return out;
+  };
+  // An archived-heading GROUP in the logged region: the archived heading node
+  // (carrying `archived`) + its children nested flat (`items`), each dropping
+  // project/area/heading but KEEPING stage (the group is stage-mixed).
+  const shapeLoggedHeadingGroup = (g: unknown): unknown => {
+    if (g === null || typeof g !== "object") return g;
+    const grp = g as Obj;
+    return {
+      heading: shapeHeadingNode(grp["heading"]),
+      items: shapeList(grp["items"], LOGGED_HEADING_MEMBER_DROP, compact, promoter),
+    };
   };
   const headings = Array.isArray(view["headings"])
     ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
@@ -649,6 +714,7 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
   delete out["scheduled"];
   delete out["repeating"];
   delete out["logged"];
+  delete out["loggedHeadings"];
   // Trashed children live only in `things trash` — never a project-view bucket.
   // Delete defensively in case an untyped source carries the old key.
   delete out["trashed"];
@@ -660,8 +726,13 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
   out["someday"] = someday;
   out["headings"] = headings;
   // A project keeps its in-context `logbook` (a project is a bounded object with
-  // a real done-state); trashed children live only in `things trash`.
-  out["logbook"] = shapeList(view["logged"], cd, compact, promoter);
+  // a real done-state); trashed children live only in `things trash`. The flat
+  // logbook rows KEEP their heading ref (PROJECT_LOGBOOK_DROP.keepHeading).
+  out["logbook"] = shapeList(view["logged"], PROJECT_LOGBOOK_DROP, compact, promoter);
+  // The archived-heading GROUPS of the logged region (HEADARC2-A).
+  out["logbookHeadings"] = Array.isArray(view["loggedHeadings"])
+    ? (view["loggedHeadings"] as unknown[]).map(shapeLoggedHeadingGroup)
+    : [];
   return out;
 }
 

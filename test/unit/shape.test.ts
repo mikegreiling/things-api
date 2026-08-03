@@ -519,8 +519,17 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     // bucket — trashed children live only in `things trash` (the seeded
     // `gone-trash` row is dropped entirely).
     expect((out["logbook"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-log"]);
+    // A flat logbook row KEEPS its heading ref (the in-project toggle labels the
+    // heading — Part 2.3 / HEADARC2-B), flattened with the project-scoped uuid.
+    const logRow = (out["logbook"] as Obj[])[0]!;
+    expect(logRow["heading"]).toBe("Phase 1");
+    expect(logRow["headingUuid"]).toBe("head-1");
+    expect("project" in logRow).toBe(false); // R6 drops the redundant container
+    expect("stage" in logRow).toBe(false); // stage-pure logbook rows
+    // No archived headings here → an empty logbookHeadings sibling.
+    expect(out["logbookHeadings"]).toEqual([]);
     expect("trash" in out).toBe(false);
-    for (const k of ["active", "scheduled", "repeating", "logged", "trashed"])
+    for (const k of ["active", "scheduled", "repeating", "logged", "loggedHeadings", "trashed"])
       expect(k in out).toBe(false);
     // Heading group reshaped to {heading, anytime, upcoming, someday}.
     const grp = (out["headings"] as Obj[])[0]!;
@@ -528,12 +537,87 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect((grp["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["h-anytime"]);
     const hup = grp["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
     expect(hup[0]!.date).toBe("2026-08-05");
-    // Heading-group members drop heading; the heading NODE drops its project ref.
+    // Heading-group members drop heading; the heading NODE drops project + type +
+    // status, and an OPEN heading carries no `archived`.
     expect("heading" in (grp["anytime"] as Obj[])[0]!).toBe(false);
-    expect("project" in (grp["heading"] as Obj)).toBe(false);
+    const headNode = grp["heading"] as Obj;
+    expect("project" in headNode).toBe(false);
+    expect("type" in headNode).toBe(false); // positional: always a heading
+    expect("status" in headNode).toBe(false);
+    expect("archived" in headNode).toBe(false); // open heading
+    expect(headNode["uuid"]).toBe("head-1");
+    expect(headNode["title"]).toBe("Phase 1");
     // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
     expect((out["project"] as Obj)["stage"]).toBe("anytime");
+  });
+
+  it("project-view: a swept ARCHIVED heading becomes a logbookHeadings group with `archived` + nested children", () => {
+    const view = {
+      project: project(),
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      headings: [],
+      logged: [],
+      loggedHeadings: [
+        {
+          heading: {
+            uuid: "arch-1",
+            type: "heading",
+            title: "Done Phase",
+            status: "completed",
+            stopped: new Date("2026-07-20T12:00:00.000Z"),
+            project: { uuid: "proj-1", title: "Q3" },
+          },
+          items: [
+            todo({
+              uuid: "swept-child",
+              status: "completed",
+              logged: true,
+              heading: { uuid: "arch-1", title: "Done Phase" },
+              headingProject: { uuid: "proj-1", title: "Q3" },
+            }),
+            // The odd OPEN child a Put-Back stranded (HEADARC2-C) — rendered.
+            todo({
+              uuid: "odd-open",
+              status: "open",
+              heading: { uuid: "arch-1", title: "Done Phase" },
+              headingProject: { uuid: "proj-1", title: "Q3" },
+            }),
+          ],
+        },
+      ],
+      openChildrenWhileResolved: 0,
+      openChildrenUnderArchivedHeading: 1,
+    };
+    const out = shapeReadPayload("project-view", view, false) as Obj;
+    const groups = out["logbookHeadings"] as Obj[];
+    expect(groups).toHaveLength(1);
+    const g = groups[0]!;
+    const head = g["heading"] as Obj;
+    // The archived heading NODE: type/status/project dropped; `archived` present
+    // (a Date, serialized to a full ISO datetime like `stopped`).
+    expect("type" in head).toBe(false);
+    expect("status" in head).toBe(false);
+    expect("project" in head).toBe(false);
+    expect(head["uuid"]).toBe("arch-1");
+    expect(head["title"]).toBe("Done Phase");
+    expect(head["archived"]).toBeInstanceOf(Date);
+    expect((head["archived"] as Date).toISOString()).toBe("2026-07-20T12:00:00.000Z");
+    // Group children: project/area/heading dropped (group states the heading),
+    // but stage KEPT (mixed — the odd open child is stage `anytime`, not logbook).
+    const items = g["items"] as Obj[];
+    expect(items.map((i) => i["uuid"])).toEqual(["swept-child", "odd-open"]);
+    for (const i of items) {
+      expect("heading" in i).toBe(false);
+      expect("project" in i).toBe(false);
+    }
+    expect(items[0]!["stage"]).toBe("logbook");
+    expect(items[1]!["stage"]).toBe("anytime"); // the odd open child, kept visible
+    // The odd-state advisory count rides the wire.
+    expect(out["openChildrenUnderArchivedHeading"]).toBe(1);
   });
 });
 

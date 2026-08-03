@@ -12,7 +12,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { encodePackedDate, localToday, decodePackedDate } from "../model/dates.ts";
-import type { Heading, IsoDateGroup, Project, Todo } from "../model/entities.ts";
+import type { Heading, IsoDateGroup, Project, Ref, Todo } from "../model/entities.ts";
 import { mapHeading, mapProject, mapTodo, type TaskRow } from "../model/mappers.ts";
 import { fetchTagsForTasks, fetchTaskByUuid, fetchTaskRows, makeRefResolver } from "./queries.ts";
 import { logBoundary, markLogged } from "./log-boundary.ts";
@@ -40,11 +40,26 @@ export interface ProjectHeadingGroup {
   repeating: Todo[];
 }
 
+/**
+ * An ARCHIVED heading rendered inside the logged region (HEADARC2-A). Unlike a
+ * live {@link ProjectHeadingGroup}, an archived heading is itself a logged item,
+ * and its children — ALL of them, whatever their own state — nest beneath it as
+ * a grouped section (most-recently-completed first). That includes any odd OPEN
+ * child a GUI "Put Back" left stranded under the archived heading (HEADARC2-C):
+ * the group renders what is there, it does NOT filter to status=3.
+ */
+export interface LoggedHeadingGroup {
+  /** The archived heading (status "completed"); the wire emits its `archived`. */
+  heading: Heading;
+  /** Every child of the archived heading, most-recently-completed first. */
+  items: Todo[];
+}
+
 export interface ProjectView {
   project: Project;
   /** Open, unscheduled/current UNHEADED children, by index. */
   active: Todo[];
-  /** Headings in project order, each with its own sub-buckets. */
+  /** OPEN headings in project order, each with its own sub-buckets. An archived heading never renders here. */
   headings: ProjectHeadingGroup[];
   /** UNHEADED future-dated children grouped by date ascending. */
   scheduled: IsoDateGroup<Todo>[];
@@ -52,7 +67,20 @@ export interface ProjectView {
   someday: Todo[];
   /** UNHEADED repeating template rows owned by this project (invisible in list views). */
   repeating: Todo[];
+  /**
+   * The flat logged region: swept children of OPEN headings (each carrying its
+   * heading ref) plus swept un-headed children, most-recently-completed first.
+   * Children of ARCHIVED headings are NOT here — they group under their heading
+   * in {@link ProjectView.loggedHeadings}.
+   */
   logged: Todo[];
+  /**
+   * The archived-heading GROUPS of the logged region (HEADARC2-A), in project
+   * (heading `index`) order — each an archived heading with its children nested.
+   * Rendered only under `--show-logged`, after the flat {@link ProjectView.logged}
+   * rows (the flat-then-grouped ordering is a defensible choice, not GUI-probed).
+   */
+  loggedHeadings: LoggedHeadingGroup[];
   /**
    * PLOG1 (additive): count of untrashed OPEN (status=0) children this project
    * still holds while it is ITSELF completed or canceled — including once swept
@@ -63,6 +91,16 @@ export interface ProjectView {
    * child.
    */
   openChildrenWhileResolved: number;
+  /**
+   * HEADARC2-C (additive): count of untrashed OPEN (status=0) children buried
+   * under an ARCHIVED heading of this project — the heading analog of the §6¾
+   * odd state. The GUI's "Put Back" of a trashed open child restores it in place
+   * under the archived heading WITHOUT reopening the heading, leaving an open,
+   * actionable to-do invisible to every live view (reachable only by expanding
+   * this card's logged region). Counted regardless of the PROJECT's own status.
+   * 0 when no archived heading holds an open child.
+   */
+  openChildrenUnderArchivedHeading: number;
 }
 
 export class ProjectNotFoundError extends Error {
@@ -159,32 +197,67 @@ export function projectView(
   }));
   markLogged([project, ...todos.map((t) => t.todo)], boundary);
 
+  // TRINARY heading split (the completion≠logged law, applied to headings): an
+  // OPEN heading — or an archived one NOT yet past the log-move boundary — stays
+  // a LIVE group IN PLACE (an archived-unswept heading carries `archived` yet
+  // renders among the live groups, exactly as a completed-unswept to-do row
+  // stays checked in place, §above / log-boundary.ts). Only a SWEPT archived
+  // heading moves into the logged region as a grouped section (HEADARC2-A).
+  const headingSwept = (h: Heading): boolean =>
+    h.status !== "open" && h.stopped !== null && h.stopped <= boundary;
+  const liveHeadings = headings.filter((h) => !headingSwept(h));
+  const sweptHeadings = headings.filter((h) => headingSwept(h));
+  const liveHeadingSet = new Set(liveHeadings.map((h) => h.uuid));
+  const sweptHeadingSet = new Set(sweptHeadings.map((h) => h.uuid));
+
+  // The owning-project ref stamped on every headed child — so the heading ref a
+  // flat logged row carries promotes its `headingUuid` in the project's scope
+  // (the round-trip predicate is project-scoped), mirroring the list views.
+  const projectRef: Ref = { uuid: project.uuid, title: project.title };
+
   // Project-level (UNHEADED) buckets.
   const active: Todo[] = [];
   const scheduledRows: ScheduledRow[] = [];
   const repeating: Todo[] = [];
   const someday: Todo[] = [];
   const logged: Todo[] = [];
-  // Per-heading sub-buckets, keyed by heading uuid (§9 fidelity fix): a headed
-  // scheduled/someday/repeating child nests under its heading, NOT at the
+  // Children of a SWEPT archived heading — grouped under their heading in the
+  // logged region (keyed by heading uuid), ALL of them regardless of state.
+  const sweptHeadingChildren = new Map<string, Todo[]>();
+  // Per-heading LIVE sub-buckets, keyed by heading uuid (§9 fidelity fix): a
+  // headed scheduled/someday/repeating child nests under its heading, NOT at the
   // project level.
   const headingItems = new Map<string, Todo[]>();
   const headingScheduled = new Map<string, ScheduledRow[]>();
   const headingSomeday = new Map<string, Todo[]>();
   const headingRepeating = new Map<string, Todo[]>();
-  // Known (fetched, untrashed) headings — a child whose heading FK is not one
-  // of these falls back to the project-level (unheaded) buckets rather than
-  // vanishing (mirrors the render's historical loose fallback).
-  const headingSet = new Set(headings.map((h) => h.uuid));
-  const headingUuidOf = (row: TaskRow): string | null =>
-    row.heading !== null && headingSet.has(row.heading) ? row.heading : null;
+  // A child whose heading FK is not a LIVE heading (an unknown/trashed heading,
+  // OR a swept archived heading handled above) falls back to the project-level
+  // (unheaded) buckets rather than vanishing (mirrors the render's loose fallback).
+  const liveHeadingUuidOf = (row: TaskRow): string | null =>
+    row.heading !== null && liveHeadingSet.has(row.heading) ? row.heading : null;
   // Every untrashed, non-template OPEN child, regardless of which bucket it
   // lands in below — surfaced (only when the project is itself resolved) as
   // the PLOG1 stranded-open-child count.
   let openChildren = 0;
+  // Open children buried under a SWEPT archived heading — the §6¾ odd state for
+  // headings (HEADARC2-C), surfaced regardless of the project's own status.
+  let openChildrenUnderArchivedHeading = 0;
 
   for (const { row, todo } of todos) {
-    const h = headingUuidOf(row);
+    if (todo.heading !== null) todo.headingProject = projectRef;
+    // A child of a SWEPT archived heading groups under it in the logged region,
+    // WHATEVER its own state — including the odd OPEN child a GUI Put-Back
+    // stranded (HEADARC2-C): render what is there, do NOT filter to status=3.
+    if (row.heading !== null && sweptHeadingSet.has(row.heading)) {
+      pushInto(sweptHeadingChildren, row.heading, todo);
+      if (row.status === 0 && !todo.repeating.isTemplate) {
+        openChildren += 1; // also stranded when the project itself is resolved
+        openChildrenUnderArchivedHeading += 1;
+      }
+      continue;
+    }
+    const h = liveHeadingUuidOf(row);
     if (todo.repeating.isTemplate) {
       if (h !== null) pushInto(headingRepeating, h, todo);
       else repeating.push(todo);
@@ -231,7 +304,7 @@ export function projectView(
   // section; a heading with any surviving child (in ANY sub-bucket) is kept.
   // With no scope active every heading renders (its own empty state).
   const contentScoped = overdue || tf.sql !== "";
-  const headingGroups: ProjectHeadingGroup[] = headings
+  const headingGroups: ProjectHeadingGroup[] = liveHeadings
     .map((heading) => ({
       heading,
       items: headingItems.get(heading.uuid) ?? [],
@@ -248,6 +321,19 @@ export function projectView(
         g.repeating.length > 0,
     );
 
+  // The logged-region archived-heading groups, in project (heading index) order;
+  // each group's children most-recently-completed first (open odd children, with
+  // no stopDate, sort last — the same null-last convention the flat logged list
+  // uses). Under a content scope (--overdue / --tag) an empty group collapses.
+  const loggedHeadings: LoggedHeadingGroup[] = sweptHeadings
+    .map((heading) => ({
+      heading,
+      items: (sweptHeadingChildren.get(heading.uuid) ?? []).toSorted(
+        (a, b) => (b.stopped?.getTime() ?? 0) - (a.stopped?.getTime() ?? 0),
+      ),
+    }))
+    .filter((g) => !contentScoped || g.items.length > 0);
+
   return {
     project,
     active,
@@ -256,6 +342,8 @@ export function projectView(
     someday,
     repeating,
     logged,
+    loggedHeadings,
     openChildrenWhileResolved: project.status === "open" ? 0 : openChildren,
+    openChildrenUnderArchivedHeading,
   };
 }

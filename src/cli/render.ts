@@ -109,6 +109,14 @@ export interface FormatOpts {
   /** Container uuids already implied by surrounding output — their context suffix is dropped. */
   suppressProject?: string | null;
   suppressArea?: string | null;
+  /**
+   * Hint the row's HEADING (muted `(Heading)`) instead of its container — the
+   * project-view LOGBOOK rows, where a swept child of an OPEN heading labels its
+   * heading (the two-view asymmetry, HEADARC2-B: the in-project logged toggle
+   * labels the heading; the global Logbook labels the project). No-op on a row
+   * with no heading (falls back to the normal container/area hint).
+   */
+  headingContext?: boolean;
   /** Reference instant for date-relative tokens (tests pin this; defaults to now). */
   now?: Date;
   /** Pre-styled Today/Evening mark (★/⏾), rendered right after the box — GUI position. */
@@ -220,21 +228,29 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
         ? ` ${bold(dim("⚑"))}`
         : "";
   const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
+  // A project-view LOGBOOK row hints its HEADING (the in-project logged toggle
+  // labels the heading — HEADARC2-B) rather than the suppressed project.
+  const headingHint =
+    opts.headingContext === true && item.type === "to-do" && item.heading !== null
+      ? ` (${item.heading.title})`
+      : null;
   const context =
-    container !== null
-      ? container.uuid === opts.suppressProject
-        ? ""
-        : // The ↻ prefix (containerLabel) marks a container that is a repeating
-          // TEMPLATE project — the whole `(…)` run is dimmed below, so the mark
-          // rides the muted container styling. Areas never carry the flag. The
-          // fused uuid-prefix rides when the title would not round-trip (shared
-          // promotion predicate — the same one JSON `*Uuid` promotion uses).
-          ` (${containerLabel(container.title, container.isRepeatingTemplate === true)}${promotedRefBracket(container, "project")})`
-      : item.area
-        ? item.area.uuid === opts.suppressArea
+    headingHint !== null
+      ? headingHint
+      : container !== null
+        ? container.uuid === opts.suppressProject
           ? ""
-          : ` (${item.area.title}${promotedRefBracket(item.area, "area")})`
-        : "";
+          : // The ↻ prefix (containerLabel) marks a container that is a repeating
+            // TEMPLATE project — the whole `(…)` run is dimmed below, so the mark
+            // rides the muted container styling. Areas never carry the flag. The
+            // fused uuid-prefix rides when the title would not round-trip (shared
+            // promotion predicate — the same one JSON `*Uuid` promotion uses).
+            ` (${containerLabel(container.title, container.isRepeatingTemplate === true)}${promotedRefBracket(container, "project")})`
+        : item.area
+          ? item.area.uuid === opts.suppressArea
+            ? ""
+            : ` (${item.area.title}${promotedRefBracket(item.area, "area")})`
+          : "";
   // width 0 (the default) means "no column" — show the full uuid untouched.
   const shownUuid = uuidWidth > 0 ? uuidCol(item.uuid, uuidWidth) : item.uuid;
   // Title styling composes four independent channels (docs/design/render-

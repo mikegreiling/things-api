@@ -1189,8 +1189,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "One project's full contents: metadata plus its to-dos grouped under their headings. " +
-        "The tag filters keep only the child to-dos matching by their own tags (a heading left " +
-        "with none is dropped). " +
+        "Open headings (and archived ones not yet swept to the logbook) stay live, carrying " +
+        "archived once archived; a swept archived heading moves into the logged region as a " +
+        "group with its children. The tag filters keep only the child to-dos matching by their " +
+        "own tags (a heading left with none is dropped). " +
         OMIT_EMPTY_NOTE +
         " " +
         REF_RULE_NOTE,

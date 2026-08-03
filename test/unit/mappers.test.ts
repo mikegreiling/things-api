@@ -210,16 +210,22 @@ describe("mapProject / mapHeading", () => {
     expect(project.openUntrashedLeafActionsCount).toBe(2);
   });
 
-  it("maps headings minimally (plus archived-state status)", () => {
+  it("maps headings minimally (plus archived-state status + stopDate)", () => {
     const heading = mapHeading(row({ type: 2, title: "Phase 1", project: null }), refs);
     expect(heading).toEqual({
       uuid: "t-1",
       type: "heading",
       title: "Phase 1",
       status: "open",
+      stopped: null,
       project: null,
     });
-    const archived = mapHeading(row({ type: 2, title: "Done", project: null, status: 3 }), refs);
+    const archived = mapHeading(
+      row({ type: 2, title: "Done", project: null, status: 3, stopDate: 1_780_000_200 }),
+      refs,
+    );
     expect(archived.status).toBe("completed");
+    // The archive timestamp (surfaced as `archivedOn` on a heading GROUP node).
+    expect(archived.stopped?.getTime()).toBe(1_780_000_200_000);
   });
 });

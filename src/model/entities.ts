@@ -175,8 +175,18 @@ export interface Heading {
   uuid: string;
   type: "heading";
   title: string;
-  /** "completed" = archived (a canceled heading is stored as completed). */
+  /**
+   * Internal archive-state axis: "completed" = archived, "open" = live. A
+   * heading has no canceled state (oddity §169: the GUI + our verb vocabulary
+   * for a heading is archive/unarchive, never complete/cancel — the archive
+   * byte IS the stopDate). The read wire does NOT surface this word for a
+   * heading GROUP node; it emits the presence-keyed {@link Heading.stopped} as
+   * `archived` instead (see src/read/shape.ts). Retained here for the write
+   * archive/unarchive result checks and the heading detail render.
+   */
   status: TaskStatus;
+  /** The archive timestamp (the stopDate) — null while the heading is open. */
+  stopped: Date | null;
   /** The owning project. */
   project: Ref | null;
 }
