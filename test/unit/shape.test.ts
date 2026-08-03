@@ -537,6 +537,123 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
   });
 });
 
+describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin of the ↻ glyph)", () => {
+  const tmplProject = { uuid: "proj-1", title: "Weekly Review", isRepeatingTemplate: true };
+
+  it("a DIRECT template-project child carries projectIsTemplate: true on BOTH tiers", () => {
+    const compact = first(
+      shapeReadPayload(
+        "search",
+        [todo({ project: tmplProject, heading: null, headingProject: null })],
+        false,
+      ),
+    );
+    expect(compact["project"]).toBe("Weekly Review");
+    expect(compact["projectIsTemplate"]).toBe(true);
+    const full = first(
+      shapeReadPayload(
+        "search",
+        [todo({ project: tmplProject, heading: null, headingProject: null })],
+        true,
+      ),
+    );
+    expect(full["projectIsTemplate"]).toBe(true); // correctness signal, not detail
+  });
+
+  it("a HEADING-NESTED template-project child marks (the fact rides the merged project ref)", () => {
+    const row = first(
+      shapeReadPayload(
+        "search",
+        [
+          todo({
+            project: null,
+            heading: { uuid: "head-1", title: "Section" },
+            headingProject: tmplProject, // owning project is the template
+          }),
+        ],
+        false,
+      ),
+    );
+    expect(row["project"]).toBe("Weekly Review"); // headingProject merged into project
+    expect(row["projectIsTemplate"]).toBe(true);
+  });
+
+  it("a same-titled OCCURRENCE child (plain container) carries NO marker", () => {
+    const row = first(
+      shapeReadPayload(
+        "search",
+        [
+          todo({
+            project: { uuid: "occ-1", title: "Weekly Review" }, // no isRepeatingTemplate
+            heading: null,
+            headingProject: null,
+          }),
+        ],
+        false,
+      ),
+    );
+    expect(row["project"]).toBe("Weekly Review");
+    expect(row).not.toHaveProperty("projectIsTemplate");
+  });
+
+  it("project-view children drop the project ref → NO orphaned marker (loose + heading-nested)", () => {
+    const view = {
+      // The project card node's OWN template nature rides its `repeating` key (R11),
+      // not this child-container marker — asserted below.
+      project: project({
+        title: "Weekly Review",
+        repeating: {
+          isTemplate: true,
+          isInstance: false,
+          templateUuid: null,
+          nextOccurrence: null,
+        },
+      }),
+      active: [todo({ uuid: "loose", project: tmplProject, heading: null, headingProject: null })],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      headings: [
+        {
+          heading: {
+            uuid: "head-1",
+            type: "heading",
+            title: "Section",
+            status: "open",
+            project: { uuid: "proj-1", title: "Weekly Review" },
+          },
+          items: [
+            todo({
+              uuid: "h-loose",
+              project: null,
+              heading: { uuid: "head-1", title: "Section" },
+              headingProject: tmplProject,
+            }),
+          ],
+          scheduled: [],
+          someday: [],
+          repeating: [],
+        },
+      ],
+      logged: [],
+      trashed: [],
+      openChildrenWhileResolved: 0,
+    };
+    const out = shapeReadPayload("project-view", view, false) as Obj;
+    const loose = (out["anytime"] as Obj[])[0]!;
+    expect("project" in loose).toBe(false); // R6 drops the container in a project view
+    expect("projectIsTemplate" in loose).toBe(false); // marker drops WITH the project ref
+    const grp = (out["headings"] as Obj[])[0]!;
+    const hChild = (grp["anytime"] as Obj[])[0]!;
+    expect("project" in hChild).toBe(false);
+    expect("projectIsTemplate" in hChild).toBe(false);
+    // The project card node exposes its OWN template nature via `repeating` (R11) —
+    // the child-container marker never attaches to the card itself.
+    expect((out["project"] as Obj)["repeating"]).toBeDefined();
+    expect("projectIsTemplate" in (out["project"] as Obj)).toBe(false);
+  });
+});
+
 describe("shapeReadPayload — R11 repeating template/instance split", () => {
   it("template LIST row: repeating present with rule facts; no discriminators, no latestInstance", () => {
     const row = first(

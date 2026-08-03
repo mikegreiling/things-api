@@ -364,7 +364,7 @@ The user-facing bug distilled from §8n's last bullet plus §8g/RSIM-P identity 
 - Compounding it, the template project row itself also appears in Quick Find under the same name as its occurrence project — two identically-named projects, one of which is unreachable from any list view once the search sheet closes.
 - Suggested fix (for the report): either exclude template-side rows from Quick Find (matching the list-view invisibility rule) or badge them with the repeat glyph the way template to-dos are badged in Upcoming. Evidence: [lab/rsim-results.md](lab/rsim-results.md) §RSIM-S Q2 (AX dumps + screenshots of unmarked twin results, gitignored `lab/artifacts/rsim-s-lab/ax/`).
 
-(Our own surfaces resolve this divergence in favor of information: `things search` keeps template children findable for GUI parity but marks the container — `(↻ Project)` glyph + `isRepeatingTemplate` in JSON.)
+(Our own surfaces resolve this divergence in favor of information: `things search` keeps template children findable for GUI parity but marks the container — the `(↻ Project)` glyph on TTY + a flat `projectIsTemplate: true` sibling in JSON.)
 
 ### 8p. A fixed→after-completion reschedule PRESERVES the start-offset and deadline, but RESETS the calendar offsets to the unit nominal (UIC7, 2026-07-26, Things 3.22.11)
 
