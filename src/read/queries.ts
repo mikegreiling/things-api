@@ -915,7 +915,7 @@ export function titleRoundTrips(
 export function makeRefPromoter(db: DatabaseSync): RefPromoter {
   const memo = new Map<string, string | null>();
   const resolve = (kind: RefKind, title: string, projectUuid?: string): string | null => {
-    const key = `${kind} ${projectUuid ?? ""} ${title}`;
+    const key = `${kind}\x00${projectUuid ?? ""}\x00${title}`;
     if (memo.has(key)) return memo.get(key) ?? null;
     const uuid = resolveTitleForRoundTrip(db, kind, title, projectUuid);
     memo.set(key, uuid);
