@@ -57,6 +57,18 @@ export interface LoggedHeadingGroup {
 
 export interface ProjectView {
   project: Project;
+  /**
+   * ALL live (non-logbook, non-trash) children of the project — unheaded AND
+   * headed — in project `index` order, each headed row carrying its `heading`
+   * ref (and `headingProject`). This is the flat wire representation (the read
+   * doctrine's project-view `items[]`): membership in a heading is a per-row
+   * attribute, not a bucket. The structured buckets below (`active`, `headings`,
+   * `scheduled`, …) are the SAME children re-grouped into the GUI's render layout
+   * for the TTY projection — the library owns the clock + `todayIndex`, so the
+   * renderer reconstructs the exact GUI placement from them without re-deriving
+   * dates. The two are always consistent (built from one child fetch).
+   */
+  items: Todo[];
   /** Open, unscheduled/current UNHEADED children, by index. */
   active: Todo[];
   /** OPEN headings in project order, each with its own sub-buckets. An archived heading never renders here. */
@@ -334,8 +346,18 @@ export function projectView(
     }))
     .filter((g) => !contentScoped || g.items.length > 0);
 
+  // The flat wire `items[]`: every LIVE child in project index order (the
+  // `todos` fetch is already `ORDER BY index ASC`). Excludes swept logged rows
+  // (→ `logged`) and children of swept archived headings (→ `loggedHeadings`) —
+  // exactly the rows that leave the live region. Each headed row already carries
+  // its `heading` ref + `headingProject` (stamped in the loop above).
+  const items = todos
+    .map((t) => t.todo)
+    .filter((td) => !td.logged && !(td.heading !== null && sweptHeadingSet.has(td.heading.uuid)));
+
   return {
     project,
+    items,
     active,
     headings: headingGroups,
     scheduled,

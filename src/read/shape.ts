@@ -585,10 +585,15 @@ function flattenGroups(groups: unknown): unknown[] {
 /** Coerce an unknown value to an array (empty when absent). */
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-/** The R6 ref drop for every child bucket of a project view (unheaded members). */
-const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, stage: true };
-/** Heading-group members drop the heading ref too (the group states it). */
-const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
+/**
+ * The flat project-view `items[]` rows (read-shape doctrine §3.12): drop
+ * project/area (the card states them) but KEEP `stage` (the list is stage-MIXED:
+ * anytime + upcoming + someday + closed-unswept), `when`, and the `heading` ref.
+ * The heading ref is kept + flattened even in compact (keepHeading), scoped to
+ * the owning project — flat title + `headingUuid` when the title would not
+ * round-trip — so a consumer reconstructs a heading's members from the rows.
+ */
+const PROJECT_ITEM_DROP: ItemDrop = { project: true, area: true, keepHeading: true };
 /**
  * Project-view LOGBOOK (flat logged) rows: drop project/area (the card states
  * them) + the bucket-implied stage (all rows are logged), but KEEP the heading
@@ -670,27 +675,18 @@ function shapeHeadingNode(src: unknown): unknown {
   return h;
 }
 
-/** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
+/**
+ * Shape a project view (read-shape doctrine §3.12). The live children dissolve
+ * into ONE flat `items[]` in project index order — each row carrying `stage`,
+ * `when`, and its `heading` ref (flat title + project-scoped `headingUuid`
+ * promotion) — so a consumer reconstructs a heading's members by filtering
+ * `items` on `heading`. The stage/date sub-buckets (unheaded anytime/upcoming/
+ * someday and the per-heading nests) are gone; `headings[]` is the live-heading
+ * catalog (its per-heading membership now rides the row refs). The logged region
+ * (`logbook` flat rows + `logbookHeadings` archived groups) is unchanged. The
+ * card node is left full + ancestry-intact.
+ */
 function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
-  const cd = PROJECT_CHILD_DROP;
-  const hd = HEADING_MEMBER_DROP;
-  const shapeHeadingGroup = (g: unknown): unknown => {
-    if (g === null || typeof g !== "object") return g;
-    const grp = g as Obj;
-    const out: Obj = {};
-    out["heading"] = shapeHeadingNode(grp["heading"]);
-    const members = [
-      ...asArray(grp["items"]),
-      ...flattenGroups(grp["scheduled"]),
-      ...asArray(grp["someday"]),
-      ...asArray(grp["repeating"]),
-    ];
-    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact, promoter);
-    out["anytime"] = anytime;
-    out["upcoming"] = upcoming;
-    out["someday"] = someday;
-    return out;
-  };
   // An archived-heading GROUP in the logged region: the archived heading node
   // (carrying `archived`) + its children nested flat (`items`), each dropping
   // project/area/heading but KEEPING stage (the group is stage-mixed).
@@ -702,20 +698,20 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
       items: shapeList(grp["items"], LOGGED_HEADING_MEMBER_DROP, compact, promoter),
     };
   };
+  // The live-heading catalog: each entry is its heading node (index order, incl.
+  // empty headings). Membership rides the flat `items[]` rows' `heading` refs.
   const headings = Array.isArray(view["headings"])
-    ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
+    ? (view["headings"] as unknown[]).map((g) =>
+        g !== null && typeof g === "object"
+          ? { heading: shapeHeadingNode((g as Obj)["heading"]) }
+          : g,
+      )
     : view["headings"];
-  const looseMembers = [
-    ...asArray(view["active"]),
-    ...flattenGroups(view["scheduled"]),
-    ...asArray(view["someday"]),
-    ...asArray(view["repeating"]),
-  ];
-  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact, promoter);
   const out: Obj = { ...view };
   delete out["active"];
   delete out["scheduled"];
   delete out["repeating"];
+  delete out["someday"];
   delete out["logged"];
   delete out["loggedHeadings"];
   // Trashed children live only in `things trash` — never a project-view bucket.
@@ -724,9 +720,10 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
   // The project card NODE keeps everything (children derive their container from
   // it), but is still an item DTO, so the universal + R10 reshapes apply.
   out["project"] = shapeItem(view["project"], NO_DROP, false, promoter);
-  out["anytime"] = anytime;
-  out["upcoming"] = upcoming;
-  out["someday"] = someday;
+  // The flat live children — stage/when/heading kept, project/area dropped (the
+  // card states them). The heading ref is kept + flattened even in compact
+  // (keepHeading), project-scoped like the logbook rows.
+  out["items"] = shapeList(view["items"], PROJECT_ITEM_DROP, compact, promoter);
   out["headings"] = headings;
   // A project keeps its in-context `logbook` (a project is a bounded object with
   // a real done-state); trashed children live only in `things trash`. The flat
