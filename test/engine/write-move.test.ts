@@ -1260,6 +1260,25 @@ function seedForecast(
   });
 }
 
+/** A deadline-forecast PROJECT (PROJDL / #385): someday stage, NO startDate, future deadline. */
+function seedForecastProject(
+  title: string,
+  deadline: string,
+  todayIndex: number,
+  index: number,
+  extra: Partial<Parameters<typeof seedProject>[1]> = {},
+): string {
+  return seedProject(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    deadline,
+    todayIndex,
+    index,
+    ...extra,
+  });
+}
+
 describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383)", () => {
   it("loose forecast rows route to the `day` scope (deadline-cycle), not someday", async () => {
     const a = seedForecast("a", "2026-07-20", -100, 5);
@@ -1362,6 +1381,63 @@ describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383
     });
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") expect(r.refusal).toBe("blocked");
+  });
+
+  it("a lone forecast PROJECT routes to the `day` scope via the update-project deadline-cycle (PROJDL / #385)", async () => {
+    // PROJDL-2a/2b: a forecast project carries the block todayIndex axis and reorders
+    // via the update-project deadline-cycle — `project reorder` must route it to `day`.
+    const fp = seedForecastProject("fp", "2026-07-20", -100, 5);
+    const { vectors, calls } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "project.move", {
+      uuids: [fp],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("2026-07-20 day-group");
+    }
+    // Per-type deadline-cycle: the project's legs went through update-project.
+    expect(calls.every((c) => c === "project.update")).toBe(true);
+    // PROJSTAR-safe: start=2 / startDate NULL / deadline preserved (never de-scheduled,
+    // never accidentally starred — PROJDL-2b).
+    const row = fixture.db
+      .prepare("SELECT start, startDate, deadline, type FROM TMTask WHERE uuid = ?")
+      .get(fp) as { start: number; startDate: number | null; deadline: number; type: number };
+    expect(row.start).toBe(2);
+    expect(row.startDate).toBeNull();
+    expect(row.deadline).toBe(encodePackedDate("2026-07-20"));
+    expect(row.type).toBe(1);
+  });
+
+  it("`todo reorder` intermixes a forecast to-do + forecast PROJECT on ONE day-block (PROJDL-2c)", async () => {
+    // PROJDL-2c: projects + to-dos share the one deadline day-block axis and can be
+    // interleaved to an exact target via a unified reverse-target pass — a project
+    // movee on the `todo reorder` path is legal (not "homogeneous kinds"), routing to
+    // `day` even though its display bucket is someday.
+    const ft = seedForecast("ft", "2026-07-20", -50, 3);
+    const fp = seedForecastProject("fp", "2026-07-20", -150, 8);
+    const idxBefore = indexOrder([fp], `"index"`);
+    const { vectors, calls } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [ft, fp],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    // Interleaved to the requested order on the shared todayIndex axis.
+    expect(ascending(indexOrder([ft, fp], "todayIndex"))).toBe(true);
+    // Per-type legs: the project via update-project, the to-do via todo.update.
+    expect(calls).toContain("project.update");
+    expect(calls).toContain("todo.update");
+    // The project's someday-bucket `index` is byte-identical (deadline-cycle never
+    // touches it) and it stays a forecast project (start=2, startDate NULL).
+    expect(indexOrder([fp], `"index"`)).toEqual(idxBefore);
+    const row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(fp) as { start: number; startDate: number | null };
+    expect(row.start).toBe(2);
+    expect(row.startDate).toBeNull();
   });
 });
 

@@ -1972,6 +1972,24 @@ function seedForecast(
   });
 }
 
+/** A deadline-forecast PROJECT (PROJDL / #385): someday stage, NO startDate, future deadline D. */
+function seedForecastProject(
+  title: string,
+  todayIndex: number,
+  index: number,
+  extra: Partial<Parameters<typeof seedProject>[1]> = {},
+): string {
+  return seedProject(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    deadline: FUTURE_ISO,
+    todayIndex,
+    index,
+    ...extra,
+  });
+}
+
 describe("day scope: DEADLINE-FORECAST rows (DLBNC / #383 — the deadline-cycle)", () => {
   it("forecast-only: lands the exact target block order, someday `index` byte-identical", async () => {
     // DLBNC-3c protocol proof: scramble 3 forecast rows, deadline-cycle to a target.
@@ -2115,6 +2133,86 @@ describe("day scope: DEADLINE-FORECAST rows (DLBNC / #383 — the deadline-cycle
     fixture.db.prepare("UPDATE TMTask SET deadline = NULL WHERE uuid = ?").run(f2);
     const result = await runReorder(hooked, { scope: "day", uuids: [f1, f2] });
     expect(result.kind).toBe("blocked"); // f2 is no longer a member → rejected pre-flight
+  });
+
+  it("dispatches a forecast PROJECT via the update-project deadline-cycle (per-type legs, #385)", async () => {
+    // PROJDL-2b: a forecast project's cycle is `update-project?deadline=` clear + re-set.
+    const fp = seedForecastProject("FP", -100, 5);
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: [fp] });
+    expect(result.kind).toBe("ok");
+    const projLegs = calls.filter((c) => c.includes(`id=${fp}`));
+    expect(projLegs).toHaveLength(2); // deadline= clear + re-set
+    expect(projLegs.every((c) => c.includes("update-project") && c.includes("deadline="))).toBe(
+      true,
+    );
+    expect(projLegs.every((c) => !c.includes("when="))).toBe(true);
+    // The re-set leg carries the SAME deadline byte-identical.
+    expect(projLegs.some((c) => c.includes(`deadline=${FUTURE_ISO}`))).toBe(true);
+    // PROJSTAR-safe: start=2 / startDate NULL / deadline restored / still a project.
+    const row = fixture.db
+      .prepare("SELECT start, startDate, deadline, type FROM TMTask WHERE uuid = ?")
+      .get(fp) as { start: number; startDate: number | null; deadline: number; type: number };
+    expect(row.start).toBe(2);
+    expect(row.startDate).toBeNull();
+    expect(row.deadline).toBe(PACKED_FUTURE);
+    expect(row.type).toBe(1);
+  });
+
+  it("mixed forecast to-do + forecast PROJECT interleave to the exact target; project `index` byte-identical (PROJDL-2c)", async () => {
+    const ft1 = seedForecast("FT1", -50, 3);
+    const fp1 = seedForecastProject("FP1", -150, 4);
+    const ft2 = seedForecast("FT2", -250, 7);
+    const fp2 = seedForecastProject("FP2", -350, 9);
+    const idxBefore = ranks([fp1, fp2], `"index"`);
+    const target = [ft1, fp1, ft2, fp2]; // interleaved to-do/project target
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: target });
+    expect(result.kind).toBe("ok");
+    const order = target.toSorted((a, b) => ranks([a])[0]! - ranks([b])[0]!);
+    expect(order).toEqual(target); // exact mixed interleave on the one axis
+    // Project someday `index` byte-identical (the deadline-cycle never touches it).
+    expect(ranks([fp1, fp2], `"index"`)).toEqual(idxBefore);
+    // PROJSTAR-safe: projects stay start=2 / startDate NULL / type=1.
+    for (const u of [fp1, fp2]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate, deadline, type FROM TMTask WHERE uuid = ?")
+        .get(u) as { start: number; startDate: number | null; deadline: number; type: number };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBeNull();
+      expect(row.deadline).toBe(PACKED_FUTURE);
+      expect(row.type).toBe(1);
+    }
+    // Per-type legs: projects via update-project, to-dos via update.
+    const pLegs = calls.filter((c) => c.includes(`id=${fp1}`) || c.includes(`id=${fp2}`));
+    const tLegs = calls.filter((c) => c.includes(`id=${ft1}`) || c.includes(`id=${ft2}`));
+    expect(pLegs.every((c) => c.includes("update-project"))).toBe(true);
+    expect(tLegs.every((c) => !c.includes("update-project"))).toBe(true);
+  });
+
+  it("forecast PROJECT preserves its area FK across the deadline-cycle (PROJDL-2b')", async () => {
+    const area = seedArea(fixture.db, "A");
+    const fp = seedForecastProject("FP", -100, 5, { area });
+    const { vector } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: [fp] });
+    expect(result.kind).toBe("ok");
+    const row = fixture.db
+      .prepare("SELECT area, start, startDate, deadline FROM TMTask WHERE uuid = ?")
+      .get(fp) as { area: string; start: number; startDate: number | null; deadline: number };
+    expect(row.area).toBe(area); // area link orthogonal to the deadline-cycle
+    expect(row.start).toBe(2);
+    expect(row.startDate).toBeNull();
+    expect(row.deadline).toBe(PACKED_FUTURE);
+  });
+
+  it("membership: computeReorderPre day admits a forecast PROJECT (type=1) as a block member (#385)", () => {
+    const fp = seedForecastProject("FP", -100, 5);
+    const ft = seedForecast("FT", -200, 2);
+    const pre = computeReorderPre(fixture.db, { scope: "day", uuids: [fp, ft] }, null, NOW);
+    const memberIds = pre.members.map((m) => m.uuid);
+    expect(memberIds).toContain(fp);
+    expect(memberIds).toContain(ft);
+    expect(pre.projectMembers).toContain(fp); // typed as a project member
   });
 });
 

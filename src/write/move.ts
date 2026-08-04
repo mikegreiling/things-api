@@ -227,20 +227,23 @@ function scheduleBucket(row: MoveeRow, packedToday: number): string {
 }
 
 /**
- * The packed future-deadline day of a DEADLINE-FORECAST to-do (DLBNC / #383), or
- * null. The §9o forecast cohort: a to-do (type=0) with NO `startDate`, someday/
- * anytime stage (`start IN (1,2)`), and a strictly-FUTURE `deadline` rests on that
- * deadline day's ROOT Upcoming day-block on the shared `todayIndex` axis (UPCDL-1a/
- * §9o, GUI-confirmed DLBNC-1d). It reorders there via the deadline-cycle (URL
- * `deadline=` clear + re-set), NOT the someday/anytime `index` lever — so the
- * planner routes it to the `day` scope keyed on the deadline. INBOX-stage rows
- * (`start=0`) rest OFF the axis (todayIndex=0) — excluded here; projects are not the
- * certified cohort — excluded (type=0 only). A today/past deadline is NOT a future
+ * The packed future-deadline day of a DEADLINE-FORECAST row (DLBNC / #383, #385),
+ * or null. The §9o forecast cohort: a to-do (type=0) OR project (type=1) with NO
+ * `startDate`, someday/anytime stage (`start IN (1,2)`), and a strictly-FUTURE
+ * `deadline` rests on that deadline day's ROOT Upcoming day-block on the shared
+ * `todayIndex` axis (UPCDL-1a/§9o, GUI-confirmed DLBNC-1d; forecast PROJECTS carry
+ * the axis identically — PROJDL-2a/2b/2c, #385). It reorders there via the deadline-
+ * cycle (URL `deadline=` clear + re-set — `update` for a to-do, `update-project`
+ * for a project), NOT the someday/anytime `index` lever — so the planner routes it
+ * to the `day` scope keyed on the deadline. INBOX-stage rows (`start=0`) rest OFF
+ * the axis (todayIndex=0) — excluded here; a today/past deadline is NOT a future
  * day-block (the row renders in its someday/anytime bucket with an overdue badge) —
- * excluded, matching the strictly-future gate scheduled rows use.
+ * excluded, matching the strictly-future gate scheduled rows use. Headings (type=2)
+ * are excluded. PROJSTAR-safe: the project deadline-cycle never flips `start` to 1
+ * (no accidental Today star) and preserves `index`/area-FK/tags (PROJDL-2b/2b').
  */
 function forecastDeadlineDay(row: MoveeRow, packedToday: number): number | null {
-  if (row.type !== 0) return null;
+  if (row.type !== 0 && row.type !== 1) return null;
   if (row.startDate !== null) return null;
   if (row.start !== 1 && row.start !== 2) return null;
   if (row.deadline === null || row.deadline <= packedToday) return null;
@@ -1364,17 +1367,25 @@ export async function runInPlaceReorder(
   // reorder: `today` (O12 — `list "Today"` takes projects inline), `evening` (SIT4
   // EVEORD — projects share the evening axis, per-type bounce legs), and the future
   // day-group scopes (`day`/`tomorrow` — SIT4 DAYBNC + TOMORROWLIST accept area-
-  // less project rows). So on the `todo reorder` path a project movee is legal WHEN
-  // every movee sits in a today/evening/scheduled bucket; the mixed set routes to
-  // one of those scopes (whose wire list is type IN (0,1)). Every OTHER bucket
-  // keeps the homogeneous-kinds refusal, and an ineligible member still fails the
-  // downstream scope guard, so the relaxation never reaches an unvalidated scope.
+  // less project rows; DEADLINE-FORECAST projects join that block via the update-
+  // project deadline-cycle, PROJDL-2a/2c #385). So on the `todo reorder` path a
+  // project movee is legal WHEN every movee sits in a today/evening/scheduled bucket
+  // OR is a deadline-forecast row (whose display bucket is someday/anytime but whose
+  // reorder home is the deadline day-block); the mixed set routes to one of those
+  // scopes (whose wire list is type IN (0,1)). Every OTHER bucket keeps the
+  // homogeneous-kinds refusal, and an ineligible member still fails the downstream
+  // scope guard, so the relaxation never reaches an unvalidated scope.
   const globalAxisIntermix =
     isTodo &&
     rows.length > 0 &&
     rows.every((r) => {
       const b = scheduleBucket(r, packedToday);
-      return b === "today" || b === "evening" || b.startsWith("scheduled:");
+      return (
+        b === "today" ||
+        b === "evening" ||
+        b.startsWith("scheduled:") ||
+        forecastDeadlineDay(r, packedToday) !== null
+      );
     });
   if (wrongKind.length > 0 && !globalAxisIntermix) {
     const list = wrongKind.map((w) => `${w.ref} (${w.kind})`).join(", ");
