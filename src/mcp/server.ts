@@ -2835,7 +2835,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "position the block instead. Refs that span different containers or buckets are refused. " +
         "A Today or This Evening member also holds a slot in its own container, so a set that is " +
         "coherent on BOTH axes is ambiguous — pass `in` to name the axis (the refusal names both " +
-        "choices). The project rows the Today/Evening/day lists intermix with to-dos may be " +
+        "choices). A deadline-forecast set sharing one Upcoming day is dual-axis the same way (the " +
+        "day-block vs its container order); `in: upcoming` or `in: <YYYY-MM-DD>` names the day-block. " +
+        "The project rows the Today/Evening/day lists intermix with to-dos may be " +
         "reordered alongside them. Ordering the Today, Inbox, or Someday lists, a project's " +
         "to-dos, or an area must first be enabled once via `things config set allow-experimental " +
         "true`. To reorder a project's HEADINGS (children follow) use the heading tool's " +
@@ -2849,8 +2851,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .string()
           .optional()
           .describe(
-            "Disambiguate the axis of a Today/This Evening set: today | evening | anytime | " +
-              "someday | inbox, or a project/area/heading ref (uuid or unique title)",
+            "Name the axis to reorder on: today | evening | anytime | someday | inbox, a project/" +
+              "area/heading ref (uuid or unique title), upcoming (the one future day the set " +
+              "shares), or a YYYY-MM-DD day-block",
           ),
         ...dryRunShape,
       },

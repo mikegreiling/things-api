@@ -494,6 +494,25 @@ function indexAxisTargetOf(row: MoveeRow, bounceEnabled: boolean): ScopeTarget {
 }
 
 /**
+ * The INDEX-axis reorder target of a DEADLINE-FORECAST row (§9o dual-citizen) —
+ * its container's someday/anytime `index` order, the alternative to its Upcoming
+ * day-block todayIndex axis. Classified by STRIPPING the deadline so
+ * reorderTargetOf routes to the container index (someday/anytime/project/area/
+ * heading-someday), never the `day` scope the forecast day-block routes to. Used
+ * both to name the container spelling in the dual-axis refusal and to classify a
+ * forecast row that an explicit `--in <container>` / `--in someday|anytime` forces
+ * onto its index axis (the bug-fix: `--in` must never be overridden by the day
+ * auto-route).
+ */
+function forecastIndexTargetOf(
+  row: MoveeRow,
+  packedToday: number,
+  bounceEnabled: boolean,
+): ScopeTarget {
+  return reorderTargetOf({ ...row, deadline: null }, row.type === 0, packedToday, bounceEnabled);
+}
+
+/**
  * True when a row's INDEX-axis target preserves the Today/Evening flag. TWO
  * flag-safe families:
  *   - the NATIVE project/area `index` re-rank writes only `index` (startBucket/
@@ -552,15 +571,48 @@ function describeSetLocation(rows: MoveeRow[], packedToday: number): string {
   return `in the ${buckets.join(" / ")} bucket`;
 }
 
+/** The DIRECT container a row sits in, named for a refusal (its title, or "the loose list"). */
+function describeDirectContainer(deps: WriteDeps, row: MoveeRow): string {
+  const c = indexAxisContainerOf(row);
+  return c === null ? "the loose list" : `"${containerLabel(deps, c)}"`;
+}
+
+/** Per-movee day membership (`uuid on YYYY-MM-DD`, or off-day), for the `--in upcoming` spread refusal. */
+function describeDayMembership(rows: MoveeRow[], packedToday: number): string {
+  return rows
+    .map((r) => {
+      const k = rowDayKey(r, packedToday);
+      return k === null ? `${r.uuid} (not on a future day)` : `${r.uuid} on ${decodePackedDate(k)}`;
+    })
+    .join("; ");
+}
+
 type ParsedIn =
   | { axis: InAxis }
+  // The DAY axis (the Upcoming day-block todayIndex axis) — the alternative to a
+  // forecast row's container index (§9o dual-citizen). `day` is a specific block
+  // (`--in YYYY-MM-DD`); `upcoming` is the proxy for the one future day the whole
+  // set shares (derived via `sharedFutureDay`). Both route to `runDayGroupReposition`.
+  | { day: number }
+  | { upcoming: true }
   | { container: { uuid: string; kind: "project" | "area" | "heading" } }
   | { error: string };
 
-/** Parse a raw `--in <target>` into a list axis or a resolved container ref. */
+/** Parse a raw `--in <target>` into a list axis, a day-axis token, or a container ref. */
 function parseInTarget(deps: WriteDeps, raw: string, rows: MoveeRow[]): ParsedIn {
   const norm = raw.trim().toLowerCase();
   if ((IN_AXES as readonly string[]).includes(norm)) return { axis: norm as InAxis };
+  // Day-axis tokens (checked before container resolution so an ISO date is never
+  // read as a container title). `upcoming` is the shared-future-day proxy; a
+  // YYYY-MM-DD names one exact Upcoming day-block.
+  if (norm === "upcoming") return { upcoming: true };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(norm)) {
+    try {
+      return { day: encodePackedDate(norm) };
+    } catch {
+      return { error: `--in "${raw}" is not a valid calendar date (expected YYYY-MM-DD)` };
+    }
+  }
   if (norm === "loose") {
     return {
       error:
@@ -594,12 +646,16 @@ function parseInTarget(deps: WriteDeps, raw: string, rows: MoveeRow[]): ParsedIn
   return {
     error:
       `--in "${raw}" did not resolve to a project, area, or heading ` +
-      "(or one of today | evening | anytime | someday | inbox)",
+      "(or one of today | evening | anytime | someday | inbox | upcoming | a YYYY-MM-DD day)",
   };
 }
 
 type AxisResolution =
   | { targetOf: (r: MoveeRow) => ScopeTarget; indexAxis?: boolean }
+  // The DAY axis was named explicitly (`--in <YYYY-MM-DD>` / `--in upcoming`):
+  // route straight to `runDayGroupReposition` on this packed day. Membership +
+  // future-ness are already validated here.
+  | { dayAxis: number }
   | { refused: MoveRefused };
 
 /**
@@ -649,14 +705,75 @@ function resolveReorderAxis(
       ? (indexTargets[0] as ScopeTarget)
       : null;
 
-  // Force the CONTAINER index axis for view members, leaving non-view members on
-  // their natural target (used when --in names a container).
-  const indexClassifier = (r: MoveeRow): ScopeTarget =>
-    viewOf(r, packedToday) !== null ? indexAxisTargetOf(r, bounceEnabled) : base(r);
+  // Force the CONTAINER index axis for a dual-axis row, leaving single-axis rows on
+  // their natural target (used when --in names a container or a loose stage list).
+  // A Today/Evening member forces onto its container index (view axis stripped); a
+  // DEADLINE-FORECAST row forces onto its someday/anytime container index (day-block
+  // axis stripped, §9o) — without this a forecast row would classify to the `day`
+  // scope and the explicit `--in` would be overridden by the day route.
+  const indexClassifier = (r: MoveeRow): ScopeTarget => {
+    if (viewOf(r, packedToday) !== null) return indexAxisTargetOf(r, bounceEnabled);
+    if (forecastDeadlineDay(r, packedToday) !== null)
+      return forecastIndexTargetOf(r, packedToday, bounceEnabled);
+    return base(r);
+  };
 
   if (inTarget !== undefined) {
     const parsed = parseInTarget(deps, inTarget, rows);
     if ("error" in parsed) return { refused: refused(op, "usage", parsed.error) };
+
+    // `--in <YYYY-MM-DD>` — one exact Upcoming day-block (the day axis). The date
+    // must be strictly future, and every movee must be a member of that day
+    // (scheduled startDate == date, or a forecast deadline == date per §9o). No
+    // shared-container requirement — a day-block is ONE cross-container axis.
+    if ("day" in parsed) {
+      const day = parsed.day;
+      if (day <= packedToday) {
+        return {
+          refused: refused(
+            op,
+            "usage",
+            `--in ${decodePackedDate(day)} is not a future day — that date is today or in the past; ` +
+              "use --in today to reorder the Today view",
+            "name a strictly-future YYYY-MM-DD day, or --in today for the Today view",
+          ),
+        };
+      }
+      const notMembers = rows.filter((r) => rowDayKey(r, packedToday) !== day);
+      if (notMembers.length > 0) {
+        return {
+          refused: refused(
+            op,
+            "usage",
+            `--in ${decodePackedDate(day)} but these items are not on that day: ` +
+              notMembers.map((r) => r.uuid).join(", ") +
+              " — a movee must be scheduled for it, or carry it as a deadline",
+            "name the day the items actually share, or omit --in if they share one",
+          ),
+        };
+      }
+      return { dayAxis: day };
+    }
+
+    // `--in upcoming` — the single future day the whole set shares (the day axis),
+    // derived via sharedFutureDay. Stage-agnostic across scheduled + forecast, no
+    // container requirement; a set spanning days (or with an off-day member) refuses
+    // with the per-item days listed.
+    if ("upcoming" in parsed) {
+      const day = sharedFutureDay(rows, packedToday);
+      if (day === null) {
+        return {
+          refused: refused(
+            op,
+            "blocked",
+            "--in upcoming needs every item on ONE shared future day, but they are not: " +
+              describeDayMembership(rows, packedToday),
+            "name the exact day with --in YYYY-MM-DD, or reorder one day at a time",
+          ),
+        };
+      }
+      return { dayAxis: day };
+    }
 
     if ("axis" in parsed) {
       const axis = parsed.axis;
@@ -701,27 +818,44 @@ function resolveReorderAxis(
           ),
         };
       }
-      const wrong = rows.filter(
-        (r) =>
-          scheduleBucket(r, packedToday) !== axis ||
-          r.project !== null ||
-          r.area !== null ||
-          r.heading !== null,
-      );
-      if (wrong.length > 0) {
+      // Sanity + membership (spec rule 4). Every movee must BE that stage; and for
+      // anytime/someday every movee must share ONE direct container (same project,
+      // heading, area, or all loose — the index bucket they re-rank in). inbox needs
+      // only the stage check (inbox items are container-less by nature).
+      const wrongStage = rows.filter((r) => scheduleBucket(r, packedToday) !== axis);
+      if (wrongStage.length > 0) {
         return {
           refused: refused(
             op,
             "usage",
-            `--in ${axis} but the items are ${describeSetLocation(rows, packedToday)}` +
-              (rows.some((r) => r.project !== null || r.area !== null || r.heading !== null)
-                ? " (and some are in a container, not loose)"
-                : ""),
-            "omit --in and reorder the items where they are, or move them first",
+            `--in ${axis} but not every item is ${axis}-stage — ` +
+              `${describeSetLocation(wrongStage, packedToday)}: ` +
+              wrongStage.map((r) => r.uuid).join(", "),
+            "omit --in and reorder the items where they are, or reschedule them first",
           ),
         };
       }
-      return { targetOf: base };
+      if (axis !== "inbox") {
+        const containers = new Set(rows.map((r) => structuralKey(r, packedToday)));
+        if (containers.size > 1) {
+          return {
+            refused: refused(
+              op,
+              "usage",
+              `--in ${axis} but the items are in different containers (` +
+                rows.map((r) => `${r.uuid} in ${describeDirectContainer(deps, r)}`).join("; ") +
+                `) — a single --in ${axis} reorder needs them all in one project, heading, or ` +
+                "area, or all loose",
+              "reorder within one container at a time, or move them together first",
+            ),
+          };
+        }
+      }
+      // The stage list axis is an INDEX axis — it suppresses the day auto-route so a
+      // forecast someday/anytime row re-ranks its container index here (the bug-fix:
+      // `--in someday` on a same-day forecast set compiles the index re-rank, not the
+      // deadline day bounce); indexClassifier strips the deadline for that.
+      return { targetOf: indexClassifier, indexAxis: true };
     }
 
     // A container ref (project/area/heading).
@@ -778,6 +912,33 @@ function resolveReorderAxis(
         `--in ${view} to reorder the ${view} view, or ${inSpellingFor(deps, indexTarget)} to reorder within the container`,
       ),
     };
+  }
+  // A FORECAST set coherent on BOTH axes (§9o dual-citizen): every movee a deadline-
+  // forecast member of ONE shared day AND all sharing one container index bucket.
+  // Ambiguous between the day-block (todayIndex) and the container (index) — refuse,
+  // echoing the REAL date and the container/list spelling. Forecast rows are never
+  // Today/Evening members, so this is the forecast twin of the view-member refusal
+  // above. (A forecast set spanning containers, or mixed with scheduled rows, is
+  // coherent on only the day axis → it auto-routes to `day` below, no refusal.)
+  const forecastDay = sharedForecastDay(rows, packedToday);
+  if (rows.length >= 2 && view === null && forecastDay !== null) {
+    const fTargets = rows.map((r) => forecastIndexTargetOf(r, packedToday, bounceEnabled));
+    const fKeys = new Set(fTargets.map(containerKey));
+    const fIndexTarget =
+      fKeys.size === 1 && fTargets[0]?.scope != null ? (fTargets[0] as ScopeTarget) : null;
+    if (fIndexTarget !== null) {
+      const date = decodePackedDate(forecastDay);
+      return {
+        refused: refused(
+          op,
+          "blocked",
+          `these items are forecast members of the ${date} Upcoming day-block that also share ` +
+            `${describeScope(fIndexTarget)} — the reorder is ambiguous between the day-block ` +
+            "(todayIndex slots) and the container (index slots); say which with --in",
+          `--in ${date} to reorder the day-block, or ${inSpellingFor(deps, fIndexTarget)} to reorder within the container`,
+        ),
+      };
+    }
   }
   // A MIXED dual-axis set (some Today/Evening-flagged, some plain, all sharing one
   // flag-safe container index) is NOT ambiguous: the plain members are not view
@@ -1467,6 +1628,23 @@ function hasForecastMember(rows: MoveeRow[], packedToday: number): boolean {
 }
 
 /**
+ * The single shared FORECAST deadline day when EVERY row is a deadline-forecast
+ * member (§9o) of that one day, else null. Stricter than {@link sharedFutureDay}:
+ * a scheduled row (or a forecast row on a different day) breaks it — so a
+ * scheduled-only or scheduled+forecast-mixed set returns null (single-axis, day-
+ * only). Gates the forecast dual-axis refusal: only an all-forecast, one-day set
+ * has a coherent container-index alternative to the day-block.
+ */
+function sharedForecastDay(rows: MoveeRow[], packedToday: number): number | null {
+  const first = rows[0];
+  if (first === undefined) return null;
+  const day = forecastDeadlineDay(first, packedToday);
+  if (day === null) return null;
+  for (const r of rows) if (forecastDeadlineDay(r, packedToday) !== day) return null;
+  return day;
+}
+
+/**
  * Reposition a shared FUTURE day-group on the global todayIndex axis — the SIT4
  * dated `day` bounce (loose/direct-area/headed/cross-container to-dos + area-less
  * project rows, any mix), or the one-call native `list "Tomorrow"` sort when the
@@ -1582,6 +1760,19 @@ async function repositionInPlace(
   // --in is refused here (naming both --in spellings).
   const axis = resolveReorderAxis(deps, op, rows, inTarget, packedToday, verb, position);
   if ("refused" in axis) return axis.refused;
+  // An explicit day-axis token (`--in <YYYY-MM-DD>` / `--in upcoming`) routes straight
+  // to the cross-container day-group reposition — membership + future-ness were
+  // validated in resolveReorderAxis. Mirror the auto-route's scope pick: the native
+  // one-call `tomorrow` sort only for a non-forecast group whose day is tomorrow (that
+  // surface re-dates a forecast row), else the dated `day` bounce.
+  if ("dayAxis" in axis) {
+    const day = axis.dayAxis;
+    const scope =
+      !hasForecastMember(rows, packedToday) && day === packedTomorrowOf(packedToday)
+        ? "tomorrow"
+        : "day";
+    return runDayGroupReposition(deps, op, rows, position, options, scope, day);
+  }
   const targetOf = axis.targetOf;
   // On a forced/auto INDEX axis (a dual-axis set reordered within its container),
   // the display-bucket coherence guards below are the WRONG check: the members
@@ -1603,10 +1794,13 @@ async function repositionInPlace(
   // one surface that serves the mixed group. Otherwise a single UNHEADED PROJECT
   // container's same-day scheduled children ride the cheaper atomic native
   // container-day re-rank (fall through to reorderTargetOf → container-day).
-  // Templates are excluded by sharedFutureDay.
+  // Templates are excluded by sharedFutureDay. The auto-route NEVER fires on a
+  // forced/auto INDEX axis (indexAxis === true): an explicit `--in someday` /
+  // `--in anytime` / `--in <container>` on a same-day forecast set is the certified
+  // container `index` re-rank, and must not be overridden by the day bounce.
   const structKeys = new Set(rows.map((r) => structuralKey(r, packedToday)));
   const sharedDay = sharedFutureDay(rows, packedToday);
-  if (sharedDay !== null) {
+  if (sharedDay !== null && !indexAxis) {
     const forecastInGroup = hasForecastMember(rows, packedToday);
     const soleStruct = structKeys.size === 1 ? (structKeys.values().next().value as string) : null;
     const singleProjectContainer =

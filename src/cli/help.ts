@@ -389,11 +389,11 @@ things reorder <refs…> [position] [--in <target>]
   One kind-neutral in-place verb (replaces the old \`todo reorder\` and the raw
   \`reorder --scope\`). Bare (no position): assemble the items as one block at the
   EARLIEST slot, argument order (--first NOT implied); partial fine. Takes to-dos +
-  the project rows Today/Evening/day lists intermix. A Today/Evening member sits on
-  TWO axes (view + container index) — a set coherent on both is refused; --in picks
-  it: today|evening|anytime|someday|inbox, or a project/area/heading ref. Forcing the
-  container index on a Today/Evening member now PRESERVES the flag — a flag-safe move
-  protocol routes it off the de-Today bounce (only the someday/inbox loose axes refuse).
+  the project rows Today/Evening/day lists intermix. A Today/Evening member, and a
+  forecast set sharing one Upcoming day, sit on TWO axes (view/day-block + container
+  index) — a set coherent on both is refused; --in picks it: today|evening|anytime|
+  someday|inbox, a project/area/heading ref, upcoming, or a YYYY-MM-DD day-block.
+  Forcing a container index on a flagged member PRESERVES the flag (someday/inbox no).
 
 things project move <refs…> [--to-area <ref> | --no-area] [position]
   --no-area is a project's detach (--loose is a to-do word, refused). A position here

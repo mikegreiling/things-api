@@ -315,6 +315,17 @@ This makes those verbs **RESERVED WORDS** in bare-noun sugar position: an area l
 
 It **never fires on a valid move**: every trapped spelling is already a usage error, so the accepted grammar is unchanged. `--inbox` and `--detach` stay genuine `move` flags (never trapped), and a value flag whose value merely looks like a term (`--heading someday`, an area literally named `today`) is left alone — the known value flags are skipped before the positional scan. Exit class is **Usage** (exit 2); under `--json` the suggestion rides `error.details.suggestions`. (`src/cli/move-hint.ts`.)
 
+### The `reorder --in` axis vocabulary
+
+`things reorder` picks a reorder AXIS with `--in <target>`. A row can be a member of more than one sortable bucket at once (a Today/Evening member has a view slot AND a container slot; a deadline-forecast row has an Upcoming day-block slot AND a container someday/anytime slot — the §9o dual-citizen law), so a set coherent on two axes is refused until `--in` names one. The accepted `<target>` values:
+
+- **view axes** — `today` | `evening` (the cross-container `todayIndex` view);
+- **stage list axes** — `anytime` | `someday` | `inbox` (a container's stage list `index`). `anytime`/`someday` require every movee to BE that stage and to share ONE direct container (same project, heading, area, or all loose); `inbox` requires only inbox-stage. A mismatch is refused, naming the offending movee(s). (`loose` is refused — it is a read view, not a reorder bucket.)
+- **container axis** — a project/area/heading ref (uuid or unique title; polymorphic, resolved project → area → heading);
+- **day axes** — `upcoming` (the single future day the whole set shares, derived via `sharedFutureDay`; a set spanning days is refused with the per-item days listed) and `<YYYY-MM-DD>` (one exact Upcoming day-block: every movee must be on that day — scheduled for it or carrying it as a deadline — and the date must be strictly future; a today/past date is refused pointing at `--in today`). Neither day token requires a shared container — a day-block is ONE cross-container sortability bucket.
+
+An explicit stage-list or container axis on a same-day forecast set reorders its CONTAINER index (never the day-block) — the named axis is honored, never overridden by the day auto-route. The refusals (both the dual-axis ambiguity and the token-validation failures) name the concrete working spellings; exit class is **Usage** (validation) or **Blocked** (ambiguity/day-spread). (`src/write/move.ts` `resolveReorderAxis`.)
+
 ## Non-goals (with reasoning)
 
 - **No sentence-like write grammar.** Writes stay one rigid `things <type> <verb> … --flags` form. A flexible, natural-language-ish parser in front of the mutation pipeline is a misparse risk exactly where the stakes are highest, and agents *prefer* one rigid, predictable form over a forgiving one. Sugar is a read-side convenience only.

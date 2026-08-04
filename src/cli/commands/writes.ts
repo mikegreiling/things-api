@@ -2469,7 +2469,9 @@ export function registerWriteCommands(program: Command): void {
             "--before/--after position the block. Operands that span containers or buckets fail " +
             "closed. A Today/Evening member also has an index slot in its container, so a set " +
             "sharing BOTH axes is ambiguous — pass --in to say which (the refusal names both " +
-            "spellings). Ordering uses the native re-rank where available (private surface, on " +
+            "spellings). A deadline-forecast set sharing one Upcoming day is dual-axis the same " +
+            "way (the day-block vs its container order); --in upcoming or --in <YYYY-MM-DD> names " +
+            "the day-block. Ordering uses the native re-rank where available (private surface, on " +
             "by default) and a verified when= bounce otherwise; bounce-max-items caps a bounce, " +
             "bounce-enabled=false refuses bounce-dependent placements rather than degrading. " +
             "For a project's HEADINGS use `things project move-heading`; for sidebar AREAS use " +
@@ -2477,8 +2479,9 @@ export function registerWriteCommands(program: Command): void {
         )
         .option(
           "--in <target>",
-          "disambiguate the axis of a Today/Evening set: today | evening | anytime | someday | " +
-            "inbox, or a project/area/heading ref (uuid or unique title)",
+          "name the axis to reorder on: today | evening | anytime | someday | inbox, a project/" +
+            "area/heading ref (uuid or unique title), upcoming (the one future day the set shares), " +
+            "or a YYYY-MM-DD day-block",
         ),
     ),
   ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {

@@ -1284,9 +1284,13 @@ describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383
     const a = seedForecast("a", "2026-07-20", -100, 5);
     const b = seedForecast("b", "2026-07-20", -200, 9);
     const { vectors, calls } = datedForecastMoveVectors();
+    // A same-day loose forecast set is dual-axis (the Upcoming day-block AND the
+    // loose Someday index) — a BARE reorder now refuses; `--in upcoming` names the
+    // day-block axis this test exercises.
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [a, b],
       position: { at: "first" },
+      in: "upcoming",
     });
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
@@ -1313,9 +1317,12 @@ describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383
     const a = seedForecast("a", "2026-07-06", -100, 3); // deadline == tomorrow
     const b = seedForecast("b", "2026-07-06", -200, 7);
     const { vectors, calls } = datedForecastMoveVectors();
+    // `--in upcoming` names the day-block axis (the bare form is dual-axis-refused);
+    // a forecast group still rides `day`, NEVER the re-dating `list "Tomorrow"` sort.
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [a, b],
       position: { at: "first" },
+      in: "upcoming",
     });
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") {
@@ -1419,9 +1426,11 @@ describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383
     const fp = seedForecastProject("fp", "2026-07-20", -150, 8);
     const idxBefore = indexOrder([fp], `"index"`);
     const { vectors, calls } = datedForecastMoveVectors();
+    // Same day, both loose forecast → dual-axis; `--in upcoming` names the day-block.
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [ft, fp],
       position: { at: "first" },
+      in: "upcoming",
     });
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
@@ -2408,6 +2417,282 @@ describe("reorder --in axis disambiguation (dual-axis Today/Evening members)", (
     const r = await dryReorder([a, b]);
     expect(r.kind).toBe("move-dry-run");
     if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=project");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: `--in` day-axis tokens + forecast dual-axis + list-token tightening
+// ---------------------------------------------------------------------------
+
+describe("reorder --in day-axis tokens (<YYYY-MM-DD> / upcoming)", () => {
+  const dry = (uuids: string[], inTarget?: string) =>
+    runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
+
+  it("--in <ISO-date> routes a shared-day forecast set to the day-block (deadline-cycle)", async () => {
+    const a = seedForecast("a", "2026-07-20", -100, 5);
+    const b = seedForecast("b", "2026-07-20", -200, 9);
+    const { vectors } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+      in: "2026-07-20",
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+  });
+
+  it("--in <ISO-date> routes a shared-day SCHEDULED set to the day-block (no container needed)", async () => {
+    // Cross-container scheduled rows on one future day — the ISO token names the
+    // ONE cross-container sortability bucket (no shared-container requirement).
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const pc = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const ac = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const r = await dry([pc, ac], "2026-07-20");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("--in <today-or-past date> refuses, pointing at --in today", async () => {
+    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dry([a], "2026-07-05");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("not a future day");
+      expect(r.detail).toContain("--in today");
+    }
+  });
+
+  it("--in <ISO-date> refuses a movee not on that day, naming it", async () => {
+    const on = seedForecast("on", "2026-07-20", -100, 3);
+    const off = seedForecast("off", "2026-07-21", -100, 4);
+    const r = await dry([on, off], "2026-07-20");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain(off);
+      expect(r.detail).toContain("not on that day");
+    }
+  });
+
+  it("--in <malformed date> is a usage error", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "active" });
+    const r = await dry([a], "2026-13-40");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("not a valid calendar date");
+    }
+  });
+
+  it("--in upcoming routes the single shared future day to the day-block", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const area = seedArea(fixture.db, "A");
+    const pc = seedTodo(fixture.db, {
+      title: "pc",
+      project: proj,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 10,
+    });
+    const ac = seedTodo(fixture.db, {
+      title: "ac",
+      area,
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 20,
+    });
+    const r = await dry([pc, ac], "upcoming");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("--in upcoming refuses a set spanning days, listing the per-item days", async () => {
+    const d1 = seedTodo(fixture.db, {
+      title: "d1",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: 1,
+    });
+    const d2 = seedTodo(fixture.db, {
+      title: "d2",
+      start: "someday",
+      startDate: "2026-07-21",
+      todayIndex: 1,
+    });
+    const r = await dry([d1, d2], "upcoming");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("2026-07-20");
+      expect(r.detail).toContain("2026-07-21");
+    }
+  });
+});
+
+describe("reorder forecast dual-axis refusal (§9o dual-citizen — bare reorder)", () => {
+  const dry = (uuids: string[], inTarget?: string) =>
+    runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
+
+  it("refuses a bare same-day LOOSE forecast set, naming the real date + the list spelling", async () => {
+    const a = seedForecast("a", "2026-07-20", -100, 3);
+    const b = seedForecast("b", "2026-07-20", -200, 7);
+    const r = await dry([a, b]);
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.detail).toContain("ambiguous");
+      expect(r.detail).toContain("2026-07-20");
+      expect(r.remediation).toContain("--in 2026-07-20");
+      expect(r.remediation).toContain("--in someday");
+    }
+  });
+
+  it("refuses a bare same-day same-PROJECT forecast set, naming the container spelling", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const a = seedForecast("a", "2026-07-20", -100, 3, { project: proj });
+    const b = seedForecast("b", "2026-07-20", -200, 7, { project: proj });
+    const r = await dry([a, b]);
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.remediation).toContain("--in 2026-07-20");
+      expect(r.remediation).toContain('--in "Work"');
+    }
+  });
+
+  it("a forecast set SPANNING containers is single-axis (day only) → auto-routes, no refusal", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedForecast("a", "2026-07-20", -100, 3, { project: proj });
+    const b = seedForecast("b", "2026-07-20", -200, 7); // loose — different index bucket
+    const r = await dry([a, b]);
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("a MIXED scheduled + forecast same-day set is single-axis (day only) → auto-routes", async () => {
+    const sched = seedTodo(fixture.db, {
+      title: "s",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: -50,
+    });
+    const fc = seedForecast("f", "2026-07-20", -150, 4);
+    const r = await dry([sched, fc]);
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+});
+
+describe("reorder --in list-token bug-fix + tightening (spec rules 2/4)", () => {
+  const dry = (uuids: string[], inTarget?: string) =>
+    runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
+
+  it("BUG-FIX: --in someday on a same-day forecast set compiles the INDEX re-rank, not the day bounce", async () => {
+    // Requirement 2: an explicit index axis must never be overridden by the day
+    // auto-route. Loose forecast someday rows → the someday list index re-rank.
+    const a = seedForecast("a", "2026-07-20", -100, 3);
+    const b = seedForecast("b", "2026-07-20", -200, 7);
+    const r = await dry([a, b], "someday");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") {
+      expect(r.plan.placement).toContain("scope=someday");
+      expect(r.plan.placement).not.toContain("scope=day");
+    }
+  });
+
+  it("--in <project> on a same-day forecast set compiles the project index re-rank, not the day bounce", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const a = seedForecast("a", "2026-07-20", -100, 3, { project: proj });
+    const b = seedForecast("b", "2026-07-20", -200, 7, { project: proj });
+    const r = await dry([a, b], "Work");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") {
+      expect(r.plan.placement).toContain("scope=project");
+      expect(r.plan.placement).not.toContain("scope=day");
+    }
+  });
+
+  it("--in someday accepts same-PROJECT someday children (shared direct container)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", project: proj, start: "someday", index: 20 });
+    const r = await dry([a, b], "someday");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=project");
+  });
+
+  it("--in someday refuses movees in DIFFERENT containers, naming them", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const a = seedTodo(fixture.db, { title: "a", project: proj, start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "someday", index: 20 }); // loose
+    const r = await dry([a, b], "someday");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("different containers");
+      expect(r.detail).toContain(a);
+      expect(r.detail).toContain(b);
+    }
+  });
+
+  it("--in someday refuses a movee that is NOT someday-stage, naming it", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "someday", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 20 }); // anytime
+    const r = await dry([a, b], "someday");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("someday-stage");
+      expect(r.detail).toContain(b);
+    }
+  });
+
+  it("--in inbox refuses a non-inbox movee", async () => {
+    const a = seedTodo(fixture.db, { title: "a", start: "inbox", index: 1 });
+    const b = seedTodo(fixture.db, { title: "b", start: "active", index: 2 });
+    const r = await dry([a, b], "inbox");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("inbox-stage");
+    }
+  });
+
+  it("--in anytime accepts a same-AREA anytime set (shared direct container)", async () => {
+    const area = seedArea(fixture.db, "A");
+    const a = seedTodo(fixture.db, { title: "a", area, start: "active", index: 10 });
+    const b = seedTodo(fixture.db, { title: "b", area, start: "active", index: 20 });
+    const r = await dry([a, b], "anytime");
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=area");
   });
 });
 
