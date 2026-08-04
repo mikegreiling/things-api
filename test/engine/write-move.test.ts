@@ -433,6 +433,98 @@ function templateDayMoveVectors() {
   return { vectors: [urlFake, asFake], calls };
 }
 
+/**
+ * GRNDINT combined harness (#393 gate fix): the FULL grand-interleave leg family
+ * in one url+applescript pair — the when= bounce (scheduled to-dos AND projects),
+ * the DLBNC deadline-cycle (forecast to-dos AND projects), and the single-id
+ * `list "Upcoming"` TO-DO-template front-insert (umd-silent). `blockMin` spans
+ * scheduled ∪ forecast ∪ TEMPLATE rows so every class shares ONE todayIndex
+ * min-space (the union of {@link datedForecastMoveVectors} and
+ * {@link templateDayMoveVectors}). A template row is NEVER handed a when=/deadline
+ * leg by the compiler (the §1 crash-path lock); this harness would date it if one
+ * arrived, so a surviving-NULL date/deadline assertion proves the lock held.
+ */
+function grandInterleaveMoveVectors() {
+  const calls: string[] = [];
+  const blockMin = (packed: number): number => {
+    const r = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
+           (startBucket = 0 AND startDate = ?)
+           OR (startDate IS NULL AND deadline = ? AND start IN (1, 2))
+           OR (rt1_nextInstanceStartDate = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
+      )
+      .get(packed, packed, packed) as { m: number | null };
+    return r.m ?? 0;
+  };
+  const applyWhen = (uuid: string, when: string): void => {
+    const packed = when === "today" ? TODAY_PACKED : encodePackedDate(when);
+    const startVal = packed > TODAY_PACKED ? 2 : 1;
+    fixture.db
+      .prepare(
+        `UPDATE TMTask SET start=?, startDate=?, startBucket=0, todayIndex=?, userModificationDate=? WHERE uuid=?`,
+      )
+      .run(startVal, packed, blockMin(packed) - 1, modClock++, uuid);
+  };
+  const applyDeadline = (uuid: string, deadline: string | null): void => {
+    if (deadline === null || deadline === "") {
+      fixture.db
+        .prepare("UPDATE TMTask SET deadline=NULL, userModificationDate=? WHERE uuid=?")
+        .run(modClock++, uuid);
+      return;
+    }
+    const packed = encodePackedDate(deadline);
+    fixture.db
+      .prepare("UPDATE TMTask SET deadline=?, todayIndex=?, userModificationDate=? WHERE uuid=?")
+      .run(packed, blockMin(packed) - 1, modClock++, uuid);
+  };
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as { uuid: string; when?: string; deadline?: string | null };
+      if (inv.op === "todo.update" || inv.op === "project.update") {
+        if (p.deadline !== undefined) applyDeadline(p.uuid, p.deadline);
+        else applyWhen(p.uuid, p.when ?? "");
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(inv) {
+      const p = inv.opParams as { scope: string; uuids: string[] };
+      calls.push(inv.op === "reorder" ? `reorder:${p.scope}` : (inv.op ?? "?"));
+      if (p.scope === "upcoming") {
+        // Single-id TO-DO template front-insert: umd-silent (todayIndex only).
+        const id = p.uuids[0] ?? "";
+        const row = fixture.db
+          .prepare("SELECT rt1_nextInstanceStartDate AS proj FROM TMTask WHERE uuid = ?")
+          .get(id) as { proj: number | null };
+        fixture.db
+          .prepare("UPDATE TMTask SET todayIndex=? WHERE uuid=?")
+          .run(blockMin(row.proj ?? 0) - 1, id);
+      } else {
+        let rank = 1;
+        for (const uuid of p.uuids) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
 function deps(overrides: Partial<WriteDeps> = {}): WriteDeps {
   return {
     db: fixture.db,
@@ -3044,6 +3136,216 @@ describe("reorder global-axis kind intermix (day/Today/Evening — unchanged)", 
     const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [t, p] }, { dryRun: true });
     expect(r.kind).toBe("move-dry-run");
     if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GRNDINT — the mixed-KIND + repeating-template day-block interleave (#393 gate
+// fix + refusal surfacing). Before the fix `globalAxisIntermix` gated only on
+// scheduleBucket/forecastDeadlineDay, so a template row (startDate NULL, no
+// deadline) failed the `.every()` predicate and the whole mixed-kind set was
+// refused UPSTREAM with the "one kind at a time" index-kind error before the
+// day-axis resolver (which #393 taught to admit templates) ever ran — blocking
+// Mike's "both kinds + template, one op" interleave. The predicate now counts a
+// strictly-future template projection as a day-group member, so the set falls
+// through to the `day` resolver exactly like a template-free one.
+// ---------------------------------------------------------------------------
+
+describe("GRNDINT: mixed-kind day-block interleave WITH a repeating template (#393 gate)", () => {
+  const DAY = "2026-07-20"; // a LATER day (not tomorrow) → the `day` leg family
+
+  it("the FULL inventory (scheduled+forecast to-dos AND projects + a to-do template) sorts in ONE `--in <day>` op", async () => {
+    // Every leg family in one set on 2026-07-20:
+    //   scheduled to-do (loose) + scheduled PROJECT (area'd)  → when= bounce
+    //   forecast to-do + forecast PROJECT                     → deadline-cycle
+    //   a repeating TO-DO template (projects 2026-07-20)       → `list "Upcoming"`
+    const sTodo = seedTodo(fixture.db, {
+      title: "s-todo",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -10,
+    });
+    const area = seedArea(fixture.db, "A");
+    const sProj = seedProject(fixture.db, {
+      title: "s-proj",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -20,
+      area,
+    });
+    const fTodo = seedForecast("f-todo", DAY, -30, 3);
+    const fProj = seedForecastProject("f-proj", DAY, -40, 8);
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: -50,
+      recurrenceRule: true,
+      nextInstanceStartDate: DAY,
+    });
+    const tmplBefore = fixture.db
+      .prepare(
+        "SELECT start, startDate, deadline, rt1_recurrenceRule AS rule, rt1_nextInstanceStartDate AS proj, userModificationDate AS umd FROM TMTask WHERE uuid = ?",
+      )
+      .get(tmpl) as Record<string, unknown>;
+
+    const { vectors, calls } = grandInterleaveMoveVectors();
+    // Target order sTodo < sProj < tmpl < fTodo < fProj — a decisively non-default
+    // arrangement that interleaves all three mechanisms and both kinds.
+    const target = [sTodo, sProj, tmpl, fTodo, fProj];
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: target,
+      position: { at: "first" },
+      in: DAY,
+    });
+
+    expect(r.kind).toBe("move-ok"); // NOT refused "one kind at a time"
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    // Every leg family fired: to-do when=/deadline, project when=/deadline, template upcoming.
+    expect(calls).toContain("todo.update");
+    expect(calls).toContain("project.update");
+    expect(calls).toContain("reorder:upcoming");
+    expect(calls).not.toContain("reorder:tomorrow");
+    // Landed the exact interleaved order on the shared todayIndex axis.
+    expect(ascending(indexOrder(target, "todayIndex"))).toBe(true);
+
+    // §1 crash-path lock: the template NEVER received a dated when=/deadline leg —
+    // its start/startDate/deadline/rule/projection/umd are byte-identical; only its
+    // todayIndex moved (the umd-silent `list "Upcoming"` front-insert).
+    const tmplAfter = fixture.db
+      .prepare(
+        "SELECT start, startDate, deadline, rt1_recurrenceRule AS rule, rt1_nextInstanceStartDate AS proj, userModificationDate AS umd FROM TMTask WHERE uuid = ?",
+      )
+      .get(tmpl) as Record<string, unknown>;
+    expect(tmplAfter).toEqual(tmplBefore);
+    expect(tmplAfter.startDate).toBeNull();
+    expect(tmplAfter.deadline).toBeNull();
+  });
+
+  it("REVERSED target — the interleave is decisively re-orderable, not a one-way collapse", async () => {
+    const sTodo = seedTodo(fixture.db, {
+      title: "s-todo",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -10,
+    });
+    const sProj = seedProject(fixture.db, {
+      title: "s-proj",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -20,
+    });
+    const fTodo = seedForecast("f-todo", DAY, -30, 3);
+    const fProj = seedForecastProject("f-proj", DAY, -40, 8);
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: -50,
+      recurrenceRule: true,
+      nextInstanceStartDate: DAY,
+    });
+    const { vectors } = grandInterleaveMoveVectors();
+    // The reverse of the forward target.
+    const reversed = [fProj, fTodo, tmpl, sProj, sTodo];
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: reversed,
+      position: { at: "first" },
+      in: DAY,
+    });
+    expect(r.kind).toBe("move-ok");
+    expect(ascending(indexOrder(reversed, "todayIndex"))).toBe(true);
+  });
+
+  it("dry-run: a mixed to-do + project + template set routes to scope=day (was refused pre-fix)", async () => {
+    const todo = seedTodo(fixture.db, {
+      title: "t",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -10,
+    });
+    const proj = seedForecastProject("p", DAY, -20, 8);
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: -30,
+      recurrenceRule: true,
+      nextInstanceStartDate: DAY,
+    });
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [todo, proj, tmpl], position: { at: "first" }, in: DAY },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("the fix is scoped to the day axis — a mixed set + template on a forced INDEX axis still refuses", async () => {
+    // `--in someday` forces the container index axis (kinds NEVER intermix there),
+    // so a mixed to-do + project + template set is still the "one kind at a time"
+    // refusal — the template disjunct must not leak the relaxation onto an index token.
+    const todo = seedTodo(fixture.db, { title: "t", start: "someday" });
+    const proj = seedProject(fixture.db, { title: "P", start: "someday" });
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      recurrenceRule: true,
+      nextInstanceStartDate: DAY,
+    });
+    const r = await runInPlaceReorder(deps(), "todo.move", {
+      uuids: [todo, proj, tmpl],
+      in: "someday",
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+    }
+  });
+});
+
+describe("GRNDINT: H-REORDER-SCOPE placement blocks surface as the canonical top-level refusal", () => {
+  const DAY = "2026-07-20";
+
+  it("experimental-off template refusal HOISTS to move-refused (blocked + H-REORDER-SCOPE), not move-leg-failed", async () => {
+    // A template-bearing day-group needs the native private reorder surface (a dated
+    // when=/deadline leg CRASHES a template). With allow-experimental off the day
+    // bounce refuses inside runBounce with the ratified H-REORDER-SCOPE copy. Because
+    // nothing landed (pure reposition), that block must surface as the CANONICAL
+    // top-level refusal (refusal=blocked → exit 4, named hazard) — NOT buried under a
+    // generic move-leg-failed with a verify-failed code.
+    const sTodo = seedTodo(fixture.db, {
+      title: "s-todo",
+      start: "someday",
+      startDate: DAY,
+      todayIndex: -10,
+    });
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: -20,
+      recurrenceRule: true,
+      nextInstanceStartDate: DAY,
+    });
+    const { vectors } = templateDayMoveVectors();
+    const r = await runInPlaceReorder(
+      deps({ vectors, config: { ...config(), allowExperimental: false } }),
+      "todo.move",
+      { uuids: [tmpl, sTodo], position: { at: "first" }, in: DAY },
+    );
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("blocked");
+      expect(r.hazard).toBe("H-REORDER-SCOPE");
+      expect(r.detail).toContain("allow-experimental is off");
+      expect(r.detail).toContain(tmpl); // names the template
+      expect(r.remediation).toBeDefined();
+    }
   });
 });
 

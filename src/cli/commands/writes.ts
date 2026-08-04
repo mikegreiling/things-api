@@ -583,12 +583,19 @@ function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeM
           : result.refusal === "unsupported"
             ? ExitCode.Unsupported
             : ExitCode.Blocked;
+      // A hoisted placement block names its hazard — surface it with the canonical
+      // `blocked:<hazard>` code + `BLOCKED (<hazard>)` copy, exactly as a direct
+      // `things reorder` hazard block does (emitResult "blocked" case).
+      const jsonCode =
+        result.hazard !== undefined
+          ? blockedCode({ hazard: result.hazard, reason: "hazard" })
+          : result.refusal;
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
             errorEnvelope(
               {
-                code: result.refusal,
+                code: jsonCode,
                 message: result.detail,
                 ...(result.remediation !== undefined && { remediation: result.remediation }),
                 ...(result.candidates !== undefined && {
@@ -600,8 +607,14 @@ function emitMoveResult(result: MoveResult, opts: WriteFlagOpts, meta: EnvelopeM
           )}\n`,
         );
       } else {
+        const prefix =
+          result.refusal === "usage"
+            ? "error"
+            : result.hazard !== undefined
+              ? `BLOCKED (${result.hazard})`
+              : result.refusal.toUpperCase();
         process.stderr.write(
-          `${result.refusal === "usage" ? "error" : result.refusal.toUpperCase()}: ${result.detail}\n` +
+          `${prefix}: ${result.detail}\n` +
             (result.remediation !== undefined ? `  remediation: ${result.remediation}\n` : ""),
         );
       }
