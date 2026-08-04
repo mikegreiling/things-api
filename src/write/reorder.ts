@@ -453,9 +453,20 @@ function bounceFallbackOk(
   return { ...d, fallbackNote: fallbackNoteFor(deps, protocol) };
 }
 
+/**
+ * Whether the native `_private_experimental_ reorder` command is available — the
+ * config gate is on AND the app still declares it in its sdef (the canary). The
+ * `day`-scope template leg family gates on this too: a repeating TO-DO template's
+ * only safe day-block placement is the native single-id `list "Upcoming"` front-
+ * insert (a dated when= leg CRASHES a template, §1), so a day-group carrying any
+ * template requires the native surface (else it refuses honestly, naming them).
+ */
+function nativeReorderAvailable(deps: WriteDeps): boolean {
+  return deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+}
+
 function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecision {
-  const nativeAvailable =
-    deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+  const nativeAvailable = nativeReorderAvailable(deps);
 
   // Scopes whose ONLY surface is the bounce (no native command reaches them).
   const bounceOnly: Partial<Record<ReorderScope, { kind: BounceKind; what: string }>> = {
@@ -565,6 +576,14 @@ function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecisi
     // this case exists only for switch exhaustiveness.
     case "heading-someday":
       return { kind: "ok", strategy: "native" };
+    // `upcoming` is an INTERNAL per-template front-insert leg (the `day` bounce
+    // dispatches it via runMutation directly — TMPLSORT-1); it never reaches the
+    // strategy resolver. Blocked here for exhaustiveness / defence in depth.
+    case "upcoming":
+      return blocked(
+        "the `upcoming` scope is an internal per-template front-insert leg, not a user reorder scope",
+        "reorder a template's day-block via `things todo reorder` on its day (the planner routes it)",
+      );
   }
 }
 
@@ -877,24 +896,35 @@ async function runBounce(
     const firstRow =
       firstUuid !== undefined
         ? (deps.db
-            .prepare("SELECT startDate, startBucket, deadline, start FROM TMTask WHERE uuid = ?")
+            .prepare(
+              "SELECT startDate, startBucket, deadline, start, rt1_nextInstanceStartDate AS proj, " +
+                "(rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL) AS isTemplate " +
+                "FROM TMTask WHERE uuid = ?",
+            )
             .get(firstUuid) as
             | {
                 startDate: number | null;
                 startBucket: number;
                 deadline: number | null;
                 start: number;
+                proj: number | null;
+                isTemplate: number;
               }
             | undefined)
         : undefined;
+    // The day D: a template's PROJECTION day (rt1_nextInstanceStartDate), else a
+    // scheduled row's startDate, else a forecast row's deadline (mirrors
+    // computeReorderPre so the when= legs and the member set agree on D).
     dayPacked =
       firstRow === undefined
         ? null
-        : firstRow.startDate !== null && firstRow.startBucket === 0
-          ? firstRow.startDate
-          : firstRow.startDate === null && (firstRow.start === 1 || firstRow.start === 2)
-            ? firstRow.deadline
-            : null;
+        : firstRow.isTemplate === 1
+          ? firstRow.proj
+          : firstRow.startDate !== null && firstRow.startBucket === 0
+            ? firstRow.startDate
+            : firstRow.startDate === null && (firstRow.start === 1 || firstRow.start === 2)
+              ? firstRow.deadline
+              : null;
     const iso = decodePackedDate(dayPacked);
     backValue = iso ?? localToday(now());
     awayValue = iso !== null ? addDaysIso(iso, 1) : localToday(now());
@@ -1050,6 +1080,83 @@ async function runBounce(
     return result;
   }
 
+  // TMPLSORT/PTMPL template leg families (the `day` scope only — the native
+  // `tomorrow` one-call wire carries templates as ordinary members). A repeating
+  // template's projection is a first-class day-block member, but a dated when=/
+  // deadline leg CRASHES it (§1), so it NEVER receives one. Split per class:
+  //   - TO-DO template: a single-id `list "Upcoming"` NATIVE front-insert leg
+  //     (TMPLSORT-1), interleaved into the reverse-target dispatch on the shared
+  //     block min-space (TMPLSORT-2). Needs the native surface.
+  //   - PROJECT template: byte-UNTOUCHED under the SUFFIX RULE — it has no headless
+  //     reach on an arbitrary future day (PTMPL-B: only `list "Tomorrow"` / a GUI
+  //     drag place it), so every movable front-inserts ABOVE it. Accept only a wire
+  //     where the project templates form a suffix in their CURRENT relative order;
+  //     refuse otherwise, naming the one achievable arrangement.
+  // The whole day dispatch is experimental-gated when ANY template is present.
+  const memberInfo = new Map(pre.members.map((m) => [m.uuid, m] as const));
+  const isTmpl = (u: string): boolean => memberInfo.get(u)?.isTemplate === true;
+  const isProjectTemplate = (u: string): boolean => isTmpl(u) && memberInfo.get(u)?.type === 1;
+  const templatesPresent = bounceKind === "day" && coBounce.some(isTmpl);
+  let dispatchRun = coBounce;
+  if (templatesPresent) {
+    const dayIso = decodePackedDate(dayPacked) ?? "the target day";
+    const templateRefusal = (detail: string, remediation: string): MutationResult => {
+      const result: MutationResult = {
+        kind: "blocked",
+        op: "reorder",
+        reason: "hazard",
+        hazard: "H-REORDER-SCOPE",
+        detail,
+        remediation,
+      };
+      auditSummary(deps, params, startedAt, "blocked:H-REORDER-SCOPE", null, {
+        pre: preRanks,
+        txnId,
+        actor,
+      });
+      return result;
+    };
+    if (!nativeReorderAvailable(deps)) {
+      // C(iii): refuse honestly, NAMING the templates — never a dated leg (crash),
+      // never a silent skip, never a partial sort.
+      const tmpls = coBounce.filter(isTmpl);
+      return templateRefusal(
+        `the ${dayIso} day-group contains repeating template(s) [${tmpls.join(", ")}] whose ` +
+          "day-block placement needs the native private reorder surface (a dated when= leg CRASHES " +
+          `a template — §1/§9e), but it is unavailable (${nativeUnavailableReason(deps)})`,
+        "enable it with `things config set allow-experimental true` (and keep Things updated so the " +
+          "sdef canary passes), or reorder the day-group without the template(s)",
+      );
+    }
+    // PROJECT-template SUFFIX RULE.
+    const projectTemplates = coBounce.filter(isProjectTemplate);
+    if (projectTemplates.length > 0) {
+      const suffix = coBounce.slice(coBounce.length - projectTemplates.length);
+      const suffixContiguous = suffix.every(isProjectTemplate);
+      // Their achievable order is their CURRENT todayIndex (render) order — untouched.
+      const currentOrder = projectTemplates.toSorted(
+        (a, b) => (memberInfo.get(a)?.rank ?? 0) - (memberInfo.get(b)?.rank ?? 0),
+      );
+      const orderPreserved = suffixContiguous && suffix.every((u, i) => u === currentOrder[i]);
+      if (!orderPreserved) {
+        const movables = coBounce.filter((u) => !isProjectTemplate(u));
+        const achievable = [...movables, ...currentOrder];
+        return templateRefusal(
+          `a repeating PROJECT template cannot be placed above a movable item on the ${dayIso} ` +
+            "day-block, and project templates cannot change their relative order there — an arbitrary " +
+            "future day gives a project template no headless reach (PTMPL-B: only the Tomorrow one-call " +
+            "sort, when the day is tomorrow, or a GUI drag place it). The only arrangement this " +
+            `day-group can reach headlessly is: ${achievable.join(", ")} (every movable above the ` +
+            "project template(s), which keep their current relative order)",
+          "request that arrangement (place the project template(s) last, in their current order), or " +
+            "drag the project template in the app; if the day is tomorrow, reorder on Tomorrow instead",
+        );
+      }
+    }
+    // Movables + to-do templates dispatch; project templates are the untouched suffix.
+    dispatchRun = coBounce.filter((u) => !isProjectTemplate(u));
+  }
+
   // Front-insert contexts (loose/area-direct) place last-first (reverse iterate,
   // unshift); back-insert contexts (heading/project children) place first-first
   // (forward iterate, push). Either way `placed` holds the current top-to-bottom
@@ -1057,8 +1164,8 @@ async function runBounce(
   // collapse (array order == result index order for both directions).
   const order =
     direction === "front"
-      ? coBounce.map((_, i) => coBounce.length - 1 - i)
-      : coBounce.map((_, i) => i);
+      ? dispatchRun.map((_, i) => dispatchRun.length - 1 - i)
+      : dispatchRun.map((_, i) => i);
 
   // BOUNCEJSON collapse (§9i): when the placement (`back`) leg is when=anytime
   // into a loose/heading-container bucket, the whole N-item round-trip collapses
@@ -1080,12 +1187,22 @@ async function runBounce(
     // single when= round-trip.
     let legNaming = `when=${awayValue} → when=${backValue}`;
     if (bounceKind === "day") {
-      const fN = coBounce.filter((u) => forecastLegOf(u) !== null).length;
-      const sN = coBounce.length - fN;
+      const ttN = coBounce.filter((u) => isTmpl(u) && !isProjectTemplate(u)).length;
+      const ptN = coBounce.filter(isProjectTemplate).length;
+      const fN = coBounce.filter((u) => !isTmpl(u) && forecastLegOf(u) !== null).length;
+      const sN = coBounce.length - fN - ttN - ptN;
       const bits: string[] = [];
       if (sN > 0) bits.push(`${sN} scheduled via when=${awayValue} → when=${backValue}`);
       if (fN > 0)
         bits.push(`${fN} deadline-forecast via deadline-cycle (deadline= clear + re-set)`);
+      if (ttN > 0)
+        bits.push(
+          `${ttN} to-do template(s) via single-id \`list "Upcoming"\` front-insert (umd-silent)`,
+        );
+      if (ptN > 0)
+        bits.push(
+          `${ptN} project template(s) left byte-untouched (suffix rule — no headless reach)`,
+        );
       legNaming = bits.join("; ");
     }
     const invocation = useJson
@@ -1133,9 +1250,9 @@ async function runBounce(
   const placed: string[] = [];
   for (let step = 0; step < order.length; step++) {
     const i = order[step] as number;
-    const uuid = coBounce[i] as string;
+    const uuid = dispatchRun[i] as string;
     const remainingBefore = () =>
-      direction === "front" ? coBounce.slice(0, i + 1) : coBounce.slice(i);
+      direction === "front" ? dispatchRun.slice(0, i + 1) : dispatchRun.slice(i);
 
     // Concurrent-edit re-check: the item must still be an eligible member.
     const memberProblem = checkStillMember(deps, uuid, bounceKind, containerUuid, now(), dayPacked);
@@ -1159,6 +1276,74 @@ async function runBounce(
         remaining: remainingBefore(),
         cause: null,
       };
+    }
+
+    // A repeating TO-DO template rides ONE native single-id `list "Upcoming"` front-
+    // insert leg (TMPLSORT-1) — NEVER a dated when=/deadline leg (§1 crash). It front-
+    // inserts on the SAME shared block min-space as the when=/deadline families, so the
+    // reverse-target dispatch interleaves it exactly (TMPLSORT-2). Project templates are
+    // excluded from `dispatchRun` (the untouched suffix), so only to-do templates reach
+    // this branch; the leg is umd-silent (§9r — disclosed in the result note).
+    if (isTmpl(uuid)) {
+      const tmplLeg = await runMutation(
+        deps,
+        "reorder",
+        { scope: "upcoming", uuids: [uuid], named: [uuid] },
+        legOptions(options, txnId),
+      );
+      if (tmplLeg.kind !== "ok") {
+        auditSummary(
+          deps,
+          params,
+          startedAt,
+          "verify-failed:mismatch",
+          { placed: [...placed] },
+          { pre: preRanks, txnId, actor },
+        );
+        return {
+          kind: "bounce-aborted",
+          op: "reorder",
+          detail:
+            `the native \`list "Upcoming"\` front-insert leg failed for repeating template ${uuid} ` +
+            "— it was NOT moved (its position is unchanged)",
+          placed: [...placed],
+          remaining: remainingBefore(),
+          cause: tmplLeg,
+        };
+      }
+      if (direction === "front") placed.unshift(uuid);
+      else placed.push(uuid);
+      const tmplPrefix = await pollUntilVerified(
+        () =>
+          evaluateDelta(
+            { mode: "ordering", key: rankKey, sequence: [...placed] },
+            createDbReader(deps.db),
+            { modDates: {}, fields: {} },
+          ),
+        options.verifyTimeoutMs ?? 4000,
+        deps.poller ?? {},
+      );
+      if (tmplPrefix.kind !== "ok") {
+        auditSummary(
+          deps,
+          params,
+          startedAt,
+          "verify-failed:mismatch",
+          { placed: [...placed] },
+          { pre: preRanks, txnId, actor },
+        );
+        return {
+          kind: "bounce-aborted",
+          op: "reorder",
+          detail:
+            `placed items fell out of order after front-inserting template ${uuid} (concurrent ` +
+            "edit?); re-run the reorder once Things is idle",
+          placed: [...placed],
+          remaining: direction === "front" ? dispatchRun.slice(0, i) : dispatchRun.slice(i + 1),
+          cause: null,
+        };
+      }
+      continue;
     }
 
     // leg 1 sends the item AWAY from its resting bucket; leg 2 returns it — the
@@ -1268,7 +1453,7 @@ async function runBounce(
           `placed items fell out of order after bouncing ${uuid} (concurrent edit?); ` +
           "re-run the reorder once Things is idle",
         placed: [...placed],
-        remaining: direction === "front" ? coBounce.slice(0, i) : coBounce.slice(i + 1),
+        remaining: direction === "front" ? dispatchRun.slice(0, i) : dispatchRun.slice(i + 1),
         cause: null,
       };
     }
@@ -1278,6 +1463,29 @@ async function runBounce(
   const observed: Record<string, unknown> = {};
   for (const uuid of coBounce) observed[uuid] = reader.rankOf(uuid, rankKey);
   auditSummary(deps, params, startedAt, "ok", observed, { pre: preRanks, txnId, actor });
+  // §9r disclosure: a template's `list "Upcoming"` front-insert leg is
+  // userModificationDate-SILENT (a umd-diffing sync/watcher misses it), and a project
+  // template left as the untouched suffix moved not at all — surface both so the caller
+  // never mistakes a umd-silent placement for a no-op.
+  const warnings: string[] = [];
+  if (templatesPresent) {
+    const tt = coBounce.filter((u) => isTmpl(u) && !isProjectTemplate(u));
+    const pt = coBounce.filter(isProjectTemplate);
+    if (tt.length > 0) {
+      warnings.push(
+        `${tt.length} repeating to-do template(s) were front-inserted via \`list "Upcoming"\` and ` +
+          "are userModificationDate-SILENT (a umd-diffing sync/watcher will not see the move): " +
+          tt.join(", "),
+      );
+    }
+    if (pt.length > 0) {
+      warnings.push(
+        `${pt.length} repeating project template(s) were left byte-untouched as the day-block suffix ` +
+          "(no headless reach on this day — every movable was placed above them): " +
+          pt.join(", "),
+      );
+    }
+  }
   return {
     kind: "ok",
     op: "reorder",
@@ -1288,6 +1496,7 @@ async function runBounce(
     // A bounce reorder is a summary txn, so its token is the txn id (matches
     // the audit record's undoToken); pass it to `things undo --txn <token>`.
     undoToken: txnId,
+    ...(warnings.length > 0 && { warnings }),
     // Co-bounced siblings the anchor placement re-inserted (honest disclosure).
     ...(touchedUnnamed.length > 0 && { touched: touchedUnnamed }),
   };
@@ -3011,7 +3220,8 @@ function checkStillMember(
   const packedToday = encodePackedDate(localToday(now));
   const row = deps.db
     .prepare(
-      "SELECT status, trashed, startBucket, startDate, start, type, area, project, heading, deadline " +
+      "SELECT status, trashed, startBucket, startDate, start, type, area, project, heading, deadline, " +
+        "rt1_recurrenceRule AS rule, repeater, rt1_nextInstanceStartDate AS proj " +
         "FROM TMTask WHERE uuid = ?",
     )
     .get(uuid) as
@@ -3026,6 +3236,9 @@ function checkStillMember(
         project: string | null;
         heading: string | null;
         deadline: number | null;
+        rule: unknown;
+        repeater: unknown;
+        proj: number | null;
       }
     | undefined;
   if (row === undefined) return "the item no longer exists";
@@ -3098,6 +3311,13 @@ function checkStillMember(
       // A concurrent edit that re-dates, de-schedules, evenings, clears the deadline,
       // or drops the row to the Inbox (start=0) ejects it from the group.
       if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
+      // A repeating TEMPLATE stays a day-block member via its PROJECTION day
+      // (rt1_nextInstanceStartDate — TMPLSORT/PTMPL), not startDate/deadline.
+      if (row.rule !== null || row.repeater !== null) {
+        return row.proj === dayPacked
+          ? null
+          : "the template's projection day changed (its recurrence rule was edited)";
+      }
       const scheduled =
         row.startBucket === 0 && row.startDate !== null && row.startDate === dayPacked;
       const forecast =

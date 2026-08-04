@@ -522,7 +522,18 @@ export type ReorderScope =
   | "container-day"
   | "day"
   | "heading-someday"
-  | "tomorrow";
+  | "tomorrow"
+  // TMPLSORT/PTMPL template day-block wiring — an INTERNAL leg scope, never a user
+  // scope and never routed through the strategy resolver / planner. The `day` bounce
+  // dispatches one per repeating TO-DO template in the group: a single-id
+  // `_private_experimental_ reorder to dos in list "Upcoming" with ids "<template>"`
+  // NATIVE front-insert (TMPLSORT-1 — the template's todayIndex front-inserts below
+  // the block min, umd-silent, no reparent, no crash), interleaved into the reverse-
+  // target dispatch on the SAME shared block min-space as the when=/deadline families
+  // (TMPLSORT-2). Compiles the `list "Upcoming"` specifier with the sent id only (no
+  // wire extension); gated by allow-experimental + the sdef canary like every native
+  // reorder. NEVER a full-block sort — the day dispatch owns block ordering.
+  | "upcoming";
 export type ReorderStrategy = "native" | "bounce";
 
 export interface ReorderParams {

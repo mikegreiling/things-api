@@ -39,6 +39,16 @@ export interface ReorderMember {
   startBucket: number | null;
   /** 0 = to-do, 1 = project. */
   type: number;
+  /**
+   * Repeating TEMPLATE row (rt1_recurrenceRule or repeater set). Only the day-block
+   * scopes (`day`/`tomorrow`) admit templates as members (their projection is a
+   * first-class todayIndex member — TMPLSORT/PTMPL); every other scope's query keeps
+   * `NOT_TEMPLATE_ROW`, so this is always false there. The `day`/`tomorrow` dispatch
+   * reads it to split the per-class leg family (a TO-DO template rides a single-id
+   * `list "Upcoming"`/`list "Tomorrow"` native front-insert; a PROJECT template is
+   * byte-untouched under the suffix rule — never a when=/deadline leg, the §1 crash).
+   */
+  isTemplate: boolean;
 }
 
 export interface ReorderPre {
@@ -843,12 +853,15 @@ export function isRepeatingTemplate(task: AnyTask | null): boolean {
 
 const NOT_TEMPLATE_ROW = "(rt1_recurrenceRule IS NULL AND repeater IS NULL)";
 
+const TEMPLATE_ROW = "(rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)";
+
 interface MemberRow {
   uuid: string;
   title: string;
   rank: number;
   startBucket: number | null;
   type: number;
+  isTemplate: boolean;
 }
 
 /**
@@ -889,18 +902,47 @@ export function computeReorderPre(
     params.scope === "evening" ||
     params.scope === "container-day" ||
     params.scope === "day" ||
-    params.scope === "tomorrow"
+    params.scope === "tomorrow" ||
+    params.scope === "upcoming"
       ? "todayIndex"
       : "index";
 
+  const rowsOf = (
+    where: string,
+    binds: (string | number)[],
+    rankCol: string,
+    templateClause: string,
+  ): MemberRow[] =>
+    (
+      db
+        .prepare(
+          `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate
+           FROM TMTask
+           WHERE trashed = 0 AND status = 0 AND ${templateClause} AND ${where}
+           ORDER BY ${rankCol} ASC`,
+        )
+        .all(...binds) as unknown as (Omit<MemberRow, "isTemplate"> & { isTemplate: number })[]
+    ).map((r) => {
+      const m: MemberRow = {
+        uuid: r.uuid,
+        title: r.title,
+        rank: r.rank,
+        startBucket: r.startBucket,
+        type: r.type,
+        isTemplate: r.isTemplate === 1,
+      };
+      return m;
+    });
+
+  // Every scope EXCEPT the day-block scopes excludes templates (NOT_TEMPLATE_ROW).
   const select = (where: string, binds: (string | number)[], rankCol: string): MemberRow[] =>
-    db
-      .prepare(
-        `SELECT uuid, title, ${rankCol} AS rank, startBucket, type FROM TMTask
-         WHERE trashed = 0 AND status = 0 AND ${NOT_TEMPLATE_ROW} AND ${where}
-         ORDER BY ${rankCol} ASC`,
-      )
-      .all(...binds) as unknown as MemberRow[];
+    rowsOf(where, binds, rankCol, NOT_TEMPLATE_ROW);
+  // The `day`/`tomorrow` day-block scopes ADMIT templates as first-class members
+  // (their strictly-future projection sits on the block todayIndex axis — TMPLSORT/
+  // PTMPL); the leg family in reorder.ts splits per class (never a when=/deadline leg
+  // on a template — the §1 crash).
+  const selectWithTemplates = (where: string, binds: (string | number)[]): MemberRow[] =>
+    rowsOf(where, binds, "todayIndex", "1=1");
 
   let members: MemberRow[] = [];
   const rejectedCandidates = new Map<string, string>();
@@ -1105,24 +1147,34 @@ export function computeReorderPre(
       const first =
         firstUuid !== undefined
           ? (db
-              .prepare("SELECT startDate, startBucket, deadline, start FROM TMTask WHERE uuid = ?")
+              .prepare(
+                "SELECT startDate, startBucket, deadline, start, rt1_nextInstanceStartDate AS proj, " +
+                  `${TEMPLATE_ROW} AS isTemplate FROM TMTask WHERE uuid = ?`,
+              )
               .get(firstUuid) as
               | {
                   startDate: number | null;
                   startBucket: number;
                   deadline: number | null;
                   start: number;
+                  proj: number | null;
+                  isTemplate: number;
                 }
               | undefined)
           : undefined;
+      // The day D read off the first requested uuid: a scheduled row's startDate, a
+      // forecast row's deadline, or a TEMPLATE's projection day (rt1_nextInstanceStart
+      // Date — TMPLSORT/PTMPL). Threaded into all three member cohorts below.
       const dayPacked: number | null =
         first === undefined
           ? null
-          : first.startDate !== null && first.startBucket === 0
-            ? first.startDate
-            : first.startDate === null && (first.start === 1 || first.start === 2)
-              ? first.deadline
-              : null;
+          : first.isTemplate === 1
+            ? first.proj
+            : first.startDate !== null && first.startBucket === 0
+              ? first.startDate
+              : first.startDate === null && (first.start === 1 || first.start === 2)
+                ? first.deadline
+                : null;
       if (dayPacked !== null) {
         const scheduled = select(
           "type IN (0, 1) AND startBucket = 0 AND startDate = ?",
@@ -1138,15 +1190,24 @@ export function computeReorderPre(
           [dayPacked],
           "todayIndex",
         );
-        // One shared todayIndex axis (DLBNC-1d): merge + re-sort into block order.
-        members = [...scheduled, ...forecast].toSorted((a, b) => a.rank - b.rank);
+        // Repeating TEMPLATE projections on day D (TMPLSORT-3c / PTMPL-B5): to-do AND
+        // project templates whose rt1_nextInstanceStartDate == D render on the SAME
+        // block todayIndex axis. Admitted as members so the dispatch can split the
+        // per-class leg family; a PROJECT template is byte-untouched under the suffix
+        // rule, a TO-DO template front-inserts via a single-id `list "Upcoming"` leg.
+        const templates = selectWithTemplates(
+          `type IN (0, 1) AND ${TEMPLATE_ROW} AND rt1_nextInstanceStartDate = ?`,
+          [dayPacked],
+        );
+        // One shared todayIndex axis (DLBNC-1d / TMPLSORT-2): merge + re-sort to block order.
+        members = [...scheduled, ...forecast, ...templates].toSorted((a, b) => a.rank - b.rank);
       }
-      // A requested TEMPLATE gets the §9e/§1 teaching reason (a dated when= leg
-      // CRASHES a template); an INBOX-stage row (start=0) carrying this deadline is
-      // OFF the block axis (todayIndex=0, §9o — the axis assignment is gated on
-      // start IN (1,2), not the bare deadline), so it is refused with an honest,
-      // unprobed-membership reason rather than a guess. Area-direct project rows are
-      // scheduled members (SIT5 AREAPROJDAY).
+      // An INBOX-stage row (start=0) carrying this deadline is OFF the block axis
+      // (todayIndex=0, §9o — the axis assignment is gated on start IN (1,2), not the
+      // bare deadline), so it is refused with an honest, unprobed-membership reason.
+      // Templates are NO LONGER rejected — they are first-class day-block members above
+      // (their leg family, never a dated when= leg, is compiled in reorder.ts). Area-
+      // direct project rows are scheduled members (SIT5 AREAPROJDAY).
       for (const uuid of params.uuids) {
         const t = db
           .prepare(
@@ -1163,14 +1224,7 @@ export function computeReorderPre(
             }
           | undefined;
         if (t === undefined) continue;
-        if (t.rule !== null || t.repeater !== null) {
-          rejectedCandidates.set(
-            uuid,
-            "is a repeating template — sending it a dated when= leg CRASHES the app (oddity §9e/§1), " +
-              "so dated ordering cannot include it",
-          );
-          continue;
-        }
+        if (t.rule !== null || t.repeater !== null) continue;
         if (
           dayPacked !== null &&
           t.start === 0 &&
@@ -1196,34 +1250,47 @@ export function computeReorderPre(
       // ranks it in position — so members are type IN (0,1), and a project row is a
       // valid MOVEE here (the ONLY reorder scope that accepts one on the day axis).
       // The day is read off the first requested uuid; the planner guarantees it is
-      // tomorrow. Templates excluded by NOT_TEMPLATE_ROW.
+      // tomorrow. Repeating TEMPLATES whose projection == tomorrow are ALSO first-
+      // class members of this one-call wire (TMPLSORT-3c-Tomorrow to-do templates /
+      // PTMPL-B5 project templates: the native `list "Tomorrow"` reorder places a
+      // template at its exact sent slot, umd-silent, no reparent, no crash) — the
+      // native surface is the ONE safe way to position a template on the day axis.
       const firstUuid = params.uuids[0];
       const first =
         firstUuid !== undefined
           ? (db
-              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
-              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+              .prepare(
+                "SELECT startDate, startBucket, rt1_nextInstanceStartDate AS proj, " +
+                  `${TEMPLATE_ROW} AS isTemplate FROM TMTask WHERE uuid = ?`,
+              )
+              .get(firstUuid) as
+              | {
+                  startDate: number | null;
+                  startBucket: number;
+                  proj: number | null;
+                  isTemplate: number;
+                }
+              | undefined)
           : undefined;
-      if (first?.startDate != null && first.startBucket === 0) {
-        members = select(
+      const dayPacked: number | null =
+        first === undefined
+          ? null
+          : first.isTemplate === 1
+            ? first.proj
+            : first.startBucket === 0
+              ? first.startDate
+              : null;
+      if (dayPacked !== null) {
+        const scheduled = select(
           "type IN (0, 1) AND startBucket = 0 AND startDate = ?",
-          [first.startDate],
+          [dayPacked],
           "todayIndex",
         );
-      }
-      // A repeating TEMPLATE gets the §9e teaching reason (the reorder SKIPS
-      // template rows) rather than the generic non-member reason.
-      for (const uuid of params.uuids) {
-        const t = db
-          .prepare("SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?")
-          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
-        if (t !== undefined && (t.rule !== null || t.repeater !== null)) {
-          rejectedCandidates.set(
-            uuid,
-            "is a repeating template — the private reorder SKIPS template rows (oddity §9e), " +
-              "so the Tomorrow day-sort cannot include it",
-          );
-        }
+        const templates = selectWithTemplates(
+          `type IN (0, 1) AND ${TEMPLATE_ROW} AND rt1_nextInstanceStartDate = ?`,
+          [dayPacked],
+        );
+        members = [...scheduled, ...templates].toSorted((a, b) => a.rank - b.rank);
       }
       break;
     }
@@ -1237,6 +1304,19 @@ export function computeReorderPre(
         [containerUuid ?? ""],
         `"index"`,
       );
+      break;
+    }
+    case "upcoming": {
+      // INTERNAL per-template front-insert leg (the `day` dispatch, TMPLSORT-1). The
+      // sent id(s) are TRUSTED day-block members already validated by the day
+      // dispatch — populate directly (so the H-REORDER-SCOPE guard passes) and let
+      // the wire be the sent id(s) only (no extension). Never a user scope.
+      if (params.uuids.length > 0) {
+        members = selectWithTemplates(
+          `uuid IN (${params.uuids.map(() => "?").join(", ")})`,
+          params.uuids,
+        );
+      }
       break;
     }
   }
@@ -1294,6 +1374,7 @@ export function computeReorderPre(
       rank: m.rank,
       startBucket: m.startBucket,
       type: m.type,
+      isTemplate: m.isTemplate,
     })),
     rejected,
     duplicates,
