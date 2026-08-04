@@ -1,0 +1,80 @@
+{
+  "golden": "things-lab-golden-v2",
+  "builtAt": "2026-08-03T22:00:00Z",
+  "buildMethod": "in-place Things update in a things-lab-golden-v1 clone (drift-runbook DRIFT-1 in-place path): swapped Things3.app 3.22.11->3.22.12, warm-up launch (schema migration none — DB stayed v26), then baked the AXVM1 L3-accessibility grant. All v1 human-seeded layers (seed dataset, TCC AppleEvents/FDA/Screen-Recording, disruption-monitor LaunchAgent, six Shortcuts proxies) inherited byte-for-byte via APFS COW clone.",
+  "derivedFrom": "things-lab-golden-v1",
+  "baseImage": "ghcr.io/cirruslabs/macos-sequoia-vanilla:latest",
+  "thingsVersion": "3.22.12",
+  "thingsCfBundleVersion": "32212016",
+  "thingsZipSha256": "105d693ae60283fbf24d62573ca5dd309c2d44883b3c5b586014a8d21d0dead0",
+  "thingsSdefSha256": "1b6752334207f68cdcb7e71dfc34a21407095bd239afe5df6b3cdd8e2c70cde0",
+  "sdefNote": "byte-identical to the 3.22.11 golden-v1 sdef; still declares `_private_experimental_ reorder to dos in` (reorder canary surface unchanged)",
+  "trialFirstLaunch": "2026-07-03 03:14:28 +0000",
+  "trialFirstLaunchIso": "2026-07-03T03:14:28Z",
+  "pinnedDate": "2026-07-05",
+  "guestClockNote": "guest free-runs (networktime off); all trial math uses GUEST wall-clock. Trial data inherited from v1 (in-place app update does NOT reset the trial); 13 days remaining at the pinned date, confirmed in the build screenshots.",
+  "uriSchemeAuthToken": "9dFi9fY-QBuqFq59yAUxOg",
+  "settings": {
+    "groupTodayByParent": false,
+    "thingsCloudDeclined": true,
+    "thingsUrlsEnabled": true,
+    "shortcutsBulkEditWithoutConfirmation": true,
+    "thingsAutoUpdateDisabled": true
+  },
+  "schemaFingerprint": "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
+  "schemaNote": "databaseVersion 26, fingerprint byte-identical to golden-v1 under Things 3.22.12 — 3.22.12 is a BEHAVIORAL-only update (zero schema delta); no new baseline required.",
+  "seedManifest": "sha256:e77c4b254291b6b76806201304eb9f8b3c74c8b6e4681667987de5872a14f9e8",
+  "humanLayersDone": [
+    "L2",
+    "L3-appleevents",
+    "L3-fulldisk",
+    "L3-accessibility",
+    "L4-launchagent",
+    "L6-seed-dataset",
+    "L5-shortcuts"
+  ],
+  "consentResidue": "one trashed L5-CONSENT-PROJ (type=1) from the v1 L5 consent absorption run — not in the seed manifest; probe assertions tolerate it (inherited from v1).",
+  "shortcutsConsent": "output-class actions Always-Allowed on the golden (headless in clones); delete-class actions have no Always-Allow and re-prompt every run (tier-3, oddities 5j).",
+  "tcc": {
+    "appleEvents_sshd": "granted (inherited from v1 base image; both Things3 + System Events work prompt-free)",
+    "fullDiskAccess_sshd": "granted (inherited from v1 base image; kTCCServiceSystemPolicyAllFiles)",
+    "accessibility": "granted to /usr/libexec/sshd-keygen-wrapper (kTCCServiceAccessibility auth_value=2; user-path System-Settings toggle driven by tccd, SIP stayed ENABLED). NEW in v2 — the AXVM1 L3-accessibility layer.",
+    "screenRecording": "granted (monitor + sshd) — inherited from v1."
+  },
+  "axvm1Layer": {
+    "grantedTo": "/usr/libexec/sshd-keygen-wrapper",
+    "service": "kTCCServiceAccessibility",
+    "authValue": 2,
+    "method": "user-path toggle in System Settings > Privacy & Security > Accessibility, authenticated admin/admin at the 'Privacy & Security is trying to modify your system settings' sheet, driven headless via vncdotool at framebuffer 2048x1536 (toggle 1642,332; password 1017,870; Modify Settings 1017,963) — the AXVM1 recipe, unchanged from 3.22.11.",
+    "sipEnabled": true,
+    "verification": {
+      "axMenuBarRead": "exit 0 — 'tell process Things3 to get name of every menu of menu bar 1' returns Apple, Things, File, Edit, View, Items, Window, Help (was -1719 ungranted)",
+      "countWindows": "exit 0, returns 1 (the DLBNC -25211 failure mode is GONE)",
+      "keystroke": "exit 0 (the DLBNC 1002 failure mode is GONE)",
+      "payoffSmoke": "AXVM1-d re-run under 3.22.12: selected LAB-REPEAT-DAILY by things:///show handle, pressed Items>Repeat>Pause purely by element NAME via System Events over SSH -> rt1_instanceCreationPaused 0->1; Resume restored 0->0 (template left clean). Synthesized UI input LANDS and mutates DB state.",
+      "reboot Persistence": "auth_value=2 survived a guest reboot; post-reboot AX menu read exit 0 (AXVM1-e re-confirmed under 3.22.12) — bakeable, and baked."
+    },
+    "unblocks": "the parked AX-dependent residuals (template-drag byte-capture, forecast-row GUI-drag capture, the reschedule-bounce mechanism, the section-6 .ips crash capture) — a SEPARATE follow-up sitting on this golden."
+  },
+  "seedCounts": {
+    "areas": 2,
+    "tags": 10,
+    "todos": 26,
+    "projects": 5,
+    "headings": 2,
+    "checklistItems": 3,
+    "trashed": 1,
+    "repeatingTemplates": 2
+  },
+  "l5Progress": {
+    "sittingCompleted": "2026-07-09 (inherited from v1)",
+    "proxies": [
+      "things-proxy-create-heading {title, project(uuid)}",
+      "things-proxy-edit-title {id(uuid), title}",
+      "things-proxy-delete-items {id(uuid)}",
+      "things-proxy-delete-items-permanently {id(uuid), Delete Immediately}",
+      "things-proxy-set-detail {id(uuid), detail, value}",
+      "things-proxy-find-items {search}"
+    ]
+  }
+}

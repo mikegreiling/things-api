@@ -15,7 +15,7 @@ source lab/scripts/env.sh
 python3 - <<'EOF'
 import json, sys
 from datetime import datetime, timedelta
-meta = json.load(open("docs/lab/golden-v1-metadata.json"))
+meta = json.load(open("docs/lab/golden-v2-metadata.json"))
 first = datetime.strptime(meta["trialFirstLaunchIso"], "%Y-%m-%dT%H:%M:%SZ")
 pinned = datetime.strptime(meta["pinnedDate"], "%Y-%m-%d")
 expiry = first + timedelta(days=15)

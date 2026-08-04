@@ -25,7 +25,7 @@ import {
 import type { DbSnapshot, ExecutionRecord, ProbeSpec, SuiteSpec, VerdictsFile } from "./types.ts";
 
 const REPO_ROOT = new URL("../..", import.meta.url).pathname;
-const GOLDEN = "things-lab-golden-v1";
+const GOLDEN = "things-lab-golden-v2";
 const GUEST_HARNESS = "things-lab/harness";
 const GUEST_RUN = "things-lab/run";
 const MIN_FREE_GB = 10;
@@ -54,7 +54,7 @@ export interface RunOutcome {
 export async function executeRun(options: RunOptions): Promise<RunOutcome> {
   const suite = JSON.parse(readFileSync(options.suitePath, "utf8")) as SuiteSpec;
   const metadata = JSON.parse(
-    readFileSync(join(REPO_ROOT, "docs/lab/golden-v1-metadata.json"), "utf8"),
+    readFileSync(join(REPO_ROOT, "docs/lab/golden-v2-metadata.json"), "utf8"),
   ) as GoldenMetadata;
   const seed = JSON.parse(
     readFileSync(join(REPO_ROOT, "docs/lab/seed-manifest.json"), "utf8"),

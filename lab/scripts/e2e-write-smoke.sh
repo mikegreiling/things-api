@@ -24,7 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[e2e] cloning golden -> $VM"
-tart clone things-lab-golden-v1 "$VM"
+tart clone things-lab-golden-v2 "$VM"
 (tart run "$VM" --no-graphics >"$ARTIFACTS/tart-run.log" 2>&1 &)
 IP=$(lab_wait_for_ssh "$VM" 300)
 echo "[e2e] ssh up at $IP"

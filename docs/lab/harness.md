@@ -2,6 +2,17 @@
 
 The harness executes **probe suites** (JSON, `lab/suites/`) against a fresh clone of the frozen golden image and judges every probe against locked expectations. It is the machine that produced/re-validates the capability matrix, and later the CI regression gate (any verdict/tier delta = a Things update moved the write surface).
 
+## Golden images (index)
+
+The runner clones the **active** golden by name (`lab/runner/run.ts` `GOLDEN`) and asserts its schema fingerprint against the matching `docs/lab/golden-v<N>-metadata.json`.
+
+| Golden | Things | DB | AX layer | Status | Notes |
+|---|---|---|---|---|---|
+| `things-lab-golden-v2` | **3.22.12** (build 32212016) | v26 · `sha256:784bd2f6…` | **L3-accessibility granted** (sshd-keygen-wrapper, `auth_value=2`) | **ACTIVE** | Built 2026-08-03 in-place from a v1 clone (drift-runbook DRIFT-1 path): Things 3.22.11→3.22.12 swap (schema + sdef byte-identical — behavioral-only update), all v1 human-seeded layers inherited via APFS COW, plus the AXVM1 grant baked + verified ([golden-v2-metadata.json](golden-v2-metadata.json)). |
+| `things-lab-golden-v1` | 3.22.11 (build 32211007) | v26 · `sha256:784bd2f6…` | none | **superseded-pending-deletion** | Retained on disk (~25 GB reclaimable). Deletion is the maintainer's call, only after v2 is confirmed certified ([golden-v1-metadata.json](golden-v1-metadata.json)). |
+
+The **AXVM1 L3-accessibility layer** (new in v2) grants Accessibility to the sshd-osascript responsible process so future sittings can synthesize real UI input (clicks/drags/keystrokes via System Events / CGEventPost) — see [axvm1-accessibility.md](axvm1-accessibility.md) for the recipe and [golden-v2-metadata.json](golden-v2-metadata.json) `axvm1Layer` for the 3.22.12 verification record (menu-bar read exit 0, `count windows`/keystroke succeed, the AXVM1-d Pause-by-name payoff smoke flips `rt1_instanceCreationPaused` 0→1, grant persists across reboot). It unblocks the parked AX-dependent residuals (template-drag byte-capture, forecast-row GUI-drag capture, the reschedule-bounce mechanism, the §6 `.ips` crash capture) — a separate follow-up sitting on this golden.
+
 ## Version-stamping (mandatory policy)
 
 Every campaign/evidence doc in `docs/lab/` MUST state, in its header, the Things version it was probed under **and** the golden id it ran against (e.g. `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05). This is not optional decoration — it is the provenance that makes a result re-checkable when a later app build moves the surface. **Evidence docs are IMMUTABLE snapshots:** they are never re-stamped or version-amended when a law is re-confirmed under a new golden — a re-confirmation accrues in the living ledger ([assumption-register](../reference/assumption-register.md), *Confirmed under* column), never by editing the historical evidence. The register is the one doc whose version list grows; every other campaign doc names exactly the golden it was born under.
@@ -21,7 +32,7 @@ Requirements: host GUI session (tart needs an unlocked keychain), `tart` + `sshp
 
 1. **Preflight** — tools present, golden exists, ≥10GB free, stray run-VMs deleted (2-VM ceiling).
 2. **Clone + boot** — `tart clone` (APFS COW, instant) → `tart run --no-graphics` on default NAT (headless but full Aqua session). `--net-host` is deliberately **not** used: on current Tart it is implemented via Softnet, which requires passwordless root on the *host*. Boot output is captured to `tart-run.log` in the artifacts dir.
-3. **Bootstrap** — **airgap guest-side** by deleting the guest's default route (SSH survives on the directly connected vmnet subnet; internet/updaters/phone-home become unroutable — verified by a failed ping each run); pin the guest clock to the golden's `pinnedDate` **before Things ever launches** (neutralizes trial expiry, freezes Today semantics); assert the disruption-monitor LaunchAgent is running; one warm-up launch+quit of Things (recomputes Today buckets / repeat instances for the pinned date, so probes see steady state); pull a consistent DB copy and **assert the schema fingerprint** against `docs/lab/golden-v1-metadata.json` — mismatch aborts the run.
+3. **Bootstrap** — **airgap guest-side** by deleting the guest's default route (SSH survives on the directly connected vmnet subnet; internet/updaters/phone-home become unroutable — verified by a failed ping each run); pin the guest clock to the golden's `pinnedDate` **before Things ever launches** (neutralizes trial expiry, freezes Today semantics); assert the disruption-monitor LaunchAgent is running; one warm-up launch+quit of Things (recomputes Today buckets / repeat instances for the pinned date, so probes see steady state); pull a consistent DB copy and **assert the schema fingerprint** against the active golden's `docs/lab/golden-v2-metadata.json` — mismatch aborts the run.
 4. **Execute** — push `lab/guest/probe-runner.py` + suite + context (auth token, pinned date, seed-manifest UUIDs); the guest runs probes **serially**, hazard-group probes (crash risk) quarantined last.
 5. **Collect** — execution records, per-probe snapshots, `events.ndjson`, final DB copy, crash reports → `lab/artifacts/<runId>/` (gitignored).
 6. **Evaluate (host-side)** — snapshot diffing, disruption tiers, assertions → `evidence/<probe>.json` + `verdicts.json` + console summary.
