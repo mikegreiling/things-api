@@ -219,6 +219,20 @@ if grep -q 'userModificationDate-SILENT' <<<"$LAST_OUT"; then
 else
   echo "FAIL to-do-template interleave missing the umd-silent disclosure"; FAILURES=$((FAILURES + 1))
 fi
+# #393 gate fix: a MIXED to-do + PROJECT + to-do TEMPLATE day set now interleaves in
+# ONE op. Before the fix `globalAxisIntermix` gated only on scheduleBucket/forecast, so
+# a template row failed the `.every()` predicate and the whole mixed-kind set was refused
+# UPSTREAM ("one kind at a time") before the day-axis resolver ran. Seed a 07-06 scheduled
+# PROJECT to join the 07-06 to-dos + template (the project template projects 07-12, a
+# different day, so it can't join this 07-06 op — that's why this uses a plain project).
+run_step 0 "seed GI scheduled PROJECT (07-06)" project add "E2E-GI-P1" --when 2026-07-06
+GI_P1=$(json_get "d['data']['uuid']")
+run_step 0 "mixed-kind grand interleave: to-do + PROJECT + to-do-template in ONE op (#393 gate)" reorder "$GI_S1" "$GI_P1" "$TEMPLATE_UUID" "$GI_F1" --in 2026-07-06
+if grep -q 'userModificationDate-SILENT' <<<"$LAST_OUT"; then
+  echo "ok   mixed-kind interleave accepted (was refused pre-fix) + umd-silent disclosure"
+else
+  echo "FAIL mixed-kind to-do+project+template interleave refused or missing disclosure"; FAILURES=$((FAILURES + 1))
+fi
 # project arm: SCHEDULED + DEADLINE-FORECAST projects + the PROJECT template — the
 # project template is the byte-untouched SUFFIX (no headless reach on a non-tomorrow
 # day). ACCEPT (template last) vs REFUSE (template above a movable, H-REORDER-SCOPE).
@@ -233,23 +247,25 @@ else
   echo "FAIL project-template suffix accept missing the byte-untouched disclosure"; FAILURES=$((FAILURES + 1))
 fi
 # Non-conformant suffix: the project template requested ABOVE a movable → refused with
-# the ratified H-REORDER-SCOPE copy naming the one achievable arrangement (exit 3).
-run_step 3 "project-template suffix REFUSE (template above a movable)" project move "$GP_S1" "$PROJ_TEMPLATE_UUID" "$GP_F1" --first
-if grep -q 'H-REORDER-SCOPE' <<<"$LAST_OUT" && grep -q 'cannot be placed above a movable' <<<"$LAST_OUT"; then
-  echo "ok   non-conformant suffix carries the ratified H-REORDER-SCOPE refusal copy"
+# the ratified H-REORDER-SCOPE copy naming the one achievable arrangement. The block now
+# HOISTS to the CANONICAL top-level refusal (blocked → exit 4, code blocked:H-REORDER-
+# SCOPE) instead of being buried under a generic verify-failed (exit 3) — the surfacing fix.
+run_step 4 "project-template suffix REFUSE (template above a movable)" project move "$GP_S1" "$PROJ_TEMPLATE_UUID" "$GP_F1" --first
+if grep -q 'blocked:H-REORDER-SCOPE' <<<"$LAST_OUT" && grep -q 'cannot be placed above a movable' <<<"$LAST_OUT"; then
+  echo "ok   non-conformant suffix surfaces the canonical top-level blocked:H-REORDER-SCOPE refusal"
 else
-  echo "FAIL non-conformant suffix missing the ratified refusal copy"; FAILURES=$((FAILURES + 1))
+  echo "FAIL non-conformant suffix missing the canonical top-level refusal copy/code"; FAILURES=$((FAILURES + 1))
 fi
 # Experimental-off: a template-bearing day-group needs the native surface (a dated
 # when= leg CRASHES a template) — with allow-experimental off it refuses NAMING the
-# template, never a crash-path leg (exit 2).
+# template, never a crash-path leg. Canonical top-level blocked refusal (exit 4).
 things config set allow-experimental false >/dev/null 2>&1
-run_step 3 "experimental-off refuses a template day-set (names the template, no crash leg)" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
+run_step 4 "experimental-off refuses a template day-set (names the template, no crash leg)" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
 things config set allow-experimental true >/dev/null 2>&1
-if grep -q "$TEMPLATE_UUID" <<<"$LAST_OUT" && grep -q 'allow-experimental is off' <<<"$LAST_OUT"; then
-  echo "ok   experimental-off refusal names the template + the config gate"
+if grep -q "$TEMPLATE_UUID" <<<"$LAST_OUT" && grep -q 'allow-experimental is off' <<<"$LAST_OUT" && grep -q 'blocked:H-REORDER-SCOPE' <<<"$LAST_OUT"; then
+  echo "ok   experimental-off refusal names the template + gate, canonical blocked:H-REORDER-SCOPE"
 else
-  echo "FAIL experimental-off refusal did not name the template / gate"; FAILURES=$((FAILURES + 1))
+  echo "FAIL experimental-off refusal did not name the template / gate / canonical code"; FAILURES=$((FAILURES + 1))
 fi
 
 echo "== suite-audit gap closure: cancel / backdate / add-logged / project tags / heading ops =="

@@ -40,6 +40,7 @@ import { taskMembershipClause } from "../read/scope.ts";
 import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
 import { computeReorderPre, resolveArea, resolveHeading, resolveProject } from "./pre-state.ts";
 import type { ContainerRef, ReorderParams, ReorderScope, TodoMoveParams } from "./operations.ts";
+import type { HazardId } from "./guards.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type { VectorId } from "./vectors/types.ts";
 import { runMutation } from "./pipeline.ts";
@@ -130,6 +131,15 @@ export interface MoveRefused {
   detail: string;
   remediation?: string;
   candidates?: CandidateRef[];
+  /**
+   * The named hazard when this refusal is a hoisted placement block (a `blocked`
+   * reorder leg that refused BEFORE anything landed — e.g. the H-REORDER-SCOPE
+   * template suffix / experimental-off refusals). Present only on a
+   * `refusal: "blocked"` result; drives the canonical `blocked:<hazard>` error
+   * code + `BLOCKED (<hazard>)` copy so a hoisted refusal surfaces exactly like a
+   * direct `things reorder` hazard block (not buried under a generic leg-failed).
+   */
+  hazard?: HazardId;
 }
 
 export interface MoveLegFailed {
@@ -1053,6 +1063,38 @@ function refused(
   };
 }
 
+/**
+ * Map a non-ok reorder PLACEMENT from a pure in-place reposition (no membership
+ * leg ran, so NOTHING landed) to a terminal MoveResult. A `blocked` placement is
+ * a genuine refusal — the reorder never touched the app (an H-REORDER-SCOPE
+ * template suffix / experimental-off block) — so it HOISTS to a canonical
+ * top-level `move-refused` carrying the hazard: exit 4 (Blocked) + the
+ * `blocked:<hazard>` code + `BLOCKED (<hazard>)` copy, the SAME surface a direct
+ * `things reorder` block gets, instead of being buried under a generic
+ * leg-failed with a verify-failed (exit 3) code. Every other non-ok kind (a
+ * mid-bounce `bounce-aborted`, a `verify-failed`) is a leg that DID run and did
+ * not complete, so it stays `move-leg-failed`.
+ */
+function repositionFailed(op: "todo.move" | "project.move", placement: ReorderResult): MoveResult {
+  if (placement.kind === "blocked") {
+    return {
+      kind: "move-refused",
+      op,
+      refusal: "blocked",
+      detail: placement.detail,
+      ...(placement.remediation !== undefined && { remediation: placement.remediation }),
+      ...(placement.hazard !== undefined && { hazard: placement.hazard }),
+    };
+  }
+  return {
+    kind: "move-leg-failed",
+    op,
+    detail: `the reorder leg did not complete (${placement.kind})`,
+    failed: placement,
+    completed: [],
+  };
+}
+
 // The ratified teaching errors (spec §4 bare-invocation block, §5, §7).
 const BARE_TODO_MOVE =
   "`todo move` needs a destination or a position. To change what a to-do belongs to, name " +
@@ -1657,7 +1699,17 @@ export async function runInPlaceReorder(
         b === "today" ||
         b === "evening" ||
         b.startsWith("scheduled:") ||
-        forecastDeadlineDay(r, packedToday) !== null
+        forecastDeadlineDay(r, packedToday) !== null ||
+        // A repeating TEMPLATE with a strictly-future projection is a first-class
+        // day-block todayIndex member too (mirrors rowDayKey's template branch,
+        // #393). Its startDate is NULL and it carries no deadline, so it satisfies
+        // NEITHER branch above — without this disjunct a MIXED-kind day set that
+        // also holds a template fails `.every()`, `globalAxisIntermix` goes false,
+        // and the upstream indexKindRefusal blocks the set before the day-axis
+        // resolver (which #393 taught to admit templates) ever runs. That is Mike's
+        // "both kinds + template, one op" interleave, so the template must count as
+        // a day-group member here exactly as it does downstream.
+        (r.isTemplate && r.templateProjectionDay !== null && r.templateProjectionDay > packedToday)
       );
     });
   if (wrongKind.length > 0 && !globalAxisIntermix) {
@@ -1830,13 +1882,7 @@ async function runDayGroupReposition(
     };
   }
   if (placement.kind !== "ok") {
-    return {
-      kind: "move-leg-failed",
-      op,
-      detail: `the reorder leg did not complete (${placement.kind})`,
-      failed: placement,
-      completed: [],
-    };
+    return repositionFailed(op, placement);
   }
   return {
     kind: "move-ok",
@@ -2059,13 +2105,7 @@ async function repositionInPlace(
     };
   }
   if (placement.kind !== "ok") {
-    return {
-      kind: "move-leg-failed",
-      op,
-      detail: `the reorder leg did not complete (${placement.kind})`,
-      failed: placement,
-      completed: [],
-    };
+    return repositionFailed(op, placement);
   }
   return {
     kind: "move-ok",

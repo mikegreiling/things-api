@@ -2987,6 +2987,716 @@
           }
         ]
       }
+    },
+    {
+      "id": "O38",
+      "title": "GRNDINT FULL mixed-kind grand interleave FORWARD (#393 gate fix): the whole 07-06 upcoming inventory the globalAxisIntermix fix unblocks - SCHEDULED to-dos (loose + in-project unheaded + HEADED-under-Alpha + area-direct) + SCHEDULED PROJECTS (area-less + area'd) + DEADLINE-FORECAST to-dos (loose/project/area) + FORECAST PROJECTS (area-less + area'd) + the baked repeating TO-DO TEMPLATE - sorted TOGETHER in ONE `day`-scope op to a decisively-non-default interleaved target. Reverse-target dispatch on the shared 07-06 day-block todayIndex axis: scheduled rows via when= bounce (to-do update; project update-project), forecast rows via the deadline-cycle (deadline= clear + re-set, per-KIND leg op), the to-do template via the single-id `list \"Upcoming\"` umd-silent front-insert. Collateral byte-preserved per class: heading-FK on the headed to-do, area-FK on the area rows + area'd projects, forecast index/deadline, scheduled startDate, and the template's index/start/startDate/deadline/rt1/umd ALL byte-identical (umd-silent). This is the mixed to-do+project+template one-op interleave refused UPSTREAM before the fix; O34-O37 cover the single-kind arms.",
+      "vector": "url",
+      "operation": "order.grand-interleave-mixed-fwd",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=GX-S-LOOSE&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-S-LOOSE' AND type=0 AND startBucket=0 AND startDate=132805376 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=GX-S-PROJ&when=2026-07-06&list-id={seed:LAB-PROJ-PLAIN}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-S-PROJ' AND type=0 AND startBucket=0 AND startDate=132805376 AND project=(SELECT uuid FROM TMTask WHERE title='LAB-PROJ-PLAIN' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=GX-S-HEAD&when=2026-07-06&list=LAB-PROJ-HEADINGS&heading=Alpha"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-S-HEAD' AND type=0 AND startBucket=0 AND startDate=132805376 AND heading=(SELECT uuid FROM TMTask WHERE title='Alpha' AND type=2)"
+        },
+        {
+          "openUrl": "things:///add?title=GX-S-AREA&when=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-S-AREA' AND type=0 AND startBucket=0 AND startDate=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-A')"
+        },
+        {
+          "openUrl": "things:///add-project?title=GX-SP-BARE&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-SP-BARE' AND type=1 AND startBucket=0 AND startDate=132805376 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=GX-SP-AREA&when=2026-07-06&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-SP-AREA' AND type=1 AND startBucket=0 AND startDate=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-B')"
+        },
+        {
+          "openUrl": "things:///add?title=GX-F-LOOSE&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-F-LOOSE' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=GX-F-PROJ&when=someday&deadline=2026-07-06&list-id={seed:LAB-PROJ-PLAIN}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-F-PROJ' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND project=(SELECT uuid FROM TMTask WHERE title='LAB-PROJ-PLAIN' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=GX-F-AREA&when=someday&deadline=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-F-AREA' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-A')"
+        },
+        {
+          "openUrl": "things:///add-project?title=GX-FP-BARE&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-FP-BARE' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=GX-FP-AREA&when=someday&deadline=2026-07-06&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GX-FP-AREA' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-B')"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-PROJ}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-PROJ' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-PROJ}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-PROJ' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-AREA}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-AREA' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-AREA}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-AREA' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-FP-AREA}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-FP-AREA' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-FP-AREA}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-FP-AREA' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-LOOSE}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-LOOSE' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-LOOSE}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-LOOSE' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-SP-BARE}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-SP-BARE' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-SP-BARE}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-SP-BARE' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-PROJ}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-PROJ' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-PROJ}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-PROJ' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-HEAD}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-HEAD' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-HEAD}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-HEAD' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-FP-BARE}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-FP-BARE' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-FP-BARE}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-FP-BARE' AND deadline=132805376"
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Upcoming\" with ids \"{seed:LAB-REPEAT-DAILY}\""
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-SP-AREA}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-SP-AREA' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GX-SP-AREA}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-SP-AREA' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-AREA}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-AREA' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-S-AREA}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-S-AREA' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-LOOSE}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-LOOSE' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GX-F-LOOSE}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GX-F-LOOSE' AND deadline=132805376"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-F-LOOSE') < (SELECT todayIndex FROM TMTask WHERE title='GX-S-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-S-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GX-SP-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-SP-AREA') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}') < (SELECT todayIndex FROM TMTask WHERE title='GX-FP-BARE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-FP-BARE') < (SELECT todayIndex FROM TMTask WHERE title='GX-S-HEAD')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-S-HEAD') < (SELECT todayIndex FROM TMTask WHERE title='GX-F-PROJ')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-F-PROJ') < (SELECT todayIndex FROM TMTask WHERE title='GX-SP-BARE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-SP-BARE') < (SELECT todayIndex FROM TMTask WHERE title='GX-S-LOOSE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-S-LOOSE') < (SELECT todayIndex FROM TMTask WHERE title='GX-FP-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-FP-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GX-F-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GX-F-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GX-S-PROJ')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-S-LOOSE"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-S-PROJ"
+            },
+            "fields": ["start", "startBucket", "startDate", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-S-HEAD"
+            },
+            "fields": ["start", "startBucket", "startDate", "heading"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-S-AREA"
+            },
+            "fields": ["start", "startBucket", "startDate", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-SP-BARE"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-SP-AREA"
+            },
+            "fields": ["start", "startBucket", "startDate", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-F-LOOSE"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-F-PROJ"
+            },
+            "fields": ["index", "start", "startDate", "deadline", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-F-AREA"
+            },
+            "fields": ["index", "start", "startDate", "deadline", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-FP-BARE"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GX-FP-AREA"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": [
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O39",
+      "title": "GRNDINT FULL mixed-kind grand interleave REVERSED (#393 gate fix): the O38 full inventory (own GY-* fixture) re-sorted to the REVERSED interleaved target in one `day`-scope op - proves the mixed to-do+project+template interleave is decisively re-orderable (not a one-way collapse). Same per-class legs + collateral byte-asserts as O38 (heading-FK, area-FK, forecast index/deadline, scheduled startDate, template umd-silence); the template repositioned again umd-silent. Companion reverse pass of O38.",
+      "vector": "url",
+      "operation": "order.grand-interleave-mixed-rev",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=GY-S-LOOSE&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-S-LOOSE' AND type=0 AND startBucket=0 AND startDate=132805376 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=GY-S-PROJ&when=2026-07-06&list-id={seed:LAB-PROJ-PLAIN}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-S-PROJ' AND type=0 AND startBucket=0 AND startDate=132805376 AND project=(SELECT uuid FROM TMTask WHERE title='LAB-PROJ-PLAIN' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=GY-S-HEAD&when=2026-07-06&list=LAB-PROJ-HEADINGS&heading=Alpha"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-S-HEAD' AND type=0 AND startBucket=0 AND startDate=132805376 AND heading=(SELECT uuid FROM TMTask WHERE title='Alpha' AND type=2)"
+        },
+        {
+          "openUrl": "things:///add?title=GY-S-AREA&when=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-S-AREA' AND type=0 AND startBucket=0 AND startDate=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-A')"
+        },
+        {
+          "openUrl": "things:///add-project?title=GY-SP-BARE&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-SP-BARE' AND type=1 AND startBucket=0 AND startDate=132805376 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=GY-SP-AREA&when=2026-07-06&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-SP-AREA' AND type=1 AND startBucket=0 AND startDate=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-B')"
+        },
+        {
+          "openUrl": "things:///add?title=GY-F-LOOSE&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-F-LOOSE' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND project IS NULL AND area IS NULL AND heading IS NULL"
+        },
+        {
+          "openUrl": "things:///add?title=GY-F-PROJ&when=someday&deadline=2026-07-06&list-id={seed:LAB-PROJ-PLAIN}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-F-PROJ' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND project=(SELECT uuid FROM TMTask WHERE title='LAB-PROJ-PLAIN' AND type=1)"
+        },
+        {
+          "openUrl": "things:///add?title=GY-F-AREA&when=someday&deadline=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-F-AREA' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-A')"
+        },
+        {
+          "openUrl": "things:///add-project?title=GY-FP-BARE&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-FP-BARE' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area IS NULL"
+        },
+        {
+          "openUrl": "things:///add-project?title=GY-FP-AREA&when=someday&deadline=2026-07-06&area-id={seed:LAB-AREA-B}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GY-FP-AREA' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805376 AND area=(SELECT uuid FROM TMArea WHERE title='LAB-AREA-B')"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-LOOSE}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-LOOSE' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-LOOSE}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-LOOSE' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-AREA}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-AREA' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-AREA}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-AREA' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-SP-AREA}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-SP-AREA' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-SP-AREA}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-SP-AREA' AND startDate=132805376"
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Upcoming\" with ids \"{seed:LAB-REPEAT-DAILY}\""
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-FP-BARE}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-FP-BARE' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-FP-BARE}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-FP-BARE' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-HEAD}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-HEAD' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-HEAD}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-HEAD' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-PROJ}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-PROJ' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-PROJ}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-PROJ' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-SP-BARE}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-SP-BARE' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-SP-BARE}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-SP-BARE' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-LOOSE}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-LOOSE' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-LOOSE}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-LOOSE' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-FP-AREA}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-FP-AREA' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GY-FP-AREA}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-FP-AREA' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-AREA}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-AREA' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-F-AREA}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-F-AREA' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-PROJ}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-PROJ' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GY-S-PROJ}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GY-S-PROJ' AND startDate=132805376"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-S-PROJ') < (SELECT todayIndex FROM TMTask WHERE title='GY-F-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-F-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GY-FP-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-FP-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GY-S-LOOSE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-S-LOOSE') < (SELECT todayIndex FROM TMTask WHERE title='GY-SP-BARE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-SP-BARE') < (SELECT todayIndex FROM TMTask WHERE title='GY-F-PROJ')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-F-PROJ') < (SELECT todayIndex FROM TMTask WHERE title='GY-S-HEAD')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-S-HEAD') < (SELECT todayIndex FROM TMTask WHERE title='GY-FP-BARE')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-FP-BARE') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}') < (SELECT todayIndex FROM TMTask WHERE title='GY-SP-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-SP-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GY-S-AREA')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GY-S-AREA') < (SELECT todayIndex FROM TMTask WHERE title='GY-F-LOOSE')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-S-LOOSE"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-S-PROJ"
+            },
+            "fields": ["start", "startBucket", "startDate", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-S-HEAD"
+            },
+            "fields": ["start", "startBucket", "startDate", "heading"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-S-AREA"
+            },
+            "fields": ["start", "startBucket", "startDate", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-SP-BARE"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-SP-AREA"
+            },
+            "fields": ["start", "startBucket", "startDate", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-F-LOOSE"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-F-PROJ"
+            },
+            "fields": ["index", "start", "startDate", "deadline", "project"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-F-AREA"
+            },
+            "fields": ["index", "start", "startDate", "deadline", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-FP-BARE"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GY-FP-AREA"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": [
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

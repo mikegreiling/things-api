@@ -308,7 +308,12 @@ function moveResult(result: MoveResult): ToolResult {
       return jsonResult(result.plan);
     case "move-refused":
       return errorResult({
-        code: result.refusal,
+        // A hoisted placement block names its hazard — surface the canonical
+        // `blocked:<hazard>` code, matching a direct reorder hazard block.
+        code:
+          result.hazard !== undefined
+            ? blockedCode({ hazard: result.hazard, reason: "hazard" })
+            : result.refusal,
         message: result.detail,
         ...(result.remediation !== undefined && { remediation: result.remediation }),
         ...(result.candidates !== undefined && { details: { candidates: result.candidates } }),
