@@ -1448,7 +1448,9 @@ const reorder: CommandSpec<"reorder"> = {
                 ? `list "Someday"`
                 : params.scope === "tomorrow"
                   ? `list "Tomorrow"`
-                  : `list "Today"`;
+                  : params.scope === "upcoming"
+                    ? `list "Upcoming"`
+                    : `list "Today"`;
     const wire = pre.reorder?.wireList ?? params.uuids;
     if (params.scope === "someday") {
       // The Someday handler STACKS each sent id above the list's current top

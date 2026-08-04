@@ -359,6 +359,80 @@ function datedBounceMoveVectors() {
   return { vectors: [urlFake], calls };
 }
 
+/**
+ * TMPLSORT/PTMPL template day-block harness: url-scheme when= legs (scheduled rows)
+ * + an applescript reorder fake that models BOTH the `list "Tomorrow"` full-wire sort
+ * (ascending ranks) and the single-id `list "Upcoming"` TO-DO-template front-insert
+ * (todayIndex at the shared block min − 1). The block min spans scheduled ∪ forecast ∪
+ * TEMPLATE rows (TMPLSORT-2), so a template and a scheduled row share ONE min-space.
+ */
+function templateDayMoveVectors() {
+  const calls: string[] = [];
+  const blockMin = (packed: number): number => {
+    const r = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
+           (startBucket = 0 AND startDate = ?)
+           OR (startDate IS NULL AND deadline = ? AND start IN (1, 2))
+           OR (rt1_nextInstanceStartDate = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
+      )
+      .get(packed, packed, packed) as { m: number | null };
+    return r.m ?? 0;
+  };
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as { uuid: string; when?: string };
+      const when = p.when ?? "";
+      if (when === "") return { exitCode: 0, stdout: "", stderr: "" };
+      const packed = when === "today" ? TODAY_PACKED : encodePackedDate(when);
+      const startVal = packed > TODAY_PACKED ? 2 : 1;
+      fixture.db
+        .prepare(
+          `UPDATE TMTask SET start=?, startDate=?, startBucket=0, todayIndex=?,
+           userModificationDate=? WHERE uuid=?`,
+        )
+        .run(startVal, packed, blockMin(packed) - 1, modClock++, p.uuid);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const asFake: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(inv) {
+      const p = inv.opParams as { scope: string; uuids: string[] };
+      calls.push(inv.op === "reorder" ? `reorder:${p.scope}` : (inv.op ?? "?"));
+      if (p.scope === "upcoming") {
+        // Single-id TO-DO template front-insert: umd-silent (unchanged).
+        const id = p.uuids[0] ?? "";
+        const row = fixture.db
+          .prepare("SELECT rt1_nextInstanceStartDate AS proj FROM TMTask WHERE uuid = ?")
+          .get(id) as { proj: number | null };
+        fixture.db
+          .prepare("UPDATE TMTask SET todayIndex=? WHERE uuid=?")
+          .run(blockMin(row.proj ?? 0) - 1, id);
+      } else {
+        // `list "Tomorrow"` (and any full-wire native reorder): exact sent order.
+        let rank = 1;
+        for (const uuid of p.uuids) {
+          fixture.db
+            .prepare("UPDATE TMTask SET todayIndex=?, userModificationDate=? WHERE uuid=?")
+            .run(rank++, modClock++, uuid);
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake, asFake], calls };
+}
+
 function deps(overrides: Partial<WriteDeps> = {}): WriteDeps {
   return {
     db: fixture.db,
@@ -1179,6 +1253,65 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
     // Project rows dispatch through update-project (the per-type leg op).
     expect(calls.every((c) => c === "project.update")).toBe(true);
     expect(ascending(indexOrder([p1, p2], "todayIndex"))).toBe(true);
+  });
+
+  // TMPLSORT/PTMPL: a repeating template's projection routes by its projection day —
+  // tomorrow → the native one-call wire; a LATER day → the `day` leg family.
+  it("a TOMORROW template routes to the native `tomorrow` scope on the one-call wire", async () => {
+    const t = seedTodo(fixture.db, {
+      title: "t",
+      start: "someday",
+      startDate: TOMORROW,
+      todayIndex: 20,
+    });
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: 10,
+      recurrenceRule: true,
+      nextInstanceStartDate: TOMORROW,
+    });
+    const { vectors, calls } = templateDayMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [tmpl, t],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("tomorrow scope");
+    // One native `list "Tomorrow"` wire carries the template — no per-template leg.
+    expect(calls).toContain("reorder:tomorrow");
+    expect(calls).not.toContain("reorder:upcoming");
+  });
+
+  it('a LATER-day template routes to the `day` leg family (single-id `list "Upcoming"` leg)', async () => {
+    const s = seedTodo(fixture.db, {
+      title: "s",
+      start: "someday",
+      startDate: LATER,
+      todayIndex: 0,
+    });
+    const tmpl = seedTodo(fixture.db, {
+      title: "tmpl",
+      start: "someday",
+      startDate: null,
+      todayIndex: -5,
+      recurrenceRule: true,
+      nextInstanceStartDate: LATER,
+    });
+    const { vectors, calls } = templateDayMoveVectors();
+    // Target: template on top of the scheduled row.
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [tmpl, s],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    // The template rides the single-id `list "Upcoming"` native leg; the scheduled row a when= leg.
+    expect(calls).toContain("reorder:upcoming");
+    expect(calls).toContain("todo.update");
+    expect(calls).not.toContain("reorder:tomorrow");
+    expect(ascending(indexOrder([tmpl, s], "todayIndex"))).toBe(true);
   });
 });
 

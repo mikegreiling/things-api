@@ -168,20 +168,38 @@ interface MoveeRow {
   startBucket: number;
   /** Packed `deadline` day — the deadline-forecast day-block axis key (DLBNC/§9o). */
   deadline: number | null;
-  /** Repeating TEMPLATE row: the private reorder no-ops on it (§9e addendum). */
+  /** Repeating TEMPLATE row (rt1_recurrenceRule or repeater set). */
   isTemplate: boolean;
+  /**
+   * A repeating template's projection day — its `rt1_nextInstanceStartDate` (packed),
+   * the Upcoming day-block its rendered projection row sits in (TMPLSORT/PTMPL). NULL
+   * for a non-template. It is the template's day-group key: a strictly-future
+   * projection makes the template a first-class member of that day-block's todayIndex
+   * axis (a `list "Tomorrow"` member when the projection == tomorrow; otherwise a
+   * `day`-scope member reachable — for a TO-DO template — by a single-id `list
+   * "Upcoming"` front-insert leg, §9s / PTMPL-B).
+   */
+  templateProjectionDay: number | null;
 }
 
 function loadRow(db: DatabaseSync, uuid: string): MoveeRow | undefined {
   const row = db
     .prepare(
       "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket, deadline, " +
-        "rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?",
+        "rt1_recurrenceRule AS rule, repeater, rt1_nextInstanceStartDate AS projectionDay " +
+        "FROM TMTask WHERE uuid = ?",
     )
-    .get(uuid) as (Omit<MoveeRow, "isTemplate"> & { rule: unknown; repeater: unknown }) | undefined;
+    .get(uuid) as
+    | (Omit<MoveeRow, "isTemplate" | "templateProjectionDay"> & {
+        rule: unknown;
+        repeater: unknown;
+        projectionDay: number | null;
+      })
+    | undefined;
   if (row === undefined) return undefined;
-  const { rule, repeater, ...rest } = row;
-  return { ...rest, isTemplate: rule !== null || repeater !== null };
+  const { rule, repeater, projectionDay, ...rest } = row;
+  const isTemplate = rule !== null || repeater !== null;
+  return { ...rest, isTemplate, templateProjectionDay: isTemplate ? projectionDay : null };
 }
 
 const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "heading" };
@@ -301,7 +319,24 @@ function reorderTargetOf(
   bounceEnabled: boolean,
 ): ScopeTarget {
   if (row.isTemplate) {
-    return { scope: null, reason: "a repeating template (unreorderable — oddity §9e)" };
+    // A repeating template's Upcoming-day-block projection is a first-class todayIndex
+    // member of its projection day (TMPLSORT/PTMPL): route it to the day-group scope so
+    // it rides the template-aware leg family in reorder.ts — the native one-call `list
+    // "Tomorrow"` wire when the projection == tomorrow (both to-do AND project
+    // templates: TMPLSORT-3c-Tomorrow / PTMPL-B5), else the `day` scope (a TO-DO
+    // template front-inserts via a single-id `list "Upcoming"` leg; a PROJECT template
+    // is byte-untouched under the suffix rule). A template with no strictly-future
+    // projection has no wired day-block surface — app-default, honest.
+    const day = rowDayKey(row, packedToday);
+    if (day === null) {
+      return {
+        scope: null,
+        reason: "a repeating template with no strictly-future projection (§9e)",
+      };
+    }
+    return day === packedTomorrowOf(packedToday)
+      ? { scope: "tomorrow", day }
+      : { scope: "day", day };
   }
   const bucket = scheduleBucket(row, packedToday);
   // A same-day (today-proper) or future scheduled day, startBucket=0 — the
@@ -1652,6 +1687,16 @@ export async function runInPlaceReorder(
  * Today axis) contributes null.
  */
 function rowDayKey(row: MoveeRow, packedToday: number): number | null {
+  // A repeating TEMPLATE contributes its PROJECTION day (rt1_nextInstanceStartDate),
+  // the Upcoming day-block its rendered projection row sits in (TMPLSORT/PTMPL). Its
+  // startDate/deadline are NULL (or non-block), so it would otherwise contribute null;
+  // strictly-future gate mirrors the scheduled/forecast branches (an arrived/absent
+  // projection is not a future day-group member).
+  if (row.isTemplate) {
+    return row.templateProjectionDay !== null && row.templateProjectionDay > packedToday
+      ? row.templateProjectionDay
+      : null;
+  }
   if (
     row.startDate !== null &&
     row.startBucket === 0 &&
@@ -1681,7 +1726,10 @@ function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
   const day = rowDayKey(first, packedToday);
   if (day === null) return null;
   for (const r of rows) {
-    if (r.isTemplate) return null;
+    // Templates NO LONGER break the group: a strictly-future template projection is
+    // a first-class day-block member (TMPLSORT-3c-Tomorrow / PTMPL-B5), reached on the
+    // `tomorrow` native wire or the `day` per-class leg family (reorder.ts). rowDayKey
+    // returns its projection day, so an on-day template shares the group.
     if (rowDayKey(r, packedToday) !== day) return null;
   }
   return day;

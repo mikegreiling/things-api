@@ -68,11 +68,20 @@ Three config knobs (`things config get/set …`) tune ordering; every default gi
 
 **Flag-aware routing (SIT6).** A reorder touching a Today/Evening-FLAGGED row never de-Todays it: the whole touched set swaps to a flag-safe MOVE protocol on the same axis (the `when=` bounce would strip the flag). This is transparent — you still call `things reorder`; the chosen strategy is disclosed in the result.
 
-## Placement guarantees and the one dead class
+## Placement guarantees
 
 "Top of bucket in selection order" is GUARANTEED wherever a lab-clean protocol exists: loose inbox/today/evening/someday/anytime; a project's or area's members (anytime AND someday); a heading's anytime/someday children; any container child's evening slot; area-less someday/anytime projects; and a whole future day-group across containers (including scheduled project rows, area'd ones too, and deadline-forecast rows — to-dos and projects — on their deadline day). The result's placement class names which guarantee you got, and a bounce that co-touches unnamed siblings to honor a `--before`/`--after` anchor lists them.
 
-**The one class that cannot be reordered is a repeating TEMPLATE** — a dated `when=` leg crashes it, so a template movee or anchor is refused and template placement stays app-default (disclosed). Everything non-template is sortable.
+## Repeating templates in day-blocks
+
+A repeating template's projected occurrence renders in an Upcoming day-block, and `things reorder` can now position it there — with two constraints, because a dated `when=`/`deadline=` leg CRASHES a template so the app's own private surface is the only safe writer.
+
+- **On TOMORROW, full power.** When a template's next occurrence lands on tomorrow, BOTH to-do and project templates sort inline with the day's scheduled rows in one native `list "Tomorrow"` call — any position, exact order.
+- **On a later future day, to-do templates sort; project templates hold their spot.** A TO-DO template front-inserts via a single-id `list "Upcoming"` native leg interleaved with the day's other rows, so it lands anywhere in the block. A PROJECT template has NO headless reach on a non-tomorrow day (only the Tomorrow call or a manual drag place it), so it stays byte-untouched at the bottom of the block and every other item sorts ABOVE it. A reorder that would need a project template above a movable row (or would re-order two project templates) is REFUSED, naming the arrangement it CAN reach — do that in the app by dragging, or reorder on the day it becomes tomorrow.
+- **Templates need `allow-experimental` on.** Any day-group reorder that includes a template requires the private native surface (the to-do-template leg uses it). With `allow-experimental` off, such a reorder is REFUSED, naming the template(s) — it never silently skips them and never routes them onto a crash-path leg.
+- A template's placement write is `userModificationDate`-SILENT (a sync/watcher keyed on that timestamp will not see the move); the result discloses it.
+
+Everything non-template is sortable on every guaranteed surface above.
 
 ## MCP parity
 

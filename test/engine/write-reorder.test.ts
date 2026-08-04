@@ -1793,21 +1793,6 @@ describe("day scope (SIT4 DAYBNC — the dated cross-container bounce)", () => {
     expect(calls.some((c) => c.includes("when=2026-07-19"))).toBe(true);
   });
 
-  it("refuses a repeating TEMPLATE movee, naming §9e/§1 (a dated leg crashes it)", async () => {
-    const t = seedDay("T", 0);
-    const tmpl = seedTodo(fixture.db, {
-      title: "TMPL",
-      start: "someday",
-      startDate: FUTURE_ISO,
-      recurrenceRule: true,
-    });
-    const { vector, calls } = datedBounceVector();
-    const result = await runReorder(deps([vector]), { scope: "day", uuids: [t, tmpl] });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") expect(result.detail).toContain("repeating template");
-    expect(calls).toHaveLength(0);
-  });
-
   it("accepts an area-DIRECT project row as a day member, preserving its area FK (SIT5 AREAPROJDAY)", async () => {
     // SIT5 AREAPROJDAY: area-direct project rows are proven dated-bounce members —
     // the update-project when= legs preserve the area FK through the round-trip.
@@ -2309,6 +2294,300 @@ describe('tomorrow scope (ORDFIN2 TOMORROWLIST one-call `list "Tomorrow"` day-so
     const result = await runReorder(deps([vector]), { scope: "tomorrow", uuids: [t1] });
     expect(result.kind).toBe("ok");
     expect(calls[0]).toContain('list "Tomorrow"');
+  });
+
+  // TMPLSORT-3c-Tomorrow / PTMPL-B5: a repeating template (to-do OR project) whose
+  // projection == tomorrow is a first-class member of the one-call `list "Tomorrow"`
+  // wire — placed at its EXACT sent slot, umd-silent, no crash. Native path (experimental
+  // on) carries it as an ordinary wire id.
+  it('carries a repeating to-do + project template on the one-call `list "Tomorrow"` wire', async () => {
+    const t1 = seedTomorrow("t1", 30);
+    const tt = seedTomorrowTemplate("tt", 20);
+    const pt = seedTomorrowTemplate("pt", 10, { project: true });
+    const { vector, calls } = nativeVector("todayIndex");
+    // Sent top→bottom: tt (to-do template), pt (project template), t1 (scheduled).
+    const result = await runReorder(deps([vector]), { scope: "tomorrow", uuids: [tt, pt, t1] });
+    expect(result.kind).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('list "Tomorrow"');
+    // Both templates ride the SAME wire (exact sent order, list "Tomorrow" law).
+    expect(calls[0]).toContain(`with ids "${tt},${pt},${t1}"`);
+    expect(ascending(ranks([tt, pt, t1]))).toBe(true);
+  });
+});
+
+/**
+ * The `day`-scope TEMPLATE leg family (TMPLSORT/PTMPL). Two fake vectors share the
+ * fixture DB so their front-inserts see each other on ONE block min-space (TMPLSORT-2):
+ *   - urlVector (url-scheme): the scheduled when= round-trip + forecast deadline-cycle,
+ *     front-inserting at the day-D block min (scheduled ∪ forecast ∪ TEMPLATE rows).
+ *   - tmplVector (applescript, experimental): the single-id `list "Upcoming"` NATIVE
+ *     front-insert leg for a TO-DO template (TMPLSORT-1) — sets the template's todayIndex
+ *     to the same shared block min − 1, userModificationDate UNCHANGED (umd-silent, §9r).
+ * A PROJECT template is never dispatched (the suffix rule leaves it byte-untouched).
+ */
+function dayTemplateVectors() {
+  const calls: string[] = [];
+  const blockMin = (packed: number): number => {
+    const r = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
+           (startBucket = 0 AND startDate = ?)
+           OR (startDate IS NULL AND deadline = ? AND start IN (1, 2))
+           OR (rt1_nextInstanceStartDate = ? AND (rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)))`,
+      )
+      .get(packed, packed, packed) as { m: number | null };
+    return r.m ?? 0;
+  };
+  const urlVector: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const url = new URL(invocation.payload);
+      const id = url.searchParams.get("id") ?? "";
+      const deadline = url.searchParams.get("deadline");
+      if (deadline !== null) {
+        if (deadline === "") {
+          fixture.db
+            .prepare("UPDATE TMTask SET deadline = NULL, userModificationDate = ? WHERE uuid = ?")
+            .run(modClock++, id);
+        } else {
+          const packed = encodePackedDate(deadline);
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET deadline = ?, todayIndex = ?, userModificationDate = ? WHERE uuid = ?",
+            )
+            .run(packed, blockMin(packed) - 1, modClock++, id);
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      const base = url.searchParams.get("when") ?? "";
+      const packed = base === "today" ? PACKED_TODAY : encodePackedDate(base);
+      const startVal = packed > PACKED_TODAY ? 2 : 1;
+      fixture.db
+        .prepare(
+          `UPDATE TMTask SET start = ?, startDate = ?, startBucket = 0, todayIndex = ?,
+           userModificationDate = ? WHERE uuid = ?`,
+        )
+        .run(startVal, packed, blockMin(packed) - 1, modClock++, id);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  const tmplVector: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      // Single-id `list "Upcoming" with ids "<tmpl>"` front-insert: the template stays
+      // on its projection day (rt1_nextInstanceStartDate) and its todayIndex drops below
+      // the shared block min — umd UNCHANGED (TMPLSORT-1, umd-silent).
+      const id = /with ids "([^"]+)"/.exec(invocation.payload)?.[1] ?? "";
+      const row = fixture.db
+        .prepare("SELECT rt1_nextInstanceStartDate AS proj FROM TMTask WHERE uuid = ?")
+        .get(id) as { proj: number | null };
+      const packed = row.proj ?? PACKED_FUTURE;
+      fixture.db
+        .prepare("UPDATE TMTask SET todayIndex = ? WHERE uuid = ?")
+        .run(blockMin(packed) - 1, id);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { urlVector, tmplVector, calls };
+}
+
+/** A repeating TO-DO (or project) template whose projection == day D (FUTURE_ISO). */
+function seedDayTemplate(
+  title: string,
+  todayIndex: number,
+  opts: { project?: boolean } = {},
+): string {
+  const seed = opts.project === true ? seedProject : seedTodo;
+  return seed(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    todayIndex,
+    recurrenceRule: true,
+    nextInstanceStartDate: FUTURE_ISO,
+  });
+}
+
+/** A repeating template whose projection == tomorrow (TOMORROW_ISO = 2026-07-06). */
+function seedTomorrowTemplate(
+  title: string,
+  todayIndex: number,
+  opts: { project?: boolean } = {},
+): string {
+  const seed = opts.project === true ? seedProject : seedTodo;
+  return seed(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    todayIndex,
+    recurrenceRule: true,
+    nextInstanceStartDate: "2026-07-06",
+  });
+}
+
+describe("day scope: repeating TEMPLATE members (TMPLSORT/PTMPL — the leg family)", () => {
+  it("a to-do template projecting to day D is a `day` member (pre-state)", () => {
+    const s = seedDay("S", 0);
+    const tt = seedDayTemplate("TT", -50);
+    const pre = computeReorderPre(fixture.db, { scope: "day", uuids: [s, tt] }, null, NOW);
+    const ids = pre.members.map((m) => m.uuid);
+    expect(ids).toContain(tt);
+    expect(ids).toContain(s);
+    expect(pre.members.find((m) => m.uuid === tt)?.isTemplate).toBe(true);
+    expect(pre.rejected).toHaveLength(0);
+  });
+
+  it('interleaves a to-do template (`list "Upcoming"` leg) with scheduled rows (when= legs)', async () => {
+    const s1 = seedDay("S1", 0);
+    const tt = seedDayTemplate("TT", -50);
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    // Target top→bottom: TT (template), S1 (scheduled).
+    const result = await runReorder(deps([urlVector, tmplVector]), {
+      scope: "day",
+      uuids: [tt, s1],
+      named: [tt, s1],
+    });
+    expect(result.kind).toBe("ok");
+    // The template rode a `list "Upcoming"` native front-insert; the scheduled row a when= round-trip.
+    expect(calls.some((c) => c.includes('list "Upcoming"') && c.includes(tt))).toBe(true);
+    expect(calls.some((c) => c.includes(`id=${s1}`) && c.includes("when="))).toBe(true);
+    // Landed order matches the target (template on top).
+    expect(ascending(ranks([tt, s1]))).toBe(true);
+  });
+
+  it("CRASH-PATH LOCK: a template is NEVER compiled onto a when=/deadline leg (§1)", async () => {
+    const s1 = seedDay("S1", 0);
+    const f1 = seedForecast("F1", -20, 5);
+    const tt = seedDayTemplate("TT", -50);
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    const result = await runReorder(deps([urlVector, tmplVector]), {
+      scope: "day",
+      uuids: [tt, s1, f1],
+      named: [tt, s1, f1],
+    });
+    expect(result.kind).toBe("ok");
+    // The template id appears ONLY in a `list "Upcoming"` leg — never in a URL leg
+    // carrying when= or deadline= (the dated legs that CRASH a template).
+    const templateUrlLegs = calls.filter(
+      (c) => c.includes(tt) && (c.includes("when=") || c.includes("deadline=")),
+    );
+    expect(templateUrlLegs).toHaveLength(0);
+    expect(calls.some((c) => c.includes('list "Upcoming"') && c.includes(tt))).toBe(true);
+    // And never onto a `project id` / `list "Later Projects"` specifier (reparent / poison).
+    expect(calls.some((c) => c.includes("project id") && c.includes(tt))).toBe(false);
+    expect(calls.some((c) => c.includes('list "Later Projects"'))).toBe(false);
+  });
+
+  it("SUFFIX RULE accept: a project template stays byte-untouched as the suffix", async () => {
+    const s1 = seedDay("S1", 0);
+    const pt = seedDayTemplate("PT", -10, { project: true });
+    const beforeUmd = (
+      fixture.db.prepare("SELECT userModificationDate AS u FROM TMTask WHERE uuid = ?").get(pt) as {
+        u: number;
+      }
+    ).u;
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    // Target: S1 (movable) ABOVE PT (project template) — the achievable suffix arrangement.
+    const result = await runReorder(deps([urlVector, tmplVector]), {
+      scope: "day",
+      uuids: [s1, pt],
+      named: [s1, pt],
+    });
+    expect(result.kind).toBe("ok");
+    // No leg targeted the project template at all (byte-untouched).
+    expect(calls.some((c) => c.includes(pt))).toBe(false);
+    const ptRow = fixture.db
+      .prepare("SELECT todayIndex AS t, userModificationDate AS u FROM TMTask WHERE uuid = ?")
+      .get(pt) as { t: number; u: number };
+    expect(ptRow.t).toBe(-10); // todayIndex byte-identical
+    expect(ptRow.u).toBe(beforeUmd); // umd byte-identical
+    // The movable landed ABOVE the untouched project template.
+    expect(ranks([s1])[0]!).toBeLessThan(-10);
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("project template"))).toBe(true);
+    }
+  });
+
+  it("SUFFIX RULE refuse: a project template above a movable names the achievable arrangement", async () => {
+    const s1 = seedDay("S1", 0);
+    const pt = seedDayTemplate("PT", -10, { project: true });
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    // Target: PT ABOVE S1 — unreachable (a project template has no headless reach on an
+    // arbitrary day; every movable front-inserts above it).
+    const result = await runReorder(deps([urlVector, tmplVector]), {
+      scope: "day",
+      uuids: [pt, s1],
+      named: [pt, s1],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("PROJECT template");
+      expect(result.detail).toContain(`${s1}, ${pt}`); // the achievable arrangement
+    }
+    expect(calls).toHaveLength(0); // nothing dispatched
+  });
+
+  it("SUFFIX RULE refuse: project templates cannot change their relative order", async () => {
+    const pt1 = seedDayTemplate("PT1", -20, { project: true });
+    const pt2 = seedDayTemplate("PT2", -10, { project: true });
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    // Current render order (asc todayIndex): PT1, PT2. Target reverses them.
+    const result = await runReorder(deps([urlVector, tmplVector]), {
+      scope: "day",
+      uuids: [pt2, pt1],
+      named: [pt2, pt1],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") expect(result.detail).toContain("relative order");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("experimental-OFF: refuses honestly, NAMING the template (never a dated leg)", async () => {
+    const s1 = seedDay("S1", 0);
+    const tt = seedDayTemplate("TT", -50);
+    const { urlVector, tmplVector, calls } = dayTemplateVectors();
+    const result = await runReorder(deps([urlVector, tmplVector], { config: config(false) }), {
+      scope: "day",
+      uuids: [tt, s1],
+      named: [tt, s1],
+    });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain(tt); // names the template
+      expect(result.detail).toContain("native private reorder");
+    }
+    expect(calls).toHaveLength(0); // nothing dispatched — never a crash-path leg
+  });
+
+  it("GUARD: a template requested in a `project` scope is refused (never onto `project id`)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const child = seedTodo(fixture.db, { title: "c", project: proj, start: "active", index: 10 });
+    const tmpl = seedTodo(fixture.db, {
+      title: "TMPL",
+      project: proj,
+      start: "someday",
+      recurrenceRule: true,
+      nextInstanceStartDate: FUTURE_ISO,
+    });
+    const { vector, calls } = nativeVector(`"index"`);
+    const result = await runReorder(deps([vector]), {
+      scope: "project",
+      uuids: [tmpl, child],
+      container: { uuid: proj },
+    });
+    expect(result.kind).toBe("blocked");
+    // The template never resolves onto a `project id ... with ids <template>` wire.
+    expect(calls.some((c) => c.includes(tmpl))).toBe(false);
   });
 });
 
