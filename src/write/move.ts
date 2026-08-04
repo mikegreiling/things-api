@@ -696,12 +696,23 @@ function resolveReorderAxis(
   const views = new Set(coherence.map((r) => viewOf(r, packedToday)));
   const view = views.size === 1 ? [...views][0] : null;
 
+  // An INDEX bucket sorts each object KIND in its OWN rank space (an area's someday
+  // to-dos and someday projects are DIFFERENT index buckets — spec axis-isolation),
+  // so a MIXED to-do+project movee set has NO shared container index: only its
+  // GLOBAL axis (the Today/Evening view or the Upcoming day-block, both of which
+  // intermix kinds) is coherent. Nulling the index target for a cross-kind set keeps
+  // the dual-axis refusals (view + forecast) and the mixed auto-route from treating
+  // it as container-sortable; it falls through to its global axis instead. (A wrong-
+  // kind movee that ISN'T bound for a global axis was already refused upstream in
+  // runInPlaceReorder, so the only cross-kind sets that reach here are global ones.)
+  const sameKind = new Set(rows.map((r) => r.type)).size === 1;
+
   // The shared index-axis container target, if the whole coherence set has one
   // (classifying each row as though it sat in its container's anytime bucket).
   const indexTargets = coherence.map((r) => indexAxisTargetOf(r, bounceEnabled));
   const indexKeys = new Set(indexTargets.map(containerKey));
   const indexTarget =
-    indexKeys.size === 1 && indexTargets[0]?.scope != null
+    sameKind && indexKeys.size === 1 && indexTargets[0]?.scope != null
       ? (indexTargets[0] as ScopeTarget)
       : null;
 
@@ -924,8 +935,13 @@ function resolveReorderAxis(
   if (rows.length >= 2 && view === null && forecastDay !== null) {
     const fTargets = rows.map((r) => forecastIndexTargetOf(r, packedToday, bounceEnabled));
     const fKeys = new Set(fTargets.map(containerKey));
+    // A cross-kind forecast set has no shared container index (kinds isolate), so it
+    // is coherent on ONLY the day-block axis — not dual-axis. Auto-route it there
+    // (below) rather than offering a container spelling that would then kind-refuse.
     const fIndexTarget =
-      fKeys.size === 1 && fTargets[0]?.scope != null ? (fTargets[0] as ScopeTarget) : null;
+      sameKind && fKeys.size === 1 && fTargets[0]?.scope != null
+        ? (fTargets[0] as ScopeTarget)
+        : null;
     if (fIndexTarget !== null) {
       const date = decodePackedDate(forecastDay);
       return {
@@ -1491,6 +1507,52 @@ export async function runProjectMove(
  * a contiguous block at the EARLIEST movee's current slot, in argument order
  * (spec §4 — `--first` is NOT implied). Cross-container operands fail closed.
  */
+/**
+ * The single-KIND refusal for an INDEX-axis reorder (a stage list, or a project/
+ * area/heading container `index`). An index bucket sorts each object KIND in its
+ * OWN rank space, so a to-do+project mix cannot re-rank in one call — even when the
+ * kinds share a container. A HEADING is never an index/day/view member at all: its
+ * order is the project's heading axis. The GLOBAL day/Today/Evening axes intermix
+ * kinds and never reach here. Copy is tailored per case, naming each movee's kind.
+ */
+function indexKindRefusal(op: "todo.move" | "project.move", rows: MoveeRow[]): MoveRefused {
+  const headings = rows.filter((r) => r.type === 2);
+  if (headings.length > 0) {
+    return refused(
+      op,
+      "usage",
+      "a heading has no stage, schedule, or day order of its own — it is never a Today/Evening, " +
+        "day-block, or stage-list member; a heading's order is the project's heading axis, not a " +
+        `to-do/project index bucket: ${headings.map((r) => r.uuid).join(", ")}`,
+      "reorder a project's headings with `things project move-heading <project> <headings…>`",
+    );
+  }
+  const want = op === "todo.move" ? 0 : 1;
+  const named = rows.map((r) => `${r.uuid} (${KIND_LABEL[r.type] ?? "item"})`).join(", ");
+  // A homogeneous set of the OTHER kind (e.g. all projects handed to `todo reorder`):
+  // point at that kind's own reorder verb rather than the mixed-axis message.
+  if (rows.every((r) => r.type !== want)) {
+    return refused(
+      op,
+      "usage",
+      `\`reorder\` on this path rearranges ${want === 0 ? "to-dos" : "projects"}, but every item ` +
+        `is a ${want === 0 ? "project" : "to-do"}: ${named}`,
+      want === 0
+        ? "to rearrange projects use `things project move <refs…> --first/--last/--before/--after`"
+        : "to rearrange to-dos use `things todo reorder <refs…>`",
+    );
+  }
+  // A genuine to-do + project mix bound for an index bucket.
+  return refused(
+    op,
+    "usage",
+    "one kind at a time — an index bucket sorts to-dos and projects in separate order-spaces (a " +
+      `shared container does not merge them), so a mixed set cannot re-rank in one call: ${named}`,
+    "reorder the to-dos and the projects in separate calls; only the Today/Evening and day-block " +
+      "axes (--in today | evening | upcoming | a YYYY-MM-DD day) sort both kinds together",
+  );
+}
+
 export async function runInPlaceReorder(
   deps: WriteDeps,
   op: "todo.move" | "project.move",
@@ -1524,21 +1586,36 @@ export async function runInPlaceReorder(
     if (row.type !== want) wrongKind.push({ ref: r.uuid, kind: KIND_LABEL[row.type] ?? "item" });
     rows.push(row);
   }
-  // The GLOBAL todayIndex buckets accept PROJECT rows INTERMIXED with to-dos in one
-  // reorder: `today` (O12 — `list "Today"` takes projects inline), `evening` (SIT4
-  // EVEORD — projects share the evening axis, per-type bounce legs), and the future
-  // day-group scopes (`day`/`tomorrow` — SIT4 DAYBNC + TOMORROWLIST accept area-
-  // less project rows; DEADLINE-FORECAST projects join that block via the update-
-  // project deadline-cycle, PROJDL-2a/2c #385). So on the `todo reorder` path a
-  // project movee is legal WHEN every movee sits in a today/evening/scheduled bucket
-  // OR is a deadline-forecast row (whose display bucket is someday/anytime but whose
-  // reorder home is the deadline day-block); the mixed set routes to one of those
-  // scopes (whose wire list is type IN (0,1)). Every OTHER bucket keeps the
-  // homogeneous-kinds refusal, and an ineligible member still fails the downstream
-  // scope guard, so the relaxation never reaches an unvalidated scope.
+  // Kind rule (spec: index-axis isolation). The GLOBAL todayIndex axes INTERMIX
+  // object kinds in one reorder: `today` (O12 — `list "Today"` takes projects
+  // inline), `evening` (SIT4 EVEORD — projects share the evening axis, per-type
+  // bounce legs), and the future day-group scopes (`day`/`tomorrow`/`upcoming`/an
+  // `<ISO>` day — SIT4 DAYBNC + TOMORROWLIST accept area-less project rows; DEADLINE-
+  // FORECAST projects join that block via the update-project deadline-cycle, PROJDL-
+  // 2a/2c #385). An INDEX axis (a stage list `anytime`/`someday`/`inbox`, or a
+  // project/area/heading container `index`) sorts each KIND in its OWN rank space, so
+  // it takes ONE kind only — an area's someday to-dos and someday projects are
+  // DIFFERENT index buckets, so a shared container does not merge them.
+  //
+  // A movee kind mismatched to the reorder verb (a project/heading on `todo reorder`)
+  // is therefore legal ONLY when the whole set lands on a GLOBAL axis. It lands there
+  // when NO `--in` forces an index axis AND every movee is a today/evening/scheduled/
+  // forecast member (the bare set then auto-routes to a day/today scope whose wire
+  // list is type IN (0,1)). An explicit `--in anytime|someday|inbox|<container>`
+  // forces the index axis regardless of bucket, so it NEVER intermixes — this is what
+  // closes the #387-opened trap where a same-day forecast set's index token slipped
+  // the bucket-only relaxation.
+  const inNorm = request.in?.trim().toLowerCase();
+  const inForcesIndex =
+    inNorm !== undefined &&
+    inNorm !== "today" &&
+    inNorm !== "evening" &&
+    inNorm !== "upcoming" &&
+    !/^\d{4}-\d{2}-\d{2}$/.test(inNorm);
   const globalAxisIntermix =
     isTodo &&
     rows.length > 0 &&
+    !inForcesIndex &&
     rows.every((r) => {
       const b = scheduleBucket(r, packedToday);
       return (
@@ -1549,19 +1626,7 @@ export async function runInPlaceReorder(
       );
     });
   if (wrongKind.length > 0 && !globalAxisIntermix) {
-    const list = wrongKind.map((w) => `${w.ref} (${w.kind})`).join(", ");
-    const allProjects = isTodo && rows.length > 0 && rows.every((r) => r.type === 1);
-    return refused(
-      op,
-      "usage",
-      `homogeneous kinds required — \`reorder\` rearranges to-dos ` +
-        "(the Today, This Evening, and future day-group lists also accept project rows " +
-        `intermixed with to-dos); not: ${list}`,
-      allProjects
-        ? "to rearrange projects in their sidebar/area/someday order use `things project move " +
-            "<refs…> --first/--last/--before/--after`"
-        : undefined,
-    );
+    return indexKindRefusal(op, rows);
   }
 
   return repositionInPlace(

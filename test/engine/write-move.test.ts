@@ -1024,7 +1024,11 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     expect(r.kind).toBe("move-refused");
     if (r.kind === "move-refused") {
       expect(r.refusal).toBe("usage");
-      expect(r.detail).toContain("homogeneous kinds");
+      // The mixed to-do+project set does not land on a global (Today/day) axis — the
+      // project is off the Today bucket — so the index-kind refusal fires, naming the
+      // kind of every movee.
+      expect(r.detail).toContain("one kind at a time");
+      expect(r.detail).toContain(`${proj} (project)`);
     }
   });
 
@@ -1426,7 +1430,9 @@ describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383
     const fp = seedForecastProject("fp", "2026-07-20", -150, 8);
     const idxBefore = indexOrder([fp], `"index"`);
     const { vectors, calls } = datedForecastMoveVectors();
-    // Same day, both loose forecast → dual-axis; `--in upcoming` names the day-block.
+    // A MIXED to-do+project forecast set is single-axis (day only) — the two kinds do
+    // not share a container index bucket, so a bare reorder auto-routes to the day-
+    // block (no dual-axis refusal); `--in upcoming` names that same axis explicitly.
     const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
       uuids: [ft, fp],
       position: { at: "first" },
@@ -2693,6 +2699,218 @@ describe("reorder --in list-token bug-fix + tightening (spec rules 2/4)", () => 
     const r = await dry([a, b], "anytime");
     expect(r.kind).toBe("move-dry-run");
     if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=area");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Index-axis SINGLE-KIND rule: an index bucket sorts each object KIND in its own
+// rank space, so a to-do+project mix (or a heading, which has no index/day/view
+// order at all) is refused on the stage-list and container `--in` tokens — even
+// when the kinds share a container. The GLOBAL day/Today/Evening axes keep
+// intermixing kinds. (Closes the #387 trap: a same-day forecast set's index token
+// used to slip the bucket-only relaxation and silently munge the mixed set.)
+// ---------------------------------------------------------------------------
+
+describe("reorder index-axis single-kind rule (spec axis-isolation)", () => {
+  const dry = (
+    uuids: string[],
+    inTarget?: string,
+    op: "todo.move" | "project.move" = "todo.move",
+  ) =>
+    runInPlaceReorder(
+      deps(),
+      op,
+      { uuids, ...(inTarget !== undefined && { in: inTarget }) },
+      { dryRun: true },
+    );
+
+  it("--in someday refuses a mixed to-do + FORECAST project sharing a project (the #387 trap)", async () => {
+    // The trap: both are same-day deadline-forecast rows in ONE project, so they
+    // pass the shared-container + stage checks — but someday to-dos and someday
+    // projects are DIFFERENT index buckets, so the mix is refused (formerly it
+    // silently compiled the someday index re-rank).
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const t = seedForecast("t", "2026-07-20", -100, 3, { project: proj });
+    const p = seedForecastProject("p", "2026-07-20", -200, 7, { project: proj });
+    const r = await dry([t, p], "someday");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+      expect(r.detail).toContain(`${t} (to-do)`);
+      expect(r.detail).toContain(`${p} (project)`);
+      // NOT a silent compile: no someday index re-rank leaked through.
+      expect((r as { plan?: unknown }).plan).toBeUndefined();
+    }
+  });
+
+  it("--in someday refuses a mixed NON-forecast to-do + project sharing an area", async () => {
+    // Requirement 1's shared-container case without deadlines: an area's someday
+    // to-do and someday project still refuse (different index buckets).
+    const area = seedArea(fixture.db, "A");
+    const t = seedTodo(fixture.db, { title: "t", area, start: "someday", index: 3 });
+    const p = seedProject(fixture.db, { title: "p", area, start: "someday", index: 7 });
+    const r = await dry([t, p], "someday");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+    }
+  });
+
+  it("--in anytime refuses a mixed to-do + project sharing an area", async () => {
+    const area = seedArea(fixture.db, "A");
+    const t = seedTodo(fixture.db, { title: "t", area, start: "active", index: 3 });
+    const p = seedProject(fixture.db, { title: "p", area, start: "active", index: 7 });
+    const r = await dry([t, p], "anytime");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+    }
+  });
+
+  it("--in <container> refuses a mixed forecast to-do + project in that project", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const t = seedForecast("t", "2026-07-20", -100, 3, { project: proj });
+    const p = seedForecastProject("p", "2026-07-20", -200, 7, { project: proj });
+    const r = await dry([t, p], "Work");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+    }
+  });
+
+  it("--in inbox with a project gives a KIND refusal, not a confusing stage message (rule 2)", async () => {
+    // A forecast project on `--in inbox` used to slip the bucket relaxation and hit
+    // the stage check, refusing with "not inbox-stage — in the someday bucket". It
+    // must refuse on KIND instead (a project is never an inbox reorder member).
+    const t = seedTodo(fixture.db, { title: "t", start: "inbox", index: 1 });
+    const p = seedForecastProject("p", "2026-07-20", -200, 7);
+    const r = await dry([t, p], "inbox");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("one kind at a time");
+      expect(r.detail).not.toContain("inbox-stage");
+    }
+  });
+
+  it("a set of PROJECTS handed to `todo reorder --in someday` points at `things project move`", async () => {
+    const a = seedProject(fixture.db, { title: "a", start: "someday", index: 3 });
+    const b = seedProject(fixture.db, { title: "b", start: "someday", index: 7 });
+    const r = await dry([a, b], "someday");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("every item is a project");
+      expect(r.remediation).toContain("things project move");
+    }
+  });
+
+  // Requirement 3 + 4: a HEADING movee is never a member of ANY reorder bucket — its
+  // order is the project's heading axis — so it refuses on every `--in` token (stage,
+  // container, day, and view) with the move-heading pointer.
+  for (const token of [
+    undefined,
+    "anytime",
+    "someday",
+    "inbox",
+    "today",
+    "evening",
+    "upcoming",
+    "2026-07-20",
+  ]) {
+    it(`a heading movee refuses on --in ${token ?? "(bare)"} → points at move-heading`, async () => {
+      const proj = seedProject(fixture.db, { title: "P" });
+      const h = seedHeading(fixture.db, { title: "H", project: proj });
+      const r = await dry([h], token);
+      expect(r.kind).toBe("move-refused");
+      if (r.kind === "move-refused") {
+        expect(r.refusal).toBe("usage");
+        expect(r.detail).toContain("heading");
+        expect(r.remediation).toContain("things project move-heading");
+      }
+    });
+  }
+
+  it("a heading mixed with a Today to-do on --in today still refuses (heading is never a member)", async () => {
+    const proj = seedProject(fixture.db, { title: "P" });
+    const h = seedHeading(fixture.db, { title: "H", project: proj });
+    const t = seedTodo(fixture.db, { title: "t", startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dry([t, h], "today");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.remediation).toContain("things project move-heading");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Global-axis kind-intermix locks: the Today/Evening view and the Upcoming day-
+// block sort to-dos and projects TOGETHER, so a mixed set on those tokens compiles
+// (never a kind refusal). A cross-kind set is single-axis, so a BARE reorder auto-
+// routes to its global axis rather than raising a bogus dual-axis container option.
+// ---------------------------------------------------------------------------
+
+describe("reorder global-axis kind intermix (day/Today/Evening — unchanged)", () => {
+  it("--in today intermixes a Today to-do + Today project (no kind refusal)", async () => {
+    const todo = seedTodo(fixture.db, { title: "t", startDate: "2026-07-05", todayIndex: 10 });
+    const proj = seedProject(fixture.db, { title: "P", startDate: "2026-07-05", todayIndex: 20 });
+    const r = await runInPlaceReorder(
+      deps({ vectors: [membershipVector(), reorderVector("todayIndex")] }),
+      "todo.move",
+      { uuids: [proj, todo], position: { at: "first" }, in: "today" },
+    );
+    expect(r.kind).toBe("move-ok");
+    expect(indexOrder([proj, todo], "todayIndex")).toEqual([1, 2]);
+  });
+
+  it("--in upcoming intermixes a forecast to-do + forecast project on one day-block", async () => {
+    const t = seedForecast("t", "2026-07-20", -50, 3);
+    const p = seedForecastProject("p", "2026-07-20", -150, 8);
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t, p], position: { at: "first" }, in: "upcoming" },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("--in <ISO> intermixes a forecast to-do + forecast project on that day-block", async () => {
+    const t = seedForecast("t", "2026-07-20", -50, 3);
+    const p = seedForecastProject("p", "2026-07-20", -150, 8);
+    const r = await runInPlaceReorder(
+      deps(),
+      "todo.move",
+      { uuids: [t, p], position: { at: "first" }, in: "2026-07-20" },
+      { dryRun: true },
+    );
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("a BARE mixed-kind forecast set is single-axis → auto-routes to the day-block (no dual-axis refusal)", async () => {
+    // Coherence fix: a to-do + project forecast set on one day has no shared
+    // container index, so the bare reorder auto-routes to the day-block instead of
+    // refusing with a container spelling that would then kind-refuse.
+    const t = seedForecast("t", "2026-07-20", -50, 3);
+    const p = seedForecastProject("p", "2026-07-20", -150, 8);
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [t, p] }, { dryRun: true });
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
+  });
+
+  it("a BARE mixed-kind forecast set sharing a PROJECT still auto-routes (no bogus container option)", async () => {
+    const proj = seedProject(fixture.db, { title: "Work" });
+    const t = seedForecast("t", "2026-07-20", -50, 3, { project: proj });
+    const p = seedForecastProject("p", "2026-07-20", -150, 8, { project: proj });
+    const r = await runInPlaceReorder(deps(), "todo.move", { uuids: [t, p] }, { dryRun: true });
+    expect(r.kind).toBe("move-dry-run");
+    if (r.kind === "move-dry-run") expect(r.plan.placement).toContain("scope=day");
   });
 });
 

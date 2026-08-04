@@ -2481,7 +2481,10 @@ export function registerWriteCommands(program: Command): void {
           "--in <target>",
           "name the axis to reorder on: today | evening | anytime | someday | inbox, a project/" +
             "area/heading ref (uuid or unique title), upcoming (the one future day the set shares), " +
-            "or a YYYY-MM-DD day-block",
+            "or a YYYY-MM-DD day-block. A stage-list or container axis sorts one KIND at a time — " +
+            "a mixed to-do+project set is refused (even sharing a container); only today | evening " +
+            "| upcoming | a day-block intermix both kinds. Reorder a project's headings with " +
+            "`things project move-heading`.",
         ),
     ),
   ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
