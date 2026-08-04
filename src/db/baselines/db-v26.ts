@@ -15,5 +15,8 @@ export const DB_V26: Baseline = {
   // deadlineSuppressionDate):
   //   sha256:5526059b10ffffe1b67f796d031857d030403bd5b747374646a2803a55c0e5c3
   fingerprint: "sha256:784bd2f6533e6f85e053b0ec68958083d4ebca11c152ad1d2935178240d4c52b",
-  knownThingsAppVersions: ["3.22.11"],
+  // Things 3.22.12 (build 32212016) ships the IDENTICAL DB v26 schema (fingerprint
+  // byte-identical) and an identical Things.sdef — a behavioral-only update, re-certified
+  // 2026-08-03 against golden-v2 (drift-runbook step 3; assumption-register *Confirmed under*).
+  knownThingsAppVersions: ["3.22.11", "3.22.12"],
 };
