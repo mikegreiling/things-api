@@ -2521,6 +2521,472 @@
           }
         ]
       }
+    },
+    {
+      "id": "O34",
+      "title": "GRNDINT to-do arm (#393 PR2): a same-07-06-day GRAND INTERLEAVE of all THREE upcoming mechanisms sorted together in ONE `day`-scope op \u2014 SCHEDULED to-dos (when=, loose + area-direct) + DEADLINE-FORECAST to-dos (deadline-cycle) + a repeating TO-DO TEMPLATE projection (single-id `list \"Upcoming\"` native front-insert, TMPLSORT-1/\u00a79s) \u2014 reverse-target dispatch on the shared block todayIndex min-space lands the exact order F1<S2<TMPL<F2<S1. The to-do-template leg is userModificationDate-SILENT (\u00a79r) and rt1/index/start byte-preserved; forecast `index`/deadline byte-identical; scheduled startDate preserved. Certifies #393's `day` template-inclusive leg family (VM-proven grndint 2026-08-04). Kind note: a MIXED to-do+project set with a template is currently refused upstream (globalAxisIntermix bug, see report) \u2014 this row is the single-kind (to-do) interleave.",
+      "vector": "url",
+      "operation": "order.grand-interleave-todo",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=GI-S1&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GI-S1' AND startBucket=0 AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=GI-S2&when=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GI-S2' AND startBucket=0 AND startDate=132805376 AND area='{seed:LAB-AREA-A}'"
+        },
+        {
+          "openUrl": "things:///add?title=GI-F1&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GI-F1' AND start=2 AND startDate IS NULL AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=GI-F2&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GI-F2' AND start=2 AND startDate IS NULL AND deadline=132805376"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:GI-S1}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-S1' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-S1}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-S1' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-F2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-F2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-F2}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-F2' AND deadline=132805376"
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Upcoming\" with ids \"{seed:LAB-REPEAT-DAILY}\""
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-S2}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-S2' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-S2}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-S2' AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-F1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-F1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GI-F1}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GI-F1' AND deadline=132805376"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GI-F1') < (SELECT todayIndex FROM TMTask WHERE title='GI-S2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GI-S2') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}') < (SELECT todayIndex FROM TMTask WHERE title='GI-F2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GI-F2') < (SELECT todayIndex FROM TMTask WHERE title='GI-S1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GI-F1"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GI-F2"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GI-S1"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GI-S2"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": [
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O35",
+      "title": "GRNDINT to-do arm REVERSED (#393 PR2): the O34 mechanism re-sorted to the REVERSED target S1<F2<TMPL<S2<F1 in one `day`-scope op (own GR-* fixture) \u2014 proves the all-three-mechanism interleave is decisively re-orderable (not a one-way collapse); the to-do template repositioned again userModificationDate-SILENT; forecast index/deadline byte-identical; scheduled startDate preserved. Companion reverse pass of O34 (VM-proven grndint 2026-08-04).",
+      "vector": "url",
+      "operation": "order.grand-interleave-todo-rev",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=GR-S1&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GR-S1' AND startBucket=0 AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=GR-S2&when=2026-07-06&list-id={seed:LAB-AREA-A}"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GR-S2' AND startBucket=0 AND startDate=132805376 AND area='{seed:LAB-AREA-A}'"
+        },
+        {
+          "openUrl": "things:///add?title=GR-F1&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GR-F1' AND start=2 AND startDate IS NULL AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=GR-F2&when=someday&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GR-F2' AND start=2 AND startDate IS NULL AND deadline=132805376"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:GR-F1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-F1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-F1}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-F1' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-S2}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-S2' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-S2}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-S2' AND startDate=132805376"
+        },
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Upcoming\" with ids \"{seed:LAB-REPEAT-DAILY}\""
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-F2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-F2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-F2}&auth-token={ctx:token}&deadline=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-F2' AND deadline=132805376"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-S1}&auth-token={ctx:token}&when=2026-07-07"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-S1' AND startDate=132805504"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:GR-S1}&auth-token={ctx:token}&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GR-S1' AND startDate=132805376"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GR-S1') < (SELECT todayIndex FROM TMTask WHERE title='GR-F2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GR-F2') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}') < (SELECT todayIndex FROM TMTask WHERE title='GR-S2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GR-S2') < (SELECT todayIndex FROM TMTask WHERE title='GR-F1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GR-F1"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GR-F2"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GR-S1"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GR-S2"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": [
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O36",
+      "title": "GRNDINT native Tomorrow wire (#393 PR2): a NO-FORECAST tomorrow-day set (07-06 == tomorrow at the 07-05 pin) of SCHEDULED to-dos + a repeating TO-DO TEMPLATE rides the native ONE-CALL `list \"Tomorrow\"` reorder (TMPLSORT-3c-Tomorrow / PTMPL-B5) \u2014 lands the EXACT sent order S2<TMPL<S1 with the template as an ordinary exact-slot member. Distinct from O34's `day` bounce: the native wire is userModificationDate-SILENT for ALL members (todayIndex re-rank, no URL legs) and `index` byte-identical. The presence of a forecast member downgrades to the `day` bounce (move.ts scope pick), so this cell is forecast-free by construction.",
+      "vector": "applescript",
+      "operation": "order.grand-interleave-tomorrow",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=GT-S1&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GT-S1' AND startBucket=0 AND startDate=132805376"
+        },
+        {
+          "openUrl": "things:///add?title=GT-S2&when=2026-07-06"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GT-S2' AND startBucket=0 AND startDate=132805376"
+        }
+      ],
+      "commands": [
+        {
+          "osascript": "tell application \"Things3\" to _private_experimental_ reorder to dos in list \"Tomorrow\" with ids \"{uuid:GT-S2},{seed:LAB-REPEAT-DAILY},{uuid:GT-S1}\""
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GT-S2') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-DAILY}') < (SELECT todayIndex FROM TMTask WHERE title='GT-S1')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GT-S1"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "userModificationDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GT-S2"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "userModificationDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-DAILY"
+            },
+            "fields": [
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O37",
+      "title": "GRNDINT project-template SUFFIX ACCEPT (#393 PR2): a same-07-12-day PROJECT set \u2014 SCHEDULED project (when=) + DEADLINE-FORECAST project (deadline-cycle) + the repeating PROJECT TEMPLATE projection \u2014 reorders as a projects day-group where the project template is the byte-UNTOUCHED SUFFIX (PTMPL-B: no headless reach on a non-tomorrow day). Every movable front-inserts ABOVE it: lands GF1<GS1<PT with the project template's todayIndex/umd/index/start/startDate/rt1 ALL byte-identical. Certifies #393's project-template suffix rule (the accept branch; the refuse + experimental-off branches are e2e-locked). VM-proven grndint 2026-08-04.",
+      "vector": "url",
+      "operation": "order.grand-interleave-proj-suffix",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=GP-S1&when=2026-07-12"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GP-S1' AND type=1 AND startBucket=0 AND startDate=132806144"
+        },
+        {
+          "openUrl": "things:///add-project?title=GP-F1&when=someday&deadline=2026-07-12"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='GP-F1' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132806144"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:GP-S1}&auth-token={ctx:token}&when=2026-07-13"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GP-S1' AND startDate=132806272"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GP-S1}&auth-token={ctx:token}&when=2026-07-12"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GP-S1' AND startDate=132806144"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GP-F1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GP-F1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:GP-F1}&auth-token={ctx:token}&deadline=2026-07-12"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='GP-F1' AND deadline=132806144"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GP-F1') < (SELECT todayIndex FROM TMTask WHERE title='GP-S1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='GP-S1') < (SELECT todayIndex FROM TMTask WHERE uuid='{seed:LAB-REPEAT-WEEKLY-PROJ}')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GP-F1"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "GP-S1"
+            },
+            "fields": ["start", "startBucket", "startDate"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "uuid": "@seed:LAB-REPEAT-WEEKLY-PROJ"
+            },
+            "fields": [
+              "todayIndex",
+              "index",
+              "start",
+              "startDate",
+              "deadline",
+              "rt1_recurrenceRule",
+              "rt1_nextInstanceStartDate",
+              "userModificationDate"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

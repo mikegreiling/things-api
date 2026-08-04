@@ -190,6 +190,68 @@ TP2=$(json_get "d['data']['uuid']")
 # Top-level sidebar PROJECTS reorder via project move --first (someday-bounce round-trip).
 run_step 0 "sidebar project reorder via project move --first (bounce)" project move "$TP2" "$TP1" --first
 
+# Phase-B #393: repeating-template day-block wiring. A template's strictly-future
+# projection is a first-class day-block todayIndex member — the `day`/`tomorrow`
+# scopes place it (o-suite O34-O37 lock the compiled DB behavior; these steps drive
+# the SHIPPED CLI end-to-end). Golden pin 2026-07-05: the baked to-do template
+# projects 07-06 (== tomorrow), the project template 07-12 (an arbitrary day).
+echo "== reorder: repeating-template day-block wiring (#393) =="
+TEMPLATE_UUID=$(python3 -c "
+import glob, os, sqlite3
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+print(sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute(\"SELECT uuid FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL AND type=0 LIMIT 1\").fetchone()[0])
+")
+PROJ_TEMPLATE_UUID=$(python3 -c "
+import glob, os, sqlite3
+db = glob.glob(os.path.expanduser('~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-*/Things Database.thingsdatabase/main.sqlite'))[0]
+print(sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute(\"SELECT uuid FROM TMTask WHERE rt1_recurrenceRule IS NOT NULL AND type=1 LIMIT 1\").fetchone()[0])
+")
+# to-do arm: SCHEDULED + DEADLINE-FORECAST to-dos + the to-do template, all three
+# upcoming mechanisms sorted together in ONE --in <day> op (the to-do template rides
+# the single-id `list "Upcoming"` native front-insert leg, umd-silent).
+run_step 0 "seed GI scheduled to-do (07-06)" todo add "E2E-GI-S1" --when 2026-07-06
+GI_S1=$(json_get "d['data']['uuid']")
+run_step 0 "seed GI deadline-forecast to-do (07-06)" todo add "E2E-GI-F1" --when someday --deadline 2026-07-06
+GI_F1=$(json_get "d['data']['uuid']")
+run_step 0 "grand interleave: scheduled+forecast+to-do-template in ONE --in day op" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
+if grep -q 'userModificationDate-SILENT' <<<"$LAST_OUT"; then
+  echo "ok   to-do-template leg discloses the umd-silent warning (§9r)"
+else
+  echo "FAIL to-do-template interleave missing the umd-silent disclosure"; FAILURES=$((FAILURES + 1))
+fi
+# project arm: SCHEDULED + DEADLINE-FORECAST projects + the PROJECT template — the
+# project template is the byte-untouched SUFFIX (no headless reach on a non-tomorrow
+# day). ACCEPT (template last) vs REFUSE (template above a movable, H-REORDER-SCOPE).
+run_step 0 "seed GP scheduled project (07-12)" project add "E2E-GP-S1" --when 2026-07-12
+GP_S1=$(json_get "d['data']['uuid']")
+run_step 0 "seed GP deadline-forecast project (07-12)" project add "E2E-GP-F1" --when someday --deadline 2026-07-12
+GP_F1=$(json_get "d['data']['uuid']")
+run_step 0 "project-template SUFFIX ACCEPT (template last, byte-untouched)" project move "$GP_F1" "$GP_S1" "$PROJ_TEMPLATE_UUID" --first
+if grep -q 'byte-untouched' <<<"$LAST_OUT"; then
+  echo "ok   project-template suffix accept discloses the byte-untouched warning"
+else
+  echo "FAIL project-template suffix accept missing the byte-untouched disclosure"; FAILURES=$((FAILURES + 1))
+fi
+# Non-conformant suffix: the project template requested ABOVE a movable → refused with
+# the ratified H-REORDER-SCOPE copy naming the one achievable arrangement (exit 3).
+run_step 3 "project-template suffix REFUSE (template above a movable)" project move "$GP_S1" "$PROJ_TEMPLATE_UUID" "$GP_F1" --first
+if grep -q 'H-REORDER-SCOPE' <<<"$LAST_OUT" && grep -q 'cannot be placed above a movable' <<<"$LAST_OUT"; then
+  echo "ok   non-conformant suffix carries the ratified H-REORDER-SCOPE refusal copy"
+else
+  echo "FAIL non-conformant suffix missing the ratified refusal copy"; FAILURES=$((FAILURES + 1))
+fi
+# Experimental-off: a template-bearing day-group needs the native surface (a dated
+# when= leg CRASHES a template) — with allow-experimental off it refuses NAMING the
+# template, never a crash-path leg (exit 2).
+things config set allow-experimental false >/dev/null 2>&1
+run_step 3 "experimental-off refuses a template day-set (names the template, no crash leg)" reorder "$GI_F1" "$TEMPLATE_UUID" "$GI_S1" --in 2026-07-06
+things config set allow-experimental true >/dev/null 2>&1
+if grep -q "$TEMPLATE_UUID" <<<"$LAST_OUT" && grep -q 'allow-experimental is off' <<<"$LAST_OUT"; then
+  echo "ok   experimental-off refusal names the template + the config gate"
+else
+  echo "FAIL experimental-off refusal did not name the template / gate"; FAILURES=$((FAILURES + 1))
+fi
+
 echo "== suite-audit gap closure: cancel / backdate / add-logged / project tags / heading ops =="
 run_step 0 "seed to-do for cancel" todo add "E2E-CANCELME"
 CXL=$(json_get "d['data']['uuid']")
