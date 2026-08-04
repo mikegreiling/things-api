@@ -1888,6 +1888,236 @@ describe("day scope (SIT4 DAYBNC — the dated cross-container bounce)", () => {
   });
 });
 
+/**
+ * Faithful sim of the DLBNC deadline-cycle + its interleave with the SIT4 scheduled
+ * bounce on ONE Upcoming day-block todayIndex axis. The block for day D is every
+ * SCHEDULED row (startBucket=0, startDate=D) AND every DEADLINE-FORECAST to-do
+ * (startDate NULL, deadline=D, start IN (1,2)); its GLOBAL min spans both classes.
+ *   - `deadline=` (empty) CLEARS the deadline: the row leaves the block, todayIndex
+ *     inert, start/startDate untouched (DLBNC-3b).
+ *   - `deadline=<ISO>` RE-SETS it: front-insert at the block's current global min,
+ *     start=2/startDate NULL and `index` byte-identical (never touched) — DLBNC-3.
+ *   - `when=<ISO>`/today (scheduled): front-insert at the same combined block min,
+ *     deadline/FKs preserved (SIT4 DAYBNC).
+ * So a reverse-target pass interleaves the two classes exactly (the #383 wiring claim).
+ */
+function datedForecastVector() {
+  const calls: string[] = [];
+  const blockMin = (packed: number): number => {
+    const r = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
+           (startBucket = 0 AND startDate = ?) OR
+           (startDate IS NULL AND deadline = ? AND start IN (1, 2)))`,
+      )
+      .get(packed, packed) as { m: number | null };
+    return r.m ?? 0;
+  };
+  const vector: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const url = new URL(invocation.payload);
+      const id = url.searchParams.get("id") ?? "";
+      const deadline = url.searchParams.get("deadline");
+      if (deadline !== null) {
+        if (deadline === "") {
+          fixture.db
+            .prepare("UPDATE TMTask SET deadline = NULL, userModificationDate = ? WHERE uuid = ?")
+            .run(modClock++, id);
+        } else {
+          const packed = encodePackedDate(deadline);
+          fixture.db
+            .prepare(
+              "UPDATE TMTask SET deadline = ?, todayIndex = ?, userModificationDate = ? WHERE uuid = ?",
+            )
+            .run(packed, blockMin(packed) - 1, modClock++, id);
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      const base = url.searchParams.get("when") ?? "";
+      const packed = base === "today" ? PACKED_TODAY : encodePackedDate(base);
+      const startVal = packed > PACKED_TODAY ? 2 : 1;
+      fixture.db
+        .prepare(
+          `UPDATE TMTask SET start = ?, startDate = ?, startBucket = 0, todayIndex = ?,
+           userModificationDate = ? WHERE uuid = ?`,
+        )
+        .run(startVal, packed, blockMin(packed) - 1, modClock++, id);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+/** A deadline-forecast row: someday/anytime stage, NO startDate, future deadline D. */
+function seedForecast(
+  title: string,
+  todayIndex: number,
+  index: number,
+  extra: Partial<Parameters<typeof seedTodo>[1]> = {},
+): string {
+  return seedTodo(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    deadline: FUTURE_ISO,
+    todayIndex,
+    index,
+    ...extra,
+  });
+}
+
+describe("day scope: DEADLINE-FORECAST rows (DLBNC / #383 — the deadline-cycle)", () => {
+  it("forecast-only: lands the exact target block order, someday `index` byte-identical", async () => {
+    // DLBNC-3c protocol proof: scramble 3 forecast rows, deadline-cycle to a target.
+    const f1 = seedForecast("F1", -100, 7);
+    const f2 = seedForecast("F2", -200, 3);
+    const f3 = seedForecast("F3", -300, 11);
+    const idxBefore = ranks([f1, f2, f3], `"index"`);
+    const target = [f2, f3, f1]; // scrambled vs resting todayIndex
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: target });
+    expect(result.kind).toBe("ok");
+    // Final ascending todayIndex == target order.
+    const order = target.toSorted((a, b) => ranks([a])[0]! - ranks([b])[0]!);
+    expect(order).toEqual(target);
+    // `index` byte-identical (the deadline-cycle never touches it — DLBNC-3).
+    expect(ranks([f1, f2, f3], `"index"`)).toEqual(idxBefore);
+    // start=2 / startDate NULL / deadline restored on every row.
+    for (const u of [f1, f2, f3]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate, deadline FROM TMTask WHERE uuid = ?")
+        .get(u) as { start: number; startDate: number | null; deadline: number | null };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBeNull();
+      expect(row.deadline).toBe(PACKED_FUTURE);
+    }
+    // Each forecast row: 2 URL legs (deadline= clear + re-set), NO when= leg.
+    expect(calls.every((c) => c.includes("deadline=") && !c.includes("when="))).toBe(true);
+    expect(calls).toHaveLength(6);
+  });
+
+  it("mixed wire: scheduled + forecast rows interleave to the exact target order (one axis)", async () => {
+    // The #383 interleave claim: both leg families front-insert below the same
+    // global day min, so a unified reverse-target pass lands the exact interleave.
+    const s1 = seedDay("S1", -50); // scheduled (startDate=D)
+    const f1 = seedForecast("F1", -150, 4); // forecast (deadline=D)
+    const s2 = seedDay("S2", -250);
+    const f2 = seedForecast("F2", -350, 9);
+    const idxBefore = ranks([f1, f2], `"index"`);
+    const target = [s1, f1, s2, f2]; // interleaved target
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: target });
+    expect(result.kind).toBe("ok");
+    const order = target.toSorted((a, b) => ranks([a])[0]! - ranks([b])[0]!);
+    expect(order).toEqual(target); // exact interleave
+    // Forecast rows: `index` byte-identical.
+    expect(ranks([f1, f2], `"index"`)).toEqual(idxBefore);
+    // Scheduled rows: dates preserved (startDate=D, startBucket=0).
+    for (const u of [s1, s2]) {
+      const row = fixture.db
+        .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+        .get(u) as { startDate: number; startBucket: number };
+      expect(row.startDate).toBe(PACKED_FUTURE);
+      expect(row.startBucket).toBe(0);
+    }
+    // Per-row-class legs: forecast rows via deadline=, scheduled via when=.
+    const fLegs = calls.filter((c) => c.includes(`id=${f1}`) || c.includes(`id=${f2}`));
+    const sLegs = calls.filter((c) => c.includes(`id=${s1}`) || c.includes(`id=${s2}`));
+    expect(fLegs.every((c) => c.includes("deadline=") && !c.includes("when="))).toBe(true);
+    expect(sLegs.every((c) => c.includes("when=") && !c.includes("deadline="))).toBe(true);
+  });
+
+  it("re-sets the SAME deadline byte-identical (never reformats)", async () => {
+    const f1 = seedForecast("F1", -100, 1);
+    const { vector, calls } = datedForecastVector();
+    await runReorder(deps([vector]), { scope: "day", uuids: [f1] });
+    // The re-set leg carries the decoded ISO of the original deadline (2026-07-19).
+    expect(calls.some((c) => c.includes(`deadline=${FUTURE_ISO}`))).toBe(true);
+    const row = fixture.db.prepare("SELECT deadline FROM TMTask WHERE uuid = ?").get(f1) as {
+      deadline: number;
+    };
+    expect(row.deadline).toBe(PACKED_FUTURE);
+  });
+
+  it("REFUSES an INBOX-stage row with the day's deadline, naming §9o (unprobed off-axis)", async () => {
+    const f1 = seedForecast("F1", -100, 1);
+    const inbox = seedTodo(fixture.db, {
+      title: "IB",
+      start: "inbox",
+      startDate: null,
+      deadline: FUTURE_ISO,
+    });
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(deps([vector]), { scope: "day", uuids: [f1, inbox] });
+    expect(result.kind).toBe("blocked");
+    if (result.kind === "blocked") {
+      expect(result.detail).toContain("INBOX-stage");
+      expect(result.detail).toContain("§9o");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("dry-run names the deadline-cycle + leg count for a mixed group", async () => {
+    const s1 = seedDay("S1", -50);
+    const f1 = seedForecast("F1", -150, 2);
+    const { vector, calls } = datedForecastVector();
+    const result = await runReorder(
+      deps([vector]),
+      { scope: "day", uuids: [s1, f1] },
+      { dryRun: true },
+    );
+    expect(result.kind).toBe("dry-run");
+    if (result.kind === "dry-run") {
+      expect(result.plan.invocation).toContain("deadline-cycle");
+      expect(result.plan.invocation).toContain("1 deadline-forecast");
+      expect(result.plan.invocation).toContain("1 scheduled");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("membership: computeReorderPre day admits start∈{1,2} forecast rows, excludes inbox+deadline", () => {
+    const someday = seedForecast("SD", -100, 1); // start=2
+    const anytime = seedForecast("AT", -200, 2, { start: "active" }); // start=1, no startDate
+    const inbox = seedTodo(fixture.db, {
+      title: "IB",
+      start: "inbox",
+      startDate: null,
+      deadline: FUTURE_ISO,
+    });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "day", uuids: [someday, anytime, inbox] },
+      null,
+      NOW,
+    );
+    const memberIds = pre.members.map((m) => m.uuid);
+    expect(memberIds).toContain(someday);
+    expect(memberIds).toContain(anytime);
+    expect(memberIds).not.toContain(inbox);
+    expect(pre.rejected.some((r) => r.uuid === inbox && r.reason.includes("INBOX-stage"))).toBe(
+      true,
+    );
+  });
+
+  it("aborts on a concurrent deadline clear (forecast row left the block)", async () => {
+    const f1 = seedForecast("F1", -100, 1);
+    const f2 = seedForecast("F2", -200, 2);
+    // f2's deadline is cleared out-of-band before its bounce runs.
+    const { vector } = datedForecastVector();
+    const hooked = deps([vector]);
+    // Clear f2's deadline right away to simulate a concurrent edit.
+    fixture.db.prepare("UPDATE TMTask SET deadline = NULL WHERE uuid = ?").run(f2);
+    const result = await runReorder(hooked, { scope: "day", uuids: [f1, f2] });
+    expect(result.kind).toBe("blocked"); // f2 is no longer a member → rejected pre-flight
+  });
+});
+
 describe("evening scope: PROJECT movees (SIT4 EVEORD — shared evening axis)", () => {
   it("front-inserts a project via update-project on the shared evening axis", async () => {
     const ev = seedToday("EV", 10, { evening: true });

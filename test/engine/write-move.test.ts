@@ -1178,6 +1178,193 @@ describe('ORDFIN2 TOMORROWLIST — the one-call `list "Tomorrow"` fast path (pla
   });
 });
 
+/**
+ * Move-layer sim of the DLBNC deadline-cycle interleaved with the scheduled bounce.
+ * A `when=` leg front-inserts at the combined block min (scheduled + forecast); a
+ * `deadline=` (empty) clears; a `deadline=<ISO>` re-sets + front-inserts. One shared
+ * todayIndex axis so a scheduled+forecast mix interleaves in one reverse-target pass.
+ */
+function datedForecastMoveVectors() {
+  const calls: string[] = [];
+  const blockMin = (packed: number): number => {
+    const r = fixture.db
+      .prepare(
+        `SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 AND (
+           (startBucket = 0 AND startDate = ?) OR
+           (startDate IS NULL AND deadline = ? AND start IN (1, 2)))`,
+      )
+      .get(packed, packed) as { m: number | null };
+    return r.m ?? 0;
+  };
+  const applyWhen = (uuid: string, when: string): void => {
+    const at = when.indexOf("@");
+    const base = at >= 0 ? when.slice(0, at) : when;
+    const packed = base === "today" ? TODAY_PACKED : encodePackedDate(base);
+    const startVal = packed > TODAY_PACKED ? 2 : 1;
+    fixture.db
+      .prepare(
+        `UPDATE TMTask SET start = ?, startDate = ?, startBucket = 0, todayIndex = ?,
+         userModificationDate = ? WHERE uuid = ?`,
+      )
+      .run(startVal, packed, blockMin(packed) - 1, modClock++, uuid);
+  };
+  const applyDeadline = (uuid: string, deadline: string | null): void => {
+    if (deadline === null || deadline === "") {
+      fixture.db
+        .prepare("UPDATE TMTask SET deadline = NULL, userModificationDate = ? WHERE uuid = ?")
+        .run(modClock++, uuid);
+      return;
+    }
+    const packed = encodePackedDate(deadline);
+    fixture.db
+      .prepare(
+        "UPDATE TMTask SET deadline = ?, todayIndex = ?, userModificationDate = ? WHERE uuid = ?",
+      )
+      .run(packed, blockMin(packed) - 1, modClock++, uuid);
+  };
+  const urlFake: WriteVector = {
+    id: "url-scheme",
+    matrix: {
+      "todo.update": { support: "yes", disruption: 0, validation: "validated" },
+      "project.update": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(inv) {
+      calls.push(inv.op ?? "?");
+      const p = inv.opParams as { uuid: string; when?: string; deadline?: string | null };
+      if (inv.op === "todo.update" || inv.op === "project.update") {
+        if (p.deadline !== undefined) applyDeadline(p.uuid, p.deadline);
+        else applyWhen(p.uuid, p.when ?? "");
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vectors: [urlFake], calls };
+}
+
+/** A deadline-forecast to-do: someday/anytime stage, NO startDate, future deadline. */
+function seedForecast(
+  title: string,
+  deadline: string,
+  todayIndex: number,
+  index: number,
+  extra: Partial<Parameters<typeof seedTodo>[1]> = {},
+): string {
+  return seedTodo(fixture.db, {
+    title,
+    start: "someday",
+    startDate: null,
+    deadline,
+    todayIndex,
+    index,
+    ...extra,
+  });
+}
+
+describe("planner: DEADLINE-FORECAST rows route to the `day` scope (DLBNC / #383)", () => {
+  it("loose forecast rows route to the `day` scope (deadline-cycle), not someday", async () => {
+    const a = seedForecast("a", "2026-07-20", -100, 5);
+    const b = seedForecast("b", "2026-07-20", -200, 9);
+    const { vectors, calls } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.placementClass).toBe("guaranteed");
+      expect(r.note).toContain("2026-07-20 day-group");
+    }
+    expect(ascending(indexOrder([a, b], "todayIndex"))).toBe(true);
+    // Deadline-cycle legs only (deadline= clear + re-set), no native reorder / scratch.
+    expect(calls.every((c) => c === "todo.update")).toBe(true);
+    // start=2 / startDate NULL preserved (never de-scheduled).
+    for (const u of [a, b]) {
+      const row = fixture.db
+        .prepare("SELECT start, startDate, deadline FROM TMTask WHERE uuid = ?")
+        .get(u) as { start: number; startDate: number | null; deadline: number };
+      expect(row.start).toBe(2);
+      expect(row.startDate).toBeNull();
+      expect(row.deadline).toBe(encodePackedDate("2026-07-20"));
+    }
+  });
+
+  it('a forecast deadline == TOMORROW still routes to `day` (never the re-dating `list "Tomorrow"` sort)', async () => {
+    // list "Tomorrow" RE-DATES a forecast row (stamps startDate, UPCDL-5), so a
+    // forecast group NEVER rides the native tomorrow sort — always the deadline-cycle.
+    const a = seedForecast("a", "2026-07-06", -100, 3); // deadline == tomorrow
+    const b = seedForecast("b", "2026-07-06", -200, 7);
+    const { vectors, calls } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [a, b],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") {
+      expect(r.note).toContain("2026-07-06 day-group"); // the `day` scope, not "Tomorrow"
+      expect(r.note).not.toContain("Tomorrow");
+    }
+    // deadline= legs, NOT a native `list "Tomorrow"` reorder.
+    expect(calls.every((c) => c === "todo.update")).toBe(true);
+  });
+
+  it("a scheduled + forecast mix on ONE day interleaves via the `day` scope (one axis)", async () => {
+    const s1 = seedTodo(fixture.db, {
+      title: "s1",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: -50,
+    });
+    const f1 = seedForecast("f1", "2026-07-20", -150, 4);
+    const { vectors } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [s1, f1],
+      position: { at: "first" },
+    });
+    expect(r.kind).toBe("move-ok");
+    if (r.kind === "move-ok") expect(r.note).toContain("2026-07-20 day-group");
+    // The scheduled row kept its date; the forecast row kept its forecast state.
+    const s1row = fixture.db
+      .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
+      .get(s1) as { startDate: number; startBucket: number };
+    expect(s1row.startDate).toBe(encodePackedDate("2026-07-20"));
+    const f1row = fixture.db
+      .prepare("SELECT start, startDate FROM TMTask WHERE uuid = ?")
+      .get(f1) as { start: number; startDate: number | null };
+    expect(f1row.start).toBe(2);
+    expect(f1row.startDate).toBeNull();
+  });
+
+  it("axis-aware anchor: a forecast movee positions --before a SCHEDULED same-day row (one bucket)", async () => {
+    // #342 axis-aware anchor: forecast + scheduled same-day rows are one bucket, so
+    // a scheduled row is a valid anchor for a forecast movee (they share the axis).
+    const sched = seedTodo(fixture.db, {
+      title: "sched",
+      start: "someday",
+      startDate: "2026-07-20",
+      todayIndex: -300,
+    });
+    const f1 = seedForecast("f1", "2026-07-20", -100, 2);
+    const { vectors } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [f1],
+      position: { before: sched },
+    });
+    expect(r.kind).toBe("move-ok"); // anchor accepted (same day-block axis)
+  });
+
+  it("axis-aware anchor: an anchor on a DIFFERENT deadline day is refused (never migrates)", async () => {
+    const f1 = seedForecast("f1", "2026-07-20", -100, 1);
+    const other = seedForecast("other", "2026-07-21", -100, 2); // different day
+    const { vectors } = datedForecastMoveVectors();
+    const r = await runInPlaceReorder(deps({ vectors }), "todo.move", {
+      uuids: [f1],
+      position: { before: other },
+    });
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") expect(r.refusal).toBe("blocked");
+  });
+});
+
 describe("regression: dated start=2 rows classify as scheduled, never someday", () => {
   // The app's ONLY representation of a future-scheduled to-do is start=2
   // (someday) + a FUTURE startDate — a plain active start=1 is always undated

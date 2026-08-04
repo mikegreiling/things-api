@@ -27,6 +27,7 @@ The SKILL.md summary is enough for most calls; this page is the full contract. E
 - **Positioned**: `--first`/`--last` send the block to the top/bottom of its bucket; `--before <ref>`/`--after <ref>` place it relative to an anchor.
 - **Selection order = landing order** (reverse by naming the refs backwards).
 - **Mixed to-do + project refs are allowed** in the Today/Evening/day buckets those kinds share; elsewhere reorder operates within one container+bucket.
+- **Deadline-forecast rows sort on their Upcoming day too.** A someday/anytime to-do with a future **deadline** and no start date renders in the Upcoming block on its deadline day. `things reorder` treats it as a first-class member of that day-group: it sorts on the same axis as the day's scheduled rows and interleaves with them, so you can reorder a mixed set of scheduled and deadline-forecast rows in one call. This works with `allow-experimental` OFF — it rides a public-URL deadline-cycle, not the private surface (still gated by `bounce-enabled`, like every multi-leg reorder). An INBOX to-do that merely carries the same deadline is NOT on that day's axis and is refused with a message saying so (schedule it, or take it out of the Inbox, first).
 
 Sibling verbs for the two things `reorder` does NOT touch: `things project move-heading` reorders a project's HEADINGS; `things area reorder` reorders the sidebar AREAS.
 
@@ -63,7 +64,7 @@ Three config knobs (`things config get/set …`) tune ordering; every default gi
 
 ## Placement guarantees and the one dead class
 
-"Top of bucket in selection order" is GUARANTEED wherever a lab-clean protocol exists: loose inbox/today/evening/someday/anytime; a project's or area's members (anytime AND someday); a heading's anytime/someday children; any container child's evening slot; area-less someday/anytime projects; and a whole future day-group across containers (including scheduled project rows, area'd ones too). The result's placement class names which guarantee you got, and a bounce that co-touches unnamed siblings to honor a `--before`/`--after` anchor lists them.
+"Top of bucket in selection order" is GUARANTEED wherever a lab-clean protocol exists: loose inbox/today/evening/someday/anytime; a project's or area's members (anytime AND someday); a heading's anytime/someday children; any container child's evening slot; area-less someday/anytime projects; and a whole future day-group across containers (including scheduled project rows, area'd ones too, and deadline-forecast to-dos on their deadline day). The result's placement class names which guarantee you got, and a bounce that co-touches unnamed siblings to honor a `--before`/`--after` anchor lists them.
 
 **The one class that cannot be reordered is a repeating TEMPLATE** — a dated `when=` leg crashes it, so a template movee or anchor is refused and template placement stays app-default (disclosed). Everything non-template is sortable.
 
