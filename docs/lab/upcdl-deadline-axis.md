@@ -8,6 +8,8 @@ One offline Tart clone (`upcdl-lab`, run 2026-08-03, **Things 3.22.11**, golden 
 
 **Status: RAN + BANKED.**
 
+> **AMENDMENT (2026-08-03, DLBNC / #382 follow-up — forward pointer, evidence body unchanged per the immutability convention).** The single open residual this doc flags — *"does the Upcoming block render same-deadline forecast rows by `index` or by `todayIndex`?"* — is **RESOLVED: `todayIndex`, period** (maintainer-established; GUI-confirmed by [dlbnc-deadline-cycle.md](dlbnc-deadline-cycle.md) DLBNC-1d — a day block rendered top→bottom in ascending `todayIndex`, opposite to `index`). A forecast row's `index` orders it only in its project's someday bucket; the ROOT Upcoming day block reads `todayIndex`. Consequences for this doc's conclusions: **(1)** the "clean lever IFF the block renders by `index`" framing is retired — the block renders by `todayIndex`, so the `project id`/someday-bounce `index` levers (UPCDL-3/7b) do NOT move the block; **(2)** a clean `startDate`-preserving `todayIndex` writer DOES exist after all — the **deadline-cycle** (URL `deadline=` clear+set front-inserts, `index`/`start`/`startDate` byte-identical, DLBNC-2/3), which this campaign had not tested; **(3)** UPCDL-7 **Q2** ("plain `when=` preserves both axes") is a single-row artifact — a multi-row `when=<date>`→`someday` round-trip front-inserts BOTH axes (DLBNC-5). The verdicts below (byte findings, the hidden-list HAZARD law §9p) stand as observed; only the open-question framing is resolved.
+
 ## The answer to the maintainer's question
 
 **NO — there is no *good* (state-preserving) headless way to coerce the `todayIndex` of same-deadline-day someday deadline-forecast rows, and `list "Today"` in particular is a HAZARD, not a lever.**
