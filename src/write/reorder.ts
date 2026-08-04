@@ -1163,24 +1163,22 @@ async function runBounce(
 
     // leg 1 sends the item AWAY from its resting bucket; leg 2 returns it — the
     // return leg is what front-inserts (BOUNCE2 re-entry law). SCHEDULED rows use
-    // the `when=` round-trip (op chosen per row type — to-do vs project); a day-scope
-    // DEADLINE-FORECAST row (startDate NULL, deadline set) uses the DLBNC deadline-
-    // cycle instead: leg 1 CLEARS the deadline (transiently off the block), leg 2
-    // RE-SETS the same deadline byte-identical (front-inserts on the block todayIndex
-    // axis). Both classes front-insert at the day's global min, so one reverse-target
-    // pass interleaves them exactly (o-suite forecast-cycle + mixed-interleave locks).
+    // the `when=` round-trip; a day-scope DEADLINE-FORECAST row (startDate NULL,
+    // deadline set) uses the DLBNC deadline-cycle instead: leg 1 CLEARS the deadline
+    // (transiently off the block), leg 2 RE-SETS the same deadline byte-identical
+    // (front-inserts on the block todayIndex axis). BOTH classes pick the leg op PER
+    // ROW TYPE — `todo.update` (→ `update?…`) for a to-do, `project.update` (→
+    // `update-project?…`) for a project — so a forecast PROJECT rides the #385-
+    // certified `update-project?deadline=` cycle (PROJDL-2b, PROJSTAR-safe). Both
+    // classes front-insert at the day's global min, so one reverse-target pass
+    // interleaves them exactly (o-suite forecast-cycle + mixed-interleave locks).
     const forecast = forecastLegOf(uuid);
-    const rowLegOp = forecast !== null ? "todo.update" : opForRow(uuid);
+    const rowLegOp = opForRow(uuid);
     const awayLabel = forecast !== null ? "deadline= clear" : `when=${awayValue}`;
     const backLabel = forecast !== null ? "deadline= re-set" : `when=${backValue}`;
     const leg1 =
       forecast !== null
-        ? await runMutation(
-            deps,
-            "todo.update",
-            { uuid, deadline: null },
-            legOptions(options, txnId),
-          )
+        ? await runMutation(deps, rowLegOp, { uuid, deadline: null }, legOptions(options, txnId))
         : await runMutation(deps, rowLegOp, { uuid, when: awayValue }, legOptions(options, txnId));
     if (leg1.kind !== "ok") {
       auditSummary(
@@ -1205,7 +1203,7 @@ async function runBounce(
       forecast !== null
         ? await runMutation(
             deps,
-            "todo.update",
+            rowLegOp,
             { uuid, deadline: forecast.iso },
             legOptions(options, txnId),
           )

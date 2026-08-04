@@ -2388,6 +2388,139 @@
           }
         ]
       }
+    },
+    {
+      "id": "O33",
+      "title": "PROJDL mixed-kind interleave (#385): a MIXED same-day DEADLINE-FORECAST block of to-dos AND PROJECTS (deadline=D, startDate NULL, start=2) reorders as ONE block on the shared Upcoming day todayIndex axis via a UNIFIED reverse-target dispatch, per-KIND leg op (to-do: update?deadline= clear+re-set; project: update-project?deadline= clear+re-set). Lands the exact interleaved order; project `index`/start(star)/startBucket/area-FK byte-preserved (PROJSTAR-safe), tag preserved, to-do `index` byte-identical. Widens #384's forecast day-cycle to type=1 project rows; the `day` reorder scope's mixed-kind wire compile locks onto this.",
+      "vector": "url",
+      "operation": "order.day-forecast-project-interleave",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-PF-T1&when=someday&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PF-T1' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-PF-P1&when=someday&deadline=2026-07-08&area-id={seed:LAB-AREA-A}&tags=lab-tag-1"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PF-P1' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805632 AND area='{seed:LAB-AREA-A}'"
+        },
+        {
+          "openUrl": "things:///add?title=O-PF-T2&when=someday&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PF-T2' AND type=0 AND start=2 AND startDate IS NULL AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-PF-P2&when=someday&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PF-P2' AND type=1 AND start=2 AND startDate IS NULL AND deadline=132805632"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update-project?id={uuid:O-PF-P2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-P2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:O-PF-P2}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-P2' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-PF-T2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-T2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-PF-T2}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-T2' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:O-PF-P1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-P1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update-project?id={uuid:O-PF-P1}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-P1' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-PF-T1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-T1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-PF-T1}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-PF-T1' AND deadline=132805632"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-PF-T1') < (SELECT todayIndex FROM TMTask WHERE title='O-PF-P1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-PF-P1') < (SELECT todayIndex FROM TMTask WHERE title='O-PF-T2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-PF-T2') < (SELECT todayIndex FROM TMTask WHERE title='O-PF-P2')"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTaskTag tt JOIN TMTag g ON tt.tags=g.uuid JOIN TMTask t ON tt.tasks=t.uuid WHERE t.title='O-PF-P1' AND g.title='lab-tag-1'"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PF-P1"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline", "area"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PF-P2"
+            },
+            "fields": ["index", "start", "startBucket", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PF-T1"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-PF-T2"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          }
+        ]
+      }
     }
   ]
 }

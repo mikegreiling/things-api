@@ -1130,8 +1130,11 @@ export function computeReorderPre(
           "todayIndex",
         );
         // §9o deadline-forecast cohort: start IN (1,2), startDate NULL, deadline == D.
+        // To-dos AND PROJECTS (type IN (0,1)) — forecast projects are first-class
+        // members of the SAME block todayIndex axis, interleaved with forecast to-dos
+        // (PROJDL-2a/2c, #385), reordered by the update-project deadline-cycle.
         const forecast = select(
-          "type = 0 AND startDate IS NULL AND deadline = ? AND start IN (1, 2)",
+          "type IN (0, 1) AND startDate IS NULL AND deadline = ? AND start IN (1, 2)",
           [dayPacked],
           "todayIndex",
         );
