@@ -3,6 +3,19 @@
 # The follow-up the AXVM1 layer (#388) was built to unblock. Write-up:
 # docs/lab/tdrag-ax-residuals.md.
 #
+# ⚠ WIRE-SYNTAX ARTIFACT (2026-08-04, do NOT reuse the multi-id lines as a model):
+# the MULTI-id reorder wires below use AppleScript LIST literals
+# `with ids {"a","b","c"}` (lines 262, 363, 367, 407). The shipped op sends ONE
+# comma-joined TEXT (`with ids "a,b,c"`, src/write/commands.ts); a multi-item list
+# literal throws `-1700 Can't make {…} into type text` at the AppleEvent parameter
+# boundary — the app NEVER runs — and `gas`'s `2>&1 || true` swallowed the error,
+# so it looked like a no-op. The findings resting on those lines (TDRAG-3-2 mixed
+# no-op; TDRAG-5/ORD-18 native-reorder provenance) are SUPERSEDED — see
+# docs/lab/tmplsort-template-protocol.md (the coercion law + the re-probes). These
+# probe lines are LEFT AS THE HISTORICAL RECORD of what produced that (corrected)
+# evidence; the fixed comma-text form lives in research-tmplsort.sh. Single-id
+# `{"x"}` wires here coerce cleanly and are unaffected.
+#
 # GUI input is synthesized via vncdotool ($VNCDO) against the --vnc-experimental
 # framebuffer (2048x1536), single-client (one vncdo per step). The golden bakes
 # the AXVM1 Accessibility grant (sshd-keygen-wrapper auth_value=2), so System
