@@ -862,23 +862,39 @@ async function runBounce(
   // The two `when=` leg values. A fixed-bucket bounce uses the spec's keywords; the
   // DATED `day` bounce (SIT4 DAYBNC) derives them from the movees' shared day —
   // back = the day D, away = the neighbour day D+1 (a strictly-future staging day
-  // ≠ D that keeps the transient visit out of Today). The day is read off the first
-  // requested uuid (the planner guarantees every movee shares it); an absent/
-  // malformed day yields an empty member set and is rejected below before any
-  // dispatch, so the today fallback here only keeps the WhenValue well-typed.
+  // ≠ D that keeps the transient visit out of Today). The day D is read off the
+  // first requested uuid — its `startDate` when scheduled, else its `deadline` when
+  // it is a deadline-forecast row (startDate NULL, start IN (1,2) — DLBNC/§9o). The
+  // planner guarantees every movee shares D; an absent/malformed day yields an empty
+  // member set and is rejected below before any dispatch, so the today fallback here
+  // only keeps the WhenValue well-typed. (The `when=` values drive the SCHEDULED
+  // rows' bounce legs; a forecast row ignores them — it rides the deadline-cycle.)
   let dayPacked: number | null = null;
   let awayValue: WhenValue;
   let backValue: WhenValue;
   if (spec.dated) {
     const firstUuid = params.uuids[0];
-    dayPacked =
+    const firstRow =
       firstUuid !== undefined
-        ? ((
-            deps.db.prepare("SELECT startDate FROM TMTask WHERE uuid = ?").get(firstUuid) as
-              | { startDate: number | null }
-              | undefined
-          )?.startDate ?? null)
-        : null;
+        ? (deps.db
+            .prepare("SELECT startDate, startBucket, deadline, start FROM TMTask WHERE uuid = ?")
+            .get(firstUuid) as
+            | {
+                startDate: number | null;
+                startBucket: number;
+                deadline: number | null;
+                start: number;
+              }
+            | undefined)
+        : undefined;
+    dayPacked =
+      firstRow === undefined
+        ? null
+        : firstRow.startDate !== null && firstRow.startBucket === 0
+          ? firstRow.startDate
+          : firstRow.startDate === null && (firstRow.start === 1 || firstRow.start === 2)
+            ? firstRow.deadline
+            : null;
     const iso = decodePackedDate(dayPacked);
     backValue = iso ?? localToday(now());
     awayValue = iso !== null ? addDaysIso(iso, 1) : localToday(now());
@@ -886,6 +902,21 @@ async function runBounce(
     awayValue = spec.away as WhenValue;
     backValue = spec.back as WhenValue;
   }
+  // A day-scope DEADLINE-FORECAST row (startDate NULL, deadline set) reorders by the
+  // DLBNC deadline-cycle (URL `deadline=` clear + re-set of the SAME deadline —
+  // byte-identical, front-inserts on the block's todayIndex axis) instead of the
+  // scheduled `when=` bounce. Returns the decoded ISO to re-set, or null for a
+  // scheduled row (which takes the `when=` legs). AppleScript `due date` is
+  // certified-wrong here (lazy todayIndex, cannot clear) — URL only (DLBNC §9q).
+  const forecastLegOf = (uuid: string): { iso: string } | null => {
+    if (bounceKind !== "day") return null;
+    const r = deps.db.prepare("SELECT startDate, deadline FROM TMTask WHERE uuid = ?").get(uuid) as
+      | { startDate: number | null; deadline: number | null }
+      | undefined;
+    if (r === undefined || r.startDate !== null || r.deadline === null) return null;
+    const iso = decodePackedDate(r.deadline);
+    return iso === null ? null : { iso };
+  };
   // Per-item leg op: the mixed-kind `day`/`evening` bounces pick update-project for
   // a project row (type=1) and todo.update for a to-do (type=0); every other bounce
   // uses one fixed op. (NEVER send a dated when= leg to a template — §1 crash — but
@@ -1043,18 +1074,32 @@ async function runBounce(
     spec.jsonCollapsible && dispatchVector !== undefined && dispatchVector.simulates !== true;
 
   if (options.dryRun === true) {
+    // Name the per-row-class legs. A `day` set may mix SCHEDULED rows (when= bounce)
+    // and DEADLINE-FORECAST rows (the DLBNC deadline-cycle: deadline= clear + re-set),
+    // so the plan discloses the leg family per class + count; every other bounce is a
+    // single when= round-trip.
+    let legNaming = `when=${awayValue} → when=${backValue}`;
+    if (bounceKind === "day") {
+      const fN = coBounce.filter((u) => forecastLegOf(u) !== null).length;
+      const sN = coBounce.length - fN;
+      const bits: string[] = [];
+      if (sN > 0) bits.push(`${sN} scheduled via when=${awayValue} → when=${backValue}`);
+      if (fN > 0)
+        bits.push(`${fN} deadline-forecast via deadline-cycle (deadline= clear + re-set)`);
+      legNaming = bits.join("; ");
+    }
     const invocation = useJson
       ? `json-collapse ×${coBounce.length} (${direction}-insert, ` +
         `${direction === "front" ? "reverse" : "forward"} array order, ` +
         (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
         `1 dispatch / ${coBounce.length * 2} ops): ` +
-        `when=${awayValue} → when=${backValue} interleaved per item; validate-first full-abort, ` +
+        `${legNaming} interleaved per item; validate-first full-abort, ` +
         `one terminal order verify`
       : `bounce ×${coBounce.length} (${direction}-insert, ` +
         `${direction === "front" ? "reverse" : "forward"} order, ` +
         (touchedUnnamed.length > 0 ? `touches ${touchedUnnamed.length} unnamed sibling(s), ` : "") +
         `${coBounce.length * 2} legs): ` +
-        `when=${awayValue} → when=${backValue}; one verify per item round-trip`;
+        `${legNaming}; one verify per item round-trip`;
     return {
       kind: "dry-run",
       op: "reorder",
@@ -1117,15 +1162,26 @@ async function runBounce(
     }
 
     // leg 1 sends the item AWAY from its resting bucket; leg 2 returns it — the
-    // return leg is what front/back-inserts (BOUNCE2 re-entry law). The op is
-    // chosen per row type (to-do vs project) for the mixed-kind day/evening bounce.
-    const rowLegOp = opForRow(uuid);
-    const leg1 = await runMutation(
-      deps,
-      rowLegOp,
-      { uuid, when: awayValue },
-      legOptions(options, txnId),
-    );
+    // return leg is what front-inserts (BOUNCE2 re-entry law). SCHEDULED rows use
+    // the `when=` round-trip (op chosen per row type — to-do vs project); a day-scope
+    // DEADLINE-FORECAST row (startDate NULL, deadline set) uses the DLBNC deadline-
+    // cycle instead: leg 1 CLEARS the deadline (transiently off the block), leg 2
+    // RE-SETS the same deadline byte-identical (front-inserts on the block todayIndex
+    // axis). Both classes front-insert at the day's global min, so one reverse-target
+    // pass interleaves them exactly (o-suite forecast-cycle + mixed-interleave locks).
+    const forecast = forecastLegOf(uuid);
+    const rowLegOp = forecast !== null ? "todo.update" : opForRow(uuid);
+    const awayLabel = forecast !== null ? "deadline= clear" : `when=${awayValue}`;
+    const backLabel = forecast !== null ? "deadline= re-set" : `when=${backValue}`;
+    const leg1 =
+      forecast !== null
+        ? await runMutation(
+            deps,
+            "todo.update",
+            { uuid, deadline: null },
+            legOptions(options, txnId),
+          )
+        : await runMutation(deps, rowLegOp, { uuid, when: awayValue }, legOptions(options, txnId));
     if (leg1.kind !== "ok") {
       auditSummary(
         deps,
@@ -1138,19 +1194,22 @@ async function runBounce(
       return {
         kind: "bounce-aborted",
         op: "reorder",
-        detail: `bounce leg 1 (when=${awayValue}) failed for ${uuid} — the item was NOT moved`,
+        detail: `bounce leg 1 (${awayLabel}) failed for ${uuid} — the item was NOT moved`,
         placed: [...placed],
         remaining: remainingBefore(),
         cause: leg1,
       };
     }
     // leg 2 must follow leg 1's committed state for the same item before the next item's bounce begins
-    const leg2 = await runMutation(
-      deps,
-      rowLegOp,
-      { uuid, when: backValue },
-      legOptions(options, txnId),
-    );
+    const leg2 =
+      forecast !== null
+        ? await runMutation(
+            deps,
+            "todo.update",
+            { uuid, deadline: forecast.iso },
+            legOptions(options, txnId),
+          )
+        : await runMutation(deps, rowLegOp, { uuid, when: backValue }, legOptions(options, txnId));
     if (leg2.kind !== "ok") {
       auditSummary(
         deps,
@@ -1160,12 +1219,20 @@ async function runBounce(
         { placed: [...placed] },
         { pre: preRanks, txnId, actor },
       );
+      const strandedState =
+        forecast !== null
+          ? "left DEADLINE-LESS (transiently off the day-block)"
+          : `STRANDED IN ${String(awayValue).toUpperCase()}`;
+      const recover =
+        forecast !== null
+          ? `re-set its deadline (${forecast.iso})`
+          : `re-schedule it (when=${backValue})`;
       return {
         kind: "bounce-aborted",
         op: "reorder",
         detail:
-          `bounce leg 2 (when=${backValue}) failed for ${uuid} — THE ITEM IS STRANDED IN ` +
-          `${String(awayValue).toUpperCase()}; re-schedule it (when=${backValue}) or fix in the app`,
+          `bounce leg 2 (${backLabel}) failed for ${uuid} — THE ITEM IS ${strandedState}; ` +
+          `${recover} or fix in the app`,
         placed: [...placed],
         remaining: remainingBefore(),
         cause: leg2,
@@ -2946,7 +3013,7 @@ function checkStillMember(
   const packedToday = encodePackedDate(localToday(now));
   const row = deps.db
     .prepare(
-      "SELECT status, trashed, startBucket, startDate, start, type, area, project, heading " +
+      "SELECT status, trashed, startBucket, startDate, start, type, area, project, heading, deadline " +
         "FROM TMTask WHERE uuid = ?",
     )
     .get(uuid) as
@@ -2960,6 +3027,7 @@ function checkStillMember(
         area: string | null;
         project: string | null;
         heading: string | null;
+        deadline: number | null;
       }
     | undefined;
   if (row === undefined) return "the item no longer exists";
@@ -3025,13 +3093,22 @@ function checkStillMember(
       return null;
     }
     case "day": {
-      // The dated bounce's members are to-dos (any container) and scheduled project
-      // rows (area-less OR area-direct — SIT5 AREAPROJDAY) sharing the day D on the
-      // startBucket=0 axis. A concurrent edit that re-dates, de-schedules, or
-      // evenings the row ejects it from the group.
+      // The dated bounce's members are SCHEDULED to-dos (any container) and scheduled
+      // project rows (area-less OR area-direct — SIT5 AREAPROJDAY) sharing the day D
+      // on the startBucket=0 axis, PLUS DEADLINE-FORECAST to-dos (startDate NULL,
+      // start IN (1,2), deadline == D — DLBNC/§9o) on the SAME block todayIndex axis.
+      // A concurrent edit that re-dates, de-schedules, evenings, clears the deadline,
+      // or drops the row to the Inbox (start=0) ejects it from the group.
       if (row.type !== 0 && row.type !== 1) return "the item is not a to-do or project";
-      if (row.startBucket !== 0 || row.startDate !== dayPacked) {
-        return "the item left the day-group (re-dated, evening-ed, or de-scheduled)";
+      const scheduled =
+        row.startBucket === 0 && row.startDate !== null && row.startDate === dayPacked;
+      const forecast =
+        row.startDate === null &&
+        (row.start === 1 || row.start === 2) &&
+        row.deadline !== null &&
+        row.deadline === dayPacked;
+      if (!scheduled && !forecast) {
+        return "the item left the day-group (re-dated, evening-ed, de-scheduled, or its deadline changed)";
       }
       return null;
     }

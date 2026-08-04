@@ -64,7 +64,7 @@
     },
     {
       "id": "O03",
-      "title": "DESTRUCTIVE FINDING: including an Evening member in a Today reorder CLEARS its startBucket (silently de-evenings it) — native reorder normalizes bucket to the targeted list; evening scope is bounce-only and the today-scope guard must reject bucket-1 members",
+      "title": "DESTRUCTIVE FINDING: including an Evening member in a Today reorder CLEARS its startBucket (silently de-evenings it) \u2014 native reorder normalizes bucket to the targeted list; evening scope is bounce-only and the today-scope guard must reject bucket-1 members",
       "vector": "applescript",
       "operation": "order.evening-interaction",
       "appState": "running-background",
@@ -117,7 +117,7 @@
     },
     {
       "id": "O04",
-      "title": "private reorder against a PROJECT specifier — native project-child reordering?",
+      "title": "private reorder against a PROJECT specifier \u2014 native project-child reordering?",
       "vector": "applescript",
       "operation": "order.project",
       "appState": "running-background",
@@ -207,7 +207,7 @@
     },
     {
       "id": "O06",
-      "title": "DESTRUCTIVE FINDING: project-scope reorder RIPS heading-contained children out of their heading (heading -> NULL) — guards must reject headed uuids; heading-scoped ordering remains unautomatable",
+      "title": "DESTRUCTIVE FINDING: project-scope reorder RIPS heading-contained children out of their heading (heading -> NULL) \u2014 guards must reject headed uuids; heading-scoped ordering remains unautomatable",
       "vector": "applescript",
       "operation": "order.heading-children",
       "appState": "running-background",
@@ -481,7 +481,7 @@
     },
     {
       "id": "O11",
-      "title": "production wire-list shape in a MIXED project: full un-headed-children ids list (headings + headed children excluded) — heading rows and headed children must be untouched. Depends on post-O06 state (LAB-H-A1/A2 are un-headed by now).",
+      "title": "production wire-list shape in a MIXED project: full un-headed-children ids list (headings + headed children excluded) \u2014 heading rows and headed children must be untouched. Depends on post-O06 state (LAB-H-A1/A2 are un-headed by now).",
       "vector": "applescript",
       "operation": "order.project-mixed-unheaded",
       "appState": "running-background",
@@ -535,7 +535,7 @@
     },
     {
       "id": "O12",
-      "title": "PROJECT rows in Today: the ids list accepts a project uuid (project inherits from `to do` in the sdef) — required so the today-scope wire list can pin scheduled projects instead of leaving their placement underdetermined",
+      "title": "PROJECT rows in Today: the ids list accepts a project uuid (project inherits from `to do` in the sdef) \u2014 required so the today-scope wire list can pin scheduled projects instead of leaving their placement underdetermined",
       "vector": "applescript",
       "operation": "order.today-project-row",
       "appState": "running-background",
@@ -669,7 +669,7 @@
     },
     {
       "id": "O15",
-      "title": "SOMEDAY to-dos: the validated TWO-CALL anchor-stack protocol (P8b). The Someday handler STACKS each sent id above the list's ORIGINAL top (later-sent higher for to-dos), so the shipped compile emits (1) push desired-bottom to top as the anchor, (2) send the REVERSED wire list — the two calls realize the exact requested order [O-SD1,O-SD2,O-SD3] (index ascending). Consistency lock for reorder --scope someday (to-do arm; s-suite/e2e-locked).",
+      "title": "SOMEDAY to-dos: the validated TWO-CALL anchor-stack protocol (P8b). The Someday handler STACKS each sent id above the list's ORIGINAL top (later-sent higher for to-dos), so the shipped compile emits (1) push desired-bottom to top as the anchor, (2) send the REVERSED wire list \u2014 the two calls realize the exact requested order [O-SD1,O-SD2,O-SD3] (index ascending). Consistency lock for reorder --scope someday (to-do arm; s-suite/e2e-locked).",
       "vector": "applescript",
       "operation": "order.someday-todos",
       "appState": "running-background",
@@ -742,7 +742,7 @@
     },
     {
       "id": "O16",
-      "title": "SOMEDAY area-less PROJECTS: the INVERTED two-call anchor-stack protocol (P9e). Someday projects DESCEND (earlier-sent higher — OPPOSITE of to-dos), so the compile keeps call 1 (push desired-bottom to top) but call 2 is anchor + FORWARD rest; realizes the exact requested order [O-SP1,O-SP2,O-SP3]. Consistency lock for reorder --scope someday (project arm; P9e locked, s-suite/e2e). NOTE: someday projects show in the Someday view only, not the sidebar.",
+      "title": "SOMEDAY area-less PROJECTS: the INVERTED two-call anchor-stack protocol (P9e). Someday projects DESCEND (earlier-sent higher \u2014 OPPOSITE of to-dos), so the compile keeps call 1 (push desired-bottom to top) but call 2 is anchor + FORWARD rest; realizes the exact requested order [O-SP1,O-SP2,O-SP3]. Consistency lock for reorder --scope someday (project arm; P9e locked, s-suite/e2e). NOTE: someday projects show in the Someday view only, not the sidebar.",
       "vector": "applescript",
       "operation": "order.someday-projects",
       "appState": "running-background",
@@ -815,7 +815,7 @@
     },
     {
       "id": "O17",
-      "title": "DAYORD-b: a CONTAINER specifier (project id) reordering same-day SCHEDULED children rewrites their day-bucket order (todayIndex) DATE-PRESERVINGLY — the clean within-day surface (contrast list \"Upcoming\", which re-dates, oddities §9g). Recurring lock for the DAYORD verdict (reordgaps-results.md); the anchor vocabulary's container same-day placement compiles onto this.",
+      "title": "DAYORD-b: a CONTAINER specifier (project id) reordering same-day SCHEDULED children rewrites their day-bucket order (todayIndex) DATE-PRESERVINGLY \u2014 the clean within-day surface (contrast list \"Upcoming\", which re-dates, oddities \u00a79g). Recurring lock for the DAYORD verdict (reordgaps-results.md); the anchor vocabulary's container same-day placement compiles onto this.",
       "vector": "applescript",
       "operation": "order.container-same-day",
       "appState": "running-background",
@@ -889,7 +889,7 @@
     },
     {
       "id": "O18",
-      "title": "BOUNCEJSON: ONE `things:///json` update array carrying [someday,anytime] per item, applied in ARRAY ORDER, reorders a heading's anytime children (back-insert, BJ-a) — the collapse the reorder compiler dispatches for the heading / area-less-anytime classes (§9i, BounceSpec.jsonCollapsible). Scrambled target (seed 1<2<3<4, target 2<4<1<3) proves array order CONTROLS placement, not a no-op; heading FK + start=1 preserved (validate-first, one dispatch).",
+      "title": "BOUNCEJSON: ONE `things:///json` update array carrying [someday,anytime] per item, applied in ARRAY ORDER, reorders a heading's anytime children (back-insert, BJ-a) \u2014 the collapse the reorder compiler dispatches for the heading / area-less-anytime classes (\u00a79i, BounceSpec.jsonCollapsible). Scrambled target (seed 1<2<3<4, target 2<4<1<3) proves array order CONTROLS placement, not a no-op; heading FK + start=1 preserved (validate-first, one dispatch).",
       "vector": "url",
       "operation": "order.bounce-json-collapse",
       "appState": "running-background",
@@ -960,7 +960,7 @@
       "operation": "order.dated-day-bounce",
       "vector": "url",
       "appState": "running-background",
-      "title": "DAYBNC (SIT4/SIT5): the DATED cross-container day bounce (re-when to D+1 then back to D) FRONT-inserts each row at day D's GLOBAL todayIndex minimum across containers, so a REVERSE-target dispatch lands the exact order. Seeds a day-D (2026-07-19) group — a loose to-do, a loose to-do carrying reminder+deadline, an AREA-DIRECT child (AREAPROJDAY membership), and an area-less PROJECT row — and bounces them in reverse target order (dispatch L1,A,L2,P -> order P,L2,A,L1). Locks the placement (ordering waitSql) AND the preservation set: bare when=<date> carries reminderTime + deadline (§2e/R21, the decisive contrast with the evening bounce §9n), keeps the area FK (area-direct membership), and re-dates project rows too. Backs the `day` reorder scope.",
+      "title": "DAYBNC (SIT4/SIT5): the DATED cross-container day bounce (re-when to D+1 then back to D) FRONT-inserts each row at day D's GLOBAL todayIndex minimum across containers, so a REVERSE-target dispatch lands the exact order. Seeds a day-D (2026-07-19) group \u2014 a loose to-do, a loose to-do carrying reminder+deadline, an AREA-DIRECT child (AREAPROJDAY membership), and an area-less PROJECT row \u2014 and bounces them in reverse target order (dispatch L1,A,L2,P -> order P,L2,A,L1). Locks the placement (ordering waitSql) AND the preservation set: bare when=<date> carries reminderTime + deadline (\u00a72e/R21, the decisive contrast with the evening bounce \u00a79n), keeps the area FK (area-direct membership), and re-dates project rows too. Backs the `day` reorder scope.",
       "setup": [
         {
           "openUrl": "things:///add?title=O-DD-L1&when=2026-07-19"
@@ -1093,7 +1093,7 @@
       "operation": "order.tomorrow-list",
       "vector": "applescript",
       "appState": "running-background",
-      "title": "TOMORROWLIST + TOMORROWHEAD (ORDFIN2 Arm 2 / SIT3): ONE `_private_experimental_ reorder to dos in list \"Tomorrow\"` re-ranks the whole next-day (2026-07-06) group on todayIndex in the sent order, ACCEPTS a scheduled PROJECT row inline (O12 analog), preserves startDate/start/FKs (NO §9g re-date), and is HEADING-SAFE — a headed child in the wire keeps its heading FK byte-identical, project stays NULL (§9k does NOT extend to the Tomorrow list). Seeds a cross-container tomorrow group (loose, area child, project row, headed child) and reorders with a SCRAMBLED wire so a passing order proves the call CONTROLS placement. Backs the `tomorrow` reorder scope.",
+      "title": "TOMORROWLIST + TOMORROWHEAD (ORDFIN2 Arm 2 / SIT3): ONE `_private_experimental_ reorder to dos in list \"Tomorrow\"` re-ranks the whole next-day (2026-07-06) group on todayIndex in the sent order, ACCEPTS a scheduled PROJECT row inline (O12 analog), preserves startDate/start/FKs (NO \u00a79g re-date), and is HEADING-SAFE \u2014 a headed child in the wire keeps its heading FK byte-identical, project stays NULL (\u00a79k does NOT extend to the Tomorrow list). Seeds a cross-container tomorrow group (loose, area child, project row, headed child) and reorders with a SCRAMBLED wire so a passing order proves the call CONTROLS placement. Backs the `tomorrow` reorder scope.",
       "setup": [
         {
           "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-TM-HP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-TM-HH%22%7D%7D%5D%7D%7D%5D"
@@ -1187,7 +1187,7 @@
       "operation": "order.evening-headed-bounce",
       "vector": "url",
       "appState": "running-background",
-      "title": "EVEHEAD (ORDFIN1 Arm 2b): the today↔evening bounce on a HEADED evening child preserves the heading FK BYTE-IDENTICAL and round-trips startBucket 1->0->1 keeping today's startDate — so the shipped `evening` reorder scope orders a headed child in the Today/Evening bucket unchanged. Seeds a headed child (project+heading via json, child attached, flagged This-Evening), then runs the shipped evening BounceSpec legs (when=today then when=evening) and asserts the heading FK unchanged + startBucket back to 1 + start=1 + today startDate kept. Backs the `evening` scope's headed-child guarantee.",
+      "title": "EVEHEAD (ORDFIN1 Arm 2b): the today\u2194evening bounce on a HEADED evening child preserves the heading FK BYTE-IDENTICAL and round-trips startBucket 1->0->1 keeping today's startDate \u2014 so the shipped `evening` reorder scope orders a headed child in the Today/Evening bucket unchanged. Seeds a headed child (project+heading via json, child attached, flagged This-Evening), then runs the shipped evening BounceSpec legs (when=today then when=evening) and asserts the heading FK unchanged + startBucket back to 1 + start=1 + today startDate kept. Backs the `evening` scope's headed-child guarantee.",
       "setup": [
         {
           "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-EV-HP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-EV-HH%22%7D%7D%5D%7D%7D%5D"
@@ -1269,7 +1269,7 @@
       "operation": "order.headmove",
       "vector": "url",
       "appState": "running-background",
-      "title": "HEADMOVE (SIT6): the flag-safe within-heading anytime sort — UNHEAD each child (list-id=P, index+flag preserved) then RE-HEAD in FORWARD target order (list-id=P&heading=H) BACK-INSERTS each past the heading-bucket max, landing the exact order WITHOUT the de-Today when= bounce. Seeds a heading with three anytime children, one Today-flagged (O-HMc2), and sorts to scrambled target c2<c3<c1 via unhead x3 + re-head x3. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the flag-aware `heading` protocol swap (reorder.ts runHeadMove).",
+      "title": "HEADMOVE (SIT6): the flag-safe within-heading anytime sort \u2014 UNHEAD each child (list-id=P, index+flag preserved) then RE-HEAD in FORWARD target order (list-id=P&heading=H) BACK-INSERTS each past the heading-bucket max, landing the exact order WITHOUT the de-Today when= bounce. Seeds a heading with three anytime children, one Today-flagged (O-HMc2), and sorts to scrambled target c2<c3<c1 via unhead x3 + re-head x3. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the flag-aware `heading` protocol swap (reorder.ts runHeadMove).",
       "setup": [
         {
           "openUrl": "things:///json?auth-token={ctx:token}&data=%5B%7B%22type%22%3A%22project%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-HMP%22%2C%22items%22%3A%5B%7B%22type%22%3A%22heading%22%2C%22attributes%22%3A%7B%22title%22%3A%22O-HMH%22%7D%7D%5D%7D%7D%5D"
@@ -1379,7 +1379,7 @@
       "operation": "order.loosepark",
       "vector": "url",
       "appState": "running-background",
-      "title": "LOOSEPARK (SIT6): the flag-safe loose-anytime sort — PARK each movee into a scratch PROJECT (list-id=SCR) then UNPARK (list-id= empty) in REVERSE target order FRONT-INSERTS each at the loose Anytime index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-Today when= bounce. Seeds three loose anytime to-dos, one Today-flagged (O-LP2), and sorts to scrambled target LP3<LP1<LP2 via park x3 + unpark in reverse (LP2,LP1,LP3). Locks the front-insert placement AND the Today-star preservation. Backs the flag-aware `anytime` protocol swap (reorder.ts runLoosePark).",
+      "title": "LOOSEPARK (SIT6): the flag-safe loose-anytime sort \u2014 PARK each movee into a scratch PROJECT (list-id=SCR) then UNPARK (list-id= empty) in REVERSE target order FRONT-INSERTS each at the loose Anytime index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-Today when= bounce. Seeds three loose anytime to-dos, one Today-flagged (O-LP2), and sorts to scrambled target LP3<LP1<LP2 via park x3 + unpark in reverse (LP2,LP1,LP3). Locks the front-insert placement AND the Today-star preservation. Backs the flag-aware `anytime` protocol swap (reorder.ts runLoosePark).",
       "setup": [
         {
           "openUrl": "things:///add-project?title=O-LPSCR"
@@ -1480,7 +1480,7 @@
       "operation": "order.projpark-detach",
       "vector": "url",
       "appState": "running-background",
-      "title": "PROJPARK detach (SIT6): the flag-safe sidebar-projects sort — DETACH each area'd project (area-id= empty) in REVERSE target order FRONT-INSERTS each at the area-less project index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-star when= bounce. Seeds three area'd projects (parked at create-time in LAB-AREA-A), one Today-flagged (O-PP2), and sorts to scrambled target PP3<PP1<PP2 via detach in reverse (PP2,PP1,PP3). Locks the detach front-insert placement AND the Today-star preservation on a project row. Backs the flag-aware `projects` protocol swap (reorder.ts runProjPark), superseding the #351 de-Today refusal.",
+      "title": "PROJPARK detach (SIT6): the flag-safe sidebar-projects sort \u2014 DETACH each area'd project (area-id= empty) in REVERSE target order FRONT-INSERTS each at the area-less project index min in dispatch order (net order = reverse of dispatch), landing the exact target WITHOUT the de-star when= bounce. Seeds three area'd projects (parked at create-time in LAB-AREA-A), one Today-flagged (O-PP2), and sorts to scrambled target PP3<PP1<PP2 via detach in reverse (PP2,PP1,PP3). Locks the detach front-insert placement AND the Today-star preservation on a project row. Backs the flag-aware `projects` protocol swap (reorder.ts runProjPark), superseding the #351 de-Today refusal.",
       "setup": [
         {
           "openUrl": "things:///add-project?title=O-PP1&area=LAB-AREA-A"
@@ -1563,19 +1563,29 @@
       "operation": "order.inboxback",
       "vector": "applescript",
       "appState": "running-background",
-      "title": "INBOXBACK (SIT7): the non-experimental `inbox`-scope fallback — PARK each inbox row into a scratch PROJECT (update?list-id=SCR; start flips 0->1 transiently) then re-enter via AppleScript `move to do id X to list \"Inbox\"` in REVERSE target order FRONT-INSERTS each at the inbox index min AND RESTORES start=0 (project->NULL), landing the exact target WITHOUT the private reorder surface. A same-list `move ... to \"Inbox\"` is a NO-OP, so park-first is mandatory. Seeds three inbox to-dos and sorts to scrambled target IB3<IB1<IB2 via park x3 + Inbox-return in reverse (IB2,IB1,IB3). Locks the front-insert placement AND the start=0 restoration. Backs the `inbox` automatic fallback (reorder.ts runInboxPark).",
+      "title": "INBOXBACK (SIT7): the non-experimental `inbox`-scope fallback \u2014 PARK each inbox row into a scratch PROJECT (update?list-id=SCR; start flips 0->1 transiently) then re-enter via AppleScript `move to do id X to list \"Inbox\"` in REVERSE target order FRONT-INSERTS each at the inbox index min AND RESTORES start=0 (project->NULL), landing the exact target WITHOUT the private reorder surface. A same-list `move ... to \"Inbox\"` is a NO-OP, so park-first is mandatory. Seeds three inbox to-dos and sorts to scrambled target IB3<IB1<IB2 via park x3 + Inbox-return in reverse (IB2,IB1,IB3). Locks the front-insert placement AND the start=0 restoration. Backs the `inbox` automatic fallback (reorder.ts runInboxPark).",
       "setup": [
-        { "openUrl": "things:///add-project?title=O-IBSCR" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IBSCR' AND type=1" },
-        { "openUrl": "things:///add?title=O-IB1" },
+        {
+          "openUrl": "things:///add-project?title=O-IBSCR"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IBSCR' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-IB1"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB1' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-IB2" },
+        {
+          "openUrl": "things:///add?title=O-IB2"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB2' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-IB3" },
+        {
+          "openUrl": "things:///add?title=O-IB3"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-IB3' AND start=0 AND project IS NULL AND area IS NULL AND heading IS NULL"
         }
@@ -1616,21 +1626,27 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-IB1" },
+            "where": {
+              "title": "O-IB1"
+            },
             "field": "start",
             "value": 0
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-IB2" },
+            "where": {
+              "title": "O-IB2"
+            },
             "field": "start",
             "value": 0
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-IB3" },
+            "where": {
+              "title": "O-IB3"
+            },
             "field": "start",
             "value": 0
           }
@@ -1642,34 +1658,64 @@
       "operation": "order.someback-todos",
       "vector": "url",
       "appState": "running-background",
-      "title": "SOMEBACK to-dos (SIT7): the non-experimental `someday`-scope fallback for loose someday to-dos — the URL anytime<->someday when= round-trip (update?when=anytime then when=someday) FRONT-INSERTS each at the loose someday index min in dispatch order, so a REVERSE-target dispatch lands the exact order, start=2 preserved. Seeds three loose someday to-dos and sorts to scrambled target SB3<SB1<SB2 via the bounce in reverse (SB2,SB1,SB3). Backs the `someday` automatic fallback (reorder.ts SOMEBACK bounce).",
+      "title": "SOMEBACK to-dos (SIT7): the non-experimental `someday`-scope fallback for loose someday to-dos \u2014 the URL anytime<->someday when= round-trip (update?when=anytime then when=someday) FRONT-INSERTS each at the loose someday index min in dispatch order, so a REVERSE-target dispatch lands the exact order, start=2 preserved. Seeds three loose someday to-dos and sorts to scrambled target SB3<SB1<SB2 via the bounce in reverse (SB2,SB1,SB3). Backs the `someday` automatic fallback (reorder.ts SOMEBACK bounce).",
       "setup": [
-        { "openUrl": "things:///add?title=O-SB1&when=someday" },
+        {
+          "openUrl": "things:///add?title=O-SB1&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB1' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
         },
-        { "openUrl": "things:///add?title=O-SB2&when=someday" },
+        {
+          "openUrl": "things:///add?title=O-SB2&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB2' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
         },
-        { "openUrl": "things:///add?title=O-SB3&when=someday" },
+        {
+          "openUrl": "things:///add?title=O-SB3&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SB3' AND start=2 AND startDate IS NULL AND project IS NULL AND area IS NULL"
         }
       ],
       "commands": [
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=anytime" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=1" },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=someday" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=2" },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=anytime" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=1" },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=someday" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=2" },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=anytime" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=1" },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=someday" },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=2" },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=anytime"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB2}&when=someday"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB2' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=anytime"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB1}&when=someday"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB1' AND start=2"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=anytime"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=1"
+        },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-SB3}&when=someday"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SB3' AND start=2"
+        },
         {
           "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SB3') < (SELECT \"index\" FROM TMTask WHERE title='O-SB1') AND (SELECT \"index\" FROM TMTask WHERE title='O-SB1') < (SELECT \"index\" FROM TMTask WHERE title='O-SB2')"
         }
@@ -1681,21 +1727,27 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SB1" },
+            "where": {
+              "title": "O-SB1"
+            },
             "field": "start",
             "value": 2
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SB2" },
+            "where": {
+              "title": "O-SB2"
+            },
             "field": "start",
             "value": 2
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SB3" },
+            "where": {
+              "title": "O-SB3"
+            },
             "field": "start",
             "value": 2
           }
@@ -1707,17 +1759,23 @@
       "operation": "order.someback-projects",
       "vector": "url",
       "appState": "running-background",
-      "title": "SOMEBACK projects (SIT7): the `someday` fallback for area-less someday PROJECTS — the per-type update-project?when=anytime then when=someday round-trip FRONT-INSERTS each at the loose someday index min (start=2 preserved), so a REVERSE-target dispatch lands the exact order (notably a FRONT-insert, unlike the native someday anchor-stack's project-DESCEND ORD-3). Seeds three area-less someday projects and sorts to scrambled target SP3<SP1<SP2 via the update-project bounce in reverse (SP2,SP1,SP3).",
+      "title": "SOMEBACK projects (SIT7): the `someday` fallback for area-less someday PROJECTS \u2014 the per-type update-project?when=anytime then when=someday round-trip FRONT-INSERTS each at the loose someday index min (start=2 preserved), so a REVERSE-target dispatch lands the exact order (notably a FRONT-insert, unlike the native someday anchor-stack's project-DESCEND ORD-3). Seeds three area-less someday projects and sorts to scrambled target SP3<SP1<SP2 via the update-project bounce in reverse (SP2,SP1,SP3).",
       "setup": [
-        { "openUrl": "things:///add-project?title=O-SPB1&when=someday" },
+        {
+          "openUrl": "things:///add-project?title=O-SPB1&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB1' AND type=1 AND start=2 AND area IS NULL"
         },
-        { "openUrl": "things:///add-project?title=O-SPB2&when=someday" },
+        {
+          "openUrl": "things:///add-project?title=O-SPB2&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB2' AND type=1 AND start=2 AND area IS NULL"
         },
-        { "openUrl": "things:///add-project?title=O-SPB3&when=someday" },
+        {
+          "openUrl": "things:///add-project?title=O-SPB3&when=someday"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-SPB3' AND type=1 AND start=2 AND area IS NULL"
         }
@@ -1726,27 +1784,39 @@
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB2}&when=anytime"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=1" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=1"
+        },
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB2}&when=someday"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=2" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB2' AND start=2"
+        },
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB1}&when=anytime"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=1" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=1"
+        },
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB1}&when=someday"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=2" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB1' AND start=2"
+        },
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB3}&when=anytime"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=1" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=1"
+        },
         {
           "openUrl": "things:///update-project?auth-token={ctx:token}&id={uuid:O-SPB3}&when=someday"
         },
-        { "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=2" },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-SPB3' AND start=2"
+        },
         {
           "waitSql": "SELECT 1 WHERE (SELECT \"index\" FROM TMTask WHERE title='O-SPB3') < (SELECT \"index\" FROM TMTask WHERE title='O-SPB1') AND (SELECT \"index\" FROM TMTask WHERE title='O-SPB1') < (SELECT \"index\" FROM TMTask WHERE title='O-SPB2')"
         }
@@ -1758,21 +1828,27 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SPB1" },
+            "where": {
+              "title": "O-SPB1"
+            },
             "field": "start",
             "value": 2
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SPB2" },
+            "where": {
+              "title": "O-SPB2"
+            },
             "field": "type",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-SPB3" },
+            "where": {
+              "title": "O-SPB3"
+            },
             "field": "area",
             "value": null
           }
@@ -1784,25 +1860,41 @@
       "operation": "order.projroot",
       "vector": "url",
       "appState": "running-background",
-      "title": "PROJROOT (SIT7): the non-experimental `project`-scope fallback for a project's unheaded children — PARK each child into a scratch PROJECT (update?list-id=SCR) then re-home to the original project (update?list-id=P) in FORWARD target order BACK-INSERTS each at the project-root index max (a project root behaves like a container), landing the exact target WITHOUT the private reorder surface. ONE flag-safe protocol for all rows. Seeds a project with three anytime children, one Today-flagged (O-PRc2), and sorts to target pc1<pc2<pc3 via park x3 + re-home forward. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the `project` automatic fallback (reorder.ts runProjectRoot).",
+      "title": "PROJROOT (SIT7): the non-experimental `project`-scope fallback for a project's unheaded children \u2014 PARK each child into a scratch PROJECT (update?list-id=SCR) then re-home to the original project (update?list-id=P) in FORWARD target order BACK-INSERTS each at the project-root index max (a project root behaves like a container), landing the exact target WITHOUT the private reorder surface. ONE flag-safe protocol for all rows. Seeds a project with three anytime children, one Today-flagged (O-PRc2), and sorts to target pc1<pc2<pc3 via park x3 + re-home forward. Locks the back-insert placement AND the Today-star preservation (start=1 + startDate=today byte-identical through both legs). Backs the `project` automatic fallback (reorder.ts runProjectRoot).",
       "setup": [
-        { "openUrl": "things:///add-project?title=O-PRP" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1" },
-        { "openUrl": "things:///add-project?title=O-PRSCR" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRSCR' AND type=1" },
-        { "openUrl": "things:///add?title=O-PRc1&list=O-PRP&when=anytime" },
+        {
+          "openUrl": "things:///add-project?title=O-PRP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1"
+        },
+        {
+          "openUrl": "things:///add-project?title=O-PRSCR"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRSCR' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-PRc1&list=O-PRP&when=anytime"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc1' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-PRc2&list=O-PRP&when=anytime" },
+        {
+          "openUrl": "things:///add?title=O-PRc2&list=O-PRP&when=anytime"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc2' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-PRc3&list=O-PRP&when=anytime" },
+        {
+          "openUrl": "things:///add?title=O-PRc3&list=O-PRP&when=anytime"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc3' AND project=(SELECT uuid FROM TMTask WHERE title='O-PRP' AND type=1) AND heading IS NULL"
         },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc2}&when=today" },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-PRc2}&when=today"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-PRc2' AND start=1 AND startDate=132805248"
         }
@@ -1843,21 +1935,27 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-PRc2" },
+            "where": {
+              "title": "O-PRc2"
+            },
             "field": "start",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-PRc2" },
+            "where": {
+              "title": "O-PRc2"
+            },
             "field": "startDate",
             "value": 132805248
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-PRc1" },
+            "where": {
+              "title": "O-PRc1"
+            },
             "field": "start",
             "value": 1
           }
@@ -1869,23 +1967,35 @@
       "operation": "order.areaback-todos",
       "vector": "url",
       "appState": "running-background",
-      "title": "AREABACK to-dos (SIT7): the non-experimental `area`-scope fallback for direct area to-dos — PARK each into a scratch PROJECT (update?list-id=SCR) then re-home to the area (update?list-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's member index min (an area behaves like a loose bucket), the area FK preserved, landing the exact target WITHOUT the private reorder surface. Seeds three direct area to-dos in LAB-AREA-A, one Today-flagged (O-ABt2), and sorts to scrambled target ABt3<ABt1<ABt2 via park x3 + re-home in reverse (ABt2,ABt1,ABt3). Locks the front-insert placement AND the Today-star + area-FK preservation. Backs the `area` automatic fallback (reorder.ts runAreaBack).",
+      "title": "AREABACK to-dos (SIT7): the non-experimental `area`-scope fallback for direct area to-dos \u2014 PARK each into a scratch PROJECT (update?list-id=SCR) then re-home to the area (update?list-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's member index min (an area behaves like a loose bucket), the area FK preserved, landing the exact target WITHOUT the private reorder surface. Seeds three direct area to-dos in LAB-AREA-A, one Today-flagged (O-ABt2), and sorts to scrambled target ABt3<ABt1<ABt2 via park x3 + re-home in reverse (ABt2,ABt1,ABt3). Locks the front-insert placement AND the Today-star + area-FK preservation. Backs the `area` automatic fallback (reorder.ts runAreaBack).",
       "setup": [
-        { "openUrl": "things:///add-project?title=O-ABSCR" },
-        { "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABSCR' AND type=1" },
-        { "openUrl": "things:///add?title=O-ABt1&when=anytime&list=LAB-AREA-A" },
+        {
+          "openUrl": "things:///add-project?title=O-ABSCR"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABSCR' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-ABt1&when=anytime&list=LAB-AREA-A"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt1' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-ABt2&when=anytime&list=LAB-AREA-A" },
+        {
+          "openUrl": "things:///add?title=O-ABt2&when=anytime&list=LAB-AREA-A"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt2' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
         },
-        { "openUrl": "things:///add?title=O-ABt3&when=anytime&list=LAB-AREA-A" },
+        {
+          "openUrl": "things:///add?title=O-ABt3&when=anytime&list=LAB-AREA-A"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt3' AND area='{seed:LAB-AREA-A}' AND heading IS NULL"
         },
-        { "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt2}&when=today" },
+        {
+          "openUrl": "things:///update?auth-token={ctx:token}&id={uuid:O-ABt2}&when=today"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABt2' AND start=1 AND startDate=132805248"
         }
@@ -1926,21 +2036,27 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABt2" },
+            "where": {
+              "title": "O-ABt2"
+            },
             "field": "start",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABt2" },
+            "where": {
+              "title": "O-ABt2"
+            },
             "field": "startDate",
             "value": 132805248
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABt2" },
+            "where": {
+              "title": "O-ABt2"
+            },
             "field": "area",
             "value": "@seed:LAB-AREA-A"
           }
@@ -1952,17 +2068,23 @@
       "operation": "order.areaback-projects",
       "vector": "url",
       "appState": "running-background",
-      "title": "AREABACK projects (SIT7): the `area` fallback for in-area PROJECTS (O14's backup) — PARK each project into a scratch AREA (update-project?area-id=SCR) then re-home to the area (update-project?area-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's project index min (area FK preserved), so a reverse-target dispatch lands the exact order. Seeds three in-area projects in LAB-AREA-B and sorts to scrambled target ABp3<ABp1<ABp2 via park x3 + re-home in reverse (ABp2,ABp1,ABp3).",
+      "title": "AREABACK projects (SIT7): the `area` fallback for in-area PROJECTS (O14's backup) \u2014 PARK each project into a scratch AREA (update-project?area-id=SCR) then re-home to the area (update-project?area-id=AREA) in REVERSE target order FRONT-INSERTS each at the area's project index min (area FK preserved), so a reverse-target dispatch lands the exact order. Seeds three in-area projects in LAB-AREA-B and sorts to scrambled target ABp3<ABp1<ABp2 via park x3 + re-home in reverse (ABp2,ABp1,ABp3).",
       "setup": [
-        { "openUrl": "things:///add-project?title=O-ABp1&area-id={seed:LAB-AREA-B}" },
+        {
+          "openUrl": "things:///add-project?title=O-ABp1&area-id={seed:LAB-AREA-B}"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp1' AND type=1 AND area='{seed:LAB-AREA-B}'"
         },
-        { "openUrl": "things:///add-project?title=O-ABp2&area-id={seed:LAB-AREA-B}" },
+        {
+          "openUrl": "things:///add-project?title=O-ABp2&area-id={seed:LAB-AREA-B}"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp2' AND type=1 AND area='{seed:LAB-AREA-B}'"
         },
-        { "openUrl": "things:///add-project?title=O-ABp3&area-id={seed:LAB-AREA-B}" },
+        {
+          "openUrl": "things:///add-project?title=O-ABp3&area-id={seed:LAB-AREA-B}"
+        },
         {
           "waitSql": "SELECT uuid FROM TMTask WHERE title='O-ABp3' AND type=1 AND area='{seed:LAB-AREA-B}'"
         }
@@ -2003,23 +2125,266 @@
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABp1" },
+            "where": {
+              "title": "O-ABp1"
+            },
             "field": "area",
             "value": "@seed:LAB-AREA-B"
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABp2" },
+            "where": {
+              "title": "O-ABp2"
+            },
             "field": "type",
             "value": 1
           },
           {
             "kind": "fieldEquals",
             "table": "TMTask",
-            "where": { "title": "O-ABp3" },
+            "where": {
+              "title": "O-ABp3"
+            },
             "field": "area",
             "value": "@seed:LAB-AREA-B"
+          }
+        ]
+      }
+    },
+    {
+      "id": "O31",
+      "title": "DLBNC forecast-cycle (#383): the deadline-cycle (URL deadline= clear + re-set of the SAME deadline) reorders same-deadline DEADLINE-FORECAST rows (someday+deadline, startDate NULL) on their Upcoming day-block todayIndex axis - a reverse-target dispatch lands the exact block order with the someday-bucket `index`, start, startDate, and deadline byte-identical (DLBNC-3/3c). The `day` reorder scope's forecast leg compiles onto this.",
+      "vector": "url",
+      "operation": "order.deadline-cycle",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add-project?title=O-DFP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DFP' AND type=1"
+        },
+        {
+          "openUrl": "things:///add?title=O-DF1&when=someday&deadline=2026-07-08&list=O-DFP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DF1' AND start=2 AND startDate IS NULL AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///add?title=O-DF2&when=someday&deadline=2026-07-08&list=O-DFP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DF2' AND start=2 AND startDate IS NULL AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///add?title=O-DF3&when=someday&deadline=2026-07-08&list=O-DFP"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-DF3' AND start=2 AND startDate IS NULL AND deadline=132805632"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-DF3}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF3' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DF3}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF3' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DF1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DF1}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF1' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DF2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-DF2}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-DF2' AND deadline=132805632"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-DF2') < (SELECT todayIndex FROM TMTask WHERE title='O-DF1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-DF1') < (SELECT todayIndex FROM TMTask WHERE title='O-DF3')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DF1"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DF2"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-DF3"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "O32",
+      "title": "DLBNC mixed interleave (#383): a MIXED same-day set - SCHEDULED rows (startDate=D) + DEADLINE-FORECAST rows (deadline=D, startDate NULL) - reorders as ONE block on the shared Upcoming day todayIndex axis via a UNIFIED reverse-target dispatch with per-row-class legs (scheduled: when=D+1->when=D bounce; forecast: deadline= clear+re-set). Lands the exact interleaved order; forecast `index` byte-identical, scheduled startDate preserved. The `day` reorder scope's mixed-wire compile locks onto this.",
+      "vector": "url",
+      "operation": "order.day-mixed-interleave",
+      "appState": "running-background",
+      "setup": [
+        {
+          "openUrl": "things:///add?title=O-MS1&when=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-MS1' AND startBucket=0 AND startDate=132805632"
+        },
+        {
+          "openUrl": "things:///add?title=O-MF1&when=someday&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-MF1' AND start=2 AND startDate IS NULL AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///add?title=O-MS2&when=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-MS2' AND startBucket=0 AND startDate=132805632"
+        },
+        {
+          "openUrl": "things:///add?title=O-MF2&when=someday&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT uuid FROM TMTask WHERE title='O-MF2' AND start=2 AND startDate IS NULL AND deadline=132805632"
+        }
+      ],
+      "commands": [
+        {
+          "openUrl": "things:///update?id={uuid:O-MF2}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MF2' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MF2}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MF2' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MS2}&auth-token={ctx:token}&when=2026-07-09"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MS2' AND startDate=132805760"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MS2}&auth-token={ctx:token}&when=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MS2' AND startDate=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MF1}&auth-token={ctx:token}&deadline="
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MF1' AND deadline IS NULL"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MF1}&auth-token={ctx:token}&deadline=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MF1' AND deadline=132805632"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MS1}&auth-token={ctx:token}&when=2026-07-09"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MS1' AND startDate=132805760"
+        },
+        {
+          "openUrl": "things:///update?id={uuid:O-MS1}&auth-token={ctx:token}&when=2026-07-08"
+        },
+        {
+          "waitSql": "SELECT 1 FROM TMTask WHERE title='O-MS1' AND startDate=132805632"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-MS1') < (SELECT todayIndex FROM TMTask WHERE title='O-MF1')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-MF1') < (SELECT todayIndex FROM TMTask WHERE title='O-MS2')"
+        },
+        {
+          "waitSql": "SELECT 1 WHERE (SELECT todayIndex FROM TMTask WHERE title='O-MS2') < (SELECT todayIndex FROM TMTask WHERE title='O-MF2')"
+        }
+      ],
+      "expect": {
+        "verdict": "supported",
+        "tier": 0,
+        "assertions": [
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-MF1"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-MF2"
+            },
+            "fields": ["index", "start", "startDate", "deadline"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-MS1"
+            },
+            "fields": ["start", "startDate", "startBucket"]
+          },
+          {
+            "kind": "fieldUnchanged",
+            "table": "TMTask",
+            "where": {
+              "title": "O-MS2"
+            },
+            "fields": ["start", "startDate", "startBucket"]
           }
         ]
       }

@@ -1084,45 +1084,103 @@ export function computeReorderPre(
     }
     case "day": {
       // The DATED BOUNCE (SIT4 DAYBNC): a whole ARBITRARY future day-group across
-      // ALL containers, ranked on todayIndex. Members are every to-do on the day
-      // (loose, project-child, headed-child, area-direct — the when= round-trip
-      // preserves each container FK, incl. the heading FK, §2e/R21) PLUS every
-      // area-less scheduled PROJECT row on the day (type=1 rows front-insert on the
-      // SAME global todayIndex axis, DAYBNC DP-1/DP-2 — the leg is update-project).
+      // ALL containers, ranked on todayIndex. SCHEDULED members are every to-do on
+      // the day (loose, project-child, headed-child, area-direct — the when= round-
+      // trip preserves each container FK, incl. the heading FK, §2e/R21) PLUS every
+      // scheduled PROJECT row on the day (type=1 rows front-insert on the SAME
+      // global todayIndex axis, DAYBNC DP-1/DP-2 — the leg is update-project).
+      // DEADLINE-FORECAST members (DLBNC / #383) are ALSO first-class day-block
+      // members: someday/anytime-stage to-dos (start IN (1,2)) whose future
+      // `deadline` == D and whose `startDate` is NULL rest on the SAME Upcoming
+      // day-block todayIndex axis (§9o / DLBNC-1d), reordered by the deadline-cycle
+      // (URL deadline= clear + re-set) rather than the when= bounce. The two classes
+      // are merged and re-sorted by todayIndex into the true interleaved block order.
       // The whole group is one bounce unit (a reverse-target pass re-bases it below
       // the day's global min), so every same-day member is enumerated — an
-      // untouched project row is just an unrequested member (co-bounced + disclosed
-      // as `touched`), never a strand. The day is read off the first requested
-      // uuid. Templates are excluded by NOT_TEMPLATE_ROW. Members are type IN (0,1):
-      // area-DIRECT project rows are now proven dated-bounce members too (SIT5
-      // AREAPROJDAY — the update-project when= legs preserve the area FK through the
-      // round-trip and re-enter at the day's global todayIndex min).
+      // untouched row is just an unrequested member (co-bounced + disclosed as
+      // `touched`), never a strand. The day D is read off the first requested uuid
+      // (its startDate when scheduled, else its deadline when forecast). Templates
+      // are excluded by NOT_TEMPLATE_ROW.
       const firstUuid = params.uuids[0];
       const first =
         firstUuid !== undefined
           ? (db
-              .prepare("SELECT startDate, startBucket FROM TMTask WHERE uuid = ?")
-              .get(firstUuid) as { startDate: number | null; startBucket: number } | undefined)
+              .prepare("SELECT startDate, startBucket, deadline, start FROM TMTask WHERE uuid = ?")
+              .get(firstUuid) as
+              | {
+                  startDate: number | null;
+                  startBucket: number;
+                  deadline: number | null;
+                  start: number;
+                }
+              | undefined)
           : undefined;
-      if (first?.startDate != null && first.startBucket === 0) {
-        members = select(
+      const dayPacked: number | null =
+        first === undefined
+          ? null
+          : first.startDate !== null && first.startBucket === 0
+            ? first.startDate
+            : first.startDate === null && (first.start === 1 || first.start === 2)
+              ? first.deadline
+              : null;
+      if (dayPacked !== null) {
+        const scheduled = select(
           "type IN (0, 1) AND startBucket = 0 AND startDate = ?",
-          [first.startDate],
+          [dayPacked],
           "todayIndex",
         );
+        // §9o deadline-forecast cohort: start IN (1,2), startDate NULL, deadline == D.
+        const forecast = select(
+          "type = 0 AND startDate IS NULL AND deadline = ? AND start IN (1, 2)",
+          [dayPacked],
+          "todayIndex",
+        );
+        // One shared todayIndex axis (DLBNC-1d): merge + re-sort into block order.
+        members = [...scheduled, ...forecast].toSorted((a, b) => a.rank - b.rank);
       }
       // A requested TEMPLATE gets the §9e/§1 teaching reason (a dated when= leg
-      // CRASHES a template). Area-direct project rows are members (SIT5 AREAPROJDAY).
+      // CRASHES a template); an INBOX-stage row (start=0) carrying this deadline is
+      // OFF the block axis (todayIndex=0, §9o — the axis assignment is gated on
+      // start IN (1,2), not the bare deadline), so it is refused with an honest,
+      // unprobed-membership reason rather than a guess. Area-direct project rows are
+      // scheduled members (SIT5 AREAPROJDAY).
       for (const uuid of params.uuids) {
         const t = db
-          .prepare("SELECT rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?")
-          .get(uuid) as { rule: unknown; repeater: unknown } | undefined;
+          .prepare(
+            "SELECT start, startDate, deadline, rt1_recurrenceRule AS rule, repeater " +
+              "FROM TMTask WHERE uuid = ?",
+          )
+          .get(uuid) as
+          | {
+              start: number;
+              startDate: number | null;
+              deadline: number | null;
+              rule: unknown;
+              repeater: unknown;
+            }
+          | undefined;
         if (t === undefined) continue;
         if (t.rule !== null || t.repeater !== null) {
           rejectedCandidates.set(
             uuid,
             "is a repeating template — sending it a dated when= leg CRASHES the app (oddity §9e/§1), " +
               "so dated ordering cannot include it",
+          );
+          continue;
+        }
+        if (
+          dayPacked !== null &&
+          t.start === 0 &&
+          t.startDate === null &&
+          t.deadline !== null &&
+          t.deadline === dayPacked
+        ) {
+          rejectedCandidates.set(
+            uuid,
+            "is an INBOX-stage row (start=0) with this deadline — it rests OFF the Upcoming " +
+              "day-block axis (todayIndex=0, §9o: the block axis is gated on start IN (1,2), " +
+              "not the bare deadline), so its position there is unprobed; schedule it or move it " +
+              "out of the Inbox before reordering it on the day axis",
           );
         }
       }

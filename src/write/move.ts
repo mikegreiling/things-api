@@ -166,6 +166,8 @@ interface MoveeRow {
   start: number;
   startDate: number | null;
   startBucket: number;
+  /** Packed `deadline` day — the deadline-forecast day-block axis key (DLBNC/§9o). */
+  deadline: number | null;
   /** Repeating TEMPLATE row: the private reorder no-ops on it (§9e addendum). */
   isTemplate: boolean;
 }
@@ -173,7 +175,7 @@ interface MoveeRow {
 function loadRow(db: DatabaseSync, uuid: string): MoveeRow | undefined {
   const row = db
     .prepare(
-      "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket, " +
+      "SELECT uuid, title, type, project, area, heading, start, startDate, startBucket, deadline, " +
         "rt1_recurrenceRule AS rule, repeater FROM TMTask WHERE uuid = ?",
     )
     .get(uuid) as (Omit<MoveeRow, "isTemplate"> & { rule: unknown; repeater: unknown }) | undefined;
@@ -222,6 +224,27 @@ function scheduleBucket(row: MoveeRow, packedToday: number): string {
   }
   if (row.start === 2) return "someday";
   return "anytime";
+}
+
+/**
+ * The packed future-deadline day of a DEADLINE-FORECAST to-do (DLBNC / #383), or
+ * null. The §9o forecast cohort: a to-do (type=0) with NO `startDate`, someday/
+ * anytime stage (`start IN (1,2)`), and a strictly-FUTURE `deadline` rests on that
+ * deadline day's ROOT Upcoming day-block on the shared `todayIndex` axis (UPCDL-1a/
+ * §9o, GUI-confirmed DLBNC-1d). It reorders there via the deadline-cycle (URL
+ * `deadline=` clear + re-set), NOT the someday/anytime `index` lever — so the
+ * planner routes it to the `day` scope keyed on the deadline. INBOX-stage rows
+ * (`start=0`) rest OFF the axis (todayIndex=0) — excluded here; projects are not the
+ * certified cohort — excluded (type=0 only). A today/past deadline is NOT a future
+ * day-block (the row renders in its someday/anytime bucket with an overdue badge) —
+ * excluded, matching the strictly-future gate scheduled rows use.
+ */
+function forecastDeadlineDay(row: MoveeRow, packedToday: number): number | null {
+  if (row.type !== 0) return null;
+  if (row.startDate !== null) return null;
+  if (row.start !== 1 && row.start !== 2) return null;
+  if (row.deadline === null || row.deadline <= packedToday) return null;
+  return row.deadline;
 }
 
 /**
@@ -299,6 +322,16 @@ function reorderTargetOf(
   // so they take the dated bounce even on tomorrow.
   const isTomorrow = row.startBucket === 0 && row.startDate === packedTomorrowOf(packedToday);
   if (isTodo) {
+    // DEADLINE-FORECAST members route FIRST (DLBNC / #383). A someday/anytime-stage
+    // to-do (no startDate) with a future deadline is a first-class member of that
+    // deadline day's Upcoming block — it reorders on the block's todayIndex axis via
+    // the deadline-cycle (URL deadline= clear + re-set), never the someday/anytime
+    // index lever. ALWAYS the `day` scope keyed on the deadline — NEVER the native
+    // `list "Tomorrow"` sort even when the deadline is tomorrow, because that surface
+    // RE-DATES a forecast row (stamps a startDate, UPCDL-5), ejecting it from the
+    // forecast cohort. The deadline-cycle is public-URL-only (no experimental gate).
+    const fDay = forecastDeadlineDay(row, packedToday);
+    if (fDay !== null) return { scope: "day", day: fDay };
     // ARRIVED Today-view members route DATE-FIRST, before any container branch.
     // A dated row whose day has landed (startDate <= today) is a Today member —
     // the GUI renders arrived/today-dated rows in the TODAY view; the Upcoming
@@ -1374,26 +1407,52 @@ export async function runInPlaceReorder(
 // ---------------------------------------------------------------- shared core
 
 /**
- * The single STRICTLY-FUTURE day every movee shares (packed startDate), or null —
- * the precondition for the SIT4 dated `day` bounce (and the one-call `tomorrow`
- * sort). Members are to-dos in ANY container AND scheduled PROJECT rows (area-less
- * OR area-direct — SIT5 AREAPROJDAY proved the update-project when= legs preserve
- * the area FK), all on the SAME future day in the Today-bucket axis (startBucket=0).
- * A row off the day, a template, or an undated/arrived row breaks the group and
- * falls through to the normal single-container guard. (Templates never reach here:
- * startDate is NULL on a resting template, so `startDate === day` fails for them.)
+ * The packed day a single row contributes to a shared future day-group, or null.
+ * A SCHEDULED row (to-do or project) on a strictly-future startBucket=0 day
+ * contributes its `startDate`; a DEADLINE-FORECAST to-do (startDate NULL, future
+ * `deadline`, start IN (1,2) — DLBNC/§9o) contributes its `deadline` (they share the
+ * one block todayIndex axis). Any other row (arrived, undated non-forecast, off the
+ * Today axis) contributes null.
+ */
+function rowDayKey(row: MoveeRow, packedToday: number): number | null {
+  if (
+    row.startDate !== null &&
+    row.startBucket === 0 &&
+    row.startDate > packedToday &&
+    (row.type === 0 || row.type === 1)
+  ) {
+    return row.startDate;
+  }
+  return forecastDeadlineDay(row, packedToday);
+}
+
+/**
+ * The single STRICTLY-FUTURE day every movee shares, or null — the precondition for
+ * the SIT4 dated `day` bounce (and the one-call `tomorrow` sort). Members are
+ * SCHEDULED to-dos in ANY container AND scheduled PROJECT rows (area-less OR area-
+ * direct — SIT5 AREAPROJDAY proved the update-project when= legs preserve the area
+ * FK) sharing a future startBucket=0 `startDate`, PLUS DEADLINE-FORECAST to-dos
+ * (DLBNC/§9o) whose future `deadline` equals that same day — all on the ONE Upcoming
+ * day-block todayIndex axis, so a scheduled+forecast mix is one group. A row off the
+ * day, a template, or an undated/arrived non-forecast row breaks the group and falls
+ * through to the normal single-container guard. (Templates never reach here: both
+ * `startDate` and `deadline` fail the strictly-future key for a resting template.)
  */
 function sharedFutureDay(rows: MoveeRow[], packedToday: number): number | null {
   const first = rows[0];
   if (first === undefined) return null;
-  const day = first.startDate;
-  if (day === null || day <= packedToday || first.startBucket !== 0) return null;
+  const day = rowDayKey(first, packedToday);
+  if (day === null) return null;
   for (const r of rows) {
-    if (r.startBucket !== 0 || r.startDate !== day) return null;
-    if (r.type !== 0 && r.type !== 1) return null;
     if (r.isTemplate) return null;
+    if (rowDayKey(r, packedToday) !== day) return null;
   }
   return day;
+}
+
+/** Whether any row in the group is a deadline-forecast member (DLBNC/§9o). */
+function hasForecastMember(rows: MoveeRow[], packedToday: number): boolean {
+  return rows.some((r) => forecastDeadlineDay(r, packedToday) !== null);
 }
 
 /**
@@ -1524,18 +1583,26 @@ async function repositionInPlace(
   // A shared FUTURE day-group (single- OR cross-container) rides the global
   // todayIndex axis, not the normal single-container reorder: the SIT4 dated `day`
   // bounce (loose/direct-area/headed/cross-container to-dos + area-less project
-  // rows, any mix), or the one-call `list "Tomorrow"` sort when the day is
-  // tomorrow. The ONLY exception is a single UNHEADED PROJECT container — its same-
-  // day children ride the cheaper atomic native container-day re-rank, so it falls
-  // through to the normal path below (reorderTargetOf → container-day). Templates
-  // and area-direct project rows are excluded by sharedFutureDay.
+  // rows + DEADLINE-FORECAST to-dos, any mix), or the one-call `list "Tomorrow"`
+  // sort when the day is tomorrow. Two exceptions force the `day` scope (never the
+  // native short-cuts): a group CONTAINING a forecast row NEVER rides `list
+  // "Tomorrow"` (that surface re-dates a forecast row, UPCDL-5) NOR the single-
+  // project container-day native re-rank (a forecast row has no startDate, so it is
+  // not a container-day scheduled child) — the deadline-cycle `day` bounce is the
+  // one surface that serves the mixed group. Otherwise a single UNHEADED PROJECT
+  // container's same-day scheduled children ride the cheaper atomic native
+  // container-day re-rank (fall through to reorderTargetOf → container-day).
+  // Templates are excluded by sharedFutureDay.
   const structKeys = new Set(rows.map((r) => structuralKey(r, packedToday)));
   const sharedDay = sharedFutureDay(rows, packedToday);
   if (sharedDay !== null) {
+    const forecastInGroup = hasForecastMember(rows, packedToday);
     const soleStruct = structKeys.size === 1 ? (structKeys.values().next().value as string) : null;
-    const singleProjectContainer = soleStruct?.startsWith("project:") ?? false;
+    const singleProjectContainer =
+      !forecastInGroup && (soleStruct?.startsWith("project:") ?? false);
     if (!singleProjectContainer) {
-      const scope = sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "day";
+      const scope =
+        !forecastInGroup && sharedDay === packedTomorrowOf(packedToday) ? "tomorrow" : "day";
       return runDayGroupReposition(deps, op, rows, position, options, scope, sharedDay);
     }
   }
