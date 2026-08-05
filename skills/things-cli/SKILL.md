@@ -24,7 +24,7 @@ version: 0.0.0-dev
 
 Reads decompose an item's position onto two derived, presence-keyed words (they REPLACED the old `start`/`logged`/`trashed`/`todaySection` fields):
 
-- **`stage`** — the sidebar BUCKET: `inbox | upcoming | anytime | someday | logbook | trash`. Read view membership off it directly (a completed row is `logbook`, a trashed row `trash`, regardless of any other hint). Dropped only where a view provably states it — the stage-pure flat views (`inbox`/`anytime`/`someday`/`logbook`/`trash`) and the `today` view; KEPT everywhere it is stage-mixed — `upcoming`, `search`, `changes`, the projects/areas listings, the project/area card `items` (and the project `logbook`), and `detail`.
+- **`stage`** — the sidebar BUCKET: `inbox | upcoming | anytime | someday | logbook | trash`. Read view membership off it directly (a completed row is `logbook`, a trashed row `trash`, regardless of any other hint). Dropped inside a section that already states it; present in mixed lists, `search`, `changes`, and `detail`.
 - **`when`** — the TIME POSITION: `today | evening | a future ISO date`, or absent. `evening` implies today; someday is a bucket (→ `stage`), never a `when`. A due deadline pulls an undated row into Today (`when: "today"`); the app re-files it into Anytime, so it derives `stage: "anytime"` (it leaves the Inbox/Someday list).
 - **`provisional: true`** marks a Today member the app has not yet materialized (the "N new to-dos" banner / `•` pip); see [references/banner.md](references/banner.md).
 
