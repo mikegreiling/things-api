@@ -57,29 +57,6 @@ export interface LoggedHeadingGroup {
 
 export interface ProjectView {
   project: Project;
-  /**
-   * ALL live (non-logbook, non-trash) children of the project — unheaded AND
-   * headed — in project `index` order, each headed row carrying its `heading`
-   * ref (and `headingProject`). This is the flat wire representation (the read
-   * doctrine's project-view `items[]`): membership in a heading is a per-row
-   * attribute, not a bucket. The structured buckets below (`active`, `headings`,
-   * `scheduled`, …) are the SAME children re-grouped into the GUI's render layout
-   * for the TTY projection — the library owns the clock + `todayIndex`, so the
-   * renderer reconstructs the exact GUI placement from them without re-deriving
-   * dates. The two are always consistent (built from one child fetch).
-   */
-  items: Todo[];
-  /**
-   * The full heading catalog — EVERY heading (live AND swept archived) in project
-   * `index` order (read-shape doctrine §3.12 / #C3). This is the flat wire
-   * representation of `headings[]` (`[{uuid,title,archived?}]`): which headings
-   * exist, in what order, and whether each is archived — the ORDER axis that
-   * earns the bucket its place. A live-group's row membership rides the flat
-   * `items[]` refs; a swept archived heading's children ride the flat `logbook`
-   * refs. The structured `headings` / `loggedHeadings` below re-group the SAME
-   * headings + children into the GUI render layout for the byte-stable TTY.
-   */
-  headingCatalog: Heading[];
   /** Open, unscheduled/current UNHEADED children, by index. */
   active: Todo[];
   /** OPEN headings in project order, each with its own sub-buckets. An archived heading never renders here. */
@@ -357,30 +334,8 @@ export function projectView(
     }))
     .filter((g) => !contentScoped || g.items.length > 0);
 
-  // The flat wire `items[]`: every LIVE child in project index order (the
-  // `todos` fetch is already `ORDER BY index ASC`). Excludes swept logged rows
-  // (→ `logged`) and children of swept archived headings (→ `loggedHeadings`) —
-  // exactly the rows that leave the live region. Each headed row already carries
-  // its `heading` ref + `headingProject` (stamped in the loop above).
-  const items = todos
-    .map((t) => t.todo)
-    .filter((td) => !td.logged && !(td.heading !== null && sweptHeadingSet.has(td.heading.uuid)));
-
-  // The catalog: every heading (live + swept archived) in index order — but under
-  // a content scope (`--overdue` / `--tag`) a heading whose children were all
-  // filtered out COLLAPSES, exactly as it does for the live groups + logged groups
-  // and the TTY. With no scope every heading survives (empty ones included), so
-  // this is a no-op there. Built from the SAME survivors the render layout uses.
-  const survivingHeadings = new Set([
-    ...headingGroups.map((g) => g.heading.uuid),
-    ...loggedHeadings.map((g) => g.heading.uuid),
-  ]);
-  const headingCatalog = headings.filter((h) => survivingHeadings.has(h.uuid));
-
   return {
     project,
-    items,
-    headingCatalog,
     active,
     headings: headingGroups,
     scheduled,

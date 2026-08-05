@@ -277,20 +277,16 @@ describe("things MCP server", () => {
     expect(tools.map((t) => t.name).toSorted()).toEqual(EXPECTED_TOOLS.toSorted());
   });
 
-  it("read_view today returns one flat items list with seeded members", async () => {
+  it("read_view today returns the split view with seeded members", async () => {
     seedTodo(fixture.db, { title: "MCP-Today", startDate: "2026-07-05" });
     await connect([fakeVector(null).vector]);
     const result = await client.callTool({ name: "read_view", arguments: { view: "today" } });
-    const view = textOf(result) as Array<{ title: string; when?: string }>;
-    expect(view.map((i) => i.title)).toContain("MCP-Today");
-    expect(view.find((i) => i.title === "MCP-Today")?.when).toBe("today");
-    // The whole-view counts ride the metadata block (the CLI meta.counts analog).
-    const metaBlock = JSON.parse((result as { content: { text: string }[] }).content[1]!.text);
-    expect(metaBlock.counts).toEqual({ dueOrOverdue: 0, other: 1 });
+    const view = textOf(result) as { today: { title: string }[]; evening: unknown[] };
+    expect(view.today.map((i) => i.title)).toContain("MCP-Today");
     expect(result.isError ?? false).toBe(false);
   });
 
-  it("read_view surfaces the R13 provisional marker; today rows drop stage; pulled row re-files to anytime", async () => {
+  it("read_view surfaces the R13 provisional marker; today sections drop stage; pulled row re-files to anytime", async () => {
     // A deadline-pulled SOMEDAY row (unmaterialized) is a provisional Today member.
     seedTodo(fixture.db, {
       title: "MCP-Pull",
@@ -304,11 +300,11 @@ describe("things MCP server", () => {
 
     const today = textOf(
       await client.callTool({ name: "read_view", arguments: { view: "today" } }),
-    ) as Array<Record<string, unknown>>;
-    const pull = today.find((i) => i["title"] === "MCP-Pull")!;
-    const placed = today.find((i) => i["title"] === "MCP-Placed")!;
+    ) as { today: Array<Record<string, unknown>>; evening: unknown[] };
+    const pull = today.today.find((i) => i["title"] === "MCP-Pull")!;
+    const placed = today.today.find((i) => i["title"] === "MCP-Placed")!;
     expect(pull["provisional"]).toBe(true); // the banner pip, as data
-    expect("stage" in pull).toBe(false); // the today view is stage-pure (R13)
+    expect("stage" in pull).toBe(false); // today sections are stage-pure (R13)
     expect(placed["provisional"]).toBeUndefined(); // materialized → not provisional
 
     // GUI fidelity: the pulled row is GONE from someday, PRESENT in anytime.
@@ -354,8 +350,8 @@ describe("things MCP server", () => {
 
     const compact = textOf(
       await client.callTool({ name: "get_project", arguments: { uuid: proj } }),
-    ) as { items: Array<Record<string, unknown>> };
-    const child = compact.items[0]!;
+    ) as { anytime: Array<Record<string, unknown>> };
+    const child = compact.anytime[0]!;
     // R6: a project-view child drops project + area (the card states them).
     expect("project" in child).toBe(false);
     expect("area" in child).toBe(false);
@@ -363,8 +359,8 @@ describe("things MCP server", () => {
 
     const full = textOf(
       await client.callTool({ name: "get_project", arguments: { uuid: proj, full: true } }),
-    ) as { items: Array<Record<string, unknown>> };
-    const fchild = full.items[0]!;
+    ) as { anytime: Array<Record<string, unknown>> };
+    const fchild = full.anytime[0]!;
     expect("created" in fchild).toBe(true); // full restores density
     expect("project" in fchild).toBe(false); // R6 still applies under --full
   });
@@ -499,14 +495,16 @@ describe("things MCP server", () => {
         name: "read_view",
         arguments: { view: "today", tz: "Pacific/Kiritimati" },
       });
-      expect((textOf(ahead) as Array<{ title: string }>).map((i) => i.title)).toContain("TZ-item");
+      expect((textOf(ahead) as { today: { title: string }[] }).today.map((i) => i.title)).toContain(
+        "TZ-item",
+      );
       expect(clockOf(ahead)).toEqual({ timezone: "Pacific/Kiritimati", today: "2026-07-03" });
 
       // No per-call tz → the server default (THINGS_TZ=Midway): NOT yet today.
       const behind = await client.callTool({ name: "read_view", arguments: { view: "today" } });
-      expect((textOf(behind) as Array<{ title: string }>).map((i) => i.title)).not.toContain(
-        "TZ-item",
-      );
+      expect(
+        (textOf(behind) as { today: { title: string }[] }).today.map((i) => i.title),
+      ).not.toContain("TZ-item");
       expect(clockOf(behind)).toEqual({ timezone: "Pacific/Midway", today: "2026-07-01" });
     });
 
@@ -549,7 +547,7 @@ describe("things MCP server", () => {
     });
   });
 
-  it("read_view today with evening: true returns only the This-Evening members", async () => {
+  it("read_view today with evening: true returns only the This Evening section", async () => {
     seedTodo(fixture.db, { title: "MCP-Day", startDate: "2026-07-05" });
     seedTodo(fixture.db, { title: "MCP-Night", startDate: "2026-07-05", evening: true });
     await connect([fakeVector(null).vector]);
@@ -557,9 +555,9 @@ describe("things MCP server", () => {
       name: "read_view",
       arguments: { view: "today", evening: true },
     });
-    const view = textOf(result) as Array<{ title: string; when?: string }>;
-    expect(view.map((i) => i.title)).toEqual(["MCP-Night"]);
-    expect(view.every((i) => i.when === "evening")).toBe(true);
+    const view = textOf(result) as { today: unknown[]; evening: { title: string }[] };
+    expect(view.today).toEqual([]);
+    expect(view.evening.map((i) => i.title)).toEqual(["MCP-Night"]);
     expect(result.isError ?? false).toBe(false);
   });
 
@@ -584,8 +582,8 @@ describe("things MCP server", () => {
         name: "read_view",
         arguments: { view: "today", untagged: true },
       }),
-    ) as Array<{ title: string }>;
-    expect(view.map((i) => i.title)).toEqual(["MCP bare"]);
+    ) as { today: { title: string }[] };
+    expect(view.today.map((i) => i.title)).toEqual(["MCP bare"]);
     const conflict = await client.callTool({
       name: "read_view",
       arguments: { view: "today", untagged: true, tag: ["focus"] },
@@ -699,16 +697,16 @@ describe("things MCP server", () => {
         name: "read_view",
         arguments: { view: "today", tag: ["foo", "bar"] },
       }),
-    ) as Array<{ title: string }>;
-    expect(anded.map((i) => i.title)).toEqual(["MCP both"]);
+    ) as { today: { title: string }[] };
+    expect(anded.today.map((i) => i.title)).toEqual(["MCP both"]);
     // Flat tag foo is inheritance-inclusive: direct AND area-inherited rows.
     const single = textOf(
       await client.callTool({
         name: "read_view",
         arguments: { view: "today", tag: ["foo"] },
       }),
-    ) as Array<{ title: string }>;
-    expect(single.map((i) => i.title).toSorted()).toEqual([
+    ) as { today: { title: string }[] };
+    expect(single.today.map((i) => i.title).toSorted()).toEqual([
       "MCP both",
       "MCP direct-foo",
       "MCP inherited-only",
@@ -721,8 +719,8 @@ describe("things MCP server", () => {
         name: "read_view",
         arguments: { view: "today", direct_tag: ["foo"] },
       }),
-    ) as Array<{ title: string }>;
-    expect(removed.map((i) => i.title).toSorted()).toEqual([
+    ) as { today: { title: string }[] };
+    expect(removed.today.map((i) => i.title).toSorted()).toEqual([
       "MCP both",
       "MCP direct-foo",
       "MCP inherited-only",
@@ -759,8 +757,8 @@ describe("things MCP server", () => {
         name: "get_project",
         arguments: { uuid: "P", tag: ["focus"] },
       }),
-    ) as { items: { title: string }[] };
-    expect(proj.items.map((i) => i.title)).toEqual(["child-focus"]);
+    ) as { anytime: { title: string }[] };
+    expect(proj.anytime.map((i) => i.title)).toEqual(["child-focus"]);
     // get_area tag → single-container semantics: loose to-dos + child projects
     // carrying focus DIRECTLY (Home's inherited focus is suppressed, so PBare —
     // which only inherits — is excluded).
@@ -769,8 +767,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "Home", tag: ["focus"] },
       }),
-    ) as { items: { title: string }[]; projects: { title: string }[] };
-    expect(areaRes.items.map((i) => i.title)).toEqual(["loose-focus"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(areaRes.anytime.map((i) => i.title)).toEqual(["loose-focus"]);
     expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
     // list_collections projects tag → FLAT/inheritance-inclusive: BOTH the
     // directly-tagged P and the area-inheriting PBare (the projects list is not a
@@ -799,8 +797,8 @@ describe("things MCP server", () => {
     await connect([fakeVector(null).vector]);
     const view = textOf(
       await client.callTool({ name: "read_view", arguments: { view: "today", overdue: true } }),
-    ) as Array<{ title: string }>;
-    expect(view.map((i) => i.title)).toEqual(["MCP overdue"]);
+    ) as { today: { title: string }[]; evening: unknown[] };
+    expect(view.today.map((i) => i.title)).toEqual(["MCP overdue"]);
     const rejections = await Promise.all(
       ["upcoming", "logbook", "trash"].map((bad) =>
         client
@@ -1361,9 +1359,9 @@ describe("things MCP server", () => {
     }
     await connect([fakeVector(null).vector]);
     const capped = await client.callTool({ name: "get_area", arguments: { ref: "Busy" } });
-    const view = textOf(capped) as { projects: unknown[]; items: unknown[] };
+    const view = textOf(capped) as { projects: unknown[]; anytime: unknown[] };
     expect(view.projects).toHaveLength(30);
-    expect(view.items).toHaveLength(30);
+    expect(view.anytime).toHaveLength(30);
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as {
@@ -1382,9 +1380,9 @@ describe("things MCP server", () => {
 
     const narrowed = textOf(
       await client.callTool({ name: "get_area", arguments: { ref: "Busy", project_limit: 2 } }),
-    ) as { projects: unknown[]; items: unknown[] };
+    ) as { projects: unknown[]; anytime: unknown[] };
     expect(narrowed.projects).toHaveLength(2);
-    expect(narrowed.items).toHaveLength(30);
+    expect(narrowed.anytime).toHaveLength(30);
 
     const conflict = await client.callTool({
       name: "get_area",
@@ -1419,18 +1417,13 @@ describe("things MCP server", () => {
       }),
     ) as {
       project: { title: string };
-      items: { title: string; heading?: string | null }[];
-      headings: { title: string }[];
+      anytime: { title: string }[];
+      headings: { heading: { title: string }; items: { title: string }[] }[];
     };
     expect(view.project.title).toBe("MCP Launch");
-    // The flat items[] carries the surviving overdue children — loose AND headed;
-    // the due-today row (not overdue) is filtered out. loose-due is gone.
-    expect(view.items.map((i) => i.title).toSorted()).toEqual(["loose-overdue", "p1-overdue"]);
-    // The headed overdue row carries its heading ref; the empty Phase 2 collapses.
-    expect(view.items.find((i) => i.title === "p1-overdue")?.heading).toBe("Phase 1");
-    // headings[] is the flat catalog — Phase 2 (no surviving child) collapsed.
+    expect(view.anytime.map((i) => i.title)).toEqual(["loose-overdue"]);
     expect(view.headings).toHaveLength(1);
-    expect(view.headings[0]?.title).toBe("Phase 1");
+    expect(view.headings[0]?.heading.title).toBe("Phase 1");
   });
 
   it("get_area overdue filters loose to-dos AND child projects; no recursion", async () => {
@@ -1452,8 +1445,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "MCP Home", overdue: true },
       }),
-    ) as { items: { title: string }[]; projects: { title: string }[] };
-    expect(view.items.map((i) => i.title)).toEqual(["todo-overdue"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(view.anytime.map((i) => i.title)).toEqual(["todo-overdue"]);
     expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
   });
 
@@ -1673,9 +1666,6 @@ describe("things MCP server", () => {
       /\b[A-Z]\d{2}\b/, // probe-evidence ids (P16, E06, R20, ...)
       /\btier\b/i,
       /\bvector\b/i,
-      // "badge" is GUI-chrome vocabulary — the read-shape doctrine forbids
-      // describing how the app looks; the today counts are self-explanatory data.
-      /\bbadge\b/i,
     ];
 
     it("no tool description, parameter description, or instruction leaks internals", async () => {

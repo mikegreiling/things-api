@@ -132,26 +132,16 @@ function readResult(data: unknown): ToolResult {
 /**
  * A read result carrying truncation metadata: the data (already limited) in
  * the first content block, and a second block with the {@link Truncation}
- * numbers plus a one-line note the agent can read when rows were dropped. `meta`
- * merges extra whole-view metadata into that second block — the today view's
- * `counts` aggregate (the analog of the CLI envelope's `meta.counts`), so `data`
- * stays pure domain rows.
+ * numbers plus a one-line note the agent can read when rows were dropped.
  */
-function truncatedResult(
-  data: unknown,
-  truncation: Truncation,
-  meta?: Record<string, unknown>,
-): ToolResult {
+function truncatedResult(data: unknown, truncation: Truncation): ToolResult {
   const note = truncation.truncated
     ? `showing ${truncation.shown} of ${truncation.total} items — pass limit (or all: true) to see more`
     : undefined;
   return {
     content: [
       { type: "text", text: JSON.stringify(omitEmpty(data)) },
-      {
-        type: "text",
-        text: JSON.stringify({ truncation, ...meta, ...(note !== undefined && { note }) }),
-      },
+      { type: "text", text: JSON.stringify({ truncation, ...(note !== undefined && { note }) }) },
     ],
   };
 }
@@ -558,10 +548,9 @@ function buildInstructions(getClient: () => ThingsClient): string {
       "confirmation parameter named in their description; refused calls return an error saying " +
       "what to pass.",
     "- Read-result semantics: an item's tags are its direct tags; its effective tags also include " +
-      "tags inherited from its containing project and area. An item's when is today or evening for " +
-      "a Today member (evening implies today), a future date for a scheduled item, else absent; an " +
-      "unscheduled start=active item is in Anytime and carries no when. Completing an item makes it " +
-      "findable in Logbook.",
+      "tags inherited from its containing project and area. The today and evening markers are " +
+      "present only for an item in Today (evening implies today); an unscheduled start=active item " +
+      "is in Anytime and carries neither. Completing an item makes it findable in Logbook.",
     "- For capped reads, pass limit to cap rows or all: true for everything; if both are set, all wins.",
     `- Read results are compact: ${OMIT_EMPTY_NOTE}`,
   ];
@@ -792,9 +781,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "read_view",
     {
       description:
-        "Read a Things list as the app presents it: today (one flat list of Today " +
-        "members, each item's when marking Today vs This Evening), inbox, anytime, " +
-        "upcoming, someday, logbook, or trash. For upcoming, " +
+        "Read a Things list as the app presents it: today (split into Today and This " +
+        "Evening), inbox, anytime, upcoming, someday, logbook, or trash. For upcoming, " +
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sections in canonical order (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
@@ -816,10 +804,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .string()
           .optional()
           .describe(`today/anytime/someday/upcoming/logbook only: ${AREA_FILTER_DESC}`),
-        evening: z
-          .boolean()
-          .optional()
-          .describe("today only: show only This-Evening members (when = evening)"),
+        evening: z.boolean().optional().describe("today only: show only the This Evening section"),
         show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
           .optional()
@@ -954,7 +939,6 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               return truncatedResult(
                 shapeReadPayload("today", view, full, c.refPromoter()),
                 truncation,
-                { counts: view.counts },
               );
             }
             case "inbox": {
@@ -1209,13 +1193,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_project",
     {
       description:
-        "One project's full contents: metadata, its live child to-dos as one flat list (items, " +
-        "in index order — each carrying its stage, when, and, when it lives under a heading, " +
-        "its heading ref), the heading catalog (headings — every heading in index order, " +
-        "carrying archived once archived), and its logged children (logbook, most recent " +
-        "first, each carrying its heading ref). Reconstruct a heading's members by filtering " +
-        "items (or logbook) on the heading ref. The tag filters keep only the child to-dos " +
-        "matching by their own tags (a heading left with none is dropped). " +
+        "One project's full contents: metadata plus its to-dos grouped under their headings. " +
+        "Open headings (and archived ones not yet swept to the logbook) stay live, carrying " +
+        "archived once archived; a swept archived heading moves into the logged region as a " +
+        "group with its children. The tag filters keep only the child to-dos matching by their " +
+        "own tags (a heading left with none is dropped). " +
         OMIT_EMPTY_NOTE +
         " " +
         REF_RULE_NOTE,
@@ -1257,11 +1239,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "get_area",
     {
       description:
-        "One area's contents: metadata plus its direct to-dos as one flat list (items, in " +
-        "index order — each row carrying its stage and when) and its projects in canonical " +
-        "order (projects). The area logbook is not returned here — read it with read_view " +
-        "logbook + area; trashed rows live in read_view trash. " +
-        `The project rows and the open/current direct to-dos are capped at ${AREA_PREVIEW_LIMIT} each ` +
+        "One area's contents: metadata plus its direct to-dos (active first), its " +
+        "projects in canonical order, and later (scheduled/repeating/someday). The area " +
+        "logbook is not returned here — read it with read_view logbook + area; trashed " +
+        "rows live in read_view trash. " +
+        `The project-rows and direct-to-dos sections are capped at ${AREA_PREVIEW_LIMIT} each ` +
         "by default (project_limit / area_limit adjust them; all: true lifts both); the " +
         "second result block reports the counts. " +
         OMIT_EMPTY_NOTE +

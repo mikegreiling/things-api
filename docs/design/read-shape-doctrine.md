@@ -1,6 +1,6 @@
 # Read-shape doctrine — JSON models semantic state; TTY projects GUI placement
 
-**Status: RATIFIED — fully implemented.** This is the doctrine of record for every primary read view's JSON `data` payload, plus the per-view verdicts it produces. The maintainer's rulings on the contentious calls (§4) are final and are baked into the per-view verdicts (§3). All five sequential PRs (§6) have landed — every per-view verdict below now ships.
+**Status: REVERTED (2026-08-04) — pending re-audit.** This doctrine was implemented across the five sequential PRs (§6) #375–#379, shipped in 0.13.0, and then reverted wholesale (in reverse order) pending a design re-audit of the read-shape approach — the `today` / project / area JSON views were restored to their pre-0.13.0 bucketed shapes (`today` `sections[]` + `badge`, per-stage project buckets + `logbookHeadings`, area direct-to-do stage buckets), and `meta.counts` was removed. This document is RETAINED unchanged below as the INPUT to that re-audit: it records the doctrine as it was ratified and the per-view verdicts as they were implemented, NOT what currently ships. The maintainer's rulings on the contentious calls (§4) and the per-view verdicts (§3) are preserved for that review.
 
 This document extends [api-doctrine.md](api-doctrine.md) (the design canon) and is the *why/what* behind the contract change it drives. It obeys api-doctrine §1 (the ten-sentence grammar): every target shape still fits an existing `data` wrapper (`item` / `items` / `sections` / `view`) — no sixth container is invented.
 

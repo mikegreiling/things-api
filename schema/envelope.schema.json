@@ -144,20 +144,6 @@
           "additionalProperties": false,
           "description": "The active content filter this response was scoped to (ADDITIVE). Present ONLY when a scope was applied — currently `area` (the `--area` view filter), carrying the resolved area's uuid + title; ABSENT otherwise, so the wire shape is unchanged for unscoped reads (the `meta.clock` precedent)."
         },
-        "counts": {
-          "type": "object",
-          "properties": {
-            "dueOrOverdue": {
-              "type": "number"
-            },
-            "other": {
-              "type": "number"
-            }
-          },
-          "required": ["dueOrOverdue", "other"],
-          "additionalProperties": false,
-          "description": "Whole-view aggregate counts (ADDITIVE). Present ONLY on the `today` view: the app's sidebar count split — `dueOrOverdue` (open members whose deadline is due or overdue) vs. `other` (the rest). A convenience aggregate an agent would otherwise recompute over the rows; it lives here so `data` stays pure domain rows. Both counts are OPEN members only, and a `0` is meaningful."
-        },
         "scope": {
           "type": "object",
           "properties": {

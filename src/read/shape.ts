@@ -54,16 +54,16 @@
  *   substrate) and KEPT in FULL/DETAIL beside `when` — different facts: `startDate`
  *   = what is stored, `when` = where it sits.
  * - a template's `repeating.nextOccurrence` is GONE from the wire — `when` replaces
- *   it (same fact, one word); an unprojected template has no `when`.
- * - `when` is KEPT on every row it is present on. (The read-shape doctrine
- *   flattened the card `upcoming` date-groups into the project-/area-view flat
- *   `items[]`, so no enclosing node states the position anymore.) It rides the
- *   today view's flat `items[]` (Today-proper vs This-Evening), the project-/area-
- *   view `items[]`, and the flat `upcoming`/`anytime`/`inbox`/`someday` catalogues,
- *   search, changes (a deadline-pulled row reads `when: "today"` in the mixed
- *   search/changes surfaces, informatively; note R13 re-files it to stage `anytime`
- *   and the flat inbox/someday views now EXCLUDE it — it appears in the `anytime`
- *   catalogue instead, `when: "today"` kept, stage dropped as pure).
+ *   it (same fact, one word); the resting-templates `{date: null}` group is
+ *   unchanged (an unprojected template has no `when`).
+ * - `when` is DROPPED inside the `today` view's own sections (the section key states
+ *   today/evening) and inside any card/heading `upcoming` DATE-GROUP for a member
+ *   whose `when` equals the group's date (the group states it). KEPT everywhere
+ *   else it is present — including the flat `upcoming`/`anytime`/`inbox`/`someday`
+ *   catalogues, search, changes (a deadline-pulled row reads `when: "today"` in the
+ *   mixed search/changes surfaces, informatively; note R13 re-files it to stage
+ *   `anytime` and the flat inbox/someday views now EXCLUDE it — it appears in the
+ *   `anytime` catalogue instead, `when: "today"` kept, stage dropped as pure).
  *
  * ## R13 — provisional Today members + GUI-faithful pulled-row membership
  * BANNER1 / BANNER1b (docs/lab/banner1-research.md). Two coupled facts:
@@ -77,10 +77,10 @@
  *   side effect our read cannot perform (watchers beware).
  * - **stage `anytime` for a deadline pull** — a due-deadline pull re-files an undated
  *   Inbox/Someday row into Anytime (deriveStage step 2½, L-A). So EVERY Today member
- *   derives stage `anytime`, and the today view's flat `items[]` is stage-PURE →
- *   `stage` is DROPPED there (TODAY_ITEM_DROP) while `when` is KEPT. The flat
- *   someday/inbox views EXCLUDE pulled rows and the anytime view INCLUDES them
- *   (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
+ *   derives stage `anytime`, and the `today` view's own sections become stage-PURE →
+ *   `stage` is DROPPED there (TODAY_SECTION_DROP), alongside the section-implied
+ *   `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
+ *   INCLUDES them (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
@@ -396,9 +396,9 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   delete o["todaySection"];
   if (drop.stage !== true) o["stage"] = stage;
   // R12 — the today/evening marker KEYS are replaced by the derived `when` on
-  // EVERY tier (they never appear on the wire); `when` is emitted on every row it
-  // is present on (since the read-shape doctrine flattened the card date-groups,
-  // no enclosing node states the position anymore — the flat lists carry it).
+  // EVERY tier (they never appear on the wire); `when` is emitted unless the
+  // enclosing context provably states the position (the today view's sections;
+  // a card date-group — handled in rebucketChildren).
   delete o["today"];
   delete o["evening"];
   // §9n — a reminder byte is presentation-dead once its `startDate` goes strictly
@@ -486,41 +486,130 @@ function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean, promoter: 
   return out;
 }
 
+/** A child entity carrying the fields the R10 re-bucketer needs. */
+interface Child extends Obj {
+  startDate?: string | null;
+  todayIndex?: number;
+}
+
+/** An IsoDate group on the wire — `date` is a real string, or `null` for the resting-templates group. */
+interface WireDateGroup {
+  date: string | null;
+  items: unknown[];
+}
+
+/**
+ * Re-bucket a project's / area's / heading's live (non-logbook/trash) children
+ * into the R10 card shape by their derived {@link deriveStage} — so the bucket an
+ * item lands in ALWAYS equals its `stage`:
+ * - `anytime` — stage anytime, in encounter order;
+ * - `upcoming` — stage upcoming, date-grouped `[{date, items}]` (a dated row under
+ *   its `startDate`, a template under its `nextOccurrence`), date ASC; date-LESS
+ *   templates (after-completion / paused) form a trailing `{date: null, items}`
+ *   group (explicit null per the `area: null` section precedent);
+ * - `someday` — stage someday.
+ * Items are already in view order (index / date+todayIndex) from the read layer,
+ * so encounter order within a date group preserves that ordering. Each item is
+ * then run through {@link shapeItem} with the section drop (ancestry + `stage`,
+ * since the bucket states it).
+ */
+function rebucketChildren(
+  children: unknown[],
+  drop: ItemDrop,
+  compact: boolean,
+  promoter: RefPromoter,
+): { anytime: unknown[]; upcoming: WireDateGroup[]; someday: unknown[] } {
+  const anytime: unknown[] = [];
+  const someday: unknown[] = [];
+  const datedByKey = new Map<string, unknown[]>();
+  const datedOrder: string[] = [];
+  const restingTemplates: unknown[] = [];
+  const shape = (c: unknown) => shapeItem(c, drop, compact, promoter);
+  for (const raw of children) {
+    if (raw === null || typeof raw !== "object") continue;
+    const c = raw as Child;
+    const stage = stageOf(c);
+    if (stage === "anytime") {
+      anytime.push(shape(c));
+    } else if (stage === "someday") {
+      someday.push(shape(c));
+    } else if (stage === "upcoming") {
+      const repeating = c["repeating"] as Obj | undefined;
+      const nextOcc =
+        repeating != null && typeof repeating === "object"
+          ? ((repeating["nextOccurrence"] as string | null | undefined) ?? null)
+          : null;
+      const date = (c.startDate ?? null) !== null ? c.startDate! : nextOcc;
+      if (date === null) {
+        restingTemplates.push(shape(c));
+      } else {
+        if (!datedByKey.has(date)) {
+          datedByKey.set(date, []);
+          datedOrder.push(date);
+        }
+        // R12 — inside a date-group the group states the date, so a member whose
+        // `when` equals it drops it (every scheduled row and every projected
+        // template does — that IS the group key).
+        const shaped = shape(c);
+        if (shaped !== null && typeof shaped === "object" && (shaped as Obj)["when"] === date) {
+          delete (shaped as Obj)["when"];
+        }
+        datedByKey.get(date)!.push(shaped);
+      }
+    } else {
+      // inbox / logbook / trash should not appear among a card's live children;
+      // route defensively to anytime rather than drop the row.
+      anytime.push(shape(c));
+    }
+  }
+  const upcoming: WireDateGroup[] = datedOrder
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((date) => ({ date, items: datedByKey.get(date)! }));
+  if (restingTemplates.length > 0) upcoming.push({ date: null, items: restingTemplates });
+  return { anytime, upcoming, someday };
+}
+
+/** Flatten an internal IsoDateGroup[] (`[{date, items}]`) to its items, in order. */
+function flattenGroups(groups: unknown): unknown[] {
+  if (!Array.isArray(groups)) return [];
+  const out: unknown[] = [];
+  for (const g of groups) {
+    if (g !== null && typeof g === "object" && Array.isArray((g as Obj)["items"])) {
+      out.push(...((g as Obj)["items"] as unknown[]));
+    }
+  }
+  return out;
+}
+
 /** Coerce an unknown value to an array (empty when absent). */
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
+/** The R6 ref drop for every child bucket of a project view (unheaded members). */
+const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, stage: true };
+/** Heading-group members drop the heading ref too (the group states it). */
+const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
 /**
- * The flat project-view `items[]` rows (read-shape doctrine §3.12): drop
- * project/area (the card states them) but KEEP `stage` (the list is stage-MIXED:
- * anytime + upcoming + someday + closed-unswept), `when`, and the `heading` ref.
- * The heading ref is kept + flattened even in compact (keepHeading), scoped to
- * the owning project — flat title + `headingUuid` when the title would not
- * round-trip — so a consumer reconstructs a heading's members from the rows.
- */
-const PROJECT_ITEM_DROP: ItemDrop = { project: true, area: true, keepHeading: true };
-/**
- * Project-view LOGBOOK (flat logged) rows (read-shape doctrine §3.12 / #C4): drop
- * project/area (the card states them) but KEEP `stage` and the `heading` ref
- * (drop.keepHeading). The bucket is stage-MIXED since it absorbs the children of
- * SWEPT ARCHIVED headings too — mostly `logbook`, but it can hold the odd OPEN
- * child a Put-Back stranded under an archived heading (HEADARC2-C, stage
- * `anytime`) — so `stage` is not provably implied and is kept. The heading ref is
- * the GUI hint (the in-project logged toggle labels the HEADING; the global
- * Logbook labels the PROJECT — the two-view asymmetry, HEADARC2-B), flat title +
- * project-scoped `headingUuid`.
+ * Project-view LOGBOOK (flat logged) rows: drop project/area (the card states
+ * them) + the bucket-implied stage (all rows are logged), but KEEP the heading
+ * ref (drop.keepHeading) — a swept child of an OPEN heading carries its heading
+ * as the GUI hint (the in-project logged toggle labels the HEADING; the global
+ * Logbook labels the PROJECT — the two-view asymmetry, HEADARC2-B).
  */
 const PROJECT_LOGBOOK_DROP: ItemDrop = {
   project: true,
   area: true,
+  stage: true,
   keepHeading: true,
 };
 /**
- * The flat area-view `items[]` rows (read-shape doctrine §3.13): drop `area` (the
- * card states it) but KEEP `stage` (the list is stage-MIXED — anytime + upcoming
- * + someday + closed-unswept) and `when`. Area direct to-dos are never headed and
- * never project-nested, so nothing else to drop.
+ * Members of an ARCHIVED-heading GROUP in the logged region (HEADARC2-A): drop
+ * project/area + the heading ref (the group header states it). `stage` is KEPT —
+ * the group is stage-MIXED (mostly `logbook`, but may hold the odd OPEN child a
+ * Put-Back stranded, HEADARC2-C), so the header does not provably state it.
  */
-const AREA_ITEM_DROP: ItemDrop = { area: true };
+const LOGGED_HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true };
+/** Area-view child-item buckets drop their area (the card states it) + the bucket-implied stage. */
+const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 /** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
 const AREA_PROJECTS_DROP: ItemDrop = { area: true };
 /**
@@ -539,32 +628,29 @@ const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and `when`. */
 const NO_DROP: ItemDrop = {};
 /**
- * The today view's flat `items[]`: drop the view-implied `stage` (R13) but KEEP
- * `when`. Every Today member derives stage `anytime` by construction — an ARRIVED
- * `startDate` (step 5) or a DEADLINE PULL (step 2½) both derive `anytime`, and
- * there are no future-dated or undated-someday Today members — so the today view
- * is provably stage-PURE `anytime` and the field is redundant (verified strict by
- * the today purity property test in test/unit/stage.test.ts). `when` is KEPT: the
- * flat list interleaves Today-proper (`when: "today"`) and This-Evening
- * (`when: "evening"`) members, so each row must carry which render section it
- * belongs to — the split is derived from `when`, not a wire bucket. `provisional`
- * is NOT a drop — the banner pip is per-row, nothing implies it.
+ * The today view's own sections: drop the section-implied `when` (R12) AND the
+ * section-implied `stage` (R13). Every Today member now derives stage `anytime`
+ * by construction — an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½)
+ * both derive `anytime`, and there are no future-dated or undated-someday Today
+ * members — so the Today sections are provably stage-PURE `anytime` and the field
+ * is redundant there (verified strict by the today-section purity property test
+ * in test/unit/stage.test.ts). `provisional` is NOT a drop — the banner is not a
+ * section, so nothing implies it.
  */
-const TODAY_ITEM_DROP: ItemDrop = { stage: true };
+const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
 /**
- * Shape a heading catalog entry (a `headings[]` node — the flat `{uuid,title,
- * archived?}` catalog, read-shape doctrine §3.12 / #C3). The type is implied by
- * position, and a heading has no open/canceled/completed vocabulary the reader
- * needs — so:
+ * Shape a heading GROUP node (the `headings[].heading` / `loggedHeadings[].heading`
+ * keyed sub-object). The type is triply implied by position, and a heading has no
+ * open/canceled/completed vocabulary the reader needs — so:
  * - DROP `type` (positional: this slot is always a heading; the "absent type =
- *   to-do" convention is scoped to ROWS/candidates, never this catalog entry);
+ *   to-do" convention is scoped to ROWS/candidates, never this keyed sub-object);
  * - DROP `project` (the card states it);
  * - REPLACE `status` with the presence-keyed `archived` (the stopDate, an ISO
  *   date-time following the `stopped`/logged-row convention) — emitted ONLY when
- *   the heading is archived (status "completed"), OMITTED when open. The entry
- *   carries only whether-and-when it was archived; sweptness (past the logbook
- *   boundary) is not on the wire — the TTY derives it (#C3a).
+ *   the heading is archived (status "completed"), OMITTED when open. Region
+ *   membership (live `headings` vs the logged region) expresses sweep state; the
+ *   node carries only whether-and-when it was archived.
  */
 function shapeHeadingNode(src: unknown): unknown {
   if (src === null || typeof src !== "object") return src;
@@ -581,95 +667,104 @@ function shapeHeadingNode(src: unknown): unknown {
   return h;
 }
 
-/** Stopped-DESC comparator for the flat logbook (open odd children — no stopDate — sort last). */
-function byStoppedDesc(a: unknown, b: unknown): number {
-  const t = (x: unknown): number => {
-    const s = x !== null && typeof x === "object" ? (x as Obj)["stopped"] : null;
-    return s instanceof Date ? s.getTime() : -Infinity;
-  };
-  return t(b) - t(a);
-}
-
-/**
- * Shape a project view (read-shape doctrine §3.12 / #C3 / #C4). The live children
- * are ONE flat `items[]` in project index order — each row carrying `stage`,
- * `when`, and its `heading` ref (flat title + project-scoped `headingUuid`) — so a
- * consumer reconstructs a heading's members by filtering `items` on `heading`.
- * `headings[]` is the flat catalog `[{uuid,title,archived?}]` of EVERY heading
- * (live + swept archived) in index order — the ORDER axis. `logbook` is one flat
- * `stopDate DESC` list of ALL swept children — of open headings, un-headed, AND
- * archived headings — each carrying its `heading` ref; `logbookHeadings` is gone
- * (its rows folded in, the archived heading itself now a catalog entry with
- * `archived`). The card node is left full + ancestry-intact.
- */
+/** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
 function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
-  // The heading catalog: every heading node (live + swept archived), index order,
-  // flattened to `{uuid,title,archived?}`. Membership rides the flat item/logbook
-  // row `heading` refs; archived-ness reads off `archived` here.
-  const headings = Array.isArray(view["headingCatalog"])
-    ? (view["headingCatalog"] as unknown[]).map(shapeHeadingNode)
-    : [];
-  // The flat logbook: swept children of open/un-headed headings (`logged`) PLUS
-  // the children of swept archived headings (`loggedHeadings`), merged into ONE
-  // stopDate-DESC list (open odd children last), each carrying its heading ref.
-  const loggedRows = [
-    ...asArray(view["logged"]),
-    ...asArray(view["loggedHeadings"]).flatMap((g) =>
-      g !== null && typeof g === "object" ? asArray((g as Obj)["items"]) : [],
-    ),
-  ].toSorted(byStoppedDesc);
+  const cd = PROJECT_CHILD_DROP;
+  const hd = HEADING_MEMBER_DROP;
+  const shapeHeadingGroup = (g: unknown): unknown => {
+    if (g === null || typeof g !== "object") return g;
+    const grp = g as Obj;
+    const out: Obj = {};
+    out["heading"] = shapeHeadingNode(grp["heading"]);
+    const members = [
+      ...asArray(grp["items"]),
+      ...flattenGroups(grp["scheduled"]),
+      ...asArray(grp["someday"]),
+      ...asArray(grp["repeating"]),
+    ];
+    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact, promoter);
+    out["anytime"] = anytime;
+    out["upcoming"] = upcoming;
+    out["someday"] = someday;
+    return out;
+  };
+  // An archived-heading GROUP in the logged region: the archived heading node
+  // (carrying `archived`) + its children nested flat (`items`), each dropping
+  // project/area/heading but KEEPING stage (the group is stage-mixed).
+  const shapeLoggedHeadingGroup = (g: unknown): unknown => {
+    if (g === null || typeof g !== "object") return g;
+    const grp = g as Obj;
+    return {
+      heading: shapeHeadingNode(grp["heading"]),
+      items: shapeList(grp["items"], LOGGED_HEADING_MEMBER_DROP, compact, promoter),
+    };
+  };
+  const headings = Array.isArray(view["headings"])
+    ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
+    : view["headings"];
+  const looseMembers = [
+    ...asArray(view["active"]),
+    ...flattenGroups(view["scheduled"]),
+    ...asArray(view["someday"]),
+    ...asArray(view["repeating"]),
+  ];
+  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact, promoter);
   const out: Obj = { ...view };
   delete out["active"];
   delete out["scheduled"];
   delete out["repeating"];
-  delete out["someday"];
   delete out["logged"];
   delete out["loggedHeadings"];
-  delete out["headingCatalog"];
   // Trashed children live only in `things trash` — never a project-view bucket.
   // Delete defensively in case an untyped source carries the old key.
   delete out["trashed"];
   // The project card NODE keeps everything (children derive their container from
   // it), but is still an item DTO, so the universal + R10 reshapes apply.
   out["project"] = shapeItem(view["project"], NO_DROP, false, promoter);
-  // The flat live children — stage/when/heading kept, project/area dropped (the
-  // card states them). The heading ref is kept + flattened even in compact
-  // (keepHeading), project-scoped like the logbook rows.
-  out["items"] = shapeList(view["items"], PROJECT_ITEM_DROP, compact, promoter);
+  out["anytime"] = anytime;
+  out["upcoming"] = upcoming;
+  out["someday"] = someday;
   out["headings"] = headings;
-  // A project keeps its in-context `logbook` (a project is a bounded object with a
-  // real done-state); trashed children live only in `things trash`. The flat
-  // rows KEEP stage (mixed) + their heading ref (PROJECT_LOGBOOK_DROP).
-  out["logbook"] = shapeList(loggedRows, PROJECT_LOGBOOK_DROP, compact, promoter);
+  // A project keeps its in-context `logbook` (a project is a bounded object with
+  // a real done-state); trashed children live only in `things trash`. The flat
+  // logbook rows KEEP their heading ref (PROJECT_LOGBOOK_DROP.keepHeading).
+  out["logbook"] = shapeList(view["logged"], PROJECT_LOGBOOK_DROP, compact, promoter);
+  // The archived-heading GROUPS of the logged region (HEADARC2-A).
+  out["logbookHeadings"] = Array.isArray(view["loggedHeadings"])
+    ? (view["loggedHeadings"] as unknown[]).map(shapeLoggedHeadingGroup)
+    : [];
   return out;
 }
 
-/**
- * Shape an area view (read-shape doctrine §3.13). The direct to-dos dissolve into
- * ONE flat `items[]` in index order — each row carrying `stage` + `when`, `area`
- * dropped (the card states it). The stage/date sub-buckets (anytime/upcoming/
- * someday) are gone. `projects[]` is KEPT — the area's child-project sidebar rank
- * is a DISTINCT order axis from the direct-to-do index, so it earns its own list
- * (mixed-stage, someday/scheduled projects included; the render split is TTY-only).
- * The area node keeps its identity (tags folded).
- */
+/** Shape every collection bucket of an area view; the area node keeps its identity (tags folded). */
 function shapeAreaView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
+  const looseMembers = [
+    ...asArray(view["active"]),
+    ...flattenGroups(view["scheduled"]),
+    ...asArray(view["someday"]),
+    ...asArray(view["repeating"]),
+  ];
+  const { anytime, upcoming, someday } = rebucketChildren(
+    looseMembers,
+    AREA_CHILD_DROP,
+    compact,
+    promoter,
+  );
   const out: Obj = { ...view };
   delete out["active"];
   delete out["scheduled"];
   delete out["repeating"];
-  delete out["someday"];
   // No `logbook` or `trash` bucket: an area's logbook is the bounded query
   // `things logbook --area <ref>`, and trashed rows live only in `things trash`.
   // Delete defensively in case an untyped source carries the old keys.
   delete out["logged"];
   delete out["trashed"];
   out["area"] = shapeArea(view["area"]);
-  // The flat direct to-dos — stage/when kept, area dropped.
-  out["items"] = shapeList(view["items"], AREA_ITEM_DROP, compact, promoter);
-  // The projects list is a mixed listing of the area's project rows — keep stage,
-  // sidebar order (the distinct order axis).
+  out["anytime"] = anytime;
+  // The projects list is a mixed listing of the area's project rows — keep stage.
   out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact, promoter);
+  out["upcoming"] = upcoming;
+  out["someday"] = someday;
   return out;
 }
 
@@ -679,6 +774,15 @@ function shapeArea(src: unknown): unknown {
   const o: Obj = { ...(src as Obj) };
   flattenTags(o);
   return o;
+}
+
+/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied `when`). */
+function shapeTodayView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
+  return {
+    ...view,
+    today: shapeList(view["today"], TODAY_SECTION_DROP, compact, promoter),
+    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact, promoter),
+  };
 }
 
 /** Shape sidebar sections (anytime/someday catalogues) with the section's drop spec. */
@@ -735,12 +839,8 @@ export function shapeReadPayload(
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);
   if (flatDrop !== undefined) return shapeList(data, flatDrop, compact, p);
-  // The today view: one flat `items[]` of Today members (Today-proper + This
-  // Evening interleaved in comparator order); drop the view-implied `stage`,
-  // KEEP `when` (it carries the render section). The `counts` aggregate rides
-  // `meta.counts`, not `data`. The wire wrapper is `{ items }` (read-driver).
   if (kind === "today" && data !== null && typeof data === "object") {
-    return shapeList((data as Obj)["items"], TODAY_ITEM_DROP, compact, p);
+    return shapeTodayView(data as Obj, compact, p);
   }
   if (kind === "anytime" && Array.isArray(data)) {
     return shapeSections(data, ANYTIME_SECTION_DROP, compact, p); // stage-pure → drop stage

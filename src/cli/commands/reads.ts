@@ -180,7 +180,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("today")
     .description(
-      "The Today list — Today and This Evening (evening expires daily). Counts (due/overdue vs. other) ride meta.counts",
+      "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
@@ -241,7 +241,6 @@ export function registerReadCommands(program: Command): void {
             return {
               data: view,
               truncation,
-              counts: view.counts,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
               lines: renderToday(view, truncation.sections, base, { eveningOnly }),

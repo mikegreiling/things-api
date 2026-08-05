@@ -9,7 +9,6 @@ import {
   seedChecklistItem,
   seedHeading,
   seedProject,
-  seedSettings,
   seedTag,
   seedTodo,
   tagArea,
@@ -58,12 +57,9 @@ function isoFromToday(days: number): string {
 const titlesOf = (stdout: string): string[] =>
   JSON.parse(stdout).data.items.map((i: { title: string }) => i.title);
 
-/** The Today-proper titles from a `today --json` envelope (the flat `data.items`
- * minus the This-Evening members, which each carry `when: "evening"`). */
+/** The `data.today` titles from a `today --json` envelope. */
 const todayTitles = (stdout: string): string[] =>
-  JSON.parse(stdout)
-    .data.items.filter((i: { when?: string }) => i.when !== "evening")
-    .map((i: { title: string }) => i.title);
+  JSON.parse(stdout).data.sections[0].items.map((i: { title: string }) => i.title);
 
 /**
  * Run `fn` with process.env keys temporarily set/cleared, restoring them after.
@@ -163,7 +159,7 @@ async function runCliAsync(argv: string[]): Promise<{ stdout: string; exitCode: 
 }
 
 describe("cli end-to-end (fixture db)", () => {
-  it("things today --json emits the versioned envelope as one flat items list with `when`", () => {
+  it("things today --json emits the versioned envelope with split sections", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: "2020-01-01", todayIndex: 1 });
     // evening membership requires startDate == today exactly (the CLI path
@@ -178,29 +174,22 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.kind).toBe("today");
     expect(envelope.meta.dbVersion).toBe(26);
     expect(envelope.meta.fingerprint).toBe("ok");
-    // One flat `items[]` in comparator order; each row carries its `when`
-    // (Today-proper "today" vs This-Evening "evening") — no `sections` wrapper.
-    expect("sections" in envelope.data).toBe(false);
-    const rows: Array<{ title: string; when?: string }> = envelope.data.items;
-    expect(rows.map((i) => i.title)).toEqual(["morning", "tonight"]);
-    expect(rows.find((i) => i.title === "morning")?.when).toBe("today");
-    expect(rows.find((i) => i.title === "tonight")?.when).toBe("evening");
-    // The whole-view counts ride meta.counts, never data.
-    expect(envelope.meta.counts).toEqual({ dueOrOverdue: 0, other: 2 });
+    expect(envelope.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual([
+      "morning",
+    ]);
+    expect(envelope.data.sections[1].items.map((i: { title: string }) => i.title)).toEqual([
+      "tonight",
+    ]);
   });
 
-  it("things today puts ★/⏾ in the clean section headers (counts at top), not on the rows", () => {
+  it("things today puts ★/⏾ in the section headers, not on the rows", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: localToday(), todayIndex: 1 });
     seedTodo(fx.db, { title: "tonight", startDate: localToday(), evening: true });
     const { stdout, exitCode } = runCli(["today", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("★ Today ──");
-    expect(stdout).not.toContain("badge");
+    expect(stdout).toContain("★ Today (badge:");
     expect(stdout).toContain("⏾ This Evening ──");
-    // The counts render as card-style metadata lines (indented key: value).
-    expect(stdout).toContain("due/overdue:");
-    expect(stdout).toContain("other:");
     // The membership glyph is gone from the item rows themselves.
     const rows = stdout.split("\n").filter((l) => l.includes("morning") || l.includes("tonight"));
     expect(rows).toHaveLength(2);
@@ -248,12 +237,10 @@ describe("cli end-to-end (fixture db)", () => {
     expect(footerIdx).toBeGreaterThan(hintIdx);
     // Exactly one blank line between the evening hint and the global footer.
     expect(lines.slice(hintIdx + 1, footerIdx)).toEqual([""]);
-    // JSON: one flat items list, sliced in comparator order (50 Today-proper
-    // rows shown, all 20 evening cut); the per-render-section breakdown lives in
-    // meta.truncation.sections so the renderer stays honest.
+    // JSON is unchanged (fields, not glyphs): the split still carries counts.
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
-    expect(env.data.items).toHaveLength(50);
-    expect(env.data.items.filter((i: { when?: string }) => i.when === "evening")).toHaveLength(0);
+    expect(env.data.sections[0].items).toHaveLength(50);
+    expect(env.data.sections[1].items).toHaveLength(0);
     expect(env.meta.truncation).toEqual({
       shown: 50,
       total: 75,
@@ -493,7 +480,9 @@ describe('cli --untagged (GUI "No Tag")', () => {
     seedTagged();
     const json = runCli(["today", "--untagged", "--json", "--db", fx!.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.items.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["bare one"]);
     const human = runCli(["today", "--untagged", "--db", fx!.path]);
     expect(human.exitCode).toBe(0);
@@ -538,7 +527,9 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     tagTask(fx.db, fooOnly, foo);
     const json = runCli(["today", "--tag", "foo", "--tag", "bar", "--json", "--db", fx.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.items.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["both"]);
   });
 
@@ -555,14 +546,14 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     const tagged = runCli(["today", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
       JSON.parse(tagged.stdout)
-        .data.items.map((i: { title: string }) => i.title)
+        .data.sections[0].items.map((i: { title: string }) => i.title)
         .toSorted(),
     ).toEqual(["direct", "inherited"]);
     // Flat --untagged drops the inherited-only row; only the truly bare survives.
     const untagged = runCli(["today", "--untagged", "--json", "--db", fx.path]);
-    expect(JSON.parse(untagged.stdout).data.items.map((i: { title: string }) => i.title)).toEqual([
-      "bare",
-    ]);
+    expect(
+      JSON.parse(untagged.stdout).data.sections[0].items.map((i: { title: string }) => i.title),
+    ).toEqual(["bare"]);
   });
 
   it("the removed --direct-tag / --direct-untagged flags error as unknown options", () => {
@@ -626,94 +617,14 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // focus directly (the project's own focus is inherited by all, suppressed).
     const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(direct.stdout).data.view.items.map((i: { title: string }) => i.title),
+      JSON.parse(direct.stdout).data.view.anytime.map((i: { title: string }) => i.title),
     ).toEqual(["child-focus"]);
     // --untagged (direct-only) keeps the child with no direct tag, even though
     // it inherits focus from the project.
     const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(untagged.stdout).data.view.items.map((i: { title: string }) => i.title),
+      JSON.parse(untagged.stdout).data.view.anytime.map((i: { title: string }) => i.title),
     ).toEqual(["child-bare"]);
-  });
-
-  it("project show --json: live children are ONE flat items[] (index order) with heading refs; no stage buckets", () => {
-    fx = buildFixtureDb();
-    const proj = seedProject(fx.db, { title: "Ship it", uuid: "SHIP" });
-    seedTodo(fx.db, { project: "SHIP", title: "loose-now", index: 0 });
-    seedTodo(fx.db, { project: "SHIP", title: "loose-later", startDate: "2030-01-01", index: 1 });
-    seedHeading(fx.db, { project: "SHIP", title: "Phase 1", uuid: "PH1", index: 2 });
-    seedTodo(fx.db, { heading: "PH1", project: null, title: "headed-now", index: 3 });
-    const env = JSON.parse(runCli(["project", "show", proj, "--json", "--db", fx.path]).stdout);
-    const view = env.data.view;
-    // ONE flat items[] in index order — headed + unheaded interleaved.
-    expect(view.items.map((i: { title: string }) => i.title)).toEqual([
-      "loose-now",
-      "loose-later",
-      "headed-now",
-    ]);
-    // The dissolved stage/date buckets are gone from the wire.
-    for (const k of ["anytime", "upcoming", "someday"]) expect(k in view).toBe(false);
-    // stage + when kept per row; a future row reads its date.
-    const later = view.items.find((i: { title: string }) => i.title === "loose-later");
-    expect(later.stage).toBe("upcoming");
-    expect(later.when).toBe("2030-01-01");
-    // A headed row carries its heading ref (title); unheaded rows omit it.
-    const headed = view.items.find((i: { title: string }) => i.title === "headed-now");
-    expect(headed.heading).toBe("Phase 1");
-    expect("heading" in view.items.find((i: { title: string }) => i.title === "loose-now")).toBe(
-      false,
-    );
-    // headings[] is the flat catalog [{uuid,title,archived?}] (members ride refs).
-    expect(view.headings).toEqual([{ uuid: "PH1", title: "Phase 1" }]);
-  });
-
-  it("project show --json: headings[] is the flat catalog (incl. archived); logbook absorbs archived-heading children; no logbookHeadings", () => {
-    fx = buildFixtureDb();
-    // Manual boundary at yesterday noon → a stopDate before it is SWEPT.
-    const NOW_EPOCH = Math.floor(Date.now() / 1000);
-    seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
-    seedProject(fx.db, { title: "Rel", uuid: "REL" });
-    seedHeading(fx.db, { project: "REL", title: "Live H", uuid: "LH", index: 0 });
-    seedTodo(fx.db, { heading: "LH", project: null, title: "live-child", index: 1 });
-    // A SWEPT archived heading + a swept child + a stranded OPEN child.
-    seedHeading(fx.db, {
-      project: "REL",
-      title: "Swept H",
-      uuid: "SH",
-      status: "completed",
-      stopDate: NOW_EPOCH - 200000,
-      index: 2,
-    });
-    seedTodo(fx.db, {
-      heading: "SH",
-      project: null,
-      title: "swept-done",
-      status: "completed",
-      stopDate: NOW_EPOCH - 210000,
-      index: 3,
-    });
-    seedTodo(fx.db, { heading: "SH", project: null, title: "swept-open", index: 4 });
-    const view = JSON.parse(
-      runCli(["project", "show", "REL", "--show-logged", "--json", "--db", fx.path]).stdout,
-    ).data.view;
-    // Flat catalog: BOTH headings, index order, the swept one carrying `archived`.
-    expect(view.headings.map((h: { title: string }) => h.title)).toEqual(["Live H", "Swept H"]);
-    const sweptCat = view.headings.find((h: { title: string }) => h.title === "Swept H");
-    expect(typeof sweptCat.archived).toBe("string");
-    expect("archived" in view.headings.find((h: { title: string }) => h.title === "Live H")).toBe(
-      false,
-    );
-    // The archived heading's children are in the FLAT logbook, each carrying the
-    // heading ref; the open stranded child keeps stage `anytime`. No logbookHeadings.
-    expect("logbookHeadings" in view).toBe(false);
-    const logTitles = view.logbook.map((i: { title: string }) => i.title);
-    expect(logTitles).toContain("swept-done");
-    expect(logTitles).toContain("swept-open");
-    const open = view.logbook.find((i: { title: string }) => i.title === "swept-open");
-    expect(open.heading).toBe("Swept H");
-    expect(open.stage).toBe("anytime");
-    // The stranded-open advisory rides the wire.
-    expect(view.openChildrenUnderArchivedHeading).toBe(1);
   });
 
   it("area show --tag filters both row kinds by direct tag; no recursion into projects", () => {
@@ -731,35 +642,10 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     tagTask(fx.db, buried, focus);
     const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
     const data = JSON.parse(json.stdout).data.view;
-    expect(data.items.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
+    expect(data.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
     expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
     const all = JSON.stringify(data);
     expect(all).not.toContain("buried-focus");
-  });
-
-  it("area show --json: direct to-dos are ONE flat items[] (index order); projects[] kept; no stage buckets", () => {
-    fx = buildFixtureDb();
-    seedArea(fx.db, "Work", 0, "AR");
-    seedTodo(fx.db, { area: "AR", title: "d-now", index: 0 });
-    seedTodo(fx.db, { area: "AR", title: "d-later", startDate: "2030-01-01", index: 1 });
-    seedTodo(fx.db, { area: "AR", title: "d-some", start: "someday", index: 2 });
-    seedProject(fx.db, { area: "AR", title: "P-a", index: 10 });
-    const view = JSON.parse(runCli(["area", "show", "AR", "--json", "--db", fx.path]).stdout).data
-      .view;
-    // ONE flat items[] in index order — all direct to-dos (current + later).
-    expect(view.items.map((i: { title: string }) => i.title)).toEqual([
-      "d-now",
-      "d-later",
-      "d-some",
-    ]);
-    // stage/when kept per row; the dissolved buckets are gone.
-    for (const k of ["anytime", "upcoming", "someday"]) expect(k in view).toBe(false);
-    const later = view.items.find((i: { title: string }) => i.title === "d-later");
-    expect(later.stage).toBe("upcoming");
-    expect(later.when).toBe("2030-01-01");
-    expect(view.items.find((i: { title: string }) => i.title === "d-some").stage).toBe("someday");
-    // projects[] KEPT (the distinct sidebar-rank order axis).
-    expect(view.projects.map((p: { title: string }) => p.title)).toEqual(["P-a"]);
   });
 
   it("things projects --tag is FLAT/inheritance-inclusive; area show --tag suppresses area inheritance", () => {
@@ -1848,7 +1734,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       ]).stdout,
     );
     expect(json.data.view.projects).toHaveLength(2);
-    expect(json.data.view.items).toHaveLength(3);
+    expect(json.data.view.anytime).toHaveLength(3);
     expect(json.meta.truncation).toEqual({
       // Aggregate counts roll the per-block totals up (2+3 shown of 35+35).
       shown: 5,
@@ -1865,7 +1751,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
     expect(all.data.view.projects).toHaveLength(35);
-    expect(all.data.view.items).toHaveLength(35);
+    expect(all.data.view.anytime).toHaveLength(35);
     expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
@@ -1897,7 +1783,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const json = JSON.parse(
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
-    expect(json.data.view.items).toHaveLength(60);
+    expect(json.data.view.anytime).toHaveLength(60);
     expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
@@ -2443,7 +2329,7 @@ describe("overdue filter (cli)", () => {
     seedTodo(fx.db, { title: "due-today", start: "active", deadline: isoFromToday(0) });
     seedTodo(fx.db, { title: "future", start: "active", deadline: isoFromToday(3) });
     const env = JSON.parse(runCli(["today", "--overdue", "--json", "--db", fx.path]).stdout);
-    expect(env.data.items.map((i: { title: string }) => i.title)).toEqual(["past"]);
+    expect(env.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual(["past"]);
   });
 
   it("is a content scope: it never lifts the default row cap", () => {
@@ -2522,15 +2408,10 @@ describe("overdue in container views (cli)", () => {
       runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
     );
     expect(env.data.view.project.title).toBe("Launch");
-    // The flat items[] holds the surviving overdue children (loose + headed); the
-    // due-today row is filtered out.
-    expect(env.data.view.items.map((i: { title: string }) => i.title).toSorted()).toEqual([
-      "loose-overdue",
-      "p1-overdue",
-    ]);
-    // Phase 2 collapsed (no surviving child); Phase 1 kept in the catalog.
+    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
+    // Phase 2 collapsed (no surviving child); Phase 1 kept.
     expect(env.data.view.headings).toHaveLength(1);
-    expect(env.data.view.headings[0].title).toBe("Phase 1");
+    expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
     // The TTY render omits the collapsed heading entirely.
     const tty = runCli(["project", "show", "Launch", "--overdue", "--db", fx.path]).stdout;
     expect(tty).toContain("Phase 1");
@@ -2555,7 +2436,7 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.view.items.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
+    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
     expect(env.data.view.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
     const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
     expect(tty).not.toContain("buried-overdue");

@@ -6,7 +6,7 @@ version: 0.0.0-dev
 
 # Things CLI
 
-`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are checked after they land. Use `things` when it is on your PATH; otherwise — or when `things --version` reports below **0.13.0** — substitute `npx -y things-api@latest` in every command (identical subcommands and flags), which always pairs the current commands with their current help.
+`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are checked after they land. Use `things` when it is on your PATH; otherwise — or when `things --version` reports below the version stamped in this skill's `version:` frontmatter above (set at publish time; the commands and read-view JSON shapes documented here — including the bucketed `today` / project / area shapes — track the release this skill ships with) — substitute `npx -y things-api@latest` in every command (identical subcommands and flags), which always pairs the current commands with their current help.
 
 `things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `move`, `output`, `repeating`, `writes`.
 
@@ -24,7 +24,7 @@ version: 0.0.0-dev
 
 Reads decompose an item's position onto two derived, presence-keyed words (they REPLACED the old `start`/`logged`/`trashed`/`todaySection` fields):
 
-- **`stage`** — the sidebar BUCKET: `inbox | upcoming | anytime | someday | logbook | trash`. Read view membership off it directly (a completed row is `logbook`, a trashed row `trash`, regardless of any other hint). Dropped only where a view provably states it — the stage-pure flat views (`inbox`/`anytime`/`someday`/`logbook`/`trash`) and the `today` view; KEPT everywhere it is stage-mixed — `upcoming`, `search`, `changes`, the projects/areas listings, the project/area card `items` (and the project `logbook`), and `detail`.
+- **`stage`** — the sidebar BUCKET: `inbox | upcoming | anytime | someday | logbook | trash`. Read view membership off it directly (a completed row is `logbook`, a trashed row `trash`, regardless of any other hint). Dropped inside a section that already states it; present in mixed lists, `search`, `changes`, and `detail`.
 - **`when`** — the TIME POSITION: `today | evening | a future ISO date`, or absent. `evening` implies today; someday is a bucket (→ `stage`), never a `when`. A due deadline pulls an undated row into Today (`when: "today"`); the app re-files it into Anytime, so it derives `stage: "anytime"` (it leaves the Inbox/Someday list).
 - **`provisional: true`** marks a Today member the app has not yet materialized (the "N new to-dos" banner / `•` pip); see [references/banner.md](references/banner.md).
 

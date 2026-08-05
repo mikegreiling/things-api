@@ -355,7 +355,7 @@ describe("property — `when` ∈ {today, evening} ⟺ Today-view membership (R1
     seedTodo(fx.db, { title: "p-inbox", start: "inbox", startDate: null }); // NOT today
 
     const view = todayView(fx.db, NOW);
-    const members = new Set(view.items.map((i) => i.uuid));
+    const members = new Set([...view.today, ...view.evening].map((i) => i.uuid));
 
     // Sweep every entity we can reach and assert the biconditional.
     const all = [
@@ -469,7 +469,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     expect(upWire.find((r) => r["uuid"] === fcSome)?.["stage"]).toBe("someday");
   });
 
-  it("project flat items[]: each row's kept `stage` equals its derived stage", () => {
+  it("project card sub-buckets: the bucket an item lands in equals its derived stage", () => {
     fx = buildFixtureDb();
     const proj = seedProject(fx.db, { title: "P" });
     const children = [
@@ -493,43 +493,58 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     seedTodo(fx.db, { title: "h-upcoming", heading: head, startDate: "2026-08-05" });
 
     const view = projectView(fx.db, proj, NOW);
-    // Map every LIVE child uuid to its derived stage from the UNSHAPED entities.
+    // Map every child uuid to its derived stage from the UNSHAPED entities.
     const stageOf = new Map<string, string>();
     const record = (i: ListItem) => stageOf.set(i.uuid, deriveStage(i));
-    view.items.forEach(record);
+    view.active.forEach(record);
+    view.scheduled.forEach((g) => g.items.forEach(record));
+    view.someday.forEach(record);
+    view.repeating.forEach(record);
     view.logged.forEach(record);
+    for (const g of view.headings) {
+      g.items.forEach(record);
+      g.scheduled.forEach((d) => d.items.forEach(record));
+      g.someday.forEach(record);
+      g.repeating.forEach(record);
+    }
 
     const shaped = shapeReadPayload("project-view", view, true) as Record<string, unknown>;
-    type Row = { uuid: string; stage?: string };
-    // The flat items[] KEEPS `stage` on every row (stage-mixed list); it must
-    // equal the derived stage from the entity — the single-source guarantee that
-    // survives the dissolve of the stage sub-buckets.
-    const items = shaped["items"] as Row[];
-    for (const r of items) expect(r.stage).toBe(stageOf.get(r.uuid));
-    expect(items.length).toBeGreaterThan(0);
-    // Every live stage is represented on the flat rows.
-    const stages = new Set(items.map((r) => r.stage));
-    expect(stages.has("anytime")).toBe(true);
-    expect(stages.has("upcoming")).toBe(true);
-    expect(stages.has("someday")).toBe(true);
-    // The logbook rows are the swept ones (stage logbook, dropped in the bucket).
+    type Row = { uuid: string };
+    type Grp = { date: string | null; items: Row[] };
+    const checkBucket = (items: Row[], stage: string) => {
+      for (const i of items) expect(stageOf.get(i.uuid)).toBe(stage);
+    };
+    checkBucket(shaped["anytime"] as Row[], "anytime");
+    checkBucket(shaped["someday"] as Row[], "someday");
+    checkBucket(shaped["logbook"] as Row[], "logbook");
+    for (const g of shaped["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+    // The heading group is bucketed the same way.
+    const grp = (shaped["headings"] as Array<Record<string, unknown>>)[0]!;
+    checkBucket(grp["anytime"] as Row[], "anytime");
+    checkBucket(grp["someday"] as Row[], "someday");
+    for (const g of grp["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+
+    // And the shape actually placed each stage where expected.
+    expect((shaped["anytime"] as Row[]).length).toBeGreaterThan(0);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-08-01")).toBe(true);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === null)).toBe(true); // the template
     expect((shaped["logbook"] as Row[]).length).toBe(1);
     // Trashed children are excluded from the project view entirely — no `trash`
     // bucket, and `c-trash` appears in no bucket (GUI-faithful, §6½/PLOG1-a).
     expect("trash" in shaped).toBe(false);
     const cTrash = children[6]!;
-    expect(items.some((r) => r.uuid === cTrash)).toBe(false);
-    // R10.2: the arrived (today) child `c-uptoday` reads stage `anytime` (Upcoming
-    // is strictly future) with `when: "today"`, NOT stage `upcoming`.
+    expect(stageOf.has(cTrash)).toBe(false);
+    // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
+    // upcoming group is keyed on its arrived date — Upcoming holds only future
+    // dates + the date-less template group.
     const cUpToday = children[2]!;
-    const upTodayRow = items.find((r) => r.uuid === cUpToday)!;
-    expect(upTodayRow.stage).toBe("anytime");
-    expect((upTodayRow as { when?: string }).when).toBe("today");
+    expect((shaped["anytime"] as Row[]).some((r) => r.uuid === cUpToday)).toBe(true);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-07-02")).toBe(false);
   });
 });
 
-describe("R13 property — every Today-view member derives stage `anytime` (justifies the today stage drop)", () => {
-  it("the today view is stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
+describe("R13 property — every Today-view member derives stage `anytime` (justifies the today-section stage drop)", () => {
+  it("the today sections are stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
     fx = buildFixtureDb();
     // A spread across every Today-membership arm AND every origin bucket.
     seedTodo(fx.db, { title: "t-arrived-active", start: "active", startDate: "2026-07-01" });
@@ -571,21 +586,18 @@ describe("R13 property — every Today-view member derives stage `anytime` (just
     });
 
     const view = todayView(fx.db, NOW);
-    const members = view.items;
+    const members = [...view.today, ...view.evening];
     expect(members.length).toBeGreaterThan(5);
     // STRICT: every member derives `anytime` — no residual mixed case survives.
-    // (If this ever fails, the today view is NOT stage-pure and the
-    // TODAY_ITEM_DROP `stage: true` must be reverted — report prominently.)
+    // (If this ever fails, the today sections are NOT stage-pure and the
+    // TODAY_SECTION_DROP `stage: true` must be reverted — report prominently.)
     for (const m of members) expect(deriveStage(m)).toBe("anytime");
-    // Consequently the emit boundary DROPS `stage` on every today row — while
-    // KEEPING `when` (the flat list interleaves Today-proper + This-Evening, so
-    // each row must carry its render section).
-    const shaped = shapeReadPayload("today", view, false) as Array<Record<string, unknown>>;
-    expect(shaped.length).toBe(members.length);
-    for (const r of shaped) {
-      expect("stage" in r).toBe(false);
-      expect(r["when"] === "today" || r["when"] === "evening").toBe(true);
-    }
+    // Consequently the emit boundary DROPS `stage` on every today-section row.
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    for (const r of [...shaped.today, ...shaped.evening]) expect("stage" in r).toBe(false);
   });
 });
 
@@ -647,7 +659,11 @@ describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count rec
     });
 
     const view = todayView(fx.db, NOW);
-    const rows = shapeReadPayload("today", view, false) as Array<Record<string, unknown>>;
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    const rows = [...shaped.today, ...shaped.evening];
 
     for (const t of ["a-dl-someday", "b-dl-inbox", "c-dl-anytime", "d-scheduled", "e-spawn"]) {
       expect(provOf(rows, t)).toBe(true);

@@ -20,7 +20,6 @@ import {
 import type { AreaView } from "../../src/read/area-view.ts";
 import type { GroupBlock } from "../../src/contracts.ts";
 import type { ListItem, SidebarSection, TodayView } from "../../src/read/views.ts";
-import { entityWhen } from "../../src/read/stage.ts";
 
 /** Minimal ListItem stand-ins — truncation only inspects type/uuid/refs. */
 const items = (n: number, prefix = "u"): ListItem[] =>
@@ -75,43 +74,17 @@ describe("truncateList", () => {
   });
 });
 
-// The today view is one flat `items[]`; the render sections are the `when`
-// subsets, so the stand-ins must carry markers entityWhen classifies (evening
-// ⊃ today). Comparator order for the test is today-proper then This-Evening.
-const todayStandIn = (uuid: string): ListItem =>
-  ({
-    uuid,
-    type: "to-do",
-    status: "open",
-    trashed: false,
-    logged: false,
-    start: "active",
-    startDate: "2026-07-02",
-    today: true,
-    repeating: { isTemplate: false },
-    project: null,
-    headingProject: null,
-  }) as unknown as ListItem;
-const eveningStandIn = (uuid: string): ListItem =>
-  ({ ...todayStandIn(uuid), evening: true }) as unknown as ListItem;
-const todayViewOf = (todayN: number, eveningN: number): TodayView => ({
-  items: [
-    ...Array.from({ length: todayN }, (_, i) => todayStandIn(`u${i}`)),
-    ...Array.from({ length: eveningN }, (_, i) => eveningStandIn(`e${i}`)),
-  ],
-  counts: { dueOrOverdue: 1, other: 2 },
-});
-const eveningShownCount = (data: TodayView) =>
-  data.items.filter((i) => entityWhen(i) === "evening").length;
-
 describe("truncateToday", () => {
-  const view = todayViewOf;
-  const eveningShown = eveningShownCount;
+  const view = (todayN: number, eveningN: number): TodayView => ({
+    today: items(todayN),
+    evening: items(eveningN, "e"),
+    badge: { dueOrOverdue: 1, other: 2 },
+  });
 
-  it("counts the cut across Today then This Evening in comparator order", () => {
+  it("counts the cut across Today then This Evening in render order", () => {
     const { data, truncation } = truncateToday(view(4, 4), 6);
-    expect(data.items).toHaveLength(6);
-    expect(eveningShown(data)).toBe(2);
+    expect(data.today).toHaveLength(4);
+    expect(data.evening).toHaveLength(2);
     expect(truncation).toEqual({
       shown: 6,
       total: 8,
@@ -122,14 +95,14 @@ describe("truncateToday", () => {
         { key: "evening", shown: 2, total: 4 },
       ],
     });
-    // The whole-view counts summary is preserved.
-    expect(data.counts).toEqual({ dueOrOverdue: 1, other: 2 });
+    // The whole-view badge summary is preserved.
+    expect(data.badge).toEqual({ dueOrOverdue: 1, other: 2 });
   });
 
-  it("a limit smaller than the Today run trims Evening to nothing", () => {
+  it("a limit smaller than Today trims Evening to nothing", () => {
     const { data, truncation } = truncateToday(view(10, 5), 3);
-    expect(data.items).toHaveLength(3);
-    expect(eveningShown(data)).toBe(0);
+    expect(data.today).toHaveLength(3);
+    expect(data.evening).toEqual([]);
     expect(truncation.total).toBe(15);
     expect(truncation.shown).toBe(3);
   });
@@ -273,8 +246,6 @@ describe("capAreaSections (area show per-section caps)", () => {
   const view = () =>
     ({
       area: { uuid: "a", title: "Busy" },
-      // The flat wire list: all direct to-dos (the 7 active + 2 scheduled), index order.
-      items: [...todos(7, "t"), ...todos(2, "s")],
       projects: todos(5, "p"),
       active: todos(7, "t"),
       scheduled: [{ date: "2026-08-01", items: todos(2, "s") }],
@@ -286,16 +257,6 @@ describe("capAreaSections (area show per-section caps)", () => {
     const { data, truncation } = capAreaSections(view(), { area: 4, project: 2 });
     expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
-    // The flat wire items[] drops exactly the 3 capped-out active rows (t4..t6);
-    // the 2 scheduled "later" rows always survive → 4 + 2 = 6.
-    expect(data.items.map((t) => (t as { uuid: string }).uuid)).toEqual([
-      "t0",
-      "t1",
-      "t2",
-      "t3",
-      "s0",
-      "s1",
-    ]);
     // The later section is a container of its own — never capped here.
     expect(data.scheduled[0]?.items).toHaveLength(2);
     expect(truncation.truncated).toBe(true);
@@ -309,7 +270,6 @@ describe("capAreaSections (area show per-section caps)", () => {
     const { data, truncation } = capAreaSections(view(), { area: null, project: null });
     expect(data.projects).toHaveLength(5);
     expect(data.active).toHaveLength(7);
-    expect(data.items).toHaveLength(9); // all direct to-dos survive
     expect(truncation.truncated).toBe(false);
     expect(
       (truncation.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),
