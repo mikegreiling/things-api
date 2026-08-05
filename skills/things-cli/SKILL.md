@@ -6,7 +6,7 @@ version: 0.0.0-dev
 
 # Things CLI
 
-`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are checked after they land. Use `things` when it is on your PATH; otherwise — or when `things --version` reports below **0.13.0** — substitute `npx -y things-api@latest` in every command (identical subcommands and flags), which always pairs the current commands with their current help.
+`things` is a command-line interface to the user's Things 3 task database. Reads are instant SQL queries; writes go through the app itself and are checked after they land. Use `things` when it is on your PATH; otherwise — or when `things --version` reports below the version stamped in this skill's `version:` frontmatter above (set at publish time; the commands and read-view JSON shapes documented here — including the bucketed `today` / project / area shapes — track the release this skill ships with) — substitute `npx -y things-api@latest` in every command (identical subcommands and flags), which always pairs the current commands with their current help.
 
 `things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `move`, `output`, `repeating`, `writes`.
 

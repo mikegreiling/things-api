@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **CHANGE (breaking, ALPHA) — the read-shape doctrine (PRs #375–#379, shipped in 0.13.0) is REVERTED in reverse order; the `today` / project / area JSON views return to their pre-0.13.0 bucketed shapes.** The five doctrine PRs — today dissolve + badge purge (#375), project-view flatten (#376), project-view headings catalog + logbook flatten (#377), area-view flatten (#378), and the ordering-contract + skill sweep (#379) — are unwound cleanly:
+  - **`today`** returns to `data.sections[]` (Today-proper / This-Evening) with the sidebar count back on `data.badge {dueOrOverdue, other}`; the flat `data.items[]` is gone and the "badge" vocabulary is un-purged.
+  - **`project show` / `get_project`** returns to per-stage child buckets (`anytime` / `upcoming` / `someday`) under each heading and unheaded, the `{heading: node}` heading groups, and the separate `logbookHeadings` alongside the flat `logbook`; the flat `items[]` + heading catalog are gone.
+  - **`area show` / `get_area`** returns to its direct-to-do stage buckets; the flat `items[]` is gone (`projects[]` is unchanged).
+  - **`meta.counts` is removed** (the today count rides `data.badge` / the today-view metadata again).
+  - This is ALPHA-CONTRACT: a clean revert — no compatibility shims, no dual shapes, no alias maps. The read-shape approach is under re-audit; `docs/design/read-shape-doctrine.md` is retained (status REVERTED) as the input to that review. The unrelated 0.13.0 flat-container-ref / `projectIsTemplate` / heading-`archived` changes are NOT affected. No new `apiVersion`; no new error code.
+
 ## 0.13.0 — 2026-08-04
 
 - **FIX — `things reorder` can now sort a MIXED to-do + project day set that ALSO contains a repeating template, in one call.** A day-block already intermixes to-dos and projects, and a template's projected occurrence already sorts on that block — but a set combining BOTH kinds AND a template was wrongly refused up front ("one kind at a time"), because the mixed-kind day relaxation had never been taught to count a template as a day member. It now does, so the full grand interleave — scheduled to-dos and projects (loose, in-project, headed, area-direct), deadline-forecast to-dos and projects, and the day's to-do template — reorders to any target in a single `things reorder … --in <YYYY-MM-DD>` call, each row's collateral preserved (heading and area links, the forecast rows' deadlines, the template's rule/projection, all byte-identical). The relaxation stays scoped to the day/Today/Evening axes — a stage-list or container `--in` token (`someday`/`anytime`/`inbox`/a project/area/heading) still sorts one kind at a time.
