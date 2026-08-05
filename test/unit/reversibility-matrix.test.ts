@@ -401,25 +401,6 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "todo.add-logged": {
-    class: "reversible",
-    register() {
-      it("round-trip: undo deletes the logged to-do to the Trash", async () => {
-        const uuid = seedTodo(fixture.db, { title: "Logged", status: "completed" });
-        writeAudit([auditRecord({ op: "todo.add-logged", uuid })]);
-        const del = osaVector(["todo.delete"], (id) => set(id, "trashed = ?", [1]));
-        const items = await runUndo(deps([del.vector]), auditDir);
-        expect(items[0]?.outcome).toBe("ok");
-        expect(
-          (
-            fixture.db.prepare("SELECT trashed FROM TMTask WHERE uuid=?").get(uuid) as {
-              trashed: number;
-            }
-          ).trashed,
-        ).toBe(1);
-      });
-    },
-  },
   "todo.duplicate": {
     class: "reversible",
     register() {
@@ -1011,7 +992,7 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
-  "todo.backdate": {
+  "todo.set-dates": {
     class: "reversible-with-loss",
     register() {
       it("round-trip + LOSS: undo restores the timestamp at DAY precision only", async () => {
@@ -1022,17 +1003,18 @@ const CASES: Record<OperationKind, CaseDef> = {
         });
         writeAudit([
           auditRecord({
-            op: "todo.backdate",
+            op: "todo.set-dates",
             uuid,
             requested: { completionDate: "2026-06-01" },
             pre: { stoppedDate: "2026-05-15" },
           }),
         ]);
-        const v = osaVector(["todo.backdate"], (id) =>
+        const v = osaVector(["todo.set-dates"], (id) =>
           set(id, "stopDate = ?", [epochNoon("2026-05-15")]),
         );
         const items = await runUndo(deps([v.vector]), auditDir);
         expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps[0]?.op).toBe("todo.set-dates");
         expect(items[0]?.plan.notes.join(" ")).toContain("DAY precision");
         // Restored to the captured DAY (noon local) — sub-day time is unrecoverable.
         expect(
@@ -1042,6 +1024,32 @@ const CASES: Record<OperationKind, CaseDef> = {
             }
           ).stopDate,
         ).toBe(epochNoon("2026-05-15"));
+      });
+    },
+  },
+  "project.set-dates": {
+    class: "reversible-with-loss",
+    register() {
+      it("round-trip + LOSS: undo restores the project timestamp at DAY precision", async () => {
+        const uuid = seedProject(fixture.db, {
+          title: "PB",
+          status: "completed",
+          stopDate: epochNoon("2026-06-01"),
+        });
+        writeAudit([
+          auditRecord({
+            op: "project.set-dates",
+            uuid,
+            requested: { completionDate: "2026-06-01" },
+            pre: { stoppedDate: "2026-05-15" },
+          }),
+        ]);
+        const v = osaVector(["project.set-dates"], (id) =>
+          set(id, "stopDate = ?", [epochNoon("2026-05-15")]),
+        );
+        const items = await runUndo(deps([v.vector]), auditDir);
+        expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.set-dates");
       });
     },
   },

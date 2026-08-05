@@ -21,8 +21,8 @@ export interface CreateProbe {
   sinceEpoch: number;
   /**
    * Alternative discovery for rows whose creationDate is intentionally
-   * BACKDATED (todo.add-logged): ignore sinceEpoch and instead exclude these
-   * pre-existing same-title uuids.
+   * BACKDATED (an add with --created-at/--completed-at): ignore sinceEpoch and
+   * instead exclude these pre-existing same-title uuids.
    */
   excludeUuids?: string[];
   /**
@@ -310,7 +310,7 @@ export function createDbReader(
     },
     findCreated(probe) {
       const excluded = new Set(probe.excludeUuids ?? []);
-      // The time-bound is dropped to 0 ONLY for a backdated create (add-logged):
+      // The time-bound is dropped to 0 ONLY for a backdated create (add --created-at):
       // there `excludeUuids` is present but `creationDate` is intentionally in
       // the past, so a bound would filter the very row we seek. A make-repeating
       // template (`repeating` set) DOES carry a fresh write-time creationDate, so

@@ -135,7 +135,7 @@ The catalog is consolidated around a few verb-parameterized tools (a discriminat
 
 - **Reads**: `read_view` (today / inbox / anytime / upcoming with occurrence horizon / someday / logbook / trash), `search`, `changes_since`, `get_item`, `get_project`, `get_area`, `list_collections`.
 - **Editing**: `update` (`kind` todo / project / area / tag), `set_status` (`scope` todo / project — completed / canceled / open, with the project children policy), `delete` (`kind` item / area / tag — Trash for items, guarded permanent delete for areas/tags incl. tag subtrees).
-- **To-do writes**: `add_todo`, `move_todo`, `set_tags`, `edit_checklist`, plus completion/creation backdating (`backdate_todo`) and Logbook import (`add_logged_todo`).
+- **To-do writes**: `add_todo`, `move_todo`, `set_tags`, `edit_checklist`. Resolution-timestamp backdating (born-resolved / Logbook import, and rewriting an item's completion/creation timestamps) is exposed on the CLI as `--created-at` / `--completed-at` on `add` / `update` / `complete` / `cancel`; the MCP parity for those flags is pending.
 - **Project writes**: `add_project`, `move_project`.
 - **To-dos and projects alike**: `restore_item`, `duplicate_item`.
 - **Create**: `add_area`, `add_tag`.

@@ -112,9 +112,7 @@ import type {
   HeadingArchiveParams,
   HeadingUnarchiveParams,
   HeadingPlacement,
-  TodoAddLoggedParams,
   TodoAddParams,
-  TodoBackdateParams,
   TodoMoveParams,
   TodoUpdateParams,
 } from "./write/operations.ts";
@@ -146,6 +144,11 @@ import {
 import { runClearReminder } from "./write/clear-reminder.ts";
 import { runEditChecklist } from "./write/edit-checklist.ts";
 import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
+import {
+  runCancelWithDate,
+  runCompleteWithDate,
+  runUpdateDates,
+} from "./write/resolution-timestamps.ts";
 import type { ChecklistEdit } from "./write/checklist.ts";
 import { runReorder, type ReorderResult } from "./write/reorder.ts";
 import {
@@ -316,6 +319,17 @@ function groupedCaps(
   };
 }
 
+/**
+ * Resolution-timestamp flags (plan §2): an ISO date (`2025-01-15`) or datetime
+ * (`2025-01-15T09:30`). `completedAt` sets the completion timestamp (also the
+ * "Completed on" stamp for canceled items); `createdAt` backdates creation. A
+ * date-only value normalizes to noon in the effective zone (§5).
+ */
+export interface ResolutionDates {
+  createdAt?: string;
+  completedAt?: string;
+}
+
 export interface ThingsClient {
   dbPath: string;
   config: ThingsApiConfig;
@@ -461,11 +475,30 @@ export interface ThingsClient {
     addTodo(params: TodoAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateTodo(
       uuid: string,
-      patch: Omit<TodoUpdateParams, "uuid">,
+      patch: Omit<TodoUpdateParams, "uuid"> & ResolutionDates,
       options?: WriteOptions,
     ): Promise<MutationResult>;
-    completeTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    cancelTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Complete a to-do. With `resolution.completedAt` (ISO date or datetime) the
+     * to-do lands completed and BACKDATED — resolving it first if needed, then
+     * an AppleScript completion-date write; a date-only value normalizes to noon
+     * in the effective zone (§5). Multi-leg, disclosed in the result / dry-run.
+     */
+    completeTodo(
+      uuid: string,
+      resolution?: ResolutionDates,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Cancel a to-do. With `resolution.completedAt` it lands canceled and
+     * BACKDATED via the certified flip-dance (→completed · AS backdate · →canceled)
+     * — the only headless path that keeps a canceled item canceled.
+     */
+    cancelTodo(
+      uuid: string,
+      resolution?: ResolutionDates,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     reopenTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     moveTodo(
       uuid: string,
@@ -511,21 +544,6 @@ export interface ThingsClient {
      * Reversible with `undo`. Force a path with `vector: "shortcuts" | "url-scheme"`.
      */
     clearReminder(uuid: string, options?: WriteOptions): Promise<MutationResult>;
-    /**
-     * Rewrite a to-do's completion and/or creation timestamp to noon (local)
-     * on the given date. Completion requires the to-do to be completed or
-     * canceled already.
-     */
-    backdateTodo(
-      uuid: string,
-      dates: Omit<TodoBackdateParams, "uuid">,
-      options?: WriteOptions,
-    ): Promise<MutationResult>;
-    /**
-     * Create a to-do directly in the Logbook, completed, with backdated
-     * completion (and optionally creation) timestamps.
-     */
-    addLoggedTodo(params: TodoAddLoggedParams, options?: WriteOptions): Promise<MutationResult>;
     /**
      * Create a heading inside an EXISTING project; the new heading's uuid is
      * on the result. Delivered through the Things proxy shortcuts (run
@@ -614,12 +632,13 @@ export interface ThingsClient {
     addProject(params: ProjectAddParams, options?: WriteOptions): Promise<MutationResult>;
     updateProject(
       uuid: string,
-      patch: Omit<ProjectUpdateParams, "uuid">,
+      patch: Omit<ProjectUpdateParams, "uuid"> & ResolutionDates,
       options?: WriteOptions,
     ): Promise<MutationResult>;
+    /** Complete a project; `resolution.completedAt` backdates it (see completeTodo). */
     completeProject(
       uuid: string,
-      policy: Pick<ProjectCompleteParams, "children">,
+      policy: Pick<ProjectCompleteParams, "children"> & ResolutionDates,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /** Move a project to another area. */
@@ -634,10 +653,10 @@ export interface ThingsClient {
     moveProjects(request: ProjectMoveRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Reorder projects IN PLACE among their siblings (spec §4). */
     reorderProjects(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
-    /** Cancel a project — open children are canceled with it, so the children policy is mandatory. */
+    /** Cancel a project — open children are canceled with it, so the children policy is mandatory. `resolution.completedAt` backdates it (flip-dance). */
     cancelProject(
       uuid: string,
-      policy: Pick<ProjectCancelParams, "children">,
+      policy: Pick<ProjectCancelParams, "children"> & ResolutionDates,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /**
@@ -876,6 +895,37 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     // Consumer entry point: normalize a consumer-provided `when` (today/evening)
     // to the effective zone before dispatch (a no-op without a zone).
     return runMutation(writeDeps, op, params, { ...writeOptions, normalizeWhen: true });
+  };
+
+  // update dispatcher: the resolution-timestamp flags route through the
+  // multi-leg orchestrator; plain attribute edits stay on `todo/project.update`.
+  // When BOTH are present the attribute edit lands first (its own undo), then
+  // the timestamp legs — two independently-undoable changes.
+  const runUpdate = async (
+    kind: "todo" | "project",
+    uuid: string,
+    patch: Record<string, unknown> & ResolutionDates,
+    o?: WriteOptions,
+  ): Promise<MutationResult> => {
+    const { createdAt, completedAt, ...attrs } = patch;
+    const op = kind === "project" ? "project.update" : "todo.update";
+    if (createdAt === undefined && completedAt === undefined) {
+      return run(op, { uuid, ...attrs } as never, o);
+    }
+    if (Object.keys(attrs).length > 0) {
+      const attrResult = await run(op, { uuid, ...attrs } as never, o);
+      if (attrResult.kind !== "ok" && attrResult.kind !== "dry-run") return attrResult;
+    }
+    return runUpdateDates(
+      writeDeps,
+      kind,
+      uuid,
+      {
+        ...(createdAt !== undefined && { createdAt }),
+        ...(completedAt !== undefined && { completedAt }),
+      },
+      o ?? {},
+    );
   };
 
   return {
@@ -1137,9 +1187,12 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
     write: {
       run,
       addTodo: (params, o) => run("todo.add", params, o),
-      updateTodo: (uuid, patch, o) => run("todo.update", { uuid, ...patch }, o),
-      completeTodo: (uuid, o) => run("todo.complete", { uuid }, o),
-      cancelTodo: (uuid, o) => run("todo.cancel", { uuid }, o),
+      updateTodo: (uuid, patch, o) =>
+        runUpdate("todo", uuid, patch as ResolutionDates & Record<string, unknown>, o),
+      completeTodo: (uuid, resolution, o) =>
+        runCompleteWithDate(writeDeps, "todo", uuid, resolution ?? {}, o ?? {}),
+      cancelTodo: (uuid, resolution, o) =>
+        runCancelWithDate(writeDeps, "todo", uuid, resolution ?? {}, o ?? {}),
       reopenTodo: (uuid, o) => run("todo.reopen", { uuid }, o),
       moveTodo: (uuid, dest, o) => run("todo.move", { uuid, ...dest }, o),
       moveTodos: (request, o) => runTodoMove(writeDeps, request, o ?? {}),
@@ -1156,8 +1209,6 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       deleteTodo: (uuid, o) => run("todo.delete", { uuid }, o),
       duplicateTodo: (uuid, o) => run("todo.duplicate", { uuid }, o),
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
-      backdateTodo: (uuid, dates, o) => run("todo.backdate", { uuid, ...dates }, o),
-      addLoggedTodo: (params, o) => run("todo.add-logged", params, o),
       addHeading: (project, title, placement, o) =>
         runAddHeading(writeDeps, project, title, placement, o ?? {}),
       renameHeading: (uuid, title, o) => run("project.rename-heading", { uuid, title }, o),
@@ -1174,16 +1225,35 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       detachTodo: (uuid, o) => run("todo.move", { uuid, loose: true }, o),
       editChecklist: (uuid, edit, o) => runEditChecklist(writeDeps, uuid, edit, o ?? {}),
       addProject: (params, o) => run("project.add", params, o),
-      updateProject: (uuid, patch, o) => run("project.update", { uuid, ...patch }, o),
+      updateProject: (uuid, patch, o) =>
+        runUpdate("project", uuid, patch as ResolutionDates & Record<string, unknown>, o),
       completeProject: (uuid, policy, o) =>
-        run("project.complete", { uuid, children: policy.children }, o),
+        runCompleteWithDate(
+          writeDeps,
+          "project",
+          uuid,
+          {
+            children: policy.children,
+            ...(policy.completedAt !== undefined && { completedAt: policy.completedAt }),
+          },
+          o ?? {},
+        ),
       moveProject: (uuid, area, o) => run("project.move", { uuid, area }, o),
       detachProject: (uuid, o) => run("project.move", { uuid, noArea: true }, o),
       moveProjects: (request, o) => runProjectMove(writeDeps, request, o ?? {}),
       reorderProjects: (request, o) =>
         runInPlaceReorder(writeDeps, "project.move", request, o ?? {}),
       cancelProject: (uuid, policy, o) =>
-        run("project.cancel", { uuid, children: policy.children }, o),
+        runCancelWithDate(
+          writeDeps,
+          "project",
+          uuid,
+          {
+            children: policy.children,
+            ...(policy.completedAt !== undefined && { completedAt: policy.completedAt }),
+          },
+          o ?? {},
+        ),
       reopenProject: (uuid, o) => runProjectReopen(writeDeps, uuid, o ?? {}),
       restoreProject: (uuid, o) => run("project.restore", { uuid }, o),
       duplicateProject: (uuid, o) => run("project.duplicate", { uuid }, o),

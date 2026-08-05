@@ -313,6 +313,21 @@ function filterRecordsByScope(
  * that these keys are EXACTLY the ops classed `irreversible` in
  * `reversibility.ts`, so the two catalogs cannot drift.
  */
+/**
+ * Ops whose SUMMARY record heads a resolution-timestamp composite (the flip-dance
+ * legs of complete/cancel/update `--completed-at`). planUndo replays their legs
+ * in reverse; a leg record of the same op is a plain mutation (no summary role)
+ * and takes its ordinary case below.
+ */
+const RESOLUTION_COMPOSITE_OPS = new Set<string>([
+  "todo.complete",
+  "todo.cancel",
+  "todo.update",
+  "project.complete",
+  "project.cancel",
+  "project.update",
+]);
+
 export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
@@ -660,11 +675,32 @@ export function planUndo(
 
   const uuid = record.uuid;
 
+  // A resolution-timestamp composite (complete/cancel/update `--completed-at`
+  // with its flip-dance): the summary record heads a txn whose legs are ordinary
+  // undoable ops (complete/cancel/reopen/set-dates). Replay each leg's inverse in
+  // reverse order — the cancel/complete inverses no-op where the leg started
+  // already-resolved, so a flip-dance backdate cleanly reverses to the captured
+  // original stopDate while keeping the item's lifecycle state.
+  if (record.txn?.role === "summary" && RESOLUTION_COMPOSITE_OPS.has(record.op)) {
+    const legs = allRecords.filter(
+      (r) => r.txn?.id === record.txn?.id && r.txn?.role === "leg" && r.result === "ok",
+    );
+    if (legs.length === 0) return irreversible("the composite's legs were not recorded");
+    const steps: UndoStep[] = [];
+    for (const leg of legs.toReversed()) {
+      const legPlan = planUndo(leg, now, allRecords);
+      if (legPlan.kind === "invertible") steps.push(...legPlan.steps);
+      else notes.push(`leg ${leg.op} (${leg.uuid ?? "?"}) is not invertible: skipped`);
+    }
+    if (steps.length === 0) return irreversible("no composite leg was invertible");
+    notes.push(`replays ${legs.length} resolution leg(s) in reverse`);
+    return { target, kind: "invertible", steps, notes };
+  }
+
   switch (record.op) {
     // Creations: the inverse is deleting what appeared. To-dos/projects go
     // to the Trash (restorable); areas/tags delete PERMANENTLY (ack needed).
     case "todo.add":
-    case "todo.add-logged":
     case "todo.duplicate": {
       if (uuid === null) return irreversible("the created uuid was never discovered");
       return {
@@ -1118,11 +1154,15 @@ export function planUndo(
       return irreversible("the pre-op area was not captured");
     }
 
-    case "todo.backdate": {
+    case "todo.set-dates":
+    case "project.set-dates": {
       if (uuid === null) return irreversible("no target uuid recorded");
       const patch: Record<string, unknown> = { uuid };
       const stoppedPre = preField(record, "stoppedDate");
       const createdPre = preField(record, "createdDate");
+      // Only restore the completion date onto a row that is STILL completed —
+      // the generalized WG-7 guard would refuse (and re-completing is wrong)
+      // otherwise. A creation-date restore is status-safe.
       if (typeof stoppedPre === "string") patch["completionDate"] = stoppedPre;
       if (typeof createdPre === "string") patch["creationDate"] = createdPre;
       if (patch["completionDate"] === undefined && patch["creationDate"] === undefined) {
@@ -1132,7 +1172,7 @@ export function planUndo(
         "timestamps restore at DAY precision (noon local) — the original sub-day time is " +
           "not recoverable",
       );
-      return { target, kind: "invertible", steps: [{ op: "todo.backdate", params: patch }], notes };
+      return { target, kind: "invertible", steps: [{ op: record.op, params: patch }], notes };
     }
 
     case "todo.set-tags": {
@@ -1640,7 +1680,7 @@ const AXIS_LABEL: Record<string, string> = {
  * these axes rely on the inverse's own verified read-after-write instead):
  *  - REPEAT rule / paused state (reschedule-repeat, pause/resume-repeat): the
  *    repeat axis is out of this guard's scope.
- *  - todo.backdate timestamps (creation/completion date).
+ *  - todo/project.set-dates timestamps (creation/completion date).
  *  - reorder / area.reorder RANKS: the inverse is a 3-way restore that already
  *    leaves non-targeted members in place; a rank precondition is not modeled.
  *  - area.update / tag.update fields: those steps address by `target`, not

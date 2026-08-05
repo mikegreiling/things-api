@@ -50,10 +50,6 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "reversible",
     note: "inverse sends the created to-do to the Trash (restorable); irreversible only if the created uuid was never discovered",
   },
-  "todo.add-logged": {
-    class: "reversible",
-    note: "inverse deletes the logged to-do to the Trash; irreversible only if the created uuid was never discovered",
-  },
   "todo.duplicate": {
     class: "reversible",
     note: "inverse deletes the copy to the Trash; irreversible only if the copy's uuid was never discovered",
@@ -141,7 +137,11 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "reversible",
     note: "inverse renames the heading back to the captured pre-op title",
   },
-  "todo.backdate": {
+  "todo.set-dates": {
+    class: "reversible-with-loss",
+    note: "inverse restores the completion/creation timestamps at DAY precision (noon local) — the original sub-day time is not recoverable",
+  },
+  "project.set-dates": {
     class: "reversible-with-loss",
     note: "inverse restores the completion/creation timestamps at DAY precision (noon local) — the original sub-day time is not recoverable",
   },

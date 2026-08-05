@@ -234,10 +234,10 @@ describe("AppleScript compilation goldens", () => {
   });
 });
 
-describe("scf2/P8 op compilation goldens", () => {
-  it("todo.add-logged: json payload with completed + UTC-noon backdated attrs", () => {
-    const inv = COMMANDS["todo.add-logged"].compile(
-      { title: "Migrated ✓", completionDate: "2025-01-15", creationDate: "2024-06-01" },
+describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
+  it("todo.add --completed-at/--created-at: json payload with completed + UTC-noon attrs", () => {
+    const inv = COMMANDS["todo.add"].compile(
+      { title: "Migrated ✓", completedAt: "2025-01-15", createdAt: "2024-06-01" },
       "url-scheme",
       emptyPreState(),
       { token: TOKEN },
@@ -260,18 +260,40 @@ describe("scf2/P8 op compilation goldens", () => {
     expect(inv.redactedPayload).not.toContain(TOKEN);
   });
 
-  it("todo.add-logged: creationDate after completionDate is refused at preRead", () => {
+  it("todo.add: --created-at after --completed-at is refused at preRead", () => {
     expect(() =>
-      COMMANDS["todo.add-logged"].preRead(
+      COMMANDS["todo.add"].preRead(
         null as never,
-        { title: "X", completionDate: "2025-01-15", creationDate: "2025-02-01" },
+        { title: "X", completedAt: "2025-01-15", createdAt: "2025-02-01" },
         new Date(),
       ),
-    ).toThrow(/creationDate must not be after/);
+    ).toThrow(/--created-at must not be after/);
   });
 
-  it("todo.backdate: locale-proof AppleScript date construction, both fields", () => {
-    const inv = COMMANDS["todo.backdate"].compile(
+  it("todo.add: a datetime --completed-at accepts a wall-clock time (not just a date)", () => {
+    const inv = COMMANDS["todo.add"].compile(
+      { title: "T", completedAt: "2025-01-15T09:30" },
+      "url-scheme",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    const data = decodeURIComponent(inv.payload.split("data=")[1]?.split("&")[0] ?? "");
+    const parsed = JSON.parse(data) as Array<{ attributes: Record<string, unknown> }>;
+    expect(parsed[0]?.attributes["completion-date"]).toBe(noMillis(new Date(2025, 0, 15, 9, 30)));
+  });
+
+  it("project.add --completed-at with an open child spec is refused (§5b)", () => {
+    expect(() =>
+      COMMANDS["project.add"].preRead(
+        null as never,
+        { title: "P", completedAt: "2025-01-15", todos: ["open child"] },
+        new Date(),
+      ),
+    ).toThrow(/§5b/);
+  });
+
+  it("todo.set-dates: locale-proof AppleScript date construction, both fields", () => {
+    const inv = COMMANDS["todo.set-dates"].compile(
       { uuid: "ABC", completionDate: "2025-01-15", creationDate: "2024-06-01" },
       "applescript",
       emptyPreState(),
@@ -287,6 +309,16 @@ describe("scf2/P8 op compilation goldens", () => {
     expect(inv.payload).toContain('set creation date of to do id "ABC" to createDate');
     // no locale-dependent date string parsing anywhere
     expect(inv.payload).not.toContain('date "');
+  });
+
+  it("project.set-dates: addresses the project row (kind-agnostic BACKDT law)", () => {
+    const inv = COMMANDS["project.set-dates"].compile(
+      { uuid: "PRJ", completionDate: "2025-01-15" },
+      "applescript",
+      emptyPreState(),
+      { token: TOKEN },
+    );
+    expect(inv.payload).toContain('set completion date of project id "PRJ" to compDate');
   });
 
   it("reorder someday: the validated two-call anchor protocol (P8b)", () => {

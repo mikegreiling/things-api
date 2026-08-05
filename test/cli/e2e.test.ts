@@ -2681,3 +2681,94 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect(search.data.items[0].stage).toBe("trash");
   });
 });
+
+describe("resolution-timestamp CLI flags (plan §2) — dry-run leg plans + refusals", () => {
+  it("todo complete --completed-at on an open to-do plans the 2-leg backdate (disclosed)", async () => {
+    fx = buildFixtureDb();
+    const uuid = seedTodo(fx.db, { title: "ship it", status: "open" });
+    const { stdout } = await runCliAsync([
+      "todo",
+      "complete",
+      uuid,
+      "--completed-at",
+      "2025-01-15",
+      "--dry-run",
+      "--db",
+      fx.path,
+    ]);
+    expect(stdout).toContain("DRY RUN todo.complete");
+    expect(stdout).toContain("2-leg sequence");
+    expect(stdout).toContain("flip → completed");
+    expect(stdout).toContain("AS set completion=2025-01-15");
+  });
+
+  it("todo cancel --completed-at on an open to-do plans the 3-leg flip-dance", async () => {
+    fx = buildFixtureDb();
+    const uuid = seedTodo(fx.db, { title: "drop it", status: "open" });
+    const { stdout } = await runCliAsync([
+      "todo",
+      "cancel",
+      uuid,
+      "--completed-at",
+      "2025-01-15",
+      "--dry-run",
+      "--db",
+      fx.path,
+    ]);
+    expect(stdout).toContain("3-leg sequence");
+    expect(stdout).toContain("flip → completed");
+    expect(stdout).toContain("flip → canceled");
+  });
+
+  it("todo update --completed-at on an OPEN to-do is refused, pointing at complete/cancel", async () => {
+    fx = buildFixtureDb();
+    const uuid = seedTodo(fx.db, { title: "still open", status: "open" });
+    const { stdout } = await runCliAsync([
+      "todo",
+      "update",
+      uuid,
+      "--completed-at",
+      "2025-01-15",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    const env = JSON.parse(stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.remediation).toContain("complete --completed-at");
+    expect(env.error.remediation).toContain("cancel --completed-at");
+  });
+
+  it("todo add --completed-at plans a json (Logbook) import", async () => {
+    fx = buildFixtureDb();
+    const { stdout } = await runCliAsync([
+      "todo",
+      "add",
+      "migrated task",
+      "--completed-at",
+      "2025-01-15",
+      "--dry-run",
+      "--db",
+      fx.path,
+    ]);
+    expect(stdout).toContain("DRY RUN todo.add");
+    expect(stdout).toContain("things:///json");
+  });
+
+  it("project add --completed-at with a seed --todo is refused (§5b)", async () => {
+    fx = buildFixtureDb();
+    const { stdout } = await runCliAsync([
+      "project",
+      "add",
+      "done project",
+      "--completed-at",
+      "2025-01-15",
+      "--todo",
+      "child",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    expect(stdout).toContain("§5b");
+  });
+});

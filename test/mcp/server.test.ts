@@ -243,8 +243,6 @@ afterEach(async () => {
 });
 
 const EXPECTED_TOOLS = [
-  "add_logged_todo",
-  "backdate_todo",
   "get_area",
   "clear_reminder",
   // verb-parameterized merges
@@ -1543,7 +1541,7 @@ describe("things MCP server", () => {
       expect(uuidDesc(name), name).toContain("unique name");
     }
     // To-do-only write targets are identity-addressed — the target must never claim name acceptance.
-    for (const name of ["move_todo", "backdate_todo"]) {
+    for (const name of ["move_todo"]) {
       expect(uuidDesc(name), name).not.toContain("unique name");
     }
   });
@@ -2620,46 +2618,8 @@ describe("things MCP server", () => {
       expect((textOf(both) as { title: string }[]).length).toBeGreaterThanOrEqual(3);
     });
 
-    it("add_logged_todo plans a logbook create (dry-run) and rejects creation after completion", async () => {
-      await connect([fakeVector(null, { ops: ["todo.add-logged"] }).vector]);
-      const outcome = textOf(
-        await client.callTool({
-          name: "add_logged_todo",
-          arguments: { title: "did it", completion_date: "2026-01-15", dry_run: true },
-        }),
-      ) as { kind: string; op: string };
-      expect(outcome.op).toBe("todo.add-logged");
-
-      const bad = await client.callTool({
-        name: "add_logged_todo",
-        arguments: {
-          title: "did it",
-          completion_date: "2026-01-15",
-          creation_date: "2026-02-15",
-        },
-      });
-      expect(bad.isError).toBe(true);
-      expect((textOf(bad) as { code: string }).code).toBe("usage");
-    });
-
-    it("backdate_todo plans a timestamp rewrite (dry-run) and needs at least one date", async () => {
-      const uuid = seedTodo(fixture.db, { title: "logged item", status: "completed" });
-      await connect([fakeVector(null, { id: "applescript", ops: ["todo.backdate"] }).vector]);
-      const outcome = textOf(
-        await client.callTool({
-          name: "backdate_todo",
-          arguments: { uuid, completion_date: "2026-01-01", dry_run: true },
-        }),
-      ) as { kind: string; op: string };
-      expect(outcome.op).toBe("todo.backdate");
-
-      const empty = await client.callTool({
-        name: "backdate_todo",
-        arguments: { uuid, dry_run: true },
-      });
-      expect(empty.isError).toBe(true);
-      expect((textOf(empty) as { code: string }).code).toBe("usage");
-    });
+    // NB: the add_logged_todo / backdate_todo MCP tools were removed with the
+    // engine ops (plan PR A); MCP parity for --created-at/--completed-at lands in PR B.
 
     it("clear_reminder plans a clear for a dated reminder, and blocks when there is none", async () => {
       const withReminder = seedTodo(fixture.db, {

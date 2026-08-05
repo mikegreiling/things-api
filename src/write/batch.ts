@@ -127,7 +127,6 @@ const KNOWN_OPS = new Set<string>(OPERATION_KINDS);
  */
 const UUID_MINTING_OPS = new Set<string>([
   "todo.add",
-  "todo.add-logged",
   "project.add",
   "project.add-repeating",
   "area.add",

@@ -11,6 +11,7 @@ import {
   encodeReminderTime,
   localToday,
   reminderUrlToken,
+  zonedWallInstant,
   type IsoDate,
   type ReminderTime,
 } from "../model/dates.ts";
@@ -74,6 +75,13 @@ import { buildRepeatingFingerprint, type DeltaSpec, type FieldAssertion } from "
 
 export interface CompileCtx {
   token: string | null;
+  /**
+   * Effective consumer zone for THIS write (`options.zone ?? deps.zone`), the
+   * same resolution chain reads use. Governs date-only → noon normalization for
+   * the resolution-timestamp surface (§5); undefined = the process-local (app
+   * host) zone.
+   */
+  zone?: string;
 }
 
 export interface DeltaCtx {
@@ -81,6 +89,8 @@ export interface DeltaCtx {
   nowEpoch: number;
   /** Local calendar date (guest/host clock) for `when: today|evening`. */
   todayIso: IsoDate;
+  /** Effective consumer zone (see {@link CompileCtx.zone}). */
+  zone?: string;
 }
 
 export interface CommandSpec<K extends OperationKind = OperationKind> {
@@ -251,6 +261,94 @@ function nonHeadingTitle(pre: PreState): string {
   return target !== null && target.type !== "heading" ? target.title : "";
 }
 
+// ---- resolution-timestamp add helpers (§2 add rows, §5b) ------------------
+
+interface AddTimestampFields {
+  createdAt?: string;
+  completedAt?: string;
+  when?: WhenValue;
+  reminder?: ReminderTime;
+}
+
+/** True when an add carries a resolution-timestamp flag (routes it through json). */
+function addHasTimestamps(p: { createdAt?: string; completedAt?: string }): boolean {
+  return p.createdAt !== undefined || p.completedAt !== undefined;
+}
+
+/**
+ * Validate the resolution-timestamp flags on an add (shape, chronology, and the
+ * schedule contradiction). Instant ordering is zone-independent (both values
+ * share one effective zone), so the chronology check resolves against the host
+ * zone. Throws RangeError on a bad combination.
+ */
+function assertAddTimestamps(p: AddTimestampFields): void {
+  if (p.createdAt !== undefined) resolveResolutionInstant(p.createdAt);
+  if (p.completedAt !== undefined) resolveResolutionInstant(p.completedAt);
+  if (
+    p.createdAt !== undefined &&
+    p.completedAt !== undefined &&
+    resolveResolutionInstant(p.createdAt).getTime() >
+      resolveResolutionInstant(p.completedAt).getTime()
+  ) {
+    throw new RangeError("--created-at must not be after --completed-at");
+  }
+  if (p.completedAt !== undefined && (p.when !== undefined || p.reminder !== undefined)) {
+    throw new RangeError(
+      "--completed-at creates a resolved (Logbook) item, which has no active schedule — drop --when/--reminder",
+    );
+  }
+  if (p.reminder !== undefined && p.createdAt !== undefined) {
+    throw new RangeError("--reminder is not available with --created-at");
+  }
+}
+
+/** A `things:///json` import payload for a single created to-do/project. */
+function addJsonUrl(
+  type: "to-do" | "project",
+  attributes: Record<string, unknown>,
+  token: string | null,
+): CompiledInvocation {
+  return thingsUrl("json", { data: JSON.stringify([{ type, attributes }]) }, token);
+}
+
+/** The completion/creation json attributes for a timestamped add. */
+function addDateAttributes(
+  p: { createdAt?: string; completedAt?: string },
+  zone: string | undefined,
+): Record<string, unknown> {
+  const attrs: Record<string, unknown> = {};
+  if (p.createdAt !== undefined) {
+    attrs["creation-date"] = jsonTimestamp(resolveResolutionInstant(p.createdAt, zone));
+  }
+  if (p.completedAt !== undefined) {
+    attrs["completed"] = true;
+    attrs["completion-date"] = jsonTimestamp(resolveResolutionInstant(p.completedAt, zone));
+  }
+  return attrs;
+}
+
+/** The completion/creation delta assertions for a timestamped add. */
+function addDateAssertions(
+  p: { createdAt?: string; completedAt?: string },
+  zone: string | undefined,
+): FieldAssertion[] {
+  const assert: FieldAssertion[] = [];
+  if (p.completedAt !== undefined) {
+    assert.push({ field: "status", equals: "completed" });
+    assert.push({
+      field: "stoppedDate",
+      equals: hostLocalDate(resolveResolutionInstant(p.completedAt, zone)),
+    });
+  }
+  if (p.createdAt !== undefined) {
+    assert.push({
+      field: "createdDate",
+      equals: hostLocalDate(resolveResolutionInstant(p.createdAt, zone)),
+    });
+  }
+  return assert;
+}
+
 // ----------------------------------------------------------------- commands
 
 const todoAdd: CommandSpec<"todo.add"> = {
@@ -269,6 +367,7 @@ const todoAdd: CommandSpec<"todo.add"> = {
     if (params.heading !== undefined && !containerGiven(params.project)) {
       throw new RangeError("heading requires a project destination");
     }
+    assertAddTimestamps(params);
     const pre = emptyPreState();
     if (containerGiven(params.project)) {
       pre.destProject = resolveProject(db, params.project as ContainerRef);
@@ -287,11 +386,17 @@ const todoAdd: CommandSpec<"todo.add"> = {
   expectedDelta(pre, params, ctx) {
     const assert: FieldAssertion[] = [];
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
-    if (params.reminder !== undefined) {
-      assert.push({ field: "reminder", equals: normalizeReminder(params.reminder) });
+    // A born-resolved (completedAt) item has no active schedule — skip when/reminder.
+    if (params.completedAt === undefined) {
+      if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
+      if (params.reminder !== undefined) {
+        assert.push({ field: "reminder", equals: normalizeReminder(params.reminder) });
+      }
+      if (params.deadline !== undefined) {
+        assert.push({ field: "deadline", equals: params.deadline });
+      }
     }
-    if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
+    assert.push(...addDateAssertions(params, ctx.zone));
     if (params.tags !== undefined) {
       assert.push({ field: "tags", equals: sortedTags(pre.resolvedTagTitles) });
     }
@@ -321,6 +426,24 @@ const todoAdd: CommandSpec<"todo.add"> = {
   compile(params, vector, pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
     const container = pre.destProject?.resolved ?? pre.destArea?.resolved;
+    // Timestamped add: the only at-creation backdating surface is things:///json
+    // (the plain add URL drops date params — oddity 2g); route through it.
+    if (addHasTimestamps(params)) {
+      const attrs: Record<string, unknown> = { title: params.title };
+      if (params.notes !== undefined) attrs["notes"] = params.notes;
+      Object.assign(attrs, addDateAttributes(params, ctx.zone));
+      if (params.completedAt === undefined) {
+        if (params.when !== undefined) attrs["when"] = params.when;
+        if (params.deadline !== undefined) attrs["deadline"] = params.deadline;
+      }
+      if (params.tags !== undefined) attrs["tags"] = pre.resolvedTagTitles;
+      if (params.checklistItems !== undefined) attrs["checklist-items"] = params.checklistItems;
+      if (container?.uuid !== undefined) attrs["list-id"] = container.uuid;
+      if (pre.destHeading?.resolved?.title !== undefined) {
+        attrs["heading"] = pre.destHeading.resolved.title;
+      }
+      return addJsonUrl("to-do", attrs, ctx.token);
+    }
     return thingsUrl(
       "add",
       {
@@ -753,6 +876,16 @@ const projectAdd: CommandSpec<"project.add"> = {
   op: "project.add",
   hazards: ["H-UNKNOWN-DESTINATION"],
   preRead(db, params) {
+    assertAddTimestamps(params);
+    // §5b (B-PROJ-JSON.2): a completed-project json import silently reverts to
+    // OPEN if any child spec is unresolved. Seed to-dos are always open, so a
+    // born-resolved project cannot carry them.
+    if (params.completedAt !== undefined && params.todos !== undefined && params.todos.length > 0) {
+      throw new RangeError(
+        "--completed-at cannot seed child to-dos: a completed-project import reverts to open " +
+          "unless every child is resolved (§5b) — create the project resolved, then add logged children",
+      );
+    }
     const pre = emptyPreState();
     if (containerGiven(params.area)) pre.destArea = resolveArea(db, params.area as ContainerRef);
     pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "project");
@@ -761,8 +894,13 @@ const projectAdd: CommandSpec<"project.add"> = {
   expectedDelta(pre, params, ctx) {
     const assert: FieldAssertion[] = [];
     if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
-    if (params.deadline !== undefined) assert.push({ field: "deadline", equals: params.deadline });
+    if (params.completedAt === undefined) {
+      if (params.when !== undefined) assert.push(...whenAssertions(params.when, ctx.todayIso));
+      if (params.deadline !== undefined) {
+        assert.push({ field: "deadline", equals: params.deadline });
+      }
+    }
+    assert.push(...addDateAssertions(params, ctx.zone));
     const area = pre.destArea?.resolved;
     if (area !== undefined && area !== null) assert.push({ field: "area.uuid", equals: area.uuid });
     return {
@@ -778,6 +916,20 @@ const projectAdd: CommandSpec<"project.add"> = {
   },
   compile(params, vector, pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
+    if (addHasTimestamps(params)) {
+      const attrs: Record<string, unknown> = { title: params.title };
+      if (params.notes !== undefined) attrs["notes"] = params.notes;
+      Object.assign(attrs, addDateAttributes(params, ctx.zone));
+      if (params.completedAt === undefined) {
+        if (params.when !== undefined) attrs["when"] = params.when;
+        if (params.deadline !== undefined) attrs["deadline"] = params.deadline;
+        if (params.todos !== undefined) {
+          attrs["items"] = params.todos.map((t) => ({ type: "to-do", attributes: { title: t } }));
+        }
+      }
+      if (pre.destArea?.resolved?.uuid !== undefined) attrs["area-id"] = pre.destArea.resolved.uuid;
+      return addJsonUrl("project", attrs, ctx.token);
+    }
     return thingsUrl(
       "add-project",
       {
@@ -1475,125 +1627,137 @@ const reorder: CommandSpec<"reorder"> = {
   },
 };
 
-/** Locale-proof AppleScript date literal: local noon on an ISO date. */
-function asDateBlock(varName: string, iso: string): string[] {
-  const [y, m, d] = iso.split("-").map(Number);
-  return [
-    `set ${varName} to current date`,
-    `set time of ${varName} to 12 * hours`,
-    `set day of ${varName} to 1`,
-    `set year of ${varName} to ${y}`,
-    `set month of ${varName} to ${m}`,
-    `set day of ${varName} to ${d}`,
-  ];
+// ---- resolution-timestamp normalization (§5 of the plan) ------------------
+
+/**
+ * Parse an ISO date (`2025-01-15`) OR datetime (`2025-01-15T09:30[:ss]`) and
+ * resolve it to a single UTC instant in the effective `zone`. A date-only value
+ * lands at NOON in that zone (B-DATEONLY: noon decodes to the intended calendar
+ * date in every zone; midnight can slip a day). A datetime is read as wall-clock
+ * time in the effective zone. `zone` undefined = the process-local (app host)
+ * zone, which for a local CLI run IS the app's own zone.
+ */
+export function resolveResolutionInstant(input: string, zone?: string): Date {
+  const dateOnly = /^(\d{4}-\d{2}-\d{2})$/.exec(input);
+  if (dateOnly !== null) return zonedWallInstant(dateOnly[1] as string, 12, 0, 0, zone);
+  const dt = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(input);
+  if (dt !== null) {
+    return zonedWallInstant(
+      dt[1] as string,
+      Number(dt[2]),
+      Number(dt[3]),
+      dt[4] === undefined ? 0 : Number(dt[4]),
+      zone,
+    );
+  }
+  throw new RangeError(
+    `invalid timestamp "${input}" — expected an ISO date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:mm)`,
+  );
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** The host-local calendar date (`YYYY-MM-DD`) an instant renders as — what the verify layer observes for stopped/created. */
+function hostLocalDate(instant: Date): IsoDate {
+  return `${instant.getFullYear()}-${pad2(instant.getMonth() + 1)}-${pad2(instant.getDate())}`;
 }
 
 /**
- * Local noon -> UTC instant, so the stored timestamp decodes back to the
- * requested local DATE in every timezone (P4d: json attrs honored exactly).
- * WITHOUT milliseconds: the app's json date parser rejects fractional
- * seconds — a `.000Z` timestamp fails the whole command (error modal, no
- * write; caught live by the e2e 2026-07-09 — P4d's validated shape was
- * second-precision).
+ * The host-local calendar date a resolution-timestamp value resolves to — the
+ * value the verify layer observes for `stoppedDate`/`createdDate`. Shared with
+ * the multi-leg orchestrators so their synthesized deltas match the op's.
  */
-function utcNoon(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y ?? 0, (m ?? 1) - 1, d ?? 1, 12, 0, 0).toISOString().replace(/\.\d{3}Z$/, "Z");
+export function resolutionDeltaDate(input: string, zone?: string): IsoDate {
+  return hostLocalDate(resolveResolutionInstant(input, zone));
 }
 
-const todoBackdate: CommandSpec<"todo.backdate"> = {
-  op: "todo.backdate",
-  hazards: ["H-UNKNOWN-DESTINATION", "H-BACKDATE-OPEN"],
-  preRead(db, params) {
-    if (params.completionDate === undefined && params.creationDate === undefined) {
-      throw new RangeError("nothing to backdate: give completionDate and/or creationDate");
-    }
-    const pre = emptyPreState();
-    pre.target = loadTarget(db, params.uuid);
-    return pre;
-  },
-  expectedDelta(_pre, params) {
-    const assert: FieldAssertion[] = [];
-    if (params.completionDate !== undefined) {
-      assert.push({ field: "stoppedDate", equals: params.completionDate });
-    }
-    if (params.creationDate !== undefined) {
-      assert.push({ field: "createdDate", equals: params.creationDate });
-    }
-    return { mode: "update", uuid: params.uuid, assert };
-  },
-  compile(params, vector) {
-    if (vector !== "applescript") unsupportedVector(this.op, vector);
-    const statements: string[] = [];
-    if (params.completionDate !== undefined) {
-      statements.push(
-        ...asDateBlock("compDate", params.completionDate),
-        `set completion date of to do id ${q(params.uuid)} to compDate`,
-      );
-    }
-    if (params.creationDate !== undefined) {
-      statements.push(
-        ...asDateBlock("createDate", params.creationDate),
-        `set creation date of to do id ${q(params.uuid)} to createDate`,
-      );
-    }
-    return osaBlock(statements);
-  },
-};
+/**
+ * An instant as a second-precision UTC timestamp (`…Thh:mm:ssZ`) for the json
+ * import. WITHOUT milliseconds: the app's json date parser rejects fractional
+ * seconds — a `.000Z` stamp fails the whole command (oddity 2h; P4d's validated
+ * shape was second-precision).
+ */
+function jsonTimestamp(instant: Date): string {
+  return instant.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 
-const todoAddLogged: CommandSpec<"todo.add-logged"> = {
-  op: "todo.add-logged",
-  hazards: [],
-  preRead(db, params) {
-    if (
-      params.creationDate !== undefined &&
-      params.creationDate.localeCompare(params.completionDate) > 0
-    ) {
-      throw new RangeError("creationDate must not be after completionDate");
-    }
-    const pre = emptyPreState();
-    pre.sameTitleUuids = sameTitleTaskUuids(db, params.title, "to-do");
-    return pre;
-  },
-  expectedDelta(pre, params) {
-    const assert: FieldAssertion[] = [
-      { field: "status", equals: "completed" },
-      { field: "stoppedDate", equals: params.completionDate },
-    ];
-    if (params.creationDate !== undefined) {
-      assert.push({ field: "createdDate", equals: params.creationDate });
-    }
-    if (params.notes !== undefined) assert.push({ field: "notes", equals: params.notes });
-    return {
-      mode: "create",
-      probe: {
-        title: params.title,
-        type: "to-do",
-        sinceEpoch: 0,
-        excludeUuids: pre.sameTitleUuids,
-      },
-      assert,
-    };
-  },
-  compile(params, vector, _pre, ctx) {
-    if (vector !== "url-scheme") unsupportedVector(this.op, vector);
-    const payload = JSON.stringify([
-      {
-        type: "to-do",
-        attributes: {
-          title: params.title,
-          ...(params.notes !== undefined && { notes: params.notes }),
-          completed: true,
-          "completion-date": utcNoon(params.completionDate),
-          ...(params.creationDate !== undefined && {
-            "creation-date": utcNoon(params.creationDate),
-          }),
-        },
-      },
-    ]);
-    return thingsUrl("json", { data: payload }, ctx.token);
-  },
-};
+/**
+ * A locale-proof AppleScript date literal built from an instant's HOST-LOCAL
+ * wall-clock components — AS `current date` mutation lives in the host zone, so
+ * setting those components reproduces exactly this instant regardless of the
+ * effective zone the noon was computed in.
+ */
+function asDateBlockFromInstant(varName: string, instant: Date): string[] {
+  return [
+    `set ${varName} to current date`,
+    `set time of ${varName} to ${instant.getHours()} * hours + ${instant.getMinutes()} * minutes + ${instant.getSeconds()}`,
+    `set day of ${varName} to 1`,
+    `set year of ${varName} to ${instant.getFullYear()}`,
+    `set month of ${varName} to ${instant.getMonth() + 1}`,
+    `set day of ${varName} to ${instant.getDate()}`,
+  ];
+}
+
+/** Shared spec for the kind-agnostic `set-dates` op (to-do / project). */
+function setDatesSpec<K extends "todo.set-dates" | "project.set-dates">(
+  op: K,
+  addressor: "to do" | "project",
+): CommandSpec<K> {
+  return {
+    op,
+    hazards: ["H-UNKNOWN-DESTINATION", "H-BACKDATE-OPEN"],
+    preRead(db, params) {
+      if (params.completionDate === undefined && params.creationDate === undefined) {
+        throw new RangeError("nothing to set: give completionDate and/or creationDate");
+      }
+      const pre = emptyPreState();
+      pre.target = loadTarget(db, params.uuid);
+      return pre;
+    },
+    expectedDelta(_pre, params, ctx) {
+      const assert: FieldAssertion[] = [];
+      if (params.completionDate !== undefined) {
+        assert.push({
+          field: "stoppedDate",
+          equals: hostLocalDate(resolveResolutionInstant(params.completionDate, ctx.zone)),
+        });
+      }
+      if (params.creationDate !== undefined) {
+        assert.push({
+          field: "createdDate",
+          equals: hostLocalDate(resolveResolutionInstant(params.creationDate, ctx.zone)),
+        });
+      }
+      return { mode: "update", uuid: params.uuid, assert };
+    },
+    compile(params, vector, _pre, ctx) {
+      if (vector !== "applescript") unsupportedVector(this.op, vector);
+      const statements: string[] = [];
+      if (params.completionDate !== undefined) {
+        statements.push(
+          ...asDateBlockFromInstant(
+            "compDate",
+            resolveResolutionInstant(params.completionDate, ctx.zone),
+          ),
+          `set completion date of ${addressor} id ${q(params.uuid)} to compDate`,
+        );
+      }
+      if (params.creationDate !== undefined) {
+        statements.push(
+          ...asDateBlockFromInstant(
+            "createDate",
+            resolveResolutionInstant(params.creationDate, ctx.zone),
+          ),
+          `set creation date of ${addressor} id ${q(params.uuid)} to createDate`,
+        );
+      }
+      return osaBlock(statements);
+    },
+  };
+}
+
+const todoSetDates = setDatesSpec("todo.set-dates", "to do");
+const projectSetDates = setDatesSpec("project.set-dates", "project");
 
 /** Children of a heading (open ones drive the archive policies). */
 function headingChildren(db: DatabaseSync, headingUuid: string): Todo[] {
@@ -2495,8 +2659,6 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.reopen": projectReopen,
   "project.restore": projectRestore,
   "project.set-tags": projectSetTags,
-  "todo.backdate": todoBackdate,
-  "todo.add-logged": todoAddLogged,
   "project.add-heading": headingAdd,
   "project.rename-heading": headingRename,
   "project.archive-heading": headingArchive,
@@ -2514,6 +2676,8 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "project.reschedule-repeat": projectRescheduleRepeat,
   "project.pause-repeat": projectPauseRepeat,
   "project.resume-repeat": projectResumeRepeat,
+  "todo.set-dates": todoSetDates,
+  "project.set-dates": projectSetDates,
   "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
   "project.add-repeating": projectAddRepeating,
