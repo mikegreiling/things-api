@@ -436,15 +436,29 @@ describe("H-BACKDATE-OPEN", () => {
     expect(block?.remediation).toBe("complete it first (todo.complete), then backdate");
   });
 
-  it("passes completionDate backdate on a completed or a canceled to-do", () => {
+  it("passes completionDate backdate on a completed to-do", () => {
     const completed = seedTodo(fixture.db, { title: "done", status: "completed" });
-    const canceled = seedTodo(fixture.db, { title: "gone", status: "canceled" });
     expect(check("todo.backdate", { uuid: completed, completionDate: "2024-01-01" })).toBeNull();
-    expect(check("todo.backdate", { uuid: canceled, completionDate: "2024-01-01" })).toBeNull();
+  });
+
+  it("blocks completionDate backdate on a CANCELED to-do (silent convert to completed)", () => {
+    const canceled = seedTodo(fixture.db, { title: "gone", status: "canceled" });
+    const block = check("todo.backdate", { uuid: canceled, completionDate: "2024-01-01" });
+    expect(block?.hazard).toBe("H-BACKDATE-OPEN");
+    expect(block?.detail).toContain("requires a completed to-do");
+    expect(block?.detail).toContain("silently convert it to completed");
+    expect(block?.remediation).toBe(
+      "backdate the completion date only on to-dos that are already completed",
+    );
   });
 
   it("does not fire when only creationDate is backdated (no completionDate rewrite)", () => {
     const uuid = seedTodo(fixture.db, { title: "still open", status: "open" });
     expect(check("todo.backdate", { uuid, creationDate: "2024-01-01" })).toBeNull();
+  });
+
+  it("allows a creationDate-only backdate on a CANCELED to-do (set creation date is status-safe)", () => {
+    const canceled = seedTodo(fixture.db, { title: "gone", status: "canceled" });
+    expect(check("todo.backdate", { uuid: canceled, creationDate: "2024-01-01" })).toBeNull();
   });
 });
