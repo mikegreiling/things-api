@@ -469,7 +469,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     expect(upWire.find((r) => r["uuid"] === fcSome)?.["stage"]).toBe("someday");
   });
 
-  it("project flat items[]: each row's kept `stage` equals its derived stage", () => {
+  it("project card sub-buckets: the bucket an item lands in equals its derived stage", () => {
     fx = buildFixtureDb();
     const proj = seedProject(fx.db, { title: "P" });
     const children = [
@@ -493,38 +493,53 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     seedTodo(fx.db, { title: "h-upcoming", heading: head, startDate: "2026-08-05" });
 
     const view = projectView(fx.db, proj, NOW);
-    // Map every LIVE child uuid to its derived stage from the UNSHAPED entities.
+    // Map every child uuid to its derived stage from the UNSHAPED entities.
     const stageOf = new Map<string, string>();
     const record = (i: ListItem) => stageOf.set(i.uuid, deriveStage(i));
-    view.items.forEach(record);
+    view.active.forEach(record);
+    view.scheduled.forEach((g) => g.items.forEach(record));
+    view.someday.forEach(record);
+    view.repeating.forEach(record);
     view.logged.forEach(record);
+    for (const g of view.headings) {
+      g.items.forEach(record);
+      g.scheduled.forEach((d) => d.items.forEach(record));
+      g.someday.forEach(record);
+      g.repeating.forEach(record);
+    }
 
     const shaped = shapeReadPayload("project-view", view, true) as Record<string, unknown>;
-    type Row = { uuid: string; stage?: string };
-    // The flat items[] KEEPS `stage` on every row (stage-mixed list); it must
-    // equal the derived stage from the entity — the single-source guarantee that
-    // survives the dissolve of the stage sub-buckets.
-    const items = shaped["items"] as Row[];
-    for (const r of items) expect(r.stage).toBe(stageOf.get(r.uuid));
-    expect(items.length).toBeGreaterThan(0);
-    // Every live stage is represented on the flat rows.
-    const stages = new Set(items.map((r) => r.stage));
-    expect(stages.has("anytime")).toBe(true);
-    expect(stages.has("upcoming")).toBe(true);
-    expect(stages.has("someday")).toBe(true);
-    // The logbook rows are the swept ones (stage logbook, dropped in the bucket).
+    type Row = { uuid: string };
+    type Grp = { date: string | null; items: Row[] };
+    const checkBucket = (items: Row[], stage: string) => {
+      for (const i of items) expect(stageOf.get(i.uuid)).toBe(stage);
+    };
+    checkBucket(shaped["anytime"] as Row[], "anytime");
+    checkBucket(shaped["someday"] as Row[], "someday");
+    checkBucket(shaped["logbook"] as Row[], "logbook");
+    for (const g of shaped["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+    // The heading group is bucketed the same way.
+    const grp = (shaped["headings"] as Array<Record<string, unknown>>)[0]!;
+    checkBucket(grp["anytime"] as Row[], "anytime");
+    checkBucket(grp["someday"] as Row[], "someday");
+    for (const g of grp["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+
+    // And the shape actually placed each stage where expected.
+    expect((shaped["anytime"] as Row[]).length).toBeGreaterThan(0);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-08-01")).toBe(true);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === null)).toBe(true); // the template
     expect((shaped["logbook"] as Row[]).length).toBe(1);
     // Trashed children are excluded from the project view entirely — no `trash`
     // bucket, and `c-trash` appears in no bucket (GUI-faithful, §6½/PLOG1-a).
     expect("trash" in shaped).toBe(false);
     const cTrash = children[6]!;
-    expect(items.some((r) => r.uuid === cTrash)).toBe(false);
-    // R10.2: the arrived (today) child `c-uptoday` reads stage `anytime` (Upcoming
-    // is strictly future) with `when: "today"`, NOT stage `upcoming`.
+    expect(stageOf.has(cTrash)).toBe(false);
+    // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
+    // upcoming group is keyed on its arrived date — Upcoming holds only future
+    // dates + the date-less template group.
     const cUpToday = children[2]!;
-    const upTodayRow = items.find((r) => r.uuid === cUpToday)!;
-    expect(upTodayRow.stage).toBe("anytime");
-    expect((upTodayRow as { when?: string }).when).toBe("today");
+    expect((shaped["anytime"] as Row[]).some((r) => r.uuid === cUpToday)).toBe(true);
+    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-07-02")).toBe(false);
   });
 });
 

@@ -457,43 +457,23 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       expect(k in out).toBe(false);
   });
 
-  it("project-view: live children dissolve into one flat items[]; headings[] is the memberless catalog (doctrine §3.12)", () => {
-    // The library return: one flat `items[]` (index order, heading ref stamped on
-    // headed rows) + heading catalog nodes + the logged region. The stage/date
-    // sub-buckets are GONE from both the library and the wire.
+  it("project-view: children re-bucket by stage; heading groups become {anytime,upcoming,someday}", () => {
     const view = {
       project: project(),
-      items: [
-        todo({ uuid: "loose-anytime", heading: null, headingProject: null }), // stage anytime, unheaded
-        todo({ uuid: "loose-up", startDate: "2026-08-01", heading: null, headingProject: null }), // upcoming
-        todo({
-          uuid: "loose-some",
-          start: "someday",
-          startDate: null,
-          heading: null,
-          headingProject: null,
-        }), // someday
+      active: [todo({ uuid: "loose-anytime" })], // stage anytime
+      scheduled: [
+        { date: "2026-08-01", items: [todo({ uuid: "loose-up", startDate: "2026-08-01" })] },
+      ],
+      someday: [todo({ uuid: "loose-some", start: "someday", startDate: null })],
+      repeating: [
         todo({
           uuid: "loose-tmpl",
-          heading: null,
-          headingProject: null,
           repeating: {
             isTemplate: true,
             isInstance: false,
             templateUuid: null,
             nextOccurrence: null,
           },
-        }),
-        todo({
-          uuid: "h-anytime",
-          heading: { uuid: "head-1", title: "Phase 1" },
-          headingProject: { uuid: "proj-1", title: "Q3" },
-        }),
-        todo({
-          uuid: "h-up",
-          startDate: "2026-08-05",
-          heading: { uuid: "head-1", title: "Phase 1" },
-          headingProject: { uuid: "proj-1", title: "Q3" },
         }),
       ],
       headings: [
@@ -505,53 +485,62 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
             status: "open",
             project: { uuid: "proj-1", title: "Q3" },
           },
+          items: [todo({ uuid: "h-anytime" })],
+          scheduled: [
+            { date: "2026-08-05", items: [todo({ uuid: "h-up", startDate: "2026-08-05" })] },
+          ],
+          someday: [],
+          repeating: [],
         },
       ],
-      logged: [
-        todo({
-          uuid: "gone-log",
-          status: "completed",
-          logged: true,
-          heading: { uuid: "head-1", title: "Phase 1" },
-          headingProject: { uuid: "proj-1", title: "Q3" },
-        }),
-      ],
-      loggedHeadings: [],
+      logged: [todo({ uuid: "gone-log", status: "completed", logged: true })],
+      trashed: [todo({ uuid: "gone-trash", trashed: true })],
       openChildrenWhileResolved: 0,
     };
     const out = shapeReadPayload("project-view", view, true) as Obj;
-    // ONE flat items[] in the given (index) order — headed + unheaded interleaved.
-    const items = out["items"] as Obj[];
-    expect(items.map((i) => i["uuid"])).toEqual([
-      "loose-anytime",
-      "loose-up",
-      "loose-some",
-      "loose-tmpl",
-      "h-anytime",
-      "h-up",
-    ]);
-    // The old stage/date buckets are gone from the wire.
-    for (const k of ["anytime", "upcoming", "someday", "active", "scheduled", "repeating"])
+    // Loose children re-bucketed by stage.
+    expect((out["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-anytime"]);
+    expect((out["someday"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-some"]);
+    // Upcoming: the dated child under its date, then a trailing null group for the date-less template.
+    const upcoming = out["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
+    expect(upcoming.map((g) => g.date)).toEqual(["2026-08-01", null]);
+    expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["loose-up"]);
+    expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["loose-tmpl"]);
+    // R12: inside a date-group `when` drops (the group states the date); the
+    // full tier still keeps the raw `startDate` substrate.
+    expect("when" in upcoming[0]!.items[0]!).toBe(false);
+    expect(upcoming[0]!.items[0]!["startDate"]).toBe("2026-08-01");
+    expect("when" in upcoming[1]!.items[0]!).toBe(false); // resting template — no projection anyway
+    // A re-bucketed child drops project/area/stage.
+    const anyChild = (out["anytime"] as Obj[])[0]!;
+    expect("project" in anyChild).toBe(false);
+    expect("area" in anyChild).toBe(false);
+    expect("stage" in anyChild).toBe(false);
+    // logbook (renamed) carries the logged rows; the project view has NO `trash`
+    // bucket — trashed children live only in `things trash` (the seeded
+    // `gone-trash` row is dropped entirely).
+    expect((out["logbook"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-log"]);
+    // A flat logbook row KEEPS its heading ref (the in-project toggle labels the
+    // heading — Part 2.3 / HEADARC2-B), flattened with the project-scoped uuid.
+    const logRow = (out["logbook"] as Obj[])[0]!;
+    expect(logRow["heading"]).toBe("Phase 1");
+    expect(logRow["headingUuid"]).toBe("head-1");
+    expect("project" in logRow).toBe(false); // R6 drops the redundant container
+    expect("stage" in logRow).toBe(false); // stage-pure logbook rows
+    // No archived headings here → an empty logbookHeadings sibling.
+    expect(out["logbookHeadings"]).toEqual([]);
+    expect("trash" in out).toBe(false);
+    for (const k of ["active", "scheduled", "repeating", "logged", "loggedHeadings", "trashed"])
       expect(k in out).toBe(false);
-    // Each row keeps stage + when, drops project/area.
-    const looseUp = items.find((i) => i["uuid"] === "loose-up")!;
-    expect(looseUp["stage"]).toBe("upcoming");
-    expect(looseUp["when"]).toBe("2026-08-01");
-    expect("project" in looseUp).toBe(false);
-    expect("area" in looseUp).toBe(false);
-    const looseSome = items.find((i) => i["uuid"] === "loose-some")!;
-    expect(looseSome["stage"]).toBe("someday");
-    // A headed row CARRIES its heading ref (flat title + project-scoped uuid) — the
-    // membership that the dissolved buckets used to express structurally.
-    const headed = items.find((i) => i["uuid"] === "h-anytime")!;
-    expect(headed["heading"]).toBe("Phase 1");
-    expect(headed["headingUuid"]).toBe("head-1");
-    expect(headed["stage"]).toBe("anytime");
-    // An unheaded row carries no heading ref.
-    expect(items.find((i) => i["uuid"] === "loose-anytime")!["heading"]).toBeNull();
-    // headings[] is the memberless catalog: each entry its heading node only.
+    // Heading group reshaped to {heading, anytime, upcoming, someday}.
     const grp = (out["headings"] as Obj[])[0]!;
-    expect(Object.keys(grp)).toEqual(["heading"]);
+    expect(Object.keys(grp).toSorted()).toEqual(["anytime", "heading", "someday", "upcoming"]);
+    expect((grp["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["h-anytime"]);
+    const hup = grp["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
+    expect(hup[0]!.date).toBe("2026-08-05");
+    // Heading-group members drop heading; the heading NODE drops project + type +
+    // status, and an OPEN heading carries no `archived`.
+    expect("heading" in (grp["anytime"] as Obj[])[0]!).toBe(false);
     const headNode = grp["heading"] as Obj;
     expect("project" in headNode).toBe(false);
     expect("type" in headNode).toBe(false); // positional: always a heading
@@ -559,14 +548,6 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect("archived" in headNode).toBe(false); // open heading
     expect(headNode["uuid"]).toBe("head-1");
     expect(headNode["title"]).toBe("Phase 1");
-    // logbook (flat swept rows) unchanged — KEEPS its heading ref, drops project/stage.
-    const logRow = (out["logbook"] as Obj[])[0]!;
-    expect(logRow["heading"]).toBe("Phase 1");
-    expect(logRow["headingUuid"]).toBe("head-1");
-    expect("project" in logRow).toBe(false);
-    expect("stage" in logRow).toBe(false);
-    expect(out["logbookHeadings"]).toEqual([]);
-    for (const k of ["logged", "loggedHeadings", "trashed", "trash"]) expect(k in out).toBe(false);
     // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
     expect((out["project"] as Obj)["stage"]).toBe("anytime");
@@ -713,15 +694,10 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
           nextOccurrence: null,
         },
       }),
-      items: [
-        todo({ uuid: "loose", project: tmplProject, heading: null, headingProject: null }),
-        todo({
-          uuid: "h-loose",
-          project: null,
-          heading: { uuid: "head-1", title: "Section" },
-          headingProject: tmplProject,
-        }),
-      ],
+      active: [todo({ uuid: "loose", project: tmplProject, heading: null, headingProject: null })],
+      scheduled: [],
+      someday: [],
+      repeating: [],
       headings: [
         {
           heading: {
@@ -731,17 +707,29 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
             status: "open",
             project: { uuid: "proj-1", title: "Weekly Review" },
           },
+          items: [
+            todo({
+              uuid: "h-loose",
+              project: null,
+              heading: { uuid: "head-1", title: "Section" },
+              headingProject: tmplProject,
+            }),
+          ],
+          scheduled: [],
+          someday: [],
+          repeating: [],
         },
       ],
       logged: [],
-      loggedHeadings: [],
+      trashed: [],
       openChildrenWhileResolved: 0,
     };
     const out = shapeReadPayload("project-view", view, false) as Obj;
-    const loose = (out["items"] as Obj[]).find((i) => i["uuid"] === "loose")!;
+    const loose = (out["anytime"] as Obj[])[0]!;
     expect("project" in loose).toBe(false); // R6 drops the container in a project view
     expect("projectIsTemplate" in loose).toBe(false); // marker drops WITH the project ref
-    const hChild = (out["items"] as Obj[]).find((i) => i["uuid"] === "h-loose")!;
+    const grp = (out["headings"] as Obj[])[0]!;
+    const hChild = (grp["anytime"] as Obj[])[0]!;
     expect("project" in hChild).toBe(false);
     expect("projectIsTemplate" in hChild).toBe(false);
     // The project card node exposes its OWN template nature via `repeating` (R11) —
