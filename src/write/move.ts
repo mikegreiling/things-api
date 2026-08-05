@@ -38,8 +38,21 @@ import { ReferenceResolutionError, resolveTaskUuidPrefix } from "../read/queries
 import type { CandidateRef } from "../read/shape.ts";
 import { taskMembershipClause } from "../read/scope.ts";
 import { isLooseRef, LOOSE_TO_AREA_REFUSAL } from "../read/pseudo-area.ts";
-import { computeReorderPre, resolveArea, resolveHeading, resolveProject } from "./pre-state.ts";
-import type { ContainerRef, ReorderParams, ReorderScope, TodoMoveParams } from "./operations.ts";
+import {
+  computeHeadingMovePre,
+  computeReorderPre,
+  resolveArea,
+  resolveHeading,
+  resolveProject,
+} from "./pre-state.ts";
+import type {
+  AreaReorderParams,
+  ContainerRef,
+  HeadingPlacement,
+  ReorderParams,
+  ReorderScope,
+  TodoMoveParams,
+} from "./operations.ts";
 import type { HazardId } from "./guards.ts";
 import { type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import type { VectorId } from "./vectors/types.ts";
@@ -110,9 +123,18 @@ export interface ReorderRequest {
 
 export type PlacementClass = "guaranteed" | "app-default";
 
+/**
+ * The op label a {@link MoveResult} carries. `todo.move` / `project.move` are the
+ * to-do and project reorder/move paths; the universal `things reorder` verb also
+ * dispatches heading re-ranking onto `project.move-heading` and sidebar-area
+ * re-ranking onto `area.reorder`, wrapping their results in the same MoveResult
+ * envelope so every kind renders through one path.
+ */
+export type MoveOp = "todo.move" | "project.move" | "project.move-heading" | "area.reorder";
+
 export interface MoveOk {
   kind: "move-ok";
-  op: "todo.move" | "project.move";
+  op: MoveOp;
   movees: { uuid: string; title: string | null }[];
   /** Membership legs (empty for a pure reposition). */
   membership: MutationResult[];
@@ -125,7 +147,7 @@ export interface MoveOk {
 
 export interface MoveRefused {
   kind: "move-refused";
-  op: "todo.move" | "project.move";
+  op: MoveOp;
   /** Maps to the CLI exit / MCP error code. */
   refusal: "usage" | "blocked" | "unsupported";
   detail: string;
@@ -144,7 +166,7 @@ export interface MoveRefused {
 
 export interface MoveLegFailed {
   kind: "move-leg-failed";
-  op: "todo.move" | "project.move";
+  op: MoveOp;
   detail: string;
   failed: MutationResult | ReorderResult;
   completed: MutationResult[];
@@ -152,7 +174,7 @@ export interface MoveLegFailed {
 
 export interface MoveDryRun {
   kind: "move-dry-run";
-  op: "todo.move" | "project.move";
+  op: MoveOp;
   plan: {
     movees: string[];
     membership: string;
@@ -711,7 +733,7 @@ type AxisResolution =
  */
 function resolveReorderAxis(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   rows: MoveeRow[],
   inTarget: string | undefined,
   packedToday: number,
@@ -1049,7 +1071,7 @@ function containerKey(target: ScopeTarget): string {
 }
 
 function refused(
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   refusal: MoveRefused["refusal"],
   detail: string,
   remediation?: string,
@@ -1075,7 +1097,7 @@ function refused(
  * mid-bounce `bounce-aborted`, a `verify-failed`) is a leg that DID run and did
  * not complete, so it stays `move-leg-failed`.
  */
-function repositionFailed(op: "todo.move" | "project.move", placement: ReorderResult): MoveResult {
+function repositionFailed(op: MoveOp, placement: ReorderResult): MoveResult {
   if (placement.kind === "blocked") {
     return {
       kind: "move-refused",
@@ -1269,7 +1291,7 @@ export async function runTodoMove(
 
 /** Pre-flight refusal for an explicit anchor into a no-protocol destination bucket. */
 function preflightAnchor(
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   position: MovePosition | undefined,
   landing: ScopeTarget,
 ): MoveRefused | null {
@@ -1592,7 +1614,7 @@ export async function runProjectMove(
  * order is the project's heading axis. The GLOBAL day/Today/Evening axes intermix
  * kinds and never reach here. Copy is tailored per case, naming each movee's kind.
  */
-function indexKindRefusal(op: "todo.move" | "project.move", rows: MoveeRow[]): MoveRefused {
+function indexKindRefusal(op: MoveOp, rows: MoveeRow[]): MoveRefused {
   const headings = rows.filter((r) => r.type === 2);
   if (headings.length > 0) {
     return refused(
@@ -1632,7 +1654,7 @@ function indexKindRefusal(op: "todo.move" | "project.move", rows: MoveeRow[]): M
 
 export async function runInPlaceReorder(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   request: ReorderRequest,
   options: WriteOptions = {},
 ): Promise<MoveResult> {
@@ -1728,6 +1750,434 @@ export async function runInPlaceReorder(
   );
 }
 
+// ------------------------------------------------------------ universal reorder
+
+/** A resolved `things reorder` operand, tagged by kind (task rows carry the row). */
+type TaskClassified = {
+  kind: "todo" | "project" | "heading";
+  uuid: string;
+  ref: string;
+  row: MoveeRow;
+};
+type AreaClassified = { kind: "area"; uuid: string; ref: string; title: string | null };
+type ClassifiedRef = TaskClassified | AreaClassified;
+
+/**
+ * The ONE reorder verb (`things reorder <refs…>`) — kind-aware dispatch across
+ * to-dos, projects, headings, and sidebar areas (spec §7). Every operand is
+ * resolved (task first, then area) and classified; a homogeneous set routes to
+ * its engine, and any illegal MIX gets one precise refusal:
+ *   - to-dos and/or projects → the in-place index/day/view engine (a to-do+project
+ *     set is legal only on the shared Today/Evening/day axes — that engine enforces
+ *     it); a pure-project set re-ranks its siblings;
+ *   - headings (one project) → the certified heading-block wire (#V11);
+ *   - areas → the sidebar-rank drag engine.
+ * A heading or area may not share a call with any other kind.
+ */
+export async function runUniversalReorder(
+  deps: WriteDeps,
+  request: ReorderRequest,
+  options: WriteOptions = {},
+): Promise<MoveResult> {
+  if (request.uuids.length === 0) {
+    return refused("todo.move", "usage", "no items given — name at least one to reorder");
+  }
+  const classified: ClassifiedRef[] = [];
+  for (const ref of request.uuids) {
+    const t = resolveMovee(deps, ref);
+    if (!(t instanceof ReferenceResolutionError)) {
+      const row = loadRow(deps.db, t.uuid);
+      if (row !== undefined) {
+        const kind = row.type === 1 ? "project" : row.type === 2 ? "heading" : "todo";
+        classified.push({ kind, uuid: t.uuid, ref, row });
+        continue;
+      }
+    }
+    // Not a task ref — try a sidebar area (areas live in TMArea, not TMTask).
+    const a = resolveArea(deps.db, { uuid: ref, title: ref });
+    if (a.resolved !== null) {
+      classified.push({ kind: "area", uuid: a.resolved.uuid, ref, title: a.resolved.title });
+      continue;
+    }
+    // Neither a task nor an area — surface an AMBIGUOUS task match (its candidates
+    // are the useful signal); a clean not-found names all four kinds.
+    if (
+      t instanceof ReferenceResolutionError &&
+      t.candidates !== undefined &&
+      t.candidates.length > 0
+    ) {
+      return {
+        kind: "move-refused",
+        op: "todo.move",
+        refusal: "usage",
+        detail: t.message,
+        candidates: t.candidates,
+      };
+    }
+    return refused("todo.move", "usage", `no to-do, project, heading, or area matches "${ref}"`);
+  }
+
+  const kinds = new Set(classified.map((c) => c.kind));
+  const hasHeading = kinds.has("heading");
+  const hasArea = kinds.has("area");
+
+  // Mixed-kind refusal (item 2): only a to-do+project set may share a call (and
+  // only on a global axis, enforced downstream). A heading or an area never mixes.
+  if ((hasHeading || hasArea) && kinds.size > 1) {
+    const listed = classified.map((c) => `${c.ref} (${c.kind})`).join(", ");
+    return refused(
+      "todo.move",
+      "usage",
+      "one kind at a time — `reorder` rearranges a set of to-dos, a set of projects, a set of " +
+        `headings, OR a set of areas, but this set mixes kinds: ${listed}. Only to-dos and ` +
+        "projects intermix, and only on the shared Today/Evening/day axes.",
+      "reorder each kind in its own call",
+    );
+  }
+
+  if (hasArea) {
+    if (request.in !== undefined) {
+      return refused(
+        "area.reorder",
+        "usage",
+        "`--in` names a to-do/project reorder axis — areas have a single sidebar-rank order, so " +
+          "it does not apply here",
+        "drop --in; position the area(s) with --start / --end / --before / --after",
+      );
+    }
+    return runAreaReorderUniversal(
+      deps,
+      classified.filter((c): c is AreaClassified => c.kind === "area"),
+      request.position,
+      options,
+    );
+  }
+  if (hasHeading) {
+    if (request.in !== undefined) {
+      return refused(
+        "project.move-heading",
+        "usage",
+        "`--in` names a to-do/project reorder axis — a heading's order is the project's heading " +
+          "axis, so it does not apply here",
+        "drop --in; position the heading(s) with --start / --end / --before / --after",
+      );
+    }
+    return runHeadingReorder(
+      deps,
+      classified.filter((c): c is TaskClassified => c.kind === "heading"),
+      request.position,
+      options,
+    );
+  }
+  // to-dos and/or projects: the existing in-place engine. A pure-project set routes
+  // through project.move; any to-do present routes through todo.move (which handles
+  // the to-do+project global-axis intermix and refuses a non-global mixed set).
+  const op: MoveOp = kinds.has("todo") ? "todo.move" : "project.move";
+  return runInPlaceReorder(deps, op, request, options);
+}
+
+/** The project's heading uuids in current display (index) order. */
+function currentHeadingOrder(deps: WriteDeps, projectUuid: string): string[] {
+  return (
+    deps.db
+      .prepare(
+        `SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+      )
+      .all(projectUuid) as { uuid: string }[]
+  ).map((r) => r.uuid);
+}
+
+/**
+ * Same-project heading re-ranking via the universal verb — dispatches onto the
+ * certified heading-block wire (`project.move-heading`), honoring #V11 (archived
+ * headings reorderable unguarded, with reopens disclosed). `project move-heading`
+ * remains the placement verb (cross-project / demotion); THIS is pure re-rank.
+ */
+async function runHeadingReorder(
+  deps: WriteDeps,
+  headings: TaskClassified[],
+  position: MovePosition | undefined,
+  options: WriteOptions,
+): Promise<MoveResult> {
+  const op = "project.move-heading" as const;
+  // One shared project (cross-container refusal, item 2).
+  const projectUuids = new Set(headings.map((h) => h.row.project));
+  if (projectUuids.size !== 1 || projectUuids.has(null)) {
+    const where = headings
+      .map(
+        (h) => `${h.uuid} in ${h.row.project === null ? "no project" : `project ${h.row.project}`}`,
+      )
+      .join("; ");
+    return refused(
+      op,
+      "blocked",
+      `these headings span projects (${where}) — a heading reorder rearranges the headings of ONE project`,
+      "reorder the headings of one project at a time",
+    );
+  }
+  const projectUuid = [...projectUuids][0] as string;
+  const movees = headings.map((h) => h.uuid);
+
+  // Map the anchor grammar onto a HeadingPlacement. --start/--end → first/last;
+  // --before/--after resolve their ref to a heading of the SAME project (an anchor
+  // positions, never migrates); bare → the block at the earliest movee's slot.
+  let placement: HeadingPlacement;
+  if (position !== undefined && ("before" in position || "after" in position)) {
+    const anchorRef = "before" in position ? position.before : position.after;
+    const ar = resolveMovee(deps, anchorRef);
+    if (ar instanceof ReferenceResolutionError) {
+      return {
+        kind: "move-refused",
+        op,
+        refusal: "usage",
+        detail: ar.message,
+        ...(ar.candidates !== undefined && { candidates: ar.candidates }),
+      };
+    }
+    const arow = loadRow(deps.db, ar.uuid);
+    if (arow === undefined || arow.type !== 2 || arow.project !== projectUuid) {
+      return refused(
+        op,
+        "blocked",
+        `the anchor ${ar.uuid} is not a heading of the movees' project — an anchor positions, it never migrates`,
+        "pick a heading anchor in that project, or use --start / --end",
+      );
+    }
+    placement = "before" in position ? { before: ar.uuid } : { after: ar.uuid };
+  } else if (position !== undefined && "at" in position) {
+    placement = { position: position.at };
+  } else {
+    const current = currentHeadingOrder(deps, projectUuid);
+    const moveeSet = new Set(movees);
+    const earliest = current.findIndex((u) => moveeSet.has(u));
+    const before = current.slice(0, Math.max(earliest, 0)).filter((u) => !moveeSet.has(u));
+    placement =
+      before.length > 0 ? { after: before[before.length - 1] as string } : { position: "first" };
+  }
+
+  // Compute the wire/reopened disclosure up front (both the dry-run plan and the ok
+  // note surface it) — computeHeadingMovePre also validates membership/anchor.
+  const pre = computeHeadingMovePre(
+    deps.db,
+    resolveProject(deps.db, { uuid: projectUuid }),
+    movees,
+    placement,
+  );
+  if (pre.problems.length > 0) {
+    return refused(
+      op,
+      "blocked",
+      `heading reorder rejected: ${pre.problems.join("; ")}`,
+      "reorder the headings of one project (read the project first)",
+    );
+  }
+  const touched = pre.wire.filter((u) => !movees.includes(u) && !pre.reopened.includes(u));
+  const reopenNote =
+    pre.reopened.length > 0
+      ? `; re-ranking archived heading(s) ${pre.reopened.join(", ")} brought them back to open ` +
+        "(their children stay resolved)"
+      : "";
+
+  const result = await runMutation(
+    deps,
+    op,
+    { project: { uuid: projectUuid }, headings: movees, placement },
+    { ...legOptions(options), ...(options.dryRun === true && { dryRun: true }) },
+  );
+
+  if (options.dryRun === true) {
+    return {
+      kind: "move-dry-run",
+      op,
+      plan: {
+        movees,
+        membership: "none (heading re-rank)",
+        placement: `move-heading → ${describePosition(position)}`,
+        placementClass: "guaranteed",
+        note: dryRunNote(result, "heading re-rank via the native heading-block wire") + reopenNote,
+      },
+    };
+  }
+  if (result.kind === "blocked") {
+    return {
+      kind: "move-refused",
+      op,
+      refusal: "blocked",
+      detail: result.detail,
+      ...(result.remediation !== undefined && { remediation: result.remediation }),
+      ...(result.hazard !== undefined && { hazard: result.hazard }),
+    };
+  }
+  if (result.kind !== "ok") {
+    return {
+      kind: "move-leg-failed",
+      op,
+      detail: `the heading re-rank did not complete (${result.kind})`,
+      failed: result,
+      completed: [],
+    };
+  }
+  return {
+    kind: "move-ok",
+    op,
+    movees: headings.map((h) => ({ uuid: h.uuid, title: h.row.title })),
+    membership: [],
+    placement: result,
+    placementClass: "guaranteed",
+    note:
+      `reordered ${movees.length} heading(s) within project ${projectUuid}` +
+      reopenNote +
+      (touched.length > 0
+        ? `; also re-inserted ${touched.length} unnamed heading(s) to honor the order: ${touched.join(", ")}`
+        : ""),
+  };
+}
+
+/** Build the ordered single-area drag legs that realize a multi-area placement. */
+function planAreaLegs(
+  areaUuids: string[],
+  position: MovePosition,
+  anchorUuid: string | null,
+): AreaReorderParams[] {
+  if ("at" in position) {
+    // first: drag last→first so the block ends up top-in-order; last: forward.
+    return position.at === "first"
+      ? areaUuids.toReversed().map((target) => ({ target, position: "first" as const }))
+      : areaUuids.map((target) => ({ target, position: "last" as const }));
+  }
+  if ("before" in position) {
+    // Each area dragged before the anchor, forward, lands them in order above it.
+    return areaUuids.map((target) => ({ target, before: anchorUuid as string }));
+  }
+  // after: chain each area after the previous (anchor → a → b → c).
+  const legs: AreaReorderParams[] = [];
+  let prev = anchorUuid as string;
+  for (const target of areaUuids) {
+    legs.push({ target, after: prev });
+    prev = target;
+  }
+  return legs;
+}
+
+/**
+ * Sidebar-area re-ranking via the universal verb — dispatches onto `area.reorder`
+ * (the GUI sidebar-drag driver, the ONLY area-order surface, P6/O13). A single
+ * area is one drag; a set composes sequential drags (non-atomic, disclosed). The
+ * discriminating `things area reorder` alias reaches the same path.
+ */
+async function runAreaReorderUniversal(
+  deps: WriteDeps,
+  areas: AreaClassified[],
+  position: MovePosition | undefined,
+  options: WriteOptions,
+): Promise<MoveResult> {
+  const op = "area.reorder" as const;
+  if (position === undefined) {
+    return refused(
+      op,
+      "usage",
+      "an area reorder needs a position — areas have no per-item bucket to assemble a block in",
+      "use --start / --end, or --before / --after another area",
+    );
+  }
+  const movees = areas.map((a) => a.uuid);
+  let anchorUuid: string | null = null;
+  if ("before" in position || "after" in position) {
+    const anchorRef = "before" in position ? position.before : position.after;
+    const ar = resolveArea(deps.db, { uuid: anchorRef, title: anchorRef });
+    if (ar.resolved === null) {
+      return refused(
+        op,
+        "usage",
+        `the anchor "${anchorRef}" did not resolve to an area`,
+        "name an area (uuid or unique title) to anchor against",
+      );
+    }
+    anchorUuid = ar.resolved.uuid;
+    if (movees.includes(anchorUuid)) {
+      return refused(
+        op,
+        "blocked",
+        "the anchor area cannot also be one of the moved areas — an anchor positions, it never migrates",
+        "pick a different anchor area, or use --start / --end",
+      );
+    }
+  }
+
+  const legs = planAreaLegs(movees, position, anchorUuid);
+  const areaTitles = areas.map((a) => ({ uuid: a.uuid, title: a.title }));
+
+  if (options.dryRun === true) {
+    return {
+      kind: "move-dry-run",
+      op,
+      plan: {
+        movees,
+        membership: "none (sidebar drag)",
+        placement: `area re-rank → ${describePosition(position)}`,
+        placementClass: "guaranteed",
+        note: `${legs.length} sidebar-drag leg(s) — drives the local Things app, one drag per area`,
+      },
+    };
+  }
+
+  // Each leg is a full GUI-drive mutation; forward the drive acknowledgement.
+  const legOpts: WriteOptions = {
+    ...legOptions(options),
+    ...(options.dangerouslyDriveGui !== undefined && {
+      dangerouslyDriveGui: options.dangerouslyDriveGui,
+    }),
+  };
+  const placed: string[] = [];
+  let last: MutationResult | null = null;
+  for (const leg of legs) {
+    const res = await runMutation(deps, op, leg, legOpts);
+    last = res;
+    if (res.kind === "blocked") {
+      // A blocked FIRST leg (nothing moved yet) hoists to a clean refusal; a
+      // blocked later leg is a partial-progress leg failure.
+      if (placed.length === 0) {
+        return {
+          kind: "move-refused",
+          op,
+          refusal: "blocked",
+          detail: res.detail,
+          ...(res.remediation !== undefined && { remediation: res.remediation }),
+          ...(res.hazard !== undefined && { hazard: res.hazard }),
+        };
+      }
+      return {
+        kind: "move-leg-failed",
+        op,
+        detail: `positioning ${leg.target} was blocked (${res.detail}) — ${placed.length} area(s) already moved`,
+        failed: res,
+        completed: [],
+      };
+    }
+    if (res.kind !== "ok") {
+      return {
+        kind: "move-leg-failed",
+        op,
+        detail: `positioning ${leg.target} did not complete (${res.kind}) — ${placed.length} area(s) already moved`,
+        failed: res,
+        completed: [],
+      };
+    }
+    placed.push(leg.target);
+  }
+  return {
+    kind: "move-ok",
+    op,
+    movees: areaTitles,
+    membership: [],
+    placement: last,
+    placementClass: "guaranteed",
+    note:
+      `re-ranked ${areas.length} area(s) via ${legs.length} sidebar drag(s)` +
+      (legs.length > 1 ? " (sequential — non-atomic)" : ""),
+  };
+}
+
 // ---------------------------------------------------------------- shared core
 
 /**
@@ -1819,7 +2269,7 @@ function sharedForecastDay(rows: MoveeRow[], packedToday: number): number | null
  */
 async function runDayGroupReposition(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   rows: MoveeRow[],
   position: MovePosition | undefined,
   options: WriteOptions,
@@ -1904,7 +2354,7 @@ async function runDayGroupReposition(
  */
 async function repositionInPlace(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   rows: MoveeRow[],
   position: MovePosition | undefined,
   packedToday: number,
@@ -2144,7 +2594,7 @@ function dryRunNote(placement: ReorderResult, base: string): string {
  */
 async function finishPlacement(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   rows: MoveeRow[],
   landing: ScopeTarget,
   position: MovePosition | undefined,
@@ -2329,7 +2779,7 @@ function groupByReorderTarget(
  */
 async function placePerBucket(
   deps: WriteDeps,
-  op: "todo.move" | "project.move",
+  op: MoveOp,
   groups: LandingGroup[],
   position: { at: "first" | "last" },
   moveeTitles: { uuid: string; title: string | null }[],

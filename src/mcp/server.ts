@@ -374,6 +374,27 @@ function movePositionArgs(args: {
   return undefined;
 }
 
+/** The universal-reorder anchor grammar (start/end/before/after → MovePosition). */
+function reorderPositionArgs(args: {
+  start?: boolean | undefined;
+  end?: boolean | undefined;
+  before?: string | undefined;
+  after?: string | undefined;
+}): MovePosition | undefined | "conflict" {
+  const chosen = [
+    args.start === true,
+    args.end === true,
+    args.before !== undefined,
+    args.after !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (args.start === true) return { at: "first" };
+  if (args.end === true) return { at: "last" };
+  if (args.before !== undefined) return { before: args.before };
+  if (args.after !== undefined) return { after: args.after };
+  return undefined;
+}
+
 /** The shared position input schema for the move tools. */
 const positionShape = {
   first: z.boolean().optional().describe("place the block at the top of its bucket"),
@@ -2858,75 +2879,43 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "reorder",
     {
       description:
-        "Rearrange to-dos IN PLACE within the list or container and the bucket they already " +
-        "share — this REARRANGES, never changes what an item belongs to (to change membership " +
-        "use move_todo / move_project). The refs order is the resulting order; unmentioned " +
-        "siblings keep theirs. Bare (no position) assembles the named items as a block at the " +
-        "EARLIEST one's current slot (partial-selection friendly); first/last/before/after " +
-        "position the block instead. Refs that span different containers or buckets are refused. " +
-        "A Today or This Evening member also holds a slot in its own container, so a set that is " +
-        "coherent on BOTH axes is ambiguous — pass `in` to name the axis (the refusal names both " +
-        "choices). A deadline-forecast set sharing one Upcoming day is dual-axis the same way (the " +
-        "day-block vs its container order); `in: upcoming` or `in: <YYYY-MM-DD>` names the day-block. " +
-        "The project rows the Today/Evening/day lists intermix with to-dos may be " +
-        "reordered alongside them. Ordering the Today, Inbox, or Someday lists, a project's " +
-        "to-dos, or an area must first be enabled once via `things config set allow-experimental " +
-        "true`. To reorder a project's HEADINGS (children follow) use the heading tool's " +
-        "move_heading action; to reorder sidebar AREAS use reorder_areas.",
+        "The ONE reorder tool — rearrange a single-KIND set IN PLACE: to-dos, projects, headings, " +
+        "OR sidebar areas. This REARRANGES, never changes what an item belongs to (to change " +
+        "membership use move_todo / move_project). All refs must be one kind; only to-dos and " +
+        "projects may intermix, and only on the shared Today/Evening/day axes. A mixed-kind set, " +
+        "a cross-container set, and a non-member anchor each get one precise refusal. The refs " +
+        "order is the resulting order; unmentioned siblings keep theirs. Bare (no position) " +
+        "assembles the named items as a block at the EARLIEST one's current slot; start/end/" +
+        "before/after position the block. A Today or This Evening member also holds a slot in its " +
+        "container, so a set coherent on BOTH axes is ambiguous — pass `in` to name the axis. " +
+        "HEADINGS: same-project heading re-ranking runs the native heading-block wire (children " +
+        "follow); an archived heading is reorderable but repositioning it brings it back to open " +
+        "(disclosed in the result). AREAS: this drives the local Things app (sidebar drag) and " +
+        "must be turned on with `things config set ui-enabled true` plus dangerously_drive_gui; " +
+        "the areas' projects and to-dos are untouched. Ordering the Today, Inbox, or Someday " +
+        "lists, or a project's to-dos, must first be enabled once via `things config set " +
+        "allow-experimental true`.",
       inputSchema: {
         refs: z
           .array(z.string())
-          .describe("The items to rearrange, in the order they should land (may be a subset)"),
-        ...positionShape,
+          .describe(
+            "The items to rearrange (one kind: to-dos, projects, headings, or areas), in the " +
+              "order they should land (may be a subset)",
+          ),
+        start: z.boolean().optional().describe("place the block at the start of its scope"),
+        end: z.boolean().optional().describe("place the block at the end of its scope"),
+        before: z.string().optional().describe("place the block immediately before this item"),
+        after: z.string().optional().describe("place the block immediately after this item"),
         in: z
           .string()
           .optional()
           .describe(
-            "Name the axis to reorder on: today | evening | anytime | someday | inbox, a project/" +
-              "area/heading ref (uuid or unique title), upcoming (the one future day the set " +
-              "shares), or a YYYY-MM-DD day-block. A stage-list or container axis sorts one KIND " +
-              "at a time — a mixed to-do+project set is refused (even sharing a container); only " +
-              "today | evening | upcoming | a day-block intermix both kinds. Reorder a project's " +
-              "headings with the heading tool's move_heading action.",
+            "to-dos/projects only — name the axis to reorder on: today | evening | anytime | " +
+              "someday | inbox, a project/area/heading ref (uuid or unique title), upcoming (the " +
+              "one future day the set shares), or a YYYY-MM-DD day-block. A stage-list or " +
+              "container axis sorts one KIND at a time; only today | evening | upcoming | a " +
+              "day-block intermix both kinds.",
           ),
-        ...dryRunShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () => {
-        const position = movePositionArgs(args);
-        if (position === "conflict") return usage("pass at most one of first/last/before/after");
-        const request: ReorderRequest = {
-          uuids: args.refs,
-          ...(position !== undefined && { position }),
-          ...(args.in !== undefined && { in: args.in }),
-        };
-        return moveResult(await getClient().write.reorderTodos(request, writeOptions(args)));
-      }),
-  );
-
-  server.registerTool(
-    "reorder_areas",
-    {
-      description:
-        "Move a sidebar area to a new position in the area order (target by uuid or unique " +
-        "name). Pass exactly one destination: before/after another area, or first/last. This " +
-        "visibly drives the local Things app (the window comes forward and the sidebar may " +
-        "scroll) and must be turned on first with `things config set ui-enabled true`; the " +
-        "area's projects and to-dos are untouched.",
-      inputSchema: {
-        target: z.string().describe(`the area to move (${REF_FORMAT})`),
-        before: z
-          .string()
-          .optional()
-          .describe(`place it immediately above this area (${REF_FORMAT})`),
-        after: z
-          .string()
-          .optional()
-          .describe(`place it immediately below this area (${REF_FORMAT})`),
-        first: z.boolean().optional().describe("move it to the top of the area list"),
-        last: z.boolean().optional().describe("move it to the bottom of the area list"),
         ...driveGuiShape,
         ...dryRunShape,
       },
@@ -2934,26 +2923,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
-        const chosen = [
-          args.before !== undefined,
-          args.after !== undefined,
-          args.first === true,
-          args.last === true,
-        ].filter(Boolean).length;
-        if (chosen !== 1) return usage("pass exactly one of before / after / first / last");
-        return mutationResult(
-          await getClient().write.run(
-            "area.reorder",
-            {
-              target: args.target,
-              ...(args.before !== undefined && { before: args.before }),
-              ...(args.after !== undefined && { after: args.after }),
-              ...(args.first === true && { position: "first" as const }),
-              ...(args.last === true && { position: "last" as const }),
-            },
-            writeOptions(args),
-          ),
-        );
+        const position = reorderPositionArgs(args);
+        if (position === "conflict") return usage("pass at most one of start/end/before/after");
+        const request: ReorderRequest = {
+          uuids: args.refs,
+          ...(position !== undefined && { position }),
+          ...(args.in !== undefined && { in: args.in }),
+        };
+        return moveResult(await getClient().write.reorderAny(request, writeOptions(args)));
       }),
   );
 

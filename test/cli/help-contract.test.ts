@@ -555,7 +555,7 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("--limit <n>");
   });
 
-  it("reorder: in-place kind-neutral verb, --in axis disambiguation, no --scope", () => {
+  it("reorder: the ONE universal verb across all kinds, ratified anchor grammar, no --scope", () => {
     const help = helpFor("reorder");
     expect(help).toContain("IN PLACE");
     expect(help).toContain("never changes membership");
@@ -563,14 +563,20 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("intermix");
     expect(help).toContain("--in <target>");
     expect(help).toContain("ambiguous");
-    expect(help).toContain("bounce");
+    // Every kind is named — the universal dispatch surface.
+    expect(help).toContain("headings");
+    expect(help).toContain("areas");
     expect(help).toContain("project move-heading");
     expect(help).toContain("area reorder");
+    // Ratified anchor grammar (spec §7): --start / --end / --before / --after.
+    expect(help).toContain("--start");
+    expect(help).toContain("--end");
     expect(help).toContain("--before <ref>");
     expect(help).toContain("--dry-run");
-    // The old raw scope surface is gone.
+    // The old raw scope surface is gone; so is the old --first/--last spelling.
     expect(help).not.toContain("--scope <scope>");
     expect(help).not.toContain("--strategy <name>");
+    expect(help).not.toContain("--first");
   });
 
   it("todo restore: trashed-only precondition + de-schedule caveat", () => {

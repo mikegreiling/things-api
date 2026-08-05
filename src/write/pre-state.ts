@@ -8,6 +8,7 @@ import { encodePackedDate, localToday, type IsoDate } from "../model/dates.ts";
 import type { AnyTask, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
+import { logBoundary } from "../read/log-boundary.ts";
 import { deadNameMatchHint, resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, HeadingPlacement, ReorderParams } from "./operations.ts";
 
@@ -161,8 +162,25 @@ export interface HeadingMovePre {
   project: ContainerResolution;
   /** The project's non-trashed heading uuids in current display (index) order. */
   current: string[];
-  /** Full target order after moving the block — feeds the native wire + delta. */
+  /** Full target order after moving the block — the verified END state (delta). */
   targetOrder: string[];
+  /**
+   * The MINIMAL native re-rank wire (#V11): the shortest front-clustered id list
+   * that realizes {@link targetOrder}. A partial wire re-ranks only its ids and
+   * clusters them above the un-named headings, which keep their current relative
+   * order (HEADSORT partial-wire law) — so an ARCHIVED heading that need not move
+   * stays OUT of the wire and is provably untouched (H-UNSWEPT). The compile sends
+   * THIS, not the full order, so archived bystanders are never reopened.
+   */
+  wire: string[];
+  /**
+   * Archived headings FORCED into the wire (wire ∩ archived). Re-ranking an
+   * archived heading REOPENS it (HEADSORT: status 3→0, stopDate→NULL, umd bump,
+   * heading-only — children stay resolved). Non-empty only when the target order
+   * cannot be reached without moving an archived heading; disclosed in the result
+   * and dry-run, never silent, never guarded (#V11).
+   */
+  reopened: string[];
   /** Reasons the move is illegal (empty = ok). */
   problems: string[];
 }
@@ -255,13 +273,17 @@ export function computeHeadingMovePre(
   placement: HeadingPlacement,
 ): HeadingMovePre {
   const projectUuid = project.resolved?.uuid ?? "";
-  const current = (
-    db
-      .prepare(
-        `SELECT uuid FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
-      )
-      .all(projectUuid) as { uuid: string }[]
-  ).map((r) => r.uuid);
+  const rows = db
+    .prepare(
+      `SELECT uuid, status FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"`,
+    )
+    .all(projectUuid) as { uuid: string; status: number }[];
+  const current = rows.map((r) => r.uuid);
+  // Archived = the heading is completed/canceled (any closed status). All lifecycle
+  // classes — open, archived-unswept, archived-swept — sit in this ONE index axis
+  // (HEADSORT, read-shape v2 R5); only `archived` marks the closed ones, and only
+  // they reopen when re-ranked (#V11).
+  const archived = new Set(rows.filter((r) => r.status !== 0).map((r) => r.uuid));
   const problems: string[] = [];
   const currentSet = new Set(current);
   const movees = new Set<string>();
@@ -283,7 +305,9 @@ export function computeHeadingMovePre(
       problems.push("the anchor heading cannot also be one of the moved headings");
     }
   }
-  if (problems.length > 0) return { project, current, targetOrder: current, problems };
+  if (problems.length > 0) {
+    return { project, current, targetOrder: current, wire: [], reopened: [], problems };
+  }
 
   const rest = current.filter((u) => !movees.has(u));
   let targetOrder: string[];
@@ -294,7 +318,39 @@ export function computeHeadingMovePre(
     const insertAt = "before" in placement ? idx : idx + 1;
     targetOrder = [...rest.slice(0, insertAt), ...headings, ...rest.slice(insertAt)];
   }
-  return { project, current, targetOrder, problems: [] };
+  // Minimal front-cluster wire (#V11). An empty wire means the request is already
+  // satisfied (target == current); fall back to the full order so the pipeline has
+  // a concrete invocation that reproduces it (and any forced reopen is disclosed).
+  const minimal = minimalReorderWire(current, targetOrder);
+  const wire = minimal.length > 0 ? minimal : [...targetOrder];
+  const reopened = wire.filter((u) => archived.has(u));
+  return { project, current, targetOrder, wire, reopened, problems: [] };
+}
+
+/**
+ * The MINIMAL front-cluster wire that realizes `target` from `current` under the
+ * native reorder's partial-wire law (HEADSORT / LOGSORT): a wire `W` re-ranks the
+ * result to `[W in wire order] ++ [headings not in W, in current order]`. So the
+ * smallest wire is the shortest PREFIX of `target` whose removal leaves a suffix
+ * that already equals the current relative order of the un-named rows. Everything
+ * genuinely out of place ends up in the wire; every already-correct trailing row
+ * (open OR archived) stays out and untouched. An already-sorted request yields the
+ * empty wire (a true no-op — the caller substitutes the movee block).
+ */
+export function minimalReorderWire(current: string[], target: string[]): string[] {
+  const n = target.length;
+  for (let k = 0; k <= n; k++) {
+    const suffix = target.slice(k);
+    const suffixSet = new Set(suffix);
+    const currentFiltered = current.filter((u) => suffixSet.has(u));
+    if (
+      currentFiltered.length === suffix.length &&
+      currentFiltered.every((u, i) => u === suffix[i])
+    ) {
+      return target.slice(0, k);
+    }
+  }
+  return [...target];
 }
 
 /**
@@ -889,6 +945,31 @@ interface MemberRow {
  *             undated), by "index". Bounce-only: a when=someday ->
  *             when=anytime round-trip front-inserts (P8e).
  */
+/**
+ * A precise refusal reason for a RESOLVED (completed/canceled) to-do handed to a
+ * reorder, or null when the row is not a resolved to-do (LOGSORT laws / doctrine
+ * R6). A SWEPT to-do lives in the Logbook — reorder has no Logbook order axis, so
+ * point at reactivation (`things todo reopen`) or, for Logbook re-dating,
+ * `--completed-at`. An UNSWEPT resolved to-do is a live-body resident that LOGSORT
+ * proves re-ranks cleanly index-only, but that permit is not yet wired on this
+ * surface (it must run native-only — the move/bounce fallbacks are uncertified for
+ * resolved rows), so it is refused honestly, distinct from a plain non-member.
+ */
+function resolvedTodoReorderReason(db: DatabaseSync, uuid: string, now: Date): string | null {
+  const r = db
+    .prepare("SELECT type, status, stopDate FROM TMTask WHERE uuid = ? AND trashed = 0")
+    .get(uuid) as { type: number; status: number; stopDate: number | null } | undefined;
+  if (r === undefined || r.type !== 0 || r.status === 0) return null;
+  const verb = r.status === 2 ? "canceled" : "completed";
+  const boundaryEpoch = logBoundary(db, now).getTime() / 1000;
+  const swept = r.stopDate !== null && r.stopDate <= boundaryEpoch;
+  return swept
+    ? `is a swept ${verb} to-do (in the Logbook) — reorder has no Logbook order to change; ` +
+        "reactivate it first (`things todo reopen`), or use `--completed-at` to re-date it in the Logbook"
+    : `is a ${verb} (resolved) to-do — reordering resolved to-dos is not yet wired on this ` +
+        "surface (reopen it first with `things todo reopen`)";
+}
+
 export function computeReorderPre(
   db: DatabaseSync,
   params: ReorderParams,
@@ -1336,7 +1417,10 @@ export function computeReorderPre(
     if (member === undefined) {
       rejected.push({
         uuid,
-        reason: rejectedCandidates.get(uuid) ?? "is not an open member of this scope",
+        reason:
+          rejectedCandidates.get(uuid) ??
+          resolvedTodoReorderReason(db, uuid, now) ??
+          "is not an open member of this scope",
       });
       continue;
     }

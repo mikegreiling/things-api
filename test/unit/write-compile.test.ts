@@ -345,13 +345,18 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
     expect(inv.payload.indexOf('with ids "C"')).toBeLessThan(inv.payload.indexOf('"C,B,A"'));
   });
 
-  it("project.move-heading: project specifier carries the full computed heading order (scf P1)", () => {
+  it("project.move-heading: project specifier carries the MINIMAL front-cluster wire (#V11)", () => {
     const pre = emptyPreState();
     pre.destProject = { resolved: { uuid: "PROJ-9", title: "P" }, matches: 1 };
+    // Full target order ["H2","H1","H3"] is reachable by front-clustering H2 alone
+    // (H1,H3 keep their current relative order) — so the wire is the minimal ["H2"],
+    // never the full order, keeping un-named (and archived) headings out of it.
     pre.headingMove = {
       project: pre.destProject,
       current: ["H1", "H2", "H3"],
       targetOrder: ["H2", "H1", "H3"],
+      wire: ["H2"],
+      reopened: [],
       problems: [],
     };
     const inv = COMMANDS["project.move-heading"].compile(
@@ -361,7 +366,7 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
       { token: TOKEN },
     );
     expect(inv.payload).toContain('project id "PROJ-9"');
-    expect(inv.payload).toContain('with ids "H2,H1,H3"');
+    expect(inv.payload).toContain('with ids "H2"');
   });
 });
 

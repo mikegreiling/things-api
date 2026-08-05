@@ -156,6 +156,7 @@ import {
   runInPlaceReorder,
   runProjectMove,
   runTodoMove,
+  runUniversalReorder,
   type MoveResult,
   type ProjectMoveRequest,
   type ReorderRequest,
@@ -530,6 +531,18 @@ export interface ThingsClient {
      * fail closed.
      */
     reorderTodos(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
+    /**
+     * The ONE reorder verb (`things reorder`). Rearranges a single-KIND set IN
+     * PLACE — to-dos, projects, headings, OR sidebar areas — dispatching the
+     * protocol by kind: the index/day/view engine for to-dos and projects (a
+     * to-do+project set intermixes only on the shared Today/Evening/day axes), the
+     * certified heading-block wire for a project's headings (archived headings
+     * reorderable, reopens disclosed — #V11), and the sidebar-drag driver for
+     * areas. A mixed-kind set, a cross-container set, and a non-member anchor each
+     * get one precise refusal. Bare (no position) assembles the block at the
+     * earliest movee's slot; --start/--end/--before/--after position it.
+     */
+    reorderAny(request: ReorderRequest, options?: WriteOptions): Promise<MoveResult>;
     /** Replace the full tag set (an empty list clears all tags). */
     setTags(uuid: string, tags: string[], options?: WriteOptions): Promise<MutationResult>;
     /** Merge: current direct tags + new ones, then replace. */
@@ -1206,6 +1219,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       moveTodo: (uuid, dest, o) => run("todo.move", { uuid, ...dest }, o),
       moveTodos: (request, o) => runTodoMove(writeDeps, request, o ?? {}),
       reorderTodos: (request, o) => runInPlaceReorder(writeDeps, "todo.move", request, o ?? {}),
+      reorderAny: (request, o) => runUniversalReorder(writeDeps, request, o ?? {}),
       setTags: (uuid, tags, o) => run("todo.set-tags", { uuid, tags }, o),
       addTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);
