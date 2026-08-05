@@ -510,36 +510,41 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
 
     const shaped = shapeReadPayload("project-view", view, true) as Record<string, unknown>;
     type Row = { uuid: string };
-    type Grp = { date: string | null; items: Row[] };
-    const checkBucket = (items: Row[], stage: string) => {
-      for (const i of items) expect(stageOf.get(i.uuid)).toBe(stage);
+    type Rec = { items: Row[] };
+    type Grp = { when: string | null; items: Row[] };
+    const items = (b: unknown) => (b as Rec).items;
+    const checkBucket = (list: Row[], stage: string) => {
+      for (const i of list) expect(stageOf.get(i.uuid)).toBe(stage);
     };
-    checkBucket(shaped["anytime"] as Row[], "anytime");
-    checkBucket(shaped["someday"] as Row[], "someday");
-    checkBucket(shaped["logbook"] as Row[], "logbook");
-    for (const g of shaped["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
-    // The heading group is bucketed the same way.
+    // v2: the un-headed body's four bucket records live under `children`.
+    const body = shaped["children"] as Record<string, unknown>;
+    checkBucket(items(body["anytime"]), "anytime");
+    checkBucket(items(body["someday"]), "someday");
+    checkBucket(items(body["logbook"]), "logbook"); // per-container logbook (R6)
+    for (const g of body["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+    // The heading's recursive `children` is bucketed the same way.
     const grp = (shaped["headings"] as Array<Record<string, unknown>>)[0]!;
-    checkBucket(grp["anytime"] as Row[], "anytime");
-    checkBucket(grp["someday"] as Row[], "someday");
-    for (const g of grp["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
+    const hc = grp["children"] as Record<string, unknown>;
+    checkBucket(items(hc["anytime"]), "anytime");
+    checkBucket(items(hc["someday"]), "someday");
+    for (const g of hc["upcoming"] as Grp[]) checkBucket(g.items, "upcoming");
 
     // And the shape actually placed each stage where expected.
-    expect((shaped["anytime"] as Row[]).length).toBeGreaterThan(0);
-    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-08-01")).toBe(true);
-    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === null)).toBe(true); // the template
-    expect((shaped["logbook"] as Row[]).length).toBe(1);
+    expect(items(body["anytime"]).length).toBeGreaterThan(0);
+    expect((body["upcoming"] as Grp[]).some((g) => g.when === "2026-08-01")).toBe(true);
+    expect((body["upcoming"] as Grp[]).some((g) => g.when === null)).toBe(true); // the template
+    expect(items(body["logbook"]).length).toBe(1);
     // Trashed children are excluded from the project view entirely — no `trash`
     // bucket, and `c-trash` appears in no bucket (GUI-faithful, §6½/PLOG1-a).
-    expect("trash" in shaped).toBe(false);
+    expect("trash" in body).toBe(false);
     const cTrash = children[6]!;
     expect(stageOf.has(cTrash)).toBe(false);
     // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
-    // upcoming group is keyed on its arrived date — Upcoming holds only future
-    // dates + the date-less template group.
+    // upcoming block is keyed on its arrived date — Upcoming holds only future
+    // dates + the date-less template block.
     const cUpToday = children[2]!;
-    expect((shaped["anytime"] as Row[]).some((r) => r.uuid === cUpToday)).toBe(true);
-    expect((shaped["upcoming"] as Grp[]).some((g) => g.date === "2026-07-02")).toBe(false);
+    expect(items(body["anytime"]).some((r) => r.uuid === cUpToday)).toBe(true);
+    expect((body["upcoming"] as Grp[]).some((g) => g.when === "2026-07-02")).toBe(false);
   });
 });
 

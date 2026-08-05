@@ -628,13 +628,17 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // focus directly (the project's own focus is inherited by all, suppressed).
     const direct = runCli(["project", "show", "P", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(direct.stdout).data.view.anytime.map((i: { title: string }) => i.title),
+      JSON.parse(direct.stdout).data.view.children.anytime.items.map(
+        (i: { title: string }) => i.title,
+      ),
     ).toEqual(["child-focus"]);
     // --untagged (direct-only) keeps the child with no direct tag, even though
     // it inherits focus from the project.
     const untagged = runCli(["project", "show", "P", "--untagged", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(untagged.stdout).data.view.anytime.map((i: { title: string }) => i.title),
+      JSON.parse(untagged.stdout).data.view.children.anytime.items.map(
+        (i: { title: string }) => i.title,
+      ),
     ).toEqual(["child-bare"]);
   });
 
@@ -1794,7 +1798,9 @@ describe("cli detail views — area show per-section caps; project show uncapped
     const json = JSON.parse(
       runCli(["project", "show", "Big Proj", "--json", "--db", fx.path]).stdout,
     );
-    expect(json.data.view.anytime).toHaveLength(60);
+    expect(json.data.view.children.anytime.items).toHaveLength(60);
+    // Uncapped → every bucket record is bare `{items}`, no inline `total` (R1).
+    expect("total" in json.data.view.children.anytime).toBe(false);
     expect(json.meta.truncation).toBeUndefined();
     // No --limit exists on project show at all — commander rejects it as an
     // unknown option (error + non-zero exit in the real CLI).
@@ -2419,10 +2425,16 @@ describe("overdue in container views (cli)", () => {
       runCli(["project", "show", "Launch", "--overdue", "--json", "--db", fx.path]).stdout,
     );
     expect(env.data.view.project.title).toBe("Launch");
-    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-overdue"]);
-    // Phase 2 collapsed (no surviving child); Phase 1 kept.
+    expect(env.data.view.children.anytime.items.map((i: { title: string }) => i.title)).toEqual([
+      "loose-overdue",
+    ]);
+    // Phase 2 collapsed (no surviving child); Phase 1 kept (v2: heading node is the
+    // headings[] entry itself — {uuid, title, archived?, children}).
     expect(env.data.view.headings).toHaveLength(1);
-    expect(env.data.view.headings[0].heading.title).toBe("Phase 1");
+    expect(env.data.view.headings[0].title).toBe("Phase 1");
+    expect(
+      env.data.view.headings[0].children.anytime.items.map((i: { title: string }) => i.title),
+    ).toEqual(["p1-overdue"]);
     // The TTY render omits the collapsed heading entirely.
     const tty = runCli(["project", "show", "Launch", "--overdue", "--db", fx.path]).stdout;
     expect(tty).toContain("Phase 1");
