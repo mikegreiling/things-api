@@ -51,6 +51,7 @@ import {
   REMINDER_FORMAT,
   schemaWarnings,
   shapeReadPayload,
+  withTodayBucketTotals,
   splitWhenSugar,
   tagFilterFields,
   tagFlagConflict,
@@ -132,16 +133,26 @@ function readResult(data: unknown): ToolResult {
 /**
  * A read result carrying truncation metadata: the data (already limited) in
  * the first content block, and a second block with the {@link Truncation}
- * numbers plus a one-line note the agent can read when rows were dropped.
+ * numbers plus a one-line note the agent can read when rows were dropped. `meta`
+ * merges extra whole-view metadata into that second block — the today view's
+ * `counts` aggregate (the analog of the CLI envelope's `meta.counts`), so `data`
+ * stays pure domain rows.
  */
-function truncatedResult(data: unknown, truncation: Truncation): ToolResult {
+function truncatedResult(
+  data: unknown,
+  truncation: Truncation,
+  meta?: Record<string, unknown>,
+): ToolResult {
   const note = truncation.truncated
     ? `showing ${truncation.shown} of ${truncation.total} items — pass limit (or all: true) to see more`
     : undefined;
   return {
     content: [
       { type: "text", text: JSON.stringify(omitEmpty(data)) },
-      { type: "text", text: JSON.stringify({ truncation, ...(note !== undefined && { note }) }) },
+      {
+        type: "text",
+        text: JSON.stringify({ truncation, ...meta, ...(note !== undefined && { note }) }),
+      },
     ],
   };
 }
@@ -781,13 +792,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     "read_view",
     {
       description:
-        "Read a Things list as the app presents it: today (split into Today and This " +
-        "Evening), inbox, anytime, upcoming, someday, logbook, or trash. For upcoming, " +
+        "Read a Things list as the app presents it: today (two children buckets — " +
+        "children.today and children.evening, evening expires daily; the whole-view " +
+        "count due/overdue vs. other rides the result's second block), inbox, anytime, " +
+        "upcoming, someday, logbook, or trash. For upcoming, " +
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sections in canonical order (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
         "from anytime — the project row represents them; someday lists each group's " +
-        "project rows before its to-dos. Flat views (today/inbox/upcoming/logbook/trash) " +
+        "project rows before its to-dos. Row-capped views (today/inbox/upcoming/logbook/trash) " +
         `return at most ${DEFAULT_LIST_LIMIT} items by default (raise with limit); ` +
         "anytime/someday always return every group and cap per block instead — " +
         `area_limit (default ${AREA_PREVIEW_LIMIT}) per area block, and on anytime ` +
@@ -927,6 +940,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const {
                 view,
                 truncation,
+                totals,
                 filter: fm,
               } = c.read.today({
                 ...filter,
@@ -936,9 +950,16 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
+              // The data block is the two `children` bucket records (each with its
+              // inline `total` when capped); the whole-view `counts` aggregate
+              // rides the metadata block (the CLI meta.counts analog).
               return truncatedResult(
-                shapeReadPayload("today", view, full, c.refPromoter()),
+                withTodayBucketTotals(
+                  shapeReadPayload("today", view, full, c.refPromoter()),
+                  totals,
+                ),
                 truncation,
+                { counts: view.counts },
               );
             }
             case "inbox": {

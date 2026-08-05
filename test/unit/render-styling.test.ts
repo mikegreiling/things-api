@@ -210,7 +210,7 @@ describe("formatItem styling (color on)", () => {
         todo({ title: "CheckedDrop", status: "canceled", stopped: new Date() }),
       ],
       evening: [],
-      badge: { dueOrOverdue: 0, other: 1 },
+      counts: { dueOrOverdue: 0, other: 1 },
     };
     const out = renderToday(view, undefined, "things today").join("\n");
     expect(out).toContain(`${DIM}CheckedWin`);

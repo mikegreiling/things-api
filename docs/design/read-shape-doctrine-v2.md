@@ -71,7 +71,7 @@ The v1-era advisory keys (`openChildrenWhileResolved`, `openChildrenUnderArchive
 
 Five sequential PRs, each independently green (ALPHA-CONTRACT: break freely, no shims, no dual shapes). Each carries contract + schema regen + CHANGELOG (Unreleased, breaking — all land in **0.14.0**), per-view fixtures, JSON-shape regression tests, and TTY byte-stability tests wherever the TTY is not being deliberately changed.
 
-1. **Doctrine ratify + today reshape** — `children` records, `meta.counts`, "badge" ban re-landed, v1's ratified today-TTY treatment restored.
+1. **Doctrine ratify + today reshape** — `children` records, `meta.counts`, "badge" ban re-landed, v1's ratified today-TTY treatment restored. **LANDED** (0.14.0): `data.children = { today: {items, total?}, evening: {items, total?} }` (each bucket's `total` present iff capped — R1, so `meta.truncation.sections`/`SectionCount` retired for today), counts on `meta.counts` (over MCP the result's metadata block), TTY = clean `── ★ Today ──` header with the counts as card-style metadata lines at the top, and the `/\bbadge\b/i` banned-vocab lock in place. The library keeps its internal Today/Evening grouping; only the wire changed.
 2. **project-view recursion** — `children` (incl. `logbook`), recursive `headings[]`, `logbookHeadings`/root-logbook gone; HEADARC2/3 TTY fidelity re-derived and byte-locked.
 3. **area-view** — `children` records + `projects` record.
 4. **global upcoming day blocks** — `view.days` + `resting`; dual-citizen seating (R7) enforced across all views with regression locks.

@@ -24,13 +24,14 @@ import {
   omitEmpty,
   openThings,
   shapeReadPayload,
+  withTodayBucketTotals,
   ReferenceResolutionError,
   schemaWarnings,
   ThingsDbNotFoundError,
   ThingsDbOpenError,
   type EnvelopeMeta,
   type ThingsClient,
-  type TodayView,
+  type TodayBucketTotals,
   type Truncation,
   type ViewFilterMeta,
 } from "../index.ts";
@@ -55,23 +56,24 @@ const ITEMS_WRAPPER_KINDS: ReadonlySet<string> = new Set([
  * Shape a read payload into its envelope `data` object (the 1.0 contract, R1/R2):
  * `data` is always an object. Flat lists become `{ items }`; the sectioned
  * catalogues (anytime/someday) become `{ sections }`; `today` becomes
- * `{ sections: [{key,items}…], badge }`; the composite cards become `{ view }`;
- * a single-entity detail becomes `{ item }`. Everything already object-shaped
- * (open/snapshot/…) passes through. The human-render path keeps the raw inner
- * payload — this transform is the JSON emit boundary only.
+ * `{ children: { today: {items, total?}, evening: {items, total?} } }` — the two
+ * keyed bucket records (read-shape v2 R1/R2; `data` here is the already-shaped
+ * children object, `todayTotals` supplies each bucket's inline `total`); the
+ * composite cards become `{ view }`; a single-entity detail becomes `{ item }`.
+ * Everything already object-shaped (open/snapshot/…) passes through. The
+ * human-render path keeps the raw inner payload — this transform is the JSON
+ * emit boundary only. `today`'s whole-view `counts` aggregate rides `meta.counts`
+ * (runRead), never `data`, so `data` stays pure domain rows.
  */
-export function wrapEnvelopeData(kind: string, data: unknown): unknown {
+export function wrapEnvelopeData(
+  kind: string,
+  data: unknown,
+  todayTotals?: TodayBucketTotals,
+): unknown {
   if (ITEMS_WRAPPER_KINDS.has(kind)) return { items: data };
   if (kind === "anytime" || kind === "someday") return { sections: data };
   if (kind === "today") {
-    const view = data as TodayView;
-    return {
-      sections: [
-        { key: "today", items: view.today },
-        { key: "evening", items: view.evening },
-      ],
-      badge: view.badge,
-    };
+    return { children: withTodayBucketTotals(data, todayTotals ?? { today: 0, evening: 0 }) };
   }
   if (kind === "area-view" || kind === "project-view") return { view: data };
   if (kind === "detail") return { item: data };
@@ -138,6 +140,18 @@ export interface PagedResult<T> {
   /** Active content filter (the `--area` scope) — carried into `meta.filter`. */
   filter?: ViewFilterMeta;
   /**
+   * Whole-view aggregate counts — the today view's due/overdue vs. other split
+   * (the app's sidebar count). Carried into `meta.counts`; absent for views that
+   * have no such aggregate.
+   */
+  counts?: { dueOrOverdue: number; other: number };
+  /**
+   * Pre-cap Today / This-Evening bucket sizes (today view only) — supply each
+   * `children` bucket's inline `total` when {@link wrapEnvelopeData} builds the
+   * `today` payload. Absent for every other view.
+   */
+  todayTotals?: TodayBucketTotals;
+  /**
    * Additional non-blocking advisories from the read itself (ADDITIVE), merged
    * with the schema-drift warnings into `meta.warnings` (and echoed once on
    * stderr for human output). Used by the `loose` pseudo-area reads to surface
@@ -191,6 +205,8 @@ export function runRead<T>(
       truncation,
       kind: kindOverride,
       filter,
+      counts,
+      todayTotals,
       warnings: readWarnings,
       lines: precomputed,
     } = fn(client);
@@ -217,6 +233,7 @@ export function runRead<T>(
       ...(warnings.length > 0 && { warnings }),
       ...(clock !== undefined && { clock }),
       ...(filter !== undefined && { filter }),
+      ...(counts !== undefined && { counts }),
       ...(scope !== undefined && { scope }),
     };
     // Human output gets the note once on STDERR (never mixed into the piped
@@ -235,7 +252,7 @@ export function runRead<T>(
         client.refPromoter(),
       );
       process.stdout.write(
-        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped)), meta))}\n`,
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals)), meta))}\n`,
       );
     } else {
       const lines = precomputed ?? render(data);

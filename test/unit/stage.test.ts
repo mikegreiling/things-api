@@ -589,15 +589,16 @@ describe("R13 property — every Today-view member derives stage `anytime` (just
     const members = [...view.today, ...view.evening];
     expect(members.length).toBeGreaterThan(5);
     // STRICT: every member derives `anytime` — no residual mixed case survives.
-    // (If this ever fails, the today sections are NOT stage-pure and the
+    // (If this ever fails, the today buckets are NOT stage-pure and the
     // TODAY_SECTION_DROP `stage: true` must be reverted — report prominently.)
     for (const m of members) expect(deriveStage(m)).toBe("anytime");
-    // Consequently the emit boundary DROPS `stage` on every today-section row.
+    // Consequently the emit boundary DROPS `stage` on every today-bucket row.
     const shaped = shapeReadPayload("today", view, false) as {
-      today: Array<Record<string, unknown>>;
-      evening: Array<Record<string, unknown>>;
+      today: { items: Array<Record<string, unknown>> };
+      evening: { items: Array<Record<string, unknown>> };
     };
-    for (const r of [...shaped.today, ...shaped.evening]) expect("stage" in r).toBe(false);
+    for (const r of [...shaped.today.items, ...shaped.evening.items])
+      expect("stage" in r).toBe(false);
   });
 });
 
@@ -660,10 +661,10 @@ describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count rec
 
     const view = todayView(fx.db, NOW);
     const shaped = shapeReadPayload("today", view, false) as {
-      today: Array<Record<string, unknown>>;
-      evening: Array<Record<string, unknown>>;
+      today: { items: Array<Record<string, unknown>> };
+      evening: { items: Array<Record<string, unknown>> };
     };
-    const rows = [...shaped.today, ...shaped.evening];
+    const rows = [...shaped.today.items, ...shaped.evening.items];
 
     for (const t of ["a-dl-someday", "b-dl-inbox", "c-dl-anytime", "d-scheduled", "e-spawn"]) {
       expect(provOf(rows, t)).toBe(true);

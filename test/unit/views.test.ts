@@ -91,7 +91,7 @@ describe("todayView", () => {
     expect(view.today[0]?.todaySection).toBe("evening");
   });
 
-  it("badge mirrors the sidebar: deadline due/overdue vs other", () => {
+  it("counts mirror the sidebar: deadline due/overdue vs other", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "overdue-dl", startDate: "2026-07-01", deadline: "2026-06-30" });
     seedTodo(fx.db, { title: "due-today", startDate: "2026-07-01", deadline: "2026-07-02" });
@@ -99,10 +99,10 @@ describe("todayView", () => {
     seedTodo(fx.db, { title: "no-dl", startDate: "2026-07-01" });
 
     const view = todayView(fx.db, NOW);
-    expect(view.badge).toEqual({ dueOrOverdue: 2, other: 2 });
+    expect(view.counts).toEqual({ dueOrOverdue: 2, other: 2 });
   });
 
-  it("eveningOnly keeps the view shape: today empty, evening populated, badge over evening", () => {
+  it("eveningOnly keeps the view shape: today empty, evening populated, counts over evening", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "day", startDate: "2026-07-02" });
     seedTodo(fx.db, { title: "night", startDate: "2026-07-02", evening: true });
@@ -116,8 +116,8 @@ describe("todayView", () => {
     const view = todayView(fx.db, NOW, { eveningOnly: true });
     expect(view.today).toEqual([]);
     expect(view.evening.map((i) => i.title).toSorted()).toEqual(["night", "night-due"]);
-    // Badge counts only the evening members (mirrors the tag filter's badge).
-    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    // Counts cover only the evening members (mirrors the tag filter's treatment).
+    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("a DUE deadline pulls items into Today, even from the Inbox (UI-oracle 2026-07-04)", () => {
@@ -151,7 +151,7 @@ describe("todayView", () => {
       "inbox-due",
       "old-suppression",
     ]);
-    expect(view.badge.dueOrOverdue).toBe(3);
+    expect(view.counts.dueOrOverdue).toBe(3);
   });
 
   it("orders by entry cohort (referenceDate DESC), then todayIndex, then uuid", () => {
@@ -245,16 +245,16 @@ describe("todayView", () => {
     expect(view.today.find((i) => i.title === "dropped")?.status).toBe("canceled");
   });
 
-  it("badge counts OPEN members only — a checked-unswept row is listed but does not move it", () => {
+  it("counts cover OPEN members only — a checked-unswept row is listed but does not move them", () => {
     fx = buildFixtureDb();
     seedSettings(fx.db, { logInterval: 4, manualLogDate: NOW_EPOCH - 86400 });
     // One open due-today item (red), one open item (gray).
     seedTodo(fx.db, { title: "due", startDate: "2026-07-01", deadline: "2026-07-02" });
     seedTodo(fx.db, { title: "plain", startDate: "2026-07-02" });
     const baseline = todayView(fx.db, NOW);
-    expect(baseline.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(baseline.counts).toEqual({ dueOrOverdue: 1, other: 1 });
     // Adding a checked-unswept row — even one carrying a due deadline — must not
-    // move the badge (the GUI badge counts remaining work).
+    // move the count (the sidebar count is remaining work).
     seedTodo(fx.db, {
       title: "checked-due",
       startDate: "2026-07-02",
@@ -264,7 +264,7 @@ describe("todayView", () => {
     });
     const view = todayView(fx.db, NOW);
     expect(view.today.map((i) => i.title)).toContain("checked-due");
-    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("a checked-but-unswept EVENING item stays in the This Evening section", () => {
@@ -280,8 +280,8 @@ describe("todayView", () => {
     const view = todayView(fx.db, NOW);
     expect(view.evening.map((i) => i.title)).toEqual(["tonight-done"]);
     expect(view.today).toEqual([]);
-    // A checked evening row still contributes nothing to the badge.
-    expect(view.badge).toEqual({ dueOrOverdue: 0, other: 0 });
+    // A checked evening row still contributes nothing to the count.
+    expect(view.counts).toEqual({ dueOrOverdue: 0, other: 0 });
   });
 });
 

@@ -22,10 +22,11 @@
  *             section only when startBucket=1 AND startDate == today exactly;
  *             overdue bucket=1 items roll back into Today proper (live-
  *             verified against the UI, 2026-07-02).
- *             Sidebar badge split: red = items with deadline <= today,
- *             gray = the rest (exact 270/122 reconciliation on live data). The
- *             badge counts OPEN members only — a checked-but-unswept row is in
- *             the list but out of the count (the GUI badge is remaining work).
+ *             Whole-view count split (the app's sidebar count): dueOrOverdue =
+ *             items with deadline <= today, other = the rest (exact 270/122
+ *             reconciliation on live data). The count covers OPEN members only —
+ *             a checked-but-unswept row is in the list but out of the count (the
+ *             sidebar count is remaining work). Surfaced as `meta.counts`.
  *             CHECKED-BUT-UNSWEPT (GUI-parity ruling 2026-07-14, Mike — "this
  *             is the behavior of the Things GUI and I like it"): membership is
  *             OPEN_OR_UNSWEPT, not OPEN — a completed/canceled row the log-move
@@ -295,22 +296,34 @@ function materialize(
 }
 
 export interface TodayView {
+  /**
+   * The Today-proper members (everything NOT in This Evening), in comparator
+   * order. The library KEEPS this internal Today/Evening grouping — the two are
+   * the `today` / `evening` reorder scopes (`--in today` / `--in evening`), and
+   * the read-shape v2 wire projects them as the two `children` bucket records.
+   * The TTY re-projects its two render sections straight from these arrays.
+   */
   today: ListItem[];
+  /** The This-Evening members (expires daily), in comparator order. */
   evening: ListItem[];
-  /** Mirrors the sidebar badge: red = deadline due/overdue, gray = the rest. */
-  badge: { dueOrOverdue: number; other: number };
+  /**
+   * The whole-view aggregate counts — the app's sidebar count over OPEN members:
+   * `dueOrOverdue` (deadline due/overdue) vs. `other` (the rest). Rides
+   * `meta.counts` on the wire (never a `data` bucket); every input is on the rows.
+   */
+  counts: { dueOrOverdue: number; other: number };
 }
 
 export interface TodayFilter extends ViewFilter {
   /**
    * Restrict to the This-Evening section: the Today section is filtered out
-   * (returned empty) and the badge counts only the evening members. A section
+   * (returned empty) and the counts cover only the evening members. A section
    * visibility toggle, not a volume change — the row limit still applies.
    */
   eveningOnly?: boolean;
 }
 
-/** Badge = OPEN members only (the GUI badge counts remaining work). */
+/** Counts cover OPEN members only (the sidebar count reflects remaining work). */
 const isOpen = (i: ListItem) => i.status === "open";
 
 export function todayView(
@@ -357,18 +370,18 @@ export function todayView(
   const evening = items.filter(isEvening);
   const dueIn = (list: ListItem[]) =>
     list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
-  // Badge = OPEN members only (the GUI badge counts remaining work). A
-  // checked-but-unswept row is present in the list but never moves the badge —
+  // Counts cover OPEN members only (the sidebar count reflects remaining work).
+  // A checked-but-unswept row is present in the list but never moves the count —
   // this preserves the exact live reconciliation computed under OPEN membership.
-  // The evening filter mirrors the tag filter's badge treatment: the badge
-  // reflects exactly the members the view now returns (here, evening only).
+  // The evening filter mirrors the tag filter's treatment: the counts reflect
+  // exactly the members the view now returns (here, evening only).
   if (filter?.eveningOnly === true) {
     const openEvening = evening.filter(isOpen);
     const eveningDue = dueIn(openEvening);
     return {
       today: [],
       evening,
-      badge: { dueOrOverdue: eveningDue, other: openEvening.length - eveningDue },
+      counts: { dueOrOverdue: eveningDue, other: openEvening.length - eveningDue },
     };
   }
   const openItems = items.filter(isOpen);
@@ -376,7 +389,7 @@ export function todayView(
   return {
     today: items.filter((i) => !isEvening(i)),
     evening,
-    badge: { dueOrOverdue, other: openItems.length - dueOrOverdue },
+    counts: { dueOrOverdue, other: openItems.length - dueOrOverdue },
   };
 }
 

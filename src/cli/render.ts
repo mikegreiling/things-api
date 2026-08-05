@@ -18,9 +18,9 @@ import {
   type GroupedLimits,
   type ListItem,
   type Project,
-  type SectionCount,
   type SidebarSection,
   REF_PREFIX_LEN,
+  type TodayBucketTotals,
   type TodayView,
   type Truncation,
 } from "../index.ts";
@@ -450,12 +450,18 @@ const provisionalRowOpts = (i: ListItem): FormatOpts =>
   entityProvisional(i) ? { mark: provisionalPip() } : {};
 
 /**
- * The `things today` split. The membership glyph lives in the SECTION HEADER,
- * not on every row — a yellow ★ in the Today header (which also carries the
- * sidebar badge split) and a blue ⏾ in the This Evening header — so the rows
- * drop the redundant per-item marker (the same convention that suppresses a
- * `(project)` context inside that project's own view). Every OTHER view keeps
- * the per-row ★/⏾, where the marker still carries information.
+ * The `things today` view. The library keeps the internal Today/This-Evening
+ * grouping (the two reorder scopes), so the TTY renders its two sections straight
+ * from `view.today` / `view.evening`. The whole-view `counts` aggregate (the
+ * app's sidebar count) renders at the TOP as card-style metadata lines (indented
+ * `key: value`, the same convention `things project show` / `things area show`
+ * use), so the section header itself stays clean (`── ★ Today ──`).
+ *
+ * The membership glyph lives in the SECTION HEADER, not on every row — a yellow ★
+ * in the Today header and a blue ⏾ in the This Evening header — so the rows drop
+ * the redundant per-item marker (the same convention that suppresses a
+ * `(project)` context inside that project's own view). Every OTHER view keeps the
+ * per-row ★/⏾, where the marker still carries information.
  *
  * A PROVISIONAL Today member (the wire's presence-keyed `provisional`, BANNER1
  * law — a Today entrant the app has not yet materialized, banner-counted until
@@ -468,15 +474,15 @@ const provisionalRowOpts = (i: ListItem): FormatOpts =>
  *
  * This Evening mirrors the GUI: it renders ONLY when evening items exist —
  * a truly-empty evening has no header at all. `view` is the rows that survived
- * the global `--limit`; `sections` is the metadata's pre-cap per-section counts
- * ({@link SectionCount}) — the Today/This-Evening totals the hint math needs, so
- * the section stays honest under truncation without a pre-cap copy of the view.
- * When the cap hid some or all evening rows, an honest muted hint counts the
- * hidden ones and points at the isolated `--evening` view — never the misleading
- * `(empty)` a truncated evening used to show. (In `--evening` mode that pointer
- * is redundant, so the hint keeps the `--limit`/`--all` levers instead.) `base`
- * is the user's own invocation (flags echoed). The global footer (row driver)
- * still reports the whole-view remainder separately.
+ * the global `--limit`; `totals` is the pre-cap Today/This-Evening bucket sizes
+ * ({@link TodayBucketTotals}) the hint math needs, so the section stays honest
+ * under truncation without a pre-cap copy of the view. When the cap hid some or
+ * all evening rows, an honest muted hint counts the hidden ones and points at the
+ * isolated `--evening` view — never the misleading `(empty)` a truncated evening
+ * used to show. (In `--evening` mode that pointer is redundant, so the hint keeps
+ * the `--limit`/`--all` levers instead.) `base` is the user's own invocation
+ * (flags echoed). The global footer (row driver) still reports the whole-view
+ * remainder separately.
  *
  * `options.eveningOnly` (the `--evening` section filter) renders ONLY the This
  * Evening block — the Today header and its `(empty)` placeholder are suppressed
@@ -484,28 +490,34 @@ const provisionalRowOpts = (i: ListItem): FormatOpts =>
  */
 export function renderToday(
   view: TodayView,
-  sections: SectionCount[] | undefined,
+  totals: TodayBucketTotals | undefined,
   base: string,
   options?: { eveningOnly?: boolean },
 ): string[] {
   // Pre-cap totals from the truncation metadata; fall back to the shown view's
-  // own lengths when a caller hands an unbounded view with no section counts.
-  const todayTotal = sections?.find((s) => s.key === "today")?.total ?? view.today.length;
-  const eveningTotal = sections?.find((s) => s.key === "evening")?.total ?? view.evening.length;
+  // own lengths when a caller hands an unbounded view with no bucket sizes.
+  const todayTotal = totals?.today ?? view.today.length;
+  const eveningTotal = totals?.evening ?? view.evening.length;
   const w = uuidDisplayWidth([...view.today, ...view.evening]);
   const eveningOnly = options?.eveningOnly === true;
-  const lines: string[] = eveningOnly
-    ? []
-    : [
-        `${bold("──")} ${todayStar()} ${bold(`Today (badge: ${view.badge.dueOrOverdue} due/overdue · ${view.badge.other} other) ──`)}`,
-        ...(view.today.length === 0
-          ? ["(empty)"]
-          : view.today.map((i) => formatItem(i, w, provisionalRowOpts(i)))),
-      ];
+  // The whole-view counts, at the TOP as card-style metadata lines (the
+  // project/area-show header convention). A `0` is meaningful, so both always show.
+  const lines: string[] = [
+    `  ${dim("due/overdue:")} ${view.counts.dueOrOverdue}`,
+    `  ${dim("other:")} ${view.counts.other}`,
+  ];
+  if (!eveningOnly) {
+    lines.push(
+      `${bold("──")} ${todayStar()} ${bold("Today ──")}`,
+      ...(view.today.length === 0
+        ? ["(empty)"]
+        : view.today.map((i) => formatItem(i, w, provisionalRowOpts(i)))),
+    );
+  }
   if (eveningTotal > 0) {
     // A blank line before the header matches every other grouped renderer's
     // section spacing — but only when the Today section rendered above it. In
-    // --evening mode the header is the first line, so no leading blank.
+    // --evening mode the header follows the count lines directly, no blank.
     if (!eveningOnly) lines.push("");
     lines.push(`${bold("──")} ${eveningMoon()} ${bold("This Evening ──")}`);
     for (const i of view.evening) lines.push(formatItem(i, w, provisionalRowOpts(i)));

@@ -128,11 +128,11 @@ describe("today --area", () => {
     expect(filter?.area.title).toBe("Alpha");
   });
 
-  it("recomputes the badge over the surviving members", () => {
+  it("recomputes the counts over the surviving members", () => {
     const alpha = seedArea(fx.db, "Alpha", 0);
     const beta = seedArea(fx.db, "Beta", 1);
-    // One overdue-deadline Alpha member (badge: dueOrOverdue), one plain Alpha
-    // member, and a Beta overdue member that must NOT move the filtered badge.
+    // One overdue-deadline Alpha member (counts: dueOrOverdue), one plain Alpha
+    // member, and a Beta overdue member that must NOT move the filtered counts.
     seedTodo(fx.db, {
       title: "a-due",
       area: alpha,
@@ -148,7 +148,7 @@ describe("today --area", () => {
     });
 
     const { view } = client().read.today({ area: "Alpha" });
-    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("emits no filter annotation when unscoped", () => {

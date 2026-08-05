@@ -56,9 +56,10 @@
  * - a template's `repeating.nextOccurrence` is GONE from the wire — `when` replaces
  *   it (same fact, one word); the resting-templates `{date: null}` group is
  *   unchanged (an unprojected template has no `when`).
- * - `when` is DROPPED inside the `today` view's own sections (the section key states
- *   today/evening) and inside any card/heading `upcoming` DATE-GROUP for a member
- *   whose `when` equals the group's date (the group states it). KEPT everywhere
+ * - `when` is DROPPED inside the `today` view's two `children` bucket records (the
+ *   bucket key `today`/`evening` states it) and inside any card/heading `upcoming`
+ *   DATE-GROUP for a member whose `when` equals the group's date (the group states
+ *   it). KEPT everywhere
  *   else it is present — including the flat `upcoming`/`anytime`/`inbox`/`someday`
  *   catalogues, search, changes (a deadline-pulled row reads `when: "today"` in the
  *   mixed search/changes surfaces, informatively; note R13 re-files it to stage
@@ -77,9 +78,9 @@
  *   side effect our read cannot perform (watchers beware).
  * - **stage `anytime` for a deadline pull** — a due-deadline pull re-files an undated
  *   Inbox/Someday row into Anytime (deriveStage step 2½, L-A). So EVERY Today member
- *   derives stage `anytime`, and the `today` view's own sections become stage-PURE →
- *   `stage` is DROPPED there (TODAY_SECTION_DROP), alongside the section-implied
- *   `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
+ *   derives stage `anytime`, and the `today` view's two `children` buckets become
+ *   stage-PURE → `stage` is DROPPED there (TODAY_SECTION_DROP), alongside the
+ *   key-implied `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
  *   INCLUDES them (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
@@ -628,14 +629,14 @@ const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and `when`. */
 const NO_DROP: ItemDrop = {};
 /**
- * The today view's own sections: drop the section-implied `when` (R12) AND the
- * section-implied `stage` (R13). Every Today member now derives stage `anytime`
- * by construction — an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½)
- * both derive `anytime`, and there are no future-dated or undated-someday Today
- * members — so the Today sections are provably stage-PURE `anytime` and the field
- * is redundant there (verified strict by the today-section purity property test
- * in test/unit/stage.test.ts). `provisional` is NOT a drop — the banner is not a
- * section, so nothing implies it.
+ * The today view's two `children` bucket records: drop the key-implied `when`
+ * (R12 — the `today`/`evening` bucket key states it) AND the bucket-implied
+ * `stage` (R13). Every Today member now derives stage `anytime` by construction —
+ * an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½) both derive
+ * `anytime`, and there are no future-dated or undated-someday Today members — so
+ * both buckets are provably stage-PURE `anytime` and the field is redundant there
+ * (verified strict by the today purity property test in test/unit/stage.test.ts).
+ * `provisional` is NOT a drop — the banner is not a bucket, so nothing implies it.
  */
 const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
@@ -776,12 +777,46 @@ function shapeArea(src: unknown): unknown {
   return o;
 }
 
-/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied `when`). */
+/**
+ * Shape the today view into its two `children` bucket records (read-shape v2 R1):
+ * `{ today: { items }, evening: { items } }`, each a stage/`when`-pure list (the
+ * bucket key states both — TODAY_SECTION_DROP). The whole-view `counts` aggregate
+ * is NOT here — it rides `meta.counts` (runRead / the MCP metadata block). Inline
+ * per-bucket `total` (present iff capped) is injected downstream by
+ * {@link withTodayBucketTotals}, where the pre-cap sizes are known.
+ */
 function shapeTodayView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   return {
-    ...view,
-    today: shapeList(view["today"], TODAY_SECTION_DROP, compact, promoter),
-    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact, promoter),
+    today: { items: shapeList(view["today"], TODAY_SECTION_DROP, compact, promoter) },
+    evening: { items: shapeList(view["evening"], TODAY_SECTION_DROP, compact, promoter) },
+  };
+}
+
+/**
+ * Inject each today bucket's inline `total` (read-shape v2 R1): present iff the
+ * bucket was capped (`items.length < total`), absent otherwise — an untruncated
+ * bucket never restates its own length. `totals` are the pre-cap bucket sizes
+ * from `truncateToday`. Both the CLI `data.children` wrapper and the MCP data
+ * block run the shaped children through this so completeness is answerable
+ * locally, with no truncation sidecar. Returns the children object unchanged when
+ * it is not the expected shape.
+ */
+export function withTodayBucketTotals(
+  children: unknown,
+  totals: { today: number; evening: number },
+): unknown {
+  if (children === null || typeof children !== "object") return children;
+  const c = children as Obj;
+  const withTotal = (bucket: unknown, total: number): unknown => {
+    if (bucket === null || typeof bucket !== "object") return bucket;
+    const b = bucket as Obj;
+    const items = b["items"];
+    const shown = Array.isArray(items) ? items.length : 0;
+    return shown < total ? { ...b, total } : b;
+  };
+  return {
+    today: withTotal(c["today"], totals.today),
+    evening: withTotal(c["evening"], totals.evening),
   };
 }
 

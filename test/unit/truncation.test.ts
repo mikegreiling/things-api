@@ -78,33 +78,29 @@ describe("truncateToday", () => {
   const view = (todayN: number, eveningN: number): TodayView => ({
     today: items(todayN),
     evening: items(eveningN, "e"),
-    badge: { dueOrOverdue: 1, other: 2 },
+    counts: { dueOrOverdue: 1, other: 2 },
   });
 
   it("counts the cut across Today then This Evening in render order", () => {
-    const { data, truncation } = truncateToday(view(4, 4), 6);
+    const { data, truncation, totals } = truncateToday(view(4, 4), 6);
     expect(data.today).toHaveLength(4);
     expect(data.evening).toHaveLength(2);
-    expect(truncation).toEqual({
-      shown: 6,
-      total: 8,
-      limit: 6,
-      truncated: true,
-      sections: [
-        { key: "today", shown: 4, total: 4 },
-        { key: "evening", shown: 2, total: 4 },
-      ],
-    });
-    // The whole-view badge summary is preserved.
-    expect(data.badge).toEqual({ dueOrOverdue: 1, other: 2 });
+    // The global truncation carries no per-section sidecar (v2 R1: bucket-local
+    // completeness rides each `children` bucket's inline `total`).
+    expect(truncation).toEqual({ shown: 6, total: 8, limit: 6, truncated: true });
+    // Pre-cap bucket sizes feed the renderer + the inline bucket `total`.
+    expect(totals).toEqual({ today: 4, evening: 4 });
+    // The whole-view counts aggregate is preserved.
+    expect(data.counts).toEqual({ dueOrOverdue: 1, other: 2 });
   });
 
   it("a limit smaller than Today trims Evening to nothing", () => {
-    const { data, truncation } = truncateToday(view(10, 5), 3);
+    const { data, truncation, totals } = truncateToday(view(10, 5), 3);
     expect(data.today).toHaveLength(3);
     expect(data.evening).toEqual([]);
     expect(truncation.total).toBe(15);
     expect(truncation.shown).toBe(3);
+    expect(totals).toEqual({ today: 10, evening: 5 });
   });
 });
 
