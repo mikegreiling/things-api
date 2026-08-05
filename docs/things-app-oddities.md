@@ -1,6 +1,6 @@
 # Things 3 automation-surface oddities — observed behavior catalog
 
-Everything surprising, inconsistent, or hazardous we found while systematically probing Things 3's automation surfaces (URL scheme, AppleScript, and their interaction with the UI). Each entry has reproduction steps, expected vs. actual, and evidence pointers into this repo's probe campaigns. **Section 1 is a genuine crash bug worth reporting to Cultured Code**; the rest ranges from silent-failure hazards to design observations, collected here so a support email can cite them precisely.
+Everything surprising, inconsistent, or hazardous we found while systematically probing Things 3's automation surfaces (URL scheme, AppleScript, and their interaction with the UI). Each entry has reproduction steps, expected vs. actual, and evidence pointers into this repo's probe campaigns. **Section 1 is a genuine crash bug worth reporting to Cultured Code**; the rest ranges from silent-failure hazards to design observations, collected here so a support email can cite them precisely. For the complementary log — the genuinely clever engineering we found on the same surfaces — see the craft catalog, [things-app-craft.md](things-app-craft.md).
 
 **Environment (all findings):** Things 3.22.11 — verified on BOTH the Mac App Store build (32211507, production Mac, macOS 15.7.4) and the direct-download trial build (32211007, clean macOS 15.6 VMs). Deterministically reproduced by the automated probe harness (`npm run lab:regress`); evidence records per probe id live under `lab/artifacts/<runId>/evidence/`.
 
