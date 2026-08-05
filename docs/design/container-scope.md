@@ -156,12 +156,13 @@ leak without threading scope through every command's `preRead`.
 - **Creates:** `todo.add` / `project.add` bare → redirect (above); explicit dest
   gated. `project.add` under a **project scope** → refuse (a new project would be a
   sibling outside the jail). `area.add` → refuse (top-level). `tag.add` → allowed
-  (additive global vocabulary — ratified Q4). `todo.add-logged` → **refused**: it
-  is created loose in the Logbook with no container parameter, so it cannot be
-  redirected and would leave scope (see Deviations).
+  (additive global vocabulary — ratified Q4). A `todo.add --completed-at` (the
+  folded Logbook-import path) with no container leaves scope like any container-less
+  add — the bare-add redirect / explicit-dest gating above governs it (the bespoke
+  `todo.add-logged` op and its dedicated scope refusal are retired).
 - **Updates / completes (no container change):** allowed iff target in scope
   (target-parity handles it). Includes `todo.update/complete/cancel/reopen/
-  set-tags/backdate/clear-dated-reminder/replace-checklist/edit-checklist-item`,
+  set-tags/set-dates/clear-dated-reminder/replace-checklist/edit-checklist-item`,
   the project equivalents, `heading.rename/archive/unarchive`.
 - **`todo.duplicate` / `project.duplicate`:** allowed iff source in scope — the
   copy inherits the source's container, so it stays in scope (amendment 3).
@@ -275,12 +276,12 @@ scope must never be a mystery jail. MCP includes the scope in the (filtered)
 
 ## 8. Deviations from the original plan
 
-- **`todo.add-logged` is REFUSED under scope**, not redirected. The plan grouped
-  it with the redirectable creates, but `TodoAddLoggedParams` has no
-  area/project/heading parameter — a logged to-do is created loose in the Logbook
-  and cannot be placed into the container. Refusing (fail closed) is the safe
-  reading of the result-stays-in-scope rule; a future scoped-add-logged would need
-  a destination parameter first.
+- **~~`todo.add-logged` is REFUSED under scope~~ — RETIRED.** The bespoke
+  `todo.add-logged` op was deleted (resolution-timestamp surface, plan PR A); the
+  Logbook-import path folds into `todo.add --completed-at`, which DOES carry the
+  full container vocabulary (`--project`/`--area`/`--heading`), so it takes the
+  ordinary scoped-add redirect/gate path instead of a dedicated refusal. A
+  container-less timestamped add leaves scope exactly like any container-less add.
 - **The post-verify in-scope assertion (plan §4.3, belt-and-braces) is not
   implemented.** The pre-dispatch gate (target parity + destination gate + default
   rule) is the guarantee; a post-verify re-read that downgrades to

@@ -379,26 +379,31 @@ const GUARDS: Record<HazardId, GuardFn> = {
     };
   },
   "H-BACKDATE-OPEN": ({ op, params, pre }) => {
-    if (op !== "todo.backdate" || params["completionDate"] === undefined) return null;
-    const status = pre.target?.type === "to-do" ? pre.target.status : null;
+    // The generalized WG-7 law (#405 / BACKDT): the AS `set completion date`
+    // leg fires EXCLUSIVELY against a verified-COMPLETED row. `set completion
+    // date` is not a pure stopDate rewrite — it FORCES status=completed,
+    // silently completing an OPEN item (cascade-stamping children at now) and
+    // re-completing a CANCELED item (2→3, discarding the canceled status). Both
+    // are refused; only an already-completed row is a clean rewrite. A
+    // creation-date-only write never trips this guard (completionDate ===
+    // undefined) and is status-safe on any row. The multi-leg resolution
+    // orchestrators route a canceled item through the certified flip legs to
+    // completed BEFORE this op, so the guard passes at leg time.
+    if (op !== "todo.set-dates" && op !== "project.set-dates") return null;
+    if (params["completionDate"] === undefined) return null;
+    const status = pre.target?.type !== "heading" ? (pre.target?.status ?? null) : null;
     if (status === "completed") return null;
-    // Canceled is refused too: `set completion date` is not a pure stopDate
-    // rewrite — it FORCES status=completed, silently re-completing a canceled
-    // to-do (2→3) and discarding its canceled status (BACKDT / WG-7). Only an
-    // already-completed row is a clean completion-date rewrite. A creation-date-
-    // only backdate never reaches this guard (completionDate === undefined) and
-    // stays allowed on any status — `set creation date` is status-safe.
+    const noun = op === "project.set-dates" ? "project" : "to-do";
     const detail =
       status === "canceled"
-        ? "a completion-date backdate requires a completed to-do — this one is canceled, and " +
-          "setting its completion date would silently convert it to completed, discarding the " +
-          "canceled status"
-        : "completionDate can only be rewritten on a completed to-do — this one " +
-          `is ${status ?? "not a to-do / not found"}`;
+        ? `a completion-date write requires a completed ${noun} — this one is canceled, and setting ` +
+          "its completion date would silently convert it to completed, discarding the canceled status"
+        : `a completion-date write requires a completed ${noun} — this one is ` +
+          `${status ?? "not found / not a to-do or project"}, and setting its completion date would ` +
+          "silently complete it (cascade-stamping any children at now)";
     const remediation =
-      status === "canceled"
-        ? "backdate the completion date only on to-dos that are already completed"
-        : "complete it first (todo.complete), then backdate";
+      "resolve it first with `complete --completed-at` (or `cancel --completed-at`, which keeps it " +
+      "canceled via the certified flip legs) rather than writing the completion date directly";
     return { hazard: "H-BACKDATE-OPEN", detail, remediation };
   },
   "H-REORDER-SCOPE": ({ op, params, pre }) => {

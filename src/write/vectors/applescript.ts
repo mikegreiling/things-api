@@ -156,14 +156,25 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["A27"],
     notes: "PERMANENT — hard-deletes every trashed row",
   },
-  "todo.backdate": {
+  "todo.set-dates": {
     support: "yes",
     disruption: 0,
     validation: "validated",
-    evidence: ["scf2:P4b"],
+    evidence: ["scf2:P4b", "backdt:B-TODO"],
     notes:
-      "`set completion date` / `set creation date` property writes — the ONLY surface " +
-      "that rewrites these timestamps on an existing item",
+      "`set completion date` / `set creation date of to do id` property writes — the ONLY surface " +
+      "that rewrites these timestamps on an existing to-do; the completion-date leg is guarded to " +
+      "completed rows only (H-BACKDATE-OPEN)",
+  },
+  "project.set-dates": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["backdt:B-PROJ-AS"],
+    notes:
+      "`set completion date` / `set creation date of project id` property writes — kind-agnostic " +
+      "law (BACKDT); touches ONLY the project row (no child cascade); completion-date leg guarded " +
+      "to completed rows only (H-BACKDATE-OPEN)",
   },
   "project.rename-heading": {
     support: "yes",

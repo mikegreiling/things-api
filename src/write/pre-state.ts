@@ -127,7 +127,7 @@ export interface PreState {
   trashedCount: number;
   /** Pre-existing uuids for entity-created probes. */
   existingEntityUuids: string[];
-  /** Pre-existing same-title/type rows (todo.add-logged create-probe exclusion). */
+  /** Pre-existing same-title/type rows (add create-probe exclusion). */
   sameTitleUuids: string[];
   /** Scope membership + wire list for the reorder operation. */
   reorder: ReorderPre | null;

@@ -84,13 +84,6 @@ export function evaluateScope(
       );
     case "todo.restore":
       return blocked("restore returns the item to the Inbox, which is outside the active scope");
-    case "todo.add-logged":
-      // A logged to-do is created loose in the Logbook with no container — it
-      // would land outside the scope and cannot be redirected (the operation
-      // has no destination parameter). Fail closed.
-      return blocked(
-        "a logged to-do is created loose in the Logbook and cannot be placed into the active scope",
-      );
     default:
       break;
   }

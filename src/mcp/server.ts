@@ -1657,9 +1657,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           }
           return mutationResult(
             args.status === "completed"
-              ? await c.write.completeTodo(args.uuid, opts)
+              ? await c.write.completeTodo(args.uuid, {}, opts)
               : args.status === "canceled"
-                ? await c.write.cancelTodo(args.uuid, opts)
+                ? await c.write.cancelTodo(args.uuid, {}, opts)
                 : await c.write.reopenTodo(args.uuid, opts),
           );
         }
@@ -2008,69 +2008,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
-  server.registerTool(
-    "backdate_todo",
-    {
-      description:
-        "Rewrite a to-do's completion and/or creation timestamp to noon (local) on the " +
-        "given date. completion_date requires the to-do to already be completed or " +
-        "canceled; the Logbook re-sorts to the new date.",
-      inputSchema: {
-        uuid: z.string(),
-        completion_date: z.string().optional().describe(DATE_FORMAT),
-        creation_date: z.string().optional().describe(DATE_FORMAT),
-        ...dryRunShape,
-        ...opIdShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.backdateTodo(
-            args.uuid,
-            {
-              ...(args.completion_date !== undefined && { completionDate: args.completion_date }),
-              ...(args.creation_date !== undefined && { creationDate: args.creation_date }),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "add_logged_todo",
-    {
-      description:
-        "Create a to-do directly in the Logbook: completed, with the given past " +
-        "completion date (and optionally a past creation date). For importing history " +
-        "from another system.",
-      inputSchema: {
-        title: z.string(),
-        completion_date: z.string().describe(DATE_FORMAT),
-        creation_date: z.string().optional().describe(`${DATE_FORMAT}; <= completion_date`),
-        notes: z.string().optional(),
-        ...dryRunShape,
-        ...opIdShape,
-      },
-      annotations: NON_DESTRUCTIVE,
-    },
-    async (args) =>
-      guard(async () =>
-        mutationResult(
-          await getClient().write.addLoggedTodo(
-            {
-              title: args.title,
-              completionDate: args.completion_date,
-              ...(args.creation_date !== undefined && { creationDate: args.creation_date }),
-              ...(args.notes !== undefined && { notes: args.notes }),
-            },
-            writeOptions(args),
-          ),
-        ),
-      ),
-  );
+  // NB: the bespoke backdate_todo / add_logged_todo tools were removed with the
+  // engine ops (plan PR A). MCP parity for the --created-at/--completed-at
+  // resolution-timestamp flags is restored in PR B.
 
   server.registerTool(
     "heading",

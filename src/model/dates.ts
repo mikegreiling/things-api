@@ -171,6 +171,35 @@ export function dayBoundInstant(iso: IsoDate, edge: "start" | "end", zone?: stri
   return offset2 === offset ? first : new Date(guess.getTime() - offset2);
 }
 
+/**
+ * The instant of a wall-clock time (`hh:mm:ss` on calendar date `iso`) in a
+ * given IANA `zone` — the general form of {@link dayBoundInstant}. Without a
+ * `zone` the wall time is the HOST-local one (byte-identical to a bare
+ * `new Date(y, m-1, d, hh, mm, ss)`); with a `zone` it is that zone's wall
+ * time, resolved through the zone's offset (DST-corrected by a second read).
+ * Used by the resolution-timestamp surface to place a date-only value at noon
+ * in the effective zone (§5).
+ */
+export function zonedWallInstant(
+  iso: IsoDate,
+  hh: number,
+  mm: number,
+  ss: number,
+  zone?: string,
+): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (match === null) throw new RangeError(`not an ISO date: ${iso}`);
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  if (zone === undefined) return new Date(y, m - 1, d, hh, mm, ss, 0);
+  const guess = new Date(Date.UTC(y, m - 1, d, hh, mm, ss, 0));
+  const offset = zoneOffsetMs(guess, zone);
+  const first = new Date(guess.getTime() - offset);
+  const offset2 = zoneOffsetMs(first, zone);
+  return offset2 === offset ? first : new Date(guess.getTime() - offset2);
+}
+
 /** Milliseconds to add to a UTC instant to read it as wall-clock time in `zone` (the zone's offset). */
 function zoneOffsetMs(instant: Date, zone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {

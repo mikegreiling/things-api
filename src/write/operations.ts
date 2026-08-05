@@ -36,8 +36,8 @@ export const OPERATION_KINDS = [
   "project.reopen",
   "project.restore",
   "project.set-tags",
-  "todo.backdate",
-  "todo.add-logged",
+  "todo.set-dates",
+  "project.set-dates",
   "project.add-heading",
   "project.rename-heading",
   "project.archive-heading",
@@ -179,6 +179,19 @@ export interface TodoAddParams {
   area?: ContainerRef;
   /** Existing heading inside the target project (placement only). */
   heading?: string;
+  /**
+   * Born-backdated creation timestamp (ISO date or datetime). Compiles the add
+   * through `things:///json` (the only at-creation backdating surface, P4d) —
+   * a date-only value normalizes to noon in the effective zone (§5).
+   */
+  createdAt?: string;
+  /**
+   * Born RESOLVED: the created to-do lands completed with this completion
+   * timestamp, straight to the Logbook (P4d). ISO date or datetime; date-only
+   * normalizes to noon in the effective zone (§5). Compiles through
+   * `things:///json`.
+   */
+  completedAt?: string;
 }
 
 export interface TodoUpdateParams {
@@ -270,24 +283,27 @@ export interface HeadingUnarchiveParams {
   restoreChildren?: boolean;
 }
 
-export interface TodoBackdateParams {
+/**
+ * Rewrite the completion and/or creation timestamp of an EXISTING resolved row
+ * via the AppleScript `set completion date` / `set creation date` property
+ * writes (the only surface that moves these fields on an existing item —
+ * BACKDT/#404). Kind-agnostic: the same op shape addresses a to-do
+ * (`todo.set-dates`, `to do id`) or a project (`project.set-dates`,
+ * `project id`).
+ *
+ * Values are an ISO date (`2025-01-15`) OR a datetime (`2025-01-15T09:30`);
+ * a date-only value normalizes to NOON in the effective zone (§5 of the
+ * resolution-timestamp plan). The completion-date leg fires EXCLUSIVELY against
+ * a verified-completed row (the generalized WG-7 / H-BACKDATE-OPEN law), so the
+ * multi-leg orchestrators flip a canceled item to completed before applying it
+ * and back afterward.
+ */
+export interface SetDatesParams {
   uuid: string;
-  /**
-   * Rewrite the completion timestamp to noon (local) on this date. The
-   * to-do must already be completed or canceled.
-   */
-  completionDate?: IsoDate;
-  /** Rewrite the creation timestamp to noon (local) on this date. */
-  creationDate?: IsoDate;
-}
-
-export interface TodoAddLoggedParams {
-  title: string;
-  notes?: string;
-  /** The completion timestamp the created row carries (logged in the past). */
-  completionDate: IsoDate;
-  /** Optional backdated creation timestamp (must be <= completionDate). */
-  creationDate?: IsoDate;
+  /** New completion timestamp (ISO date or datetime); requires a completed row. */
+  completionDate?: string;
+  /** New creation timestamp (ISO date or datetime); status-safe on any row. */
+  creationDate?: string;
 }
 
 export interface TodoMoveParams {
@@ -368,6 +384,19 @@ export interface ProjectAddParams {
   when?: WhenValue;
   deadline?: IsoDate;
   todos?: string[];
+  /**
+   * Born-backdated creation timestamp (ISO date or datetime). Compiles through
+   * `things:///json`; date-only normalizes to noon in the effective zone (§5).
+   */
+  createdAt?: string;
+  /**
+   * Born RESOLVED: the created project lands completed with this completion
+   * timestamp, straight to the Logbook (B-PROJ-JSON). Refused when the project
+   * carries any OPEN child spec — a completed-project json import silently
+   * reverts to open unless every child is resolved (§5b). ISO date or datetime;
+   * date-only normalizes to noon in the effective zone (§5).
+   */
+  completedAt?: string;
 }
 
 export interface ProjectUpdateParams {
@@ -730,8 +759,8 @@ export interface OperationParamsMap {
   "project.reopen": UuidParams;
   "project.restore": UuidParams;
   "project.set-tags": ProjectSetTagsParams;
-  "todo.backdate": TodoBackdateParams;
-  "todo.add-logged": TodoAddLoggedParams;
+  "todo.set-dates": SetDatesParams;
+  "project.set-dates": SetDatesParams;
   "project.add-heading": HeadingAddParams;
   "project.rename-heading": HeadingRenameParams;
   "project.archive-heading": HeadingArchiveParams;

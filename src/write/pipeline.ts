@@ -673,12 +673,19 @@ export async function runMutation<K extends OperationKind>(
             op,
             opParams: params,
           }
-        : spec.compile(params, vector.id, pre, { token });
+        : spec.compile(params, vector.id, pre, {
+            token,
+            ...(effectiveZone !== undefined && { zone: effectiveZone }),
+          });
     if (vector.simulates !== true) {
       invocation.op = op;
       invocation.opParams = params;
     }
-    const delta = spec.expectedDelta(pre, params, { nowEpoch, todayIso });
+    const delta = spec.expectedDelta(pre, params, {
+      nowEpoch,
+      todayIso,
+      ...(effectiveZone !== undefined && { zone: effectiveZone }),
+    });
 
     if (options.dryRun === true) {
       return {

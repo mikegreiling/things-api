@@ -837,6 +837,14 @@ export function registerWriteCommands(program: Command): void {
         .option("--project <ref>", "destination project (uuid or unique name)")
         .option("--area <ref>", "destination area (uuid or unique name)")
         .option("--heading <name>", "existing heading in the destination project")
+        .option(
+          "--created-at <iso>",
+          "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
+        )
+        .option(
+          "--completed-at <iso>",
+          "born completed (in the Logbook) with this completion timestamp (ISO date or datetime); drop --when/--reminder",
+        )
         .option("--acknowledge-project-reopen", "allow adding into a completed/canceled project")
         .option(
           "--stdin",
@@ -884,6 +892,8 @@ export function registerWriteCommands(program: Command): void {
       ...(project !== undefined && { project }),
       ...(area !== undefined && { area }),
       ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+      ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
+      ...(opts["completedAt"] !== undefined && { completedAt: opts["completedAt"] as string }),
     });
     const ackReopen =
       opts["acknowledgeProjectReopen"] !== undefined
@@ -972,7 +982,15 @@ export function registerWriteCommands(program: Command): void {
       .option("--reminder <HH:mm>", "set a reminder (24h); requires --when today|evening|date")
       .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
       .option("--deadline <date>", "YYYY-MM-DD")
-      .option("--clear-deadline", "remove the deadline"),
+      .option("--clear-deadline", "remove the deadline")
+      .option(
+        "--created-at <iso>",
+        "rewrite the creation timestamp (ISO date or datetime; a date is noon in the effective zone); status-safe",
+      )
+      .option(
+        "--completed-at <iso>",
+        "rewrite the completion timestamp of an already-resolved to-do (a canceled one stays canceled); open to-dos are refused — use complete/cancel",
+      ),
   ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
       (k) => opts[k] !== undefined,
@@ -1001,27 +1019,46 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["clearReminder"] === true && { reminder: null }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
           ...(opts["clearDeadline"] === true && { deadline: null }),
+          ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
+          ...(opts["completedAt"] !== undefined && { completedAt: opts["completedAt"] as string }),
         },
         writeOptionsFrom(opts),
       ),
     );
   });
 
-  for (const [verb, method] of [
-    ["complete", "completeTodo"],
-    ["cancel", "cancelTodo"],
-    ["reopen", "reopenTodo"],
-  ] as const) {
+  for (const verb of ["complete", "cancel"] as const) {
+    const method = verb === "complete" ? "completeTodo" : "cancelTodo";
+    const stampNote =
+      verb === "complete"
+        ? "resolving it first if needed, then backdating"
+        : "keeping it canceled via the certified flip legs";
     addWriteFlags(
       todo
         .command(`${verb} <uuid>`)
         .description(
-          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do. Not available for repeating to-dos.`,
+          `${verb[0]?.toUpperCase()}${verb.slice(1)} a to-do. Not available for repeating to-dos. ` +
+            '--completed-at sets the completion timestamp (also the "Completed on" stamp for a canceled ' +
+            `item), ${stampNote} — a multi-leg sequence, disclosed in the result and --dry-run.`,
+        )
+        .option(
+          "--completed-at <iso>",
+          "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
         ),
-    ).action(async (uuid: string, opts: WriteFlagOpts) => {
-      await runWrite(opts, (c) => c.write[method](uuid, writeOptionsFrom(opts)));
+    ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+      const resolution =
+        opts["completedAt"] !== undefined ? { completedAt: opts["completedAt"] as string } : {};
+      await runWrite(opts, (c) => c.write[method](uuid, resolution, writeOptionsFrom(opts)));
     });
   }
+
+  addWriteFlags(
+    todo
+      .command("reopen <uuid>")
+      .description("Reopen a to-do. Not available for repeating to-dos."),
+  ).action(async (uuid: string, opts: WriteFlagOpts) => {
+    await runWrite(opts, (c) => c.write.reopenTodo(uuid, writeOptionsFrom(opts)));
+  });
 
   addPositionFlags(
     addWriteFlags(
@@ -1258,55 +1295,10 @@ export function registerWriteCommands(program: Command): void {
     await runWrite(opts, (c) => c.write.clearReminder(uuid, writeOptionsFrom(opts)));
   });
 
-  addWriteFlags(
-    todo
-      .command("backdate <uuid>")
-      .description(
-        "Rewrite a to-do's completion and/or creation timestamp to noon (local) on the " +
-          "given date. --completed-on requires the to-do to already be completed or " +
-          "canceled. The Logbook re-sorts to the new date.",
-      )
-      .option("--completed-on <date>", "YYYY-MM-DD — new completion date")
-      .option("--created-on <date>", "YYYY-MM-DD — new creation date"),
-  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    await runWrite(opts, (c) =>
-      c.write.backdateTodo(
-        uuid,
-        {
-          ...(opts["completedOn"] !== undefined && {
-            completionDate: opts["completedOn"] as string,
-          }),
-          ...(opts["createdOn"] !== undefined && { creationDate: opts["createdOn"] as string }),
-        },
-        writeOptionsFrom(opts),
-      ),
-    );
-  });
-
-  addWriteFlags(
-    todo
-      .command("add-logged <title>")
-      .description(
-        "Create a to-do directly in the Logbook: completed, with the given past " +
-          "completion date (and optionally a past creation date). For importing history " +
-          "from another system.",
-      )
-      .requiredOption("--completed-on <date>", "YYYY-MM-DD — completion date (required)")
-      .option("--created-on <date>", "YYYY-MM-DD — creation date (must be <= completed-on)")
-      .option("--notes <text>", "notes body"),
-  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-    await runWrite(opts, (c) =>
-      c.write.addLoggedTodo(
-        {
-          title,
-          completionDate: opts["completedOn"] as string,
-          ...(opts["createdOn"] !== undefined && { creationDate: opts["createdOn"] as string }),
-          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
-        },
-        writeOptionsFrom(opts),
-      ),
-    );
-  });
+  // NB: the bespoke `todo backdate` / `todo add-logged` commands were removed
+  // (plan PR A). Backdated creation and Logbook import are now `todo add
+  // --created-at/--completed-at`; rewriting an existing item's timestamps is
+  // `todo update --created-at/--completed-at` (or complete/cancel --completed-at).
 
   // --- ui vector: GUI-driven transforms (two-key gated) --------------------
 
@@ -1749,6 +1741,14 @@ export function registerWriteCommands(program: Command): void {
         "initial child to-do, repeatable (seeds the new project)",
         collect,
         [],
+      )
+      .option(
+        "--created-at <iso>",
+        "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
+      )
+      .option(
+        "--completed-at <iso>",
+        "born completed (in the Logbook) with this completion timestamp; cannot seed open child to-dos (§5b)",
       ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
@@ -1762,6 +1762,8 @@ export function registerWriteCommands(program: Command): void {
           ...(opts["when"] !== undefined && { when: opts["when"] as never }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
           ...(todos.length > 0 && { todos }),
+          ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
+          ...(opts["completedAt"] !== undefined && { completedAt: opts["completedAt"] as string }),
         },
         writeOptionsFrom(opts),
       ),
@@ -1788,6 +1790,14 @@ export function registerWriteCommands(program: Command): void {
     .option("--clear-reminder", "clear the reminder (works while scheduled today|evening)")
     .option("--deadline <date>", "YYYY-MM-DD")
     .option("--clear-deadline", "remove the deadline")
+    .option(
+      "--created-at <iso>",
+      "rewrite the creation timestamp (ISO date or datetime; a date is noon in the effective zone); status-safe",
+    )
+    .option(
+      "--completed-at <iso>",
+      "rewrite the completion timestamp of an already-resolved project (a canceled one stays canceled); open projects are refused — use complete/cancel",
+    )
     .action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
       const notesModes = ["notes", "appendNotes", "prependNotes"].filter(
         (k) => opts[k] !== undefined,
@@ -1818,6 +1828,10 @@ export function registerWriteCommands(program: Command): void {
             ...(opts["clearReminder"] === true && { reminder: null }),
             ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
             ...(opts["clearDeadline"] === true && { deadline: null }),
+            ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
+            ...(opts["completedAt"] !== undefined && {
+              completedAt: opts["completedAt"] as string,
+            }),
           },
           writeOptionsFrom(opts),
         ),
@@ -1894,21 +1908,34 @@ export function registerWriteCommands(program: Command): void {
       .description(
         "Cancel a project (target by uuid or unique name). Canceling also cancels its open " +
           "to-dos, so an explicit --children policy is required; already-completed children " +
-          "are never altered.",
+          "are never altered. --completed-at sets the completion timestamp and keeps the project " +
+          "canceled via the certified flip legs (multi-leg, disclosed); it is refused while the " +
+          "project still has open children.",
       )
       .requiredOption(
         "--children <policy>",
         "require-resolved (error if open to-dos remain) | auto-cancel (cancel them too)",
+      )
+      .option(
+        "--completed-at <iso>",
+        "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
       ),
-  ).action(async (uuid: string, opts: WriteFlagOpts & { children: string }) => {
-    await runWrite(opts, (c) =>
-      c.write.cancelProject(
-        uuid,
-        { children: opts.children as "require-resolved" | "auto-cancel" },
-        writeOptionsFrom(opts),
-      ),
-    );
-  });
+  ).action(
+    async (uuid: string, opts: WriteFlagOpts & { children: string } & Record<string, unknown>) => {
+      await runWrite(opts, (c) =>
+        c.write.cancelProject(
+          uuid,
+          {
+            children: opts.children as "require-resolved" | "auto-cancel",
+            ...(opts["completedAt"] !== undefined && {
+              completedAt: opts["completedAt"] as string,
+            }),
+          },
+          writeOptionsFrom(opts),
+        ),
+      );
+    },
+  );
 
   addWriteFlags(
     project
@@ -1996,21 +2023,33 @@ export function registerWriteCommands(program: Command): void {
       .command("complete <ref>")
       .description(
         "Complete a project (target by uuid or unique name). Completing also completes its " +
-          "open to-dos, so an explicit --children policy is required.",
+          "open to-dos, so an explicit --children policy is required. --completed-at sets the " +
+          "completion timestamp and backdates it (multi-leg, disclosed).",
       )
       .requiredOption(
         "--children <policy>",
         "require-resolved (error if open to-dos remain) | auto-complete (complete them too)",
+      )
+      .option(
+        "--completed-at <iso>",
+        "completion timestamp (ISO date or datetime; a date is noon in the effective zone)",
       ),
-  ).action(async (uuid: string, opts: WriteFlagOpts & { children: string }) => {
-    await runWrite(opts, (c) =>
-      c.write.completeProject(
-        uuid,
-        { children: opts.children as "require-resolved" | "auto-complete" },
-        writeOptionsFrom(opts),
-      ),
-    );
-  });
+  ).action(
+    async (uuid: string, opts: WriteFlagOpts & { children: string } & Record<string, unknown>) => {
+      await runWrite(opts, (c) =>
+        c.write.completeProject(
+          uuid,
+          {
+            children: opts.children as "require-resolved" | "auto-complete",
+            ...(opts["completedAt"] !== undefined && {
+              completedAt: opts["completedAt"] as string,
+            }),
+          },
+          writeOptionsFrom(opts),
+        ),
+      );
+    },
+  );
 
   addWriteFlags(
     project
