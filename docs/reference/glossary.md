@@ -1,20 +1,20 @@
 # Glossary — lifecycle verbs and states
 
-House vocabulary for the Things lifecycle, preferring **Cultured Code's own GUI language** wherever it exists. Each entry names the canonical word, its DB substrate, and our consumer-surface word — with honest caveats where no canonical choice is nailed down. GUI menu strings marked *(maintainer-observed 2026-08-05, macOS GUI)* were read off right-click menus in the production app; strings marked *unverified* are recollections awaiting a screenshot-grade capture.
+House vocabulary for the Things lifecycle, preferring **Cultured Code's own GUI language** wherever it exists. Each entry names the canonical word, its DB substrate, and our consumer-surface word — with honest caveats where no canonical choice is nailed down. GUI menu strings marked *(maintainer-verified 2026-08-05)* are screenshot-confirmed from the macOS GUI (Things 3.22.x): the heading `⋯` menu shows **Archive** (open heading) / **Restore** (archived heading); the resolved to-do context menu shows **Reactivate**.
 
 ## Resolution states (to-dos & projects)
 
-- **open** — a to-do/project that is not completed or canceled (`status=0`). Our stage/consumer word. CC's GUI names the *action back to* this state — **"Mark as Incomplete"** *(maintainer-observed)* — but does not obviously name the state itself; "active"/"open" are our choices, not CC's. Caveat: no canonical CC state-noun discovered yet.
+- **open** — a to-do/project that is not completed or canceled (`status=0`). Our stage/consumer word. CC's GUI names the *action back to* this state — **"Mark as Incomplete"** *(maintainer-observed)* — and **"Reactivate"** for log-swept items — but does not obviously name the state itself; "active"/"open" are our choices, not CC's. Caveat: no canonical CC state-noun discovered yet.
 - **completed** — checked off (`status=3`). GUI: **"Mark as Completed"**.
 - **canceled** — resolved-without-doing (`status=2`, dash checkbox). GUI: **"Mark as Canceled"**.
 - **resolved** — OUR umbrella for completed-or-canceled (`status IN (2,3)`). CC has no public umbrella word (caveat: house term, used in probe docs and refusal copy).
 - **stopDate / `stopped`** — the DB column stamping the resolution instant; surfaced in JSON as `stopped`. "Stop" is CC-internal substrate vocabulary — the GUI never says "stop" (caveat). Notable: toggling an already-resolved (even log-swept) item between Completed ↔ Canceled does **not** change `stopDate` and does not un-sweep it *(maintainer-observed; not yet VM-probed)* — the resolution instant is preserved across resolution-kind changes.
-- **reactivate** — CC's GUI verb for returning a **log-swept to-do/project** to open *(maintainer-observed: right-click a Logbook item → "Reactivate")*. Substrate: `status→0`, `stopDate→NULL`, index-silent (LOGSORT L-RESTORE: the item re-enters its container at its retained `index`, retained heading, retained schedule). Prefer this verb for to-dos/projects; note CC uses a *different* verb for headings (below).
+- **reactivate** — CC's GUI verb for returning a **log-swept to-do/project** to open *(maintainer-verified 2026-08-05: context menu → "Reactivate")*. Substrate: `status→0`, `stopDate→NULL`, index-silent (LOGSORT L-RESTORE: the item re-enters its container at its retained `index`, retained heading, retained schedule). Prefer this verb for to-dos/projects; note CC uses a *different* verb for headings (below).
 
 ## Heading lifecycle
 
-- **archive / archived** — a heading's analogue of completion (`status=3` + `stopDate`); JSON field `archived` (presence-keyed ISO datetime). GUI verb for the action believed to be **"Archive"** (*unverified string*); the state renders as a struck heading in place until swept.
-- **restore** — CC's GUI verb for un-archiving a heading *(maintainer-observed: right-click an archived heading → "Restore")*. Substrate: `status→0` + `stopDate→NULL`, index-silent (HEADSORT H-RESTORE). Distinct from **reactivate**: CC deliberately uses different verbs for headings vs to-dos/projects — mirror that.
+- **archive / archived** — a heading's analogue of completion (`status=3` + `stopDate`); JSON field `archived` (presence-keyed ISO datetime). GUI verb: **"Archive"** *(maintainer-verified 2026-08-05: heading `⋯` menu)*; the state renders as a struck heading in place until swept.
+- **restore** — CC's GUI verb for un-archiving a heading *(maintainer-verified 2026-08-05: archived heading `⋯` menu → "Restore")*. Substrate: `status→0` + `stopDate→NULL`, index-silent (HEADSORT H-RESTORE). Distinct from **reactivate**: CC deliberately uses different verbs for headings vs to-dos/projects — mirror that.
 
 ## The Logbook and the sweep
 
