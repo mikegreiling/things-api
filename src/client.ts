@@ -243,10 +243,9 @@ export interface BoundedList<T> {
 }
 
 /**
- * A bounded today view: `view` is the shown flat `items[]` (capped in comparator
- * order) plus the whole-view `counts`, and `truncation` the exact counts,
- * including the per-render-section (`today`/`evening`) breakdown — derived per row
- * from `when` — a renderer needs to stay honest.
+ * A bounded Today view: `view` is the shown split (capped in render order —
+ * Today, then This Evening) and `truncation` the exact counts, including the
+ * per-section (`today`/`evening`) breakdown a renderer needs to stay honest.
  */
 export interface BoundedTodayView {
   view: TodayView;
@@ -357,11 +356,10 @@ export interface ThingsClient {
   refPromoter(): RefPromoter;
   read: {
     /**
-     * The Today list — one flat `items[]` of Today members (Today-proper and
-     * This-Evening interleaved in comparator order, each row's `when` carrying
-     * which) plus the whole-view `counts` aggregate, bounded to `limit` rows
-     * (default 50). `all`/`limit: null` returns every row; the `truncation`
-     * metadata carries the per-render-section (`today`/`evening`) counts.
+     * The Today list (Today + This Evening split) with the sidebar badge,
+     * bounded to `limit` rows (default 50) counted in render order — Today
+     * first, then This Evening. `all`/`limit: null` returns every row; the
+     * `truncation` metadata carries the per-section (`today`/`evening`) counts.
      */
     today(options?: TodayFilter & ListBound & ClockScopedRead & AreaScopedRead): BoundedTodayView;
     /** Inbox captures, bounded (default 50). */

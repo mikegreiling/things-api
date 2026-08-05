@@ -123,16 +123,16 @@ describe("today --area", () => {
     seedTodo(fx.db, { title: "t-orphan", startDate: "2026-07-02" });
 
     const { view, filter } = client().read.today({ area: "Alpha" });
-    const titles = view.items.map((i) => i.title).toSorted();
+    const titles = [...view.today, ...view.evening].map((i) => i.title).toSorted();
     expect(titles).toEqual(["t-alpha", "tp-alpha", "tp-child"]);
     expect(filter?.area.title).toBe("Alpha");
   });
 
-  it("recomputes the counts over the surviving members", () => {
+  it("recomputes the badge over the surviving members", () => {
     const alpha = seedArea(fx.db, "Alpha", 0);
     const beta = seedArea(fx.db, "Beta", 1);
-    // One overdue-deadline Alpha member (dueOrOverdue), one plain Alpha member,
-    // and a Beta overdue member that must NOT move the filtered counts.
+    // One overdue-deadline Alpha member (badge: dueOrOverdue), one plain Alpha
+    // member, and a Beta overdue member that must NOT move the filtered badge.
     seedTodo(fx.db, {
       title: "a-due",
       area: alpha,
@@ -148,7 +148,7 @@ describe("today --area", () => {
     });
 
     const { view } = client().read.today({ area: "Alpha" });
-    expect(view.counts).toEqual({ dueOrOverdue: 1, other: 1 });
+    expect(view.badge).toEqual({ dueOrOverdue: 1, other: 1 });
   });
 
   it("emits no filter annotation when unscoped", () => {

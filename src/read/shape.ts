@@ -56,15 +56,14 @@
  * - a template's `repeating.nextOccurrence` is GONE from the wire — `when` replaces
  *   it (same fact, one word); the resting-templates `{date: null}` group is
  *   unchanged (an unprojected template has no `when`).
- * - `when` is DROPPED inside a card/heading `upcoming` DATE-GROUP for a member whose
- *   `when` equals the group's date (the group states it), and KEPT everywhere else
- *   it is present — including the today view's flat `items[]` (it carries the
- *   Today-proper vs This-Evening render section), and the flat
- *   `upcoming`/`anytime`/`inbox`/`someday` catalogues, search, changes (a
- *   deadline-pulled row reads `when: "today"` in the mixed search/changes surfaces,
- *   informatively; note R13 re-files it to stage `anytime` and the flat
- *   inbox/someday views now EXCLUDE it — it appears in the `anytime` catalogue
- *   instead, `when: "today"` kept, stage dropped as pure).
+ * - `when` is DROPPED inside the `today` view's own sections (the section key states
+ *   today/evening) and inside any card/heading `upcoming` DATE-GROUP for a member
+ *   whose `when` equals the group's date (the group states it). KEPT everywhere
+ *   else it is present — including the flat `upcoming`/`anytime`/`inbox`/`someday`
+ *   catalogues, search, changes (a deadline-pulled row reads `when: "today"` in the
+ *   mixed search/changes surfaces, informatively; note R13 re-files it to stage
+ *   `anytime` and the flat inbox/someday views now EXCLUDE it — it appears in the
+ *   `anytime` catalogue instead, `when: "today"` kept, stage dropped as pure).
  *
  * ## R13 — provisional Today members + GUI-faithful pulled-row membership
  * BANNER1 / BANNER1b (docs/lab/banner1-research.md). Two coupled facts:
@@ -78,10 +77,10 @@
  *   side effect our read cannot perform (watchers beware).
  * - **stage `anytime` for a deadline pull** — a due-deadline pull re-files an undated
  *   Inbox/Someday row into Anytime (deriveStage step 2½, L-A). So EVERY Today member
- *   derives stage `anytime`, and the today view's flat `items[]` is stage-PURE →
- *   `stage` is DROPPED there (TODAY_ITEM_DROP) while `when` is KEPT. The flat
- *   someday/inbox views EXCLUDE pulled rows and the anytime view INCLUDES them
- *   (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
+ *   derives stage `anytime`, and the `today` view's own sections become stage-PURE →
+ *   `stage` is DROPPED there (TODAY_SECTION_DROP), alongside the section-implied
+ *   `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
+ *   INCLUDES them (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
  *
  * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
@@ -629,18 +628,16 @@ const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 /** The card NODE / detail / mixed lists: keep every ref, `stage`, and `when`. */
 const NO_DROP: ItemDrop = {};
 /**
- * The today view's flat `items[]`: drop the view-implied `stage` (R13) but KEEP
- * `when`. Every Today member derives stage `anytime` by construction — an ARRIVED
- * `startDate` (step 5) or a DEADLINE PULL (step 2½) both derive `anytime`, and
- * there are no future-dated or undated-someday Today members — so the today view
- * is provably stage-PURE `anytime` and the field is redundant (verified strict by
- * the today purity property test in test/unit/stage.test.ts). `when` is KEPT: the
- * flat list interleaves Today-proper (`when: "today"`) and This-Evening
- * (`when: "evening"`) members, so each row must carry which render section it
- * belongs to — the split is derived from `when`, not a wire bucket. `provisional`
- * is NOT a drop — the banner pip is per-row, nothing implies it.
+ * The today view's own sections: drop the section-implied `when` (R12) AND the
+ * section-implied `stage` (R13). Every Today member now derives stage `anytime`
+ * by construction — an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½)
+ * both derive `anytime`, and there are no future-dated or undated-someday Today
+ * members — so the Today sections are provably stage-PURE `anytime` and the field
+ * is redundant there (verified strict by the today-section purity property test
+ * in test/unit/stage.test.ts). `provisional` is NOT a drop — the banner is not a
+ * section, so nothing implies it.
  */
-const TODAY_ITEM_DROP: ItemDrop = { stage: true };
+const TODAY_SECTION_DROP: ItemDrop = { when: true, stage: true };
 
 /**
  * Shape a heading GROUP node (the `headings[].heading` / `loggedHeadings[].heading`
@@ -779,6 +776,15 @@ function shapeArea(src: unknown): unknown {
   return o;
 }
 
+/** Shape the today/evening split (mixed list — keep refs + stage; drop the section-implied `when`). */
+function shapeTodayView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
+  return {
+    ...view,
+    today: shapeList(view["today"], TODAY_SECTION_DROP, compact, promoter),
+    evening: shapeList(view["evening"], TODAY_SECTION_DROP, compact, promoter),
+  };
+}
+
 /** Shape sidebar sections (anytime/someday catalogues) with the section's drop spec. */
 function shapeSections(
   sections: unknown,
@@ -833,12 +839,8 @@ export function shapeReadPayload(
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);
   if (flatDrop !== undefined) return shapeList(data, flatDrop, compact, p);
-  // The today view: one flat `items[]` of Today members (Today-proper + This
-  // Evening interleaved in comparator order); drop the view-implied `stage`,
-  // KEEP `when` (it carries the render section). The `counts` aggregate rides
-  // `meta.counts`, not `data`. The wire wrapper is `{ items }` (read-driver).
   if (kind === "today" && data !== null && typeof data === "object") {
-    return shapeList((data as Obj)["items"], TODAY_ITEM_DROP, compact, p);
+    return shapeTodayView(data as Obj, compact, p);
   }
   if (kind === "anytime" && Array.isArray(data)) {
     return shapeSections(data, ANYTIME_SECTION_DROP, compact, p); // stage-pure → drop stage

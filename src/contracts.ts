@@ -161,14 +161,6 @@ export interface EnvelopeMeta {
    */
   filter?: { area: { uuid: string; title: string } };
   /**
-   * Whole-view aggregate counts (ADDITIVE). Present ONLY on the `today` view: the
-   * app's sidebar count split — `dueOrOverdue` (open members whose deadline is
-   * due or overdue) vs. `other` (the rest). A convenience aggregate an agent
-   * would otherwise recompute over the rows; it lives here so `data` stays pure
-   * domain rows. Both counts are OPEN members only, and a `0` is meaningful.
-   */
-  counts?: { dueOrOverdue: number; other: number };
-  /**
    * The active container scope this response was jailed to (ADDITIVE). Present
    * ONLY when a scope is in force (the MCP `--scope` flag / `THINGS_API_SCOPE` /
    * a stored `scope`), naming the container + where the scope came from; ABSENT

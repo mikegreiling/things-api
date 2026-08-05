@@ -204,12 +204,13 @@ describe("formatItem styling (color on)", () => {
   it("render path: today applies dim (completed) / dim+strike (canceled) to checked-unswept rows", async () => {
     const { renderToday } = await render();
     const view = {
-      items: [
+      today: [
         todo({ title: "StillOpen" }),
         todo({ title: "CheckedWin", status: "completed", stopped: new Date() }),
         todo({ title: "CheckedDrop", status: "canceled", stopped: new Date() }),
       ],
-      counts: { dueOrOverdue: 0, other: 1 },
+      evening: [],
+      badge: { dueOrOverdue: 0, other: 1 },
     };
     const out = renderToday(view, undefined, "things today").join("\n");
     expect(out).toContain(`${DIM}CheckedWin`);

@@ -295,34 +295,22 @@ function materialize(
 }
 
 export interface TodayView {
-  /**
-   * One flat list of every Today member in comparator order (the SQL ORDER BY),
-   * Today-proper and This-Evening members interleaved by their position — each
-   * row carries its `when` (`"today"` / `"evening"`), so the This-Evening
-   * sub-region is the `when === "evening"` subset, recoverable per row (the TTY
-   * re-projects the two render sections from it). Doctrine: JSON models semantic
-   * state (the flat members + their `when`); the Today/Evening split is GUI
-   * placement, derived from `when`, not a wire bucket.
-   */
-  items: ListItem[];
-  /**
-   * The two whole-view aggregate counts (the app's sidebar count): open members
-   * whose deadline is due/overdue vs. the rest. A convenience aggregate carried
-   * on `meta.counts`, never a bucket — every input is on the rows.
-   */
-  counts: { dueOrOverdue: number; other: number };
+  today: ListItem[];
+  evening: ListItem[];
+  /** Mirrors the sidebar badge: red = deadline due/overdue, gray = the rest. */
+  badge: { dueOrOverdue: number; other: number };
 }
 
 export interface TodayFilter extends ViewFilter {
   /**
-   * Restrict to the This-Evening section: only `when === "evening"` members are
-   * returned and the counts cover only those members. A section visibility
-   * toggle, not a volume change — the row limit still applies.
+   * Restrict to the This-Evening section: the Today section is filtered out
+   * (returned empty) and the badge counts only the evening members. A section
+   * visibility toggle, not a volume change — the row limit still applies.
    */
   eveningOnly?: boolean;
 }
 
-/** Counts cover OPEN members only (the sidebar count reflects remaining work). */
+/** Badge = OPEN members only (the GUI badge counts remaining work). */
 const isOpen = (i: ListItem) => i.status === "open";
 
 export function todayView(
@@ -366,30 +354,29 @@ export function todayView(
   // Evening membership expires daily: raw startBucket=1 counts only while
   // startDate is exactly today; stale evening items belong to Today proper.
   const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
+  const evening = items.filter(isEvening);
   const dueIn = (list: ListItem[]) =>
     list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
-  // Counts cover OPEN members only (the sidebar count reflects remaining work).
-  // A checked-but-unswept row is present in the list but never moves the count —
+  // Badge = OPEN members only (the GUI badge counts remaining work). A
+  // checked-but-unswept row is present in the list but never moves the badge —
   // this preserves the exact live reconciliation computed under OPEN membership.
-  // The evening filter mirrors the tag filter's treatment: the counts reflect
-  // exactly the members the view now returns (here, evening only).
+  // The evening filter mirrors the tag filter's badge treatment: the badge
+  // reflects exactly the members the view now returns (here, evening only).
   if (filter?.eveningOnly === true) {
-    const evening = items.filter(isEvening);
     const openEvening = evening.filter(isOpen);
     const eveningDue = dueIn(openEvening);
     return {
-      items: evening,
-      counts: { dueOrOverdue: eveningDue, other: openEvening.length - eveningDue },
+      today: [],
+      evening,
+      badge: { dueOrOverdue: eveningDue, other: openEvening.length - eveningDue },
     };
   }
   const openItems = items.filter(isOpen);
   const dueOrOverdue = dueIn(openItems);
-  // The flat list is the raw comparator order — Today-proper and This-Evening
-  // members interleaved by their SQL position; each row's `when` carries which
-  // render section it belongs to.
   return {
-    items,
-    counts: { dueOrOverdue, other: openItems.length - dueOrOverdue },
+    today: items.filter((i) => !isEvening(i)),
+    evening,
+    badge: { dueOrOverdue, other: openItems.length - dueOrOverdue },
   };
 }
 

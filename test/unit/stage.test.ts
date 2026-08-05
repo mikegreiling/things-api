@@ -355,7 +355,7 @@ describe("property — `when` ∈ {today, evening} ⟺ Today-view membership (R1
     seedTodo(fx.db, { title: "p-inbox", start: "inbox", startDate: null }); // NOT today
 
     const view = todayView(fx.db, NOW);
-    const members = new Set(view.items.map((i) => i.uuid));
+    const members = new Set([...view.today, ...view.evening].map((i) => i.uuid));
 
     // Sweep every entity we can reach and assert the biconditional.
     const all = [
@@ -543,8 +543,8 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
   });
 });
 
-describe("R13 property — every Today-view member derives stage `anytime` (justifies the today stage drop)", () => {
-  it("the today view is stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
+describe("R13 property — every Today-view member derives stage `anytime` (justifies the today-section stage drop)", () => {
+  it("the today sections are stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
     fx = buildFixtureDb();
     // A spread across every Today-membership arm AND every origin bucket.
     seedTodo(fx.db, { title: "t-arrived-active", start: "active", startDate: "2026-07-01" });
@@ -586,21 +586,18 @@ describe("R13 property — every Today-view member derives stage `anytime` (just
     });
 
     const view = todayView(fx.db, NOW);
-    const members = view.items;
+    const members = [...view.today, ...view.evening];
     expect(members.length).toBeGreaterThan(5);
     // STRICT: every member derives `anytime` — no residual mixed case survives.
-    // (If this ever fails, the today view is NOT stage-pure and the
-    // TODAY_ITEM_DROP `stage: true` must be reverted — report prominently.)
+    // (If this ever fails, the today sections are NOT stage-pure and the
+    // TODAY_SECTION_DROP `stage: true` must be reverted — report prominently.)
     for (const m of members) expect(deriveStage(m)).toBe("anytime");
-    // Consequently the emit boundary DROPS `stage` on every today row — while
-    // KEEPING `when` (the flat list interleaves Today-proper + This-Evening, so
-    // each row must carry its render section).
-    const shaped = shapeReadPayload("today", view, false) as Array<Record<string, unknown>>;
-    expect(shaped.length).toBe(members.length);
-    for (const r of shaped) {
-      expect("stage" in r).toBe(false);
-      expect(r["when"] === "today" || r["when"] === "evening").toBe(true);
-    }
+    // Consequently the emit boundary DROPS `stage` on every today-section row.
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    for (const r of [...shaped.today, ...shaped.evening]) expect("stage" in r).toBe(false);
   });
 });
 
@@ -662,7 +659,11 @@ describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count rec
     });
 
     const view = todayView(fx.db, NOW);
-    const rows = shapeReadPayload("today", view, false) as Array<Record<string, unknown>>;
+    const shaped = shapeReadPayload("today", view, false) as {
+      today: Array<Record<string, unknown>>;
+      evening: Array<Record<string, unknown>>;
+    };
+    const rows = [...shaped.today, ...shaped.evening];
 
     for (const t of ["a-dl-someday", "b-dl-inbox", "c-dl-anytime", "d-scheduled", "e-spawn"]) {
       expect(provOf(rows, t)).toBe(true);

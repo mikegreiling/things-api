@@ -57,12 +57,9 @@ function isoFromToday(days: number): string {
 const titlesOf = (stdout: string): string[] =>
   JSON.parse(stdout).data.items.map((i: { title: string }) => i.title);
 
-/** The Today-proper titles from a `today --json` envelope (the flat `data.items`
- * minus the This-Evening members, which each carry `when: "evening"`). */
+/** The `data.today` titles from a `today --json` envelope. */
 const todayTitles = (stdout: string): string[] =>
-  JSON.parse(stdout)
-    .data.items.filter((i: { when?: string }) => i.when !== "evening")
-    .map((i: { title: string }) => i.title);
+  JSON.parse(stdout).data.sections[0].items.map((i: { title: string }) => i.title);
 
 /**
  * Run `fn` with process.env keys temporarily set/cleared, restoring them after.
@@ -162,7 +159,7 @@ async function runCliAsync(argv: string[]): Promise<{ stdout: string; exitCode: 
 }
 
 describe("cli end-to-end (fixture db)", () => {
-  it("things today --json emits the versioned envelope as one flat items list with `when`", () => {
+  it("things today --json emits the versioned envelope with split sections", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: "2020-01-01", todayIndex: 1 });
     // evening membership requires startDate == today exactly (the CLI path
@@ -177,29 +174,22 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.kind).toBe("today");
     expect(envelope.meta.dbVersion).toBe(26);
     expect(envelope.meta.fingerprint).toBe("ok");
-    // One flat `items[]` in comparator order; each row carries its `when`
-    // (Today-proper "today" vs This-Evening "evening") — no `sections` wrapper.
-    expect("sections" in envelope.data).toBe(false);
-    const rows: Array<{ title: string; when?: string }> = envelope.data.items;
-    expect(rows.map((i) => i.title)).toEqual(["morning", "tonight"]);
-    expect(rows.find((i) => i.title === "morning")?.when).toBe("today");
-    expect(rows.find((i) => i.title === "tonight")?.when).toBe("evening");
-    // The whole-view counts ride meta.counts, never data.
-    expect(envelope.meta.counts).toEqual({ dueOrOverdue: 0, other: 2 });
+    expect(envelope.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual([
+      "morning",
+    ]);
+    expect(envelope.data.sections[1].items.map((i: { title: string }) => i.title)).toEqual([
+      "tonight",
+    ]);
   });
 
-  it("things today puts ★/⏾ in the clean section headers (counts at top), not on the rows", () => {
+  it("things today puts ★/⏾ in the section headers, not on the rows", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: localToday(), todayIndex: 1 });
     seedTodo(fx.db, { title: "tonight", startDate: localToday(), evening: true });
     const { stdout, exitCode } = runCli(["today", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("★ Today ──");
-    expect(stdout).not.toContain("badge");
+    expect(stdout).toContain("★ Today (badge:");
     expect(stdout).toContain("⏾ This Evening ──");
-    // The counts render as card-style metadata lines (indented key: value).
-    expect(stdout).toContain("due/overdue:");
-    expect(stdout).toContain("other:");
     // The membership glyph is gone from the item rows themselves.
     const rows = stdout.split("\n").filter((l) => l.includes("morning") || l.includes("tonight"));
     expect(rows).toHaveLength(2);
@@ -247,12 +237,10 @@ describe("cli end-to-end (fixture db)", () => {
     expect(footerIdx).toBeGreaterThan(hintIdx);
     // Exactly one blank line between the evening hint and the global footer.
     expect(lines.slice(hintIdx + 1, footerIdx)).toEqual([""]);
-    // JSON: one flat items list, sliced in comparator order (50 Today-proper
-    // rows shown, all 20 evening cut); the per-render-section breakdown lives in
-    // meta.truncation.sections so the renderer stays honest.
+    // JSON is unchanged (fields, not glyphs): the split still carries counts.
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
-    expect(env.data.items).toHaveLength(50);
-    expect(env.data.items.filter((i: { when?: string }) => i.when === "evening")).toHaveLength(0);
+    expect(env.data.sections[0].items).toHaveLength(50);
+    expect(env.data.sections[1].items).toHaveLength(0);
     expect(env.meta.truncation).toEqual({
       shown: 50,
       total: 75,
@@ -492,7 +480,9 @@ describe('cli --untagged (GUI "No Tag")', () => {
     seedTagged();
     const json = runCli(["today", "--untagged", "--json", "--db", fx!.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.items.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["bare one"]);
     const human = runCli(["today", "--untagged", "--db", fx!.path]);
     expect(human.exitCode).toBe(0);
@@ -537,7 +527,9 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     tagTask(fx.db, fooOnly, foo);
     const json = runCli(["today", "--tag", "foo", "--tag", "bar", "--json", "--db", fx.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.items.map((i: { title: string }) => i.title);
+    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+      (i: { title: string }) => i.title,
+    );
     expect(titles).toEqual(["both"]);
   });
 
@@ -554,14 +546,14 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     const tagged = runCli(["today", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
       JSON.parse(tagged.stdout)
-        .data.items.map((i: { title: string }) => i.title)
+        .data.sections[0].items.map((i: { title: string }) => i.title)
         .toSorted(),
     ).toEqual(["direct", "inherited"]);
     // Flat --untagged drops the inherited-only row; only the truly bare survives.
     const untagged = runCli(["today", "--untagged", "--json", "--db", fx.path]);
-    expect(JSON.parse(untagged.stdout).data.items.map((i: { title: string }) => i.title)).toEqual([
-      "bare",
-    ]);
+    expect(
+      JSON.parse(untagged.stdout).data.sections[0].items.map((i: { title: string }) => i.title),
+    ).toEqual(["bare"]);
   });
 
   it("the removed --direct-tag / --direct-untagged flags error as unknown options", () => {
@@ -2337,7 +2329,7 @@ describe("overdue filter (cli)", () => {
     seedTodo(fx.db, { title: "due-today", start: "active", deadline: isoFromToday(0) });
     seedTodo(fx.db, { title: "future", start: "active", deadline: isoFromToday(3) });
     const env = JSON.parse(runCli(["today", "--overdue", "--json", "--db", fx.path]).stdout);
-    expect(env.data.items.map((i: { title: string }) => i.title)).toEqual(["past"]);
+    expect(env.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual(["past"]);
   });
 
   it("is a content scope: it never lifts the default row cap", () => {

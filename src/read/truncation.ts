@@ -12,7 +12,6 @@ import { localToday } from "../model/dates.ts";
 import { isActiveProjectRow, type AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
 import type { ListItem, SidebarSection, TodayView } from "./views.ts";
-import { entityWhen } from "./stage.ts";
 import { partitionSomedaySection, splitSectionBlocks, type GroupedLimits } from "./sections.ts";
 
 // The per-block cap shape and the structural section splitters live in
@@ -63,23 +62,19 @@ export function truncateList<T>(
 }
 
 /**
- * Today view: the flat `items[]` is sliced in comparator order (Today-proper and
- * This-Evening members interleaved by their SQL position), so a limit smaller
- * than the Today-proper run trims the trailing This-Evening members. The
- * whole-view `counts` aggregate is preserved unchanged. The truncation carries a
- * per-render-section (`today`/`evening`) shown/total breakdown — derived per row
- * from `when` (the SAME axis the wire and the TTY split on) — so the renderer can
+ * Today split: the cut runs across Today then This Evening in render order,
+ * so a limit smaller than the Today block trims Evening to nothing. The badge
+ * (a whole-view count summary) is preserved unchanged. The truncation carries
+ * a per-section (`today`/`evening`) shown/total breakdown so a renderer can
  * keep This Evening honest under the single global cap without a pre-cap copy.
  */
-const isEveningRow = (i: ListItem) => entityWhen(i) === "evening";
-
 export function truncateToday(
   view: TodayView,
   limit: number | null,
 ): { data: TodayView; truncation: Truncation } {
-  const eveningTotal = view.items.filter(isEveningRow).length;
-  const total = view.items.length;
-  const todayTotal = total - eveningTotal;
+  const todayTotal = view.today.length;
+  const eveningTotal = view.evening.length;
+  const total = todayTotal + eveningTotal;
   const sections = (shownToday: number, shownEvening: number): SectionCount[] => [
     { key: "today", shown: shownToday, total: todayTotal },
     { key: "evening", shown: shownEvening, total: eveningTotal },
@@ -90,17 +85,17 @@ export function truncateToday(
       truncation: { ...whole(total, limit), sections: sections(todayTotal, eveningTotal) },
     };
   }
-  const items = view.items.slice(0, limit);
-  const shownEvening = items.filter(isEveningRow).length;
-  const shownToday = items.length - shownEvening;
+  const today = view.today.slice(0, limit);
+  const evening = view.evening.slice(0, Math.max(0, limit - today.length));
+  const shown = today.length + evening.length;
   return {
-    data: { items, counts: view.counts },
+    data: { today, evening, badge: view.badge },
     truncation: {
-      shown: items.length,
+      shown,
       total,
       limit,
       truncated: true,
-      sections: sections(shownToday, shownEvening),
+      sections: sections(today.length, evening.length),
     },
   };
 }

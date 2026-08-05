@@ -209,13 +209,16 @@ describe("omitEmpty — structural scaffolding is preserved", () => {
     expect(out["area"]).toBeNull();
   });
 
-  it("keeps a today view's empty flat items list (the structural `items` wrapper)", () => {
-    // The today view is now one flat `{ items }` wrapper (the Today/Evening
-    // split is derived per row from `when`); its whole-view `counts` ride
-    // `meta.counts`, never `data`. The wrapper survives empty like any flat view.
-    const out = omitEmpty({ items: [] }) as Record<string, unknown>;
-    expect("items" in out).toBe(true);
-    expect(out["items"]).toEqual([]);
+  it("keeps a today view's empty evening section (fixed two-section shape)", () => {
+    const out = omitEmpty({
+      today: [minimalTodo()],
+      evening: [],
+      badge: { dueOrOverdue: 0, other: 0 },
+    }) as Record<string, unknown>;
+    expect("evening" in out).toBe(true);
+    expect(out["evening"]).toEqual([]);
+    // The badge object is scaffolding, not an entity — its zero counts survive.
+    expect(out["badge"]).toEqual({ dueOrOverdue: 0, other: 0 });
   });
 
   it("keeps empty project-card sections but prunes the nested project entity", () => {
