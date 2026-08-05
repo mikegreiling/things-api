@@ -7,7 +7,7 @@
  * entirely past the cut so no empty header survives. `limit === null` means
  * "all rows" (the caller passed --all / all: true).
  */
-import type { GroupBlock, SectionCount, Truncation } from "../contracts.ts";
+import type { GroupBlock, Truncation } from "../contracts.ts";
 import { localToday } from "../model/dates.ts";
 import { isActiveProjectRow, type AreaView } from "./area-view.ts";
 import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from "../surface-copy.ts";
@@ -62,41 +62,44 @@ export function truncateList<T>(
 }
 
 /**
- * Today split: the cut runs across Today then This Evening in render order,
- * so a limit smaller than the Today block trims Evening to nothing. The badge
- * (a whole-view count summary) is preserved unchanged. The truncation carries
- * a per-section (`today`/`evening`) shown/total breakdown so a renderer can
- * keep This Evening honest under the single global cap without a pre-cap copy.
+ * Pre-cap Today / This-Evening bucket sizes, returned alongside a truncated
+ * {@link TodayView} so a consumer can (a) render the This-Evening honesty hint
+ * without a pre-cap copy of the view and (b) emit each `children` bucket's inline
+ * `total` — present iff that bucket was capped (read-shape v2 R1, no sidecar
+ * join). These are the FULL bucket sizes; the returned `data.today`/`data.evening`
+ * are the shown (possibly sliced) rows.
+ */
+export interface TodayBucketTotals {
+  today: number;
+  evening: number;
+}
+
+/**
+ * Today view: the cut runs across Today then This Evening in render order, so a
+ * limit smaller than the Today block trims Evening to nothing. The library keeps
+ * the internal Today/Evening grouping (the two reorder scopes); the whole-view
+ * `counts` aggregate is preserved unchanged. `totals` carries the pre-cap bucket
+ * sizes — the renderer keeps This Evening honest under the single global cap, and
+ * the wire emits each bucket's inline `total` when it was capped.
  */
 export function truncateToday(
   view: TodayView,
   limit: number | null,
-): { data: TodayView; truncation: Truncation } {
+): { data: TodayView; truncation: Truncation; totals: TodayBucketTotals } {
   const todayTotal = view.today.length;
   const eveningTotal = view.evening.length;
   const total = todayTotal + eveningTotal;
-  const sections = (shownToday: number, shownEvening: number): SectionCount[] => [
-    { key: "today", shown: shownToday, total: todayTotal },
-    { key: "evening", shown: shownEvening, total: eveningTotal },
-  ];
+  const totals: TodayBucketTotals = { today: todayTotal, evening: eveningTotal };
   if (limit === null || total <= limit) {
-    return {
-      data: view,
-      truncation: { ...whole(total, limit), sections: sections(todayTotal, eveningTotal) },
-    };
+    return { data: view, truncation: whole(total, limit), totals };
   }
   const today = view.today.slice(0, limit);
   const evening = view.evening.slice(0, Math.max(0, limit - today.length));
   const shown = today.length + evening.length;
   return {
-    data: { today, evening, badge: view.badge },
-    truncation: {
-      shown,
-      total,
-      limit,
-      truncated: true,
-      sections: sections(today.length, evening.length),
-    },
+    data: { today, evening, counts: view.counts },
+    truncation: { shown, total, limit, truncated: true },
+    totals,
   };
 }
 

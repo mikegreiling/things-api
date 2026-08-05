@@ -209,16 +209,18 @@ describe("omitEmpty — structural scaffolding is preserved", () => {
     expect(out["area"]).toBeNull();
   });
 
-  it("keeps a today view's empty evening section (fixed two-section shape)", () => {
+  it("keeps a today view's empty evening bucket record (v2 children scaffolding)", () => {
     const out = omitEmpty({
-      today: [minimalTodo()],
-      evening: [],
-      badge: { dueOrOverdue: 0, other: 0 },
-    }) as Record<string, unknown>;
-    expect("evening" in out).toBe(true);
-    expect(out["evening"]).toEqual([]);
-    // The badge object is scaffolding, not an entity — its zero counts survive.
-    expect(out["badge"]).toEqual({ dueOrOverdue: 0, other: 0 });
+      children: {
+        today: { items: [minimalTodo()], total: 3 },
+        evening: { items: [] },
+      },
+    }) as { children: { today: Record<string, unknown>; evening: Record<string, unknown> } };
+    // The bucket records are scaffolding, not entities — the empty evening
+    // `items: []` and a capped bucket's inline `total` (a number) both survive.
+    expect("evening" in out.children).toBe(true);
+    expect(out.children.evening["items"]).toEqual([]);
+    expect(out.children.today["total"]).toBe(3);
   });
 
   it("keeps empty project-card sections but prunes the nested project entity", () => {

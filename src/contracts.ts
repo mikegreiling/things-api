@@ -44,19 +44,6 @@ export const ExitCode = {
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 
 /**
- * Per-section counts for a SPLIT flat view — currently only `today`'s
- * Today / This-Evening split. One entry per section IN RENDER ORDER, each
- * reporting the rows `shown` of the `total` that matched after all filters.
- * Lets a renderer keep a downstream section (This Evening) honest under a
- * single global cap without a pre-truncation copy of the view.
- */
-export interface SectionCount {
-  key: "today" | "evening";
-  shown: number;
-  total: number;
-}
-
-/**
  * The single truncation-metadata shape for every read (the `meta.truncation`
  * field). `shown` items were returned of `total` that matched after all
  * filters; `limit` is the effective cap (null when the caller asked for all
@@ -65,19 +52,17 @@ export interface SectionCount {
  * (`shown < total`, or any block hid rows). The dropped remainder is
  * `total - shown`.
  *
- * Two optional per-shape breakdowns hang off it: `sections` for a split flat
- * view (the Today split — per render-section shown/total), and `blocks` for a
- * grouped view (anytime/someday/`area show` — the identity-carrying per-block
- * nesting). Exactly one of them is present on the shapes that have it; both are
- * absent on a plain flat view.
+ * One optional per-shape breakdown hangs off it: `blocks` for a grouped view
+ * (anytime/someday/`area show` — the identity-carrying per-block nesting); absent
+ * on a plain flat view. The `today` view carries per-bucket completeness INLINE
+ * on its `children.{today,evening}` records (each bucket's `total`, present iff
+ * capped — read-shape v2 R1), not as a truncation sidecar.
  */
 export interface Truncation {
   shown: number;
   total: number;
   limit: number | null;
   truncated: boolean;
-  /** Per-section shown/total breakdown for a split flat view (Today); absent otherwise. */
-  sections?: SectionCount[];
   /** Per-block nesting for a grouped view (anytime/someday/area card); absent otherwise. */
   blocks?: GroupBlock[];
 }
@@ -128,8 +113,9 @@ export interface EnvelopeMeta {
   elapsedMs: number;
   /**
    * The read's completeness metadata (the single truncation shape). Present on
-   * any read that could drop rows — flat views (row `limit`), the Today split
-   * (`sections`), and grouped views (anytime/someday/`area show`, `blocks`).
+   * any read that could drop rows — flat views (row `limit`), the `today` view
+   * (whose per-bucket completeness rides its inline `children.{today,evening}.total`),
+   * and grouped views (anytime/someday/`area show`, `blocks`).
    * `meta.truncation.truncated` is the universal "did I see everything" check.
    */
   truncation?: Truncation;
@@ -160,6 +146,14 @@ export interface EnvelopeMeta {
    * shape is unchanged for unscoped reads (the `meta.clock` precedent).
    */
   filter?: { area: { uuid: string; title: string } };
+  /**
+   * Whole-view aggregate counts (ADDITIVE). Present ONLY on the `today` view: the
+   * app's sidebar count split — `dueOrOverdue` (open members whose deadline is
+   * due or overdue) vs. `other` (the rest). A convenience aggregate an agent
+   * would otherwise recompute over the rows; it lives here so `data` stays pure
+   * domain rows. Both counts are OPEN members only, and a `0` is meaningful.
+   */
+  counts?: { dueOrOverdue: number; other: number };
   /**
    * The active container scope this response was jailed to (ADDITIVE). Present
    * ONLY when a scope is in force (the MCP `--scope` flag / `THINGS_API_SCOPE` /

@@ -67,6 +67,7 @@ import {
   previewSomedaySections,
   truncateList,
   truncateToday,
+  type TodayBucketTotals,
 } from "./read/truncation.ts";
 import {
   filterListByArea,
@@ -244,12 +245,16 @@ export interface BoundedList<T> {
 
 /**
  * A bounded Today view: `view` is the shown split (capped in render order —
- * Today, then This Evening) and `truncation` the exact counts, including the
- * per-section (`today`/`evening`) breakdown a renderer needs to stay honest.
+ * Today, then This Evening), `truncation` the exact global counts, and `totals`
+ * the PRE-cap Today/This-Evening bucket sizes — the renderer keeps This Evening
+ * honest under the single global cap, and each `children` bucket's inline `total`
+ * (present iff capped, read-shape v2 R1) derives from them.
  */
 export interface BoundedTodayView {
   view: TodayView;
   truncation: Truncation;
+  /** Pre-cap Today / This-Evening bucket sizes (see {@link TodayBucketTotals}). */
+  totals: TodayBucketTotals;
   /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
   filter?: ViewFilterMeta;
 }
@@ -356,10 +361,11 @@ export interface ThingsClient {
   refPromoter(): RefPromoter;
   read: {
     /**
-     * The Today list (Today + This Evening split) with the sidebar badge,
-     * bounded to `limit` rows (default 50) counted in render order — Today
-     * first, then This Evening. `all`/`limit: null` returns every row; the
-     * `truncation` metadata carries the per-section (`today`/`evening`) counts.
+     * The Today list (Today + This Evening split) plus the whole-view `counts`
+     * aggregate (the app's sidebar count), bounded to `limit` rows (default 50)
+     * counted in render order — Today first, then This Evening. `all`/`limit:
+     * null` returns every row; `totals` carries the pre-cap Today/This-Evening
+     * bucket sizes (the two `children` bucket records project from the split).
      */
     today(options?: TodayFilter & ListBound & ClockScopedRead & AreaScopedRead): BoundedTodayView;
     /** Inbox captures, bounded (default 50). */
@@ -919,8 +925,8 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           view = filterTodayByArea(view, target.uuid, localToday(now(), zoneOf(o)));
           filter = { area: target };
         }
-        const { data, truncation } = truncateToday(view, listCap(o));
-        return { view: data, truncation, ...(filter !== undefined && { filter }) };
+        const { data, truncation, totals } = truncateToday(view, listCap(o));
+        return { view: data, truncation, totals, ...(filter !== undefined && { filter }) };
       },
       inbox: (o) => {
         let items = inboxView(conn.db, now(), o, zoneOf(o));

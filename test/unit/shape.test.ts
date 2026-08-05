@@ -354,21 +354,26 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
     expect(full["startDate"]).toBe("2026-08-01"); // full/detail keep startDate beside when
   });
 
-  it("`when` drops inside the today view's own sections (the section key states it)", () => {
+  it("`when` drops inside the today view's two `children` bucket records (the bucket key states it)", () => {
     const view = {
       today: [todo({ today: true })],
       evening: [todo({ uuid: "todo-e", today: true, evening: true })],
-      badge: { dueOrOverdue: 0, other: 2 },
+      counts: { dueOrOverdue: 0, other: 2 },
     };
+    // v2: shapeReadPayload("today") returns the two bucket records
+    // `{ today: { items }, evening: { items } }` (counts ride meta, not data).
     const out = shapeReadPayload("today", view, false) as Obj;
-    const t = (out["today"] as Obj[])[0]!;
-    const e = (out["evening"] as Obj[])[0]!;
-    expect("when" in t).toBe(false); // section key states today
-    expect("when" in e).toBe(false); // section key states evening
-    // R13: every Today member derives stage `anytime`, so the today sections are
+    const t = ((out["today"] as Obj)["items"] as Obj[])[0]!;
+    const e = ((out["evening"] as Obj)["items"] as Obj[])[0]!;
+    expect("when" in t).toBe(false); // bucket key states today
+    expect("when" in e).toBe(false); // bucket key states evening
+    // R13: every Today member derives stage `anytime`, so both buckets are
     // stage-PURE and the field is DROPPED (was kept as "mixed" pre-R13).
     expect("stage" in t).toBe(false);
     expect("stage" in e).toBe(false);
+    // The whole-view counts aggregate is NOT in the shaped data.
+    expect("counts" in out).toBe(false);
+    expect("badge" in out).toBe(false);
   });
 
   it("`when` is KEPT on anytime/inbox/someday sections — the informative deadline-pull cases", () => {

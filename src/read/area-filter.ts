@@ -102,8 +102,8 @@ export function filterSectionsByArea(
 }
 
 /**
- * Filter the Today split to the target area. The badge is recomputed over the
- * surviving OPEN members so it reflects exactly the rows the view now returns —
+ * Filter the Today split to the target area. The counts are recomputed over the
+ * surviving OPEN members so they reflect exactly the rows the view now returns —
  * the same treatment {@link todayView} gives its `eveningOnly` filter — never a
  * count that includes dropped rows.
  */
@@ -112,5 +112,5 @@ export function filterTodayByArea(view: TodayView, areaUuid: string, todayIso: I
   const evening = view.evening.filter((i) => itemInArea(i, areaUuid));
   const open = [...today, ...evening].filter((i) => i.status === "open");
   const dueOrOverdue = open.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
-  return { today, evening, badge: { dueOrOverdue, other: open.length - dueOrOverdue } };
+  return { today, evening, counts: { dueOrOverdue, other: open.length - dueOrOverdue } };
 }

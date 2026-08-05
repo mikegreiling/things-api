@@ -57,9 +57,9 @@ function isoFromToday(days: number): string {
 const titlesOf = (stdout: string): string[] =>
   JSON.parse(stdout).data.items.map((i: { title: string }) => i.title);
 
-/** The `data.today` titles from a `today --json` envelope. */
+/** The `data.children.today` bucket titles from a `today --json` envelope. */
 const todayTitles = (stdout: string): string[] =>
-  JSON.parse(stdout).data.sections[0].items.map((i: { title: string }) => i.title);
+  JSON.parse(stdout).data.children.today.items.map((i: { title: string }) => i.title);
 
 /**
  * Run `fn` with process.env keys temporarily set/cleared, restoring them after.
@@ -159,7 +159,7 @@ async function runCliAsync(argv: string[]): Promise<{ stdout: string; exitCode: 
 }
 
 describe("cli end-to-end (fixture db)", () => {
-  it("things today --json emits the versioned envelope with split sections", () => {
+  it("things today --json emits the versioned envelope with the two children buckets + meta.counts", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: "2020-01-01", todayIndex: 1 });
     // evening membership requires startDate == today exactly (the CLI path
@@ -174,21 +174,32 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.kind).toBe("today");
     expect(envelope.meta.dbVersion).toBe(26);
     expect(envelope.meta.fingerprint).toBe("ok");
-    expect(envelope.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual([
+    // v2: two keyed bucket records under `children`, no `sections` array, no `badge`.
+    expect(envelope.data.sections).toBeUndefined();
+    expect("badge" in envelope.data).toBe(false);
+    expect(envelope.data.children.today.items.map((i: { title: string }) => i.title)).toEqual([
       "morning",
     ]);
-    expect(envelope.data.sections[1].items.map((i: { title: string }) => i.title)).toEqual([
+    expect(envelope.data.children.evening.items.map((i: { title: string }) => i.title)).toEqual([
       "tonight",
     ]);
+    // Untruncated buckets never restate their own length (R1: no inline `total`).
+    expect("total" in envelope.data.children.today).toBe(false);
+    expect("total" in envelope.data.children.evening).toBe(false);
+    // The whole-view counts aggregate rides meta.counts.
+    expect(envelope.meta.counts).toEqual({ dueOrOverdue: 0, other: 2 });
   });
 
-  it("things today puts ★/⏾ in the section headers, not on the rows", () => {
+  it("things today puts ★/⏾ in the section headers, not on the rows; counts at the top", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: localToday(), todayIndex: 1 });
     seedTodo(fx.db, { title: "tonight", startDate: localToday(), evening: true });
     const { stdout, exitCode } = runCli(["today", "--db", fx.path]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("★ Today (badge:");
+    // Clean header (no baked-in count text) + the card-style count lines above it.
+    expect(stdout).toContain("★ Today ──");
+    expect(stdout).toContain("due/overdue:");
+    expect(stdout).toContain("other:");
     expect(stdout).toContain("⏾ This Evening ──");
     // The membership glyph is gone from the item rows themselves.
     const rows = stdout.split("\n").filter((l) => l.includes("morning") || l.includes("tonight"));
@@ -237,20 +248,20 @@ describe("cli end-to-end (fixture db)", () => {
     expect(footerIdx).toBeGreaterThan(hintIdx);
     // Exactly one blank line between the evening hint and the global footer.
     expect(lines.slice(hintIdx + 1, footerIdx)).toEqual([""]);
-    // JSON is unchanged (fields, not glyphs): the split still carries counts.
+    // JSON: each capped bucket carries its inline `total` (R1 — present iff
+    // capped); the global truncation has NO per-section sidecar.
     const env = JSON.parse(runCli(["today", "--json", "--db", fx.path]).stdout);
-    expect(env.data.sections[0].items).toHaveLength(50);
-    expect(env.data.sections[1].items).toHaveLength(0);
+    expect(env.data.children.today.items).toHaveLength(50);
+    expect(env.data.children.today.total).toBe(55); // 50 shown < 55 → capped
+    expect(env.data.children.evening.items).toHaveLength(0);
+    expect(env.data.children.evening.total).toBe(20); // 0 shown < 20 → capped
     expect(env.meta.truncation).toEqual({
       shown: 50,
       total: 75,
       limit: 50,
       truncated: true,
-      sections: [
-        { key: "today", shown: 50, total: 55 },
-        { key: "evening", shown: 0, total: 20 },
-      ],
     });
+    expect(env.meta.counts).toEqual({ dueOrOverdue: 0, other: 75 });
   });
 
   it("things todo show — R11 template wire (repeating rule facts, no discriminators)", () => {
@@ -480,7 +491,7 @@ describe('cli --untagged (GUI "No Tag")', () => {
     seedTagged();
     const json = runCli(["today", "--untagged", "--json", "--db", fx!.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+    const titles = JSON.parse(json.stdout).data.children.today.items.map(
       (i: { title: string }) => i.title,
     );
     expect(titles).toEqual(["bare one"]);
@@ -527,7 +538,7 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     tagTask(fx.db, fooOnly, foo);
     const json = runCli(["today", "--tag", "foo", "--tag", "bar", "--json", "--db", fx.path]);
     expect(json.exitCode).toBe(0);
-    const titles = JSON.parse(json.stdout).data.sections[0].items.map(
+    const titles = JSON.parse(json.stdout).data.children.today.items.map(
       (i: { title: string }) => i.title,
     );
     expect(titles).toEqual(["both"]);
@@ -546,13 +557,13 @@ describe("cli tag filters (flat inheritance-inclusive; direct flags removed)", (
     const tagged = runCli(["today", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
       JSON.parse(tagged.stdout)
-        .data.sections[0].items.map((i: { title: string }) => i.title)
+        .data.children.today.items.map((i: { title: string }) => i.title)
         .toSorted(),
     ).toEqual(["direct", "inherited"]);
     // Flat --untagged drops the inherited-only row; only the truly bare survives.
     const untagged = runCli(["today", "--untagged", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(untagged.stdout).data.sections[0].items.map((i: { title: string }) => i.title),
+      JSON.parse(untagged.stdout).data.children.today.items.map((i: { title: string }) => i.title),
     ).toEqual(["bare"]);
   });
 
@@ -2329,7 +2340,7 @@ describe("overdue filter (cli)", () => {
     seedTodo(fx.db, { title: "due-today", start: "active", deadline: isoFromToday(0) });
     seedTodo(fx.db, { title: "future", start: "active", deadline: isoFromToday(3) });
     const env = JSON.parse(runCli(["today", "--overdue", "--json", "--db", fx.path]).stdout);
-    expect(env.data.sections[0].items.map((i: { title: string }) => i.title)).toEqual(["past"]);
+    expect(env.data.children.today.items.map((i: { title: string }) => i.title)).toEqual(["past"]);
   });
 
   it("is a content scope: it never lifts the default row cap", () => {

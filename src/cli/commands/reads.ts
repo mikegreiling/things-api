@@ -180,7 +180,7 @@ export function registerReadCommands(program: Command): void {
   program
     .command("today")
     .description(
-      "The Today list, split into Today and This Evening (evening expires daily), with the sidebar badge split (red = deadline due/overdue)",
+      "The Today list — Today and This Evening (evening expires daily). Counts (due/overdue vs. other) ride meta.counts",
     )
     .option("--tag <ref>", TAG_DESC, collectRef, [])
     .option("--exact-tag", EXACT_TAG_DESC)
@@ -229,21 +229,26 @@ export function registerReadCommands(program: Command): void {
             const {
               view,
               truncation,
+              totals,
               filter: areaFilter,
             } = c.read.today({
               ...filter,
               limit: lim.limit,
             });
             // The renderer keeps This Evening honest under truncation from the
-            // metadata's per-section counts; the lines are precomputed here and
-            // the global footer (whole-view remainder) is appended by the driver.
+            // pre-cap bucket `totals`; the lines are precomputed here and the
+            // global footer (whole-view remainder) is appended by the driver.
+            // `counts` rides meta.counts; `todayTotals` supplies each `children`
+            // bucket's inline `total` on the JSON path.
             const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: view,
               truncation,
+              counts: view.counts,
+              todayTotals: totals,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
-              lines: renderToday(view, truncation.sections, base, { eveningOnly }),
+              lines: renderToday(view, totals, base, { eveningOnly }),
             };
           },
           // Type-correct fallback for the TodayView payload; never reached

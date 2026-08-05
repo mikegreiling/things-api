@@ -111,9 +111,11 @@ describe("today --area (CLI/--json)", () => {
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
     expect(env.meta.filter.area.title).toBe("Alpha");
-    const titles = (env.data.sections as Array<{ items: { title: string }[] }>).flatMap((s) =>
-      s.items.map((i) => i.title),
-    );
+    const children = env.data.children as {
+      today: { items: { title: string }[] };
+      evening: { items: { title: string }[] };
+    };
+    const titles = [...children.today.items, ...children.evening.items].map((i) => i.title);
     expect(titles).toEqual(["t-alpha"]);
   });
 });
