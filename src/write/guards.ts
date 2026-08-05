@@ -381,14 +381,25 @@ const GUARDS: Record<HazardId, GuardFn> = {
   "H-BACKDATE-OPEN": ({ op, params, pre }) => {
     if (op !== "todo.backdate" || params["completionDate"] === undefined) return null;
     const status = pre.target?.type === "to-do" ? pre.target.status : null;
-    if (status === "completed" || status === "canceled") return null;
-    return {
-      hazard: "H-BACKDATE-OPEN",
-      detail:
-        "completionDate can only be rewritten on a completed or canceled to-do — this one " +
-        `is ${status ?? "not a to-do / not found"}`,
-      remediation: "complete it first (todo.complete), then backdate",
-    };
+    if (status === "completed") return null;
+    // Canceled is refused too: `set completion date` is not a pure stopDate
+    // rewrite — it FORCES status=completed, silently re-completing a canceled
+    // to-do (2→3) and discarding its canceled status (BACKDT / WG-7). Only an
+    // already-completed row is a clean completion-date rewrite. A creation-date-
+    // only backdate never reaches this guard (completionDate === undefined) and
+    // stays allowed on any status — `set creation date` is status-safe.
+    const detail =
+      status === "canceled"
+        ? "a completion-date backdate requires a completed to-do — this one is canceled, and " +
+          "setting its completion date would silently convert it to completed, discarding the " +
+          "canceled status"
+        : "completionDate can only be rewritten on a completed to-do — this one " +
+          `is ${status ?? "not a to-do / not found"}`;
+    const remediation =
+      status === "canceled"
+        ? "backdate the completion date only on to-dos that are already completed"
+        : "complete it first (todo.complete), then backdate";
+    return { hazard: "H-BACKDATE-OPEN", detail, remediation };
   },
   "H-REORDER-SCOPE": ({ op, params, pre }) => {
     if (op !== "reorder" || pre.reorder === null) return null;
