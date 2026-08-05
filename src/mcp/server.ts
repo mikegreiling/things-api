@@ -49,6 +49,7 @@ import {
   REF_RULE_NOTE,
   ReferenceResolutionError,
   REMINDER_FORMAT,
+  RESOLUTION_DATE_FORMAT,
   schemaWarnings,
   shapeReadPayload,
   withTodayBucketTotals,
@@ -1430,6 +1431,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("Confirm adding into a completed/canceled project (this reopens it)"),
+        created_at: z
+          .string()
+          .optional()
+          .describe(`Born with this creation timestamp (${RESOLUTION_DATE_FORMAT})`),
+        completed_at: z
+          .string()
+          .optional()
+          .describe(
+            `Born completed, in the Logbook, with this completion timestamp ` +
+              `(${RESOLUTION_DATE_FORMAT}); drop when/reminder`,
+          ),
         ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
@@ -1458,6 +1470,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.project !== undefined && { project: containerRef(args.project) }),
               ...(args.area !== undefined && { area: containerRef(args.area) }),
               ...(args.heading !== undefined && { heading: args.heading }),
+              ...(args.created_at !== undefined && { createdAt: args.created_at }),
+              ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
             },
             writeOptions(args),
           ),
@@ -1475,7 +1489,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "deadline/clear_deadline; changing the schedule keeps an existing reminder unless a new " +
         "one is set, schedule and deadline changes are unavailable for repeating items, and " +
         "clear_reminder needs the item scheduled for today or this evening (a reminder on a " +
-        "future date can only be changed, not cleared). kind area: title and/or tags (the full " +
+        "future date can only be changed, not cleared). created_at/completed_at rewrite the " +
+        "resolution timestamps of an already-resolved item; created_at is status-safe, but " +
+        "completed_at on an open item is refused — resolving it is set_status's boundary, not " +
+        "update's. kind area: title and/or tags (the full " +
         "replacement set). kind tag: title, parent (nest under it) or unnest (to the top level; " +
         "exclusive), and shortcut or clear_shortcut (exclusive). Tags must exist unless " +
         "create_tags is set.",
@@ -1496,6 +1513,20 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         clear_reminder: z.boolean().optional().describe("todo/project: remove the reminder"),
         deadline: z.string().optional().describe(`todo/project: ${DATE_FORMAT}`),
         clear_deadline: z.boolean().optional().describe("todo/project: remove the deadline"),
+        created_at: z
+          .string()
+          .optional()
+          .describe(
+            `todo/project: rewrite the creation timestamp (${RESOLUTION_DATE_FORMAT}); status-safe`,
+          ),
+        completed_at: z
+          .string()
+          .optional()
+          .describe(
+            "todo/project: rewrite the completion timestamp of an already-resolved item " +
+              `(${RESOLUTION_DATE_FORMAT}; a canceled one stays canceled); an open item is ` +
+              "refused — use set_status to resolve it",
+          ),
         tags: z
           .array(z.string())
           .optional()
@@ -1548,6 +1579,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                   ...(args.clear_reminder === true && { reminder: null }),
                   ...(args.deadline !== undefined && { deadline: args.deadline }),
                   ...(args.clear_deadline === true && { deadline: null }),
+                  ...(args.created_at !== undefined && { createdAt: args.created_at }),
+                  ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
                 },
                 opts,
               ),
@@ -1566,6 +1599,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 ...(args.clear_reminder === true && { reminder: null }),
                 ...(args.deadline !== undefined && { deadline: args.deadline }),
                 ...(args.clear_deadline === true && { deadline: null }),
+                ...(args.created_at !== undefined && { createdAt: args.created_at }),
+                ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
               },
               opts,
             ),
@@ -1627,7 +1662,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "scope project, completing or canceling requires a children policy: 'require-resolved' " +
         "errors if open to-dos remain; 'auto-complete'/'auto-cancel' resolves them together with " +
         "the project (canceling never alters already-completed children). scope project, status " +
-        "open, restore_children also reopens the to-dos that were resolved with the project.",
+        "open, restore_children also reopens the to-dos that were resolved with the project. " +
+        "completed_at (status completed or canceled) sets the completion timestamp — also the " +
+        '"Completed on" stamp for a canceled item — backdating it; reaching a backdated canceled ' +
+        "item is a multi-leg, non-atomic sequence, disclosed in the result and in dry_run.",
       inputSchema: {
         scope: z.enum(["todo", "project"]),
         uuid: z
@@ -1642,6 +1680,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("scope project, open only: also reopen the to-dos resolved with the project"),
+        completed_at: z
+          .string()
+          .optional()
+          .describe(
+            `status completed or canceled: the completion timestamp (${RESOLUTION_DATE_FORMAT})`,
+          ),
+        ...tzShape,
         ...dryRunShape,
         ...opIdShape,
       },
@@ -1649,17 +1694,24 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     },
     async (args) =>
       guard(async () => {
+        const badZone = badTz(args.tz);
+        if (badZone !== null) return badZone;
         const c = getClient();
         const opts = writeOptions(args);
+        if (args.completed_at !== undefined && args.status === "open") {
+          return usage("completed_at applies only to status 'completed' or 'canceled'");
+        }
+        const resolution =
+          args.completed_at !== undefined ? { completedAt: args.completed_at } : {};
         if (args.scope === "todo") {
           if (args.children !== undefined || args.restore_children !== undefined) {
             return usage("children/restore_children apply only to scope project");
           }
           return mutationResult(
             args.status === "completed"
-              ? await c.write.completeTodo(args.uuid, {}, opts)
+              ? await c.write.completeTodo(args.uuid, resolution, opts)
               : args.status === "canceled"
-                ? await c.write.cancelTodo(args.uuid, {}, opts)
+                ? await c.write.cancelTodo(args.uuid, resolution, opts)
                 : await c.write.reopenTodo(args.uuid, opts),
           );
         }
@@ -1674,7 +1726,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             );
           }
           return mutationResult(
-            await c.write.completeProject(args.uuid, { children: args.children }, opts),
+            await c.write.completeProject(
+              args.uuid,
+              { children: args.children, ...resolution },
+              opts,
+            ),
           );
         }
         if (args.status === "canceled") {
@@ -1684,7 +1740,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             );
           }
           return mutationResult(
-            await c.write.cancelProject(args.uuid, { children: args.children }, opts),
+            await c.write.cancelProject(
+              args.uuid,
+              { children: args.children, ...resolution },
+              opts,
+            ),
           );
         }
         if (args.children !== undefined) {
@@ -2009,8 +2069,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
   );
 
   // NB: the bespoke backdate_todo / add_logged_todo tools were removed with the
-  // engine ops (plan PR A). MCP parity for the --created-at/--completed-at
-  // resolution-timestamp flags is restored in PR B.
+  // engine ops (plan PR A). MCP parity for the resolution-timestamp surface is
+  // restored (PR B) as created_at/completed_at params folded onto the existing
+  // write tools: add_todo / add_project (Logbook import), update (rewrite an
+  // already-resolved item's timestamps), and set_status (backdate on
+  // complete/cancel) — matching the CLI's --created-at/--completed-at flags.
 
   server.registerTool(
     "heading",
@@ -2509,6 +2572,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         when: whenSchema,
         deadline: z.string().optional().describe(DATE_FORMAT),
         todos: z.array(z.string()).optional().describe("Initial child to-do titles"),
+        created_at: z
+          .string()
+          .optional()
+          .describe(`Born with this creation timestamp (${RESOLUTION_DATE_FORMAT})`),
+        completed_at: z
+          .string()
+          .optional()
+          .describe(
+            `Born completed, in the Logbook, with this completion timestamp ` +
+              `(${RESOLUTION_DATE_FORMAT}); cannot seed open child to-dos`,
+          ),
         ...tzShape,
         ...dryRunShape,
         ...opIdShape,
@@ -2528,6 +2602,8 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               ...(args.when !== undefined && { when: args.when as never }),
               ...(args.deadline !== undefined && { deadline: args.deadline }),
               ...(args.todos !== undefined && { todos: args.todos }),
+              ...(args.created_at !== undefined && { createdAt: args.created_at }),
+              ...(args.completed_at !== undefined && { completedAt: args.completed_at }),
             },
             writeOptions(args),
           ),

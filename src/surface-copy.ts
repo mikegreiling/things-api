@@ -15,6 +15,13 @@ export const DATE_FORMAT = "YYYY-MM-DD";
 /** Reminder time-of-day parameter format. */
 export const REMINDER_FORMAT = "HH:mm (24-hour)";
 
+/**
+ * Resolution-timestamp value format (`--created-at`/`--completed-at`,
+ * `created_at`/`completed_at`): an ISO date or datetime; a bare date normalizes
+ * to noon in the effective zone (resolution-timestamp plan §5).
+ */
+export const RESOLUTION_DATE_FORMAT = "ISO date or datetime; a date is noon in the effective zone";
+
 /** How projects, areas, and tags may be referenced. */
 export const REF_FORMAT = "uuid or unique name";
 
