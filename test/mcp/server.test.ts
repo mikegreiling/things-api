@@ -2618,8 +2618,115 @@ describe("things MCP server", () => {
       expect((textOf(both) as { title: string }[]).length).toBeGreaterThanOrEqual(3);
     });
 
-    // NB: the add_logged_todo / backdate_todo MCP tools were removed with the
-    // engine ops (plan PR A); MCP parity for --created-at/--completed-at lands in PR B.
+    // --- resolution-timestamp parity (plan PR B): created_at/completed_at folded
+    //     onto add_todo/add_project, update, and set_status. -----------------
+
+    it("add_todo completed_at plans a logbook import (dry-run)", async () => {
+      await connect([fakeVector(null, { ops: ["todo.add"] }).vector]);
+      const outcome = textOf(
+        await client.callTool({
+          name: "add_todo",
+          arguments: { title: "did it", completed_at: "2026-01-15", dry_run: true },
+        }),
+      ) as { op: string };
+      expect(outcome.op).toBe("todo.add");
+    });
+
+    it("add_project completed_at refuses seeding an open child (§5b)", async () => {
+      await connect([fakeVector(null, { ops: ["project.add"] }).vector]);
+      const bad = await client.callTool({
+        name: "add_project",
+        arguments: { title: "logged proj", completed_at: "2026-01-15", todos: ["still open"] },
+      });
+      expect(bad.isError).toBe(true);
+    });
+
+    it("set_status completed_at on a canceled to-do plans the flip + backdate (dry-run)", async () => {
+      const uuid = seedTodo(fixture.db, { title: "was canceled", status: "canceled" });
+      await connect([
+        fakeVector(null, { ops: ["todo.complete"] }).vector,
+        fakeVector(null, { id: "applescript", ops: ["todo.set-dates"] }).vector,
+      ]);
+      const plan = textOf(
+        await client.callTool({
+          name: "set_status",
+          arguments: {
+            scope: "todo",
+            uuid,
+            status: "completed",
+            completed_at: "2025-01-15",
+            dry_run: true,
+          },
+        }),
+      ) as { op: string; invocation: string };
+      expect(plan.op).toBe("todo.complete");
+      expect(plan.invocation).toContain("flip → completed");
+      expect(plan.invocation).toContain("AS set completion=2025-01-15");
+    });
+
+    it("update completed_at on a canceled to-do plans the 3-leg flip-dance (dry-run)", async () => {
+      const uuid = seedTodo(fixture.db, { title: "was canceled", status: "canceled" });
+      await connect([
+        fakeVector(null, { ops: ["todo.complete", "todo.cancel"] }).vector,
+        fakeVector(null, { id: "applescript", ops: ["todo.set-dates"] }).vector,
+      ]);
+      const plan = textOf(
+        await client.callTool({
+          name: "update",
+          arguments: { kind: "todo", uuid, completed_at: "2025-01-15", dry_run: true },
+        }),
+      ) as { op: string; invocation: string };
+      expect(plan.op).toBe("todo.update");
+      expect(plan.invocation).toContain("flip → completed");
+      expect(plan.invocation).toContain("AS set completion=2025-01-15");
+      expect(plan.invocation).toContain("flip → canceled");
+    });
+
+    it("set_status canceled with completed_at on a completed project plans the backdate + flip (dry-run)", async () => {
+      const proj = seedProject(fixture.db, { title: "wrap up", status: "completed" });
+      await connect([
+        fakeVector(null, { ops: ["project.cancel"] }).vector,
+        fakeVector(null, { id: "applescript", ops: ["project.set-dates"] }).vector,
+      ]);
+      const plan = textOf(
+        await client.callTool({
+          name: "set_status",
+          arguments: {
+            scope: "project",
+            uuid: proj,
+            status: "canceled",
+            children: "require-resolved",
+            completed_at: "2025-01-15",
+            dry_run: true,
+          },
+        }),
+      ) as { op: string; invocation: string };
+      expect(plan.op).toBe("project.cancel");
+      expect(plan.invocation).toContain("AS set completion=2025-01-15");
+      expect(plan.invocation).toContain("flip → canceled");
+    });
+
+    it("update completed_at on an OPEN to-do is refused — the boundary belongs to set_status", async () => {
+      const uuid = seedTodo(fixture.db, { title: "still open", status: "open" });
+      await connect([fakeVector(null, { ops: ["todo.update"] }).vector]);
+      const bad = await client.callTool({
+        name: "update",
+        arguments: { kind: "todo", uuid, completed_at: "2025-01-15" },
+      });
+      expect(bad.isError).toBe(true);
+      expect((textOf(bad) as { code: string }).code).toBe("blocked:H-BACKDATE-OPEN");
+    });
+
+    it("set_status rejects completed_at when reopening (status open)", async () => {
+      const uuid = seedTodo(fixture.db, { title: "done", status: "completed" });
+      await connect([fakeVector(null, { ops: ["todo.reopen"] }).vector]);
+      const bad = await client.callTool({
+        name: "set_status",
+        arguments: { scope: "todo", uuid, status: "open", completed_at: "2025-01-15" },
+      });
+      expect(bad.isError).toBe(true);
+      expect((textOf(bad) as { code: string }).code).toBe("usage");
+    });
 
     it("clear_reminder plans a clear for a dated reminder, and blocks when there is none", async () => {
       const withReminder = seedTodo(fixture.db, {
