@@ -117,30 +117,28 @@ describe("area show loose (composite null-area view)", () => {
     // Active section: the area-less project row + the loose active to-do.
     // Inbox capture, real-area rows, and project-nested rows never appear here.
     expect(env.data.view.projects.map((p: { title: string }) => p.title)).toEqual(["loose-proj"]);
-    // The flat items[] holds the direct to-dos; only the arrived/current one shows
-    // without --show-later, so `loose-active` is the sole stage-`anytime` row here.
-    expect(
-      env.data.view.items
-        .filter((t: { stage?: string }) => t.stage === "anytime")
-        .map((t: { title: string }) => t.title),
-    ).toEqual(["loose-active"]);
+    expect(env.data.view.anytime.map((t: { title: string }) => t.title)).toEqual(["loose-active"]);
     const flat = JSON.stringify(env.data);
     expect(flat).not.toContain("inbox-capture");
     expect(flat).not.toContain("work-loose");
     expect(flat).not.toContain("work-child");
   });
 
-  it("the loose someday/scheduled to-dos ride the flat items[] (JSON carries them regardless of --show-later)", () => {
+  it("--show-later surfaces the loose someday/scheduled to-dos", () => {
     seedWorld();
-    const env = JSON.parse(runCli(["area", "show", "loose", "--json", "--db", fx.path]).stdout);
-    // items[] is one flat list of all direct to-dos; the later ones carry their
-    // stage (`someday`) / future `when` — the --show-later toggle is TTY-only.
-    const titles = env.data.view.items.map((t: { title: string }) => t.title);
-    expect(titles).toContain("loose-someday");
-    expect(titles).toContain("loose-later");
-    expect(
-      env.data.view.items.find((t: { title: string }) => t.title === "loose-someday").stage,
-    ).toBe("someday");
+    const { stdout: out } = runCli([
+      "area",
+      "show",
+      "loose",
+      "--show-later",
+      "--json",
+      "--db",
+      fx.path,
+    ]);
+    const env = JSON.parse(out);
+    const later = JSON.stringify([env.data.view.upcoming, env.data.view.someday]);
+    expect(later).toContain("loose-someday");
+    expect(later).toContain("loose-later");
   });
 
   it("renders a human card titled Loose with no uri line", () => {

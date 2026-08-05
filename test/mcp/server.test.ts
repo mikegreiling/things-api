@@ -769,8 +769,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "Home", tag: ["focus"] },
       }),
-    ) as { items: { title: string }[]; projects: { title: string }[] };
-    expect(areaRes.items.map((i) => i.title)).toEqual(["loose-focus"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(areaRes.anytime.map((i) => i.title)).toEqual(["loose-focus"]);
     expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
     // list_collections projects tag → FLAT/inheritance-inclusive: BOTH the
     // directly-tagged P and the area-inheriting PBare (the projects list is not a
@@ -1361,9 +1361,9 @@ describe("things MCP server", () => {
     }
     await connect([fakeVector(null).vector]);
     const capped = await client.callTool({ name: "get_area", arguments: { ref: "Busy" } });
-    const view = textOf(capped) as { projects: unknown[]; items: unknown[] };
+    const view = textOf(capped) as { projects: unknown[]; anytime: unknown[] };
     expect(view.projects).toHaveLength(30);
-    expect(view.items).toHaveLength(30);
+    expect(view.anytime).toHaveLength(30);
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as {
@@ -1382,9 +1382,9 @@ describe("things MCP server", () => {
 
     const narrowed = textOf(
       await client.callTool({ name: "get_area", arguments: { ref: "Busy", project_limit: 2 } }),
-    ) as { projects: unknown[]; items: unknown[] };
+    ) as { projects: unknown[]; anytime: unknown[] };
     expect(narrowed.projects).toHaveLength(2);
-    expect(narrowed.items).toHaveLength(30);
+    expect(narrowed.anytime).toHaveLength(30);
 
     const conflict = await client.callTool({
       name: "get_area",
@@ -1452,8 +1452,8 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "MCP Home", overdue: true },
       }),
-    ) as { items: { title: string }[]; projects: { title: string }[] };
-    expect(view.items.map((i) => i.title)).toEqual(["todo-overdue"]);
+    ) as { anytime: { title: string }[]; projects: { title: string }[] };
+    expect(view.anytime.map((i) => i.title)).toEqual(["todo-overdue"]);
     expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
   });
 

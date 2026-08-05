@@ -165,7 +165,7 @@ One bucket per semantic question: the heading **order axis** (`headings`), the l
 
 Orderings: `headings` = heading `index ASC`; `items` = child `index ASC`; `logbook` = `stopDate DESC` (open odd children null-last).
 
-### 3.13 `area-view` (`data: { view }`) — **landed (PR 4)**
+### 3.13 `area-view` (`data: { view }`) — **planned (PR 4)**
 
 Current buckets: `area` (node, or `null` for loose) · `anytime[]` (direct to-dos) · `projects[]` (mixed-stage project rows) · `upcoming[{date,items}]` · `someday[]`.
 
@@ -248,7 +248,7 @@ Ordered so each step is independently green and self-merged before the next (ALP
 1. **`mg/today-dissolve` — today dissolve (§3.1) + this doctrine doc.** `sections` → flat `items[]` + `when`; `badge` → `meta.counts`; the "badge" vocabulary purge; the TTY redesign (clean header + counts at top). **Landed.**
 2. **`mg/project-children-dissolve` — project-view children dissolve (§3.12).** Unheaded + per-heading stage sub-buckets → one flat `items[]` in project index order, every row carrying `stage`/`when`/`heading` ref; `headings[]` becomes the memberless live-heading catalog. TTY byte-stable (the library retains the structured groups for the GUI-faithful projection — it owns the clock + `todayIndex`; the wire is flat). **Landed.**
 3. **`mg/headings-catalog-logbook-flatten` — headings catalog + logbook flatten (§3.12, rulings #C3/#C3a/#C4).** `headings[]` → index-ordered catalog `[{uuid,title,archived?}]` (all headings, live + swept archived); `logbookHeadings` dissolves; single flat `logbook` bucket (stopDate DESC) absorbing archived-heading children, each with its `heading` ref, `stage` kept (mixed). All HEADARC2 TTY invariants preserved (byte-stable — the library keeps its structured logged-region grouping for the projection). **Landed.**
-4. **`mg/area-view-dissolve` — area-view dissolve (§3.13).** Direct `anytime`/`upcoming`/`someday` → one flat `items[]` (index order, `stage`/`when` per row); `projects[]` KEPT (the distinct sidebar-rank order axis). TTY + truncation byte-stable (the library keeps its structured direct-to-do grouping; the per-block `area` cap on the open/current rows is preserved and mirrored onto the flat `items[]`). **Landed.**
+4. **`mg/area-view-dissolve` — area-view dissolve (§3.13).** Direct `anytime`/`upcoming`/`someday` → one flat `items[]`; `projects[]` KEPT (sidebar-rank axis). TTY byte-stable.
 5. **`mg/ordering-contract-docs` — ordering contract + skill sweep (ruling #C6).** Document every kept bucket's ordering in [../contract.md](../contract.md) (+ envelope schema description strings); flag presentation-derived orders as such; sweep [contracts.md](contracts.md) and the skill for the new shapes across all five PRs; fix the §5o "the desktop GUI is stricter" lede to platform-accurate wording.
 
 Living-doc updates ride each PR (per AGENTS.md): [../contract.md](../contract.md), [contracts.md](contracts.md), `CHANGELOG.md` (Unreleased, breaking), and the capability-matrix if a read verdict changes.

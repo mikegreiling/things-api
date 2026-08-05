@@ -731,35 +731,10 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     tagTask(fx.db, buried, focus);
     const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
     const data = JSON.parse(json.stdout).data.view;
-    expect(data.items.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
+    expect(data.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
     expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
     const all = JSON.stringify(data);
     expect(all).not.toContain("buried-focus");
-  });
-
-  it("area show --json: direct to-dos are ONE flat items[] (index order); projects[] kept; no stage buckets", () => {
-    fx = buildFixtureDb();
-    seedArea(fx.db, "Work", 0, "AR");
-    seedTodo(fx.db, { area: "AR", title: "d-now", index: 0 });
-    seedTodo(fx.db, { area: "AR", title: "d-later", startDate: "2030-01-01", index: 1 });
-    seedTodo(fx.db, { area: "AR", title: "d-some", start: "someday", index: 2 });
-    seedProject(fx.db, { area: "AR", title: "P-a", index: 10 });
-    const view = JSON.parse(runCli(["area", "show", "AR", "--json", "--db", fx.path]).stdout).data
-      .view;
-    // ONE flat items[] in index order — all direct to-dos (current + later).
-    expect(view.items.map((i: { title: string }) => i.title)).toEqual([
-      "d-now",
-      "d-later",
-      "d-some",
-    ]);
-    // stage/when kept per row; the dissolved buckets are gone.
-    for (const k of ["anytime", "upcoming", "someday"]) expect(k in view).toBe(false);
-    const later = view.items.find((i: { title: string }) => i.title === "d-later");
-    expect(later.stage).toBe("upcoming");
-    expect(later.when).toBe("2030-01-01");
-    expect(view.items.find((i: { title: string }) => i.title === "d-some").stage).toBe("someday");
-    // projects[] KEPT (the distinct sidebar-rank order axis).
-    expect(view.projects.map((p: { title: string }) => p.title)).toEqual(["P-a"]);
   });
 
   it("things projects --tag is FLAT/inheritance-inclusive; area show --tag suppresses area inheritance", () => {
@@ -1848,7 +1823,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       ]).stdout,
     );
     expect(json.data.view.projects).toHaveLength(2);
-    expect(json.data.view.items).toHaveLength(3);
+    expect(json.data.view.anytime).toHaveLength(3);
     expect(json.meta.truncation).toEqual({
       // Aggregate counts roll the per-block totals up (2+3 shown of 35+35).
       shown: 5,
@@ -1865,7 +1840,7 @@ describe("cli detail views — area show per-section caps; project show uncapped
       runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
     expect(all.data.view.projects).toHaveLength(35);
-    expect(all.data.view.items).toHaveLength(35);
+    expect(all.data.view.anytime).toHaveLength(35);
     expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
@@ -2555,7 +2530,7 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.view.items.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
+    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
     expect(env.data.view.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
     const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
     expect(tty).not.toContain("buried-overdue");
