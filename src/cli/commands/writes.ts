@@ -703,6 +703,35 @@ function addPositionFlags(cmd: Command): Command {
     .option("--after <ref>", "place the block immediately after this item (same bucket)");
 }
 
+/**
+ * The universal-`reorder` anchor grammar (spec §7 ratified vocabulary):
+ * --start / --end / --before / --after. `--start`/`--end` name the block's top/
+ * bottom slot in its scope; --before/--after anchor against a sibling.
+ */
+function addReorderPositionFlags(cmd: Command): Command {
+  return cmd
+    .option("--start", "place the block at the start of its scope")
+    .option("--end", "place the block at the end of its scope")
+    .option("--before <ref>", "place the block immediately before this item")
+    .option("--after <ref>", "place the block immediately after this item");
+}
+
+/** Build a MovePosition from the reorder --start/--end/--before/--after flags. */
+function reorderPosition(opts: Record<string, unknown>): MovePosition | undefined | "conflict" {
+  const chosen = [
+    opts["start"] === true,
+    opts["end"] === true,
+    opts["before"] !== undefined,
+    opts["after"] !== undefined,
+  ].filter(Boolean).length;
+  if (chosen > 1) return "conflict";
+  if (opts["start"] === true) return { at: "first" };
+  if (opts["end"] === true) return { at: "last" };
+  if (opts["before"] !== undefined) return { before: opts["before"] as string };
+  if (opts["after"] !== undefined) return { after: opts["after"] as string };
+  return undefined;
+}
+
 /** One TTY line for a bulk-add batch item (the human, non-JSON multi rendering). */
 function addResultLine(r: BatchItemResult): string {
   const o = r.outcome;
@@ -2507,42 +2536,41 @@ export function registerWriteCommands(program: Command): void {
       }
     });
 
-  addPositionFlags(
-    addWriteFlags(
-      program
-        .command("reorder <refs...>")
-        .description(
-          "Rearrange to-dos (and the project rows the Today/Evening/day lists intermix with " +
-            "them) IN PLACE within the container and bucket they already share — REARRANGES, " +
-            "never changes membership (to change what an item belongs to, use `things todo " +
-            "move` / `things project move`). Argument order is the resulting order; unmentioned " +
-            "siblings keep theirs. Bare (no position) assembles the named items as a block at " +
-            "the EARLIEST one's current slot (partial-selection friendly); --first/--last/" +
-            "--before/--after position the block. Operands that span containers or buckets fail " +
-            "closed. A Today/Evening member also has an index slot in its container, so a set " +
-            "sharing BOTH axes is ambiguous — pass --in to say which (the refusal names both " +
-            "spellings). A deadline-forecast set sharing one Upcoming day is dual-axis the same " +
-            "way (the day-block vs its container order); --in upcoming or --in <YYYY-MM-DD> names " +
-            "the day-block. Ordering uses the native re-rank where available (private surface, on " +
-            "by default) and a verified when= bounce otherwise; bounce-max-items caps a bounce, " +
-            "bounce-enabled=false refuses bounce-dependent placements rather than degrading. " +
-            "For a project's HEADINGS use `things project move-heading`; for sidebar AREAS use " +
-            "`things area reorder`.",
-        )
-        .option(
-          "--in <target>",
-          "name the axis to reorder on: today | evening | anytime | someday | inbox, a project/" +
-            "area/heading ref (uuid or unique title), upcoming (the one future day the set shares), " +
-            "or a YYYY-MM-DD day-block. A stage-list or container axis sorts one KIND at a time — " +
-            "a mixed to-do+project set is refused (even sharing a container); only today | evening " +
-            "| upcoming | a day-block intermix both kinds. Reorder a project's headings with " +
-            "`things project move-heading`.",
-        ),
+  addReorderPositionFlags(
+    addDriveGuiFlag(
+      addWriteFlags(
+        program
+          .command("reorder <refs...>")
+          .description(
+            "The ONE reorder verb — rearrange to-dos, projects, headings, OR sidebar areas IN " +
+              "PLACE (REARRANGES, never changes membership; to change what an item belongs to use " +
+              "`things todo move` / `things project move`). All operands must be ONE kind (only " +
+              "to-dos and projects intermix, and only on the shared Today/Evening/day axes); a " +
+              "mixed-kind set, a cross-container set, and a non-member anchor each fail closed with " +
+              "one precise message. Argument order is the resulting order; unmentioned siblings " +
+              "keep theirs. Bare (no position) assembles the named items as a block at the " +
+              "EARLIEST one's current slot; --start/--end/--before/--after position the block. A " +
+              "Today/Evening member also has an index slot in its container, so a set sharing BOTH " +
+              "axes is ambiguous — pass --in to say which. HEADINGS: same-project heading " +
+              "re-ranking runs the native heading-block wire; an archived heading is reorderable " +
+              "but repositioning it brings it back to open (disclosed). AREAS: this drives the " +
+              "local Things app (sidebar drag). `things area reorder` and `things project " +
+              "move-heading` remain as kind-specific spellings.",
+          )
+          .option(
+            "--in <target>",
+            "to-dos/projects only — name the axis to reorder on: today | evening | anytime | " +
+              "someday | inbox, a project/area/heading ref (uuid or unique title), upcoming (the " +
+              "one future day the set shares), or a YYYY-MM-DD day-block. A stage-list or container " +
+              "axis sorts one KIND at a time; only today | evening | upcoming | a day-block " +
+              "intermix both kinds.",
+          ),
+      ),
     ),
   ).action(async (refs: string[], opts: WriteFlagOpts & Record<string, unknown>) => {
-    const position = movePosition(opts);
+    const position = reorderPosition(opts);
     if (position === "conflict") {
-      usageError(opts, "pass at most one of --first/--last/--before/--after");
+      usageError(opts, "pass at most one of --start / --end / --before / --after");
       return;
     }
     const request: ReorderRequest = {
@@ -2550,7 +2578,7 @@ export function registerWriteCommands(program: Command): void {
       ...(position !== undefined && { position }),
       ...(opts["in"] !== undefined && { in: opts["in"] as string }),
     };
-    await runMoveCmd(opts, (c) => c.write.reorderTodos(request, writeOptionsFrom(opts)));
+    await runMoveCmd(opts, (c) => c.write.reorderAny(request, writeOptionsFrom(opts)));
   });
 
   program

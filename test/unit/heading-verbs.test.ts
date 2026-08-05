@@ -121,4 +121,53 @@ describe("computeHeadingMovePre (project.move-heading order)", () => {
       computeHeadingMovePre(fixture.db, proj, [h1, h1], { position: "first" }).problems.join(" "),
     ).toContain("listed more than once");
   });
+
+  it("#V11: the wire is the MINIMAL front-cluster set, never the full order", () => {
+    const { proj, h1, h2, h3 } = seedThree();
+    // Moving h3 to the front is realized by front-clustering h3 alone — h1,h2 keep
+    // their current relative order at the back. So the wire is just [h3].
+    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
+    expect(pre.targetOrder).toEqual([h3, h1, h2]);
+    expect(pre.wire).toEqual([h3]);
+    expect(pre.reopened).toEqual([]);
+  });
+
+  it("#V11: an archived heading that need not move stays OUT of the wire (archived-free, no reopen)", () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    seedHeading(fixture.db, { title: "H1", project, index: 1 });
+    seedHeading(fixture.db, {
+      title: "H2arch",
+      project,
+      index: 2,
+      status: "completed",
+      stopDate: 1,
+    });
+    const h3 = seedHeading(fixture.db, { title: "H3", project, index: 3 });
+    const proj = { resolved: { uuid: project, title: "P" }, matches: 1 };
+    // Front-cluster h3 → [h3, h1, H2arch]; H2arch keeps its slot at the back and is
+    // never in the wire, so it is provably untouched (not reopened).
+    const pre = computeHeadingMovePre(fixture.db, proj, [h3], { position: "first" });
+    expect(pre.wire).toEqual([h3]);
+    expect(pre.reopened).toEqual([]);
+  });
+
+  it("#V11: an archived heading FORCED into the wire is disclosed as reopened", () => {
+    const project = seedProject(fixture.db, { title: "P" });
+    const h1 = seedHeading(fixture.db, { title: "H1", project, index: 1 });
+    const h2 = seedHeading(fixture.db, {
+      title: "H2arch",
+      project,
+      index: 2,
+      status: "completed",
+      stopDate: 1,
+    });
+    const h3 = seedHeading(fixture.db, { title: "H3", project, index: 3 });
+    const proj = { resolved: { uuid: project, title: "P" }, matches: 1 };
+    // Sending h1 to the end forces H2arch (and h3) above it into the wire — H2arch
+    // must move, so it reopens, and that is disclosed (never silent, never guarded).
+    const pre = computeHeadingMovePre(fixture.db, proj, [h1], { position: "last" });
+    expect(pre.targetOrder).toEqual([h2, h3, h1]);
+    expect(pre.wire).toEqual([h2, h3]);
+    expect(pre.reopened).toEqual([h2]);
+  });
 });

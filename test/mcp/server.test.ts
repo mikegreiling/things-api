@@ -277,8 +277,7 @@ const EXPECTED_TOOLS = [
   // generic + discovery
   "run_operation",
   "batch",
-  "reorder", // planner-form in-place reorder (mirrors `things reorder`)
-  "reorder_areas", // sidebar-area reorder (mirrors `things area reorder`)
+  "reorder", // the ONE universal reorder (to-dos/projects/headings/areas; mirrors `things reorder`)
   "undo",
   "capabilities",
   "doctor",
@@ -2021,38 +2020,39 @@ describe("things MCP server", () => {
       expect(index.placement).toContain("scope=project");
     });
 
-    it("reorder_areas repositions a sidebar area, gates the drive, and demands exactly one destination", async () => {
+    it("the unified reorder tool repositions a sidebar area, gates the drive, and needs a position", async () => {
       const target = seedArea(fixture.db, "Move Me", 0);
       seedArea(fixture.db, "Anchor", 1);
       await connect([fakeVector(null, { id: "ui", ops: ["area.reorder"] }).vector]);
-      // Without the drive ack the ui-vector op blocks (H-UI-DRIVE, a pre-vector hazard).
+      // Without the drive ack the ui-vector leg blocks (H-UI-DRIVE, a pre-vector hazard).
       const blocked = await client.callTool({
-        name: "reorder_areas",
-        arguments: { target, last: true },
+        name: "reorder",
+        arguments: { refs: [target], end: true },
       });
       expect((textOf(blocked) as { code: string }).code).toBe("blocked:H-UI-DRIVE");
 
-      // With the ack it plans through the area.reorder op (plan carries `op`).
+      // With the ack it plans through the sidebar-drag driver (move-dry-run plan).
       const outcome = textOf(
         await client.callTool({
-          name: "reorder_areas",
-          arguments: { target, last: true, dangerously_drive_gui: true, dry_run: true },
+          name: "reorder",
+          arguments: { refs: [target], end: true, dangerously_drive_gui: true, dry_run: true },
         }),
-      ) as { op: string };
-      expect(outcome.op).toBe("area.reorder");
+      ) as { placement: string; note: string };
+      expect(outcome.placement).toContain("area re-rank");
+      expect(outcome.note).toContain("sidebar-drag");
 
-      // Two destinations is a usage error (enforced in the tool).
+      // Two positions is a usage error (start/end/before/after are exclusive).
       const twoDest = await client.callTool({
-        name: "reorder_areas",
-        arguments: { target, before: "a", last: true, dangerously_drive_gui: true },
+        name: "reorder",
+        arguments: { refs: [target], before: "a", end: true, dangerously_drive_gui: true },
       });
       expect(twoDest.isError).toBe(true);
       expect((textOf(twoDest) as { code: string }).code).toBe("usage");
 
-      // No destination at all is also a usage error.
+      // No position at all is a usage error (an area reorder needs a position).
       const noDest = await client.callTool({
-        name: "reorder_areas",
-        arguments: { target, dangerously_drive_gui: true },
+        name: "reorder",
+        arguments: { refs: [target], dangerously_drive_gui: true },
       });
       expect(noDest.isError).toBe(true);
       expect((textOf(noDest) as { code: string }).code).toBe("usage");

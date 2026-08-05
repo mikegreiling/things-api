@@ -44,7 +44,7 @@ Corollary inherited from v1: structure a consumer can cheaply discard (flatten) 
 | `search` | `data.items` + per-row `match` | unchanged (non-scope) |
 | `changes` | `data.items` + per-row `changeKind` | unchanged (non-scope) |
 | `projects` listing | `data.items` | unchanged (non-scope; the sidebar-rank scopes live in `area-view.projects`) |
-| `areas` listing | `data.items` | unchanged (IS the area-rank scope — `reorder_areas`) |
+| `areas` listing | `data.items` | unchanged (IS the area-rank scope — reachable via the universal `reorder`; the dedicated `reorder_areas` tool was folded in and removed, plan PR D) |
 | `project-view` | `data.view = { project, children, headings[] }` per §2 R2–R6 | RESHAPE: stage buckets return under `children` (+ per-container `logbook`); `headings[]` recursive, all lifecycle classes, no `logbookHeadings`, no root logbook |
 | `area-view` | `data.view = { area \| null, children: { anytime, upcoming[], someday }, projects: {items, total?} }` | RESHAPE: direct to-dos under `children` records; `projects` record-ized (a real scope: child-project sidebar rank). NO `logbook` key — the area logbook stays a query view (#346) |
 | `detail` / `show` router | `data.item` | unchanged |

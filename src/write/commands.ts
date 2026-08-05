@@ -1926,7 +1926,11 @@ const projectMoveHeading: CommandSpec<"project.move-heading"> = {
     // used (experimental — gated by allow-experimental + the sdef canary),
     // fed the computed full order.
     if (vector !== "applescript") unsupportedVector(this.op, vector);
-    const order = pre.headingMove?.targetOrder ?? [];
+    // #V11: send the MINIMAL front-cluster wire, not the full order — an archived
+    // heading that need not move stays out of it (untouched, HEADSORT H-UNSWEPT);
+    // any archived heading the target FORCES in (pre.headingMove.reopened) is
+    // reopened and disclosed. NEVER put un-targeted rows into the wire.
+    const order = pre.headingMove?.wire ?? [];
     return osa(
       `${PRIVATE_REORDER_COMMAND} project id ${q(pre.destProject?.resolved?.uuid ?? "")} ` +
         `with ids ${q(order.join(","))}`,
