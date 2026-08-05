@@ -87,7 +87,10 @@ export function renderDetail(item: AnyTask | null): string[] {
       );
     }
   } else if (item.stopped !== null) {
-    meta("logged", `${loggedDate(item.stopped, todayIso)} ${dim(`(${item.status})`)}`);
+    meta(
+      "logged",
+      `${loggedDate(item.stopped, todayIso, renderZone())} ${dim(`(${item.status})`)}`,
+    );
   }
   meta("area", item.area?.title);
   if (item.type === "to-do") {

@@ -145,7 +145,9 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   if (p.deadline !== null && p.deadline < "4000" && p.status === "open")
     lines.push(`  ${dim("deadline:")} ${deadlineDetail(p.deadline, todayIso)}`);
   if (p.status !== "open" && p.stopped !== null)
-    lines.push(`  ${dim("logged:")} ${loggedDate(p.stopped, todayIso)} ${dim(`(${p.status})`)}`);
+    lines.push(
+      `  ${dim("logged:")} ${loggedDate(p.stopped, todayIso, renderZone())} ${dim(`(${p.status})`)}`,
+    );
   if (p.tags.length > 0)
     lines.push(`  ${dim("tags:")} ${green(`#${p.tags.map((t) => t.title).join(" #")}`)}`);
   // Inherited (from the area) renders dim as plain tag names, only when

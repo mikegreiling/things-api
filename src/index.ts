@@ -245,7 +245,7 @@ export { makeRefPromoter, titleRoundTrips } from "./read/queries.ts";
 // The fused TTY ref form `Title [8charPrefix]` (round-trippable as a decorated
 // input ref) the consumer surfaces render for every disambiguation candidate.
 export { fusedRef, REF_PREFIX_LEN } from "./read/queries.ts";
-export { localToday } from "./model/dates.ts";
+export { instantDateIso, localToday } from "./model/dates.ts";
 export { templateStatus } from "./model/recurrence.ts";
 export { isTodayMember } from "./read/views.ts";
 // The single-source time-axis derivation the wire emit boundary and the TTY
