@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { shapeReadPayload } from "../../src/read/shape.ts";
+import { bucketRecord, shapeReadPayload } from "../../src/read/shape.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -71,6 +71,19 @@ function project(over: Obj = {}): Obj {
 }
 
 const first = (out: unknown): Obj => (out as Obj[])[0]!;
+
+/** A v2 project-view heading container fixture (empty children) at a lifecycle class. */
+const mkHeadingContainer = (uuid: string, status: string, stopped: Date | null): Obj => ({
+  heading: {
+    uuid,
+    type: "heading",
+    title: uuid,
+    status,
+    stopped,
+    project: { uuid: "proj-1", title: "Q3" },
+  },
+  children: [],
+});
 
 describe("shapeReadPayload — R7 compact tier (flat list)", () => {
   it("compact keeps identity + structural facts; start/logged/trashed gone, stage kept on mixed", () => {
@@ -461,112 +474,126 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       expect(k in out).toBe(false);
   });
 
-  it("project-view: children re-bucket by stage; heading groups become {anytime,upcoming,someday}", () => {
+  it("project-view v2: body children bucket by stage under `children`; per-container logbook; advisories + root logbook + logbookHeadings DELETED", () => {
+    const looseRef = { heading: null, headingProject: null };
     const view = {
       project: project(),
-      active: [todo({ uuid: "loose-anytime" })], // stage anytime
-      scheduled: [
-        { date: "2026-08-01", items: [todo({ uuid: "loose-up", startDate: "2026-08-01" })] },
-      ],
-      someday: [todo({ uuid: "loose-some", start: "someday", startDate: null })],
-      repeating: [
+      // The v2 wire reads ONLY project + bodyChildren + headingContainers. The
+      // render-only fields (active/scheduled/logged/loggedHeadings/advisories) are
+      // seeded here to PROVE they never leak onto the wire.
+      bodyChildren: [
+        todo({ uuid: "loose-anytime", ...looseRef }), // stage anytime
+        todo({ uuid: "loose-up", startDate: "2026-08-01", ...looseRef }), // stage upcoming (future)
+        todo({ uuid: "loose-some", start: "someday", startDate: null, ...looseRef }), // someday
         todo({
           uuid: "loose-tmpl",
+          ...looseRef,
           repeating: {
             isTemplate: true,
             isInstance: false,
             templateUuid: null,
             nextOccurrence: null,
           },
-        }),
+        }), // resting template → the {when:null} block
+        todo({ uuid: "gone-log", status: "completed", logged: true, ...looseRef }), // stage logbook
       ],
-      headings: [
+      headingContainers: [
         {
           heading: {
             uuid: "head-1",
             type: "heading",
             title: "Phase 1",
             status: "open",
+            stopped: null,
             project: { uuid: "proj-1", title: "Q3" },
           },
-          items: [todo({ uuid: "h-anytime" })],
-          scheduled: [
-            { date: "2026-08-05", items: [todo({ uuid: "h-up", startDate: "2026-08-05" })] },
+          children: [
+            todo({ uuid: "h-anytime", heading: { uuid: "head-1", title: "Phase 1" } }),
+            todo({
+              uuid: "h-up",
+              startDate: "2026-08-05",
+              heading: { uuid: "head-1", title: "Phase 1" },
+            }),
+            todo({
+              uuid: "h-log",
+              status: "completed",
+              logged: true,
+              stopped: new Date("2026-07-19T00:00:00.000Z"),
+              heading: { uuid: "head-1", title: "Phase 1" },
+            }),
           ],
-          someday: [],
-          repeating: [],
         },
       ],
-      logged: [todo({ uuid: "gone-log", status: "completed", logged: true })],
-      trashed: [todo({ uuid: "gone-trash", trashed: true })],
-      openChildrenWhileResolved: 0,
+      // Render-only fields (must NOT survive onto the wire):
+      active: [todo({ uuid: "leak-active" })],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      logged: [todo({ uuid: "leak-logged" })],
+      loggedHeadings: [{ heading: {}, items: [] }],
+      openChildrenWhileResolved: 3,
+      openChildrenUnderArchivedHeading: 2,
     };
-    const out = shapeReadPayload("project-view", view, true) as Obj;
-    // Loose children re-bucketed by stage.
-    expect((out["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-anytime"]);
-    expect((out["someday"] as Obj[]).map((i) => i["uuid"])).toEqual(["loose-some"]);
-    // Upcoming: the dated child under its date, then a trailing null group for the date-less template.
-    const upcoming = out["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
-    expect(upcoming.map((g) => g.date)).toEqual(["2026-08-01", null]);
+    const out = shapeReadPayload("project-view", view, true) as Obj; // FULL tier
+    // Top-level: EXACTLY {project, children, headings} — nothing else (#V12: no
+    // advisory keys, no root logbook, no logbookHeadings, no render-only buckets).
+    expect(Object.keys(out).toSorted()).toEqual(["children", "headings", "project"]);
+    const children = out["children"] as Obj;
+    const items = (b: unknown) => ((b as Obj)["items"] as Obj[]).map((i) => i["uuid"]);
+    // Body children re-bucketed by stage into the four RECORDS.
+    expect(items(children["anytime"])).toEqual(["loose-anytime"]);
+    expect(items(children["someday"])).toEqual(["loose-some"]);
+    expect(items(children["logbook"])).toEqual(["gone-log"]); // per-container logbook (R6)
+    // Upcoming: dated block, then the trailing {when:null} resting block (R3/#V8).
+    const upcoming = children["upcoming"] as Array<{ when: string | null; items: Obj[] }>;
+    expect(upcoming.map((g) => g.when)).toEqual(["2026-08-01", null]);
     expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["loose-up"]);
     expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["loose-tmpl"]);
-    // R12: inside a date-group `when` drops (the group states the date); the
-    // full tier still keeps the raw `startDate` substrate.
+    // R12: inside a day block `when` drops (the block states it); the full tier
+    // keeps the raw `startDate` substrate.
     expect("when" in upcoming[0]!.items[0]!).toBe(false);
     expect(upcoming[0]!.items[0]!["startDate"]).toBe("2026-08-01");
-    expect("when" in upcoming[1]!.items[0]!).toBe(false); // resting template — no projection anyway
-    // A re-bucketed child drops project/area/stage.
-    const anyChild = (out["anytime"] as Obj[])[0]!;
+    // A re-bucketed body child drops project/area/stage (bucket + card state them).
+    const anyChild = ((children["anytime"] as Obj)["items"] as Obj[])[0]!;
     expect("project" in anyChild).toBe(false);
     expect("area" in anyChild).toBe(false);
     expect("stage" in anyChild).toBe(false);
-    // logbook (renamed) carries the logged rows; the project view has NO `trash`
-    // bucket — trashed children live only in `things trash` (the seeded
-    // `gone-trash` row is dropped entirely).
-    expect((out["logbook"] as Obj[]).map((i) => i["uuid"])).toEqual(["gone-log"]);
-    // A flat logbook row KEEPS its heading ref (the in-project toggle labels the
-    // heading — Part 2.3 / HEADARC2-B), flattened with the project-scoped uuid.
-    const logRow = (out["logbook"] as Obj[])[0]!;
-    expect(logRow["heading"]).toBe("Phase 1");
-    expect(logRow["headingUuid"]).toBe("head-1");
-    expect("project" in logRow).toBe(false); // R6 drops the redundant container
-    expect("stage" in logRow).toBe(false); // stage-pure logbook rows
-    // No archived headings here → an empty logbookHeadings sibling.
-    expect(out["logbookHeadings"]).toEqual([]);
-    expect("trash" in out).toBe(false);
-    for (const k of ["active", "scheduled", "repeating", "logged", "loggedHeadings", "trashed"])
-      expect(k in out).toBe(false);
-    // Heading group reshaped to {heading, anytime, upcoming, someday}.
+    // The BODY logbook row: no heading (un-headed), no project, stage-pure (dropped).
+    const bodyLog = ((children["logbook"] as Obj)["items"] as Obj[])[0]!;
+    expect("heading" in bodyLog).toBe(false);
+    expect("project" in bodyLog).toBe(false);
+    expect("stage" in bodyLog).toBe(false);
+    // Heading node → {uuid, title, children}: an OPEN heading carries no `archived`.
     const grp = (out["headings"] as Obj[])[0]!;
-    expect(Object.keys(grp).toSorted()).toEqual(["anytime", "heading", "someday", "upcoming"]);
-    expect((grp["anytime"] as Obj[]).map((i) => i["uuid"])).toEqual(["h-anytime"]);
-    const hup = grp["upcoming"] as Array<{ date: string | null; items: Obj[] }>;
-    expect(hup[0]!.date).toBe("2026-08-05");
-    // Heading-group members drop heading; the heading NODE drops project + type +
-    // status, and an OPEN heading carries no `archived`.
-    expect("heading" in (grp["anytime"] as Obj[])[0]!).toBe(false);
-    const headNode = grp["heading"] as Obj;
-    expect("project" in headNode).toBe(false);
-    expect("type" in headNode).toBe(false); // positional: always a heading
-    expect("status" in headNode).toBe(false);
-    expect("archived" in headNode).toBe(false); // open heading
-    expect(headNode["uuid"]).toBe("head-1");
-    expect(headNode["title"]).toBe("Phase 1");
+    expect(Object.keys(grp).toSorted()).toEqual(["children", "title", "uuid"]);
+    expect(grp["uuid"]).toBe("head-1");
+    expect(grp["title"]).toBe("Phase 1");
+    expect("archived" in grp).toBe(false);
+    const hChildren = grp["children"] as Obj;
+    expect(items(hChildren["anytime"])).toEqual(["h-anytime"]);
+    expect((hChildren["upcoming"] as Array<{ when: string | null }>)[0]!.when).toBe("2026-08-05");
+    // Swept child of a LIVE heading nests in ITS children.logbook (R6) — and in v2
+    // DROPS its heading ref (its position UNDER headings[].children states it, task
+    // item 6), unlike the v1 flat root logbook that kept it.
+    expect(items(hChildren["logbook"])).toEqual(["h-log"]);
+    const hLog = ((hChildren["logbook"] as Obj)["items"] as Obj[])[0]!;
+    expect("heading" in hLog).toBe(false);
+    expect("project" in hLog).toBe(false);
+    expect("stage" in hLog).toBe(false);
+    // A live-heading member drops heading (membership structural now).
+    expect("heading" in ((hChildren["anytime"] as Obj)["items"] as Obj[])[0]!).toBe(false);
     // The project card node keeps its own area + stage.
     expect((out["project"] as Obj)["area"]).toBeDefined();
     expect((out["project"] as Obj)["stage"]).toBe("anytime");
   });
 
-  it("project-view: a swept ARCHIVED heading becomes a logbookHeadings group with `archived` + nested children", () => {
+  it("project-view v2: headings[] recursive — swept-heading logged children nest in ITS children.logbook; the open anomaly rides children.anytime (self-evident under `archived`)", () => {
     const view = {
       project: project(),
-      active: [],
-      scheduled: [],
-      someday: [],
-      repeating: [],
-      headings: [],
-      logged: [],
-      loggedHeadings: [
+      bodyChildren: [],
+      // A SWEPT ARCHIVED heading is now an ordinary headings[] entry (R5) carrying
+      // `archived`; its children ride ITS recursive `children` by stage.
+      headingContainers: [
         {
           heading: {
             uuid: "arch-1",
@@ -576,53 +603,168 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
             stopped: new Date("2026-07-20T12:00:00.000Z"),
             project: { uuid: "proj-1", title: "Q3" },
           },
-          items: [
+          children: [
             todo({
-              uuid: "swept-child",
+              uuid: "swept-newer",
               status: "completed",
               logged: true,
+              stopped: new Date("2026-07-18T00:00:00.000Z"),
               heading: { uuid: "arch-1", title: "Done Phase" },
-              headingProject: { uuid: "proj-1", title: "Q3" },
             }),
-            // The odd OPEN child a Put-Back stranded (HEADARC2-C) — rendered.
+            todo({
+              uuid: "swept-older",
+              status: "completed",
+              logged: true,
+              stopped: new Date("2026-07-10T00:00:00.000Z"),
+              heading: { uuid: "arch-1", title: "Done Phase" },
+            }),
+            // The odd OPEN child a Put-Back stranded (HEADARC2-C) — NOT logged.
             todo({
               uuid: "odd-open",
               status: "open",
               heading: { uuid: "arch-1", title: "Done Phase" },
-              headingProject: { uuid: "proj-1", title: "Q3" },
             }),
           ],
         },
       ],
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      logged: [],
+      loggedHeadings: [],
       openChildrenWhileResolved: 0,
       openChildrenUnderArchivedHeading: 1,
     };
-    const out = shapeReadPayload("project-view", view, false) as Obj;
-    const groups = out["logbookHeadings"] as Obj[];
-    expect(groups).toHaveLength(1);
-    const g = groups[0]!;
-    const head = g["heading"] as Obj;
+    const out = shapeReadPayload("project-view", view, false) as Obj; // compact
+    const grp = (out["headings"] as Obj[])[0]!;
     // The archived heading NODE: type/status/project dropped; `archived` present
-    // (a Date, serialized to a full ISO datetime like `stopped`).
-    expect("type" in head).toBe(false);
-    expect("status" in head).toBe(false);
-    expect("project" in head).toBe(false);
-    expect(head["uuid"]).toBe("arch-1");
-    expect(head["title"]).toBe("Done Phase");
-    expect(head["archived"]).toBeInstanceOf(Date);
-    expect((head["archived"] as Date).toISOString()).toBe("2026-07-20T12:00:00.000Z");
-    // Group children: project/area/heading dropped (group states the heading),
-    // but stage KEPT (mixed — the odd open child is stage `anytime`, not logbook).
-    const items = g["items"] as Obj[];
-    expect(items.map((i) => i["uuid"])).toEqual(["swept-child", "odd-open"]);
-    for (const i of items) {
-      expect("heading" in i).toBe(false);
-      expect("project" in i).toBe(false);
+    // (a Date, full ISO datetime like `stopped`), no `stage`/`status`.
+    expect("type" in grp).toBe(false);
+    expect("status" in grp).toBe(false);
+    expect("stage" in grp).toBe(false);
+    expect("project" in grp).toBe(false);
+    expect(grp["uuid"]).toBe("arch-1");
+    expect((grp["archived"] as Date).toISOString()).toBe("2026-07-20T12:00:00.000Z");
+    const c = grp["children"] as Obj;
+    const items = (b: unknown) => ((b as Obj)["items"] as Obj[]).map((i) => i["uuid"]);
+    // Logged children in ITS logbook, most-recently-completed first (stopped DESC).
+    expect(items(c["logbook"])).toEqual(["swept-newer", "swept-older"]);
+    // The open anomaly rides children.anytime (stage anytime) — one entity one
+    // place (R5/#V12). Its OPEN status (no `status` key in compact) sitting in a
+    // live bucket UNDER an `archived` heading makes the anomaly self-evident; the
+    // bucket states the stage, so `stage` is dropped.
+    expect(items(c["anytime"])).toEqual(["odd-open"]);
+    const odd = ((c["anytime"] as Obj)["items"] as Obj[])[0]!;
+    expect("stage" in odd).toBe(false);
+    expect("status" in odd).toBe(false); // open → compact-dropped
+    // No advisory keys anywhere on the wire (#V12).
+    expect("openChildrenUnderArchivedHeading" in out).toBe(false);
+    expect("openChildrenWhileResolved" in out).toBe(false);
+  });
+
+  it("project-view v2: headings[] holds every lifecycle class in index order (open, archived-unswept, archived-swept)", () => {
+    const view = {
+      project: project(),
+      bodyChildren: [],
+      headingContainers: [
+        mkHeadingContainer("open-h", "open", null),
+        mkHeadingContainer("unswept-h", "completed", new Date("2026-08-04T00:00:00.000Z")), // archived, not swept
+        mkHeadingContainer("swept-h", "completed", new Date("2026-06-01T00:00:00.000Z")), // archived + swept
+      ],
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      logged: [],
+      loggedHeadings: [],
+      openChildrenWhileResolved: 0,
+      openChildrenUnderArchivedHeading: 0,
+    };
+    const out = shapeReadPayload("project-view", view, false) as Obj;
+    const heads = out["headings"] as Obj[];
+    expect(heads.map((h) => h["uuid"])).toEqual(["open-h", "unswept-h", "swept-h"]); // index order
+    expect("archived" in heads[0]!).toBe(false); // open
+    expect("archived" in heads[1]!).toBe(true); // archived-unswept still carries archived
+    expect("archived" in heads[2]!).toBe(true); // archived-swept
+    // Each carries the recursive four-bucket children shape (empty here).
+    for (const h of heads) {
+      const c = h["children"] as Obj;
+      expect(Object.keys(c).toSorted()).toEqual(["anytime", "logbook", "someday", "upcoming"]);
     }
-    expect(items[0]!["stage"]).toBe("logbook");
-    expect(items[1]!["stage"]).toBe("anytime"); // the odd open child, kept visible
-    // The odd-state advisory count rides the wire.
-    expect(out["openChildrenUnderArchivedHeading"]).toBe(1);
+  });
+
+  it("project-view v2: dual citizen — a someday/anytime child with a deadline seats in its CANONICAL stage bucket ONLY, never a day block (R7)", () => {
+    const looseRef = { heading: null, headingProject: null };
+    const view = {
+      project: project(),
+      bodyChildren: [
+        // A SOMEDAY child with a FUTURE (not-yet-due) deadline: stays someday, no pull.
+        todo({
+          uuid: "some-dl",
+          start: "someday",
+          startDate: null,
+          deadline: "2026-12-01",
+          ...looseRef,
+        }),
+        // An ANYTIME child with a future deadline: stays anytime.
+        todo({ uuid: "any-dl", deadline: "2026-12-01", ...looseRef }),
+      ],
+      headingContainers: [],
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      logged: [],
+      loggedHeadings: [],
+      openChildrenWhileResolved: 0,
+      openChildrenUnderArchivedHeading: 0,
+    };
+    const out = shapeReadPayload("project-view", view, false) as Obj;
+    const children = out["children"] as Obj;
+    const items = (b: unknown) => ((b as Obj)["items"] as Obj[]).map((i) => i["uuid"]);
+    expect(items(children["someday"])).toEqual(["some-dl"]);
+    expect(items(children["anytime"])).toEqual(["any-dl"]);
+    // NEVER duplicated into a day block — the container view buckets by STAGE, and a
+    // deadline never makes the stage `upcoming` (only a future startDate / template).
+    expect(children["upcoming"]).toEqual([]);
+    // Single seat: no uuid appears twice across the whole view.
+    const all = [
+      ...items(children["anytime"]),
+      ...items(children["someday"]),
+      ...items(children["logbook"]),
+      ...(children["upcoming"] as Array<{ items: Obj[] }>).flatMap((g) =>
+        g.items.map((i) => i["uuid"]),
+      ),
+    ];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("project-view v2: bucket records are {items} with NO `total` when uncapped (R1); bucketRecord presence ⟺ capped", () => {
+    const view = {
+      project: project(),
+      bodyChildren: [todo({ uuid: "a", heading: null, headingProject: null })],
+      headingContainers: [],
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
+      logged: [],
+      loggedHeadings: [],
+      openChildrenWhileResolved: 0,
+      openChildrenUnderArchivedHeading: 0,
+    };
+    const out = shapeReadPayload("project-view", view, false) as Obj;
+    const children = out["children"] as Obj;
+    // The project view is uncapped today, so every record is {items} — no `total`
+    // (R1: an untruncated bucket never restates its own length).
+    for (const k of ["anytime", "someday", "logbook"]) {
+      expect(Object.keys(children[k] as Obj)).toEqual(["items"]);
+    }
+    // The record constructor's total-presence law: present IFF capped.
+    expect(bucketRecord([1, 2])).toEqual({ items: [1, 2] }); // uncapped → absent
+    expect(bucketRecord([1, 2], 2)).toEqual({ items: [1, 2] }); // exact → absent
+    expect(bucketRecord([1, 2], 5)).toEqual({ items: [1, 2], total: 5 }); // capped → present
   });
 });
 
@@ -698,20 +840,20 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
           nextOccurrence: null,
         },
       }),
-      active: [todo({ uuid: "loose", project: tmplProject, heading: null, headingProject: null })],
-      scheduled: [],
-      someday: [],
-      repeating: [],
-      headings: [
+      bodyChildren: [
+        todo({ uuid: "loose", project: tmplProject, heading: null, headingProject: null }),
+      ],
+      headingContainers: [
         {
           heading: {
             uuid: "head-1",
             type: "heading",
             title: "Section",
             status: "open",
+            stopped: null,
             project: { uuid: "proj-1", title: "Weekly Review" },
           },
-          items: [
+          children: [
             todo({
               uuid: "h-loose",
               project: null,
@@ -719,23 +861,25 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
               headingProject: tmplProject,
             }),
           ],
-          scheduled: [],
-          someday: [],
-          repeating: [],
         },
       ],
+      active: [],
+      scheduled: [],
+      someday: [],
+      repeating: [],
       logged: [],
-      trashed: [],
+      loggedHeadings: [],
       openChildrenWhileResolved: 0,
+      openChildrenUnderArchivedHeading: 0,
     };
     const out = shapeReadPayload("project-view", view, false) as Obj;
-    const loose = (out["anytime"] as Obj[])[0]!;
-    expect("project" in loose).toBe(false); // R6 drops the container in a project view
-    expect("projectIsTemplate" in loose).toBe(false); // marker drops WITH the project ref
+    const loose = ((out["children"] as Obj)["anytime"] as Obj)["items"] as Obj[];
+    expect("project" in loose[0]!).toBe(false); // R6 drops the container in a project view
+    expect("projectIsTemplate" in loose[0]!).toBe(false); // marker drops WITH the project ref
     const grp = (out["headings"] as Obj[])[0]!;
-    const hChild = (grp["anytime"] as Obj[])[0]!;
-    expect("project" in hChild).toBe(false);
-    expect("projectIsTemplate" in hChild).toBe(false);
+    const hChild = ((grp["children"] as Obj)["anytime"] as Obj)["items"] as Obj[];
+    expect("project" in hChild[0]!).toBe(false);
+    expect("projectIsTemplate" in hChild[0]!).toBe(false);
     // The project card node exposes its OWN template nature via `repeating` (R11) —
     // the child-container marker never attaches to the card itself.
     expect((out["project"] as Obj)["repeating"]).toBeDefined();

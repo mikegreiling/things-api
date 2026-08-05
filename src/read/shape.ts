@@ -585,30 +585,23 @@ function flattenGroups(groups: unknown): unknown[] {
 /** Coerce an unknown value to an array (empty when absent). */
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-/** The R6 ref drop for every child bucket of a project view (unheaded members). */
-const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, stage: true };
-/** Heading-group members drop the heading ref too (the group states it). */
+/**
+ * The R6 ref drop for the un-headed BODY's four `children` bucket records (v2):
+ * every body child drops project/area (the card states them), the bucket-implied
+ * stage (each of `anytime`/`upcoming`/`someday`/`logbook` is stage-pure), and the
+ * heading ref — a body child is by construction un-headed (its `heading` is null),
+ * and a project view surfaces no bare `heading: null` (drop it explicitly rather
+ * than leaning on omit-empty).
+ */
+const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
+/**
+ * The R6 ref drop for a HEADING's four `children` bucket records (v2): a headed
+ * child drops project/area (the card states them), the heading ref (its position
+ * UNDER `headings[].children` states membership — structural, #362 / task item 6),
+ * and the bucket-implied stage. Applied uniformly to the heading's live buckets
+ * AND its `logbook` — the logbook is stage-pure (all logged), so stage drops too.
+ */
 const HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
-/**
- * Project-view LOGBOOK (flat logged) rows: drop project/area (the card states
- * them) + the bucket-implied stage (all rows are logged), but KEEP the heading
- * ref (drop.keepHeading) — a swept child of an OPEN heading carries its heading
- * as the GUI hint (the in-project logged toggle labels the HEADING; the global
- * Logbook labels the PROJECT — the two-view asymmetry, HEADARC2-B).
- */
-const PROJECT_LOGBOOK_DROP: ItemDrop = {
-  project: true,
-  area: true,
-  stage: true,
-  keepHeading: true,
-};
-/**
- * Members of an ARCHIVED-heading GROUP in the logged region (HEADARC2-A): drop
- * project/area + the heading ref (the group header states it). `stage` is KEPT —
- * the group is stage-MIXED (mostly `logbook`, but may hold the odd OPEN child a
- * Put-Back stranded, HEADARC2-C), so the header does not provably state it.
- */
-const LOGGED_HEADING_MEMBER_DROP: ItemDrop = { project: true, area: true, heading: true };
 /** Area-view child-item buckets drop their area (the card states it) + the bucket-implied stage. */
 const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 /** Area-view PROJECTS list: a mixed listing of the area's project rows — keep `stage`, drop area. */
@@ -668,73 +661,91 @@ function shapeHeadingNode(src: unknown): unknown {
   return h;
 }
 
-/** Shape every collection bucket of a project view; the card node is left full + ancestry-intact. */
+/** A bucket record `{items, total?}` (v2 R1): `total` present IFF the bucket was capped. */
+export function bucketRecord(items: unknown[], total?: number): Obj {
+  return total !== undefined && items.length < total ? { items, total } : { items };
+}
+
+/** The `stopped` epoch of an internal entity (a Date pre-shaping), or 0 — for logbook DESC ordering. */
+function stoppedMs(o: Obj): number {
+  const s = o["stopped"];
+  return s instanceof Date ? s.getTime() : 0;
+}
+
+/**
+ * Build ONE container's four v2 `children` bucket records (PR 2) from its flat
+ * child set (live AND logged alike). Every child is routed by DERIVED STAGE, so
+ * one entity lands in exactly one place (R5/#V12):
+ * - `logbook: {items, total?}` — the swept/resolved children (`logged` flag),
+ *   most-recently-completed first (`stopped` DESC — the certified HEADARC3/logbook
+ *   ordering), stage-pure so `stage` drops;
+ * - `anytime` / `someday: {items, total?}` — stage-pure records;
+ * - `upcoming: [{when, items, total?} …]` — the day-block ARRAY (R3): dated blocks
+ *   chronological, then a single trailing `{when: null, items}` resting block for
+ *   date-less recurring templates (#V8). An open child stranded under an archived
+ *   heading (HEADARC2-C anomaly) is NOT logged, so it rides `anytime` here — its
+ *   presence in a live bucket under an `archived` heading node is self-evident.
+ * `drop` carries the container's ancestry drops (body vs heading); the day-block
+ * `when` renames the internal date group's `date` (rebucketChildren) — `null` for
+ * the resting block. No bucket is capped in the project view today, so every
+ * `total` is absent (R1: an untruncated bucket never restates its length); the
+ * `total?` argument keeps the record + day-block shape ready for PR 5's sweep and
+ * is exercised by the unit tests.
+ */
+function shapeContainerChildren(
+  children: unknown,
+  drop: ItemDrop,
+  compact: boolean,
+  promoter: RefPromoter,
+): Obj {
+  const live: unknown[] = [];
+  const logged: Obj[] = [];
+  for (const c of asArray(children)) {
+    if (c !== null && typeof c === "object" && (c as Obj)["logged"] === true) logged.push(c as Obj);
+    else live.push(c);
+  }
+  const { anytime, upcoming, someday } = rebucketChildren(live, drop, compact, promoter);
+  const loggedSorted = logged.toSorted((a, b) => stoppedMs(b) - stoppedMs(a));
+  const logbook = shapeList(loggedSorted, drop, compact, promoter) as unknown[];
+  return {
+    anytime: bucketRecord(anytime),
+    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
+    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    someday: bucketRecord(someday),
+    logbook: bucketRecord(logbook),
+  };
+}
+
+/**
+ * Shape a project view into the read-shape v2 wire (PR 2):
+ * `{ project, children, headings[] }` — NOTHING else at this level. `children` is
+ * the un-headed BODY's four stage-keyed bucket records; `headings[]` is EVERY
+ * heading (index order, all lifecycle classes — R5) as `{uuid, title, archived?,
+ * children}` with the SAME recursive `children` shape. The per-container `logbook`
+ * lives inside each `children` (R6, no root logbook); the v1-era `logbookHeadings`
+ * and BOTH advisory keys (`openChildrenWhileResolved` /
+ * `openChildrenUnderArchivedHeading`) are DELETED (#V12) — anomalous open children
+ * seat in the normal recursive buckets, the heading's `archived` mark making the
+ * anomaly self-evident. The card node keeps everything (children derive their
+ * container from it). `out` is built fresh, so no render-only field leaks.
+ */
 function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
-  const cd = PROJECT_CHILD_DROP;
-  const hd = HEADING_MEMBER_DROP;
-  const shapeHeadingGroup = (g: unknown): unknown => {
-    if (g === null || typeof g !== "object") return g;
-    const grp = g as Obj;
-    const out: Obj = {};
-    out["heading"] = shapeHeadingNode(grp["heading"]);
-    const members = [
-      ...asArray(grp["items"]),
-      ...flattenGroups(grp["scheduled"]),
-      ...asArray(grp["someday"]),
-      ...asArray(grp["repeating"]),
-    ];
-    const { anytime, upcoming, someday } = rebucketChildren(members, hd, compact, promoter);
-    out["anytime"] = anytime;
-    out["upcoming"] = upcoming;
-    out["someday"] = someday;
-    return out;
+  const headingContainers = asArray(view["headingContainers"]).map((c) => {
+    const grp = (c ?? {}) as Obj;
+    // The heading NODE (`{uuid, title, archived?}`) gains the recursive `children`
+    // (last key, so it reads after the identity). Object.assign mutates the fresh
+    // node copy shapeHeadingNode already returns — no spread-in-map.
+    const node = shapeHeadingNode(grp["heading"]) as Obj;
+    return Object.assign(node, {
+      children: shapeContainerChildren(grp["children"], HEADING_MEMBER_DROP, compact, promoter),
+    });
+  });
+  return {
+    // The card NODE keeps everything but is still an item DTO (universal + R10 reshapes).
+    project: shapeItem(view["project"], NO_DROP, false, promoter),
+    children: shapeContainerChildren(view["bodyChildren"], PROJECT_CHILD_DROP, compact, promoter),
+    headings: headingContainers,
   };
-  // An archived-heading GROUP in the logged region: the archived heading node
-  // (carrying `archived`) + its children nested flat (`items`), each dropping
-  // project/area/heading but KEEPING stage (the group is stage-mixed).
-  const shapeLoggedHeadingGroup = (g: unknown): unknown => {
-    if (g === null || typeof g !== "object") return g;
-    const grp = g as Obj;
-    return {
-      heading: shapeHeadingNode(grp["heading"]),
-      items: shapeList(grp["items"], LOGGED_HEADING_MEMBER_DROP, compact, promoter),
-    };
-  };
-  const headings = Array.isArray(view["headings"])
-    ? (view["headings"] as unknown[]).map(shapeHeadingGroup)
-    : view["headings"];
-  const looseMembers = [
-    ...asArray(view["active"]),
-    ...flattenGroups(view["scheduled"]),
-    ...asArray(view["someday"]),
-    ...asArray(view["repeating"]),
-  ];
-  const { anytime, upcoming, someday } = rebucketChildren(looseMembers, cd, compact, promoter);
-  const out: Obj = { ...view };
-  delete out["active"];
-  delete out["scheduled"];
-  delete out["repeating"];
-  delete out["logged"];
-  delete out["loggedHeadings"];
-  // Trashed children live only in `things trash` — never a project-view bucket.
-  // Delete defensively in case an untyped source carries the old key.
-  delete out["trashed"];
-  // The project card NODE keeps everything (children derive their container from
-  // it), but is still an item DTO, so the universal + R10 reshapes apply.
-  out["project"] = shapeItem(view["project"], NO_DROP, false, promoter);
-  out["anytime"] = anytime;
-  out["upcoming"] = upcoming;
-  out["someday"] = someday;
-  out["headings"] = headings;
-  // A project keeps its in-context `logbook` (a project is a bounded object with
-  // a real done-state); trashed children live only in `things trash`. The flat
-  // logbook rows KEEP their heading ref (PROJECT_LOGBOOK_DROP.keepHeading).
-  out["logbook"] = shapeList(view["logged"], PROJECT_LOGBOOK_DROP, compact, promoter);
-  // The archived-heading GROUPS of the logged region (HEADARC2-A).
-  out["logbookHeadings"] = Array.isArray(view["loggedHeadings"])
-    ? (view["loggedHeadings"] as unknown[]).map(shapeLoggedHeadingGroup)
-    : [];
-  return out;
 }
 
 /** Shape every collection bucket of an area view; the area node keeps its identity (tags folded). */

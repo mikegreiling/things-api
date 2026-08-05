@@ -55,8 +55,47 @@ export interface LoggedHeadingGroup {
   items: Todo[];
 }
 
+/**
+ * A container's full child set for the read-shape v2 wire (PR 2): a heading (any
+ * lifecycle class — open, archived-unswept, archived-SWEPT) with EVERY one of its
+ * children, live AND logged alike, in project `index` order. The wire boundary
+ * ({@link src/read/shape.ts} `shapeProjectView`) buckets these by DERIVED STAGE —
+ * logged → the heading's own `children.logbook`, the rest into
+ * `anytime`/`upcoming`/`someday` — so one entity lands in exactly one place
+ * (doctrine v2 R5 / #V12). The structured render buckets ({@link
+ * ProjectView.headings}, {@link ProjectView.loggedHeadings}) are the SAME
+ * headings + children re-grouped into the GUI layout for the byte-stable TTY.
+ */
+export interface ProjectHeadingContainer {
+  heading: Heading;
+  /** EVERY child of this heading (live AND logged/swept), project `index` order. */
+  children: Todo[];
+}
+
 export interface ProjectView {
   project: Project;
+  /**
+   * Read-shape v2 wire (PR 2): the un-headed BODY's children — live AND logged
+   * alike — in project `index` order. The wire boundary buckets these by derived
+   * stage into the body's `children.{anytime,upcoming,someday,logbook}` record set
+   * (one entity, one place — R5/#V12). This is the wire representation of the body;
+   * the structured render buckets below (`active`, `scheduled`, `someday`,
+   * `repeating`, and the un-headed slice of `logged`) are the SAME children
+   * re-grouped into the GUI layout for the byte-stable TTY — the library owns the
+   * clock + sweep boundary, so the two are always consistent (one child fetch).
+   */
+  bodyChildren: Todo[];
+  /**
+   * Read-shape v2 wire (PR 2): EVERY heading — open, archived-unswept, AND
+   * archived-SWEPT — in project `index` order, each carrying ALL its children (R5:
+   * all lifecycle classes, one entity one place). Under a content scope
+   * (`--overdue` / `--tag`) a heading whose children were all filtered out
+   * collapses, exactly as the render groups do. The wire boundary nests each
+   * container's stage-bucketed `children` under its heading node; the structured
+   * `headings` / `loggedHeadings` below re-group the SAME headings + children into
+   * the GUI render layout for the byte-stable TTY.
+   */
+  headingContainers: ProjectHeadingContainer[];
   /** Open, unscheduled/current UNHEADED children, by index. */
   active: Todo[];
   /** OPEN headings in project order, each with its own sub-buckets. An archived heading never renders here. */
@@ -334,8 +373,33 @@ export function projectView(
     }))
     .filter((g) => !contentScoped || g.items.length > 0);
 
+  // Read-shape v2 wire containers (PR 2): partition EVERY child by its heading
+  // membership, preserving the `index`-order fetch. A child whose heading FK is
+  // not one of THIS project's headings (an unknown/trashed heading, or none) falls
+  // back to the un-headed BODY — mirroring the render's loose fallback. Each
+  // container's children (live AND swept/logged alike) are bucketed by DERIVED
+  // STAGE at the wire boundary (src/read/shape.ts) — logged → its per-container
+  // `logbook`, the rest into `anytime`/`upcoming`/`someday` — so one entity lands
+  // in exactly one place (R5 / #V12). Built from the SAME `todos` (already
+  // `headingProject`-stamped above), so the wire and the render buckets never drift.
+  const knownHeadingSet = new Set(headings.map((h) => h.uuid));
+  const bodyChildren: Todo[] = [];
+  const headingChildren = new Map<string, Todo[]>();
+  for (const { row, todo } of todos) {
+    const hUuid = row.heading;
+    if (hUuid !== null && knownHeadingSet.has(hUuid)) pushInto(headingChildren, hUuid, todo);
+    else bodyChildren.push(todo);
+  }
+  // Every heading in `index` order, ALL lifecycle classes (R5). Under a content
+  // scope an emptied heading collapses (matching the live/logged render groups).
+  const headingContainers: ProjectHeadingContainer[] = headings
+    .map((heading) => ({ heading, children: headingChildren.get(heading.uuid) ?? [] }))
+    .filter((c) => !contentScoped || c.children.length > 0);
+
   return {
     project,
+    bodyChildren,
+    headingContainers,
     active,
     headings: headingGroups,
     scheduled,
