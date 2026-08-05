@@ -138,7 +138,7 @@ describe("wire: project rows emit `when` like to-dos", () => {
     const { area } = seedWorld();
     const env = JSON.parse(runCli(["area", "show", area, "--json"]));
     const byTitle = new Map(
-      (env.data.view.projects as Array<{ title: string; when?: string }>).map((p) => [
+      (env.data.view.projects.items as Array<{ title: string; when?: string }>).map((p) => [
         p.title,
         p.when,
       ]),

@@ -657,8 +657,10 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     tagTask(fx.db, buried, focus);
     const json = runCli(["area", "show", "Home", "--tag", "focus", "--json", "--db", fx.path]);
     const data = JSON.parse(json.stdout).data.view;
-    expect(data.anytime.map((i: { title: string }) => i.title)).toEqual(["loose-focus"]);
-    expect(data.projects.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
+    expect(data.children.anytime.items.map((i: { title: string }) => i.title)).toEqual([
+      "loose-focus",
+    ]);
+    expect(data.projects.items.map((i: { title: string }) => i.title)).toEqual(["proj-focus"]);
     const all = JSON.stringify(data);
     expect(all).not.toContain("buried-focus");
   });
@@ -684,7 +686,7 @@ describe("cli tag filters in container views (§9a wiring — direct-on-row)", (
     // directly-tagged project survives (the deliberate single-container behavior).
     const areaShow = runCli(["area", "show", "Zone", "--tag", "focus", "--json", "--db", fx.path]);
     expect(
-      JSON.parse(areaShow.stdout).data.view.projects.map((p: { title: string }) => p.title),
+      JSON.parse(areaShow.stdout).data.view.projects.items.map((p: { title: string }) => p.title),
     ).toEqual(["proj-direct"]);
     // A content scope never grants a strict --limit on the container views.
     expect(
@@ -1748,25 +1750,31 @@ describe("cli detail views — area show per-section caps; project show uncapped
         fx.path,
       ]).stdout,
     );
-    expect(json.data.view.projects).toHaveLength(2);
-    expect(json.data.view.anytime).toHaveLength(3);
+    // v2: each capped scope's completeness rides its INLINE `total` (R1) — the
+    // `projects` record + `children.anytime` record — with NO `meta.truncation.
+    // blocks[]` sidecar (retired for this view, PR 3).
+    expect(json.data.view.projects.items).toHaveLength(2);
+    expect(json.data.view.projects.total).toBe(35); // 2 shown < 35 → capped
+    expect(json.data.view.children.anytime.items).toHaveLength(3);
+    expect(json.data.view.children.anytime.total).toBe(35); // 3 shown < 35 → capped
     expect(json.meta.truncation).toEqual({
-      // Aggregate counts roll the per-block totals up (2+3 shown of 35+35).
+      // The flat whole-view rollup survives (mirrors today); the per-block sidecar
+      // does not — 2+3 shown of 35+35.
       shown: 5,
       total: 70,
       limit: null,
       truncated: true,
-      blocks: [
-        expect.objectContaining({ kind: "projects", title: "Busy", shown: 2, total: 35, limit: 2 }),
-        expect.objectContaining({ kind: "area", title: "Busy", shown: 3, total: 35, limit: 3 }),
-      ],
     });
+    expect("blocks" in json.meta.truncation).toBe(false);
 
     const all = JSON.parse(
       runCli(["area", "show", "Busy", "--all", "--json", "--db", fx.path]).stdout,
     );
-    expect(all.data.view.projects).toHaveLength(35);
-    expect(all.data.view.anytime).toHaveLength(35);
+    expect(all.data.view.projects.items).toHaveLength(35);
+    expect(all.data.view.children.anytime.items).toHaveLength(35);
+    // Uncapped → every scope is bare `{items}`, no inline `total` (R1).
+    expect("total" in all.data.view.projects).toBe(false);
+    expect("total" in all.data.view.children.anytime).toBe(false);
     expect(all.meta.truncation.truncated).toBe(false);
     expect(runCli(["area", "show", "Busy", "--all", "--db", fx.path]).stdout).not.toContain("more");
   });
@@ -1814,7 +1822,8 @@ describe("cli detail views — area show per-section caps; project show uncapped
     seedBusyArea();
     const json = JSON.parse(runCli(["show", "Busy", "--json", "--db", fx.path]).stdout);
     expect(json.kind).toBe("area-view");
-    expect(json.data.view.projects).toHaveLength(30);
+    expect(json.data.view.projects.items).toHaveLength(30);
+    expect(json.data.view.projects.total).toBe(35); // capped active project rows
     expect(json.meta.truncation.truncated).toBe(true);
     // …and via the bare shorthand, knobs intact. The footer speaks the CANONICAL,
     // verb-coherent command (point 4): the loose `show` unifies onto the resolved
@@ -2459,8 +2468,12 @@ describe("overdue in container views (cli)", () => {
     const env = JSON.parse(
       runCli(["area", "show", "Home", "--overdue", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.data.view.anytime.map((i: { title: string }) => i.title)).toEqual(["todo-overdue"]);
-    expect(env.data.view.projects.map((i: { title: string }) => i.title)).toEqual(["proj-overdue"]);
+    expect(env.data.view.children.anytime.items.map((i: { title: string }) => i.title)).toEqual([
+      "todo-overdue",
+    ]);
+    expect(env.data.view.projects.items.map((i: { title: string }) => i.title)).toEqual([
+      "proj-overdue",
+    ]);
     const tty = runCli(["area", "show", "Home", "--overdue", "--db", fx.path]).stdout;
     expect(tty).not.toContain("buried-overdue");
     expect(tty).not.toContain("proj-clean");

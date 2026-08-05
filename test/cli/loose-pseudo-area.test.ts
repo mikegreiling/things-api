@@ -116,8 +116,12 @@ describe("area show loose (composite null-area view)", () => {
     expect(env.data.view.area).toBeNull();
     // Active section: the area-less project row + the loose active to-do.
     // Inbox capture, real-area rows, and project-nested rows never appear here.
-    expect(env.data.view.projects.map((p: { title: string }) => p.title)).toEqual(["loose-proj"]);
-    expect(env.data.view.anytime.map((t: { title: string }) => t.title)).toEqual(["loose-active"]);
+    expect(env.data.view.projects.items.map((p: { title: string }) => p.title)).toEqual([
+      "loose-proj",
+    ]);
+    expect(env.data.view.children.anytime.items.map((t: { title: string }) => t.title)).toEqual([
+      "loose-active",
+    ]);
     const flat = JSON.stringify(env.data);
     expect(flat).not.toContain("inbox-capture");
     expect(flat).not.toContain("work-loose");
@@ -136,7 +140,7 @@ describe("area show loose (composite null-area view)", () => {
       fx.path,
     ]);
     const env = JSON.parse(out);
-    const later = JSON.stringify([env.data.view.upcoming, env.data.view.someday]);
+    const later = JSON.stringify([env.data.view.children.upcoming, env.data.view.children.someday]);
     expect(later).toContain("loose-someday");
     expect(later).toContain("loose-later");
   });

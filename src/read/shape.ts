@@ -115,6 +115,7 @@
  */
 import { deriveStage, deriveWhen, whenIsProvisional, type Stage, type When } from "./stage.ts";
 import type { StartState } from "../model/entities.ts";
+import type { AreaBucketTotals } from "./truncation.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -748,7 +749,45 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
   };
 }
 
-/** Shape every collection bucket of an area view; the area node keeps its identity (tags folded). */
+/**
+ * Build an area's THREE v2 `children` bucket records (PR 3) from its flat direct
+ * to-do set (live only — an area has NO logged-children region, so no `logbook`
+ * key; the area logbook is the bounded query `things logbook --area <ref>`, #346).
+ * The same stage-derived bucketing as {@link shapeContainerChildren} minus the
+ * logbook split: `anytime`/`someday` are `{items, total?}` records, `upcoming` is
+ * the day-block ARRAY (R3, `date` → `when`) with the trailing `{when: null, items}`
+ * resting block for date-less recurring templates (#V8). Inline `total` is stamped
+ * downstream by {@link withAreaBucketTotals} (only `anytime` can be capped — the
+ * `--area-limit` scope; the scheduled/someday direct to-dos always survive).
+ */
+function shapeAreaChildren(
+  members: unknown[],
+  drop: ItemDrop,
+  compact: boolean,
+  promoter: RefPromoter,
+): Obj {
+  const { anytime, upcoming, someday } = rebucketChildren(members, drop, compact, promoter);
+  return {
+    anytime: bucketRecord(anytime),
+    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
+    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    someday: bucketRecord(someday),
+  };
+}
+
+/**
+ * Shape an area view into the read-shape v2 wire (PR 3):
+ * `{ area | null, children, projects }` — NOTHING else at this level. `children`
+ * is the area's direct to-dos as three stage-keyed bucket records (`anytime`,
+ * `upcoming[]`, `someday` — NO `logbook`, #346); `projects` is the child-project
+ * sidebar-rank scope as a bucket record `{items, total?}` — a mixed-stage listing
+ * that KEEPS `stage`/`when` (the someday-projects / active split is TTY-only). The
+ * loose pseudo-area keeps `area: null`. The area node keeps its identity (tags
+ * folded to names); each direct-to-do row drops `area` (the node states it) + the
+ * bucket-implied `stage`. Inline `total` (present iff a scope was capped, R1) is
+ * injected downstream by {@link withAreaBucketTotals}, where the pre-cap sizes are
+ * known. `out` is built fresh, so no render-only field leaks.
+ */
 function shapeAreaView(view: Obj, compact: boolean, promoter: RefPromoter): Obj {
   const looseMembers = [
     ...asArray(view["active"]),
@@ -756,28 +795,45 @@ function shapeAreaView(view: Obj, compact: boolean, promoter: RefPromoter): Obj 
     ...asArray(view["someday"]),
     ...asArray(view["repeating"]),
   ];
-  const { anytime, upcoming, someday } = rebucketChildren(
-    looseMembers,
-    AREA_CHILD_DROP,
-    compact,
-    promoter,
-  );
-  const out: Obj = { ...view };
-  delete out["active"];
-  delete out["scheduled"];
-  delete out["repeating"];
-  // No `logbook` or `trash` bucket: an area's logbook is the bounded query
-  // `things logbook --area <ref>`, and trashed rows live only in `things trash`.
-  // Delete defensively in case an untyped source carries the old keys.
-  delete out["logged"];
-  delete out["trashed"];
-  out["area"] = shapeArea(view["area"]);
-  out["anytime"] = anytime;
-  // The projects list is a mixed listing of the area's project rows — keep stage.
-  out["projects"] = shapeList(view["projects"], AREA_PROJECTS_DROP, compact, promoter);
-  out["upcoming"] = upcoming;
-  out["someday"] = someday;
-  return out;
+  return {
+    // The area NODE, or `null` for the loose pseudo-area (shapeArea passes null).
+    area: shapeArea(view["area"]),
+    children: shapeAreaChildren(looseMembers, AREA_CHILD_DROP, compact, promoter),
+    // The projects list is a mixed listing of the area's project rows — keep stage.
+    projects: bucketRecord(
+      shapeList(view["projects"], AREA_PROJECTS_DROP, compact, promoter) as unknown[],
+    ),
+  };
+}
+
+/**
+ * Inject the area view's inline scope `total`s (read-shape v2 R1, PR 3): present
+ * iff the scope was capped (`items.length < total`), absent otherwise — no
+ * `meta.truncation.blocks[]` sidecar. `children.anytime` carries the direct-to-dos
+ * (`--area-limit`) total; `projects` carries the project-rows (`--project-limit`)
+ * total. The scheduled/someday direct-to-do blocks and the scheduled/someday
+ * project rows are never capped, so they never gain a `total`. Both the CLI `view`
+ * wrapper and the MCP data block run the shaped view through this so completeness
+ * is answerable locally. Returns the view unchanged when it is not the expected
+ * shape.
+ */
+export function withAreaBucketTotals(view: unknown, totals: AreaBucketTotals): unknown {
+  if (view === null || typeof view !== "object") return view;
+  const v = view as Obj;
+  const children = v["children"];
+  const withChildTotals =
+    children !== null && typeof children === "object"
+      ? {
+          ...(children as Obj),
+          anytime: withBucketTotal((children as Obj)["anytime"], totals.anytime),
+        }
+      : children;
+  // Spread-then-override keeps the `area` / `children` / `projects` key order.
+  return {
+    ...v,
+    children: withChildTotals,
+    projects: withBucketTotal(v["projects"], totals.projects),
+  };
 }
 
 /** Fold an area entity's tags to string names in place (returns a shallow copy). */
@@ -818,17 +874,25 @@ export function withTodayBucketTotals(
 ): unknown {
   if (children === null || typeof children !== "object") return children;
   const c = children as Obj;
-  const withTotal = (bucket: unknown, total: number): unknown => {
-    if (bucket === null || typeof bucket !== "object") return bucket;
-    const b = bucket as Obj;
-    const items = b["items"];
-    const shown = Array.isArray(items) ? items.length : 0;
-    return shown < total ? { ...b, total } : b;
-  };
   return {
-    today: withTotal(c["today"], totals.today),
-    evening: withTotal(c["evening"], totals.evening),
+    today: withBucketTotal(c["today"], totals.today),
+    evening: withBucketTotal(c["evening"], totals.evening),
   };
+}
+
+/**
+ * Stamp a bucket record's inline `total` (read-shape v2 R1) iff it was capped
+ * (`items.length < total`) — an untruncated bucket never restates its own length.
+ * The pre-cap `total` comes from the bounding layer; returns the bucket unchanged
+ * when it is not a `{items}` record. Shared by the today and area inline-total
+ * injectors.
+ */
+function withBucketTotal(bucket: unknown, total: number): unknown {
+  if (bucket === null || typeof bucket !== "object") return bucket;
+  const b = bucket as Obj;
+  const items = b["items"];
+  const shown = Array.isArray(items) ? items.length : 0;
+  return shown < total ? { ...b, total } : b;
 }
 
 /** Shape sidebar sections (anytime/someday catalogues) with the section's drop spec. */

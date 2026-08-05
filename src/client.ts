@@ -68,6 +68,7 @@ import {
   truncateList,
   truncateToday,
   type TodayBucketTotals,
+  type AreaBucketTotals,
 } from "./read/truncation.ts";
 import {
   filterListByArea,
@@ -279,6 +280,13 @@ export interface BoundedSectionsView {
 export interface BoundedAreaView {
   view: AreaView;
   truncation: Truncation;
+  /**
+   * Pre-cap scope sizes (read-shape v2 R1, PR 3) — the direct-to-dos and
+   * project-rows counts a consumer stamps as each capped scope's inline `total`
+   * ({@link withAreaBucketTotals}), so completeness is answerable locally with no
+   * `meta.truncation.blocks[]` sidecar.
+   */
+  totals: AreaBucketTotals;
   /**
    * A resolution disclosure — present ONLY on the `loose` pseudo-area read when
    * a real area shadows the reserved word (names it, by uuid, for targeting).
@@ -1095,7 +1103,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
               : { where: "0", binds: [] as (string | number)[] };
           resolveAreaUuid(conn.db, ref, { scopeWhere: clause.where, scopeBinds: clause.binds });
         }
-        const { data, truncation } = capAreaSections(
+        const { data, truncation, totals } = capAreaSections(
           areaView(conn.db, ref, now(), o ?? {}, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
           now(),
@@ -1114,6 +1122,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         return {
           view: data,
           truncation,
+          totals,
           ...(shadow !== undefined && { notice: looseShadowNotice(shadow) }),
           ...(loggedCount !== undefined && { loggedCount }),
         };

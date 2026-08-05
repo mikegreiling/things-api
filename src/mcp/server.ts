@@ -53,6 +53,7 @@ import {
   schemaWarnings,
   shapeReadPayload,
   withTodayBucketTotals,
+  withAreaBucketTotals,
   splitWhenSugar,
   tagFilterFields,
   tagFlagConflict,
@@ -1313,7 +1314,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           if (areaLimit === "conflict" || projectLimit === "conflict") {
             return usage("pass at most one of area_limit/project_limit / all");
           }
-          const { view, truncation, notice } = getClient().read.areaView(args.ref, {
+          const { view, truncation, totals, notice } = getClient().read.areaView(args.ref, {
             overdue: args.overdue === true,
             ...tagFilterFields(tagPresence(args)),
             ...(args.tz !== undefined && { zone: args.tz }),
@@ -1321,9 +1322,15 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             projectLimit,
           });
           areaNotice = notice;
+          // Each capped scope's completeness rides its inline `total` (R1, PR 3);
+          // the `blocks[]` sidecar retires from the metadata block.
+          const { blocks: _blocks, ...flatTruncation } = truncation;
           return groupedResult(
-            shapeReadPayload("area-view", view, args.full === true, getClient().refPromoter()),
-            truncation,
+            withAreaBucketTotals(
+              shapeReadPayload("area-view", view, args.full === true, getClient().refPromoter()),
+              totals,
+            ),
+            flatTruncation,
           );
         },
         args.tz,

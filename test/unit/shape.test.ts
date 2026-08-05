@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bucketRecord, shapeReadPayload } from "../../src/read/shape.ts";
+import { bucketRecord, shapeReadPayload, withAreaBucketTotals } from "../../src/read/shape.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -443,11 +443,68 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect("stage" in sItem).toBe(false); // stage-pure catalogue → dropped
   });
 
-  it("area-view: children buckets drop area+stage; the projects list keeps stage; card node kept", () => {
+  it("area-view v2: children records (anytime/upcoming[]/someday, NO logbook) + projects record; card node kept", () => {
     const view = {
       area: { uuid: "area-1", title: "Work", visible: true, tags: [{ title: "focus" }] },
-      active: [todo()],
+      active: [todo({ uuid: "direct-anytime" })],
       projects: [project()],
+      // A future-dated direct to-do → children.upcoming day block (by its startDate).
+      scheduled: [
+        { date: "2026-08-01", items: [todo({ uuid: "direct-up", startDate: "2026-08-01" })] },
+      ],
+      someday: [todo({ uuid: "direct-some", start: "someday", startDate: null })],
+      // A resting recurring template → the trailing {when:null} block (#V8).
+      repeating: [
+        todo({
+          uuid: "direct-tmpl",
+          repeating: {
+            isTemplate: true,
+            isInstance: false,
+            templateUuid: null,
+            nextOccurrence: null,
+          },
+        }),
+      ],
+      logged: [],
+      trashed: [],
+    };
+    const out = shapeReadPayload("area-view", view, true) as Obj;
+    // Top-level: EXACTLY {area, children, projects} — no logbook/trash, no render
+    // fields (active/scheduled/repeating), no v1 flat buckets.
+    expect(Object.keys(out).toSorted()).toEqual(["area", "children", "projects"]);
+    const children = out["children"] as Obj;
+    // children has the THREE stage keys — NO `logbook` (an area has no logged-
+    // children region; its logbook is `things logbook --area <ref>`, #346).
+    expect(Object.keys(children).toSorted()).toEqual(["anytime", "someday", "upcoming"]);
+    expect("logbook" in children).toBe(false);
+    const items = (b: unknown) => ((b as Obj)["items"] as Obj[]).map((i) => i["uuid"]);
+    expect(items(children["anytime"])).toEqual(["direct-anytime"]);
+    expect(items(children["someday"])).toEqual(["direct-some"]);
+    // Upcoming: the dated block, then the trailing {when:null} resting block (R3/#V8).
+    const upcoming = children["upcoming"] as Array<{ when: string | null; items: Obj[] }>;
+    expect(upcoming.map((g) => g.when)).toEqual(["2026-08-01", null]);
+    expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["direct-up"]);
+    expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["direct-tmpl"]);
+    // A direct-to-do row drops area (the node states it) + the bucket-implied stage.
+    const anyChild = ((children["anytime"] as Obj)["items"] as Obj[])[0]!;
+    expect("area" in anyChild).toBe(false);
+    expect("stage" in anyChild).toBe(false);
+    expect(anyChild["project"]).toBeDefined();
+    // The projects record: {items} (uncapped → no `total`), rows keep stage, drop area.
+    const projects = out["projects"] as Obj;
+    expect("total" in projects).toBe(false);
+    const projRow = (projects["items"] as Obj[])[0]!;
+    expect("area" in projRow).toBe(false);
+    expect(projRow["stage"]).toBe("anytime");
+    // The area node keeps its identity; its tags fold to names.
+    expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: ["focus"] });
+  });
+
+  it("area-view v2: the loose pseudo-area keeps area: null", () => {
+    const view = {
+      area: null,
+      active: [todo({ uuid: "loose-anytime", area: null, project: null })],
+      projects: [],
       scheduled: [],
       someday: [],
       repeating: [],
@@ -455,23 +512,56 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
       trashed: [],
     };
     const out = shapeReadPayload("area-view", view, true) as Obj;
-    // active → anytime bucket (stage anytime); area + stage dropped.
-    const child = (out["anytime"] as Obj[])[0]!;
-    expect("area" in child).toBe(false);
-    expect("stage" in child).toBe(false);
-    expect(child["project"]).toBeDefined();
-    // the projects list keeps stage (mixed listing), drops area.
-    const projRow = (out["projects"] as Obj[])[0]!;
-    expect("area" in projRow).toBe(false);
-    expect(projRow["stage"]).toBe("anytime");
-    // The area node keeps its identity; its tags fold to names.
-    expect(out["area"]).toEqual({ uuid: "area-1", title: "Work", visible: true, tags: ["focus"] });
-    // The renamed live buckets exist; the old names are gone. An area carries NO
-    // `logbook` or `trash` bucket (the logbook is `things logbook --area`, trash
-    // is `things trash`).
-    for (const k of ["anytime", "upcoming", "someday"]) expect(k in out).toBe(true);
-    for (const k of ["active", "scheduled", "repeating", "logged", "trashed", "logbook", "trash"])
-      expect(k in out).toBe(false);
+    expect(out["area"]).toBeNull();
+    const children = out["children"] as Obj;
+    expect(((children["anytime"] as Obj)["items"] as Obj[]).map((i) => i["uuid"])).toEqual([
+      "loose-anytime",
+    ]);
+  });
+
+  it("area-view v2 R7: a someday direct to-do WITH a deadline seats in someday, in NO day block (single seat)", () => {
+    const view = {
+      area: { uuid: "area-1", title: "Work" },
+      active: [],
+      projects: [],
+      scheduled: [],
+      // A dual citizen: someday stage carrying a deadline. R7 seats it in its
+      // canonical stage bucket (someday), never also in an upcoming day block.
+      someday: [todo({ uuid: "dual", start: "someday", startDate: null, deadline: "2026-09-01" })],
+      repeating: [],
+      logged: [],
+      trashed: [],
+    };
+    const out = shapeReadPayload("area-view", view, true) as Obj;
+    const children = out["children"] as Obj;
+    expect(((children["someday"] as Obj)["items"] as Obj[]).map((i) => i["uuid"])).toEqual([
+      "dual",
+    ]);
+    // Not in any upcoming day block — no uuid appears twice in the view.
+    const upcoming = children["upcoming"] as Array<{ items: Obj[] }>;
+    expect(upcoming.flatMap((g) => g.items.map((i) => i["uuid"]))).not.toContain("dual");
+  });
+
+  it("area-view v2: withAreaBucketTotals stamps inline `total` iff a scope was capped (R1)", () => {
+    const view = {
+      area: null,
+      children: {
+        anytime: { items: [todo({ uuid: "a1" }), todo({ uuid: "a2" })] }, // 2 shown
+        upcoming: [],
+        someday: { items: [] },
+      },
+      projects: { items: [project()] }, // 1 shown
+    };
+    // anytime capped (2 < 35), projects capped (1 < 30) → both totals present.
+    const capped = withAreaBucketTotals(view, { anytime: 35, projects: 30 }) as Obj;
+    expect((capped["children"] as Obj)["anytime"]).toMatchObject({ total: 35 });
+    expect(capped["projects"]).toMatchObject({ total: 30 });
+    // The uncapped blocks never gain a total; key order preserved.
+    expect(Object.keys(capped)).toEqual(["area", "children", "projects"]);
+    // Uncapped (shown === total) → no `total` restated.
+    const whole = withAreaBucketTotals(view, { anytime: 2, projects: 1 }) as Obj;
+    expect("total" in ((whole["children"] as Obj)["anytime"] as Obj)).toBe(false);
+    expect("total" in (whole["projects"] as Obj)).toBe(false);
   });
 
   it("project-view v2: body children bucket by stage under `children`; per-container logbook; advisories + root logbook + logbookHeadings DELETED", () => {
