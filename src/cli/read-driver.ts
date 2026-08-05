@@ -25,6 +25,7 @@ import {
   openThings,
   shapeReadPayload,
   withTodayBucketTotals,
+  withAreaBucketTotals,
   ReferenceResolutionError,
   schemaWarnings,
   ThingsDbNotFoundError,
@@ -32,6 +33,7 @@ import {
   type EnvelopeMeta,
   type ThingsClient,
   type TodayBucketTotals,
+  type AreaBucketTotals,
   type Truncation,
   type ViewFilterMeta,
 } from "../index.ts";
@@ -69,13 +71,19 @@ export function wrapEnvelopeData(
   kind: string,
   data: unknown,
   todayTotals?: TodayBucketTotals,
+  areaTotals?: AreaBucketTotals,
 ): unknown {
   if (ITEMS_WRAPPER_KINDS.has(kind)) return { items: data };
   if (kind === "anytime" || kind === "someday") return { sections: data };
   if (kind === "today") {
     return { children: withTodayBucketTotals(data, todayTotals ?? { today: 0, evening: 0 }) };
   }
-  if (kind === "area-view" || kind === "project-view") return { view: data };
+  if (kind === "area-view") {
+    // Each capped scope's inline `total` (R1) is stamped here from the pre-cap
+    // sizes — no `meta.truncation.blocks[]` sidecar (PR 3).
+    return { view: areaTotals !== undefined ? withAreaBucketTotals(data, areaTotals) : data };
+  }
+  if (kind === "project-view") return { view: data };
   if (kind === "detail") return { item: data };
   return data;
 }
@@ -152,6 +160,12 @@ export interface PagedResult<T> {
    */
   todayTotals?: TodayBucketTotals;
   /**
+   * Pre-cap area scope sizes (area-view only) — supply the `children.anytime` and
+   * `projects` inline `total`s when {@link wrapEnvelopeData} builds the `area-view`
+   * payload (R1, no `blocks[]` sidecar). Absent for every other view.
+   */
+  areaTotals?: AreaBucketTotals;
+  /**
    * Additional non-blocking advisories from the read itself (ADDITIVE), merged
    * with the schema-drift warnings into `meta.warnings` (and echoed once on
    * stderr for human output). Used by the `loose` pseudo-area reads to surface
@@ -207,6 +221,7 @@ export function runRead<T>(
       filter,
       counts,
       todayTotals,
+      areaTotals,
       warnings: readWarnings,
       lines: precomputed,
     } = fn(client);
@@ -252,7 +267,7 @@ export function runRead<T>(
         client.refPromoter(),
       );
       process.stdout.write(
-        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals)), meta))}\n`,
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals, areaTotals)), meta))}\n`,
       );
     } else {
       const lines = precomputed ?? render(data);

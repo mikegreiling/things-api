@@ -796,9 +796,12 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "Home", tag: ["focus"] },
       }),
-    ) as { anytime: { title: string }[]; projects: { title: string }[] };
-    expect(areaRes.anytime.map((i) => i.title)).toEqual(["loose-focus"]);
-    expect(areaRes.projects.map((i) => i.title)).toEqual(["P"]);
+    ) as {
+      children: { anytime: { items: { title: string }[] } };
+      projects: { items: { title: string }[] };
+    };
+    expect(areaRes.children.anytime.items.map((i) => i.title)).toEqual(["loose-focus"]);
+    expect(areaRes.projects.items.map((i) => i.title)).toEqual(["P"]);
     // list_collections projects tag → FLAT/inheritance-inclusive: BOTH the
     // directly-tagged P and the area-inheriting PBare (the projects list is not a
     // single-container view — contrast get_area above).
@@ -1388,30 +1391,38 @@ describe("things MCP server", () => {
     }
     await connect([fakeVector(null).vector]);
     const capped = await client.callTool({ name: "get_area", arguments: { ref: "Busy" } });
-    const view = textOf(capped) as { projects: unknown[]; anytime: unknown[] };
-    expect(view.projects).toHaveLength(30);
-    expect(view.anytime).toHaveLength(30);
+    const view = textOf(capped) as {
+      projects: { items: unknown[]; total?: number };
+      children: { anytime: { items: unknown[]; total?: number } };
+    };
+    // v2: each capped scope's completeness rides its INLINE `total` (R1) — the
+    // `blocks[]` sidecar retires from the metadata block (PR 3).
+    expect(view.projects.items).toHaveLength(30);
+    expect(view.projects.total).toBe(35);
+    expect(view.children.anytime.items).toHaveLength(30);
+    expect(view.children.anytime.total).toBe(35);
     const meta = JSON.parse(
       (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as {
-      truncation: { truncated: boolean; blocks: { kind: string; shown: number; total: number }[] };
+      truncation: { truncated: boolean; blocks?: unknown };
     };
     expect(meta.truncation.truncated).toBe(true);
-    expect(meta.truncation.blocks).toEqual([
-      expect.objectContaining({ kind: "projects", shown: 30, total: 35 }),
-      expect.objectContaining({ kind: "area", shown: 30, total: 35 }),
-    ]);
+    expect("blocks" in meta.truncation).toBe(false);
 
     const all = textOf(
       await client.callTool({ name: "get_area", arguments: { ref: "Busy", all: true } }),
-    ) as { projects: unknown[] };
-    expect(all.projects).toHaveLength(35);
+    ) as { projects: { items: unknown[]; total?: number } };
+    expect(all.projects.items).toHaveLength(35);
+    expect("total" in all.projects).toBe(false); // uncapped → no inline total
 
     const narrowed = textOf(
       await client.callTool({ name: "get_area", arguments: { ref: "Busy", project_limit: 2 } }),
-    ) as { projects: unknown[]; anytime: unknown[] };
-    expect(narrowed.projects).toHaveLength(2);
-    expect(narrowed.anytime).toHaveLength(30);
+    ) as {
+      projects: { items: unknown[] };
+      children: { anytime: { items: unknown[] } };
+    };
+    expect(narrowed.projects.items).toHaveLength(2);
+    expect(narrowed.children.anytime.items).toHaveLength(30);
 
     const conflict = await client.callTool({
       name: "get_area",
@@ -1480,9 +1491,12 @@ describe("things MCP server", () => {
         name: "get_area",
         arguments: { ref: "MCP Home", overdue: true },
       }),
-    ) as { anytime: { title: string }[]; projects: { title: string }[] };
-    expect(view.anytime.map((i) => i.title)).toEqual(["todo-overdue"]);
-    expect(view.projects.map((i) => i.title)).toEqual(["proj-overdue"]);
+    ) as {
+      children: { anytime: { items: { title: string }[] } };
+      projects: { items: { title: string }[] };
+    };
+    expect(view.children.anytime.items.map((i) => i.title)).toEqual(["todo-overdue"]);
+    expect(view.projects.items.map((i) => i.title)).toEqual(["proj-overdue"]);
   });
 
   it("list_collections overdue narrows projects; rejects it on areas/tags", async () => {

@@ -18,7 +18,7 @@ export type {
   ThingsClient,
 } from "./client.ts";
 export type { Truncation, GroupBlock } from "./contracts.ts";
-export type { TodayBucketTotals } from "./read/truncation.ts";
+export type { TodayBucketTotals, AreaBucketTotals } from "./read/truncation.ts";
 export { diagnose } from "./diagnose.ts";
 export type { DiagnoseOptions, DiagnoseReport, DiagnoseResult } from "./diagnose.ts";
 export { probeAutomation } from "./write/automation-probe.ts";
@@ -237,7 +237,7 @@ export * from "./surface-copy.ts";
 
 // Pure model/read helpers the presentation layers reuse.
 export { omitEmpty } from "./model/serialize.ts";
-export { shapeReadPayload, withTodayBucketTotals } from "./read/shape.ts";
+export { shapeReadPayload, withTodayBucketTotals, withAreaBucketTotals } from "./read/shape.ts";
 // The emit-side ref-promotion oracle for the JSON round-trip law: build one over
 // the live DB (memoized per response) and hand it to shapeReadPayload; the
 // consumer surfaces get theirs from `client.refPromoter()`.

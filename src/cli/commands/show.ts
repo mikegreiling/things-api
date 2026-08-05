@@ -257,11 +257,15 @@ export function registerShowCommands(program: Command): void {
                 opts,
               );
               echoIfSugar(hintBase);
-              // Identical to `things area show` (kind area-view, data `{view}`).
+              // Identical to `things area show` (kind area-view, data `{view}`):
+              // the `blocks[]` sidecar retires from the wire (inline `total` via
+              // `areaTotals`); the render keeps the full per-block truncation.
+              const { blocks: _blocks, ...flatTruncation } = bounded.truncation;
               return {
                 data: bounded.view,
                 kind: "area-view",
-                truncation: bounded.truncation,
+                truncation: flatTruncation,
+                areaTotals: bounded.totals,
                 ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
                 lines: renderAreaView(bounded.view, bounded.truncation, {
                   ...opts,

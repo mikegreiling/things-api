@@ -284,9 +284,15 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
       if (getInvocation()?.canonical !== null) {
         setInvocationCanonical(invocation("area show", [cref]));
       }
+      // The per-block `blocks[]` sidecar retires from the JSON wire (PR 3): each
+      // capped scope's completeness rides its inline `total` (via `areaTotals`).
+      // The RENDER still reads the full per-block truncation (a direct argument,
+      // not the wire) for its hidden-row footers — TTY behavior unchanged.
+      const { blocks: _blocks, ...flatTruncation } = bounded.truncation;
       return {
         data: bounded.view,
-        truncation: bounded.truncation,
+        truncation: flatTruncation,
+        areaTotals: bounded.totals,
         ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
         lines: renderAreaView(bounded.view, bounded.truncation, {
           ...opts,

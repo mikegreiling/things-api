@@ -75,6 +75,24 @@ export interface TodayBucketTotals {
 }
 
 /**
+ * Pre-cap area-view bucket sizes, returned alongside a bounded {@link AreaView}
+ * so the wire can emit each capped scope's inline `total` (read-shape v2 R1, no
+ * `blocks[]` sidecar join — PR 3). `anytime` is the pre-cap count of the area's
+ * direct to-dos (the `--area-limit` scope, which map onto `children.anytime`);
+ * `projects` is the pre-cap count of ALL the area's project rows (the
+ * `--project-limit` scope caps the ACTIVE ones in place, so a capped active-rows
+ * slice makes `projects.items.length < projects.total`). The scheduled/someday
+ * direct to-dos and the scheduled/someday project rows are never capped, so their
+ * buckets carry no `total`.
+ */
+export interface AreaBucketTotals {
+  /** Pre-cap count of the direct to-dos (the `children.anytime` scope). */
+  anytime: number;
+  /** Pre-cap count of ALL project rows (the `projects` record scope). */
+  projects: number;
+}
+
+/**
  * Today view: the cut runs across Today then This Evening in render order, so a
  * limit smaller than the Today block trims Evening to nothing. The library keeps
  * the internal Today/Evening grouping (the two reorder scopes); the whole-view
@@ -231,8 +249,12 @@ export function capAreaSections(
   limits: GroupedLimits,
   now?: Date,
   zone?: string,
-): { data: AreaView; truncation: Truncation } {
+): { data: AreaView; truncation: Truncation; totals: AreaBucketTotals } {
   const todayIso = localToday(now, zone);
+  // Pre-cap scope sizes for the wire's inline `total` (R1): the direct to-dos
+  // (`children.anytime`) and ALL project rows (`projects` record). Captured
+  // before the caps slice below.
+  const totals: AreaBucketTotals = { anytime: view.active.length, projects: view.projects.length };
   const blocks: GroupBlock[] = [];
   let truncated = false;
   // Cap the ACTIVE project rows in place; scheduled/someday rows always survive.
@@ -270,5 +292,6 @@ export function capAreaSections(
   return {
     data: { ...view, projects, active },
     truncation: groupedTruncation(blocks, truncated),
+    totals,
   };
 }
