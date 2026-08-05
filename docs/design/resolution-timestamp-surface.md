@@ -58,7 +58,15 @@ The line already exists in the shipped surface; this plan makes it doctrine:
 - **Glossary**: add the "Completed on" canon note (universal Get Info label — completed, canceled, archived headings alike; 24h timestamps; maintainer screenshots 2026-08-05) to the `stopDate` entry.
 - Capability matrix rows, CHANGELOG (Unreleased, breaking — bespoke ops deleted), skill sweep, MCP tool descriptions.
 
-## 7. Sequencing
+## 7. Universal `reorder` (vocabulary unification — maintainer-directed 2026-08-05)
+
+One verb owns every reorder in the data model. `things reorder <refs…> [--start | --after <ref> | --before <ref>] [--in <token>]` accepts ANY single-kind set — to-dos, projects, **headings**, **areas** — and the engine dispatches the protocol by kind and axis (index wire, day-axis bounce family, heading-block wire, area-rank write), exactly as it already dispatches index vs day axes. Refusals, not fragmentation: mixed kinds in one call, cross-container targets, and cross-axis anchors each get a precise refusal naming the fix. Consequences:
+
+- `things project move-heading` remains the **placement** verb (cross-project moves, demotion — it changes *where*, with children riding); pure same-project heading re-ranking becomes expressible through `things reorder` too, honoring #V11 (unguarded archived reorder with disclosed reopens).
+- `things area reorder` (and any kind-specific spelling) survives as a **discriminating alias**: same engine path, but refuses when any target or anchor is not that kind.
+- The anchor grammar (`--start` / `--after` / `--before`) is reconciled with the `--in` token family at build time; the doctrine's keys-are-tokens rule (read-shape v2 R2) supplies the vocabulary.
+
+## 8. Sequencing
 
 1. **PR A** — engine: op specs (`todo/project.set-dates` family or folded params on existing resolve ops), guards (§2/§4), flip-dance compiler, zone-aware date normalization, unit + guard tests, CLI flags + refusal copy, CHANGELOG.
 2. **PR B** — MCP parity + skill sweep + capability matrix.
