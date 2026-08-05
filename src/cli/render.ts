@@ -10,6 +10,7 @@
 import {
   entityProvisional,
   entityWhen,
+  instantDateIso,
   localToday,
   partitionSomedaySection,
   splitSectionBlocks,
@@ -184,7 +185,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   if (opts.mark != null) meta.push(opts.mark);
   // ↻ now lives INSIDE the box for templates (glyphs.ts) — no separate mark.
   if (item.status !== "open" && item.stopped !== null)
-    meta.push(loggedDate(item.stopped, todayIso));
+    meta.push(loggedDate(item.stopped, todayIso, renderZone()));
   if (opts.hideDateChip === true) {
     // rows under a day header — the header carries the date
   } else if (item.status === "open" && item.startDate !== null && item.startDate > todayIso)
@@ -691,15 +692,21 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
 export function renderLogbook(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
-  const currentYear = localToday(now ?? renderNow(), renderZone()).slice(0, 4);
+  const zone = renderZone();
+  const currentYear = localToday(now ?? renderNow(), zone).slice(0, 4);
   const lines: string[] = [];
   let openHeading: string | null = null;
   for (const item of items) {
     const s = item.stopped;
-    const heading =
-      s === null
-        ? "no logged date"
-        : `${FULL_MONTHS[s.getMonth()]}${String(s.getFullYear()) === currentYear ? "" : ` ${s.getFullYear()}`}`;
+    // `stopDate` is an INSTANT — resolve its calendar month/year in the consumer
+    // zone (Z-LOGVIEW is viewer-local), never through host-zone `Date` getters,
+    // so a completion near local midnight blocks under the correct month.
+    let heading: string;
+    if (s === null) heading = "no logged date";
+    else {
+      const [yy, mm] = instantDateIso(s, zone).split("-").map(Number);
+      heading = `${FULL_MONTHS[(mm ?? 1) - 1]}${String(yy) === currentYear ? "" : ` ${yy}`}`;
+    }
     if (heading !== openHeading) {
       if (lines.length > 0) lines.push("");
       lines.push(bold(`── ${heading} ──`));

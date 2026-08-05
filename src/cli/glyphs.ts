@@ -8,7 +8,7 @@
  * Every glyph lives here so a cross-terminal rendering audit
  * (docs/roadmap.md) can retune the language in one file.
  */
-import { entityWhen, type Project, type TagRef, type Todo } from "../index.ts";
+import { entityWhen, instantDateIso, type Project, type TagRef, type Todo } from "../index.ts";
 import { blue, bold, brightBlue, dim, green, red, strike, underline, yellow } from "./style.ts";
 
 const MONTHS = [
@@ -51,10 +51,16 @@ export function dateChip(iso: string, todayIso: string): string {
   return dim(`‹${shortDate(iso, todayIso)}›`);
 }
 
-/** Completion date on logged rows (the GUI's blue date before the title). */
-export function loggedDate(stopped: Date, todayIso: string): string {
-  const iso = `${stopped.getFullYear()}-${String(stopped.getMonth() + 1).padStart(2, "0")}-${String(stopped.getDate()).padStart(2, "0")}`;
-  return bold(blue(shortDate(iso, todayIso)));
+/**
+ * Completion date on logged rows (the GUI's blue date before the title). The
+ * `stopDate` is an INSTANT, so its calendar day is resolved in the consumer
+ * `zone` ({@link instantDateIso}) — the app groups the Logbook viewer-local
+ * (Z-LOGVIEW), and a bare `Date`'s getters would silently format in the HOST
+ * zone, mislabelling a completion near local midnight for a `THINGS_TZ`
+ * consumer. Without a zone this is byte-identical to the old host-local form.
+ */
+export function loggedDate(stopped: Date, todayIso: string, zone?: string): string {
+  return bold(blue(shortDate(instantDateIso(stopped, zone), todayIso)));
 }
 
 /**

@@ -108,10 +108,29 @@ export function addDaysIso(iso: IsoDate, days: number): IsoDate {
  * calendarDateInZone}'s use of Intl — never manual offset math.
  */
 export function localToday(now: Date = new Date(), zone?: string): IsoDate {
-  if (zone !== undefined) return calendarDateInZone(now, zone);
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
-  const d = now.getDate();
+  return instantDateIso(now, zone);
+}
+
+/**
+ * The calendar date (`YYYY-MM-DD`) an INSTANT falls on, rendered for a consumer
+ * zone. Without a `zone` it is the HOST-local calendar date (byte-identical to a
+ * bare `Date`'s `getFullYear`/`getMonth`/`getDate`); with a `zone` it is that
+ * zone's calendar date (via {@link calendarDateInZone}, DST/antimeridian-correct
+ * through Intl — never manual offset math).
+ *
+ * This is the twin of {@link localToday} for an ARBITRARY instant rather than
+ * "now": the render path uses it to label a completion instant (`stopDate`) by
+ * the VIEWER'S local day — matching the app's own viewer-local Logbook grouping
+ * (Z-LOGVIEW, docs/reference/timezones.md) — instead of the host zone's. `Date`'s
+ * own `getMonth`/`getFullYear`/`getDate` silently format in the HOST zone, so a
+ * stopDate near local midnight would otherwise land in the wrong calendar day
+ * (and month/year block) for a consumer whose `THINGS_TZ` differs from the host.
+ */
+export function instantDateIso(instant: Date, zone?: string): IsoDate {
+  if (zone !== undefined) return calendarDateInZone(instant, zone);
+  const y = instant.getFullYear();
+  const m = instant.getMonth() + 1;
+  const d = instant.getDate();
   return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 

@@ -37,6 +37,7 @@ import {
   viewHeaderLines,
 } from "../../src/cli/render.ts";
 import { truncateToday } from "../../src/read/truncation.ts";
+import { setRenderClock } from "../../src/cli/clock.ts";
 import { parsePeriodEnd, parsePeriodStart } from "../../src/cli/period.ts";
 import {
   areaMark,
@@ -69,6 +70,9 @@ afterEach(() => {
 const NOW = new Date("2026-07-05T12:00:00Z");
 
 const stopAt = (iso: string) => new Date(iso).getTime() / 1000;
+
+/** A fixed render-clock instant for the zone-audit regression (host-zone-independent). */
+const ZONE_AUDIT_NOW = () => new Date("2026-08-05T00:00:00Z");
 
 function seedHobbies(fx: FixtureDb): { area: string; firmware: string; fasteners: string } {
   const area = seedArea(fx.db, "Hobbies");
@@ -577,6 +581,49 @@ describe("logbook", () => {
     expect([q1.getFullYear(), q1.getMonth(), q1.getDate()]).toEqual([2024, 2, 1]);
     const year = parsePeriodStart("2024", now);
     expect([year.getMonth(), year.getDate()]).toEqual([0, 1]);
+  });
+});
+
+describe("logbook render-zone audit (host-zone formatting regression lock)", () => {
+  // A completion INSTANT near local midnight: the calendar DAY it lands on
+  // depends on the viewer's zone. Both the month-block heading (renderLogbook)
+  // and the blue logged-date chip (loggedDate) must follow the CONSUMER zone
+  // (THINGS_TZ / the render clock), never the host zone — the app's own Logbook
+  // grouping is viewer-local render-time (Z-LOGVIEW, docs/reference/timezones.md).
+  // The membership math (which items are logged) is already zone-correct in
+  // src/model/clock.ts; this locks the DATE LABELS that a bare `Date`'s host-zone
+  // getters used to mis-format. Two explicit zones straddling a month boundary
+  // prove the labels track the consumer zone independent of the CI host zone
+  // (the plan's "THINGS_TZ 14h ahead of the host, both directions" fixture).
+  const NEAR_MIDNIGHT = "2026-07-31T12:30:00Z"; // +14 → 2026-08-01; −11 → 2026-07-31
+
+  afterEach(() => {
+    setRenderClock({ now: () => new Date(), zone: undefined });
+  });
+
+  function loggedLines(zone: string): string[] {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Boundary win",
+      status: "completed",
+      stopDate: stopAt(NEAR_MIDNIGHT),
+    });
+    setRenderClock({ now: ZONE_AUDIT_NOW, zone });
+    return renderLogbook(logbookView(fixture.db));
+  }
+
+  it("labels the completion in a zone 14h AHEAD of UTC — rolls into the next month", () => {
+    const lines = loggedLines("Pacific/Kiritimati"); // UTC+14 → local 2026-08-01
+    expect(lines[0]).toBe("── August ──");
+    const row = lines.find((l) => l.includes("Boundary win"));
+    expect(row).toContain("Aug 1"); // blue logged-date chip, consumer-zone day
+  });
+
+  it("labels the SAME instant a day earlier in a zone 11h BEHIND UTC — stays in July", () => {
+    const lines = loggedLines("Pacific/Midway"); // UTC−11 → local 2026-07-31
+    expect(lines[0]).toBe("── July ──");
+    const row = lines.find((l) => l.includes("Boundary win"));
+    expect(row).toContain("Jul 31");
   });
 });
 
