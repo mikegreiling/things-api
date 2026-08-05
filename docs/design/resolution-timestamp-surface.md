@@ -1,6 +1,6 @@
 # Resolution-timestamp surface — `--created-at` / `--completed-at` implementation plan
 
-**Status: PLAN — awaiting maintainer sign-off (this PR).** Probe basis: scf2 P4a–P4d, BACKDT (#404), HEADSORT (#400), LOGSORT (#401), WG-7 fix (#405). Maintainer rulings from the 2026-08-05 design conversation are baked in; open recommendations are marked. Independent of the read-shape doctrine v2 migration (#399) — this is pure write surface. Everything lands in **0.14.0** (ALPHA: no shims).
+**Status: SIGNED OFF (2026-08-05).** Implementation in progress (§8 sequencing; §7 universal reorder rides as its own PR). Probe basis: scf2 P4a–P4d, BACKDT (#404), HEADSORT (#400), LOGSORT (#401), WG-7 fix (#405). Maintainer rulings from the 2026-08-05 design conversation are baked in; open recommendations are marked. Independent of the read-shape doctrine v2 migration (#399) — this is pure write surface. Everything lands in **0.14.0** (ALPHA: no shims).
 
 ## 1. Vocabulary
 
@@ -56,6 +56,7 @@ The line already exists in the shipped surface; this plan makes it doctrine:
 - **timezones.md**: one section per behavior, each marked *certified* / *model-derived* / *unprobed*: the log boundary (viewer-local midnight under Daily; settings-flip stamp guard); Logbook day-grouping (viewer-local); date-only → noon convention (this plan); **`when=today`/`evening` writes are governed by the app host's clock** — a caller in a different zone cannot re-target its own local day, and `evening` has no cross-day form at all (model-derived; the write-side cross-midnight behavior is on the probe list); the **Tomorrow-list partial mitigation** — a caller *ahead* of the app host can reach app-tomorrow (= caller-today) via the certified `list "Tomorrow"` placement laws, but that day's *evening* remains unreachable until the app's own rollover (unprobed).
 - **Probe list riding this workstream** (small, one clone): write-side `when=today`/`evening` across a simulated zone gap; the timezones doc upgrades entries from model-derived to certified as legs land.
 - **Glossary**: add the "Completed on" canon note (universal Get Info label — completed, canceled, archived headings alike; 24h timestamps; maintainer screenshots 2026-08-05) to the `stopDate` entry.
+- **Render-formatting zone audit (PR C, explicitly scoped so it cannot get lost):** every date-label formatter in the TTY render path (`renderLogbook`, logged-region sublabels, day-block headers, relative-day words) must format through the consumer zone — the membership math is already zone-correct (`src/model/clock.ts`), but JS `Date` formatting silently falls back to the host zone after zone-correct grouping. Audit, fix, and lock with a regression test (fixture: a stopDate near local midnight under `THINGS_TZ` 14h ahead of the host).
 - Capability matrix rows, CHANGELOG (Unreleased, breaking — bespoke ops deleted), skill sweep, MCP tool descriptions.
 
 ## 7. Universal `reorder` (vocabulary unification — maintainer-directed 2026-08-05)
