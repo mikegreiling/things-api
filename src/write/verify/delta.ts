@@ -274,13 +274,14 @@ export interface VerifyReader {
 
 /**
  * `now`/`zone` supply the evaluation clock the reader hands to `byUuid` (and thus
- * `mapTodaySection`) so a verified read-after-write gates `todaySection` on the
- * SAME injected clock the write planner used — never the wall clock. Under a
- * pinned `THINGS_NOW` (consumer-timezone / bench fence), an `evening`/`today`
- * item dated pinned-today would otherwise be judged future-dated by a real-clock
- * reader and lose its `todaySection`, failing the delta assertion (bench-caught
- * regression from the #211 todaySection gate). Defaults to the host clock so the
- * pure verify-reader tests and ordering call sites are unaffected.
+ * the `today`/`evening` markers) so a verified read-after-write gates Today
+ * placement on the SAME injected clock the write planner used — never the wall
+ * clock. Under a pinned `THINGS_NOW` (consumer-timezone / bench fence), an
+ * `evening`/`today` item dated pinned-today would otherwise be judged
+ * future-dated by a real-clock reader and lose its markers, failing the delta
+ * assertion (bench-caught regression from the #211 clock gate). Defaults to the
+ * host clock so the pure verify-reader tests and ordering call sites are
+ * unaffected.
  */
 export function createDbReader(
   db: DatabaseSync,
@@ -398,19 +399,19 @@ export function createDbReader(
 
 /**
  * The internal derivation-substrate field names an assertion may reference by
- * their bare (stable) schedule-vocabulary name — they now live on the entity's
+ * their bare (stable) schedule-vocabulary name — they live on the entity's
  * nested `derived` bag (one-vocabulary Batch 2), so {@link getField} reads them
- * from there. This keeps the write-verify assertion vocabulary (`start`,
- * `startDate`, `todaySection`) unchanged while the entity's field layout moved.
+ * from there. The Today placement axis is the presence-keyed `today`/`evening`
+ * markers (`todaySection` was deleted); `reminder` resolves to the RAW stored
+ * byte on the substrate, the write engine's prediction/verification target.
  */
 const DERIVED_ASSERT_FIELDS: ReadonlySet<string> = new Set([
   "start",
   "logged",
   "trashed",
-  "todaySection",
   "today",
   "evening",
-  "reminderLive",
+  "reminder",
 ]);
 
 /**
@@ -418,12 +419,16 @@ const DERIVED_ASSERT_FIELDS: ReadonlySet<string> = new Set([
  * `tags` → sorted direct-tag titles; `checklistTitles` → checklist titles
  * in order; the derivation-substrate names ({@link DERIVED_ASSERT_FIELDS}) read
  * from the nested `derived` bag; otherwise a dotted walk (`area.uuid`,
- * `project.title`, …).
+ * `project.title`, …). NOTE: the write-verify `reminder` assertion resolves to
+ * the RAW stored byte `derived.reminder` (NOT the live-gated top-level
+ * `reminder`) — a write must be verified against the byte the app actually
+ * stored/cleared, which survives a stale schedule (§9n).
  */
 export function getField(entity: AnyTask, path: string): unknown {
-  // The substrate fields (start/logged/trashed/todaySection/today/evening/
-  // reminderLive) live on `entity.derived` — read them there under their stable
-  // schedule-vocabulary name (a heading carries no substrate, so it has none).
+  // The substrate fields (start/logged/trashed/today/evening/reminder) live on
+  // `entity.derived` — read them there under their stable schedule-vocabulary
+  // name (a heading carries no substrate, so it has none). `reminder` here is
+  // the RAW byte, the write engine's prediction/verification target.
   if (DERIVED_ASSERT_FIELDS.has(path) && "derived" in entity) {
     return (entity.derived as unknown as Record<string, unknown>)[path];
   }

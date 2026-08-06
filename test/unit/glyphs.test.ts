@@ -20,7 +20,7 @@ const TODAY = "2026-07-05";
 function project(
   overrides: Partial<Omit<Project, "derived">> & Partial<DerivedSubstrate>,
 ): Project {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
+  const { start, logged, trashed, today, evening, ...rest } = overrides;
   return {
     type: "project",
     status: "open",
@@ -33,16 +33,15 @@ function project(
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as Project;
 }
 
 function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
+  const { start, logged, trashed, today, evening, ...rest } = overrides;
   return {
     type: "to-do",
     status: "open",
@@ -53,10 +52,9 @@ function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstra
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as Todo;
 }

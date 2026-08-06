@@ -150,7 +150,6 @@ export type {
   TaskStatus,
   TaskType,
   Todo,
-  TodaySection,
 } from "./model/entities.ts";
 export type { IsoDate } from "./model/dates.ts";
 export {

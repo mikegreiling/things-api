@@ -376,7 +376,7 @@ describe("formatItem width plumbing", () => {
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
-    derived: { start: "active", logged: false, trashed: false, todaySection: null },
+    derived: { start: "active", logged: false, trashed: false, reminder: null },
   } as unknown as Parameters<typeof formatItem>[0];
 
   it("null (the default) does NOT fit — byte-identical to the composed row", () => {
@@ -445,7 +445,7 @@ const mkDeadlineTodo = (uuid: string, title: string, deadline: string) =>
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
-    derived: { start: "active", logged: false, trashed: false, todaySection: null },
+    derived: { start: "active", logged: false, trashed: false, reminder: null },
   }) as unknown as Parameters<typeof formatItem>[0];
 
 describe("compact deadline forms across a view (formatItem, end-to-end)", () => {

@@ -113,8 +113,8 @@ export function areaView(
     );
 
   const boundary = logBoundary(db, now, zone);
-  // The view's injected clock — gates `todaySection` to Today members in the
-  // mapper AND drives the scheduled/overdue bucketing below.
+  // The view's injected clock — gates the today/evening markers (and reminder
+  // liveness) in the mapper AND drives the scheduled/overdue bucketing below.
   const packedToday = encodePackedDate(localToday(now, zone));
   // OWN-DEADLINE UNIFORM: `--overdue` filters BOTH displayed row kinds by each
   // row's OWN deadline (open, strictly before today) via the shared OVERDUE

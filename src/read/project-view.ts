@@ -184,8 +184,8 @@ export function projectView(
   if (!projectRow || projectRow.type !== 1) throw new ProjectNotFoundError(uuid);
 
   const refs = makeRefResolver(db);
-  // The view's injected clock — gates `todaySection` to Today members in the
-  // mapper AND drives the scheduled/overdue bucketing below.
+  // The view's injected clock — gates the today/evening markers (and reminder
+  // liveness) in the mapper AND drives the scheduled/overdue bucketing below.
   const packedToday = encodePackedDate(localToday(now, zone));
   const tagsOf = (rows: TaskRow[]) =>
     fetchTagsForTasks(

@@ -1223,8 +1223,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       showTarget: (ref) => classifyShowTarget(conn.db, ref, scope),
       byUuid: (uuid) => {
         // Prefix-friendly: unknown refs keep the null contract; ambiguity throws.
-        // The injected clock gates `todaySection` to Today members under the
-        // consumer's own today (a pinned-clock/lab run reads honestly). Under a
+        // The injected clock gates the today/evening markers (and reminder
+        // liveness) under the consumer's own today (a pinned-clock/lab run reads
+        // honestly). Under a
         // scope, an out-of-scope uuid resolves to not-found → null (parity).
         try {
           return byUuid(

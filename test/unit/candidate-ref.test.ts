@@ -41,8 +41,8 @@ describe("candidateRef — the fixed disambiguation shape", () => {
 
   it("schema pin: a FULL internal entity emits ONLY allowed keys — the leak-prone raw fields are dropped", () => {
     // The exact shape that used to leak onto the wire: materialized-entity fields
-    // like the leaf-action counts, todaySection, notes body, checklist counts,
-    // dates, and the non-presence-keyed lifecycle booleans.
+    // like the leaf-action counts, notes body, checklist counts, dates, and the
+    // non-presence-keyed lifecycle booleans.
     const leaky = {
       uuid: "t-1",
       title: "Leaky",
@@ -55,7 +55,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       created: new Date(),
       modified: new Date(),
       startDate: null,
-      derived: { start: "active", logged: false, trashed: false, todaySection: "evening" },
+      derived: { start: "active", logged: false, trashed: false, reminder: null },
       area: { uuid: "a-1", title: "Home" },
       project: { uuid: "p-1", title: "Roof" },
       repeating: { isTemplate: false, isInstance: false, templateUuid: null },
@@ -69,7 +69,6 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       "untrashedLeafActionsCount",
       "openUntrashedLeafActionsCount",
       "checklistItemsCount",
-      "todaySection",
       "created",
       "modified",
       "logged",
@@ -95,7 +94,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       uuid: "t-2",
       title: "Loose",
       startDate: null,
-      derived: { start: "active", logged: false, trashed: false, todaySection: null },
+      derived: { start: "active", logged: false, trashed: false },
       area: null,
       project: null,
     }) as unknown as Record<string, unknown>;
@@ -110,7 +109,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       uuid: "t-3",
       title: "Later",
       startDate: "2099-01-01",
-      derived: { start: "active", logged: false, trashed: false, todaySection: null },
+      derived: { start: "active", logged: false, trashed: false },
     });
     expect(future.stage).toBe("upcoming");
     expect(future.when).toBe("2099-01-01");
@@ -129,7 +128,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       uuid: "t-4",
       title: "Gone",
       startDate: null,
-      derived: { start: "active", logged: false, trashed: true, todaySection: null },
+      derived: { start: "active", logged: false, trashed: true },
     });
     expect(trashed.stage).toBe("trash");
     expect(trashed).not.toHaveProperty("trashed");
@@ -137,7 +136,7 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       uuid: "p-3",
       title: "Done",
       startDate: null,
-      derived: { start: "active", logged: true, trashed: false, todaySection: null },
+      derived: { start: "active", logged: true, trashed: false },
     });
     expect(logged.stage).toBe("logbook");
     expect(logged).not.toHaveProperty("logged");

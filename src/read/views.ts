@@ -266,8 +266,8 @@ function overdueFilter(
 // honors the same clock as the SQL membership filter (a pinned test clock, a
 // lab run) — nothing here silently reaches for real time.
 // `packedToday` (the view's injected clock, encodePackedDate(localToday(now)))
-// is threaded so the mapper can gate `todaySection` to Today members only —
-// the same clock the SQL membership filter uses.
+// is threaded so the mapper can gate the today/evening markers (and reminder
+// liveness) — the same clock the SQL membership filter uses.
 function materialize(
   db: DatabaseSync,
   rows: TaskRow[],
@@ -325,6 +325,12 @@ export interface TodayFilter extends ViewFilter {
 
 /** Counts cover OPEN members only (the sidebar count reflects remaining work). */
 const isOpen = (i: ListItem) => i.status === "open";
+// Evening membership expires daily: the presence-keyed `evening` marker is set
+// ONLY when startBucket=1 AND startDate is exactly today (mappers todayMarkers),
+// so it already excludes stale evening items (which belong to Today proper) —
+// exactly what the retired `todaySection === "evening" && startDate === today`
+// test expressed.
+const isEvening = (i: ListItem) => i.derived.evening === true;
 
 export function todayView(
   db: DatabaseSync,
@@ -364,10 +370,6 @@ export function todayView(
     [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds, ...of.binds],
   );
   const items = materialize(db, rows, boundary, packedToday);
-  // Evening membership expires daily: raw startBucket=1 counts only while
-  // startDate is exactly today; stale evening items belong to Today proper.
-  const isEvening = (i: ListItem) =>
-    i.derived.todaySection === "evening" && i.startDate === todayIso;
   const evening = items.filter(isEvening);
   const dueIn = (list: ListItem[]) =>
     list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;

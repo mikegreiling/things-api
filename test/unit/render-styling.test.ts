@@ -49,7 +49,7 @@ const detailCard = () => import("../../src/cli/commands/todo.ts");
 
 // Flat substrate overrides (start/logged/…) are routed into the `derived` bag.
 function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
+  const { start, logged, trashed, today, evening, ...rest } = overrides;
   return {
     type: "to-do",
     uuid: "todo0001",
@@ -74,10 +74,9 @@ function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstra
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as Todo;
 }
@@ -85,7 +84,7 @@ function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstra
 function project(
   overrides: Partial<Omit<Project, "derived">> & Partial<DerivedSubstrate>,
 ): Project {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
+  const { start, logged, trashed, today, evening, ...rest } = overrides;
   return {
     type: "project",
     uuid: "proj0001",
@@ -108,10 +107,9 @@ function project(
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as Project;
 }

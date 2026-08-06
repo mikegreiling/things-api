@@ -728,7 +728,7 @@ const CASES: Record<OperationKind, CaseDef> = {
             op: "todo.update",
             uuid: "U-1",
             requested: { when: "2026-07-20", reminder: "10:00" },
-            pre: { start: "someday", startDate: "2026-07-20", todaySection: null, reminder: null },
+            pre: { start: "someday", startDate: "2026-07-20", reminder: null },
           }),
           NOW,
         );

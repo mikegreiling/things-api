@@ -23,7 +23,7 @@ const NOW = new Date("2026-07-05T12:00:00Z");
 function currentTodo(
   partial: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate> = {},
 ): AnyTask {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = partial;
+  const { start, logged, trashed, today, evening, ...rest } = partial;
   return {
     type: "to-do",
     uuid: "U-1",
@@ -35,10 +35,9 @@ function currentTodo(
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as unknown as AnyTask;
 }
@@ -362,7 +361,7 @@ describe("planUndo — field updates", () => {
       record({
         op: "todo.update",
         requested: { when: "today" },
-        pre: { start: "inbox", startDate: null, todaySection: null, reminder: null },
+        pre: { start: "inbox", startDate: null, reminder: null },
       }),
       NOW,
     );
@@ -370,7 +369,7 @@ describe("planUndo — field updates", () => {
       {
         op: "todo.move",
         params: { uuid: "U-1", inbox: true },
-        options: { guardFields: ["start", "startDate", "todaySection"] },
+        options: { guardFields: ["start", "startDate", "today", "evening"] },
       },
     ]);
   });
@@ -380,7 +379,7 @@ describe("planUndo — field updates", () => {
       record({
         op: "todo.update",
         requested: { when: "today" },
-        pre: { start: "someday", startDate: "2026-07-09", todaySection: null, reminder: "15:00" },
+        pre: { start: "someday", startDate: "2026-07-09", reminder: "15:00" },
       }),
       NOW,
     );
@@ -388,7 +387,7 @@ describe("planUndo — field updates", () => {
       {
         op: "todo.update",
         params: { uuid: "U-1", when: "2026-07-09", reminder: "15:00" },
-        options: { guardFields: ["start", "startDate", "todaySection"] },
+        options: { guardFields: ["start", "startDate", "today", "evening"] },
       },
     ]);
   });
@@ -398,7 +397,7 @@ describe("planUndo — field updates", () => {
       record({
         op: "todo.update",
         requested: { when: "today", reminder: "10:00" },
-        pre: { start: "active", startDate: "2026-07-05", todaySection: "today", reminder: null },
+        pre: { start: "active", startDate: "2026-07-05", today: true, reminder: null },
       }),
       NOW,
     );
@@ -406,7 +405,7 @@ describe("planUndo — field updates", () => {
       {
         op: "todo.update",
         params: { uuid: "U-1", when: "today", reminder: null },
-        options: { guardFields: ["start", "startDate", "todaySection"] },
+        options: { guardFields: ["start", "startDate", "today", "evening"] },
       },
     ]);
   });
@@ -416,7 +415,7 @@ describe("planUndo — field updates", () => {
       record({
         op: "todo.update",
         requested: { when: "2026-07-09", reminder: "10:00" },
-        pre: { start: "someday", startDate: "2026-07-09", todaySection: null, reminder: null },
+        pre: { start: "someday", startDate: "2026-07-09", reminder: null },
       }),
       NOW,
     );
@@ -431,7 +430,13 @@ describe("planUndo — field updates", () => {
       record({
         op: "todo.update",
         requested: { when: "someday" },
-        pre: { start: "active", startDate: "2026-07-05", todaySection: "evening", reminder: null },
+        pre: {
+          start: "active",
+          startDate: "2026-07-05",
+          today: true,
+          evening: true,
+          reminder: null,
+        },
       }),
       NOW,
     );
@@ -730,7 +735,7 @@ describe("planUndo — clear-dated-reminder (targeted restore)", () => {
       clearRecord(),
       NOW,
       [],
-      currentTodo({ startDate: "2026-07-05", todaySection: "evening" }),
+      currentTodo({ startDate: "2026-07-05", evening: true }),
     );
     expect(plan.steps[0]?.params["when"]).toBe("evening");
   });

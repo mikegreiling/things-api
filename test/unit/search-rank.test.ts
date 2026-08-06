@@ -19,7 +19,7 @@ import type { ListItem } from "../../src/read/views.ts";
 
 // Flat substrate overrides (start/trashed/…) are routed into the `derived` bag.
 function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
+  const { start, logged, trashed, today, evening, ...rest } = overrides;
   return {
     type: "to-do",
     uuid: "u",
@@ -33,10 +33,9 @@ function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstra
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as Todo;
 }

@@ -25,8 +25,8 @@ import {
 import { logBoundary, markLogged } from "./log-boundary.ts";
 import { inheritedTagsFor } from "./tags.ts";
 
-// `now`/`zone` supply the evaluation clock used to gate `todaySection` to
-// Today members (see mappers.mapTodaySection). They default to the host clock —
+// `now`/`zone` supply the evaluation clock used to gate the today/evening markers
+// (and reminder liveness) in the mapper. They default to the host clock —
 // matching this module's existing logBoundary default; the client facade passes
 // the injected clock so a pinned-clock `show` reads under the consumer's Today.
 export function byUuid(

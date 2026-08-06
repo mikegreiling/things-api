@@ -70,23 +70,14 @@ function derived(over: Obj): Obj {
     start: over["start"] ?? "active",
     logged: over["logged"] ?? false,
     trashed: over["trashed"] ?? false,
-    todaySection: over["todaySection"] ?? null,
+    reminder: over["reminderRaw"] ?? null,
   };
   if (over["today"] !== undefined) bag["today"] = over["today"];
   if (over["evening"] !== undefined) bag["evening"] = over["evening"];
-  if (over["reminderLive"] !== undefined) bag["reminderLive"] = over["reminderLive"];
   return bag;
 }
 
-const SUBSTRATE_KEYS = new Set([
-  "start",
-  "logged",
-  "trashed",
-  "todaySection",
-  "today",
-  "evening",
-  "reminderLive",
-]);
+const SUBSTRATE_KEYS = new Set(["start", "logged", "trashed", "today", "evening", "reminderRaw"]);
 
 /** A maximally-populated to-do entity (every optional field set), substrate under `derived`. */
 function maxTodo(over: Obj = {}): Obj {
@@ -213,7 +204,7 @@ describe("wire-key inventory lock (derived substrate segregation)", () => {
         start: "someday",
         startDate: null, // someday + today marker ⇒ provisional, when="today"
         today: true,
-        reminderLive: true,
+        reminder: "09:00", // top-level live reminder ⇒ the `reminder` wire key
         project: { uuid: "proj-1", title: "Q3", isRepeatingTemplate: true }, // ⇒ projectIsTemplate
         repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl-1" }, // ⇒ instanceOf
       }),

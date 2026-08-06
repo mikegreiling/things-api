@@ -212,8 +212,8 @@ export function thingsLink(uuid: string): string {
  */
 export function whenValue(item: Todo | Project, todayIso: string): string | null {
   // Consume the ONE derived `when` (the same value the wire emits) — never
-  // re-derive Today/Evening from `todaySection`/`startBucket` (those diverge
-  // from the marker on stale rows: a past-dated startBucket=1 row is Today, not
+  // re-derive Today/Evening from the raw `startBucket` (it diverges from the
+  // marker on stale rows: a past-dated startBucket=1 row is Today, not
   // Evening). `entityWhen` returns "today" | "evening" | a future ISO date |
   // undefined; a non-template someday row (undefined + start=someday) shows
   // Someday.
@@ -225,11 +225,10 @@ export function whenValue(item: Todo | Project, todayIso: string): string | null
   else if (item.derived.start === "someday") label = "Someday";
   else label = null;
   if (label === null) return null;
-  // The reminder rides the presence-keyed `reminderLive` marker (§9n) — the SAME
-  // materialize-time gate the JSON wire uses — so a stale reminder (past
-  // startDate, bell hidden in the GUI) is omitted from the card too. The marker
-  // implies `reminder` is set, so the non-null value read below is safe.
-  return item.derived.reminderLive !== true || item.reminder === null
+  // The reminder reads the top-level `reminder` — the LIVE value the model
+  // already gated (§9n): it is null for a stale reminder (past startDate, bell
+  // hidden in the GUI), so it is omitted from the card too.
+  return item.reminder === null
     ? label
     : `${label} ${dim(REMINDER_MARK)} ${formatReminderTime(item.reminder)}`;
 }

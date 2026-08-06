@@ -22,31 +22,24 @@ type Obj = Record<string, unknown>;
 
 /**
  * Assemble the internal `derived` substrate bag from flat overrides — so the
- * fixtures keep accepting `todo({ start, today, todaySection, … })` at the top
- * level while the entity nests them (one-vocabulary Batch 2).
+ * fixtures keep accepting `todo({ start, today, evening, … })` at the top level
+ * while the entity nests them (one-vocabulary Batch 2). `reminderRaw` seeds the
+ * substrate's RAW reminder byte (distinct from the top-level live-gated
+ * `reminder`); shaping drops the whole bag, so it must never leak.
  */
 function derived(over: Obj): Obj {
   const bag: Obj = {
     start: over["start"] ?? "active",
     logged: over["logged"] ?? false,
     trashed: over["trashed"] ?? false,
-    todaySection: over["todaySection"] ?? null,
+    reminder: over["reminderRaw"] ?? null,
   };
   if (over["today"] !== undefined) bag["today"] = over["today"];
   if (over["evening"] !== undefined) bag["evening"] = over["evening"];
-  if (over["reminderLive"] !== undefined) bag["reminderLive"] = over["reminderLive"];
   return bag;
 }
 
-const SUBSTRATE_KEYS = new Set([
-  "logged",
-  "trashed",
-  "start",
-  "todaySection",
-  "today",
-  "evening",
-  "reminderLive",
-]);
+const SUBSTRATE_KEYS = new Set(["logged", "trashed", "start", "today", "evening", "reminderRaw"]);
 
 /** Strip the flat substrate keys an override may carry (they route into `derived`). */
 function withoutSubstrate(over: Obj): Obj {
@@ -166,51 +159,58 @@ describe("shapeReadPayload — hasNotes marker (compact)", () => {
   });
 });
 
-describe("shapeReadPayload — §9n reminder gating (keys on the reminderLive marker)", () => {
-  // A stale reminder: the byte is on the entity (reminder set) but the
-  // materialize-time reminderLive marker is ABSENT (past startDate) — the GUI
-  // shows no bell, so the wire must omit the key. A live reminder carries the
-  // marker (today/future) and is kept. The marker itself never rides the wire.
-  it("drops a STALE reminder (marker absent) in list rows, both tiers", () => {
-    for (const full of [false, true]) {
-      const row = first(
-        shapeReadPayload("search", [todo({ startDate: "2026-07-01", reminder: "18:00" })], full),
-      );
-      expect("reminder" in row).toBe(false);
-      expect("reminderLive" in row).toBe(false); // internal marker never emitted
-    }
-  });
-
-  it("keeps a LIVE reminder (marker present) and strips only the marker, both tiers", () => {
+describe("shapeReadPayload — §9n reminder (live-gated top-level; raw substrate never leaks)", () => {
+  // The §9n gating now lives at the mapper: the top-level `reminder` a fixture
+  // carries is ALREADY the live value (null once the byte is stale, its
+  // startDate past). The RAW byte lives only in the `derived` substrate, which
+  // shaping drops wholesale — so shaping just passes the top-level reminder
+  // through, and a null one is pruned downstream by omit-empty (exactly like
+  // `deadline: null`). The raw substrate byte never leaks onto the wire.
+  it("keeps a LIVE reminder and never leaks the raw substrate byte, both tiers", () => {
     for (const full of [false, true]) {
       const row = first(
         shapeReadPayload(
           "search",
-          [todo({ startDate: "2026-07-15", reminder: "18:00", reminderLive: true })],
+          [todo({ startDate: "2026-07-15", reminder: "18:00", reminderRaw: "18:00" })],
           full,
         ),
       );
       expect(row["reminder"]).toBe("18:00");
-      expect("reminderLive" in row).toBe(false); // internal marker never emitted
+      expect("derived" in row).toBe(false); // the whole substrate (incl raw byte) is gone
     }
   });
 
-  it("drops a STALE reminder on a detail read; keeps a live one", () => {
+  it("a STALE reminder is null at the top level (raw byte only in the dropped substrate), both tiers", () => {
+    for (const full of [false, true]) {
+      const row = first(
+        shapeReadPayload(
+          "search",
+          // Mapper output for a stale reminder: top-level null, raw byte in substrate.
+          [todo({ startDate: "2026-07-01", reminder: null, reminderRaw: "18:00" })],
+          full,
+        ),
+      );
+      expect(row["reminder"] ?? null).toBeNull(); // pruned by omit-empty on the wire
+      expect("derived" in row).toBe(false);
+    }
+  });
+
+  it("passes the live/stale reminder through faithfully on a detail read", () => {
     const stale = shapeReadPayload(
       "detail",
-      todo({ startDate: "2026-07-01", reminder: "18:00" }),
+      todo({ startDate: "2026-07-01", reminder: null, reminderRaw: "18:00" }),
       false,
     ) as Obj;
-    expect("reminder" in stale).toBe(false);
-    expect("reminderLive" in stale).toBe(false);
+    expect(stale["reminder"] ?? null).toBeNull();
+    expect("derived" in stale).toBe(false);
 
     const live = shapeReadPayload(
       "detail",
-      todo({ startDate: "2026-07-15", reminder: "18:00", reminderLive: true }),
+      todo({ startDate: "2026-07-15", reminder: "18:00", reminderRaw: "18:00" }),
       false,
     ) as Obj;
     expect(live["reminder"]).toBe("18:00");
-    expect("reminderLive" in live).toBe(false);
+    expect("derived" in live).toBe(false);
   });
 });
 
@@ -358,15 +358,6 @@ describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)
       const row = first(shapeReadPayload(kind, [todo()], false));
       expect(row["stage"]).toBe("anytime"); // kept
     }
-  });
-
-  it("todaySection is retired from the wire on every surface (R10.1)", () => {
-    const mixed = first(shapeReadPayload("search", [todo({ todaySection: "today" })], true));
-    expect("todaySection" in mixed).toBe(false);
-    const pure = first(shapeReadPayload("inbox", [todo({ todaySection: "evening" })], false));
-    expect("todaySection" in pure).toBe(false);
-    const detail = shapeReadPayload("detail", todo({ todaySection: "evening" }), false) as Obj;
-    expect("todaySection" in detail).toBe(false);
   });
 
   it("trash wins over logbook: a trashed+completed+logged row derives `trash`", () => {

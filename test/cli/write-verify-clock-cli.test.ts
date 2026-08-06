@@ -89,7 +89,7 @@ describe("todo add --when evening under a future pinned THINGS_NOW", () => {
     expect(data["observed"]).toMatchObject({
       start: "active",
       startDate: FUTURE_TODAY,
-      todaySection: "evening",
+      evening: true,
     });
     expect(process.exitCode ?? 0).toBe(0);
   });
