@@ -260,6 +260,51 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
     expect(inv.redactedPayload).not.toContain(TOKEN);
   });
 
+  it("todo.add --completed-at + --checklist-item: checklist-items is an OBJECT array, never a bare string array (§9y regression)", () => {
+    // §9y (RESID1 R-JSONPAR): the timestamped-add json path once emitted
+    // checklist-items as a bare STRING array, which things:///json rejects
+    // wholesale (the entire import silently no-ops). Lock the OBJECT-array
+    // shape the app accepts. Full rich case (Case-A analogue): both dates +
+    // checklist + tags + container + heading, so no attribute regresses.
+    const pre = emptyPreState();
+    pre.destProject = { resolved: { uuid: "PROJ-9", title: "Lab" }, matches: 1 };
+    pre.destHeading = { resolved: { uuid: "HEAD-9", title: "Phase" }, matches: 1 };
+    pre.resolvedTagTitles = ["t1", "t2"];
+    const inv = COMMANDS["todo.add"].compile(
+      {
+        title: "Migrated",
+        completedAt: "2025-01-15T09:00",
+        createdAt: "2024-06-01T08:00",
+        tags: ["t1", "t2"],
+        checklistItems: ["ck1", "ck2"],
+        project: { title: "Lab" },
+        heading: "Phase",
+      },
+      "url-scheme",
+      pre,
+      { token: TOKEN },
+    );
+    expect(inv.payload).toContain("things:///json?");
+    const data = decodeURIComponent(inv.payload.split("data=")[1]?.split("&")[0] ?? "");
+    const parsed = JSON.parse(data) as Array<{ attributes: Record<string, unknown> }>;
+    const checklist = parsed[0]?.attributes["checklist-items"];
+    // Not the rejected bare-string shape.
+    expect(checklist).not.toEqual(["ck1", "ck2"]);
+    // The object-array shape the app accepts (minimal {title} attrs — items are
+    // born open, so no `completed` key is emitted).
+    expect(checklist).toEqual([
+      { type: "checklist-item", attributes: { title: "ck1" } },
+      { type: "checklist-item", attributes: { title: "ck2" } },
+    ]);
+    // Every sibling attribute still lands (no regression from the checklist fix).
+    expect(parsed[0]?.attributes["completed"]).toBe(true);
+    expect(parsed[0]?.attributes["completion-date"]).toBe(noMillis(new Date(2025, 0, 15, 9)));
+    expect(parsed[0]?.attributes["creation-date"]).toBe(noMillis(new Date(2024, 5, 1, 8)));
+    expect(parsed[0]?.attributes["tags"]).toEqual(["t1", "t2"]);
+    expect(parsed[0]?.attributes["list-id"]).toBe("PROJ-9");
+    expect(parsed[0]?.attributes["heading"]).toBe("Phase");
+  });
+
   it("todo.add: --created-at after --completed-at is refused at preRead", () => {
     expect(() =>
       COMMANDS["todo.add"].preRead(

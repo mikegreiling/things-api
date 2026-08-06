@@ -443,7 +443,13 @@ const todoAdd: CommandSpec<"todo.add"> = {
         if (params.deadline !== undefined) attrs["deadline"] = params.deadline;
       }
       if (params.tags !== undefined) attrs["tags"] = pre.resolvedTagTitles;
-      if (params.checklistItems !== undefined) attrs["checklist-items"] = params.checklistItems;
+      if (params.checklistItems !== undefined) {
+        // §9y: things:///json rejects a bare STRING array wholesale (silent
+        // no-op) — emit the OBJECT-array shape the app accepts.
+        attrs["checklist-items"] = checklistItemsJsonAttr(
+          params.checklistItems.map((title) => ({ title })),
+        );
+      }
       if (container?.uuid !== undefined) attrs["list-id"] = container.uuid;
       if (pre.destHeading?.resolved?.title !== undefined) {
         attrs["heading"] = pre.destHeading.resolved.title;
@@ -779,6 +785,25 @@ const todoSetTags: CommandSpec<"todo.set-tags"> = {
 };
 
 /** Normalize the string | spec union; decide whether states force the json form. */
+/**
+ * The `checklist-items` value `things:///json` accepts: an array of
+ * `{type:"checklist-item",attributes:{title[,completed]}}` OBJECTS. A bare
+ * STRING array is rejected wholesale — the whole import silently no-ops, no row,
+ * no error (§9y; RESID1 R-JSONPAR RAW-a..d). `completed` is emitted only when a
+ * spec carries it, so an at-creation add (all items open) yields the minimal
+ * `{title}` attributes the probe validated (OBJ/OBJ3), while the checklist
+ * replace path forwards its per-item state.
+ */
+function checklistItemsJsonAttr(
+  specs: { title: string; completed?: boolean }[],
+): { type: "checklist-item"; attributes: { title: string; completed?: boolean } }[] {
+  return specs.map((s) => ({
+    type: "checklist-item",
+    attributes:
+      s.completed === undefined ? { title: s.title } : { title: s.title, completed: s.completed },
+  }));
+}
+
 function checklistSpecs(items: (string | { title: string; completed?: boolean })[]): {
   specs: { title: string; completed: boolean }[];
   needsJson: boolean;
@@ -834,10 +859,7 @@ const todoReplaceChecklist: CommandSpec<"todo.replace-checklist"> = {
         operation: "update",
         id: params.uuid,
         attributes: {
-          "checklist-items": specs.map((s) => ({
-            type: "checklist-item",
-            attributes: { title: s.title, completed: s.completed },
-          })),
+          "checklist-items": checklistItemsJsonAttr(specs),
         },
       },
     ]);
