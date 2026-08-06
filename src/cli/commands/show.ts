@@ -258,16 +258,16 @@ export function registerShowCommands(program: Command): void {
               );
               echoIfSugar(hintBase);
               // Identical to `things area show` (kind area-view, data `{view}`):
-              // the `blocks[]` sidecar retires from the wire (inline `total` via
-              // `areaTotals`); the render keeps the full per-block truncation.
-              const { blocks: _blocks, ...flatTruncation } = bounded.truncation;
+              // each capped scope's completeness rides its inline `total` (via
+              // `areaTotals`, R1); the render reads the per-block detail directly
+              // (`bounded.blocks`, never the wire — doctrine v2 PR 5).
               return {
                 data: bounded.view,
                 kind: "area-view",
-                truncation: flatTruncation,
+                truncation: bounded.truncation,
                 areaTotals: bounded.totals,
                 ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
-                lines: renderAreaView(bounded.view, bounded.truncation, {
+                lines: renderAreaView(bounded.view, bounded.blocks, {
                   ...opts,
                   limits,
                   hintBase,

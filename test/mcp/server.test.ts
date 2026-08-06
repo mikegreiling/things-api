@@ -213,11 +213,6 @@ function textOf(result: unknown): unknown {
   return JSON.parse(content[0]?.text ?? "null");
 }
 
-/** Flatten a nested grouped-block list (top-level blocks + their project children). */
-function flattenBlocks<T extends { children?: T[] }>(blocks: T[]): T[] {
-  return [...blocks, ...blocks.flatMap((b) => b.children ?? [])];
-}
-
 /** The warnings array from whichever result block carries meta.warnings. */
 function warningsOf(result: unknown): string[] | undefined {
   const content = (result as { content: { text: string }[] }).content;
@@ -983,37 +978,34 @@ describe("things MCP server", () => {
     for (let i = 0; i < 8; i++) seedTodo(fixture.db, { title: `fw ${i}`, project: proj, index: i });
     await connect([fakeVector(null).vector]);
 
+    type Section = {
+      area: { title?: string } | null;
+      items: { title?: string }[];
+      total?: number;
+    };
     const result = await client.callTool({ name: "read_view", arguments: { view: "anytime" } });
     const content = (result as { content: { text: string }[] }).content;
-    type Blk = {
-      kind: string;
-      title: string | null;
-      shown: number;
-      total: number;
-      limit: number | null;
-      children?: Blk[];
-    };
     const meta = JSON.parse(content[1]?.text ?? "{}") as {
-      truncation: { truncated: boolean; blocks: Blk[] };
+      truncation: { truncated: boolean };
       note: string;
     };
     expect(meta.truncation.truncated).toBe(true);
-    // Project blocks nest inside their area block — flatten to match by identity.
-    expect(flattenBlocks(meta.truncation.blocks)).toContainEqual(
-      expect.objectContaining({ kind: "project", title: "Firmware", shown: 3, total: 8, limit: 3 }),
-    );
+    // The per-block `blocks[]` sidecar is retired from the wire (PR 5): each
+    // capped section carries its inline `total` in the data block instead.
+    expect("blocks" in meta.truncation).toBe(false);
+    const hobbies = (textOf(result) as Section[]).find((s) => s.area?.title === "Hobbies");
+    // 4 shown (1 project row + 3 children) of a 9-row scope → inline `total: 9`.
+    expect(hobbies?.total).toBe(9);
     expect(meta.note).toContain("per block");
 
     const wider = await client.callTool({
       name: "read_view",
       arguments: { view: "anytime", project_limit: 5 },
     });
-    const widerMeta = JSON.parse(
-      (wider as { content: { text: string }[] }).content[1]?.text ?? "{}",
-    ) as { truncation: { blocks: Blk[] } };
-    expect(
-      flattenBlocks(widerMeta.truncation.blocks).find((b) => b.title === "Firmware")?.shown,
-    ).toBe(5);
+    const widerHobbies = (textOf(wider) as Section[]).find((s) => s.area?.title === "Hobbies");
+    // A higher per-project cap shows 5 children: 1 project row + 5 = 6 items.
+    expect(widerHobbies?.items).toHaveLength(6);
+    expect(widerHobbies?.total).toBe(9);
 
     const all = await client.callTool({
       name: "read_view",
@@ -1023,6 +1015,10 @@ describe("things MCP server", () => {
       (all as { content: { text: string }[] }).content[1]?.text ?? "{}",
     ) as { truncation: { truncated: boolean } };
     expect(allMeta.truncation.truncated).toBe(false);
+    // Uncapped: the whole section shows, so no inline `total` (R1).
+    expect(
+      (textOf(all) as Section[]).find((s) => s.area?.title === "Hobbies")?.total,
+    ).toBeUndefined();
   });
 
   it("read_view someday: numeric show_active_project_items caps that section; limit rejected on grouped views", async () => {
@@ -1045,21 +1041,20 @@ describe("things MCP server", () => {
       });
       const meta = JSON.parse(
         (capped as { content: { text: string }[] }).content[1]?.text ?? "{}",
-      ) as {
-        truncation: {
-          blocks: {
-            kind: string;
-            title: string | null;
-            shown: number;
-            total: number;
-            children?: { kind: string; title: string | null; shown: number; total: number }[];
-          }[];
-        };
-      };
-      // The active-project child block nests inside its section block.
-      expect(flattenBlocks(meta.truncation.blocks)).toContainEqual(
-        expect.objectContaining({ kind: "project", title: "Active Proj", shown: 2, total: 4 }),
-      );
+      ) as { truncation: { truncated: boolean } };
+      // The `blocks[]` sidecar is retired (PR 5): the capped section carries its
+      // inline `total` in the data block. Hobbies holds only Active Proj's 4
+      // someday children (no own someday rows); capped at 2, so 2 shown of 4.
+      expect("blocks" in meta.truncation).toBe(false);
+      const hobbies = (
+        textOf(capped) as Array<{
+          area: { title?: string } | null;
+          items: unknown[];
+          total?: number;
+        }>
+      ).find((s) => s.area?.title === "Hobbies");
+      expect(hobbies?.items).toHaveLength(2);
+      expect(hobbies?.total).toBe(4);
     };
     // Preferred name and its compatibility alias behave identically.
     await capsWith({ show_active_project_items: 2 });

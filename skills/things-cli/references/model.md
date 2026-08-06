@@ -30,8 +30,8 @@ Entities, relationships, and how the sidebar views are computed over them, as ex
 - **inbox** — untriaged to-dos (no container, no schedule).
 - **today** — items scheduled for today, with the **This Evening** section beneath.
 - **upcoming** — future-dated items, forward-ordered by date. JSON returns `data.sections = [{when, items, total?} …]` — chronological day blocks keyed by `when` (an ISO date), then a trailing `{when: null, items}` block of date-less recurring templates when any exist (flatten with `.data.sections[].items[]`).
-- **anytime** — all active items kept without a specific date (standalone or filed).
-- **someday** — items deliberately kept without a date.
+- **anytime** — all active items kept without a specific date (standalone or filed). JSON returns `data.sections = [{area, items, total?} …]` — area-grouped sections (sidebar-rank order; `area` is `null` for the loose section), each carrying its inline `total` iff its rows were capped by `--area-limit`/`--project-limit` (flatten with `.data.sections[].items[]`).
+- **someday** — items deliberately kept without a date. Same `data.sections = [{area, items, total?} …]` shape as anytime.
 - **logbook** — completed/canceled items.
 - **trash** — trashed items (restorable until the trash is emptied).
 

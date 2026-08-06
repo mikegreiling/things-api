@@ -23,7 +23,6 @@ import {
   REF_PREFIX_LEN,
   type TodayBucketTotals,
   type TodayView,
-  type Truncation,
 } from "../index.ts";
 import { renderNow, renderZone } from "./clock.ts";
 import { renderRefPromoter } from "./ref-render.ts";
@@ -831,16 +830,16 @@ function mixedMoreLine(projects: number, todos: number, drill: string | null): s
   return dim(`  … ${parts.join(", ")}${drill === null ? "" : ` — \`${drill}\``}`);
 }
 
-/** The area/loose block for a section, matched by identity in the grouped metadata. */
-function areaBlockFor(grouped: Truncation, area: { uuid: string } | null): GroupBlock | undefined {
+/** The area/loose block for a section, matched by identity in the per-block detail. */
+function areaBlockFor(blocks: GroupBlock[], area: { uuid: string } | null): GroupBlock | undefined {
   const kind = area === null ? "loose" : "area";
   const ref = area?.uuid ?? null;
-  return (grouped.blocks ?? []).find((b) => b.kind === kind && b.ref === ref);
+  return blocks.find((b) => b.kind === kind && b.ref === ref);
 }
 
-/** A nested project block anywhere in the grouped metadata, matched by project uuid. */
-function projectBlockFor(grouped: Truncation, projectUuid: string): GroupBlock | undefined {
-  for (const b of grouped.blocks ?? []) {
+/** A nested project block anywhere in the per-block detail, matched by project uuid. */
+function projectBlockFor(blocks: GroupBlock[], projectUuid: string): GroupBlock | undefined {
+  for (const b of blocks) {
     const hit = b.children?.find((c) => c.kind === "project" && c.ref === projectUuid);
     if (hit !== undefined) return hit;
   }
@@ -860,16 +859,16 @@ function groupedBottomLine(base: string, escalations: string[], allBase = base):
 /**
  * The anytime preview: the FULL block skeleton — every area header and every
  * project row — always renders; the `sections` are the already-bounded view
- * and `grouped` the per-block metadata that carries each block's pre-cap total,
- * so a truncated block trails a muted `… N more — \`things (project|area) show
- * '…'\`` drill-down (the loose block has no container, so it shows only the
- * count), and the view ends with one line escalating the caps that hit
- * (`limits` supplies the doubling). Today members are starred. Mirrors
- * renderSections' layout exactly.
+ * and `blocks` the per-block detail that carries each block's pre-cap total
+ * (internal render plumbing, never the wire), so a truncated block trails a muted
+ * `… N more — \`things (project|area) show '…'\`` drill-down (the loose block has
+ * no container, so it shows only the count), and the view ends with one line
+ * escalating the caps that hit (`limits` supplies the doubling). Today members
+ * are starred. Mirrors renderSections' layout exactly.
  */
 export function renderAnytimePreview(
   sections: SidebarSection[],
-  grouped: Truncation,
+  blocks: GroupBlock[],
   limits: GroupedLimits,
   base: string,
 ): string[] {
@@ -891,7 +890,7 @@ export function renderAnytimePreview(
     // rows; the pre-cap totals come from the block metadata.
     const { direct, projects } = splitSectionBlocks(section);
     const suppressArea = section.area?.uuid ?? null;
-    const areaBlock = areaBlockFor(grouped, section.area);
+    const areaBlock = areaBlockFor(blocks, section.area);
     for (const item of direct) {
       lines.push(formatItem(item, w, { suppressArea, mark: todayMark(item) }));
     }
@@ -954,7 +953,7 @@ export function renderAnytimePreview(
  */
 export function renderSomedayPreview(
   sections: SidebarSection[],
-  grouped: Truncation,
+  blocks: GroupBlock[],
   limits: GroupedLimits,
   base: string,
   showActive: boolean,
@@ -983,7 +982,7 @@ export function renderSomedayPreview(
       }
       const suppressArea = section.area?.uuid ?? null;
       for (const item of own) lines.push(formatItem(item, w, { suppressArea }));
-      const ownBlock = areaBlockFor(grouped, section.area);
+      const ownBlock = areaBlockFor(blocks, section.area);
       if (ownBlock !== undefined && ownBlock.total > ownBlock.shown) {
         areaHit = true;
         const drill =
@@ -1007,7 +1006,7 @@ export function renderSomedayPreview(
         for (const item of group.items) {
           lines.push(formatItem(item, w, { suppressProject: group.project.uuid }));
         }
-        const projectBlock = projectBlockFor(grouped, group.project.uuid);
+        const projectBlock = projectBlockFor(blocks, group.project.uuid);
         if (projectBlock !== undefined && projectBlock.total > projectBlock.shown) {
           projectHit = true;
           lines.push(

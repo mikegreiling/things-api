@@ -52,30 +52,32 @@ export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
  * (`shown < total`, or any block hid rows). The dropped remainder is
  * `total - shown`.
  *
- * One optional per-shape breakdown hangs off it: `blocks` for a grouped view
- * (anytime/someday/`area show` — the identity-carrying per-block nesting); absent
- * on a plain flat view. The `today` view carries per-bucket completeness INLINE
- * on its `children.{today,evening}` records (each bucket's `total`, present iff
- * capped — read-shape v2 R1), not as a truncation sidecar.
+ * This is the WHOLE-VIEW rollup only. Per-bucket completeness rides INLINE on the
+ * data records (read-shape v2 R1): each `children`/`sections`/`projects` bucket
+ * carries its own `total`, present iff it was capped. The pre-v2 `blocks[]`
+ * descriptor-join sidecar is RETIRED from the wire entirely (doctrine v2 PR 5) —
+ * the per-block detail the TTY renderers need is internal render plumbing
+ * ({@link GroupBlock}), never serialized.
  */
 export interface Truncation {
   shown: number;
   total: number;
   limit: number | null;
   truncated: boolean;
-  /** Per-block nesting for a grouped view (anytime/someday/area card); absent otherwise. */
-  blocks?: GroupBlock[];
 }
 
 /**
  * One identity-carrying block of a grouped catalogue (anytime/someday) or a
- * sectioned detail view (`area show`). Every header/section is always rendered;
- * only the innermost item lists are capped. Emitted for every block that has
- * rows to cap (`total > 0`) — including a block whose rows were ALL dropped
- * (`shown: 0`), so no truncated header is untraceable. A block with no
- * cappable rows of its own (`total: 0`) is omitted UNLESS it wraps truncated
- * `children` — an area whose only capped content is its project item-lists
- * still appears as their container.
+ * sectioned detail view (`area show`) — INTERNAL render plumbing only, NEVER on
+ * the wire (the `blocks[]` truncation sidecar retired in doctrine v2 PR 5; each
+ * bucket's completeness now rides its inline `total`, R1). The grouped renderers
+ * consume these to draw per-block "… N more" drill-down footers. Every
+ * header/section is always rendered; only the innermost item lists are capped.
+ * Emitted for every block that has rows to cap (`total > 0`) — including a block
+ * whose rows were ALL dropped (`shown: 0`), so no truncated header is
+ * untraceable. A block with no cappable rows of its own (`total: 0`) is omitted
+ * UNLESS it wraps truncated `children` — an area whose only capped content is its
+ * project item-lists still appears as their container.
  *
  * Blocks are NESTED: an area/loose block carries its project blocks in
  * `children` — in anytime the project item-lists inside the area, in someday
@@ -112,11 +114,12 @@ export interface EnvelopeMeta {
   /** Wall-clock duration of the command in milliseconds. */
   elapsedMs: number;
   /**
-   * The read's completeness metadata (the single truncation shape). Present on
-   * any read that could drop rows — flat views (row `limit`), the `today` view
-   * (whose per-bucket completeness rides its inline `children.{today,evening}.total`),
-   * and grouped views (anytime/someday/`area show`, `blocks`).
-   * `meta.truncation.truncated` is the universal "did I see everything" check.
+   * The read's completeness metadata (the single truncation shape) — the
+   * WHOLE-VIEW rollup. Present on any read that could drop rows — flat views (row
+   * `limit`), the `today` view, and grouped views (anytime/someday/`area show`).
+   * Per-bucket completeness rides INLINE on the data records' own `total` (R1),
+   * never on this envelope. `meta.truncation.truncated` is the universal "did I
+   * see everything" check.
    */
   truncation?: Truncation;
   /**

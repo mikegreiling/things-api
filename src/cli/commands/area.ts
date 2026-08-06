@@ -29,10 +29,10 @@ import {
   ReferenceResolutionError,
   type AreaView,
   type BoundedAreaView,
+  type GroupBlock,
   type GroupedLimits,
   type Project,
   type Todo,
-  type Truncation,
 } from "../../index.ts";
 import {
   addTagFilterOptions,
@@ -72,15 +72,11 @@ export interface AreaShowOpts {
  *
  * `view` is the already-bounded card (its ACTIVE project rows and direct to-dos
  * capped; scheduled/someday project rows and the later section intact) and
- * `grouped` the per-block metadata carrying each capped section's pre-cap total
- * — so the "… N more" footers derive from metadata, never a pre-cap copy of the
- * view.
+ * `blocks` the per-block detail carrying each capped section's pre-cap total
+ * (internal render plumbing, never the wire) — so the "… N more" footers derive
+ * from it, never a pre-cap copy of the view.
  */
-export function renderAreaView(
-  view: AreaView,
-  truncation: Truncation,
-  opts: AreaShowOpts,
-): string[] {
+export function renderAreaView(view: AreaView, blocks: GroupBlock[], opts: AreaShowOpts): string[] {
   const todayIso = localToday(renderNow(), renderZone());
   // The card's ACTIVE project rows are already capped in `view`; scheduled and
   // someday rows always survive and route to the Upcoming/Someday sections.
@@ -110,8 +106,8 @@ export function renderAreaView(
   // preamble and the toggled later section are never capped. The pre-cap
   // totals come from the metadata; `limits` supplies the footer's doubling.
   const limits = opts.limits ?? { area: null, project: null };
-  const projectsBlock = truncation.blocks?.find((b) => b.kind === "projects");
-  const activeBlock = truncation.blocks?.find((b) => b.kind === "area");
+  const projectsBlock = blocks.find((b) => b.kind === "projects");
+  const activeBlock = blocks.find((b) => b.kind === "area");
   const hiddenProjects = projectsBlock ? projectsBlock.total - projectsBlock.shown : 0;
   const hiddenActive = activeBlock ? activeBlock.total - activeBlock.shown : 0;
   // The `loose` pseudo-area renders like an area card but has no uuid/uri/tags
@@ -284,17 +280,16 @@ export function runAreaShow(ref: string, opts: AreaShowActionOpts): void {
       if (getInvocation()?.canonical !== null) {
         setInvocationCanonical(invocation("area show", [cref]));
       }
-      // The per-block `blocks[]` sidecar retires from the JSON wire (PR 3): each
-      // capped scope's completeness rides its inline `total` (via `areaTotals`).
-      // The RENDER still reads the full per-block truncation (a direct argument,
-      // not the wire) for its hidden-row footers — TTY behavior unchanged.
-      const { blocks: _blocks, ...flatTruncation } = bounded.truncation;
+      // Each capped scope's completeness rides its inline `total` (via
+      // `areaTotals`, R1); the whole-view rollup rides `truncation`. The RENDER
+      // reads the per-block detail directly (`bounded.blocks`, never the wire)
+      // for its hidden-row footers — TTY behavior unchanged (doctrine v2 PR 5).
       return {
         data: bounded.view,
-        truncation: flatTruncation,
+        truncation: bounded.truncation,
         areaTotals: bounded.totals,
         ...(bounded.notice !== undefined && { warnings: [bounded.notice] }),
-        lines: renderAreaView(bounded.view, bounded.truncation, {
+        lines: renderAreaView(bounded.view, bounded.blocks, {
           ...opts,
           limits,
           hintBase,

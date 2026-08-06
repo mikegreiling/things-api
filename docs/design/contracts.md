@@ -46,51 +46,28 @@ Every command supports `--json`. Envelope JSON goes to **stdout**; all human/log
 
 ## List-view truncation metadata (`meta.truncation`)
 
-List views are bounded by default and report exactly what was hidden — nothing is ever silently dropped. Since the 1.0 shape break there is ONE shape, `meta.truncation` (the former separate `meta.grouped` was folded into it as the optional `blocks` breakdown); `meta.truncation.truncated` is the universal completeness check. It is additive and never omit-empty-pruned.
+List views are bounded by default and report exactly what was hidden — nothing is ever silently dropped. There is ONE shape, `meta.truncation`, and it is the WHOLE-VIEW rollup only; `meta.truncation.truncated` is the universal completeness check. It is additive and never omit-empty-pruned. **Per-bucket completeness rides INLINE on the data records — read-shape v2 R1 — not on this envelope.** The pre-v2 `meta.truncation.blocks[]` descriptor-join sidecar is RETIRED from the wire ENTIRELY (doctrine v2 PR 5: with `anytime`/`someday` swept, no view emits it; the `blocks` field is gone from the `Truncation` type and `GroupBlock` drops out of the envelope schema).
 
-**Flat / chronological views** (`inbox`, `logbook`, `trash`, `search`, `changes`; and `upcoming`, whose `data` reshapes into day-block `sections` but whose `meta.truncation` is still this base shape) carry the base shape:
+**Every view that can drop rows** (flat/chronological — `inbox`, `logbook`, `trash`, `search`, `changes`; and the grouped/reshaped views — `today`, `anytime`, `someday`, `upcoming`, `area show`) carries this ONE base shape:
 
 ```jsonc
 {
-  "shown": 50,          // rows returned
+  "shown": 50,          // rows returned (whole-view sum on a grouped view)
   "total": 75,          // rows that matched after all filters
-  "limit": 50,          // effective cap; null = unbounded (--all / limit:null)
-  "truncated": true     // exactly shown < total
+  "limit": 50,          // effective cap; null = unbounded (--all / limit:null),
+                        // and ALWAYS null on a grouped view (caps are per-block)
+  "truncated": true     // exactly shown < total (any bucket hid rows)
 }
 ```
 
-The `today` view carries the SAME base shape for its whole-view `shown`/`total`/`limit`/`truncated` (its `--limit` cuts across Today then This Evening in render order), but its per-bucket completeness lives INLINE on each `children` bucket record, not as a truncation sidecar (read-shape v2 R1) — see below. The **global `upcoming`** view is the same story: the base shape is its whole-view rollup (its `--limit` cuts across the day-ordered stream), while each capped DAY BLOCK carries its own inline `total` — no `blocks[]` sidecar (read-shape v2 PR 4, below).
+**Per-bucket completeness — the R1 inline `total`.** Every bucket record is `{ …key, items, total? }`, and `total` is present INLINE **iff** that bucket's `items` were capped (`items.length < total`) — absent otherwise, since an untruncated bucket never restates its own length. This is uniform across:
 
-**Grouped catalogues** (`anytime`, `someday`, on the CLI and over MCP) put their per-block nesting under `meta.truncation.blocks` (the base `shown`/`total` aggregate the blocks; `limit` is `null`). Every header/section is always rendered; only the innermost item lists are capped. *(The **`area show`** / `get_area` view no longer emits `blocks` — read-shape v2 PR 3 retired that sidecar in favor of each capped scope's INLINE `total`; see below.)*
+- **`today`** — `data.children = { today: {items, total?}, evening: {items, total?} }` (keys = the `--in today` / `--in evening` reorder scopes). The whole-view aggregate — the app's sidebar count — rides `meta.counts` (`{dueOrOverdue, other}`, OPEN members only), NOT `data`. No `sections` wrapper, no `badge`.
+- **`anytime` / `someday`** (CLI and MCP) — `data.sections = [{ area, items, total? } …]`; each area/loose section carries its inline `total` when its rows were capped (PR 5). The per-block "… N more" TTY drill-downs (and someday's projects-vs-to-dos hidden split) are derived by the renderers from INTERNAL per-block detail (`GroupBlock[]`, returned separately from the client's bounded view), NEVER serialized.
+- **global `upcoming`** — `data.sections = [{ when, items, total? } …]`; the flat `--limit` cut straddles at most one day block, which carries the inline `total` (PR 4).
+- **`area show` / `get_area`** — `data.view.children.anytime` (the `--area-limit` scope) and `data.view.projects` (the `--project-limit` cap on active project rows) carry the inline `total` (PR 3).
 
-```jsonc
-// meta.truncation on a grouped view
-{
-  "shown": 12, "total": 23, "limit": null,
-  "truncated": true,          // any block hid items
-  "blocks": [                 // one identity-carrying block per capped list
-    { "kind": "loose", "ref": null, "title": null, "shown": 5, "total": 5, "limit": 30 },
-    {
-      "kind": "area", "ref": "<area-uuid>", "title": "Hobbies",
-      "shown": 4, "total": 10, "limit": 30,
-      // Project blocks NEST inside their area/loose block (anytime item-lists;
-      // someday's active-project child groups).
-      "children": [
-        { "kind": "project", "ref": "<project-uuid>", "title": "Firmware",
-          "shown": 3, "total": 8, "limit": 3 }
-      ]
-    }
-  ]
-}
-```
-
-- `kind` ∈ `loose | area | project` (the `anytime`/`someday` catalogues). `ref` is the container uuid (`null` for the loose block); `title` its name.
-- `shown`/`total`/`limit` are per block; the dropped remainder is `total - shown`. A block whose rows were ALL dropped still appears with `shown: 0` (so no truncated header is untraceable); a genuinely empty block (`total: 0`) is omitted.
-- Someday's mixed area/loose blocks additionally carry `totalProjects` / `totalTodos` (project rows list first, so the hidden split is derivable).
-
-**The `today` view** (read-shape v2) returns `data.children = { today: {items, total?}, evening: {items, total?} }` — two keyed bucket records (the keys are the `--in today` / `--in evening` reorder scopes). Each bucket's `total` is present INLINE **iff** that bucket's `items` were capped (`items.length < total`), absent otherwise — so bucket-local completeness is answerable without a truncation sidecar (`meta.truncation` no longer carries a per-section breakdown for `today`; its base `shown`/`total`/`limit`/`truncated` still report the whole-view cut). The whole-view aggregate — the app's sidebar count — rides `meta.counts` (`{dueOrOverdue, other}`, OPEN members only), NOT `data`, so `data` stays pure domain rows. There is no `sections` wrapper in a `today` `data` and no `badge`.
-
-**Shape history (pre-1.0 breaks):** the block breakdown grew identity + nesting (`ref` replaced the former `uuid`; project blocks moved under `children`), and the 1.0 shape break folded the former standalone `meta.grouped` into `meta.truncation.blocks` so there is one completeness shape. (Read-shape v2 retired `meta.truncation.sections`, the former Today per-section sidecar, in favor of the `today` view's inline per-bucket `total` — and, in PR 3, `meta.truncation.blocks` for the `area show` / `get_area` view in favor of that view's inline scope `total`s; the base `shown`/`total`/`limit`/`truncated` whole-view rollup survives for both.) Same defaults and metadata apply over MCP. The full consumer-facing contract — the envelope grammar, the compatibility covenant, the glossary, and the error-code registry — is in [docs/contract.md](../contract.md).
+**Shape history (pre-1.0 breaks):** the former standalone `meta.grouped` was folded into `meta.truncation.blocks` at the 1.0 shape break; read-shape v2 then retired the sidecar entirely, one view at a time — `meta.truncation.sections` (the Today per-section sidecar, PR 1), then `blocks[]` for `area show`/`get_area` (PR 3), and finally `blocks[]` for `anytime`/`someday` (PR 5) — each in favor of the inline per-bucket `total`. The base `shown`/`total`/`limit`/`truncated` whole-view rollup survives on every view. Same defaults and metadata apply over MCP. The full consumer-facing contract — the envelope grammar, the read-views shapes-and-orderings table, the compatibility covenant, the glossary, and the error-code registry — is in [docs/contract.md](../contract.md).
 
 ## Consumer clock (`meta.clock`, timezone / pinned now)
 

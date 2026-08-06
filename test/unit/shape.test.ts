@@ -14,6 +14,7 @@ import {
   bucketRecord,
   shapeReadPayload,
   withAreaBucketTotals,
+  withSectionTotals,
   withUpcomingBlockTotals,
 } from "../../src/read/shape.ts";
 
@@ -985,6 +986,51 @@ describe("shapeReadPayload — global upcoming day blocks (read-shape v2 PR 4)",
     const stamped = withUpcomingBlockTotals(out, new Map([[null, 4]])) as Section[];
     expect(Object.keys(stamped[0]!)).toEqual(["when", "items", "total"]);
     expect(stamped[0]).toMatchObject({ when: null, total: 4 });
+  });
+});
+
+describe("withSectionTotals — global anytime/someday inline section `total` (R1, PR 5)", () => {
+  const shaped = (): Obj[] =>
+    shapeReadPayload(
+      "anytime",
+      [
+        { area: { uuid: "area-1", title: "Work" }, items: [todo({ uuid: "a" })] },
+        { area: null, items: [todo({ uuid: "l" })] },
+      ],
+      false,
+    ) as Obj[];
+
+  it("stamps a capped section's inline `total` keyed by area uuid; loose section keyed by null", () => {
+    // Work: 1 shown of a 5-row pre-cap scope → total 5. Loose: 1 of 1 → whole.
+    const stamped = withSectionTotals(
+      shaped(),
+      new Map<string | null, number>([
+        ["area-1", 5],
+        [null, 1],
+      ]),
+    ) as Obj[];
+    expect(stamped[0]).toMatchObject({ total: 5 });
+    // Key order stays {area, items, total} — the section states area first.
+    expect(Object.keys(stamped[0]!)).toEqual(["area", "items", "total"]);
+    // An untruncated section never restates its own length (R1).
+    expect("total" in stamped[1]!).toBe(false);
+  });
+
+  it("no inline `total` when a section shows its whole pre-cap scope", () => {
+    const stamped = withSectionTotals(
+      shaped(),
+      new Map<string | null, number>([
+        ["area-1", 1],
+        [null, 1],
+      ]),
+    ) as Obj[];
+    expect("total" in stamped[0]!).toBe(false);
+    expect("total" in stamped[1]!).toBe(false);
+  });
+
+  it("returns the input unchanged when it is not a sections array", () => {
+    expect(withSectionTotals(null, new Map())).toBeNull();
+    expect(withSectionTotals({ items: [] }, new Map())).toEqual({ items: [] });
   });
 });
 

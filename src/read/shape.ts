@@ -115,7 +115,7 @@
  */
 import { deriveStage, deriveWhen, whenIsProvisional, type Stage, type When } from "./stage.ts";
 import type { StartState } from "../model/entities.ts";
-import type { AreaBucketTotals, UpcomingBlockTotals } from "./truncation.ts";
+import type { AreaBucketTotals, SectionTotals, UpcomingBlockTotals } from "./truncation.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -927,6 +927,35 @@ export function withUpcomingBlockTotals(sections: unknown, totals: UpcomingBlock
     const items = sec["items"];
     const shown = Array.isArray(items) ? items.length : 0;
     // Spread-then-add keeps the `when` / `items` / `total` key order.
+    return total !== undefined && shown < total ? { ...sec, total } : sec;
+  });
+}
+
+/**
+ * Inject each global anytime/someday section's inline `total` (read-shape v2 R1,
+ * PR 5): present iff that section's `items` were capped (`items.length < total`),
+ * absent otherwise — an untruncated section never restates its own length, and
+ * the pre-v2 `meta.truncation.blocks[]` descriptor-join sidecar is RETIRED. The
+ * pre-cap section sizes come from {@link previewSections}/{@link
+ * previewSomedaySections} keyed by area uuid (`null` for the loose section); the
+ * per-block "… N more" render detail is carried separately (internal
+ * {@link GroupBlock}[]), never on the wire. Both the CLI `sections` wrapper and
+ * the MCP data block run the shaped sections through this so completeness is
+ * answerable locally. Returns the input unchanged when it is not the expected
+ * sections array.
+ */
+export function withSectionTotals(sections: unknown, totals: SectionTotals): unknown {
+  if (!Array.isArray(sections)) return sections;
+  return sections.map((s) => {
+    if (s === null || typeof s !== "object") return s;
+    const sec = s as Obj;
+    const area = sec["area"];
+    const key =
+      area !== null && typeof area === "object" ? ((area as Obj)["uuid"] as string) : null;
+    const total = totals.get(key);
+    const items = sec["items"];
+    const shown = Array.isArray(items) ? items.length : 0;
+    // Spread-then-add keeps the `area` / `items` / `total` key order.
     return total !== undefined && shown < total ? { ...sec, total } : sec;
   });
 }

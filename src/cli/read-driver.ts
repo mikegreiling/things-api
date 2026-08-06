@@ -26,6 +26,7 @@ import {
   shapeReadPayload,
   withTodayBucketTotals,
   withAreaBucketTotals,
+  withSectionTotals,
   withUpcomingBlockTotals,
   ReferenceResolutionError,
   schemaWarnings,
@@ -35,6 +36,7 @@ import {
   type ThingsClient,
   type TodayBucketTotals,
   type AreaBucketTotals,
+  type SectionTotals,
   type UpcomingBlockTotals,
   type Truncation,
   type ViewFilterMeta,
@@ -76,9 +78,15 @@ export function wrapEnvelopeData(
   todayTotals?: TodayBucketTotals,
   areaTotals?: AreaBucketTotals,
   upcomingTotals?: UpcomingBlockTotals,
+  sectionTotals?: SectionTotals,
 ): unknown {
   if (ITEMS_WRAPPER_KINDS.has(kind)) return { items: data };
-  if (kind === "anytime" || kind === "someday") return { sections: data };
+  if (kind === "anytime" || kind === "someday") {
+    // Each capped section's inline `total` (R1, no `blocks[]` sidecar — PR 5).
+    return {
+      sections: sectionTotals !== undefined ? withSectionTotals(data, sectionTotals) : data,
+    };
+  }
   if (kind === "upcoming") {
     // Day blocks with each capped block's inline `total` (R1, no `blocks[]`).
     return {
@@ -182,6 +190,13 @@ export interface PagedResult<T> {
    */
   upcomingTotals?: UpcomingBlockTotals;
   /**
+   * Pre-cap sidebar-section sizes (global anytime/someday only) — supply each
+   * `data.sections` section's inline `total` when {@link wrapEnvelopeData} builds
+   * the anytime/someday payload (R1, PR 5, no `blocks[]` sidecar). Absent for
+   * every other view.
+   */
+  sectionTotals?: SectionTotals;
+  /**
    * Additional non-blocking advisories from the read itself (ADDITIVE), merged
    * with the schema-drift warnings into `meta.warnings` (and echoed once on
    * stderr for human output). Used by the `loose` pseudo-area reads to surface
@@ -239,6 +254,7 @@ export function runRead<T>(
       todayTotals,
       areaTotals,
       upcomingTotals,
+      sectionTotals,
       warnings: readWarnings,
       lines: precomputed,
     } = fn(client);
@@ -284,7 +300,7 @@ export function runRead<T>(
         client.refPromoter(),
       );
       process.stdout.write(
-        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals, areaTotals, upcomingTotals)), meta))}\n`,
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals, areaTotals, upcomingTotals, sectionTotals)), meta))}\n`,
       );
     } else {
       const lines = precomputed ?? render(data);

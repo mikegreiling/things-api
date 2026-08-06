@@ -6,7 +6,7 @@ import type { AuditWriter } from "./audit/log.ts";
 import { createAuditWriter } from "./audit/log.ts";
 import { loadConfig, type ThingsApiConfig } from "./config.ts";
 import { resolveClock, clockMeta as buildClockMeta, type ClockMeta } from "./model/clock.ts";
-import { PKG_VERSION, type Truncation } from "./contracts.ts";
+import { PKG_VERSION, type GroupBlock, type Truncation } from "./contracts.ts";
 import { BASELINES } from "./db/baselines/index.ts";
 import { openConnection, type ThingsConnection } from "./db/connection.ts";
 import {
@@ -70,6 +70,7 @@ import {
   upcomingBlockTotals,
   type TodayBucketTotals,
   type AreaBucketTotals,
+  type SectionTotals,
   type UpcomingBlockTotals,
 } from "./read/truncation.ts";
 import {
@@ -279,21 +280,34 @@ export interface BoundedTodayView {
 
 /**
  * A bounded sidebar catalogue (anytime/someday): `view` is the
- * per-block-capped sections and `truncation` the unified completeness metadata
- * whose `blocks` carry the identity-bearing per-block counts (project blocks
- * nested under their area/loose block).
+ * per-block-capped sections and `truncation` the WHOLE-VIEW completeness rollup
+ * (`{shown,total,limit,truncated}`). Per-section completeness rides its inline
+ * `total` on the wire (stamped from `sectionTotals`, R1); `blocks` carries the
+ * identity-bearing per-block counts (project blocks nested under their area/loose
+ * block) as INTERNAL render plumbing only — the grouped renderers' "… N more"
+ * drill-downs — never on the wire (doctrine v2 PR 5: the sidecar retired).
  */
 export interface BoundedSectionsView {
   view: SidebarSection[];
   truncation: Truncation;
+  /** Per-block render detail (TTY drill-downs); never serialized. */
+  blocks: GroupBlock[];
+  /**
+   * Pre-cap per-section sizes keyed by area uuid (`null` = loose) — the inline
+   * `total` a consumer stamps on each capped section ({@link withSectionTotals},
+   * R1), so completeness is answerable locally with no `blocks[]` sidecar.
+   */
+  sectionTotals: SectionTotals;
   /** The active `area` scope, when one was applied (surfaced as `meta.filter`). */
   filter?: ViewFilterMeta;
 }
 
-/** A bounded composite area card: the per-section-capped view and the per-block truncation. */
+/** A bounded composite area card: the per-section-capped view and the whole-view rollup. */
 export interface BoundedAreaView {
   view: AreaView;
   truncation: Truncation;
+  /** Per-block render detail (the `area show` "… N more" footers); never serialized. */
+  blocks: GroupBlock[];
   /**
    * Pre-cap scope sizes (read-shape v2 R1, PR 3) — the direct-to-dos and
    * project-rows counts a consumer stamps as each capped scope's inline `total`
@@ -1029,11 +1043,17 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
-        const { data, truncation } = previewSections(
+        const { data, truncation, blocks, totals } = previewSections(
           sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, PROJECT_PREVIEW_LIMIT),
         );
-        return { view: data, truncation, ...(filter !== undefined && { filter }) };
+        return {
+          view: data,
+          truncation,
+          blocks,
+          sectionTotals: totals,
+          ...(filter !== undefined && { filter }),
+        };
       },
       upcoming: (o) => {
         let items = upcomingView(conn.db, now(), o, zoneOf(o));
@@ -1059,11 +1079,17 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           sections = filterSectionsByArea(sections, target.uuid);
           filter = { area: target };
         }
-        const { data, truncation } = previewSomedaySections(
+        const { data, truncation, blocks, totals } = previewSomedaySections(
           sections,
           groupedCaps(o, AREA_PREVIEW_LIMIT, null),
         );
-        return { view: data, truncation, ...(filter !== undefined && { filter }) };
+        return {
+          view: data,
+          truncation,
+          blocks,
+          sectionTotals: totals,
+          ...(filter !== undefined && { filter }),
+        };
       },
       logbook: (o) => {
         // The bound is the truncation cap; the underlying query stays unbounded
@@ -1132,7 +1158,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
               : { where: "0", binds: [] as (string | number)[] };
           resolveAreaUuid(conn.db, ref, { scopeWhere: clause.where, scopeBinds: clause.binds });
         }
-        const { data, truncation, totals } = capAreaSections(
+        const { data, truncation, blocks, totals } = capAreaSections(
           areaView(conn.db, ref, now(), o ?? {}, zoneOf(o)),
           groupedCaps(o, AREA_PREVIEW_LIMIT, AREA_PREVIEW_LIMIT),
           now(),
@@ -1151,6 +1177,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         return {
           view: data,
           truncation,
+          blocks,
           totals,
           ...(shadow !== undefined && { notice: looseShadowNotice(shadow) }),
           ...(loggedCount !== undefined && { loggedCount }),
