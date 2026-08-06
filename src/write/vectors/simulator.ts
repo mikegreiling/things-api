@@ -39,9 +39,17 @@ import type {
   OperationParamsMap,
   RepeatFrequency,
   RepeatRuleParams,
+  ReorderParams,
   WhenValue,
 } from "../operations.ts";
-import { resolveArea, resolveHeading, resolveProject, resolveTag } from "../pre-state.ts";
+import { resolveResolutionInstant } from "../commands.ts";
+import {
+  computeReorderPre,
+  resolveArea,
+  resolveHeading,
+  resolveProject,
+  resolveTag,
+} from "../pre-state.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
@@ -62,6 +70,14 @@ const PROD_CONTAINER = "Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac";
 interface ApplyCtx {
   nowEpoch: number;
   todayIso: string;
+  /**
+   * The effective consumer IANA zone (from THINGS_TZ), threaded so the
+   * resolution-timestamp appliers resolve a date-only backdate to the SAME
+   * instant the pipeline's expectedDelta computed (both land at noon in this
+   * zone, §5). Undefined = process-local zone, which for a local run is the
+   * app's own zone.
+   */
+  zone?: string | undefined;
 }
 
 // --------------------------------------------------------------- fence
@@ -212,6 +228,10 @@ function insertTask(
     heading?: string | null;
     checklistItemsCount?: number;
     openChecklistItemsCount?: number;
+    /** Born-backdated creation stamp (add --created-at); default the write clock. */
+    creationDate?: number | undefined;
+    /** Born-resolved completion stamp (add --completed-at); default NULL (open). */
+    stopDate?: number | null | undefined;
   },
 ): void {
   sim
@@ -225,15 +245,16 @@ function insertTask(
          checklistItemsCount, openChecklistItemsCount,
          rt1_repeatingTemplate, rt1_recurrenceRule,
          rt1_nextInstanceStartDate, rt1_instanceCreationPaused, repeater
-       ) VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, NULL, 0, NULL)`,
+       ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, NULL, 0, NULL)`,
     )
     .run(
       opts.uuid,
       type,
       STATUS[opts.status ?? "open"],
+      opts.stopDate ?? null,
       opts.title,
       opts.notes ?? "",
-      ctx.nowEpoch,
+      opts.creationDate ?? ctx.nowEpoch,
       ctx.nowEpoch,
       opts.start ?? START.active,
       opts.startDate ?? null,
@@ -441,6 +462,162 @@ function setStatus(
   sim
     .prepare("UPDATE TMTask SET status = ?, stopDate = ?, userModificationDate = ? WHERE uuid = ?")
     .run(status, stopDate, ctx.nowEpoch, uuid);
+}
+
+// -------------------------------------------- resolution timestamps (BACKDT)
+//
+// The `--completed-at` / `--created-at` surface (docs/design/resolution-
+// timestamp-surface.md; assumption-register BACKDT / WG-7). Backdating has no
+// single-shot headless move on an existing row, so the CLI sequences legs:
+//   complete --completed-at  = [complete] → todo.set-dates(completedAt)
+//   cancel   --completed-at  = [complete] → todo.set-dates(completedAt) → cancel
+//   update   --completed-at  = todo.set-dates (completed row) or the flip-dance
+//   add --created-at/--completed-at = a single json import (folded into *.add)
+// The simulator applies the STRUCTURED op each leg carries: the flip legs are
+// the existing complete/cancel appliers (extended below to PRESERVE an existing
+// stopDate — the WG-7 "flip preserves stopDate" law), and todo.set-dates /
+// project.set-dates write the exact backdated column value.
+
+/**
+ * The Unix-epoch second-precision value a resolution timestamp materializes,
+ * resolved through the SAME `resolveResolutionInstant` the compile + expected-
+ * delta use (a date-only value lands at noon in the effective zone, §5), so the
+ * stored `stopDate` / `creationDate` decodes back to the asserted host-local
+ * date exactly.
+ */
+function resolutionEpoch(input: string, zone: string | undefined): number {
+  return Math.floor(resolveResolutionInstant(input, zone).getTime() / 1000);
+}
+
+/**
+ * The born creation/completion stamps for a timestamped `add` (--created-at /
+ * --completed-at, the single-leg json-import path folded into *.add). A
+ * born-resolved add lands COMPLETED with the exact backdated stopDate; both
+ * stamps resolve through the shared instant resolver so the create-probe verify
+ * (status + stoppedDate + createdDate) reads back the asserted host-local dates.
+ */
+function bornTimestamps(
+  params: { createdAt?: string; completedAt?: string },
+  ctx: ApplyCtx,
+): { completed: boolean; creationDate: number | undefined; stopDate: number | undefined } {
+  return {
+    completed: params.completedAt !== undefined,
+    creationDate:
+      params.createdAt !== undefined ? resolutionEpoch(params.createdAt, ctx.zone) : undefined,
+    stopDate:
+      params.completedAt !== undefined ? resolutionEpoch(params.completedAt, ctx.zone) : undefined,
+  };
+}
+
+/**
+ * The stopDate a complete/cancel FLIP leg leaves (WG-7 flip-preserves-stopDate +
+ * idempotent re-resolve): a row that is ALREADY resolved (has a stopDate) keeps
+ * it — the flip only rewrites `status` — so the backdated stamp a preceding
+ * set-dates leg wrote survives the flip-dance (e.g. cancel --completed-at:
+ * complete → set-dates(backdate) → cancel must NOT clobber the backdated stop).
+ * A row crossing FROM open (stopDate NULL) is freshly stamped at the write clock.
+ */
+function flipStopDate(sim: DatabaseSync, uuid: string, ctx: ApplyCtx): number {
+  const row = sim.prepare("SELECT stopDate FROM TMTask WHERE uuid = ?").get(uuid) as
+    | { stopDate: number | null }
+    | undefined;
+  return row?.stopDate ?? ctx.nowEpoch;
+}
+
+/**
+ * todo.set-dates / project.set-dates (kind-agnostic — one TMTask row): rewrite
+ * the completion and/or creation stamp to the exact backdated value. The
+ * completion leg fires only against a verified-completed row (the H-BACKDATE-OPEN
+ * guard + the orchestrator's flip legs guarantee it upstream), so this is a pure
+ * column write — status is untouched here.
+ */
+function applySetDates(
+  sim: DatabaseSync,
+  params: { uuid: string; completedAt?: string; createdAt?: string },
+  ctx: ApplyCtx,
+): void {
+  const sets: string[] = [];
+  const binds: (number | null)[] = [];
+  if (params.completedAt !== undefined) {
+    sets.push("stopDate = ?");
+    binds.push(resolutionEpoch(params.completedAt, ctx.zone));
+  }
+  if (params.createdAt !== undefined) {
+    sets.push("creationDate = ?");
+    binds.push(resolutionEpoch(params.createdAt, ctx.zone));
+  }
+  if (sets.length === 0) return;
+  sets.push("userModificationDate = ?");
+  binds.push(ctx.nowEpoch);
+  sim.prepare(`UPDATE TMTask SET ${sets.join(", ")} WHERE uuid = ?`).run(...binds, params.uuid);
+}
+
+// --------------------------------------------------------- reorder (ORD-*)
+//
+// The universal `reorder` op IS the native private-command index wire (runReorder
+// dispatches strategy=native here; the bounce-only scopes never reach this op).
+// ORD-1 (native forward, o-suite O01/O04/O05/O09/O10/O11): the listed rows re-rank
+// into the sent order on their bucket axis — `todayIndex` for the Today/day scopes,
+// `index` elsewhere (ORD-18 axis-isolation). The wire list is the full target
+// order (requested subset first, remaining members after, computed by the SHARED
+// computeReorderPre the command's preRead + guard use), so a partial request keeps
+// the unrequested tail's relative order below the block. Refusal/eligibility (mixed
+// kinds, non-member anchors, duplicates, swept-resolved rows, evening→native) is
+// enforced by the H-REORDER-SCOPE guard BEFORE this applier runs — an admitted
+// request has a clean wire list, so re-ranking it is the whole job. The re-rank is
+// userModificationDate-SILENT (LOGSORT ORD-13 byte-lock: an admitted unswept-
+// resolved movee must read back index-only, status/stopDate/umd unchanged).
+
+/** Resolve the reorder scope's container uuid exactly as the command's preRead does. */
+function reorderContainerUuid(sim: DatabaseSync, params: ReorderParams): string | null {
+  if (params.scope === "project")
+    return resolveProject(sim, params.container ?? {}).resolved?.uuid ?? null;
+  if (params.scope === "area")
+    return resolveArea(sim, params.container ?? {}).resolved?.uuid ?? null;
+  if (params.scope === "container-day") {
+    // The container may be a project OR an area (DAYORD-b) — resolve whichever it names.
+    const asProject = resolveProject(sim, params.container ?? {});
+    if (asProject.resolved !== null) return asProject.resolved.uuid;
+    return resolveArea(sim, params.container ?? {}).resolved?.uuid ?? null;
+  }
+  return null;
+}
+
+function applyReorder(sim: DatabaseSync, params: ReorderParams, ctx: ApplyCtx): void {
+  const now = new Date(ctx.nowEpoch * 1000);
+  const container = reorderContainerUuid(sim, params);
+  // The SAME membership + wire-list computation the pipeline's preRead/guard use;
+  // admitResolved mirrors the native op's preRead (LOGSORT ORD-13 permit).
+  const pre = computeReorderPre(sim, params, container, now, {
+    admitResolved: true,
+    zone: ctx.zone,
+  });
+  const wire = pre.wireList;
+  if (wire.length === 0) return; // a guard-admitted request always has members
+  const col = pre.key === "todayIndex" ? "todayIndex" : `"index"`;
+  // Re-rank into wire order using the members' OWN current rank slots (permuted),
+  // so nothing outside the scope shifts. Guarantee strict ascension for the verify.
+  const existing = wire
+    .map((u) => {
+      const r = sim.prepare(`SELECT ${col} AS rank FROM TMTask WHERE uuid = ?`).get(u) as
+        | { rank: number | null }
+        | undefined;
+      return r?.rank ?? null;
+    })
+    .filter((r): r is number => r !== null)
+    .toSorted((a, b) => a - b);
+  const pool: number[] = [];
+  for (let i = 0; i < wire.length; i++) {
+    const cand = existing[i] ?? (pool[i - 1] ?? -1) + 1;
+    const prev = pool[i - 1];
+    pool.push(prev !== undefined && cand <= prev ? prev + 1 : cand);
+  }
+  // umd-SILENT: touch ONLY the rank column (LOGSORT ORD-13 byte-lock).
+  for (let i = 0; i < wire.length; i++) {
+    sim
+      .prepare(`UPDATE TMTask SET ${col} = ? WHERE uuid = ?`)
+      .run(pool[i] as number, wire[i] as string);
+  }
 }
 
 // ------------------------------------------------- recurrence appliers
@@ -1279,20 +1456,31 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       area = containerUuid(sim, params.area, "area");
     }
     const hasContainer = project !== null || heading !== null || area !== null;
-    const s = scheduleColumns(params.when, ctx.todayIso, hasContainer);
+    // Born-resolved (--completed-at, §5b): a completed json import lands straight
+    // in the Logbook — no active schedule (when/reminder are refused alongside it).
+    const born = bornTimestamps(params, ctx);
+    const s = born.completed
+      ? { start: START.active, startDate: null, startBucket: 0 }
+      : scheduleColumns(params.when, ctx.todayIso, hasContainer);
     const uuid = genUuid();
     insertTask(sim, 0, ctx, {
       uuid,
       title: params.title,
       notes: params.notes ?? "",
+      status: born.completed ? "completed" : "open",
       start: s.start,
       startDate: s.startDate,
       startBucket: s.startBucket,
-      reminderTime: params.reminder !== undefined ? encodeReminderTime(params.reminder) : null,
+      reminderTime:
+        !born.completed && params.reminder !== undefined
+          ? encodeReminderTime(params.reminder)
+          : null,
       deadline: params.deadline !== undefined ? encodePackedDate(params.deadline) : null,
       area,
       project,
       heading,
+      creationDate: born.creationDate,
+      stopDate: born.stopDate,
     });
     if (params.tags !== undefined) setTaskTags(sim, uuid, params.tags);
     if (params.checklistItems !== undefined)
@@ -1302,13 +1490,18 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
   "todo.update": op<"todo.update">((sim, params, ctx) => applyEntityUpdate(sim, params, ctx)),
 
   "todo.complete": op<"todo.complete">((sim, params, ctx) => {
-    setStatus(sim, params.uuid, STATUS.completed, ctx.nowEpoch, ctx);
+    // WG-7 flip-preserves-stopDate: a resolved→completed flip keeps the existing
+    // stopDate (so a backdate leg's stamp survives); an open→completed flip stamps
+    // the write clock.
+    setStatus(sim, params.uuid, STATUS.completed, flipStopDate(sim, params.uuid, ctx), ctx);
     // RSIM4: completing an after-completion instance schedules the next
     // occurrence on its template without materializing it.
     stampAfterCompletionTemplate(sim, params.uuid, ctx);
   }),
   "todo.cancel": op<"todo.cancel">((sim, params, ctx) =>
-    setStatus(sim, params.uuid, STATUS.canceled, ctx.nowEpoch, ctx),
+    // WG-7 flip-preserves-stopDate (the flip-dance's closing leg must not clobber
+    // the backdated stopDate set-dates wrote).
+    setStatus(sim, params.uuid, STATUS.canceled, flipStopDate(sim, params.uuid, ctx), ctx),
   ),
   "todo.reopen": op<"todo.reopen">((sim, params, ctx) =>
     setStatus(sim, params.uuid, STATUS.open, null, ctx),
@@ -1415,17 +1608,26 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
 
   "project.add": op<"project.add">((sim, params, ctx) => {
     const area = containerUuid(sim, params.area, "area");
-    const s = scheduleColumns(params.when, ctx.todayIso, area !== null);
+    // Born-resolved project (--completed-at, B-PROJ-JSON): lands completed in the
+    // Logbook. The command refuses a completedAt project carrying OPEN child specs
+    // (§5b), and this applier omits seed children anyway — so nothing strands.
+    const born = bornTimestamps(params, ctx);
+    const s = born.completed
+      ? { start: START.active, startDate: null, startBucket: 0 }
+      : scheduleColumns(params.when, ctx.todayIso, area !== null);
     const uuid = genUuid();
     insertTask(sim, 1, ctx, {
       uuid,
       title: params.title,
       notes: params.notes ?? "",
+      status: born.completed ? "completed" : "open",
       start: s.start,
       startDate: s.startDate,
       startBucket: s.startBucket,
       deadline: params.deadline !== undefined ? encodePackedDate(params.deadline) : null,
       area,
+      creationDate: born.creationDate,
+      stopDate: born.stopDate,
     });
     // `todos` seed children are not asserted by the delta and are omitted.
   }),
@@ -1446,7 +1648,8 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       )
       .all(params.uuid, params.uuid, params.uuid) as { uuid: string }[];
     for (const c of children) setStatus(sim, c.uuid, STATUS.completed, ctx.nowEpoch, ctx);
-    setStatus(sim, params.uuid, STATUS.completed, ctx.nowEpoch, ctx);
+    // WG-7 flip-preserves-stopDate for the project's own row (idempotent re-resolve).
+    setStatus(sim, params.uuid, STATUS.completed, flipStopDate(sim, params.uuid, ctx), ctx);
     // RSIM-P P2: completing an INSTANCE project also promotes its own start 2→1
     // (observed only for instance projects — a plain project is left untouched).
     sim
@@ -1518,6 +1721,21 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
   "project.reschedule-repeat": op<"project.reschedule-repeat">((sim, params, ctx) =>
     applyReschedule(sim, params, ctx),
   ),
+
+  // Universal reorder (ORD-1 native-wire re-rank). The bounce-only scopes
+  // (evening / anytime / projects / heading / area-someday / day) never dispatch
+  // this op — they run when=/move legs the update/move appliers already model —
+  // so this covers exactly the native index/todayIndex scopes (today / project /
+  // area / inbox / someday / container-day / tomorrow).
+  reorder: op<"reorder">((sim, params, ctx) => applyReorder(sim, params, ctx)),
+
+  // Resolution-timestamp writes (BACKDT / WG-7). Kind-agnostic (one TMTask row).
+  // Reached as the AS-backdate leg of complete/cancel/update --completed-at/
+  // --created-at; the born-timestamped add path folds into *.add above.
+  "todo.set-dates": op<"todo.set-dates">((sim, params, ctx) => applySetDates(sim, params, ctx)),
+  "project.set-dates": op<"project.set-dates">((sim, params, ctx) =>
+    applySetDates(sim, params, ctx),
+  ),
 };
 
 /** The ops this simulator can apply — the ONLY entries in its honest matrix. */
@@ -1580,9 +1798,11 @@ export function createSimulatorVector(
       }
       sim ??= new DatabaseSync(dbPath);
       const when = now();
+      const tz = process.env["THINGS_TZ"];
       const ctx: ApplyCtx = {
         nowEpoch: Math.floor(when.getTime() / 1000),
         todayIso: localToday(when),
+        zone: tz !== undefined && tz.trim() !== "" ? tz : undefined,
       };
       try {
         applier(sim, invocation.opParams, ctx);
