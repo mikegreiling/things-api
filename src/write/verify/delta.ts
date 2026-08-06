@@ -200,6 +200,17 @@ export type DeltaSpec =
        * ordering asserts have no single uuid otherwise).
        */
       subject?: string;
+      /**
+       * Per-row invariants that must hold UNCHANGED across the re-rank — the
+       * LOGSORT ORD-13 byte-lock for an UNSWEPT-resolved to-do movee: the native
+       * `index` re-rank is index-only + `userModificationDate`-silent, so a
+       * PERMITTED resolved movee must read back still-resolved (`status`
+       * completed/canceled, `stoppedDate` unchanged) with NO `umd` bump. A frozen
+       * assertion failure (a reopen — status→open, stoppedDate→null — or a umd
+       * bump) fails the whole ordering delta. Each row's asserted fields AND its
+       * `userModificationDate` are captured pre-op and compared post-op.
+       */
+      frozen?: { uuid: string; assert: FieldAssertion[] }[];
     }
   /** Area/tag property updates (TMArea/TMTag rows aren't tasks). */
   | { mode: "entity-updated"; entity: "area" | "tag"; uuid: string; assert: FieldAssertion[] };
@@ -782,8 +793,26 @@ export function evaluateDelta(
       const moved = ranks.some(
         (r) => preRanks[r.uuid] !== undefined && preRanks[r.uuid] !== r.rank,
       );
+      // LOGSORT ORD-13 byte-lock: each frozen (unswept-resolved) movee must read
+      // back with its asserted fields unchanged (status still closed, stoppedDate
+      // intact — a reopen would flip both) AND with NO userModificationDate bump
+      // (the native index re-rank is umd-silent for these rows). Any drift is a
+      // reopen or a silent touch — the whole ordering delta fails.
+      let frozenOk = true;
+      for (const f of spec.frozen ?? []) {
+        const entity = reader.taskByUuid(f.uuid);
+        const { pass, observed: frozenObserved } = checkAssertions(entity, f.assert);
+        for (const [field, value] of Object.entries(frozenObserved)) {
+          observed[`${f.uuid}.${field}`] = value;
+        }
+        const preUmd = pre.modDates[f.uuid];
+        const postUmd = reader.modDateOf(f.uuid);
+        const umdSilent = preUmd === undefined || preUmd === postUmd;
+        observed[`${f.uuid}.umd`] = postUmd;
+        if (!pass || !umdSilent) frozenOk = false;
+      }
       return {
-        satisfied: sorted,
+        satisfied: sorted && frozenOk,
         movement: moved,
         assertedMovement: moved,
         observed,

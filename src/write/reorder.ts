@@ -682,7 +682,7 @@ async function runHeadingSomeday(
   const projectUuid = headingProjectUuid(deps, headingUuid);
   const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
 
-  const pre = computeReorderPre(deps.db, params, headingUuid, now());
+  const pre = computeReorderPre(deps.db, params, headingUuid, now(), { zone: deps.zone });
   const preRanks: Record<string, unknown> = {};
   for (const m of pre.members) preRanks[m.uuid] = m.rank;
 
@@ -964,7 +964,7 @@ async function runBounce(
 
   const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
   // Scope/membership guard — same data the native path's guard uses.
-  const pre = computeReorderPre(deps.db, params, containerUuid, now());
+  const pre = computeReorderPre(deps.db, params, containerUuid, now(), { zone: deps.zone });
   // Pre-ranks make the SUMMARY record the undoable unit (a single inverse
   // reorder restores the old relative order); legs are excluded from undo.
   const preRanks: Record<string, unknown> = {};
@@ -2290,7 +2290,7 @@ async function runMoveFallback(
   const cap = deps.config.bounceMaxItems ?? BOUNCE_MAX_ITEMS;
   const containerUuid = resolveContainerUuid(deps, params);
   const txnId = `txn-${startedAt.getTime().toString(36)}-${process.pid.toString(36)}`;
-  const pre = computeReorderPre(deps.db, params, containerUuid, now());
+  const pre = computeReorderPre(deps.db, params, containerUuid, now(), { zone: deps.zone });
 
   // proj-root BACK-inserts (forward dispatch → suffix from the first named slot);
   // inbox/area FRONT-insert (reverse dispatch → prefix to the last named slot).

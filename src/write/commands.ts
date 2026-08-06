@@ -96,7 +96,7 @@ export interface DeltaCtx {
 export interface CommandSpec<K extends OperationKind = OperationKind> {
   op: K;
   hazards: HazardId[];
-  preRead(db: DatabaseSync, params: OperationParamsMap[K], now: Date): PreState;
+  preRead(db: DatabaseSync, params: OperationParamsMap[K], now: Date, zone?: string): PreState;
   expectedDelta(pre: PreState, params: OperationParamsMap[K], ctx: DeltaCtx): DeltaSpec;
   compile(
     params: OperationParamsMap[K],
@@ -1542,7 +1542,7 @@ const tagUpdate: CommandSpec<"tag.update"> = {
 const reorder: CommandSpec<"reorder"> = {
   op: "reorder",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REORDER-SCOPE"],
-  preRead(db, params, now) {
+  preRead(db, params, now, zone) {
     const pre = emptyPreState();
     let containerUuid: string | null = null;
     if (params.scope === "project") {
@@ -1566,19 +1566,37 @@ const reorder: CommandSpec<"reorder"> = {
         containerUuid = pre.destArea.resolved?.uuid ?? null;
       }
     }
-    pre.reorder = computeReorderPre(db, params, containerUuid, now);
+    // The `reorder` op IS the pure-native private index wire — the ONE surface
+    // runReorder dispatches here (strategy === "native"). So the LOGSORT ORD-13
+    // permit is unconditionally offered (`admitResolved: true`); computeReorderPre
+    // gates it internally on `key === "index"`, so day-axis native re-ranks
+    // (today/container-day/tomorrow → todayIndex) still refuse resolved movees.
+    // Every bounce/move/day-axis orchestrator calls computeReorderPre WITHOUT the
+    // flag, so a resolved movee reaching an uncertified protocol stays refused.
+    pre.reorder = computeReorderPre(db, params, containerUuid, now, { admitResolved: true, zone });
     return pre;
   },
   expectedDelta(pre, params) {
     // Verify the REQUESTED sequence (strictly ascending ranks). The wire
     // list pins the unrequested tail too, but the caller's contract is the
     // requested prefix; tail members are covered by pre-rank tripwires.
+    // LOGSORT ORD-13 byte-lock: any admitted UNSWEPT-resolved movee must read
+    // back index-only — status still closed, stoppedDate intact, umd unbumped
+    // (a reopen would flip all three). Frozen assertions carry that into verify.
+    const frozen = (pre.reorder?.resolvedMembers ?? []).map((m) => ({
+      uuid: m.uuid,
+      assert: [
+        { field: "status", equals: m.status },
+        { field: "stoppedDate", equals: m.stoppedDate },
+      ] satisfies FieldAssertion[],
+    }));
     return {
       mode: "ordering",
       key:
         pre.reorder?.key ??
         (params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index"),
       sequence: params.uuids,
+      ...(frozen.length > 0 && { frozen }),
     };
   },
   compile(params, vector, pre) {

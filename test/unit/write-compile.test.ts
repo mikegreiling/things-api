@@ -331,6 +331,7 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
       projectMembers: [],
       mixedTypes: false,
       wireList: ["A", "B", "C"],
+      resolvedMembers: [],
     };
     const inv = COMMANDS["reorder"].compile(
       { scope: "someday", uuids: ["A", "B", "C"] },
