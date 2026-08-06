@@ -93,6 +93,43 @@ export interface AreaBucketTotals {
 }
 
 /**
+ * Pre-cap global-`upcoming` day-block sizes, keyed by each block's `when` (an ISO
+ * date, or `null` for the trailing resting block), returned alongside the flat
+ * {@link truncateList} slice so the wire can stamp each capped day block's inline
+ * `total` (read-shape v2 R1, PR 4 — no `blocks[]` sidecar). The flat row cap cuts
+ * across the day-ordered stream, so at most one block is straddled (its shown rows
+ * fewer than its pre-cap `total`); blocks fully past the cut never appear. The key
+ * mirrors the emit-boundary {@link src/read/shape.ts} `upcomingBlockKey` and the
+ * renderer's `groupDate` so the counts line up block-for-block.
+ */
+export type UpcomingBlockTotals = ReadonlyMap<string | null, number>;
+
+/**
+ * The pre-cap day-block key for one upcoming row: its `startDate`; else, for a
+ * NON-template, its `deadline` (a deadline-forecast row); else `null` (a date-less
+ * recurring template → the resting block). Identical to the emit-boundary
+ * `upcomingBlockKey` — one grouping law, three call sites (wire, totals, render).
+ */
+const upcomingBlockKey = (i: ListItem): string | null =>
+  i.startDate ?? (i.repeating.isTemplate ? null : (i.deadline ?? null));
+
+/**
+ * Count the FULL (pre-cap) upcoming stream into per-day-block totals (R1, PR 4).
+ * Computed on the unbounded, in-scope, area-filtered stream BEFORE the flat row
+ * cap slices it, so {@link src/read/shape.ts} `withUpcomingBlockTotals` can mark
+ * the one straddled block's `total`. Resting templates aggregate under the `null`
+ * key.
+ */
+export function upcomingBlockTotals(items: ListItem[]): UpcomingBlockTotals {
+  const totals = new Map<string | null, number>();
+  for (const i of items) {
+    const key = upcomingBlockKey(i);
+    totals.set(key, (totals.get(key) ?? 0) + 1);
+  }
+  return totals;
+}
+
+/**
  * Today view: the cut runs across Today then This Evening in render order, so a
  * limit smaller than the Today block trims Evening to nothing. The library keeps
  * the internal Today/Evening grouping (the two reorder scopes); the whole-view

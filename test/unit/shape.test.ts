@@ -10,7 +10,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { bucketRecord, shapeReadPayload, withAreaBucketTotals } from "../../src/read/shape.ts";
+import {
+  bucketRecord,
+  shapeReadPayload,
+  withAreaBucketTotals,
+  withUpcomingBlockTotals,
+} from "../../src/read/shape.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -317,9 +322,9 @@ describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)
       const row = first(shapeReadPayload(kind, [todo()], false));
       expect("stage" in row).toBe(false); // provably stated by the pure view
     }
-    // R10.1: `upcoming` is stage-MIXED (deadline-forecast anytime/someday rows),
-    // so it KEEPS stage — alongside the derived surfaces.
-    for (const kind of ["upcoming", "search", "changes", "projects"]) {
+    // The derived surfaces KEEP stage. (`upcoming` is stage-MIXED too, but it
+    // reshapes into day-block sections — asserted in the day-block suite below.)
+    for (const kind of ["search", "changes", "projects"]) {
       const row = first(shapeReadPayload(kind, [todo()], false));
       expect(row["stage"]).toBe("anytime"); // kept
     }
@@ -855,6 +860,131 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(bucketRecord([1, 2])).toEqual({ items: [1, 2] }); // uncapped → absent
     expect(bucketRecord([1, 2], 2)).toEqual({ items: [1, 2] }); // exact → absent
     expect(bucketRecord([1, 2], 5)).toEqual({ items: [1, 2], total: 5 }); // capped → present
+  });
+});
+
+describe("shapeReadPayload — global upcoming day blocks (read-shape v2 PR 4)", () => {
+  type Section = { when: string | null; items: Obj[]; total?: number };
+  const sections = (out: unknown): Section[] => out as Section[];
+
+  /** A future-scheduled to-do (stage upcoming) grouped under its startDate. */
+  const scheduled = (uuid: string, date: string): Obj =>
+    todo({ uuid, start: "someday", startDate: date });
+
+  it("flat list → dated day blocks (keyed by `when`), then the trailing {when:null} resting block", () => {
+    const items = [
+      scheduled("up-a", "2026-08-10"),
+      scheduled("up-b", "2026-08-10"), // same day → same block
+      scheduled("up-c", "2026-08-14"),
+      // A date-less resting recurring template → the {when:null} block (#V8).
+      todo({
+        uuid: "tmpl",
+        startDate: null,
+        repeating: {
+          isTemplate: true,
+          isInstance: false,
+          templateUuid: null,
+          nextOccurrence: null,
+        },
+      }),
+    ];
+    const out = sections(shapeReadPayload("upcoming", items, false));
+    expect(out.map((s) => s.when)).toEqual(["2026-08-10", "2026-08-14", null]);
+    expect(out[0]!.items.map((i) => i["uuid"])).toEqual(["up-a", "up-b"]);
+    expect(out[1]!.items.map((i) => i["uuid"])).toEqual(["up-c"]);
+    expect(out[2]!.items.map((i) => i["uuid"])).toEqual(["tmpl"]);
+  });
+
+  it("no resting templates → NO trailing {when:null} block (it appears only when such rows exist)", () => {
+    const out = sections(shapeReadPayload("upcoming", [scheduled("up", "2026-08-10")], false));
+    expect(out.map((s) => s.when)).toEqual(["2026-08-10"]);
+    expect(out.some((s) => s.when === null)).toBe(false);
+  });
+
+  it("rows inside a dated block DROP `when` (the block states it) but KEEP `stage`", () => {
+    const out = sections(shapeReadPayload("upcoming", [scheduled("up", "2026-08-10")], false));
+    const row = out[0]!.items[0]!;
+    expect("when" in row).toBe(false); // the block key states the date
+    expect(row["stage"]).toBe("upcoming"); // stage-mixed view → kept
+  });
+
+  it("the projection-side mix (R7): future-dated `upcoming` beside deadline-forecast `anytime`/`someday`, each at its day", () => {
+    const items = [
+      scheduled("up-fut", "2026-08-10"), // stage upcoming, at its startDate
+      // Deadline-forecast: an anytime row with NO startDate seats at its DEADLINE day.
+      todo({ uuid: "fc-any", start: "active", startDate: null, deadline: "2026-08-12" }),
+      // A someday row with a future deadline — a deadline-forecast dual citizen.
+      todo({ uuid: "fc-some", start: "someday", startDate: null, deadline: "2026-08-12" }),
+    ];
+    const out = sections(shapeReadPayload("upcoming", items, false));
+    expect(out.map((s) => s.when)).toEqual(["2026-08-10", "2026-08-12"]);
+    // The future-dated row keeps stage `upcoming`; the two forecast rows keep their
+    // canonical `anytime`/`someday` (R7 — dropping stage here would lose real info).
+    const byUuid = new Map(out.flatMap((s) => s.items.map((i) => [i["uuid"], i] as const)));
+    expect(byUuid.get("up-fut")!["stage"]).toBe("upcoming");
+    expect(byUuid.get("fc-any")!["stage"]).toBe("anytime");
+    expect(byUuid.get("fc-some")!["stage"]).toBe("someday");
+    // A forecast row carries no when-date pill (its `when` is absent), so the block
+    // day-groups it under its deadline with nothing to drop.
+    expect("when" in byUuid.get("fc-any")!).toBe(false);
+  });
+
+  it("every row keeps its container refs (a global mixed view — no ancestry drop)", () => {
+    const out = sections(shapeReadPayload("upcoming", [scheduled("up", "2026-08-10")], false));
+    const row = out[0]!.items[0]!;
+    // The seed row lives in area Work / project Q3 — both refs survive on the wire.
+    expect(row["project"]).toBe("Q3");
+    expect(row["area"]).toBe("Work");
+  });
+
+  it("withUpcomingBlockTotals stamps a straddled block's inline `total` iff capped (R1)", () => {
+    // The flat cap cut day 08-10 to 1 of its 3 rows; day 08-14 (2 of 2) is whole.
+    const out = sections(
+      shapeReadPayload(
+        "upcoming",
+        [scheduled("a", "2026-08-10"), scheduled("c", "2026-08-14")],
+        false,
+      ),
+    );
+    const totals = new Map<string | null, number>([
+      ["2026-08-10", 3], // pre-cap: 3 rows that day, only 1 survived the flat cut
+      ["2026-08-14", 2], // pre-cap: 2 rows, but only 1 shown here → also stamped
+    ]);
+    const stamped = withUpcomingBlockTotals(out, totals) as Section[];
+    expect(stamped[0]).toMatchObject({ when: "2026-08-10", total: 3 });
+    expect("when" in stamped[0]!).toBe(true);
+    // A block whose shown count equals its pre-cap total gets NO `total`.
+    const wholeTotals = new Map<string | null, number>([
+      ["2026-08-10", 1],
+      ["2026-08-14", 1],
+    ]);
+    const whole = withUpcomingBlockTotals(out, wholeTotals) as Section[];
+    expect("total" in whole[0]!).toBe(false);
+    expect("total" in whole[1]!).toBe(false);
+  });
+
+  it("withUpcomingBlockTotals stamps the resting block via the `null` key; key order stays {when,items,total}", () => {
+    const out = sections(
+      shapeReadPayload(
+        "upcoming",
+        [
+          todo({
+            uuid: "t1",
+            startDate: null,
+            repeating: {
+              isTemplate: true,
+              isInstance: false,
+              templateUuid: null,
+              nextOccurrence: null,
+            },
+          }),
+        ],
+        false,
+      ),
+    );
+    const stamped = withUpcomingBlockTotals(out, new Map([[null, 4]])) as Section[];
+    expect(Object.keys(stamped[0]!)).toEqual(["when", "items", "total"]);
+    expect(stamped[0]).toMatchObject({ when: null, total: 4 });
   });
 });
 

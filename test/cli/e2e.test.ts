@@ -57,6 +57,12 @@ function isoFromToday(days: number): string {
 const titlesOf = (stdout: string): string[] =>
   JSON.parse(stdout).data.items.map((i: { title: string }) => i.title);
 
+/** Flatten a `upcoming --json` envelope's `data.sections` day blocks to their titles. */
+const upcomingTitles = (stdout: string): string[] =>
+  JSON.parse(stdout).data.sections.flatMap((s: { items: { title: string }[] }) =>
+    s.items.map((i) => i.title),
+  );
+
 /** The `data.children.today` bucket titles from a `today --json` envelope. */
 const todayTitles = (stdout: string): string[] =>
   JSON.parse(stdout).data.children.today.items.map((i: { title: string }) => i.title);
@@ -805,13 +811,13 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     seedTodo(fx.db, { title: "far", start: "someday", startDate: isoFromToday(45) });
 
     const bare = runCli(["upcoming", "--json", "--db", fx.path]).stdout;
-    expect(titlesOf(bare)).toContain("near");
-    expect(titlesOf(bare)).not.toContain("far"); // default 1m window excludes it
+    expect(upcomingTitles(bare)).toContain("near");
+    expect(upcomingTitles(bare)).not.toContain("far"); // default 1m window excludes it
     expect(JSON.parse(bare).meta.truncation.limit).toBe(50); // default cap present
 
     const wide = runCli(["upcoming", "--limit", "100", "--json", "--db", fx.path]).stdout;
-    expect(titlesOf(wide)).toContain("near");
-    expect(titlesOf(wide)).toContain("far"); // window default lifted by explicit --limit
+    expect(upcomingTitles(wide)).toContain("near");
+    expect(upcomingTitles(wide)).toContain("far"); // window default lifted by explicit --limit
     expect(JSON.parse(wide).meta.truncation.limit).toBe(100);
   });
 
@@ -821,7 +827,7 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
 
     const until = runCli(["upcoming", "--until", "3m", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(until).meta.truncation.limit).toBeNull();
-    expect(titlesOf(until)).toContain("far");
+    expect(upcomingTitles(until)).toContain("far");
 
     const since = runCli(["upcoming", "--since", "2000", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(since).meta.truncation.limit).toBeNull();
@@ -836,8 +842,36 @@ describe("cli bounds & defaults policy (upcoming / logbook / changes)", () => {
     tagTask(fx.db, far, t);
     const env = runCli(["upcoming", "--tag", "work", "--json", "--db", fx.path]).stdout;
     expect(JSON.parse(env).meta.truncation.limit).toBe(50);
-    expect(titlesOf(env)).toContain("near");
-    expect(titlesOf(env)).not.toContain("far"); // window default still applies under a scope
+    expect(upcomingTitles(env)).toContain("near");
+    expect(upcomingTitles(env)).not.toContain("far"); // window default still applies under a scope
+  });
+
+  it("upcoming --json: data.sections are when-keyed day blocks; a capped straddling day carries inline `total` (R1, PR 4)", () => {
+    fx = buildFixtureDb();
+    const d1 = isoFromToday(5);
+    const d2 = isoFromToday(9);
+    for (let i = 0; i < 3; i++)
+      seedTodo(fx.db, { title: `d1-${i}`, start: "someday", startDate: d1, index: i });
+    seedTodo(fx.db, { title: "d2-x", start: "someday", startDate: d2, index: 9 });
+    // --limit drops the default window (both days in horizon); cap 2 straddles d1.
+    const env = JSON.parse(runCli(["upcoming", "--limit", "2", "--json", "--db", fx.path]).stdout);
+    const secs = env.data.sections as Array<{
+      when: string | null;
+      items: Array<{ title: string; when?: string; stage?: string }>;
+      total?: number;
+    }>;
+    // The data is `sections`, not `items` — a clean break (no flat list).
+    expect("items" in env.data).toBe(false);
+    // Only the straddled day survives; the later day was cut entirely.
+    expect(secs.map((s) => s.when)).toEqual([d1]);
+    expect(secs[0]!.items.map((i) => i.title)).toEqual(["d1-0", "d1-1"]);
+    // R1: the capped block restates its full pre-cap scope size (2 shown of 3).
+    expect(secs[0]!.total).toBe(3);
+    // A row inside a dated block drops `when` (the block states it), keeps `stage`.
+    expect("when" in secs[0]!.items[0]!).toBe(false);
+    expect(secs[0]!.items[0]!.stage).toBe("upcoming");
+    // The whole-view flat rollup still rides meta.truncation (drives the row hint).
+    expect(env.meta.truncation).toMatchObject({ shown: 2, total: 4, limit: 2, truncated: true });
   });
 
   it("logbook --since drops the default row cap; bare keeps it", () => {

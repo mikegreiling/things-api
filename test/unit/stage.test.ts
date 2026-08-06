@@ -722,9 +722,15 @@ describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count rec
       recurrenceRule: true,
       nextInstanceStartDate: "2026-07-03",
     });
+    // The upcoming wire is day-block sections `[{when, items}]` (v2 PR 4); the
+    // template seats in its projected-occurrence block.
     const hit = (
-      shapeReadPayload("upcoming", upcomingView(fx.db, NOW), true) as Array<Record<string, unknown>>
-    ).find((r) => r["uuid"] === tmpl)!;
+      shapeReadPayload("upcoming", upcomingView(fx.db, NOW), true) as Array<{
+        items: Array<Record<string, unknown>>;
+      }>
+    )
+      .flatMap((s) => s.items)
+      .find((r) => r["uuid"] === tmpl)!;
     expect(hit).toBeDefined();
     expect("provisional" in hit).toBe(false);
   });

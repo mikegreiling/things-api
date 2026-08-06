@@ -306,6 +306,38 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view upcoming returns day-block sections (when-keyed), rows keep stage and drop the block's when (v2 PR 4)", async () => {
+    // NOW is pinned to 2026-07-05; both rows are strictly future.
+    seedTodo(fixture.db, {
+      title: "MCP-up-a",
+      start: "someday",
+      startDate: "2026-07-10",
+      index: 0,
+    });
+    seedTodo(fixture.db, {
+      title: "MCP-up-b",
+      start: "someday",
+      startDate: "2026-07-10",
+      index: 1,
+    });
+    seedTodo(fixture.db, {
+      title: "MCP-up-c",
+      start: "someday",
+      startDate: "2026-07-14",
+      index: 2,
+    });
+    await connect([fakeVector(null).vector]);
+    const secs = textOf(
+      await client.callTool({ name: "read_view", arguments: { view: "upcoming" } }),
+    ) as Array<{ when: string | null; items: Array<Record<string, unknown>>; total?: number }>;
+    // Chronological day blocks keyed by `when`.
+    expect(secs.map((s) => s.when)).toEqual(["2026-07-10", "2026-07-14"]);
+    expect(secs[0]!.items.map((i) => i["title"])).toEqual(["MCP-up-a", "MCP-up-b"]);
+    // A dated-block row keeps `stage` (stage-mixed view) and drops the block's `when`.
+    expect(secs[0]!.items[0]!["stage"]).toBe("upcoming");
+    expect("when" in secs[0]!.items[0]!).toBe(false);
+  });
+
   it("read_view surfaces the R13 provisional marker; today buckets drop stage; pulled row re-files to anytime", async () => {
     // A deadline-pulled SOMEDAY row (unmaterialized) is a provisional Today member.
     seedTodo(fixture.db, {

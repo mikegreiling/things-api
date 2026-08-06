@@ -115,7 +115,7 @@
  */
 import { deriveStage, deriveWhen, whenIsProvisional, type Stage, type When } from "./stage.ts";
 import type { StartState } from "../model/entities.ts";
-import type { AreaBucketTotals } from "./truncation.ts";
+import type { AreaBucketTotals, UpcomingBlockTotals } from "./truncation.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -836,6 +836,101 @@ export function withAreaBucketTotals(view: unknown, totals: AreaBucketTotals): u
   };
 }
 
+/**
+ * The global `upcoming` view's DAY-BLOCK key for one raw item (read-shape v2 PR 4):
+ * its `startDate` when scheduled; else, for a NON-template, its `deadline` (a
+ * deadline-forecast row appears at its due day — cohort 2, UPC1); else `null` —
+ * a date-LESS recurring template rides the trailing resting block (#V8). This is
+ * the emit-boundary twin of the renderer's `groupDate` (src/cli/render.ts) and of
+ * {@link upcomingBlockTotals} (the pre-cap sizer), so the wire's day blocks match
+ * the TTY grouping row-for-row and each block's inline `total` lines up with its
+ * scope. The library keeps its own day grouping; only the wire reshapes here.
+ */
+function upcomingBlockKey(o: Obj): string | null {
+  const startDate = (o["startDate"] as string | null) ?? null;
+  if (startDate !== null) return startDate;
+  const repeating = o["repeating"];
+  const isTemplate =
+    repeating !== null &&
+    typeof repeating === "object" &&
+    (repeating as Obj)["isTemplate"] === true;
+  if (isTemplate) return null; // a date-less template → the resting block (#V8)
+  return (o["deadline"] as string | null) ?? null; // a forecast row appears at its deadline
+}
+
+/**
+ * Reshape the global `upcoming` view into the read-shape v2 day-block sections
+ * (PR 4): `[{ when, items, total? } …]` — chronological dated blocks keyed by
+ * {@link upcomingBlockKey} (each the COMPLETE global day scope, its `when` doubling
+ * as the `--in <when>` reorder token), then ONE trailing `{ when: null, items }`
+ * block holding the date-less resting recurring templates (#V8) when any exist.
+ * The incoming stream is already day-ordered (COALESCE(startDate, deadline) ASC,
+ * then the UI's within-day drag order), so encounter order preserves both the
+ * block chronology and the within-block order — no re-sort, matching the renderer.
+ * Rows KEEP `stage` (the view is projection-side stage-MIXED, R7: future-dated
+ * `upcoming` rows beside deadline-forecast `anytime`/`someday` ones) and drop
+ * `when` only when it equals the block's date (the block states it — the same rule
+ * {@link rebucketChildren} applies to a container day block); a forecast row's
+ * `when` is absent already, and a divergent projected `when` (horizon > 1) is kept.
+ * Every row keeps its container refs (a global mixed view — NO_DROP). Inline
+ * `total` is stamped downstream by {@link withUpcomingBlockTotals}.
+ */
+function shapeUpcomingView(items: unknown[], compact: boolean, promoter: RefPromoter): Obj[] {
+  const datedByKey = new Map<string, unknown[]>();
+  const datedOrder: string[] = [];
+  const resting: unknown[] = [];
+  for (const raw of items) {
+    if (raw === null || typeof raw !== "object") continue;
+    const key = upcomingBlockKey(raw as Obj);
+    const shaped = shapeItem(raw, NO_DROP, compact, promoter);
+    if (key === null) {
+      resting.push(shaped);
+      continue;
+    }
+    if (!datedByKey.has(key)) {
+      datedByKey.set(key, []);
+      datedOrder.push(key);
+    }
+    // R12 — inside a dated block the block states the date, so a member whose
+    // `when` equals it drops it (a scheduled row's when IS the key). A forecast
+    // row has no `when`; a horizon-projected row whose `when` diverges keeps it.
+    if (shaped !== null && typeof shaped === "object" && (shaped as Obj)["when"] === key) {
+      delete (shaped as Obj)["when"];
+    }
+    datedByKey.get(key)!.push(shaped);
+  }
+  const sections: Obj[] = datedOrder.map((when) => ({ when, items: datedByKey.get(when)! }));
+  if (resting.length > 0) sections.push({ when: null, items: resting });
+  return sections;
+}
+
+/**
+ * Inject each global-`upcoming` day block's inline `total` (read-shape v2 R1,
+ * PR 4): present iff that day's scope was capped by the flat row limit
+ * (`items.length < total`), absent otherwise — no `meta.truncation.blocks[]`
+ * sidecar (the whole-view `{shown,total,limit,truncated}` rollup still rides
+ * `meta.truncation` for the row hint). The flat cut across the day-ordered stream
+ * leaves at most ONE straddling block partial (its pre-cap size looked up by
+ * `when` from `totals`); blocks fully before the cut are complete (no `total`),
+ * and blocks fully past it never appear. The resting block keys on `null`. Both
+ * the CLI `sections` wrapper and the MCP data block run the shaped sections
+ * through this so completeness is answerable locally. Returns the input unchanged
+ * when it is not the expected sections array.
+ */
+export function withUpcomingBlockTotals(sections: unknown, totals: UpcomingBlockTotals): unknown {
+  if (!Array.isArray(sections)) return sections;
+  return sections.map((s) => {
+    if (s === null || typeof s !== "object") return s;
+    const sec = s as Obj;
+    const when = (sec["when"] ?? null) as string | null;
+    const total = totals.get(when);
+    const items = sec["items"];
+    const shown = Array.isArray(items) ? items.length : 0;
+    // Spread-then-add keeps the `when` / `items` / `total` key order.
+    return total !== undefined && shown < total ? { ...sec, total } : sec;
+  });
+}
+
 /** Fold an area entity's tags to string names in place (returns a shallow copy). */
 function shapeArea(src: unknown): unknown {
   if (src === null || typeof src !== "object") return src;
@@ -912,14 +1007,13 @@ function shapeSections(
  * The flat, mixed-provenance list kinds mapped to their drop spec. Only the
  * stage-PURE catalogues (inbox/someday/logbook/trash; the section-based `anytime`
  * is pure too, handled via shapeSections below) drop the bucket-implied `stage`.
- * `upcoming` KEEPS it (R10.2): the Upcoming view is stage-mixed — it carries
- * deadline-forecast stage-`anytime`/`someday` rows alongside future-dated
- * stage-`upcoming` ones. The mixed/derived surfaces (search/changes/projects)
- * keep it too.
+ * The mixed/derived surfaces (search/changes/projects) keep it. The global
+ * `upcoming` view is NOT here — it reshapes into `data.sections` day blocks
+ * ({@link shapeUpcomingView}), keeping `stage` (R10.2: stage-mixed — future-dated
+ * `upcoming` rows beside deadline-forecast `anytime`/`someday` ones).
  */
 const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
   ["inbox", { stage: true }],
-  ["upcoming", NO_DROP],
   ["logbook", { stage: true }],
   ["trash", { stage: true }],
   ["changes", NO_DROP],
@@ -949,6 +1043,8 @@ export function shapeReadPayload(
   const compact = !full;
   const flatDrop = FLAT_LIST_DROP.get(kind);
   if (flatDrop !== undefined) return shapeList(data, flatDrop, compact, p);
+  // The global `upcoming` view reshapes into `data.sections` day blocks (PR 4).
+  if (kind === "upcoming" && Array.isArray(data)) return shapeUpcomingView(data, compact, p);
   if (kind === "today" && data !== null && typeof data === "object") {
     return shapeTodayView(data as Obj, compact, p);
   }
