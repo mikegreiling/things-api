@@ -1,0 +1,57 @@
+{
+  "id": "writes-reorder-today-intermix",
+  "family": "writes",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "On my Today list, rearrange things so 'Ship the newsletter' is first, then the 'Quarterly review' project, then 'Call the vendor' last.",
+  "paraphrases": [
+    "Reorder my Today list to this exact order: Ship the newsletter, Quarterly review, Call the vendor.",
+    "Put 'Ship the newsletter' at the top of Today, 'Call the vendor' at the bottom, and the 'Quarterly review' project between them."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "todo",
+      "key": "t_call",
+      "title": "Call the vendor",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 0
+    },
+    {
+      "kind": "project",
+      "key": "p_qr",
+      "title": "Quarterly review",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 1
+    },
+    {
+      "kind": "todo",
+      "key": "t_ship",
+      "title": "Ship the newsletter",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 2
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT title FROM TMTask WHERE trashed=0 AND title IN ('Ship the newsletter','Quarterly review','Call the vendor') ORDER BY todayIndex",
+      "expect": [
+        { "title": "Ship the newsletter" },
+        { "title": "Quarterly review" },
+        { "title": "Call the vendor" }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things reorder \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Ship the newsletter\")|.uuid')\" \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Quarterly review\")|.uuid')\" \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Call the vendor\")|.uuid')\" --in today"
+  ]
+}
