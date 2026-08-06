@@ -2155,14 +2155,14 @@ describe("cli did-you-mean fallback (item 4)", () => {
     const titles = candidates.map((c) => c.title as string);
     expect(titles).toEqual(expect.arrayContaining(["OutRun Restoration", "OutRun Wiring"]));
     // WIRE schema pin: every candidate carries ONLY the fixed keys — a future
-    // field leak (the old raw-entity emit shipped notes/counts/todaySection/…)
+    // field leak (the old raw-entity emit shipped notes/counts/the raw substrate/…)
     // fails here loudly.
     const allowed = new Set(["uuid", "title", "type", "area", "project", "stage", "when"]);
     for (const c of candidates) {
       for (const k of Object.keys(c)) expect(allowed.has(k)).toBe(true);
       expect(c).not.toHaveProperty("notes");
       expect(c).not.toHaveProperty("untrashedLeafActionsCount");
-      expect(c).not.toHaveProperty("todaySection");
+      expect(c).not.toHaveProperty("derived");
       expect(typeof c.type).toBe("string");
     }
     // a project candidate names its kind

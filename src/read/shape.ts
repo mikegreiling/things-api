@@ -32,10 +32,11 @@
  *   non-redundant information — plus `today` (mixes upcoming + anytime-deadline
  *   rows), search, changes, the projects/areas listings, the card NODE, and
  *   detail.
- * - the former `todaySection` field is RETIRED from the wire entirely (R10.1):
- *   `todaySection: "evening"` merely duplicated the `evening: true` marker. It
- *   remains an internal entity field (the human render and the write-verify delta
- *   still read it); shaping deletes it from the JSON copy.
+ * - the former `todaySection` field is DELETED from the entity model entirely:
+ *   it merely duplicated the presence-keyed `today`/`evening` markers
+ *   (`todaySection: "evening"` ⇔ `evening: true`; `"today"` ⇔ `today && !evening`),
+ *   which every consumer now reads directly (the human render, the write-verify
+ *   delta, the today-view evening split).
  *
  * ## R12 — `when`, the derived TIME-AXIS position (replaces startDate + markers)
  * Today/evening membership and the scheduled/projected date collapse onto ONE
@@ -393,16 +394,13 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
 
   // The ENTIRE internal derivation substrate leaves the wire in ONE structural
   // drop (one-vocabulary Batch 2, Option B): `start`/`logged`/`trashed` (R10 —
-  // replaced by `stage`), `todaySection` (R10.1 — retired), `today`/`evening`
-  // (R12 — replaced by `when`), and `reminderLive` (§9n) all live in the nested
-  // `o.derived` bag. §9n: a reminder byte is presentation-dead once its
-  // `startDate` goes strictly past (the GUI hides the bell but never clears the
-  // byte); the materialize-time `reminderLive` marker says whether it still
-  // renders — drop the `reminder` key when it does not, reading the marker
-  // BEFORE the substrate bag is dropped. `stage`/`when`/`provisional` are then
-  // stamped from the derivations above.
-  const sub = (o["derived"] ?? {}) as Obj;
-  if (sub["reminderLive"] !== true) delete o["reminder"];
+  // replaced by `stage`), `today`/`evening` (R12 — replaced by `when`), and the
+  // raw `reminder` byte all live in the nested `o.derived` bag. §9n: the
+  // top-level consumer `reminder` is ALREADY the live-gated value (null once the
+  // byte is presentation-dead — its `startDate` gone strictly past), gated at the
+  // mapper; a null key is pruned by omit-empty, so a stale reminder never reaches
+  // the wire without any drop here. `stage`/`when`/`provisional` are then stamped
+  // from the derivations above.
   delete o["derived"];
   if (drop.stage !== true) o["stage"] = stage;
   // R12 — `when` is emitted unless the enclosing context provably states the

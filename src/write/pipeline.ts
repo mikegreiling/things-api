@@ -295,8 +295,8 @@ function capturePre(
   fields: Record<string, Record<string, unknown>>;
   trashedCount?: number;
 } {
-  // Same injected clock the write planner rides — so a captured pre-value of
-  // `todaySection` is judged under the SAME Today the post-op read will be.
+  // Same injected clock the write planner rides — so a captured pre-value of the
+  // today/evening markers is judged under the SAME Today the post-op read will be.
   const reader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
   const modDates: PreModDates = {};
   const fields: Record<string, Record<string, unknown>> = {};
@@ -834,7 +834,7 @@ export async function runMutation<K extends OperationKind>(
 
     // Verify under the injected clock (deps.now/deps.zone), never the wall
     // clock: an `evening`/`today` write dated pinned-today must read back IN
-    // Today at verify time, or its `todaySection` assertion fails under a
+    // Today at verify time, or its today/evening marker assertion fails under a
     // pinned THINGS_NOW (bench-caught #211 regression).
     const reader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
     const timeoutMs = options.verifyTimeoutMs ?? (appRunning ? 6000 : 10_000);

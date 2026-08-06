@@ -406,8 +406,8 @@ describe("runUndo — structural precondition guard", () => {
         op: "todo.update",
         uuid,
         requested: { when: "someday" }, // the op scheduled it; its inverse restores the prior state
-        pre: { start: "someday", startDate: null, todaySection: null, reminder: null },
-        observed: { start: "active", startDate: "2026-07-05", todaySection: "today" },
+        pre: { start: "someday", startDate: null, reminder: null },
+        observed: { start: "active", startDate: "2026-07-05", today: true },
       }),
     ]);
     const { vector, calls } = fakeVector(() => {

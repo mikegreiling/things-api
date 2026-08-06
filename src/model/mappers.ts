@@ -5,7 +5,6 @@
 import {
   START_STATE_FROM_DB,
   TASK_STATUS_FROM_DB,
-  TODAY_SECTION_FROM_DB,
   type ChecklistItem,
   type Heading,
   type Project,
@@ -14,7 +13,6 @@ import {
   type StartState,
   type TaskStatus,
   type Todo,
-  type TodaySection,
 } from "./entities.ts";
 import { decodeEpochReal, decodePackedDate, decodeReminderTime } from "./dates.ts";
 import { reminderIsLive } from "../read/stage.ts";
@@ -96,31 +94,6 @@ function mapStart(row: { start: number | null; uuid: string }): StartState {
   return start;
 }
 
-/**
- * `todaySection` is meaningful ONLY for items actually in the Today view. The
- * DB stores a raw `startBucket` (0/1) on EVERY active row — prod carries
- * startBucket=0 on every undated Anytime to-do, and future-scheduled
- * (Upcoming) rows carry it too — so the raw bucket cannot be surfaced as-is:
- * emitting "today" for an Anytime/Upcoming item wrongly implies Today
- * membership (architecture.md; the MCP server note). We gate on the injected
- * clock's `packedToday`: the field is emitted only when the row is active,
- * dated, and not future-scheduled ("evening" via startBucket=1, else "today");
- * overdue scheduled rows (startDate < today) stay in Today and keep it.
- * Undated or future-dated rows OMIT the field (null).
- */
-function mapTodaySection(
-  row: { start: number | null; startDate: number | null; startBucket: number | null; uuid: string },
-  packedToday: number,
-): TodaySection | null {
-  if (row.startBucket === null) return null;
-  const section = TODAY_SECTION_FROM_DB[row.startBucket];
-  if (!section) throw new EnumDomainError("startBucket", row.startBucket, row.uuid);
-  if ((row.start ?? 0) !== 1) return null; // not start=active → not in Today
-  if (row.startDate === null) return null; // undated (Anytime)
-  if (row.startDate > packedToday) return null; // future startDate (Upcoming)
-  return section;
-}
-
 function mapRepeating(row: TaskRow): RepeatingInfo {
   const isTemplate = row.rt1_recurrenceRule !== null || row.repeater !== null;
   const templateUuid = row.rt1_repeatingTemplate;
@@ -168,15 +141,19 @@ function todayMarkers(row: TaskRow, packedToday: number): { today?: true; evenin
 
 function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday: number) {
   const startDate = decodePackedDate(row.startDate);
-  const reminder = decodeReminderTime(row.reminderTime);
+  // The RAW stored reminder byte — kept in `derived` verbatim (possibly stale)
+  // for the write engine's pre-state/delta predictions (§9n: a stale byte is
+  // revived by re-scheduling, so the raw value must survive on the substrate).
+  const rawReminder = decodeReminderTime(row.reminderTime);
   // §9n: a reminder byte renders only while startDate is today-or-future — a
-  // strictly-past startDate leaves the byte in the DB but presentation-dead.
-  // Bake that liveness into a presence-keyed marker under the response clock (as
-  // todayMarkers bakes Today/Evening), so the read-emit boundary and the human
-  // render gate on it without re-consulting a clock. decodePackedDate(packedToday)
-  // is today's ISO; reminderIsLive keeps null-startDate reminders (defensive).
+  // strictly-past startDate leaves the byte in the DB but presentation-dead. The
+  // top-level `reminder` a consumer sees is the LIVE value only (null when
+  // stale), live-gated here under the response clock (as todayMarkers gates
+  // Today/Evening). decodePackedDate(packedToday) is today's ISO; reminderIsLive
+  // keeps null-startDate reminders (defensive).
   const reminderLive =
-    reminder !== null && reminderIsLive(startDate, decodePackedDate(packedToday) ?? "");
+    rawReminder !== null && reminderIsLive(startDate, decodePackedDate(packedToday) ?? "");
+  const reminder = reminderLive ? rawReminder : null;
   return {
     uuid: row.uuid,
     title: row.title ?? "",
@@ -206,14 +183,14 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday:
     // The internal derivation substrate — never on the wire (DerivedSubstrate).
     derived: {
       ...todayMarkers(row, packedToday),
-      ...(reminderLive ? { reminderLive: true as const } : {}),
+      // The RAW reminder byte (possibly stale) — the write engine's substrate.
+      reminder: rawReminder,
       // Refined by markLogged (read layer): closed AND past the log-move
       // boundary. Defaulting to closed-implies-logged keeps paths that skip
       // the boundary (writes' result checks) on the old semantics.
       logged: mapStatus(row) !== "open",
       trashed: row.trashed === 1,
       start: mapStart(row),
-      todaySection: mapTodaySection(row, packedToday),
     },
   };
 }

@@ -143,7 +143,9 @@ async function runBounce(
 ): Promise<MutationResult> {
   const startedAt = deps.now?.() ?? new Date();
   const originalDate = target !== null && target.type === "to-do" ? target.startDate : null;
-  const preReminder = target !== null && target.type === "to-do" ? target.reminder : null;
+  // The RAW stored byte (top-level `reminder` is live-gated; a stale-but-revivable
+  // reminder must still be captured for restore and drive the bounce, §9n).
+  const preReminder = target !== null && target.type === "to-do" ? target.derived.reminder : null;
   if (originalDate === null || preReminder === null) {
     // The guard above already ruled these out; defensive only.
     return {

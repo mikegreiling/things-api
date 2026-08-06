@@ -189,16 +189,22 @@ function whenAssertions(when: WhenValue, todayIso: IsoDate): FieldAssertion[] {
   }
   switch (when) {
     case "today":
+      // Today's non-evening section: in Today (the `today` marker) AND NOT in the
+      // evening sub-bucket (the presence-keyed `evening` marker absent — asserted
+      // as null, which valuesEqual treats as absent). Gated to Today members under
+      // the verify clock exactly as the retired `todaySection` was.
       return [
         { field: "start", equals: "active" },
         { field: "startDate", equals: todayIso },
-        { field: "todaySection", equals: "today" },
+        { field: "today", equals: true },
+        { field: "evening", equals: null },
       ];
     case "evening":
+      // The This-Evening sub-bucket: the `evening` marker (which implies `today`).
       return [
         { field: "start", equals: "active" },
         { field: "startDate", equals: todayIso },
-        { field: "todaySection", equals: "evening" },
+        { field: "evening", equals: true },
       ];
     case "anytime":
       return [
@@ -490,7 +496,12 @@ function effectiveReminder(
   const target = pre.target;
   if (target === null || target.type === "heading") return null;
   if (!reminderIsLive(target.startDate, pre.todayIso)) return null;
-  return target.reminder;
+  // Read the RAW stored byte off the substrate (top-level `reminder` is
+  // live-gated under the LOAD clock, which can differ from `pre.todayIso` under a
+  // pinned THINGS_NOW). The `reminderIsLive` guard above applies liveness under
+  // the injected clock explicitly, so the raw byte + this gate reproduce the
+  // former semantics exactly.
+  return target.derived.reminder;
 }
 
 function assertNotesModesExclusive(params: {

@@ -15,7 +15,7 @@ function task(
   over: Partial<Omit<ListItem, "derived">> &
     Partial<DerivedSubstrate> & { uuid: string; title: string },
 ): ListItem {
-  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = over;
+  const { start, logged, trashed, today, evening, ...rest } = over;
   return {
     type: "to-do",
     notes: "",
@@ -38,10 +38,9 @@ function task(
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   } as ListItem;
 }

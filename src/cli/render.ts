@@ -276,12 +276,12 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     return t;
   };
   // GUI indicator order after the title: bell, document, checklist. The bell
-  // rides the presence-keyed `reminderLive` marker (§9n) — the SAME materialize-
-  // time gate the JSON wire's `reminder` key uses, so a stale reminder (past
-  // startDate, bell hidden in the GUI) shows no chip here either.
+  // reads the top-level `reminder` — the LIVE value the model already gated (§9n):
+  // it is null for a stale reminder (past startDate, bell hidden in the GUI), so
+  // no chip shows there either.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
-    ...(item.derived.reminderLive === true ? [dim(REMINDER_MARK)] : []),
+    ...(item.reminder !== null ? [dim(REMINDER_MARK)] : []),
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
     ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
   ];
@@ -322,7 +322,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
 export function todayMark(item: ListItem): string | null {
   // Consume the ONE derived `when` (the same value the wire emits) so a row's
   // ★/⏾ can never disagree with the emitted `when` — never re-derive membership
-  // or evening from `todaySection`/`startBucket`/`startDate`. Projects carry the
+  // or evening from the raw `startBucket`/`startDate`. Projects carry the
   // Today markers exactly like to-dos (probe O12), so they pip identically.
   const when = entityWhen(item);
   if (when === "evening") return eveningMoon();

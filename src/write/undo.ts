@@ -27,7 +27,7 @@
  *    `observed` after-values: CONTENT fields (title/notes/deadline/reminder/
  *    tags, keyed 1:1 to the inverse step's params) and the STRUCTURAL axes each
  *    step names in its `guardFields` — status, container (project/area/
- *    heading), schedule (start/startDate/todaySection), and trashed state. A
+ *    heading), schedule (start/startDate/today/evening), and trashed state. A
  *    field an out-of-band edit already moved is NOT clobbered — the step is
  *    refused (blocked, naming what moved) and unwinding stops.
  *    `--acknowledge-out-of-band-changes` (MCP `acknowledge_out_of_band_changes`)
@@ -72,7 +72,7 @@ export interface UndoStep {
     /**
      * STRUCTURAL axes this step overwrites (getField paths into the decoded
      * target: `status`, `trashed`, `project`/`project.uuid`, `area`/`area.uuid`,
-     * `heading.uuid`, `start`/`startDate`/`todaySection`). Before executing,
+     * `heading.uuid`, `start`/`startDate`/`today`/`evening`). Before executing,
      * `checkStepPrecondition` verifies the target's CURRENT value on each still
      * equals the recorded `observed` after-value — an out-of-band move/status/
      * schedule change already there blocks rather than being clobbered. Set only
@@ -396,7 +396,7 @@ function decodedRuleOf(record: AuditRecord): RepeatRule | null {
 
 /**
  * Reconstruct the scheduling step that restores a to-do's pre-op placement
- * from the captured pre-values (start / startDate / todaySection / reminder).
+ * from the captured pre-values (start / startDate / evening-marker / reminder).
  */
 function scheduleSteps(
   uuid: string,
@@ -407,7 +407,9 @@ function scheduleSteps(
   const notes: string[] = [];
   const start = preField(record, "start");
   const startDate = preField(record, "startDate");
-  const section = preField(record, "todaySection");
+  // Pre-op Today placement rides the presence-keyed `evening` marker (the retired
+  // `todaySection` word is gone): `evening === true` ⇔ the former "evening".
+  const wasEvening = preField(record, "evening") === true;
   const reminder = preField(record, "reminder");
 
   // start === "inbox" is a to-do-only pre-state (projects never live in the
@@ -423,10 +425,10 @@ function scheduleSteps(
   if (typeof startDate === "string") {
     // startDate == today maps back to the today/evening keywords (which also
     // keep the reminder-clear path open); other dates restore literally.
-    if (startDate === todayIso) when = section === "evening" ? "evening" : "today";
+    if (startDate === todayIso) when = wasEvening ? "evening" : "today";
     else {
       when = startDate;
-      if (section === "evening") {
+      if (wasEvening) {
         notes.push(
           "the item was a STALE evening entry (past startDate) — the date is restored but " +
             "the evening bucket cannot be (bucket placement is today-only)",
@@ -896,7 +898,8 @@ export function planUndo(
         (record.requested["when"] ?? record.requested["reminder"]) !== undefined;
       // Schedule axes the restore overwrites — guarded against the recorded
       // after-state so an out-of-band re-schedule blocks rather than clobbers.
-      const scheduleGuard = ["start", "startDate", "todaySection"];
+      // Today placement is the `today`/`evening` markers (todaySection retired).
+      const scheduleGuard = ["start", "startDate", "today", "evening"];
       let scheduleMerged = false;
       if (requestedWhen) {
         const schedule = scheduleSteps(uuid, record, todayIso);
@@ -956,7 +959,7 @@ export function planUndo(
             op: "project.update",
             params,
             ...(projectScheduleMerged && {
-              options: { guardFields: ["start", "startDate", "todaySection"] },
+              options: { guardFields: ["start", "startDate", "today", "evening"] },
             }),
           },
         ],
@@ -1519,7 +1522,7 @@ export function planUndo(
       }
       const when =
         startDate === todayIso
-          ? current.derived.todaySection === "evening"
+          ? current.derived.evening === true
             ? "evening"
             : "today"
           : startDate;
@@ -1672,7 +1675,8 @@ const AXIS_LABEL: Record<string, string> = {
   "heading.uuid": "heading",
   start: "schedule",
   startDate: "schedule",
-  todaySection: "schedule",
+  today: "schedule",
+  evening: "schedule",
 };
 
 /**

@@ -223,8 +223,8 @@ export function entityStage(item: EntityDerivable): Stage {
  * wire emit boundary (`shape.ts` `whenOf`) and the human/TTY renderers
  * (`whenValue`, `todayMark`) share. Composes {@link entityStage} → {@link
  * deriveWhen} off the entity's own presence-keyed markers, so a TTY when/pip can
- * NEVER disagree with the emitted `when` (never re-derived from `startBucket` /
- * `todaySection`). Returns the same {@link When} the wire carries.
+ * NEVER disagree with the emitted `when` (never re-derived from `startBucket`).
+ * Returns the same {@link When} the wire carries.
  */
 export function entityWhen(item: EntityDerivable): When | undefined {
   return deriveWhen({
@@ -263,10 +263,11 @@ export function entityProvisional(item: EntityDerivable): boolean {
 }
 
 /**
- * The §9n stale-reminder LAW — the ONE liveness predicate the read-emit boundary
- * (its precomputed `reminderLive` marker, mappers) and the write-side reminder
- * auto-preserve ({@link src/write/commands.ts} `effectiveReminder`) share, so a
- * reminder is reported/preserved iff the GUI would still render its bell.
+ * The §9n stale-reminder LAW — the ONE liveness predicate the read side (the
+ * mapper's live-gating of the top-level `reminder`, which is null once stale) and
+ * the write-side reminder auto-preserve ({@link src/write/commands.ts}
+ * `effectiveReminder`) share, so a reminder is reported/preserved iff the GUI
+ * would still render its bell.
  *
  * A time-of-day reminder renders in the GUI ONLY while its row's `startDate` is
  * the current day or FUTURE (a future-scheduled row's reminder is a live

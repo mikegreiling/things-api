@@ -37,8 +37,8 @@ export interface Snapshot {
   };
 }
 
-// `now`/`zone` supply the evaluation clock used to gate `todaySection` to Today
-// members (mappers.mapTodaySection); they default to the host clock, matching
+// `now`/`zone` supply the evaluation clock used to gate the today/evening markers
+// (and reminder liveness) in the mapper; they default to the host clock, matching
 // this module's existing logBoundary default.
 export function snapshotView(db: DatabaseSync, now: Date = new Date(), zone?: string): Snapshot {
   const areas = areasView(db);

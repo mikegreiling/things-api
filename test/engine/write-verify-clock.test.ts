@@ -1,15 +1,15 @@
 /**
- * Regression: the verified read-after-write must gate `todaySection` on the
- * INJECTED clock (deps.now / deps.zone), never the wall clock.
+ * Regression: the verified read-after-write must gate the `today`/`evening`
+ * markers on the INJECTED clock (deps.now / deps.zone), never the wall clock.
  *
- * The #211 todaySection fix threaded `packedToday` through the read surfaces,
- * but the WRITE pipeline's verify reader (createDbReader) kept resolving
- * `packedToday` from `new Date()`. Under a pinned THINGS_NOW in the FUTURE
- * (consumer-timezone / bench fence), an `evening`/`today` write dated
- * pinned-today is future-dated relative to the wall clock, so a real-clock
- * verify reader omits `todaySection` and the `{ todaySection: "evening" }`
- * create-delta assertion fails as `verify-failed:mismatch` — a correct write
- * reported as a failure (bench-caught: the agent's retry then duplicated state).
+ * The #211 clock fix threaded `packedToday` through the read surfaces, but the
+ * WRITE pipeline's verify reader (createDbReader) kept resolving `packedToday`
+ * from `new Date()`. Under a pinned THINGS_NOW in the FUTURE (consumer-timezone
+ * / bench fence), an `evening`/`today` write dated pinned-today is future-dated
+ * relative to the wall clock, so a real-clock verify reader omits the Today
+ * markers and the `{ evening: true }` create-delta assertion fails as
+ * `verify-failed:mismatch` — a correct write reported as a failure (bench-caught:
+ * the agent's retry then duplicated state).
  *
  * These tests pin deps.now (and the simulator's now) to a far-future instant,
  * guaranteeing the injected clock is ahead of the wall clock whenever the suite
@@ -103,7 +103,7 @@ function restoreEnv(key: string, value: string | undefined): void {
 }
 
 describe("write verification honors the injected clock (not the wall clock)", () => {
-  it("evening write dated a FUTURE pinned-today still verifies (todaySection: evening)", async () => {
+  it("evening write dated a FUTURE pinned-today still verifies (evening marker)", async () => {
     const vector = createSimulatorVector(fixture.path, { now: () => FUTURE });
     const res = await runMutation(
       deps(vector, () => FUTURE),
@@ -111,14 +111,14 @@ describe("write verification honors the injected clock (not the wall clock)", ()
       { title: "Evening probe", when: "evening" },
       { verifyTimeoutMs: 1000 }, // a reintroduced bug fails fast as a mismatch
     );
-    // Before the fix: verify-failed:mismatch with observed.todaySection === null,
+    // Before the fix: verify-failed:mismatch with observed.evening === null,
     // because the verify reader computed packedToday from new Date() (< FUTURE).
     expect(res.kind).toBe("ok");
     if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
     expect(res.observed).toMatchObject({
       start: "active",
       startDate: FUTURE_TODAY,
-      todaySection: "evening",
+      evening: true,
     });
     // And the row is genuinely a future-pinned Today/Evening member.
     const row = fixture.db
@@ -128,7 +128,7 @@ describe("write verification honors the injected clock (not the wall clock)", ()
     expect(row.startBucket).toBe(1);
   });
 
-  it("today write dated a FUTURE pinned-today still verifies (todaySection: today)", async () => {
+  it("today write dated a FUTURE pinned-today still verifies (today marker, no evening)", async () => {
     const vector = createSimulatorVector(fixture.path, { now: () => FUTURE });
     const res = await runMutation(
       deps(vector, () => FUTURE),
@@ -141,7 +141,8 @@ describe("write verification honors the injected clock (not the wall clock)", ()
     expect(res.observed).toMatchObject({
       start: "active",
       startDate: FUTURE_TODAY,
-      todaySection: "today",
+      today: true,
+      evening: null,
     });
   });
 
@@ -158,6 +159,6 @@ describe("write verification honors the injected clock (not the wall clock)", ()
     );
     expect(res.kind).toBe("ok");
     if (res.kind !== "ok") throw new Error(`expected ok, got ${res.kind}`);
-    expect(res.observed).toMatchObject({ todaySection: "evening", startDate: localToday(now) });
+    expect(res.observed).toMatchObject({ evening: true, startDate: localToday(now) });
   });
 });

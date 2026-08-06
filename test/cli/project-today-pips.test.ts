@@ -2,8 +2,8 @@
  * Projects carry Today/Evening state exactly like to-dos (probe O12): the wire
  * emits `when` on project rows on every surface, and the TTY places the ★/⏾ pip
  * (including `renderProjectsSidebar`). Plus the R12 single-source rule — every
- * TTY when/Today/Evening state consumes the derived `when`, never `startBucket`/
- * `todaySection` (a stale-bytes row is Today, not Evening) — and the 12-hour TTY
+ * TTY when/Today/Evening state consumes the derived `when`, never the raw
+ * `startBucket` (a stale-bytes row is Today, not Evening) — and the 12-hour TTY
  * reminder chip (the wire keeps 24h `HH:MM`).
  */
 import { mkdtempSync, rmSync } from "node:fs";

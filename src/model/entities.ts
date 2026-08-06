@@ -7,7 +7,6 @@ import type { RepeatRule } from "./recurrence.ts";
 
 export type TaskStatus = "open" | "canceled" | "completed"; // status 0 | 2 | 3
 export type StartState = "inbox" | "active" | "someday"; // start 0 | 1 | 2
-export type TodaySection = "today" | "evening"; // startBucket 0 | 1
 export type TaskType = "to-do" | "project" | "heading"; // type 0 | 1 | 2
 
 /** Lightweight reference to another entity. */
@@ -97,21 +96,6 @@ export interface DerivedSubstrate {
   logged: boolean;
   trashed: boolean;
   /**
-   * Today-view section ("today" | "evening"), meaningful ONLY for items actually
-   * in Today under the evaluation clock: start=active, dated, and not
-   * future-scheduled (overdue rows stay in Today). Anytime (undated) and
-   * Upcoming (future startDate) rows carry a raw startBucket in the DB but are
-   * NOT in Today, so this is null for them.
-   *
-   * INTERNAL-ONLY (R10.1): this field is NOT on the JSON wire — it was retired
-   * as redundant with the presence-keyed {@link DerivedSubstrate.evening} marker
-   * (`todaySection === "evening"` ⇔ `evening: true`). It survives on the
-   * in-memory entity for the human render (evening styling) and the write-verify
-   * schedule delta, which still read it. Use TodayView.evening for UI-faithful
-   * placement.
-   */
-  todaySection: TodaySection | null;
-  /**
    * Presence-keyed Today-view marker (`true` or absent) — derived with the Today
    * view's own two-arm membership (a scheduled `startDate <= today`, OR an
    * undated due/overdue deadline that is not suppressed; see
@@ -127,16 +111,21 @@ export interface DerivedSubstrate {
    */
   evening?: true;
   /**
-   * Presence-keyed marker (`true` or absent): the stored {@link TaskCommon.reminder}
-   * STILL RENDERS under the evaluation clock — i.e. `reminder` is set AND
-   * `startDate` is today-or-future (src/read/stage.ts `reminderIsLive`). §9n: once
-   * `startDate` goes strictly past, the GUI hides the reminder bell while the DB
-   * keeps the byte forever, so a stale reminder is presentation-dead — this
-   * marker is absent for it. Computed at materialize (mappers) with the response
-   * clock, exactly like the {@link today}/{@link evening} markers. It gates the
-   * read-shaping `reminder` emit and the human-render bell. Set only when true.
+   * The RAW stored reminder byte (`HH:mm`), possibly STALE — null when the row
+   * carries no reminder at all. This is the substrate the write engine reads for
+   * its pre-state/delta predictions; the honest, live-gated value a consumer sees
+   * is the top-level {@link TaskCommon.reminder} (which this feeds).
+   *
+   * §9n: the app keeps the reminder byte in the DB forever, even once the row's
+   * `startDate` goes strictly past — at that point the GUI hides the bell
+   * (presentation-dead) but the byte is NOT gone: RE-SCHEDULING the item to
+   * today/future REVIVES the reminder. The write engine therefore must predict
+   * and verify against this raw byte, never the live-gated top-level value (a
+   * past-dated `add --reminder` stores the byte; a `clear-dated-reminder` must
+   * verify the byte itself is gone, not merely that the live view reads empty).
+   * Computed at materialize (mappers) with no clock gating.
    */
-  reminderLive?: true;
+  reminder: ReminderTime | null;
 }
 
 interface TaskCommon {
@@ -147,7 +136,14 @@ interface TaskCommon {
   /** The "When" date (packed int in DB), null when unscheduled. */
   startDate: IsoDate | null;
   deadline: IsoDate | null;
-  /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
+  /**
+   * Time-of-day reminder (`HH:mm`, 24h) — the LIVE value only: it is null once the
+   * reminder is presentation-dead (its row's `startDate` gone strictly past, §9n),
+   * exactly what a consumer/renderer should honor. Live-gated at the mapper under
+   * the response clock (the {@link reminderIsLive} predicate). The RAW stored byte
+   * (which survives a stale schedule and is revived by re-scheduling) lives in the
+   * substrate as {@link DerivedSubstrate.reminder}; the write engine reads THAT.
+   */
   reminder: ReminderTime | null;
   area: Ref | null;
   /** Direct tags only, by name — mirrors DB truth (inherited tags are computed; see inheritedTags). */
@@ -276,8 +272,4 @@ export const START_STATE_FROM_DB: Record<number, StartState> = {
   0: "inbox",
   1: "active",
   2: "someday",
-};
-export const TODAY_SECTION_FROM_DB: Record<number, TodaySection> = {
-  0: "today",
-  1: "evening",
 };

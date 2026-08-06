@@ -87,8 +87,11 @@ describe("todayView", () => {
     const view = todayView(fx.db, NOW);
     expect(view.today.map((i) => i.title)).toEqual(["stale-evening"]);
     expect(view.evening.map((i) => i.title)).toEqual(["tonight"]);
-    // raw assignment stays visible on the entity for both
-    expect(view.today[0]?.derived.todaySection).toBe("evening");
+    // The evening marker expires daily (set only when startDate is exactly today):
+    // the stale row is Today proper (today marker, no evening); tonight is evening.
+    expect(view.today[0]?.derived.today).toBe(true);
+    expect(view.today[0]?.derived.evening).toBeUndefined();
+    expect(view.evening[0]?.derived.evening).toBe(true);
   });
 
   it("counts mirror the sidebar: deadline due/overdue vs other", () => {

@@ -25,7 +25,7 @@ const first = (out: unknown): Obj => (out as Obj[])[0]!;
 
 /** A minimal shaped-item payload — enough for the stage/when derivation + refs. */
 function todo(over: Obj = {}): Obj {
-  const { logged, trashed, start, todaySection, today, evening, reminderLive, ...rest } = over;
+  const { logged, trashed, start, today, evening, reminder, ...rest } = over;
   return {
     uuid: "todo-x",
     type: "to-do",
@@ -50,10 +50,9 @@ function todo(over: Obj = {}): Obj {
       start: start ?? "active",
       logged: logged ?? false,
       trashed: trashed ?? false,
-      todaySection: todaySection ?? null,
+      reminder: (reminder as string | null) ?? null,
       ...(today !== undefined && { today }),
       ...(evening !== undefined && { evening }),
-      ...(reminderLive !== undefined && { reminderLive }),
     },
   };
 }
@@ -255,7 +254,7 @@ describe("`type` omission — absent type = to-do", () => {
             created: new Date(),
             modified: new Date(),
             stopped: null,
-            derived: { start: "active", logged: false, trashed: false, todaySection: null },
+            derived: { start: "active", logged: false, trashed: false, reminder: null },
           },
         ],
         false,

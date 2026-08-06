@@ -22,7 +22,6 @@ function fullTodo(): Record<string, unknown> {
     trashed: false,
     start: "active",
     startDate: "2026-07-16",
-    todaySection: "today",
     deadline: "2026-07-20",
     reminder: "09:00",
     area: { uuid: "area-1", title: "Work" },
@@ -52,7 +51,6 @@ function minimalTodo(): Record<string, unknown> {
     trashed: false,
     start: "inbox",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -81,7 +79,6 @@ describe("omitEmpty — entity field omission", () => {
     for (const gone of [
       "notes",
       "startDate",
-      "todaySection",
       "deadline",
       "reminder",
       "area",

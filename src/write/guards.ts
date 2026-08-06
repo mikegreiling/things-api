@@ -374,8 +374,10 @@ const GUARDS: Record<HazardId, GuardFn> = {
     const target = pre.target;
     // Type/existence problems are H-UNKNOWN-DESTINATION's job; here we only
     // guard the no-op: clearing a reminder that isn't set would verify
-    // trivially (already null) without anything having happened.
-    if (target === null || target.type !== "to-do" || target.reminder !== null) return null;
+    // trivially (already null) without anything having happened. Read the RAW
+    // byte — a STALE reminder (past startDate, bell hidden) is still a real,
+    // revivable byte the clear op removes, so it is NOT a no-op (§9n).
+    if (target === null || target.type !== "to-do" || target.derived.reminder !== null) return null;
     return {
       hazard: "H-NO-REMINDER",
       detail: "this to-do has no reminder to clear",
