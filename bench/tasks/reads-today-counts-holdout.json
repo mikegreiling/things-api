@@ -1,0 +1,57 @@
+{
+  "id": "reads-today-counts-holdout",
+  "family": "reads",
+  "tier": 2,
+  "split": "holdout",
+  "prompt": "Of everything in my Today list (including This Evening), how many items are due or overdue, and how many are just there without a deadline pressing? Reply with JSON {\"due_or_overdue\": N, \"other\": M}.",
+  "paraphrases": [
+    "Split my Today list into two buckets: items that are due today or already overdue, versus the rest. JSON {\"due_or_overdue\": N, \"other\": M}.",
+    "How much of Today (This Evening included) is deadline-driven versus not? Give JSON {\"due_or_overdue\": N, \"other\": M}."
+  ],
+  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    {
+      "kind": "todo",
+      "key": "a",
+      "title": "Water the ferns",
+      "start": "active",
+      "startDate": "2026-07-20"
+    },
+    {
+      "kind": "todo",
+      "key": "b",
+      "title": "Submit the grant draft",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "deadline": "2026-07-20"
+    },
+    {
+      "kind": "todo",
+      "key": "c",
+      "title": "Return the rental skis",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "deadline": "2026-07-12"
+    },
+    {
+      "kind": "todo",
+      "key": "d",
+      "title": "Call the framer",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "evening": true
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"due_or_overdue\": number, \"other\": number}"
+  },
+  "assertions": [
+    { "type": "answer", "path": "due_or_overdue", "equals": 2 },
+    { "type": "answer", "path": "other", "equals": 2 },
+    { "type": "db-unchanged" }
+  ],
+  "maxTurns": 15,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things today --json"]
+}

@@ -33,6 +33,6 @@
   "timeoutMs": 220000,
   "pseudoScript": [
     "things todo add \"Write the year-end charity letters\" --json",
-    "things todo make-repeating \"$(things search \"Write the year-end charity letters\" --json | jq -r '.data[0].uuid')\" --frequency yearly --interval 1 --yearly-month 12 --on-weekday sunday --on-ordinal last --dangerously-drive-gui"
+    "things todo make-repeating \"$(things search \"Write the year-end charity letters\" --json | jq -r '.data.items[0].uuid')\" --frequency yearly --interval 1 --yearly-month 12 --on-weekday sunday --on-ordinal last --dangerously-drive-gui"
   ]
 }

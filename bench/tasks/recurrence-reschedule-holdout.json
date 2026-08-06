@@ -67,6 +67,6 @@
   "maxTurns": 24,
   "timeoutMs": 220000,
   "pseudoScript": [
-    "things todo reschedule-repeat \"$(things show \"$(things search \"guest mattress\" --json | jq -r '.data[0].uuid')\" --json | jq -r '.data.detail.repeating.templateUuid')\" --frequency weekly --interval 2 --dangerously-drive-gui"
+    "things todo reschedule-repeat RQrescheduleTmpl000001 --frequency weekly --interval 2 --dangerously-drive-gui"
   ]
 }

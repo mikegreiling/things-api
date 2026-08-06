@@ -10,6 +10,8 @@ version: 0.0.0-dev
 
 `things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `move`, `output`, `repeating`, `writes`.
 
+**This skill's reference files** are exactly `model`, `contracts`, `ordering`, `errors`, `banner`, `gui` (all `references/*.md`) — do not guess other names. Read *shapes* (every view's JSON, `stage`/`when`, the compact/full tiers) live in `model`; the envelope, exit codes, undo, batch, and recurrence in `contracts`; move/reorder axes in `ordering`; the error contract in `errors`. There is no `reads`/`writes`/`data-model`/`recurrence`/`safety` file. Most tasks need only this page — open a reference only when a link below sends you there.
+
 ## Data model (read this first)
 
 - **To-do** — the basic item: title, notes, an optional **checklist** (sub-steps), tags, schedule, deadline, reminder. Has at most ONE container — loose in an **area**, directly in a **project**, or under a **heading** inside a project — or **none at all** (standalone to-dos are normal, like standalone projects).

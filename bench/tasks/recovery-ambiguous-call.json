@@ -62,6 +62,6 @@
   "maxTurns": 25,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo complete \"$(things show Taxes --json | jq -r '.data.view.active[]|select(.title==\"Call the office\")|.uuid')\""
+    "things todo complete \"$(things show Taxes --json | jq -r '.data.view.children.anytime.items[]|select(.title==\"Call the office\")|.uuid')\""
   ]
 }
