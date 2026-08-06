@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.14.0 — 2026-08-05
+
 - **CHANGE (breaking, ALPHA) — read-shape doctrine v2, PR 5 of 5 (FINALE): the global `anytime`/`someday` sections become bucket RECORDS with inline `total`, and the `meta.truncation.blocks[]` sidecar is RETIRED from the wire ENTIRELY.** Fifth and last migration PR of the ratified [read-shape doctrine v2](docs/design/read-shape-doctrine-v2.md) — the doctrine migration is now COMPLETE (5 of 5):
   - **Sections record-ized (R1).** `things anytime` / `things someday` (and `read_view anytime`/`someday`) `data.sections` is now `[{ area, items, total? } …]` — each section carries its own inline `total`, present **iff** that section's `items` were capped (`items.length < total`); an untruncated section never restates its own length. `area` is the area node (or `null` for the loose section); `items` is the section's flattened rows (area-direct/loose to-dos, then each project row with its capped children). Completeness is answerable locally, no sidecar join.
   - **`blocks[]` retired from the WIRE ENTIRELY.** With anytime/someday swept, NO view emits the per-block `blocks[]` truncation sidecar any longer — so the `blocks` field is DELETED from the `Truncation` wire type (ALPHA — no dead shapes), and the `GroupBlock` definition drops out of the regenerated envelope schema. The whole-view `{shown, total, limit, truncated}` rollup still rides `meta.truncation` on every grouped view. The per-block detail the TTY renderers need (the "… N more — `things project show '…'`" drill-downs, the someday projects-vs-to-dos split) is now carried as INTERNAL render plumbing (`GroupBlock[]`, returned separately from the client's bounded views), never serialized.
