@@ -47,6 +47,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo add \"Pack for the campout\" --area \"$(things areas --json | jq -r '.data[]|select(.title==\"Trips\")|.uuid')\" --when 2026-07-24 --checklist-item tent --checklist-item \"sleeping bag\" --checklist-item headlamp"
+    "things todo add \"Pack for the campout\" --area \"$(things areas --json | jq -r '.data.items[]|select(.title==\"Trips\")|.uuid')\" --when 2026-07-24 --checklist-item tent --checklist-item \"sleeping bag\" --checklist-item headlamp"
   ]
 }

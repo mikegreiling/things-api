@@ -37,6 +37,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo update \"$(things inbox --json | jq -r '.data[]|select(.title==\"Check smoke detectors\")|.uuid')\" --when someday"
+    "things todo update \"$(things inbox --json | jq -r '.data.items[]|select(.title==\"Check smoke detectors\")|.uuid')\" --when someday"
   ]
 }

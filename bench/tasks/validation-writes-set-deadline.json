@@ -36,6 +36,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo update \"$(things search \"Submit the rebate form\" --json | jq -r '.data[0].uuid')\" --deadline 2026-07-30"
+    "things todo update \"$(things search \"Submit the rebate form\" --json | jq -r '.data.items[0].uuid')\" --deadline 2026-07-30"
   ]
 }

@@ -43,6 +43,6 @@
   "timeoutMs": 220000,
   "pseudoScript": [
     "things todo add \"Water the seedling trays\" --json",
-    "things todo make-repeating \"$(things search \"Water the seedling trays\" --json | jq -r '.data[0].uuid')\" --frequency weekly --interval 1 --weekdays thursday,friday --dangerously-drive-gui"
+    "things todo make-repeating \"$(things search \"Water the seedling trays\" --json | jq -r '.data.items[0].uuid')\" --frequency weekly --interval 1 --weekdays thursday,friday --dangerously-drive-gui"
   ]
 }

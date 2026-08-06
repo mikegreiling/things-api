@@ -50,6 +50,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo complete \"$(things today --json | jq -r '.data.today[]|select(.title==\"Order seed catalog\")|.uuid')\""
+    "things todo complete \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Order seed catalog\")|.uuid')\""
   ]
 }

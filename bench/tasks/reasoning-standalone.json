@@ -83,6 +83,6 @@
   "maxTurns": 15,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things show \"$(things search \"Sharpen the mower blade\" --json | jq -r '.data[0].uuid')\" --json"
+    "things show \"$(things search \"Sharpen the mower blade\" --json | jq -r '.data.items[0].uuid')\" --json"
   ]
 }

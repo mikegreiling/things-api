@@ -80,6 +80,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things show \"$(things search \"Book the van rental\" --json | jq -r '.data[0].uuid')\" --json"
+    "things show \"$(things search \"Book the van rental\" --json | jq -r '.data.items[0].uuid')\" --json"
   ]
 }

@@ -85,6 +85,6 @@
   "maxTurns": 30,
   "timeoutMs": 240000,
   "pseudoScript": [
-    "for u in $(things show \"Studio move\" --json | jq -r '.data.view.active[]|select(.status==\"open\")|.uuid'); do things todo tags \"$u\" --add boxes; done"
+    "for u in $(things show \"Studio move\" --json | jq -r '.data.view.children.anytime.items[]|select(.status==null)|.uuid'); do things todo tags \"$u\" --add boxes; done"
   ]
 }

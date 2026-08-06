@@ -3,7 +3,7 @@
   "family": "writes",
   "tier": 2,
   "split": "dev",
-  "prompt": "I've decided against refinishing the porch swing \u2014 mark that to-do abandoned (not completed, I never did it), and tell me which list it moves to. Reply JSON {\"view\": \"<lowercase list name>\"}.",
+  "prompt": "I've decided against refinishing the porch swing — mark that to-do abandoned (not completed, I never did it), and tell me which list it moves to. Reply JSON {\"view\": \"<lowercase list name>\"}.",
   "paraphrases": [
     "The porch-swing refinish isn't happening. Close it out as won't-do rather than done, and say where I'd find the record. JSON {\"view\": \"...\"}."
   ],
@@ -57,6 +57,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo cancel \"$(things search \"Refinish the porch swing\" --json | jq -r '.data[0].uuid')\""
+    "things todo cancel \"$(things search \"Refinish the porch swing\" --json | jq -r '.data.items[0].uuid')\""
   ]
 }

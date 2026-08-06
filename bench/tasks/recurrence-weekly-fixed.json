@@ -51,6 +51,6 @@
   "maxTurns": 22,
   "timeoutMs": 200000,
   "pseudoScript": [
-    "things todo make-repeating \"$(things search \"Refill the bird feeders\" --json | jq -r '.data[0].uuid')\" --frequency weekly --interval 1 --weekdays monday --dangerously-drive-gui"
+    "things todo make-repeating \"$(things search \"Refill the bird feeders\" --json | jq -r '.data.items[0].uuid')\" --frequency weekly --interval 1 --weekdays monday --dangerously-drive-gui"
   ]
 }

@@ -67,8 +67,8 @@
   "timeoutMs": 240000,
   "pseudoScript": [
     "things project add \"Garden shed\" --area Home",
-    "things heading add \"Garden shed\" Materials",
-    "things heading add \"Garden shed\" Build",
+    "things project add-heading \"Garden shed\" Materials",
+    "things project add-heading \"Garden shed\" Build",
     "things todo add \"Buy lumber\" --project \"Garden shed\" --heading Materials --deadline 2026-07-24",
     "things todo add \"Assemble frame\" --project \"Garden shed\" --heading Build"
   ]

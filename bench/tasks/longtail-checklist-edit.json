@@ -87,6 +87,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "U=$(things search \"Weekly grocery run\" --json | jq -r '.data[0].uuid'); things todo checklist \"$U\" --check Eggs; things todo checklist \"$U\" --add \"Sparkling water\""
+    "U=$(things search \"Weekly grocery run\" --json | jq -r '.data.items[0].uuid'); things todo checklist \"$U\" --check Eggs; things todo checklist \"$U\" --add \"Sparkling water\""
   ]
 }

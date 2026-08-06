@@ -51,6 +51,6 @@
   "maxTurns": 20,
   "timeoutMs": 180000,
   "pseudoScript": [
-    "things todo move \"$(things inbox --json | jq -r '.data[]|select(.title==\"Renew library card\")|.uuid')\" --area Errands"
+    "things todo move \"$(things inbox --json | jq -r '.data.items[]|select(.title==\"Renew library card\")|.uuid')\" --to-area Errands"
   ]
 }

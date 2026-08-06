@@ -157,6 +157,13 @@ function buildFenceEnv(dbPath: string, clock: Clock, scratch: Scratch): Record<s
     THINGS_API_CONFIG_DIR: scratch.config,
     THINGS_API_STATE_DIR: scratch.state,
     NO_COLOR: "1",
+    // Hermetic fence: the skill-drift check (src/cli/skill-check.ts) reads the
+    // operator's REAL ~/.agents and ~/.claude skill installs and prints a
+    // "installed skill vX predates bundled vY" note on stderr — host-environment
+    // leakage into a sandboxed arm, and pure friction noise the subject sees on
+    // every command. Silence it so the arm measures the SURFACE, not the
+    // operator's local skill-install staleness.
+    THINGS_API_NO_SKILL_CHECK: "1",
   };
   const path = process.env["PATH"];
   if (path !== undefined) env["PATH"] = path;

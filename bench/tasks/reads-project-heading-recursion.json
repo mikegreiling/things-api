@@ -1,0 +1,74 @@
+{
+  "id": "reads-project-heading-recursion",
+  "family": "reads",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "In my 'Kayak trip prep' project, how many to-dos are still OPEN under the 'Gear' heading, and what are their titles? Reply with JSON {\"count\": N, \"titles\": [\"...\"]} — only open ones, and only under that heading.",
+  "paraphrases": [
+    "Under the Gear heading of Kayak trip prep, list the to-dos I still have left to do (open only). JSON {\"count\": N, \"titles\": [...]}.",
+    "How much is left under 'Gear' in the 'Kayak trip prep' project? Count and name only the open to-dos in that heading. JSON {\"count\": N, \"titles\": [...]}."
+  ],
+  "clock": { "now": "2026-07-20T09:00:00-05:00", "tz": "America/Chicago" },
+  "seed": [
+    { "kind": "area", "key": "paddling", "title": "Paddling" },
+    {
+      "kind": "project",
+      "key": "kayak",
+      "title": "Kayak trip prep",
+      "container": "paddling",
+      "start": "active"
+    },
+    { "kind": "heading", "key": "gear", "title": "Gear", "container": "kayak" },
+    { "kind": "heading", "key": "logi", "title": "Logistics", "container": "kayak" },
+    {
+      "kind": "todo",
+      "key": "g1",
+      "title": "Patch the drysuit",
+      "container": "gear",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "g2",
+      "title": "Wax the paddle",
+      "container": "gear",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "g3",
+      "title": "Buy dry bags",
+      "container": "gear",
+      "status": "completed"
+    },
+    {
+      "kind": "todo",
+      "key": "l1",
+      "title": "Reserve the put-in shuttle",
+      "container": "logi",
+      "start": "active"
+    },
+    {
+      "kind": "todo",
+      "key": "r1",
+      "title": "Confirm weather window",
+      "container": "kayak",
+      "start": "active"
+    }
+  ],
+  "finalAnswer": { "required": true, "shape": "{\"count\": number, \"titles\": string[]}" },
+  "assertions": [
+    { "type": "answer", "path": "count", "equals": 2 },
+    {
+      "type": "answer-includes",
+      "path": "titles",
+      "values": ["Patch the drysuit", "Wax the paddle"]
+    },
+    { "type": "db-unchanged" }
+  ],
+  "maxTurns": 15,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things project show \"Kayak trip prep\" --json | jq '.data.view.headings[]|select(.title==\"Gear\")|.children.anytime.items|map(select(.status==null))|{count:length,titles:map(.title)}'"
+  ]
+}

@@ -54,6 +54,6 @@
   "timeoutMs": 180000,
   "pseudoScript": [
     "things tag add quick-wins --parent chores",
-    "things todo tags \"$(things search \"Drop off the dry cleaning\" --json | jq -r '.data[0].uuid')\" --add quick-wins"
+    "things todo tags \"$(things search \"Drop off the dry cleaning\" --json | jq -r '.data.items[0].uuid')\" --add quick-wins"
   ]
 }

@@ -54,6 +54,6 @@
   "maxTurns": 24,
   "timeoutMs": 220000,
   "pseudoScript": [
-    "things project make-repeating \"$(things search \"Pantry inventory reset\" --type project --json | jq -r '.data[0].uuid')\" --frequency monthly --interval 1 --on-day 1 --dangerously-drive-gui"
+    "things project make-repeating \"$(things search \"Pantry inventory reset\" --type project --json | jq -r '.data.items[0].uuid')\" --frequency monthly --interval 1 --on-day 1 --dangerously-drive-gui"
   ]
 }
