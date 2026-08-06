@@ -706,6 +706,7 @@ export function registerReadCommands(program: Command): void {
             const {
               items: data,
               truncation,
+              upcomingTotals,
               filter: areaFilter,
             } = c.read.upcoming({
               ...(until !== undefined && { until }),
@@ -762,6 +763,7 @@ export function registerReadCommands(program: Command): void {
             return {
               data,
               truncation,
+              upcomingTotals,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
               lines,

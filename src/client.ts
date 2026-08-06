@@ -67,8 +67,10 @@ import {
   previewSomedaySections,
   truncateList,
   truncateToday,
+  upcomingBlockTotals,
   type TodayBucketTotals,
   type AreaBucketTotals,
+  type UpcomingBlockTotals,
 } from "./read/truncation.ts";
 import {
   filterListByArea,
@@ -249,6 +251,17 @@ export interface BoundedList<T> {
 }
 
 /**
+ * A bounded global `upcoming` list: the flat {@link truncateList} slice (rendered
+ * as-is, grouped by day in the renderer) plus `upcomingTotals` — the PRE-cap
+ * per-day-block sizes keyed by `when`, from which each `data.sections` day block's
+ * inline `total` derives (present iff the flat row cap straddled that day, R1).
+ */
+export interface BoundedUpcomingList extends BoundedList<ListItem> {
+  /** Pre-cap day-block sizes for the wire's inline `total` (see {@link UpcomingBlockTotals}). */
+  upcomingTotals: UpcomingBlockTotals;
+}
+
+/**
  * A bounded Today view: `view` is the shown split (capped in render order —
  * Today, then This Evening), `truncation` the exact global counts, and `totals`
  * the PRE-cap Today/This-Evening bucket sizes — the renderer keeps This Evening
@@ -402,10 +415,10 @@ export interface ThingsClient {
     anytime(
       options?: ViewFilter & GroupedBound & ClockScopedRead & AreaScopedRead,
     ): BoundedSectionsView;
-    /** Future-scheduled items in date order, bounded (default 50). */
+    /** Future-scheduled items in date order, bounded (default 50); day-block totals for R1. */
     upcoming(
       options?: UpcomingFilter & ListBound & ClockScopedRead & AreaScopedRead,
-    ): BoundedList<ListItem>;
+    ): BoundedUpcomingList;
     /**
      * Someday catalogue: `areaLimit` (default 30) caps each group; with
      * `activeProjectItems`, `projectLimit` (default: every item) caps each
@@ -1031,8 +1044,11 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
           items = filterListByArea(items, target.uuid);
           filter = { area: target };
         }
+        // Pre-cap per-day-block sizes for the wire's inline `total` (R1): counted
+        // over the in-scope, area-filtered stream BEFORE the flat row cap slices it.
+        const upcomingTotals = upcomingBlockTotals(items);
         const { data, truncation } = truncateList(items, listCap(o));
-        return { items: data, truncation, ...(filter !== undefined && { filter }) };
+        return { items: data, truncation, upcomingTotals, ...(filter !== undefined && { filter }) };
       },
       someday: (o) => {
         let sections = somedayView(conn.db, now(), o, zoneOf(o));

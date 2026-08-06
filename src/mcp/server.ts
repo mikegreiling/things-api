@@ -54,6 +54,7 @@ import {
   shapeReadPayload,
   withTodayBucketTotals,
   withAreaBucketTotals,
+  withUpcomingBlockTotals,
   splitWhenSugar,
   tagFilterFields,
   tagFlagConflict,
@@ -1014,6 +1015,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const {
                 items,
                 truncation,
+                upcomingTotals,
                 filter: fm,
               } = c.read.upcoming({
                 ...filter,
@@ -1023,8 +1025,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
+              // The data block is the day-block `sections` array, each capped block
+              // carrying its inline `total` (R1); the flat rollup rides truncation.
               return truncatedResult(
-                shapeReadPayload("upcoming", items, full, c.refPromoter()),
+                withUpcomingBlockTotals(
+                  shapeReadPayload("upcoming", items, full, c.refPromoter()),
+                  upcomingTotals,
+                ),
                 truncation,
               );
             }

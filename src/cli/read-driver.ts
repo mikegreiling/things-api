@@ -26,6 +26,7 @@ import {
   shapeReadPayload,
   withTodayBucketTotals,
   withAreaBucketTotals,
+  withUpcomingBlockTotals,
   ReferenceResolutionError,
   schemaWarnings,
   ThingsDbNotFoundError,
@@ -34,6 +35,7 @@ import {
   type ThingsClient,
   type TodayBucketTotals,
   type AreaBucketTotals,
+  type UpcomingBlockTotals,
   type Truncation,
   type ViewFilterMeta,
 } from "../index.ts";
@@ -44,7 +46,6 @@ import {
  */
 const ITEMS_WRAPPER_KINDS: ReadonlySet<string> = new Set([
   "inbox",
-  "upcoming",
   "logbook",
   "trash",
   "changes",
@@ -57,13 +58,15 @@ const ITEMS_WRAPPER_KINDS: ReadonlySet<string> = new Set([
 /**
  * Shape a read payload into its envelope `data` object (the 1.0 contract, R1/R2):
  * `data` is always an object. Flat lists become `{ items }`; the sectioned
- * catalogues (anytime/someday) become `{ sections }`; `today` becomes
- * `{ children: { today: {items, total?}, evening: {items, total?} } }` — the two
- * keyed bucket records (read-shape v2 R1/R2; `data` here is the already-shaped
- * children object, `todayTotals` supplies each bucket's inline `total`); the
- * composite cards become `{ view }`; a single-entity detail becomes `{ item }`.
- * Everything already object-shaped (open/snapshot/…) passes through. The
- * human-render path keeps the raw inner payload — this transform is the JSON
+ * catalogues (anytime/someday, and global `upcoming`) become `{ sections }` — for
+ * `upcoming` the sections are day blocks `{ when, items, total? }` and
+ * `upcomingTotals` supplies each capped block's inline `total` (R1, PR 4); `today`
+ * becomes `{ children: { today: {items, total?}, evening: {items, total?} } }` —
+ * the two keyed bucket records (read-shape v2 R1/R2; `data` here is the
+ * already-shaped children object, `todayTotals` supplies each bucket's inline
+ * `total`); the composite cards become `{ view }`; a single-entity detail becomes
+ * `{ item }`. Everything already object-shaped (open/snapshot/…) passes through.
+ * The human-render path keeps the raw inner payload — this transform is the JSON
  * emit boundary only. `today`'s whole-view `counts` aggregate rides `meta.counts`
  * (runRead), never `data`, so `data` stays pure domain rows.
  */
@@ -72,9 +75,16 @@ export function wrapEnvelopeData(
   data: unknown,
   todayTotals?: TodayBucketTotals,
   areaTotals?: AreaBucketTotals,
+  upcomingTotals?: UpcomingBlockTotals,
 ): unknown {
   if (ITEMS_WRAPPER_KINDS.has(kind)) return { items: data };
   if (kind === "anytime" || kind === "someday") return { sections: data };
+  if (kind === "upcoming") {
+    // Day blocks with each capped block's inline `total` (R1, no `blocks[]`).
+    return {
+      sections: upcomingTotals !== undefined ? withUpcomingBlockTotals(data, upcomingTotals) : data,
+    };
+  }
   if (kind === "today") {
     return { children: withTodayBucketTotals(data, todayTotals ?? { today: 0, evening: 0 }) };
   }
@@ -166,6 +176,12 @@ export interface PagedResult<T> {
    */
   areaTotals?: AreaBucketTotals;
   /**
+   * Pre-cap upcoming day-block sizes (global `upcoming` only) — supply each
+   * `data.sections` day block's inline `total` when {@link wrapEnvelopeData} builds
+   * the `upcoming` payload (R1, PR 4). Absent for every other view.
+   */
+  upcomingTotals?: UpcomingBlockTotals;
+  /**
    * Additional non-blocking advisories from the read itself (ADDITIVE), merged
    * with the schema-drift warnings into `meta.warnings` (and echoed once on
    * stderr for human output). Used by the `loose` pseudo-area reads to surface
@@ -222,6 +238,7 @@ export function runRead<T>(
       counts,
       todayTotals,
       areaTotals,
+      upcomingTotals,
       warnings: readWarnings,
       lines: precomputed,
     } = fn(client);
@@ -267,7 +284,7 @@ export function runRead<T>(
         client.refPromoter(),
       );
       process.stdout.write(
-        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals, areaTotals)), meta))}\n`,
+        `${JSON.stringify(okEnvelope(effectiveKind, omitEmpty(wrapEnvelopeData(effectiveKind, shaped, todayTotals, areaTotals, upcomingTotals)), meta))}\n`,
       );
     } else {
       const lines = precomputed ?? render(data);
