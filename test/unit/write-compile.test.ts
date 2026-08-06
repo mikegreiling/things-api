@@ -294,7 +294,7 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
 
   it("todo.set-dates: locale-proof AppleScript date construction, both fields", () => {
     const inv = COMMANDS["todo.set-dates"].compile(
-      { uuid: "ABC", completionDate: "2025-01-15", creationDate: "2024-06-01" },
+      { uuid: "ABC", completedAt: "2025-01-15", createdAt: "2024-06-01" },
       "applescript",
       emptyPreState(),
       { token: TOKEN },
@@ -313,7 +313,7 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
 
   it("project.set-dates: addresses the project row (kind-agnostic BACKDT law)", () => {
     const inv = COMMANDS["project.set-dates"].compile(
-      { uuid: "PRJ", completionDate: "2025-01-15" },
+      { uuid: "PRJ", completedAt: "2025-01-15" },
       "applescript",
       emptyPreState(),
       { token: TOKEN },

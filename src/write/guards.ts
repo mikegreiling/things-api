@@ -389,12 +389,12 @@ const GUARDS: Record<HazardId, GuardFn> = {
     // silently completing an OPEN item (cascade-stamping children at now) and
     // re-completing a CANCELED item (2→3, discarding the canceled status). Both
     // are refused; only an already-completed row is a clean rewrite. A
-    // creation-date-only write never trips this guard (completionDate ===
+    // creation-date-only write never trips this guard (completedAt ===
     // undefined) and is status-safe on any row. The multi-leg resolution
     // orchestrators route a canceled item through the certified flip legs to
     // completed BEFORE this op, so the guard passes at leg time.
     if (op !== "todo.set-dates" && op !== "project.set-dates") return null;
-    if (params["completionDate"] === undefined) return null;
+    if (params["completedAt"] === undefined) return null;
     const status = pre.target?.type !== "heading" ? (pre.target?.status ?? null) : null;
     if (status === "completed") return null;
     const noun = op === "project.set-dates" ? "project" : "to-do";

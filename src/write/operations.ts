@@ -301,9 +301,9 @@ export interface HeadingUnarchiveParams {
 export interface SetDatesParams {
   uuid: string;
   /** New completion timestamp (ISO date or datetime); requires a completed row. */
-  completionDate?: string;
+  completedAt?: string;
   /** New creation timestamp (ISO date or datetime); status-safe on any row. */
-  creationDate?: string;
+  createdAt?: string;
 }
 
 export interface TodoMoveParams {

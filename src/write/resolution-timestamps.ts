@@ -233,11 +233,11 @@ function cancelLeg(kind: ResolutionKind, uuid: string, children: CancelChildren)
 function setDatesLeg(
   kind: ResolutionKind,
   uuid: string,
-  dates: { completionDate?: string; creationDate?: string },
+  dates: { completedAt?: string; createdAt?: string },
 ): Leg {
   const parts = [
-    ...(dates.completionDate !== undefined ? [`completion=${dates.completionDate}`] : []),
-    ...(dates.creationDate !== undefined ? [`creation=${dates.creationDate}`] : []),
+    ...(dates.completedAt !== undefined ? [`completion=${dates.completedAt}`] : []),
+    ...(dates.createdAt !== undefined ? [`creation=${dates.createdAt}`] : []),
   ];
   return {
     op: setDatesOp(kind),
@@ -298,7 +298,7 @@ export async function runCompleteWithDate(
   const status = statusOf(deps, uuid);
   const legs: Leg[] = [];
   if (status !== "completed") legs.push(completeLeg(kind, uuid, children));
-  legs.push(setDatesLeg(kind, uuid, { completionDate: args.completedAt }));
+  legs.push(setDatesLeg(kind, uuid, { completedAt: args.completedAt }));
   const delta = stopDelta(uuid, "completed", resolutionDeltaDate(args.completedAt, options.zone));
   return runComposite(deps, completeOp(kind), uuid, legs, delta, options);
 }
@@ -332,7 +332,7 @@ export async function runCancelWithDate(
     }
     legs.push(completeLeg(kind, uuid, "require-resolved"));
   }
-  legs.push(setDatesLeg(kind, uuid, { completionDate: args.completedAt }));
+  legs.push(setDatesLeg(kind, uuid, { completedAt: args.completedAt }));
   legs.push(cancelLeg(kind, uuid, "require-resolved"));
   const delta = stopDelta(uuid, "canceled", resolutionDeltaDate(args.completedAt, options.zone));
   return runComposite(deps, cancelOp(kind), uuid, legs, delta, options);
@@ -358,7 +358,7 @@ export async function runUpdateDates(
 
   if (args.completedAt === undefined) {
     // created-at only: status-safe single set-dates leg (own undo).
-    return exec(deps, setDatesOp(kind), { uuid, creationDate: args.createdAt }, options);
+    return exec(deps, setDatesOp(kind), { uuid, createdAt: args.createdAt }, options);
   }
 
   if (status === "open") {
@@ -377,8 +377,8 @@ export async function runUpdateDates(
   }
 
   const dates = {
-    completionDate: args.completedAt,
-    ...(args.createdAt !== undefined && { creationDate: args.createdAt }),
+    completedAt: args.completedAt,
+    ...(args.createdAt !== undefined && { createdAt: args.createdAt }),
   };
 
   if (status === "completed") {
