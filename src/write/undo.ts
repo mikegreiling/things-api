@@ -1163,9 +1163,9 @@ export function planUndo(
       // Only restore the completion date onto a row that is STILL completed —
       // the generalized WG-7 guard would refuse (and re-completing is wrong)
       // otherwise. A creation-date restore is status-safe.
-      if (typeof stoppedPre === "string") patch["completionDate"] = stoppedPre;
-      if (typeof createdPre === "string") patch["creationDate"] = createdPre;
-      if (patch["completionDate"] === undefined && patch["creationDate"] === undefined) {
+      if (typeof stoppedPre === "string") patch["completedAt"] = stoppedPre;
+      if (typeof createdPre === "string") patch["createdAt"] = createdPre;
+      if (patch["completedAt"] === undefined && patch["createdAt"] === undefined) {
         return irreversible("the pre-op timestamps were not captured");
       }
       notes.push(

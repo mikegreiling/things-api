@@ -1725,8 +1725,8 @@ function setDatesSpec<K extends "todo.set-dates" | "project.set-dates">(
     op,
     hazards: ["H-UNKNOWN-DESTINATION", "H-BACKDATE-OPEN"],
     preRead(db, params) {
-      if (params.completionDate === undefined && params.creationDate === undefined) {
-        throw new RangeError("nothing to set: give completionDate and/or creationDate");
+      if (params.completedAt === undefined && params.createdAt === undefined) {
+        throw new RangeError("nothing to set: give completedAt and/or createdAt");
       }
       const pre = emptyPreState();
       pre.target = loadTarget(db, params.uuid);
@@ -1734,16 +1734,16 @@ function setDatesSpec<K extends "todo.set-dates" | "project.set-dates">(
     },
     expectedDelta(_pre, params, ctx) {
       const assert: FieldAssertion[] = [];
-      if (params.completionDate !== undefined) {
+      if (params.completedAt !== undefined) {
         assert.push({
           field: "stoppedDate",
-          equals: hostLocalDate(resolveResolutionInstant(params.completionDate, ctx.zone)),
+          equals: hostLocalDate(resolveResolutionInstant(params.completedAt, ctx.zone)),
         });
       }
-      if (params.creationDate !== undefined) {
+      if (params.createdAt !== undefined) {
         assert.push({
           field: "createdDate",
-          equals: hostLocalDate(resolveResolutionInstant(params.creationDate, ctx.zone)),
+          equals: hostLocalDate(resolveResolutionInstant(params.createdAt, ctx.zone)),
         });
       }
       return { mode: "update", uuid: params.uuid, assert };
@@ -1751,20 +1751,20 @@ function setDatesSpec<K extends "todo.set-dates" | "project.set-dates">(
     compile(params, vector, _pre, ctx) {
       if (vector !== "applescript") unsupportedVector(this.op, vector);
       const statements: string[] = [];
-      if (params.completionDate !== undefined) {
+      if (params.completedAt !== undefined) {
         statements.push(
           ...asDateBlockFromInstant(
             "compDate",
-            resolveResolutionInstant(params.completionDate, ctx.zone),
+            resolveResolutionInstant(params.completedAt, ctx.zone),
           ),
           `set completion date of ${addressor} id ${q(params.uuid)} to compDate`,
         );
       }
-      if (params.creationDate !== undefined) {
+      if (params.createdAt !== undefined) {
         statements.push(
           ...asDateBlockFromInstant(
             "createDate",
-            resolveResolutionInstant(params.creationDate, ctx.zone),
+            resolveResolutionInstant(params.createdAt, ctx.zone),
           ),
           `set creation date of ${addressor} id ${q(params.uuid)} to createDate`,
         );

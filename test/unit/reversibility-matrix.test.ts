@@ -1005,7 +1005,7 @@ const CASES: Record<OperationKind, CaseDef> = {
           auditRecord({
             op: "todo.set-dates",
             uuid,
-            requested: { completionDate: "2026-06-01" },
+            requested: { completedAt: "2026-06-01" },
             pre: { stoppedDate: "2026-05-15" },
           }),
         ]);
@@ -1040,7 +1040,7 @@ const CASES: Record<OperationKind, CaseDef> = {
           auditRecord({
             op: "project.set-dates",
             uuid,
-            requested: { completionDate: "2026-06-01" },
+            requested: { completedAt: "2026-06-01" },
             pre: { stoppedDate: "2026-05-15" },
           }),
         ]);

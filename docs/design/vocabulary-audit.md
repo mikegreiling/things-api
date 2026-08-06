@@ -1,6 +1,6 @@
 # The one-vocabulary layer-collapse audit
 
-Status: **EXECUTED (Batches 1–2), 2026-08-05 (PR #423).** Batch 1 (R-1 day-block `date`→`when` in `shape.ts` + R-1b `IsoDateGroup<T>.date`→`when`) and Batch 2 (the `derived` substrate bag per Option B + the wire-key-inventory lock test) SHIPPED. `src/read/shape.ts` now performs no vocabulary translation, and the seven entity substrate fields live in the nested `TaskCommon.derived` bag (`start`/`logged`/`trashed`/`todaySection`/`today`/`evening`/`reminderLive`); `startDate` stays flat; `entityStage`/`entityWhen`/`entityProvisional` are the exported entity-level derivation helpers. `todaySection` was MOVED into `derived` (not deleted): the write-verify schedule delta still depends on it, so the audit's deletion caveat did not clear. **Batch 3 (R-3, the write-timestamp `createdAt`/`creationDate` unification) remains PENDING a maintainer ruling** — it is a write-input-surface CLI/MCP break, separate from the read-projection collapse. This document remains the classification of record for [docs/up-next.md](../up-next.md) §7 item 1.
+Status: **EXECUTED (Batches 1–3), 2026-08-05 (Batches 1–2 PR #423; Batch 3 PR #<PR>).** Batch 1 (R-1 day-block `date`→`when` in `shape.ts` + R-1b `IsoDateGroup<T>.date`→`when`) and Batch 2 (the `derived` substrate bag per Option B + the wire-key-inventory lock test) SHIPPED. `src/read/shape.ts` now performs no vocabulary translation, and the seven entity substrate fields live in the nested `TaskCommon.derived` bag (`start`/`logged`/`trashed`/`todaySection`/`today`/`evening`/`reminderLive`); `startDate` stays flat; `entityStage`/`entityWhen`/`entityProvisional` are the exported entity-level derivation helpers. `todaySection` was MOVED into `derived` (not deleted): the write-verify schedule delta still depends on it, so the audit's deletion caveat did not clear. **Batch 3 (R-3) SHIPPED, MAINTAINER-APPROVED 2026-08-05:** the `set-dates` op params `creationDate`/`completionDate` were renamed to `createdAt`/`completedAt`, unifying the write input surface on ONE spelling per concept (the add-path already used `createdAt`/`completedAt`). CLI/MCP wire unchanged (they were already `--created-at`/`--completed-at` and `created_at`/`completed_at`); reads keep `created`/`stopped` (distinct concept-role); the DB column `creationDate` is untouched. This document remains the classification of record for [docs/up-next.md](../up-next.md) §7 item 1.
 
 **The maintainer's principle** (the ruling this audit serves): *one name per concept, normalized at the DB boundary; downstream layers may only DROP, GROUP, or PROMOTE — never RENAME.* The success end-state: `src/read/shape.ts` selects / drops / promotes / presence-keys attributes, but performs no vocabulary TRANSLATION (no `internalName → wireName` renaming at the emit boundary).
 
@@ -75,7 +75,7 @@ Every consumer-facing key, its internal representation(s), and its classificatio
 | `--area` / `--tag` (read filters) | wire `area` / `tags` | SAME | |
 | `--when` (write scheduling input) | `WhenValue` → app When control | SAME-name, DISTINCT concept | The write `--when` is the INPUT control (accepts `someday`); the read `when` is the DERIVED time-position (no `someday`). Documented read/write asymmetry (contract.md glossary). They share one word for two related-but-distinct concepts — ratified, NOT a rename to resolve. |
 | `--deadline` / `--reminder` / `--notes` / `--tag` (write) | op params `deadline` / `reminder` / `notes` / `tags` | SAME | |
-| `--created-at` / `--completed-at` (add) vs set-dates `creationDate` / `completionDate` | `TodoAddParams.createdAt`/`completedAt` vs `SetDatesParams.creationDate`/`completionDate` | **RENAME (adjacent)** | Same concepts (creation/completion timestamp) spelled TWO ways across the write surface, and a third way on reads (`created`/`stopped`). See §2 R-3 — a write-surface cross-consistency issue, adjacent to §7.1's read-projection core. |
+| `--created-at` / `--completed-at` (add + set-dates) | `TodoAddParams.createdAt`/`completedAt` AND `SetDatesParams.createdAt`/`completedAt` | RESOLVED (Batch 3) | Formerly spelled two ways (`createdAt`/`completedAt` on add vs `creationDate`/`completionDate` on set-dates); unified to `createdAt`/`completedAt` throughout (R-3, 2026-08-05). Reads keep `created`/`stopped` (distinct concept-role). |
 
 ### 1e. Write-side param names (operations.ts) vs entity/wire vocabulary
 
@@ -83,9 +83,8 @@ Every consumer-facing key, its internal representation(s), and its classificatio
 |---|---|---|---|---|
 | `title` / `notes` / `deadline` / `reminder` / `tags` / `project` / `area` / `heading` | same fields | `title`/`notes`/`deadline`/`reminder`/`tags`/`project`/`area`/`heading` | SAME | Write inputs already share the consumer vocabulary. |
 | `when` (`WhenValue`) | scheduling input | read `when` (derived) | SAME-name, DISTINCT concept | See §1d. |
-| `createdAt` (`TodoAddParams`/`ProjectAddParams`) | creation timestamp | read `created`; DB `creationDate` | RENAME (adjacent) | See R-3. |
-| `completedAt` (add) | completion timestamp | read `stopped`; DB `stopDate` | RENAME (adjacent) | See R-3. |
-| `creationDate` / `completionDate` (`SetDatesParams`) | creation / completion timestamp | read `created` / `stopped` | RENAME (adjacent) | See R-3 — and inconsistent with the add-path `createdAt`/`completedAt` for the SAME concept. |
+| `createdAt` (`TodoAddParams`/`ProjectAddParams`/`SetDatesParams`) | creation timestamp | read `created`; DB `creationDate` | RESOLVED (Batch 3) | Unified across add + set-dates (R-3, 2026-08-05). |
+| `completedAt` (add + set-dates) | completion timestamp | read `stopped`; DB `stopDate` | RESOLVED (Batch 3) | Unified across add + set-dates (R-3, 2026-08-05). |
 
 ### 1f. Entity-level SUBSTRATE (internal, stripped at emission) — segregation flag
 
@@ -124,12 +123,14 @@ These live on `TaskCommon` / subtypes, INTERMIXED with the consumer-facing field
 - **Risk:** LOW-MEDIUM — mechanical but touches render + two view builders + tests. NOT required for the `shape.ts`-no-translation criterion (this structure never reaches the wire; the wire re-buckets from flat `Todo[]`). Purely a "one name per concept" consistency win.
 - **Trade-off:** couples a generically-named helper (`IsoDateGroup`) to the Things time-axis word `when`. Acceptable because `IsoDateGroup` is used ONLY for scheduled/upcoming day-groups (all time-axis). Optional; can be deferred without blocking R-1.
 
-### R-3 — write timestamp param vocabulary (`createdAt`/`completedAt` vs `creationDate`/`completionDate`) — ADJACENT, needs a ruling
+### R-3 — write timestamp param vocabulary (`createdAt`/`completedAt` vs `creationDate`/`completionDate`) — EXECUTED 2026-08-05 (Batch 3)
 
 - **What:** the "creation timestamp" concept is spelled `createdAt` (add), `creationDate` (set-dates), `created` (read wire), `creationDate` (DB). "Completion timestamp": `completedAt` (add), `completionDate` (set-dates), `stopped` (read wire), `stopDate` (DB). The two WRITE spellings for the SAME concept (`createdAt` vs `creationDate`) are a one-name-per-concept violation on the input surface.
 - **This is NOT the same kind of debt as §7.1's core.** §7.1 targets the INTERNAL projection layers (entity → wire). R-3 is a consumer-vs-consumer inconsistency on the write input surface, with no internal-vs-consumer divergence to collapse (both compile to the same AppleScript / `things:///json` writes). It is recorded here for completeness and because the brief asked the write params be traced — but it is a SEPARATE CLI-vocabulary decision, not a `shape.ts` cleanup.
-- **Recommendation:** pick ONE consumer spelling per concept. `createdAt` / `completedAt` (instant-style, matches the ISO-datetime values they accept and reads naturally as `--created-at`) is the better pick; align `SetDatesParams` to it. Defer to Mike as a ratified vocabulary ruling, and if taken, batch it with any other write-grammar change rather than the read-projection work.
-- **Risk:** LOW mechanically (rename params + CLI flags + tests), but it is a CLI/MCP surface break, so it wants an explicit ruling rather than being folded silently into the projection collapse.
+- **Recommendation (TAKEN):** pick ONE consumer spelling per concept. `createdAt` / `completedAt` (instant-style, matches the ISO-datetime values they accept and reads naturally as `--created-at`) was the pick; `SetDatesParams` was aligned to it. Maintainer-approved 2026-08-05.
+- **What shipped:** `SetDatesParams.creationDate`→`createdAt`, `completionDate`→`completedAt` throughout the write surface — the op-param type (`operations.ts`), the compile spec + guard message (`commands.ts` `setDatesSpec`), the `H-BACKDATE-OPEN` guard's `params["completedAt"]` presence check (`guards.ts`), the resolution orchestrators' `setDatesLeg` + its callers (`resolution-timestamps.ts`), and the undo replay patch keys (`undo.ts`). NOT touched: the CLI flags (`--created-at`/`--completed-at`) and the client resolution surface (`ResolutionDates.createdAt`/`completedAt`) — already this spelling; the MCP params (`created_at`/`completed_at`) — already this spelling and mapping to `createdAt`/`completedAt`, so the MCP wire is byte-stable; the DB column `creationDate` and the delta assertion field names (`stoppedDate`/`createdDate`) — different layers; the AppleScript app-property names (`set creation date`/`set completion date`).
+- **Audit-record implication (ALPHA):** the op params surface in audit records only under `requested`. `set-dates` undo reconstructs the inverse from the captured pre-state DELTA fields (`stoppedDate`/`createdDate`), NOT from `requested`, so pre-rename `set-dates` records stay fully undoable — no readers/shims added.
+- **Risk:** LOW mechanically (rename params + tests). Wire-stable on CLI + MCP; a programmatic-API-only op-param break (ALPHA — no compat machinery).
 
 ### Non-renames confirmed by the audit (honesty rules)
 
@@ -157,9 +158,9 @@ Three PRs, ordered. Batch 1 is the direct success-criterion work; Batch 2 is the
 - This is the larger PR (churns the mappers, `stage.ts` derivation inputs, `shape.ts` reads, `render.ts`, and the write-verify schedule delta) but it is mechanical and one-time (ALPHA-CONTRACT permits the entity-shape break).
 - Consider folding the `todaySection` DELETION into this PR (it is redundant with the `evening` marker + raw `startBucket`; verify the write-verify delta can read `evening` + `startBucket` instead before removing it).
 
-### Batch 3 — write timestamp vocabulary unification (adjacent; needs Mike's ruling)
+### Batch 3 — write timestamp vocabulary unification — EXECUTED 2026-08-05
 
-- R-3. Do NOT bundle into Batch 1/2 — it is a write-input-surface CLI/MCP break that wants an explicit vocabulary ruling, separate from the read-projection collapse. Land only if/when Mike rules on the target spelling.
+- R-3. Maintainer-approved and shipped: `SetDatesParams` op params `creationDate`/`completionDate` → `createdAt`/`completedAt`, unifying the write input surface. Kept separate from Batches 1/2 (a write-input-surface break, not a read-projection collapse); CLI + MCP wire byte-stable (they were already this spelling).
 
 ### The substrate-segregation proposal (Batch 2 detail)
 
