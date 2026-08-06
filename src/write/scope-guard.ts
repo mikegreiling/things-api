@@ -74,6 +74,10 @@ export function evaluateScope(
       return blocked(
         "emptying the Trash permanently deletes every trashed item library-wide, including ones outside the active scope",
       );
+    case "log-now":
+      return blocked(
+        "logging moves every completed item library-wide into the Logbook, including ones outside the active scope",
+      );
     case "tag.update":
       return blocked(
         "renaming or re-nesting a tag changes shared state visible to every tagged item across the whole library",

@@ -164,6 +164,12 @@ export interface PreState {
   headingMoveToProject: HeadingMoveToProjectTaxonomy | null;
   /** project.dissolve-heading: parent reveal + heading title + children (DISS1). */
   headingDissolve: HeadingDissolveTaxonomy | null;
+  /**
+   * log-now: the resolved-but-unlogged census the `log completed now` verb will
+   * move (`pending`) and the pre-op `TMSettings.manualLogDate` (epoch seconds) the
+   * delta compares against. Null for every other op.
+   */
+  logNow: { pending: number; manualLogDatePre: number | null } | null;
 }
 
 /** project.move-heading pre-computation (spec §2/§4). */
@@ -265,6 +271,7 @@ export function emptyPreState(): PreState {
     headingMove: null,
     headingMoveToProject: null,
     headingDissolve: null,
+    logNow: null,
   };
 }
 

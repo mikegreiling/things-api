@@ -38,7 +38,7 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
   },
   {
     title: "Write — create and change items",
-    commands: ["todo", "project", "area", "tag", "batch", "undo", "reorder"],
+    commands: ["todo", "project", "area", "tag", "batch", "undo", "reorder", "log-now"],
   },
   {
     title: "Setup & diagnostics",
@@ -88,6 +88,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
     args: "<refs…>",
     desc: "rearrange items in place; --in for a dual-axis set",
   },
+  "log-now": { args: "", desc: "move completed items to the Logbook now" },
   // Setup & diagnostics
   config: { args: "<verb>", desc: "show, get, or set configuration keys" },
   doctor: { args: "", desc: "check environment health and pending setup" },

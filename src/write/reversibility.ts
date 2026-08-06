@@ -269,6 +269,12 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "reversible",
     note: "inverse pauses the project's repeat (UIC2-a): resume clears the paused flag, pause re-sets it",
   },
+
+  // ---- irreversible: the log-move boundary only advances ------------------
+  "log-now": {
+    class: "irreversible",
+    note: "logging moves completed items into the Logbook by advancing the log-move boundary (TMSettings.manualLogDate); no official surface can rewind it (TIMEZ/settings-stamp laws), so there is no inverse. Nothing is deleted — the items simply become logged",
+  },
 };
 
 /** The ops whose class is `irreversible` — must equal undo.ts's IRREVERSIBLE keys. */

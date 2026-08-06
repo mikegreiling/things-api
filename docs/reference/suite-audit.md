@@ -10,6 +10,8 @@ Part of the hardening pass (roadmap §G → §F): when a new Things version drop
 
 The e2e also exercises the non-op verbs: doctor, batch, changes, undo, config.
 
+**`log-now` (added 2026-08-06)** — the `log completed now` global verb. Covered in the local tier (a compile golden asserting the AppleScript payload, `test/unit/write-compile.test.ts`; the pipeline no-op / boundary-advance / verify-failed paths, `test/engine/write-pipeline.test.ts`; a CLI + MCP smoke, `test/cli/e2e.test.ts` / `test/mcp/server.test.ts`) and the reversibility-matrix (irreversible row). Not in the VM guest e2e: it stamps the `TMSettings` singleton (no task-row delta), so its live check is a `manualLogDate`-advance re-read rather than a seeded-item round-trip — a candidate for a future suite row if a golden-clone with `logInterval=Manually` is banked. Law: LOGNOW/A28/plog1 (advances only when pending completions exist; mutates zero task rows).
+
 ## Former gaps — CLOSED 2026-07-09 (all 34/34 op kinds now e2e-covered)
 
 Seven op kinds had no recurring autonomous coverage: `todo.cancel`, `todo.backdate`, `todo.add-logged`, `project.set-tags`, `project.rename-heading`, `project.archive-heading`, `project.unarchive-heading`. All seven got e2e steps in the same change as this audit (heading fixtures were already seeded via the §C json path). Final run: **GREEN, 118 steps, 0 failures** (`things-run-e2e-20260709-181620`).

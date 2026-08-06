@@ -332,6 +332,10 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "area.delete": "areas are deleted permanently — there is nothing to restore (A25)",
   "tag.delete": "tags are deleted permanently — assignments already cascaded (A26)",
   "trash.empty": "emptying the Trash hard-deletes every row — nothing to restore (A27)",
+  "log-now":
+    "logging advances the log-move boundary (manualLogDate) to move completed items into the " +
+    "Logbook; no official surface can rewind the boundary (TIMEZ/settings-stamp), so there is " +
+    "no inverse — nothing is deleted, the items are simply logged",
   "project.add-heading":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",

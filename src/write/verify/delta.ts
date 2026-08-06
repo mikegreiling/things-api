@@ -180,6 +180,17 @@ export type DeltaSpec =
     }
   | { mode: "trash-emptied" }
   /**
+   * `log-now` (AppleScript `log completed now`): moves resolved-but-unlogged items
+   * into the Logbook by advancing `TMSettings.manualLogDate`. Verified as a delta
+   * on the singleton — NOT on task rows (the log-move sweep mutates zero rows,
+   * plog1/A28/LOGNOW). `pending` is the pre-op count of resolvable items (the
+   * result's disclosed "how many logged"); `manualLogDatePre` the pre-op stamp.
+   * When `pending > 0` the stamp must advance; when `pending == 0` it is a clean
+   * no-op (satisfied unconditionally — the verb advances only when there is
+   * something to log).
+   */
+  | { mode: "logged-now"; pending: number; manualLogDatePre: number | null }
+  /**
    * Ordering: the given uuids must read back in strictly ascending rank on
    * the named key (todayIndex for Today/Evening scopes, index elsewhere;
    * area-index reads TMArea."index" — sidebar area order).
@@ -249,6 +260,8 @@ export interface VerifyReader {
   tagsByTitle(title: string): { uuid: string; parent: string | null }[];
   rankOf(uuid: string, key: "index" | "todayIndex" | "area-index"): number | null;
   trashedCount(): number;
+  /** The current `TMSettings.manualLogDate` (epoch seconds), or null — the `log-now` verify oracle. */
+  manualLogDate(): number | null;
   findCreated(probe: CreateProbe): AnyTask[];
   /**
    * Non-trashed rows of the given DB type (0=to-do, 1=project, 2=heading)
@@ -319,6 +332,12 @@ export function createDbReader(
         n: number;
       };
       return row.n;
+    },
+    manualLogDate() {
+      const row = db.prepare("SELECT manualLogDate FROM TMSettings").get() as
+        | { manualLogDate: number | null }
+        | undefined;
+      return row?.manualLogDate ?? null;
     },
     findCreated(probe) {
       const excluded = new Set(probe.excludeUuids ?? []);
@@ -878,6 +897,21 @@ export function evaluateDelta(
         movement: hadTrash ? remaining < (pre.trashedCount ?? 0) : true,
         assertedMovement: remaining !== (pre.trashedCount ?? remaining),
         observed: { trashedCount: remaining },
+      };
+    }
+    case "logged-now": {
+      const current = reader.manualLogDate();
+      const advanced =
+        current !== null && (spec.manualLogDatePre === null || current > spec.manualLogDatePre);
+      // pending>0: the boundary MUST advance (manualLogDate stamped ~the completion
+      // instant). pending==0: a clean no-op — `log completed now` advances only when
+      // there are pending completions, so an unchanged stamp is the correct outcome.
+      const satisfied = spec.pending > 0 ? advanced : true;
+      return {
+        satisfied,
+        movement: advanced,
+        assertedMovement: advanced,
+        observed: { logged: spec.pending, manualLogDate: current },
       };
     }
     default: {

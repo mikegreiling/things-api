@@ -9,6 +9,8 @@
  * - `data` is command-specific; `error` is present exactly when `ok` is false.
  */
 
+import type { LogState } from "./read/log-boundary.ts";
+
 export const API_VERSION = 1;
 
 /**
@@ -157,6 +159,16 @@ export interface EnvelopeMeta {
    * domain rows. Both counts are OPEN members only, and a `0` is meaningful.
    */
   counts?: { dueOrOverdue: number; other: number };
+  /**
+   * The Logbook's log-move cadence fact (ADDITIVE). Present ONLY on the `logbook`
+   * view: the "Move completed items to Logbook" setting in Cultured Code's own
+   * words (`cadence` ∈ Immediately | Daily | Manually) plus — under Manually only
+   * — `lastLoggedAt`, the ISO-8601 instant of the last explicit log. A whole-view
+   * fact an agent would otherwise have no way to read; it lives here so `data`
+   * stays pure logged rows (the `meta.counts` precedent). Absent for every other
+   * view.
+   */
+  logging?: LogState;
   /**
    * The active container scope this response was jailed to (ADDITIVE). Present
    * ONLY when a scope is in force (the MCP `--scope` flag / `THINGS_API_SCOPE` /

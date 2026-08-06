@@ -2329,6 +2329,37 @@ export function registerWriteCommands(program: Command): void {
     );
   });
 
+  addWriteFlags(
+    program
+      .command("log-now")
+      .description(
+        "Move completed items to the Logbook now. Reports how many items were moved; when none " +
+          "are waiting it logs nothing (a clean no-op, not an error). This cannot be undone.",
+      ),
+  ).action(async (opts: WriteFlagOpts) => {
+    await runWrite(
+      opts,
+      (c) => c.write.logNow(writeOptionsFrom(opts)),
+      (result, o, m) => {
+        // Human path discloses the count inline; --json carries it on
+        // `observed.logged`. Everything else defers to the shared emitter.
+        if (result.kind === "ok" && o.json !== true) {
+          for (const warning of result.warnings ?? []) {
+            process.stderr.write(`warning: ${warning}\n`);
+          }
+          const logged = (result.observed as { logged?: number } | null)?.logged ?? 0;
+          process.stdout.write(
+            `ok log-now (logged ${logged} item${logged === 1 ? "" : "s"}, ` +
+              `vector=${result.vector}, tier=${result.tier}, verified)\n`,
+          );
+          process.exitCode = ExitCode.Ok;
+          return;
+        }
+        emitResult(result, o, m);
+      },
+    );
+  });
+
   program
     .command("batch [file]")
     .description(

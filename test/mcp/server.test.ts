@@ -169,6 +169,22 @@ function countsOf(result: unknown): { dueOrOverdue: number; other: number } | un
   return undefined;
 }
 
+/** The logbook view's `logging` cadence fact from the result's metadata block, if any. */
+function loggingOf(result: unknown): { cadence: string; lastLoggedAt?: string } | undefined {
+  const content = (result as { content: { text: string }[] }).content;
+  for (const block of content) {
+    try {
+      const parsed = JSON.parse(block.text) as {
+        logging?: { cadence: string; lastLoggedAt?: string };
+      };
+      if (parsed.logging !== undefined) return parsed.logging;
+    } catch {
+      // non-JSON block: skip
+    }
+  }
+  return undefined;
+}
+
 /** The meta.filter block appended to a read result, if any. */
 function filterOf(result: unknown): { area: { uuid: string; title: string } } | undefined {
   const content = (result as { content: { text: string }[] }).content;
@@ -269,6 +285,8 @@ const EXPECTED_TOOLS = [
   "add_area",
   // tags
   "add_tag",
+  // system
+  "log_now",
   // generic + discovery
   "run_operation",
   "batch",
@@ -299,6 +317,33 @@ describe("things MCP server", () => {
     // The whole-view counts ride the metadata block (the CLI meta.counts analog).
     expect(countsOf(result)).toEqual({ dueOrOverdue: 0, other: 1 });
     expect(result.isError ?? false).toBe(false);
+  });
+
+  it("read_view logbook carries the log-move cadence on the metadata block (meta.logging analog)", async () => {
+    const manual = Math.floor(NOW.getTime() / 1000) - 60;
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, ?)")
+      .run(manual);
+    seedTodo(fixture.db, { title: "MCP-logged", status: "completed", stopDate: manual - 3600 });
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({ name: "read_view", arguments: { view: "logbook" } });
+    const logging = loggingOf(result);
+    expect(logging?.cadence).toBe("Manually");
+    expect(typeof logging?.lastLoggedAt).toBe("string");
+    const items = textOf(result) as { title: string }[];
+    expect(items.map((i) => i.title)).toContain("MCP-logged");
+    expect(result.isError ?? false).toBe(false);
+  });
+
+  it("log_now moves nothing under the default Immediately cadence and reports logged: 0", async () => {
+    seedTodo(fixture.db, { title: "already-logged", status: "completed", stopDate: 1_700_000_000 });
+    await connect([fakeVector(null, { id: "applescript", ops: ["log-now"] }).vector]);
+    const result = await client.callTool({ name: "log_now", arguments: {} });
+    expect(result.isError ?? false).toBe(false);
+    const wire = textOf(result) as { op: string; observed: { logged: number }; undoToken?: string };
+    expect(wire.op).toBe("log-now");
+    expect(wire.observed.logged).toBe(0);
+    expect(wire.undoToken).toBeUndefined(); // irreversible
   });
 
   it("read_view upcoming returns day-block sections (when-keyed), rows keep stage and drop the block's when (v2 PR 4)", async () => {

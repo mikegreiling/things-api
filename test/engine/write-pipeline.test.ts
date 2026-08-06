@@ -326,6 +326,60 @@ describe("verification failure classification", () => {
   });
 });
 
+describe("log-now (log completed now)", () => {
+  const LOGNOW_MATRIX: VectorMatrix = {
+    "log-now": { support: "yes", disruption: 0, validation: "validated" },
+  };
+
+  it("no-op under the default Immediately cadence: ok, logged 0, no undo token", async () => {
+    // No TMSettings row → logInterval defaults to Immediately (boundary = now),
+    // so a past completion is already logged and nothing is pending.
+    seedTodo(fixture.db, { title: "Done", status: "completed", stopDate: NOW_EPOCH - 3600 });
+    const { vector, calls } = fakeVector(null, LOGNOW_MATRIX, "applescript");
+    const result = await runMutation(deps(vector), "log-now", {});
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.observed).toMatchObject({ logged: 0 });
+      expect(result.undoToken).toBeUndefined(); // irreversible — no token emitted
+    }
+    // The AS verb still runs — the app itself decides there is nothing to log.
+    expect(calls).toEqual(['tell application "Things3" to log completed now']);
+  });
+
+  it("Manually + a pending completion: advances the boundary and discloses the count", async () => {
+    const t0 = NOW_EPOCH - 86400; // the boundary sits yesterday
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, ?)")
+      .run(t0);
+    // Completed AFTER the boundary → resolved-but-unlogged (pending = 1).
+    seedTodo(fixture.db, { title: "Fresh done", status: "completed", stopDate: NOW_EPOCH - 3600 });
+    // The verb advances manualLogDate to ~now, moving the pending completion in.
+    const { vector } = fakeVector(
+      (db) => db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH),
+      LOGNOW_MATRIX,
+      "applescript",
+    );
+    const result = await runMutation(deps(vector), "log-now", {});
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.observed).toMatchObject({ logged: 1, manualLogDate: NOW_EPOCH });
+    }
+  });
+
+  it("Manually + pending, but the boundary never advances: verify-failed (no silent success)", async () => {
+    const t0 = NOW_EPOCH - 86400;
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, ?)")
+      .run(t0);
+    seedTodo(fixture.db, { title: "Pending", status: "completed", stopDate: NOW_EPOCH - 3600 });
+    // The transport is clean but the boundary stamp does not move — pending>0
+    // requires the advance, so verify must fail rather than report a false ok.
+    const { vector } = fakeVector(null, LOGNOW_MATRIX, "applescript");
+    const result = await runMutation(deps(vector), "log-now", {}, { verifyTimeoutMs: 250 });
+    expect(result.kind).toBe("verify-failed");
+  });
+});
+
 describe("blocked / unsupported paths", () => {
   it("hazard block: never executes, audited as blocked", async () => {
     const { vector, calls } = fakeVector(null);

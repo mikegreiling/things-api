@@ -58,6 +58,7 @@ export const OPERATION_KINDS = [
   "area.reorder",
   "project.make-repeating",
   "project.add-repeating",
+  "log-now",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -781,6 +782,7 @@ export interface OperationParamsMap {
   "area.reorder": AreaReorderParams;
   "project.make-repeating": RepeatRuleParams;
   "project.add-repeating": ProjectAddRepeatingParams;
+  "log-now": EmptyParams;
 }
 
 /** Explicit confirmations for operations with cascading or permanent effects (never defaulted). */
