@@ -494,9 +494,9 @@ interface Child extends Obj {
   todayIndex?: number;
 }
 
-/** An IsoDate group on the wire — `date` is a real string, or `null` for the resting-templates group. */
+/** An IsoDate group on the wire — `when` is a real string, or `null` for the resting-templates group. */
 interface WireDateGroup {
-  date: string | null;
+  when: string | null;
   items: unknown[];
 }
 
@@ -505,9 +505,9 @@ interface WireDateGroup {
  * into the R10 card shape by their derived {@link deriveStage} — so the bucket an
  * item lands in ALWAYS equals its `stage`:
  * - `anytime` — stage anytime, in encounter order;
- * - `upcoming` — stage upcoming, date-grouped `[{date, items}]` (a dated row under
+ * - `upcoming` — stage upcoming, day-grouped `[{when, items}]` (a dated row under
  *   its `startDate`, a template under its `nextOccurrence`), date ASC; date-LESS
- *   templates (after-completion / paused) form a trailing `{date: null, items}`
+ *   templates (after-completion / paused) form a trailing `{when: null, items}`
  *   group (explicit null per the `area: null` section precedent);
  * - `someday` — stage someday.
  * Items are already in view order (index / date+todayIndex) from the read layer,
@@ -566,12 +566,12 @@ function rebucketChildren(
   }
   const upcoming: WireDateGroup[] = datedOrder
     .toSorted((a, b) => a.localeCompare(b))
-    .map((date) => ({ date, items: datedByKey.get(date)! }));
-  if (restingTemplates.length > 0) upcoming.push({ date: null, items: restingTemplates });
+    .map((date) => ({ when: date, items: datedByKey.get(date)! }));
+  if (restingTemplates.length > 0) upcoming.push({ when: null, items: restingTemplates });
   return { anytime, upcoming, someday };
 }
 
-/** Flatten an internal IsoDateGroup[] (`[{date, items}]`) to its items, in order. */
+/** Flatten an internal IsoDateGroup[] (`[{when, items}]`) to its items, in order. */
 function flattenGroups(groups: unknown): unknown[] {
   if (!Array.isArray(groups)) return [];
   const out: unknown[] = [];
@@ -687,7 +687,7 @@ function stoppedMs(o: Obj): number {
  *   heading (HEADARC2-C anomaly) is NOT logged, so it rides `anytime` here — its
  *   presence in a live bucket under an `archived` heading node is self-evident.
  * `drop` carries the container's ancestry drops (body vs heading); the day-block
- * `when` renames the internal date group's `date` (rebucketChildren) — `null` for
+ * key is `when` end-to-end (`rebucketChildren` builds it — no rename) — `null` for
  * the resting block. No bucket is capped in the project view today, so every
  * `total` is absent (R1: an untruncated bucket never restates its length); the
  * `total?` argument keeps the record + day-block shape ready for PR 5's sweep and
@@ -710,8 +710,9 @@ function shapeContainerChildren(
   const logbook = shapeList(loggedSorted, drop, compact, promoter) as unknown[];
   return {
     anytime: bucketRecord(anytime),
-    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
-    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    // The day-block ARRAY (`{when, items}`, `when: null` the resting block #V8);
+    // `rebucketChildren` already keys each block by `when`.
+    upcoming,
     someday: bucketRecord(someday),
     logbook: bucketRecord(logbook),
   };
@@ -755,7 +756,7 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
  * key; the area logbook is the bounded query `things logbook --area <ref>`, #346).
  * The same stage-derived bucketing as {@link shapeContainerChildren} minus the
  * logbook split: `anytime`/`someday` are `{items, total?}` records, `upcoming` is
- * the day-block ARRAY (R3, `date` → `when`) with the trailing `{when: null, items}`
+ * the day-block ARRAY (R3, keyed by `when`) with the trailing `{when: null, items}`
  * resting block for date-less recurring templates (#V8). Inline `total` is stamped
  * downstream by {@link withAreaBucketTotals} (only `anytime` can be capped — the
  * `--area-limit` scope; the scheduled/someday direct to-dos always survive).
@@ -769,8 +770,9 @@ function shapeAreaChildren(
   const { anytime, upcoming, someday } = rebucketChildren(members, drop, compact, promoter);
   return {
     anytime: bucketRecord(anytime),
-    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
-    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    // The day-block ARRAY (`{when, items}`, `when: null` the resting block #V8);
+    // `rebucketChildren` already keys each block by `when`.
+    upcoming,
     someday: bucketRecord(someday),
   };
 }

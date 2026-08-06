@@ -679,7 +679,7 @@ describe("projectView", () => {
     expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
     expect(view.headings).toHaveLength(1);
     expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["headed-1"]);
-    expect(view.scheduled).toEqual([expect.objectContaining({ date: "2026-07-05" })]);
+    expect(view.scheduled).toEqual([expect.objectContaining({ when: "2026-07-05" })]);
     expect(view.scheduled[0]?.items).toHaveLength(2);
     expect(view.repeating.map((i) => i.title)).toEqual(["tpl"]);
     expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
@@ -724,7 +724,7 @@ describe("projectView", () => {
     expect(view.active.map((i) => i.title)).toEqual(["loose-active"]);
     expect(view.scheduled).toEqual([
       expect.objectContaining({
-        date: "2026-07-05",
+        when: "2026-07-05",
         items: [expect.objectContaining({ title: "loose-sched" })],
       }),
     ]);
@@ -738,7 +738,7 @@ describe("projectView", () => {
     expect(g.items.map((i) => i.title)).toEqual(["headed-active"]);
     expect(g.scheduled).toEqual([
       expect.objectContaining({
-        date: "2026-07-06",
+        when: "2026-07-06",
         items: [expect.objectContaining({ title: "headed-sched" })],
       }),
     ]);

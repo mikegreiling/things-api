@@ -229,7 +229,12 @@ export type AnyTask = Todo | Project | Heading;
 
 /** Items grouped under one ISO date (Upcoming days, project "later" groups). */
 export interface IsoDateGroup<T> {
-  date: string;
+  /**
+   * The ISO day the group sits under — named `when` to speak the same time-axis
+   * word the read wire and the `--in <when>` reorder token use (one name per
+   * concept; the render/view builders never translate it).
+   */
+  when: string;
   items: T[];
 }
 

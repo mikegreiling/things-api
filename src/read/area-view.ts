@@ -202,8 +202,8 @@ export function areaView(
     (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
   )) {
     const last = scheduled[scheduled.length - 1];
-    if (last && last.date === date) last.items.push(todo);
-    else scheduled.push({ date, items: [todo] });
+    if (last && last.when === date) last.items.push(todo);
+    else scheduled.push({ when: date, items: [todo] });
   }
 
   return { area, active, projects, scheduled, someday, repeating };

@@ -166,8 +166,8 @@ function groupByDate(rows: ScheduledRow[]): IsoDateGroup<Todo>[] {
     (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
   )) {
     const last = out[out.length - 1];
-    if (last && last.date === date) last.items.push(todo);
-    else out.push({ date, items: [todo] });
+    if (last && last.when === date) last.items.push(todo);
+    else out.push({ when: date, items: [todo] });
   }
   return out;
 }
