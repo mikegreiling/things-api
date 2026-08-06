@@ -711,14 +711,14 @@ export function classifyProjectRepeat(
   if (target === null || target.type !== "project") {
     return { kind: "refuse", refusal: "not-a-project", detail: "target is not a project" };
   }
-  if (target.trashed) {
+  if (target.derived.trashed) {
     return { kind: "refuse", refusal: "trashed", detail: "the project is in the Trash" };
   }
-  if (target.status !== "open" || target.logged) {
+  if (target.status !== "open" || target.derived.logged) {
     return {
       kind: "refuse",
       refusal: "logged",
-      detail: `the project is ${target.logged ? "logged" : target.status} — only an open project can be made repeating`,
+      detail: `the project is ${target.derived.logged ? "logged" : target.status} — only an open project can be made repeating`,
     };
   }
   if (target.repeating.isTemplate) {
@@ -741,7 +741,7 @@ export function classifyProjectRepeat(
     return { kind: "area", containerReveal: areaUuid, title };
   }
   // Area-less: someday renders a selectable row; anytime needs coercion first.
-  if (target.start === "someday") {
+  if (target.derived.start === "someday") {
     if (sameTitleRowCount(db, title, target.uuid, { somedayAreaLess: true }) > 0) {
       return {
         kind: "refuse",
@@ -751,7 +751,7 @@ export function classifyProjectRepeat(
     }
     return { kind: "someday", containerReveal: "someday", title };
   }
-  if (target.start === "active") {
+  if (target.derived.start === "active") {
     // Post-coercion the project joins the Someday cohort; refuse if that would
     // collide with an existing same-titled area-less Someday project.
     if (sameTitleRowCount(db, title, target.uuid, { somedayAreaLess: true }) > 0) {
@@ -766,7 +766,7 @@ export function classifyProjectRepeat(
   return {
     kind: "refuse",
     refusal: "unexpected-start",
-    detail: `the project has an unexpected schedule state (${target.start}) with no area — cannot resolve a selectable row`,
+    detail: `the project has an unexpected schedule state (${target.derived.start}) with no area — cannot resolve a selectable row`,
   };
 }
 

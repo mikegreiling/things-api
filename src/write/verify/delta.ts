@@ -397,11 +397,36 @@ export function createDbReader(
 }
 
 /**
+ * The internal derivation-substrate field names an assertion may reference by
+ * their bare (stable) schedule-vocabulary name — they now live on the entity's
+ * nested `derived` bag (one-vocabulary Batch 2), so {@link getField} reads them
+ * from there. This keeps the write-verify assertion vocabulary (`start`,
+ * `startDate`, `todaySection`) unchanged while the entity's field layout moved.
+ */
+const DERIVED_ASSERT_FIELDS: ReadonlySet<string> = new Set([
+  "start",
+  "logged",
+  "trashed",
+  "todaySection",
+  "today",
+  "evening",
+  "reminderLive",
+]);
+
+/**
  * Resolve an assertion path against a decoded entity. Computed paths:
  * `tags` → sorted direct-tag titles; `checklistTitles` → checklist titles
- * in order; otherwise a dotted walk (`area.uuid`, `project.title`, …).
+ * in order; the derivation-substrate names ({@link DERIVED_ASSERT_FIELDS}) read
+ * from the nested `derived` bag; otherwise a dotted walk (`area.uuid`,
+ * `project.title`, …).
  */
 export function getField(entity: AnyTask, path: string): unknown {
+  // The substrate fields (start/logged/trashed/todaySection/today/evening/
+  // reminderLive) live on `entity.derived` — read them there under their stable
+  // schedule-vocabulary name (a heading carries no substrate, so it has none).
+  if (DERIVED_ASSERT_FIELDS.has(path) && "derived" in entity) {
+    return (entity.derived as unknown as Record<string, unknown>)[path];
+  }
   // Day-precision views of the stored timestamps (backdating asserts these;
   // Date objects never compare === so the raw fields are not assertable).
   if (path === "stoppedDate" && "stopped" in entity) {

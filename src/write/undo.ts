@@ -1519,7 +1519,7 @@ export function planUndo(
       }
       const when =
         startDate === todayIso
-          ? current.todaySection === "evening"
+          ? current.derived.todaySection === "evening"
             ? "evening"
             : "today"
           : startDate;

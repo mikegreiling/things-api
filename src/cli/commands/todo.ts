@@ -49,7 +49,7 @@ export function renderDetail(item: AnyTask | null): string[] {
   const todayIso = localToday(renderNow(), renderZone());
   const label = item.type === "to-do" ? "To-Do:" : "Project:";
   const box = item.type === "to-do" ? todoBox(item) : projectCircle(item);
-  const trashed = item.trashed ? ` ${red("(trashed)")}` : "";
+  const trashed = item.derived.trashed ? ` ${red("(trashed)")}` : "";
   const lines = [
     `${bold(label)} ${box} ${bold(item.title)}${trashed}`,
     `  ${dim("uri:")} ${thingsLink(item.uuid)}`,

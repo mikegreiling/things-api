@@ -79,7 +79,7 @@ export function todoBox(item: Todo): string {
   // The box stays PLAIN — the GUI's repeat pseudo-checkbox is white, and the ↻
   // inside already marks the rule row (no muting).
   if (item.repeating.isTemplate) return "[↻]";
-  if (item.start === "someday" && item.startDate === null) return dim("[~]");
+  if (item.derived.start === "someday" && item.startDate === null) return dim("[~]");
   return "[ ]";
 }
 
@@ -99,7 +99,7 @@ export function projectCircle(item: Project): string {
   // Someday projects are muted like someday to-dos — the GUI greys a someday
   // project the same way. Its type is still carried by the round bracket and
   // the bold title (projectTitleAccent), so the circle spends dim, not blue.
-  if (item.start === "someday" && item.startDate === null) return dim("(~)");
+  if (item.derived.start === "someday" && item.startDate === null) return dim("(~)");
   // Open projects render blue — GUI parity (the sidebar/list accent) and a
   // second, color-independent cue on top of the round bracket that this row
   // is a project, not a to-do.
@@ -222,14 +222,14 @@ export function whenValue(item: Todo | Project, todayIso: string): string | null
   if (when === "evening") label = `${eveningMoon()} This Evening`;
   else if (when === "today") label = `${todayStar()} Today`;
   else if (when !== undefined) label = shortDate(when, todayIso);
-  else if (item.start === "someday") label = "Someday";
+  else if (item.derived.start === "someday") label = "Someday";
   else label = null;
   if (label === null) return null;
   // The reminder rides the presence-keyed `reminderLive` marker (§9n) — the SAME
   // materialize-time gate the JSON wire uses — so a stale reminder (past
   // startDate, bell hidden in the GUI) is omitted from the card too. The marker
   // implies `reminder` is set, so the non-null value read below is safe.
-  return item.reminderLive !== true || item.reminder === null
+  return item.derived.reminderLive !== true || item.reminder === null
     ? label
     : `${label} ${dim(REMINDER_MARK)} ${formatReminderTime(item.reminder)}`;
 }

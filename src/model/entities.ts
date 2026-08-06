@@ -71,11 +71,24 @@ export interface RepeatingInfo {
   latestInstance?: string;
 }
 
-interface TaskCommon {
-  uuid: string;
-  title: string;
-  notes: string;
-  status: TaskStatus;
+/**
+ * The internal DERIVATION SUBSTRATE bag — the entity fields that feed the
+ * emission-time derivations (`stage` / `when` / `provisional`) and the human
+ * render / write-verify paths, but never ride the JSON wire. Segregated into
+ * this nested bag (one-vocabulary audit, Batch 2, Option B) so that everything
+ * OUTSIDE `derived` is consumer vocabulary and everything INSIDE never reaches
+ * the wire: `src/read/shape.ts` drops the whole substrate in ONE `delete
+ * o.derived`, and the wire-key-inventory lock test guarantees a new substrate
+ * field cannot leak. A programmatic consumer wanting the wire words should reach
+ * for the exported {@link entityStage}/{@link entityWhen}/{@link
+ * entityProvisional} helpers (a clock-derived read) rather than these raw fields.
+ */
+export interface DerivedSubstrate {
+  /**
+   * Raw start-state (inbox | active | someday). Feeds `stage`/`when`; cannot be
+   * renamed to `stage` (raw vs the clock-derived taxonomy).
+   */
+  start: StartState;
   /**
    * In the GUI's Logbook. Completion and logged are SEPARATE states: a
    * closed item stays checked in its original list until the app's
@@ -83,9 +96,6 @@ interface TaskCommon {
    */
   logged: boolean;
   trashed: boolean;
-  start: StartState;
-  /** The "When" date (packed int in DB), null when unscheduled. */
-  startDate: IsoDate | null;
   /**
    * Today-view section ("today" | "evening"), meaningful ONLY for items actually
    * in Today under the evaluation clock: start=active, dated, and not
@@ -94,11 +104,11 @@ interface TaskCommon {
    * NOT in Today, so this is null for them.
    *
    * INTERNAL-ONLY (R10.1): this field is NOT on the JSON wire — it was retired
-   * as redundant with the presence-keyed {@link TaskCommon.evening} marker
+   * as redundant with the presence-keyed {@link DerivedSubstrate.evening} marker
    * (`todaySection === "evening"` ⇔ `evening: true`). It survives on the
    * in-memory entity for the human render (evening styling) and the write-verify
-   * schedule delta, which still read it; the read-shaping transform deletes it
-   * from the emitted copy. Use TodayView.evening for UI-faithful placement.
+   * schedule delta, which still read it. Use TodayView.evening for UI-faithful
+   * placement.
    */
   todaySection: TodaySection | null;
   /**
@@ -113,24 +123,32 @@ interface TaskCommon {
   /**
    * Presence-keyed This-Evening marker (`true` or absent) — the evening
    * sub-section of Today (`startBucket=1` AND `startDate` exactly today). Implies
-   * {@link TaskCommon.today}. Set only when true.
+   * {@link DerivedSubstrate.today}. Set only when true.
    */
   evening?: true;
-  deadline: IsoDate | null;
-  /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
-  reminder: ReminderTime | null;
   /**
-   * Presence-keyed marker (`true` or absent): the stored {@link reminder} STILL
-   * RENDERS under the evaluation clock — i.e. `reminder` is set AND `startDate`
-   * is today-or-future (src/read/stage.ts `reminderIsLive`). §9n: once
+   * Presence-keyed marker (`true` or absent): the stored {@link TaskCommon.reminder}
+   * STILL RENDERS under the evaluation clock — i.e. `reminder` is set AND
+   * `startDate` is today-or-future (src/read/stage.ts `reminderIsLive`). §9n: once
    * `startDate` goes strictly past, the GUI hides the reminder bell while the DB
    * keeps the byte forever, so a stale reminder is presentation-dead — this
    * marker is absent for it. Computed at materialize (mappers) with the response
-   * clock, exactly like the {@link today}/{@link evening} markers. INTERNAL: it
-   * gates the read-shaping `reminder` emit and the human-render bell, and is
-   * stripped from the JSON wire by the shaping transform. Set only when true.
+   * clock, exactly like the {@link today}/{@link evening} markers. It gates the
+   * read-shaping `reminder` emit and the human-render bell. Set only when true.
    */
   reminderLive?: true;
+}
+
+interface TaskCommon {
+  uuid: string;
+  title: string;
+  notes: string;
+  status: TaskStatus;
+  /** The "When" date (packed int in DB), null when unscheduled. */
+  startDate: IsoDate | null;
+  deadline: IsoDate | null;
+  /** Time-of-day reminder (`HH:mm`, 24h); requires a scheduled startDate. */
+  reminder: ReminderTime | null;
   area: Ref | null;
   /** Direct tags only, by name — mirrors DB truth (inherited tags are computed; see inheritedTags). */
   tags: TagRef[];
@@ -147,6 +165,11 @@ interface TaskCommon {
   created: Date;
   modified: Date;
   stopped: Date | null;
+  /**
+   * The internal derivation substrate (raw lifecycle + Today/reminder markers) —
+   * NEVER on the JSON wire. See {@link DerivedSubstrate}.
+   */
+  derived: DerivedSubstrate;
 }
 
 export interface Todo extends TaskCommon {

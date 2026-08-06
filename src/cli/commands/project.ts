@@ -133,7 +133,7 @@ export function renderProjectView(view: ProjectView, opts: ProjectShowOpts): str
   const areaSuffix = p.area === null ? "" : ` ${dim(`(${p.area.title})`)}`;
   // In the Trash the card says so — the only view where the project's
   // would-be-recovered (untrashed) children remain visible.
-  const trashedSuffix = p.trashed ? ` ${dim("(trashed)")}` : "";
+  const trashedSuffix = p.derived.trashed ? ` ${dim("(trashed)")}` : "";
   const lines: string[] = [
     `${bold("Project:")} ${projectCircle(p)} ${bold(underline(p.title))} ${countChip(p)}${areaSuffix}${trashedSuffix}`,
     `  ${dim("uri:")} ${thingsLink(p.uuid)}`,

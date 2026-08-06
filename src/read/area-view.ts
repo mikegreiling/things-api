@@ -43,7 +43,7 @@ export interface AreaView {
 
 /** A someday project row: open, incubated, no start date. */
 export const isSomedayProjectRow = (p: Project): boolean =>
-  p.status === "open" && p.start === "someday" && p.startDate === null;
+  p.status === "open" && p.derived.start === "someday" && p.startDate === null;
 
 /** A future-scheduled project row (start date strictly after `todayIso`). */
 export const isScheduledProjectRow = (p: Project, todayIso: string): boolean =>
@@ -178,7 +178,7 @@ export function areaView(
       // Completion ≠ logged: closed-but-unswept items stay checked in the
       // active block, like the GUI. Logged rows (past the log boundary) are
       // NOT a view section — they live in `things logbook --area <ref>`.
-      if (!todo.logged) active.push(todo);
+      if (!todo.derived.logged) active.push(todo);
       continue;
     }
     if (todoRow.start === 2 && todoRow.startDate === null) {

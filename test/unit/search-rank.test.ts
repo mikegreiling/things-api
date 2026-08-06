@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Project, Todo } from "../../src/model/entities.ts";
+import type { DerivedSubstrate, Project, Todo } from "../../src/model/entities.ts";
 import {
   compareSearchMatches,
   fieldRank,
@@ -17,18 +17,27 @@ import {
 } from "../../src/read/search-rank.ts";
 import type { ListItem } from "../../src/read/views.ts";
 
-function todo(overrides: Partial<Todo>): Todo {
+// Flat substrate overrides (start/trashed/…) are routed into the `derived` bag.
+function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
   return {
     type: "to-do",
     uuid: "u",
     title: "t",
     status: "open",
-    start: "active",
     startDate: null,
-    trashed: false,
     modified: new Date("2026-01-01"),
     repeating: { isTemplate: false, isInstance: false },
-    ...overrides,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as Todo;
 }
 function project(overrides: Partial<Project>): Project {

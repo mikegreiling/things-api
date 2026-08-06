@@ -20,6 +20,41 @@ import {
 
 type Obj = Record<string, unknown>;
 
+/**
+ * Assemble the internal `derived` substrate bag from flat overrides — so the
+ * fixtures keep accepting `todo({ start, today, todaySection, … })` at the top
+ * level while the entity nests them (one-vocabulary Batch 2).
+ */
+function derived(over: Obj): Obj {
+  const bag: Obj = {
+    start: over["start"] ?? "active",
+    logged: over["logged"] ?? false,
+    trashed: over["trashed"] ?? false,
+    todaySection: over["todaySection"] ?? null,
+  };
+  if (over["today"] !== undefined) bag["today"] = over["today"];
+  if (over["evening"] !== undefined) bag["evening"] = over["evening"];
+  if (over["reminderLive"] !== undefined) bag["reminderLive"] = over["reminderLive"];
+  return bag;
+}
+
+const SUBSTRATE_KEYS = new Set([
+  "logged",
+  "trashed",
+  "start",
+  "todaySection",
+  "today",
+  "evening",
+  "reminderLive",
+]);
+
+/** Strip the flat substrate keys an override may carry (they route into `derived`). */
+function withoutSubstrate(over: Obj): Obj {
+  const rest: Obj = {};
+  for (const [k, v] of Object.entries(over)) if (!SUBSTRATE_KEYS.has(k)) rest[k] = v;
+  return rest;
+}
+
 /** A fully-populated UNDATED-active to-do (stage `anytime`) — every emit field. */
 function todo(over: Obj = {}): Obj {
   return {
@@ -28,11 +63,7 @@ function todo(over: Obj = {}): Obj {
     title: "write the report",
     notes: "first line of the notes\nand a second line",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: { uuid: "area-1", title: "Work" },
@@ -46,7 +77,8 @@ function todo(over: Obj = {}): Obj {
     created: new Date("2026-07-01T00:00:00.000Z"),
     modified: new Date("2026-07-10T00:00:00.000Z"),
     stopped: null,
-    ...over,
+    ...withoutSubstrate(over),
+    derived: derived(over),
   };
 }
 
@@ -57,11 +89,7 @@ function project(over: Obj = {}): Obj {
     title: "Q3 launch",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: { uuid: "area-1", title: "Work" },
@@ -72,7 +100,8 @@ function project(over: Obj = {}): Obj {
     created: new Date("2026-07-01T00:00:00.000Z"),
     modified: new Date("2026-07-10T00:00:00.000Z"),
     stopped: null,
-    ...over,
+    ...withoutSubstrate(over),
+    derived: derived(over),
   };
 }
 

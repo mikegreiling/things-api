@@ -1178,7 +1178,7 @@ export function registerReadCommands(program: Command): void {
             ? ["(no changes)"]
             : items.map(
                 (i) =>
-                  `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.trashed ? " [trashed]" : ""}`,
+                  `${i.changeKind === "created" ? "+" : "~"} ${formatItem(i)}${i.derived.trashed ? " [trashed]" : ""}`,
               ),
         base,
       );

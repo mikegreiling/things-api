@@ -52,15 +52,10 @@ describe("candidateRef — the fixed disambiguation shape", () => {
       openUntrashedLeafActionsCount: 1,
       checklistItemsCount: 5,
       openChecklistItemsCount: 2,
-      todaySection: "evening",
       created: new Date(),
       modified: new Date(),
-      logged: false,
-      trashed: false,
-      start: "active",
       startDate: null,
-      today: undefined,
-      evening: undefined,
+      derived: { start: "active", logged: false, trashed: false, todaySection: "evening" },
       area: { uuid: "a-1", title: "Home" },
       project: { uuid: "p-1", title: "Roof" },
       repeating: { isTemplate: false, isInstance: false, templateUuid: null },
@@ -99,10 +94,8 @@ describe("candidateRef — the fixed disambiguation shape", () => {
     const c = candidateRef("to-do", {
       uuid: "t-2",
       title: "Loose",
-      start: "active",
       startDate: null,
-      logged: false,
-      trashed: false,
+      derived: { start: "active", logged: false, trashed: false, todaySection: null },
       area: null,
       project: null,
     }) as unknown as Record<string, unknown>;
@@ -116,10 +109,8 @@ describe("candidateRef — the fixed disambiguation shape", () => {
     const future = candidateRef("to-do", {
       uuid: "t-3",
       title: "Later",
-      start: "active",
       startDate: "2099-01-01",
-      logged: false,
-      trashed: false,
+      derived: { start: "active", logged: false, trashed: false, todaySection: null },
     });
     expect(future.stage).toBe("upcoming");
     expect(future.when).toBe("2099-01-01");
@@ -137,20 +128,16 @@ describe("candidateRef — the fixed disambiguation shape", () => {
     const trashed = candidateRef("to-do", {
       uuid: "t-4",
       title: "Gone",
-      start: "active",
       startDate: null,
-      logged: false,
-      trashed: true,
+      derived: { start: "active", logged: false, trashed: true, todaySection: null },
     });
     expect(trashed.stage).toBe("trash");
     expect(trashed).not.toHaveProperty("trashed");
     const logged = candidateRef("project", {
       uuid: "p-3",
       title: "Done",
-      start: "active",
       startDate: null,
-      logged: true,
-      trashed: false,
+      derived: { start: "active", logged: true, trashed: false, todaySection: null },
     });
     expect(logged.stage).toBe("logbook");
     expect(logged).not.toHaveProperty("logged");

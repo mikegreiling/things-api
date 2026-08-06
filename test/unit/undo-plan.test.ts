@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { undoToken, type AuditRecord } from "../../src/audit/schema.ts";
-import type { AnyTask } from "../../src/model/entities.ts";
+import type { AnyTask, DerivedSubstrate, Todo } from "../../src/model/entities.ts";
 import {
   planUndo,
   readAuditRecords,
@@ -20,15 +20,26 @@ import {
 const NOW = new Date("2026-07-05T12:00:00Z");
 
 /** Minimal decoded to-do for the clear-reminder targeted-restore path. */
-function currentTodo(partial: Partial<AnyTask> = {}): AnyTask {
+function currentTodo(
+  partial: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate> = {},
+): AnyTask {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = partial;
   return {
     type: "to-do",
     uuid: "U-1",
     startDate: null,
-    todaySection: null,
     reminder: null,
     repeating: { isTemplate: false, isInstance: false, templateUuid: null },
-    ...partial,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as unknown as AnyTask;
 }
 
@@ -497,7 +508,7 @@ describe("planUndo — tags, checklist, entities, reorder", () => {
       }),
       NOW,
       [],
-      currentTodo({ checklist: [{ title: "a", status: "open" }] } as Partial<AnyTask>),
+      currentTodo({ checklist: [{ title: "a", status: "open" }] }),
     );
     expect(plan.steps[0]?.options?.acknowledgeChecklistReset).toBe(true);
     // per-item completion IS recoverable now (json form) — no stale caveat.

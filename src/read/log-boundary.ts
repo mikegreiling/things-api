@@ -66,13 +66,13 @@ export function logBoundary(db: DatabaseSync, now = new Date(), zone?: string): 
   return manual !== null && manual > auto ? manual : auto;
 }
 
-/** Stamp `logged` on mapped entities (closed AND at/before the boundary). */
-export function markLogged<T extends { status: string; stopped: Date | null; logged: boolean }>(
-  items: T[],
-  boundary: Date,
-): T[] {
+/** Stamp `derived.logged` on mapped entities (closed AND at/before the boundary). */
+export function markLogged<
+  T extends { status: string; stopped: Date | null; derived: { logged: boolean } },
+>(items: T[], boundary: Date): T[] {
   for (const item of items) {
-    item.logged = item.status !== "open" && item.stopped !== null && item.stopped <= boundary;
+    item.derived.logged =
+      item.status !== "open" && item.stopped !== null && item.stopped <= boundary;
   }
   return items;
 }

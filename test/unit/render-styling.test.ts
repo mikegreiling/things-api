@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Project, Todo } from "../../src/model/entities.ts";
+import type { DerivedSubstrate, Project, Todo } from "../../src/model/entities.ts";
 import { stripSgr, visibleWidth } from "../../src/cli/width.ts";
 
 // SGR codes (see src/cli/style.ts). We assert on these rather than full strings
@@ -47,18 +47,16 @@ const render = () => import("../../src/cli/render.ts");
 const width = () => import("../../src/cli/width.ts");
 const detailCard = () => import("../../src/cli/commands/todo.ts");
 
-function todo(overrides: Partial<Todo>): Todo {
+// Flat substrate overrides (start/logged/…) are routed into the `derived` bag.
+function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
   return {
     type: "to-do",
     uuid: "todo0001",
     title: "T",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -71,22 +69,30 @@ function todo(overrides: Partial<Todo>): Todo {
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
-    ...overrides,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as Todo;
 }
 
-function project(overrides: Partial<Project>): Project {
+function project(
+  overrides: Partial<Omit<Project, "derived">> & Partial<DerivedSubstrate>,
+): Project {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
   return {
     type: "project",
     uuid: "proj0001",
     title: "P",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -97,7 +103,16 @@ function project(overrides: Partial<Project>): Project {
     stopped: null,
     untrashedLeafActionsCount: 0,
     openUntrashedLeafActionsCount: 0,
-    ...overrides,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as Project;
 }
 

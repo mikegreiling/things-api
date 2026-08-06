@@ -307,7 +307,7 @@ export function projectView(
       // Completion ≠ logged: closed items the log-move sweep has not
       // passed stay checked IN PLACE (their heading / the active block),
       // exactly like the GUI — only logged ones join the Logbook bucket.
-      if (todo.logged) {
+      if (todo.derived.logged) {
         logged.push(todo);
         continue;
       }

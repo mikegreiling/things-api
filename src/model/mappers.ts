@@ -178,20 +178,11 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday:
   const reminderLive =
     reminder !== null && reminderIsLive(startDate, decodePackedDate(packedToday) ?? "");
   return {
-    ...todayMarkers(row, packedToday),
-    ...(reminderLive ? { reminderLive: true as const } : {}),
     uuid: row.uuid,
     title: row.title ?? "",
     notes: row.notes ?? "",
     status: mapStatus(row),
-    // Refined by markLogged (read layer): closed AND past the log-move
-    // boundary. Defaulting to closed-implies-logged keeps paths that skip
-    // the boundary (writes' result checks) on the old semantics.
-    logged: mapStatus(row) !== "open",
-    trashed: row.trashed === 1,
-    start: mapStart(row),
     startDate,
-    todaySection: mapTodaySection(row, packedToday),
     // A template's own `deadline` column is not a real date: it is NULL
     // (deadline-less) or a far-future sentinel (4001-01-01, deadlined) that
     // flags whether spawned instances deadline. Surface it via
@@ -212,6 +203,18 @@ function commonFields(row: TaskRow, refs: RefResolver, tags: Ref[], packedToday:
     created: decodeEpochReal(row.creationDate) ?? new Date(0),
     modified: decodeEpochReal(row.userModificationDate) ?? new Date(0),
     stopped: decodeEpochReal(row.stopDate),
+    // The internal derivation substrate — never on the wire (DerivedSubstrate).
+    derived: {
+      ...todayMarkers(row, packedToday),
+      ...(reminderLive ? { reminderLive: true as const } : {}),
+      // Refined by markLogged (read layer): closed AND past the log-move
+      // boundary. Defaulting to closed-implies-logged keeps paths that skip
+      // the boundary (writes' result checks) on the old semantics.
+      logged: mapStatus(row) !== "open",
+      trashed: row.trashed === 1,
+      start: mapStart(row),
+      todaySection: mapTodaySection(row, packedToday),
+    },
   };
 }
 

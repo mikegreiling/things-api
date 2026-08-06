@@ -7,20 +7,20 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Area } from "../../src/model/entities.ts";
+import type { Area, DerivedSubstrate } from "../../src/model/entities.ts";
 import { DidYouMeanError, renderDidYouMean, candidatesJson } from "../../src/cli/did-you-mean.ts";
 import type { ListItem } from "../../src/index.ts";
 
-function task(over: Partial<ListItem> & { uuid: string; title: string }): ListItem {
+function task(
+  over: Partial<Omit<ListItem, "derived">> &
+    Partial<DerivedSubstrate> & { uuid: string; title: string },
+): ListItem {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = over;
   return {
     type: "to-do",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -33,7 +33,16 @@ function task(over: Partial<ListItem> & { uuid: string; title: string }): ListIt
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
-    ...over,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as ListItem;
 }
 
