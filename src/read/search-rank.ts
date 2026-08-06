@@ -40,9 +40,9 @@ export type MatchStatus = "active" | "someday" | "logged" | "trashed";
 
 /** Derive the ranking status bucket from an item's own state. */
 export function matchStatus(item: ListItem): MatchStatus {
-  if (item.trashed) return "trashed";
+  if (item.derived.trashed) return "trashed";
   if (item.status !== "open") return "logged";
-  if (item.start === "someday") return "someday";
+  if (item.derived.start === "someday") return "someday";
   return "active";
 }
 

@@ -281,7 +281,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   // startDate, bell hidden in the GUI) shows no chip here either.
   const tail = [
     ...(item.type === "project" ? [countChip(item)] : []),
-    ...(item.reminderLive === true ? [dim(REMINDER_MARK)] : []),
+    ...(item.derived.reminderLive === true ? [dim(REMINDER_MARK)] : []),
     ...(item.notes !== "" ? [dim(NOTES_MARK)] : []),
     ...(item.type === "to-do" && item.checklistItemsCount > 0 ? [dim(CHECKLIST_MARK)] : []),
   ];

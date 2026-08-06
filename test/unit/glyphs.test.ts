@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Project, Todo } from "../../src/model/entities.ts";
+import type { DerivedSubstrate, Project, Todo } from "../../src/model/entities.ts";
 import {
   deadlineDetail,
   deadlineToken,
@@ -16,27 +16,48 @@ import {
 
 const TODAY = "2026-07-05";
 
-function project(overrides: Partial<Project>): Project {
+// Flat substrate overrides (start/…) are routed into the `derived` bag.
+function project(
+  overrides: Partial<Omit<Project, "derived">> & Partial<DerivedSubstrate>,
+): Project {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
   return {
     type: "project",
     status: "open",
-    start: "active",
     startDate: null,
     untrashedLeafActionsCount: 0,
     openUntrashedLeafActionsCount: 0,
     repeating: { isTemplate: false, isInstance: false },
-    ...overrides,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as Project;
 }
 
-function todo(overrides: Partial<Todo>): Todo {
+function todo(overrides: Partial<Omit<Todo, "derived">> & Partial<DerivedSubstrate>): Todo {
+  const { start, logged, trashed, todaySection, today, evening, reminderLive, ...rest } = overrides;
   return {
     type: "to-do",
     status: "open",
-    start: "active",
     startDate: null,
     repeating: { isTemplate: false, isInstance: false },
-    ...overrides,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   } as Todo;
 }
 

@@ -88,7 +88,7 @@ describe("todayView", () => {
     expect(view.today.map((i) => i.title)).toEqual(["stale-evening"]);
     expect(view.evening.map((i) => i.title)).toEqual(["tonight"]);
     // raw assignment stays visible on the entity for both
-    expect(view.today[0]?.todaySection).toBe("evening");
+    expect(view.today[0]?.derived.todaySection).toBe("evening");
   });
 
   it("counts mirror the sidebar: deadline due/overdue vs other", () => {
@@ -221,7 +221,7 @@ describe("todayView", () => {
     expect(before.today.map((i) => i.title)).toEqual(["open-a", "checked", "open-b"]);
     const checked = before.today.find((i) => i.title === "checked");
     expect(checked?.status).toBe("completed"); // JSON surfaces the real status
-    expect(checked?.logged).toBe(false); // unswept, so not logged
+    expect(checked?.derived.logged).toBe(false); // unswept, so not logged
 
     // Advance the boundary past the checked row's stopDate → it is swept away.
     fx.db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH + 60);
@@ -428,10 +428,10 @@ describe("injected clock threads through logged/logbook membership", () => {
     // The closed row appears in a --logged search under either clock; only the
     // `logged` flag (completion vs. swept-into-Logbook) tracks the boundary.
     expect(
-      searchView(fx.db, "widget", { logged: true }, BEFORE).map((i) => [i.title, i.logged]),
+      searchView(fx.db, "widget", { logged: true }, BEFORE).map((i) => [i.title, i.derived.logged]),
     ).toEqual([["widget win", false]]);
     expect(
-      searchView(fx.db, "widget", { logged: true }, AFTER).map((i) => [i.title, i.logged]),
+      searchView(fx.db, "widget", { logged: true }, AFTER).map((i) => [i.title, i.derived.logged]),
     ).toEqual([["widget win", true]]);
   });
 });
@@ -567,7 +567,7 @@ describe("anytime container cascade + sidebar grouping", () => {
 
     const before = flat(anytimeView(fx.db, NOW));
     expect(before.map((i) => i.title)).toEqual(["open-1", "checked", "open-2"]);
-    expect(before.find((i) => i.title === "checked")?.logged).toBe(false);
+    expect(before.find((i) => i.title === "checked")?.derived.logged).toBe(false);
 
     fx.db.prepare("UPDATE TMSettings SET manualLogDate = ?").run(NOW_EPOCH + 60);
     const after = flat(anytimeView(fx.db, NOW));
@@ -679,7 +679,7 @@ describe("projectView", () => {
     expect(view.active.map((i) => i.title)).toEqual(["active-1"]);
     expect(view.headings).toHaveLength(1);
     expect(view.headings[0]?.items.map((i) => i.title)).toEqual(["headed-1"]);
-    expect(view.scheduled).toEqual([expect.objectContaining({ date: "2026-07-05" })]);
+    expect(view.scheduled).toEqual([expect.objectContaining({ when: "2026-07-05" })]);
     expect(view.scheduled[0]?.items).toHaveLength(2);
     expect(view.repeating.map((i) => i.title)).toEqual(["tpl"]);
     expect(view.someday.map((i) => i.title)).toEqual(["incub"]);
@@ -724,7 +724,7 @@ describe("projectView", () => {
     expect(view.active.map((i) => i.title)).toEqual(["loose-active"]);
     expect(view.scheduled).toEqual([
       expect.objectContaining({
-        date: "2026-07-05",
+        when: "2026-07-05",
         items: [expect.objectContaining({ title: "loose-sched" })],
       }),
     ]);
@@ -738,7 +738,7 @@ describe("projectView", () => {
     expect(g.items.map((i) => i.title)).toEqual(["headed-active"]);
     expect(g.scheduled).toEqual([
       expect.objectContaining({
-        date: "2026-07-06",
+        when: "2026-07-06",
         items: [expect.objectContaining({ title: "headed-sched" })],
       }),
     ]);
@@ -2119,7 +2119,7 @@ describe("changesView (Phase 13)", () => {
       ["born-after", "created"],
       ["edited-after", "modified"],
     ]);
-    expect(changes.find((c) => c.title === "trashed-after")?.trashed).toBe(true);
+    expect(changes.find((c) => c.title === "trashed-after")?.derived.trashed).toBe(true);
     expect(changes.find((c) => c.title === "template-edited")?.repeating.isTemplate).toBe(true);
     expect(changesView(fx.db, undefined, { since: new Date(SINCE * 1000), limit: 2 })).toHaveLength(
       2,

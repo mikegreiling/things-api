@@ -166,8 +166,8 @@ function groupByDate(rows: ScheduledRow[]): IsoDateGroup<Todo>[] {
     (a, b) => a.date.localeCompare(b.date) || a.ti - b.ti,
   )) {
     const last = out[out.length - 1];
-    if (last && last.date === date) last.items.push(todo);
-    else out.push({ date, items: [todo] });
+    if (last && last.when === date) last.items.push(todo);
+    else out.push({ when: date, items: [todo] });
   }
   return out;
 }
@@ -307,7 +307,7 @@ export function projectView(
       // Completion ≠ logged: closed items the log-move sweep has not
       // passed stay checked IN PLACE (their heading / the active block),
       // exactly like the GUI — only logged ones join the Logbook bucket.
-      if (todo.logged) {
+      if (todo.derived.logged) {
         logged.push(todo);
         continue;
       }

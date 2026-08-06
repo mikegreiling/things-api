@@ -184,26 +184,53 @@ export function deriveWhen(item: WhenInput): When | undefined {
   return undefined;
 }
 
-/** The materialized-entity shape {@link entityWhen} reads (a superset of both inputs). */
-export interface WhenStageInput extends StageInput {
-  /** The presence-keyed This-Evening marker (implies today). */
-  evening?: boolean;
+/**
+ * The materialized-ENTITY shape the entity-level derivations read: the raw
+ * lifecycle substrate lives in the nested `derived` bag ({@link
+ * DerivedSubstrate}); `startDate` and `repeating` stay flat (consumer fields).
+ */
+export interface EntityDerivable {
+  startDate: IsoDate | null;
   repeating: { isTemplate: boolean; nextOccurrence?: IsoDate | null };
+  derived: {
+    start: StartState;
+    logged: boolean;
+    trashed: boolean;
+    today?: boolean;
+    evening?: boolean;
+  };
+}
+
+/**
+ * The ONE {@link Stage} derivation for a materialized ENTITY — composes {@link
+ * deriveStage} off the entity's `derived` substrate. Exported for programmatic-
+ * API ergonomics: a TS consumer gets the wire's lifecycle word from an entity +
+ * clock without reaching into `entity.derived` itself.
+ */
+export function entityStage(item: EntityDerivable): Stage {
+  return deriveStage({
+    trashed: item.derived.trashed,
+    logged: item.derived.logged,
+    start: item.derived.start,
+    startDate: item.startDate,
+    repeating: item.repeating,
+    ...(item.derived.today !== undefined && { today: item.derived.today }),
+  });
 }
 
 /**
  * The ONE time-axis derivation for a materialized ENTITY — the SINGLE SOURCE the
  * wire emit boundary (`shape.ts` `whenOf`) and the human/TTY renderers
- * (`whenValue`, `todayMark`) share. Composes {@link deriveStage} → {@link
+ * (`whenValue`, `todayMark`) share. Composes {@link entityStage} → {@link
  * deriveWhen} off the entity's own presence-keyed markers, so a TTY when/pip can
  * NEVER disagree with the emitted `when` (never re-derived from `startBucket` /
  * `todaySection`). Returns the same {@link When} the wire carries.
  */
-export function entityWhen(item: WhenStageInput): When | undefined {
+export function entityWhen(item: EntityDerivable): When | undefined {
   return deriveWhen({
-    stage: deriveStage(item),
-    ...(item.today !== undefined && { today: item.today }),
-    ...(item.evening !== undefined && { evening: item.evening }),
+    stage: entityStage(item),
+    ...(item.derived.today !== undefined && { today: item.derived.today }),
+    ...(item.derived.evening !== undefined && { evening: item.derived.evening }),
     startDate: item.startDate,
     repeating: item.repeating,
   });
@@ -231,8 +258,8 @@ export function whenIsProvisional(
  * {@link entityWhen} (the same value the wire emits), so the TTY provisional pip
  * shares the wire's derivation end to end.
  */
-export function entityProvisional(item: WhenStageInput): boolean {
-  return whenIsProvisional(entityWhen(item), item.start, item.startDate);
+export function entityProvisional(item: EntityDerivable): boolean {
+  return whenIsProvisional(entityWhen(item), item.derived.start, item.startDate);
 }
 
 /**

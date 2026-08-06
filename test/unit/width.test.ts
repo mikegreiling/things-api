@@ -363,11 +363,7 @@ describe("formatItem width plumbing", () => {
     title: "A short title",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -380,6 +376,7 @@ describe("formatItem width plumbing", () => {
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
+    derived: { start: "active", logged: false, trashed: false, todaySection: null },
   } as unknown as Parameters<typeof formatItem>[0];
 
   it("null (the default) does NOT fit — byte-identical to the composed row", () => {
@@ -435,11 +432,7 @@ const mkDeadlineTodo = (uuid: string, title: string, deadline: string) =>
     title,
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline,
     reminder: null,
     area: null,
@@ -452,6 +445,7 @@ const mkDeadlineTodo = (uuid: string, title: string, deadline: string) =>
     heading: null,
     checklistItemsCount: 0,
     openChecklistItemsCount: 0,
+    derived: { start: "active", logged: false, trashed: false, todaySection: null },
   }) as unknown as Parameters<typeof formatItem>[0];
 
 describe("compact deadline forms across a view (formatItem, end-to-end)", () => {

@@ -249,13 +249,17 @@ const GUARDS: Record<HazardId, GuardFn> = {
         if (pre.target.status === "open") {
           problems.push("target project is already open — nothing to reopen");
         }
-        if (pre.target.trashed) {
+        if (pre.target.derived.trashed) {
           problems.push(
             "target project is in the Trash — restore it first (things project restore)",
           );
         }
       }
-      if (op === "project.restore" && pre.target.type === "project" && !pre.target.trashed) {
+      if (
+        op === "project.restore" &&
+        pre.target.type === "project" &&
+        !pre.target.derived.trashed
+      ) {
         problems.push(
           `target ${String(params["uuid"])} is not in the Trash — restore only applies to ` +
             "trashed projects",
@@ -267,7 +271,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
             `target ${String(params["uuid"])} is a ${pre.target.type} — restore is only ` +
               "validated for to-dos (E15); restore a trashed project via the app",
           );
-        } else if (!pre.target.trashed) {
+        } else if (!pre.target.derived.trashed) {
           problems.push(
             `target ${String(params["uuid"])} is not in the Trash — restore only applies to ` +
               "trashed to-dos (a live item would just be de-scheduled into the Inbox)",

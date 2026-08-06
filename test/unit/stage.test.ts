@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deriveStage,
   deriveWhen,
+  entityStage,
+  entityWhen,
   reminderIsLive,
   type StageInput,
   type WhenInput,
@@ -187,7 +189,7 @@ afterEach(() => fx?.close());
 function markerRow(title: string): { today: true | undefined; evening: true | undefined } {
   const hits = searchView(fx.db, title, {}, NOW) as ListItem[];
   const item = hits.find((i) => i.title === title)!;
-  return { today: item.today, evening: item.evening };
+  return { today: item.derived.today, evening: item.derived.evening };
 }
 
 describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddities §8d–8e)", () => {
@@ -200,7 +202,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadline: "2026-07-02",
     });
     const hit = (searchView(fx.db, "dl-active", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("anytime");
+    expect(entityStage(hit)).toBe("anytime");
     expect(markerRow("dl-active").today).toBe(true);
     expect(markerRow("dl-active").evening).toBeUndefined();
   });
@@ -217,7 +219,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadline: "2026-07-01", // overdue vs 07-02
     });
     const hit = (searchView(fx.db, "some-due", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("anytime");
+    expect(entityStage(hit)).toBe("anytime");
     expect(markerRow("some-due").today).toBe(true);
   });
 
@@ -231,7 +233,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadlineSuppressionDate: "2026-07-01", // dismissed nag (supp == deadline)
     });
     const hit = (searchView(fx.db, "some-supp", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("someday");
+    expect(entityStage(hit)).toBe("someday");
     expect(markerRow("some-supp").today).toBeUndefined();
   });
 
@@ -248,7 +250,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
       deadline: "2026-07-02",
     });
     const hit = (searchView(fx.db, "materialized", {}, NOW) as ListItem[])[0]!;
-    expect(deriveStage(hit)).toBe("anytime");
+    expect(entityStage(hit)).toBe("anytime");
     expect(markerRow("materialized").today).toBe(true);
   });
 
@@ -260,17 +262,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
 });
 
 /** `when` derived over a real materialized entity, mirroring src/read/shape.ts `whenOf`. */
-const whenOfEntity = (i: ListItem): ReturnType<typeof deriveWhen> =>
-  deriveWhen({
-    stage: deriveStage(i),
-    today: i.today === true,
-    evening: i.evening === true,
-    startDate: i.startDate,
-    repeating: {
-      isTemplate: i.repeating.isTemplate,
-      nextOccurrence: i.repeating.nextOccurrence ?? null,
-    },
-  });
+const whenOfEntity = (i: ListItem): ReturnType<typeof deriveWhen> => entityWhen(i);
 
 describe("deriveWhen — over real entities through the read pipeline (R12)", () => {
   it("banner-materialized UPC1 case (start=1, startDate:=deadline=today) → when `today`", () => {
@@ -388,7 +380,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
   const stageMap = (unshaped: unknown): Map<string, string> => {
     const m = new Map<string, string>();
     for (const i of flatten(unshaped))
-      m.set(i["uuid"] as string, deriveStage(i as unknown as StageInput));
+      m.set(i["uuid"] as string, entityStage(i as unknown as ListItem));
     return m;
   };
 
@@ -436,7 +428,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
       ["trash", trashView(fx.db, NOW), "trash"],
     ];
     for (const [kind, unshaped, stg] of pure) {
-      for (const i of flatten(unshaped)) expect(deriveStage(i as unknown as StageInput)).toBe(stg);
+      for (const i of flatten(unshaped)) expect(entityStage(i as unknown as ListItem)).toBe(stg);
       for (const row of flatten(shapeReadPayload(kind, unshaped, true)))
         expect("stage" in row).toBe(false);
     }
@@ -495,7 +487,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     const view = projectView(fx.db, proj, NOW);
     // Map every child uuid to its derived stage from the UNSHAPED entities.
     const stageOf = new Map<string, string>();
-    const record = (i: ListItem) => stageOf.set(i.uuid, deriveStage(i));
+    const record = (i: ListItem) => stageOf.set(i.uuid, entityStage(i));
     view.active.forEach(record);
     view.scheduled.forEach((g) => g.items.forEach(record));
     view.someday.forEach(record);
@@ -596,7 +588,7 @@ describe("R13 property — every Today-view member derives stage `anytime` (just
     // STRICT: every member derives `anytime` — no residual mixed case survives.
     // (If this ever fails, the today buckets are NOT stage-pure and the
     // TODAY_SECTION_DROP `stage: true` must be reverted — report prominently.)
-    for (const m of members) expect(deriveStage(m)).toBe("anytime");
+    for (const m of members) expect(entityStage(m)).toBe("anytime");
     // Consequently the emit boundary DROPS `stage` on every today-bucket row.
     const shaped = shapeReadPayload("today", view, false) as {
       today: { items: Array<Record<string, unknown>> };

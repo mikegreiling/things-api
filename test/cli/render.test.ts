@@ -527,9 +527,9 @@ describe("logbook", () => {
     // The fresh completion sits checked in its ORIGINAL list instead: the
     // project view keeps it inline, marked logged=false.
     const [fresh] = searchView(fixture.db, "Fresh win", { logged: true });
-    expect(fresh?.logged).toBe(false);
+    expect(fresh?.derived.logged).toBe(false);
     const [swept] = searchView(fixture.db, "Swept win", { logged: true });
-    expect(swept?.logged).toBe(true);
+    expect(swept?.derived.logged).toBe(true);
   });
 
   it("keeps closed-but-unswept rows inline in the project view", () => {
@@ -676,7 +676,7 @@ describe("PLOG1 — stranded open children of a resolved project", () => {
     const logged = seedProject(fixture.db, { title: "Swept", status: "completed", stopDate: 100 });
     seedTodo(fixture.db, { title: "stranded open", project: logged });
     const lv = projectView(fixture.db, logged, NOW);
-    expect(lv.project.logged).toBe(true);
+    expect(lv.project.derived.logged).toBe(true);
     expect(lv.openChildrenWhileResolved).toBe(1);
     expect(renderProjectView(lv, {}).join("\n")).toMatch(HINT);
   });
@@ -1004,7 +1004,7 @@ describe("derived trash — children of trashed containers (A24B shallow delete)
     const p = seedProject(fixture.db, { title: "Binned", trashed: true });
     seedTodo(fixture.db, { title: "Recoverable", project: p });
     const view = projectView(fixture.db, p, NOW);
-    expect(view.project.trashed).toBe(true);
+    expect(view.project.derived.trashed).toBe(true);
     expect(view.active.map((t) => t.title)).toEqual(["Recoverable"]);
   });
 

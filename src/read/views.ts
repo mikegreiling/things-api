@@ -366,7 +366,8 @@ export function todayView(
   const items = materialize(db, rows, boundary, packedToday);
   // Evening membership expires daily: raw startBucket=1 counts only while
   // startDate is exactly today; stale evening items belong to Today proper.
-  const isEvening = (i: ListItem) => i.todaySection === "evening" && i.startDate === todayIso;
+  const isEvening = (i: ListItem) =>
+    i.derived.todaySection === "evening" && i.startDate === todayIso;
   const evening = items.filter(isEvening);
   const dueIn = (list: ListItem[]) =>
     list.filter((i) => i.deadline !== null && i.deadline <= todayIso).length;
@@ -974,7 +975,7 @@ export function projectsView(
   const todayIso = localToday(options?.now, options?.zone);
   const ti = new Map(rows.map((r) => [r.uuid, r.todayIndex ?? 0]));
   const isLater = (p: Project) =>
-    p.startDate !== null ? p.startDate > todayIso : p.start === "someday";
+    p.startDate !== null ? p.startDate > todayIso : p.derived.start === "someday";
   const out: Project[] = [];
   let run: Project[] = [];
   let runArea: string | null | undefined;
@@ -1093,7 +1094,7 @@ export interface LiteSearchResult {
  * (default {@link CANDIDATE_CAP}); `total` reports the pre-cap match count so the
  * caller can append a "… n more" tail.
  */
-const somedayRank = (i: ListItem): number => (i.start === "someday" ? 1 : 0);
+const somedayRank = (i: ListItem): number => (i.derived.start === "someday" ? 1 : 0);
 
 /** Lite-search order within a task group: active before someday, then most-recently-modified. */
 function byStatusThenRecent(a: ListItem, b: ListItem): number {

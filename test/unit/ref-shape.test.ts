@@ -25,17 +25,14 @@ const first = (out: unknown): Obj => (out as Obj[])[0]!;
 
 /** A minimal shaped-item payload — enough for the stage/when derivation + refs. */
 function todo(over: Obj = {}): Obj {
+  const { logged, trashed, start, todaySection, today, evening, reminderLive, ...rest } = over;
   return {
     uuid: "todo-x",
     type: "to-do",
     title: "a task",
     notes: "",
     status: "open",
-    logged: false,
-    trashed: false,
-    start: "active",
     startDate: null,
-    todaySection: null,
     deadline: null,
     reminder: null,
     area: null,
@@ -48,7 +45,16 @@ function todo(over: Obj = {}): Obj {
     created: new Date("2026-07-01T00:00:00.000Z"),
     modified: new Date("2026-07-01T00:00:00.000Z"),
     stopped: null,
-    ...over,
+    ...rest,
+    derived: {
+      start: start ?? "active",
+      logged: logged ?? false,
+      trashed: trashed ?? false,
+      todaySection: todaySection ?? null,
+      ...(today !== undefined && { today }),
+      ...(evening !== undefined && { evening }),
+      ...(reminderLive !== undefined && { reminderLive }),
+    },
   };
 }
 
@@ -238,11 +244,7 @@ describe("`type` omission — absent type = to-do", () => {
             title: "Q3",
             notes: "",
             status: "open",
-            logged: false,
-            trashed: false,
-            start: "active",
             startDate: null,
-            todaySection: null,
             deadline: null,
             reminder: null,
             area: null,
@@ -253,6 +255,7 @@ describe("`type` omission — absent type = to-do", () => {
             created: new Date(),
             modified: new Date(),
             stopped: null,
+            derived: { start: "active", logged: false, trashed: false, todaySection: null },
           },
         ],
         false,

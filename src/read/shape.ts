@@ -307,23 +307,24 @@ function reshapeRepeatingWire(o: Obj): void {
   }
 }
 
-/** The R10 stage input read straight off a materialized task entity. */
+/** The R10 stage input read straight off a materialized task entity's `derived` bag. */
 function stageOf(s: Obj): ReturnType<typeof deriveStage> {
   const repeating = s["repeating"];
   const isTemplate =
     repeating !== null &&
     typeof repeating === "object" &&
     (repeating as Obj)["isTemplate"] === true;
+  const d = (s["derived"] ?? {}) as Obj;
   return deriveStage({
-    trashed: s["trashed"] === true,
-    logged: s["logged"] === true,
-    start: s["start"] as "inbox" | "active" | "someday",
+    trashed: d["trashed"] === true,
+    logged: d["logged"] === true,
+    start: d["start"] as "inbox" | "active" | "someday",
     startDate: (s["startDate"] as string | null) ?? null,
     repeating: { isTemplate },
     // The presence-keyed Today marker (stamped at materialize with the response
     // clock) discriminates an ARRIVED dated row (→ anytime) from a strictly-
-    // future one (→ upcoming). Read BEFORE the marker is stripped downstream.
-    today: s["today"] === true,
+    // future one (→ upcoming). Read from the `derived` substrate bag.
+    today: d["today"] === true,
   });
 }
 
@@ -338,12 +339,13 @@ function whenOf(s: Obj, stage: Stage): ReturnType<typeof deriveWhen> {
     isTemplate && typeof (repeating as Obj)["nextOccurrence"] === "string"
       ? ((repeating as Obj)["nextOccurrence"] as string)
       : null;
+  const d = (s["derived"] ?? {}) as Obj;
   return deriveWhen({
     stage,
     // The SAME presence-keyed markers stageOf reads — never re-derived, so a
     // `when` of today/evening can never disagree with Today-view membership.
-    today: s["today"] === true,
-    evening: s["evening"] === true,
+    today: d["today"] === true,
+    evening: d["evening"] === true,
     startDate: (s["startDate"] as string | null) ?? null,
     repeating: { isTemplate, nextOccurrence },
   });
@@ -376,7 +378,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   // read cannot clear (watchers beware — see contract.md `provisional`).
   const provisional = whenIsProvisional(
     when,
-    s["start"] as StartState,
+    ((s["derived"] ?? {}) as Obj)["start"] as StartState,
     (s["startDate"] as string | null) ?? null,
   );
   const o: Obj = { ...s };
@@ -389,27 +391,22 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   if (o["project"] == null && o["headingProject"] != null) o["project"] = o["headingProject"];
   delete o["headingProject"];
 
-  // R10 — the three lifecycle fields are replaced by the one derived `stage`.
-  delete o["start"];
-  delete o["logged"];
-  delete o["trashed"];
-  // R10.1 — `todaySection` is retired from the wire (it duplicated `evening`);
-  // the internal entity keeps it for the render / write-verify paths.
-  delete o["todaySection"];
+  // The ENTIRE internal derivation substrate leaves the wire in ONE structural
+  // drop (one-vocabulary Batch 2, Option B): `start`/`logged`/`trashed` (R10 —
+  // replaced by `stage`), `todaySection` (R10.1 — retired), `today`/`evening`
+  // (R12 — replaced by `when`), and `reminderLive` (§9n) all live in the nested
+  // `o.derived` bag. §9n: a reminder byte is presentation-dead once its
+  // `startDate` goes strictly past (the GUI hides the bell but never clears the
+  // byte); the materialize-time `reminderLive` marker says whether it still
+  // renders — drop the `reminder` key when it does not, reading the marker
+  // BEFORE the substrate bag is dropped. `stage`/`when`/`provisional` are then
+  // stamped from the derivations above.
+  const sub = (o["derived"] ?? {}) as Obj;
+  if (sub["reminderLive"] !== true) delete o["reminder"];
+  delete o["derived"];
   if (drop.stage !== true) o["stage"] = stage;
-  // R12 — the today/evening marker KEYS are replaced by the derived `when` on
-  // EVERY tier (they never appear on the wire); `when` is emitted unless the
-  // enclosing context provably states the position (the today view's sections;
-  // a card date-group — handled in rebucketChildren).
-  delete o["today"];
-  delete o["evening"];
-  // §9n — a reminder byte is presentation-dead once its `startDate` goes strictly
-  // past: the GUI hides the bell but never clears the byte. The materialize-time
-  // `reminderLive` marker (mappers, via `reminderIsLive` under the response clock)
-  // says whether the stored reminder still renders; drop the `reminder` key when
-  // it does not, mirroring the GUI. The marker itself never rides the wire.
-  if (o["reminderLive"] !== true) delete o["reminder"];
-  delete o["reminderLive"];
+  // R12 — `when` is emitted unless the enclosing context provably states the
+  // position (the today view's sections; a card date-group in rebucketChildren).
   if (drop.when !== true && when !== undefined) o["when"] = when;
   // R13 — the provisional banner marker (never dropped; presence-keyed).
   if (provisional) o["provisional"] = true;
@@ -494,9 +491,9 @@ interface Child extends Obj {
   todayIndex?: number;
 }
 
-/** An IsoDate group on the wire — `date` is a real string, or `null` for the resting-templates group. */
+/** An IsoDate group on the wire — `when` is a real string, or `null` for the resting-templates group. */
 interface WireDateGroup {
-  date: string | null;
+  when: string | null;
   items: unknown[];
 }
 
@@ -505,9 +502,9 @@ interface WireDateGroup {
  * into the R10 card shape by their derived {@link deriveStage} — so the bucket an
  * item lands in ALWAYS equals its `stage`:
  * - `anytime` — stage anytime, in encounter order;
- * - `upcoming` — stage upcoming, date-grouped `[{date, items}]` (a dated row under
+ * - `upcoming` — stage upcoming, day-grouped `[{when, items}]` (a dated row under
  *   its `startDate`, a template under its `nextOccurrence`), date ASC; date-LESS
- *   templates (after-completion / paused) form a trailing `{date: null, items}`
+ *   templates (after-completion / paused) form a trailing `{when: null, items}`
  *   group (explicit null per the `area: null` section precedent);
  * - `someday` — stage someday.
  * Items are already in view order (index / date+todayIndex) from the read layer,
@@ -566,12 +563,12 @@ function rebucketChildren(
   }
   const upcoming: WireDateGroup[] = datedOrder
     .toSorted((a, b) => a.localeCompare(b))
-    .map((date) => ({ date, items: datedByKey.get(date)! }));
-  if (restingTemplates.length > 0) upcoming.push({ date: null, items: restingTemplates });
+    .map((date) => ({ when: date, items: datedByKey.get(date)! }));
+  if (restingTemplates.length > 0) upcoming.push({ when: null, items: restingTemplates });
   return { anytime, upcoming, someday };
 }
 
-/** Flatten an internal IsoDateGroup[] (`[{date, items}]`) to its items, in order. */
+/** Flatten an internal IsoDateGroup[] (`[{when, items}]`) to its items, in order. */
 function flattenGroups(groups: unknown): unknown[] {
   if (!Array.isArray(groups)) return [];
   const out: unknown[] = [];
@@ -687,7 +684,7 @@ function stoppedMs(o: Obj): number {
  *   heading (HEADARC2-C anomaly) is NOT logged, so it rides `anytime` here — its
  *   presence in a live bucket under an `archived` heading node is self-evident.
  * `drop` carries the container's ancestry drops (body vs heading); the day-block
- * `when` renames the internal date group's `date` (rebucketChildren) — `null` for
+ * key is `when` end-to-end (`rebucketChildren` builds it — no rename) — `null` for
  * the resting block. No bucket is capped in the project view today, so every
  * `total` is absent (R1: an untruncated bucket never restates its length); the
  * `total?` argument keeps the record + day-block shape ready for PR 5's sweep and
@@ -702,7 +699,12 @@ function shapeContainerChildren(
   const live: unknown[] = [];
   const logged: Obj[] = [];
   for (const c of asArray(children)) {
-    if (c !== null && typeof c === "object" && (c as Obj)["logged"] === true) logged.push(c as Obj);
+    // The logbook-boundary flag lives on the internal `derived` substrate bag.
+    const isLogged =
+      c !== null &&
+      typeof c === "object" &&
+      ((c as Obj)["derived"] as Obj | undefined)?.["logged"] === true;
+    if (isLogged) logged.push(c as Obj);
     else live.push(c);
   }
   const { anytime, upcoming, someday } = rebucketChildren(live, drop, compact, promoter);
@@ -710,8 +712,9 @@ function shapeContainerChildren(
   const logbook = shapeList(loggedSorted, drop, compact, promoter) as unknown[];
   return {
     anytime: bucketRecord(anytime),
-    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
-    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    // The day-block ARRAY (`{when, items}`, `when: null` the resting block #V8);
+    // `rebucketChildren` already keys each block by `when`.
+    upcoming,
     someday: bucketRecord(someday),
     logbook: bucketRecord(logbook),
   };
@@ -755,7 +758,7 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
  * key; the area logbook is the bounded query `things logbook --area <ref>`, #346).
  * The same stage-derived bucketing as {@link shapeContainerChildren} minus the
  * logbook split: `anytime`/`someday` are `{items, total?}` records, `upcoming` is
- * the day-block ARRAY (R3, `date` → `when`) with the trailing `{when: null, items}`
+ * the day-block ARRAY (R3, keyed by `when`) with the trailing `{when: null, items}`
  * resting block for date-less recurring templates (#V8). Inline `total` is stamped
  * downstream by {@link withAreaBucketTotals} (only `anytime` can be capped — the
  * `--area-limit` scope; the scheduled/someday direct to-dos always survive).
@@ -769,8 +772,9 @@ function shapeAreaChildren(
   const { anytime, upcoming, someday } = rebucketChildren(members, drop, compact, promoter);
   return {
     anytime: bucketRecord(anytime),
-    // The day-block ARRAY: `date` → `when` (R3); `null` is the resting block (#V8).
-    upcoming: upcoming.map((g) => ({ when: g.date, items: g.items })),
+    // The day-block ARRAY (`{when, items}`, `when: null` the resting block #V8);
+    // `rebucketChildren` already keys each block by `when`.
+    upcoming,
     someday: bucketRecord(someday),
   };
 }
@@ -1163,9 +1167,12 @@ export function candidateRef(type: CandidateType, src: unknown): CandidateRef {
     candidateContainerTitle(s["project"]) ?? candidateContainerTitle(s["headingProject"]);
   if (project !== null) out.project = project;
   // stage/when only for the task kinds, and only when the source carries the
-  // materialized lifecycle substrate (`start`) — a thin uuid+title resolver row
-  // does not, so the keys stay absent (presence-keyed, like the wire).
-  if ((type === "to-do" || type === "project") && typeof s["start"] === "string") {
+  // materialized lifecycle substrate (`derived.start`) — a thin uuid+title
+  // resolver row does not, so the keys stay absent (presence-keyed, like the wire).
+  if (
+    (type === "to-do" || type === "project") &&
+    typeof ((s["derived"] ?? {}) as Obj)["start"] === "string"
+  ) {
     const stage = stageOf(s);
     out.stage = stage;
     const when = whenOf(s, stage);

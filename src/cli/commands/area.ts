@@ -88,7 +88,7 @@ export function renderAreaView(view: AreaView, blocks: GroupBlock[], opts: AreaS
     ...view.projects
       .filter((p) => isScheduledProjectRow(p, todayIso))
       .map((p) => ({ date: p.startDate ?? "", item: p })),
-    ...view.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.date, item: t }))),
+    ...view.scheduled.flatMap((d) => d.items.map((t) => ({ date: d.when, item: t }))),
     ...view.repeating.map((t) => ({ date: t.repeating.nextOccurrence ?? "9999", item: t })),
   ].toSorted((a, b) => a.date.localeCompare(b.date));
 

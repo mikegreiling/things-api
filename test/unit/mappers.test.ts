@@ -62,9 +62,9 @@ describe("mapTodo", () => {
     const todo = mapTodo(row(), refs, [], TODAY);
     expect(todo.type).toBe("to-do");
     expect(todo.status).toBe("open");
-    expect(todo.start).toBe("active");
+    expect(todo.derived.start).toBe("active");
     expect(todo.startDate).toBe("2026-06-25");
-    expect(todo.todaySection).toBe("evening");
+    expect(todo.derived.todaySection).toBe("evening");
     expect(todo.area).toEqual(AREA);
     expect(todo.repeating).toEqual({ isTemplate: false, isInstance: false, templateUuid: null });
   });
@@ -96,32 +96,32 @@ describe("mapTodaySection gate (Today members only)", () => {
   // in Anytime, NOT Today — the field must be omitted, not reported "today".
   it("omits todaySection for an undated Anytime to-do", () => {
     const todo = mapTodo(row({ start: 1, startDate: null, startBucket: 0 }), refs, [], TODAY);
-    expect(todo.start).toBe("active");
-    expect(todo.todaySection).toBeNull();
+    expect(todo.derived.start).toBe("active");
+    expect(todo.derived.todaySection).toBeNull();
   });
 
   // A future startDate (Upcoming) also carries startBucket=0; still not Today.
   it("omits todaySection for a future-scheduled (Upcoming) to-do", () => {
     const todo = mapTodo(row({ start: 1, startDate: FUTURE, startBucket: 0 }), refs, [], TODAY);
-    expect(todo.todaySection).toBeNull();
+    expect(todo.derived.todaySection).toBeNull();
   });
 
   // Overdue scheduled rows (startDate < today) DO sit in Today.
   it("keeps todaySection='today' for an overdue scheduled to-do", () => {
     const todo = mapTodo(row({ start: 1, startDate: PAST, startBucket: 0 }), refs, [], TODAY);
-    expect(todo.todaySection).toBe("today");
+    expect(todo.derived.todaySection).toBe("today");
   });
 
   // A dated Today member with startBucket=0 reports "today".
   it("reports todaySection='today' for a to-do scheduled today", () => {
     const todo = mapTodo(row({ start: 1, startDate: TODAY, startBucket: 0 }), refs, [], TODAY);
-    expect(todo.todaySection).toBe("today");
+    expect(todo.derived.todaySection).toBe("today");
   });
 
   // Inbox rows (start=0) are never in Today, whatever their raw startBucket.
   it("omits todaySection for an inbox to-do", () => {
     const todo = mapTodo(row({ start: 0, startDate: null, startBucket: 0 }), refs, [], TODAY);
-    expect(todo.todaySection).toBeNull();
+    expect(todo.derived.todaySection).toBeNull();
   });
 });
 
@@ -139,9 +139,9 @@ describe("reminderLive marker (§9n stale-reminder gating)", () => {
       TODAY,
     );
     expect(todo.reminder).toBe("18:00"); // raw byte still decoded (write path reads it)
-    expect(todo.reminderLive).toBeUndefined(); // ...but not live → read/render suppress it
+    expect(todo.derived.reminderLive).toBeUndefined(); // ...but not live → read/render suppress it
     // It IS still an arrived Today member (the today marker is unaffected).
-    expect(todo.today).toBe(true);
+    expect(todo.derived.today).toBe(true);
   });
 
   it("a TODAY-dated reminder is live: marker set", () => {
@@ -152,7 +152,7 @@ describe("reminderLive marker (§9n stale-reminder gating)", () => {
       TODAY,
     );
     expect(todo.reminder).toBe("18:00");
-    expect(todo.reminderLive).toBe(true);
+    expect(todo.derived.reminderLive).toBe(true);
   });
 
   it("a FUTURE-dated reminder is live (an upcoming reminder): marker set", () => {
@@ -163,13 +163,13 @@ describe("reminderLive marker (§9n stale-reminder gating)", () => {
       TODAY,
     );
     expect(todo.reminder).toBe("18:00");
-    expect(todo.reminderLive).toBe(true);
+    expect(todo.derived.reminderLive).toBe(true);
   });
 
   it("no reminderTime → no marker (nothing to gate)", () => {
     const todo = mapTodo(row({ start: 1, startDate: PAST, reminderTime: null }), refs, [], TODAY);
     expect(todo.reminder).toBeNull();
-    expect(todo.reminderLive).toBeUndefined();
+    expect(todo.derived.reminderLive).toBeUndefined();
   });
 
   it("a reminder with NO startDate keeps the byte live (defensive — the app never produces this shape)", () => {
@@ -183,7 +183,7 @@ describe("reminderLive marker (§9n stale-reminder gating)", () => {
       TODAY,
     );
     expect(todo.reminder).toBe("18:00");
-    expect(todo.reminderLive).toBe(true);
+    expect(todo.derived.reminderLive).toBe(true);
   });
 
   it("generalizes to projects (the marker lives on the shared common fields)", () => {
@@ -194,7 +194,7 @@ describe("reminderLive marker (§9n stale-reminder gating)", () => {
       TODAY,
     );
     expect(staleProject.reminder).toBe("18:00");
-    expect(staleProject.reminderLive).toBeUndefined();
+    expect(staleProject.derived.reminderLive).toBeUndefined();
   });
 });
 
