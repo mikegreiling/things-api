@@ -325,6 +325,10 @@ function capturePre(
       preRanks[uuid] = reader.rankOf(uuid, spec.key);
     }
     fields["__ordering__"] = preRanks;
+    // LOGSORT ORD-13: capture each frozen (unswept-resolved) movee's asserted
+    // fields AND its userModificationDate, so the post-op eval can prove the
+    // native re-rank left them index-only + umd-silent (no reopen).
+    for (const f of spec.frozen ?? []) captureFor(f.uuid, f.assert);
   }
   if (spec.mode === "entity-updated") {
     const current = reader.entityFields(spec.entity, spec.uuid);
@@ -520,8 +524,15 @@ export async function runMutation<K extends OperationKind>(
   }
 
   try {
-    // 3. Pre-read.
-    const pre = spec.preRead(deps.db, params, deps.now?.() ?? new Date());
+    // 3. Pre-read. The consumer zone (options.zone ?? deps.zone) is threaded so
+    // any boundary-derived pre-state (the reorder swept/unswept log boundary,
+    // LOGSORT ORD-13) is computed under the SAME zone the reads use.
+    const pre = spec.preRead(
+      deps.db,
+      params,
+      deps.now?.() ?? new Date(),
+      options.zone ?? deps.zone,
+    );
 
     // 3a. Universal container-scope gate — runs for EVERY op (unlike hazards),
     // BEFORE evaluateGuards so a scope refusal precedes any hazard copy. It may

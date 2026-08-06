@@ -2901,7 +2901,9 @@ function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string)
     ...(target.container !== undefined && { container: { uuid: target.container } }),
   };
   const containerUuid = target.container ?? null;
-  const pre = computeReorderPre(deps.db, params, containerUuid, deps.now?.() ?? new Date());
+  const pre = computeReorderPre(deps.db, params, containerUuid, deps.now?.() ?? new Date(), {
+    zone: deps.zone,
+  });
   return pre.members.map((m) => m.uuid);
 }
 

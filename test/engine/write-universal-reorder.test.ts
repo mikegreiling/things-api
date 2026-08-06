@@ -221,10 +221,71 @@ describe("universal reorder — refusals", () => {
   });
 });
 
-describe("universal reorder — resolved to-do movees (LOGSORT)", () => {
+/** Hold resolutions UNSWEPT: logInterval 4 (Manually) with a manualLogDate BELOW the stopDates. */
+function unsweptSettings(manualLogDate = 1_780_000_000): void {
+  fixture.db
+    .prepare(`INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES (?, 4, ?)`)
+    .run("settings-1", manualLogDate);
+}
+
+/**
+ * A native reorder vector that mimics the LOGSORT byte-level law: sets `index`
+ * ONLY, `userModificationDate`-SILENT, status/stopDate untouched — the certified
+ * behavior for OPEN and UNSWEPT-resolved rows alike.
+ */
+function nativeVectorIndexOnly() {
+  const calls: string[] = [];
+  const vector: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.move-heading": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(invocation) {
+      calls.push(invocation.payload);
+      const ids = /with ids "([^"]+)"/.exec(invocation.payload)?.[1]?.split(",") ?? [];
+      let rank = 1;
+      for (const uuid of ids) {
+        fixture.db.prepare(`UPDATE TMTask SET "index" = ? WHERE uuid = ?`).run(rank++, uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector, calls };
+}
+
+/**
+ * A BUGGY native reorder vector that REOPENS every row it re-ranks (status→open,
+ * stopDate→NULL, umd bump) — the exact failure mode the ORD-13 delta byte-lock
+ * must catch on a resolved movee.
+ */
+function reopeningVector() {
+  const vector: WriteVector = {
+    id: "applescript",
+    matrix: {
+      reorder: { support: "partial", disruption: 0, validation: "validated", experimental: true },
+      "project.move-heading": { support: "yes", disruption: 0, validation: "validated" },
+    },
+    async execute(invocation) {
+      const ids = /with ids "([^"]+)"/.exec(invocation.payload)?.[1]?.split(",") ?? [];
+      let rank = 1;
+      for (const uuid of ids) {
+        fixture.db
+          .prepare(
+            `UPDATE TMTask SET "index" = ?, status = 0, stopDate = NULL, userModificationDate = ? WHERE uuid = ?`,
+          )
+          .run(rank++, modClock++, uuid);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+  return { vector };
+}
+
+describe("universal reorder — resolved to-do movees (LOGSORT ORD-13)", () => {
   it("refuses a swept resolved to-do, pointing at reactivation / --completed-at", () => {
     // logInterval default 0 (Immediately) → boundary = now → a completed row with a
-    // past stopDate is SWEPT.
+    // past stopDate is SWEPT. Even the native permit never admits it (a re-rank reopens it).
     const project = seedProject(fixture.db, { title: "P" });
     const done = seedTodo(fixture.db, {
       title: "Done",
@@ -238,18 +299,19 @@ describe("universal reorder — resolved to-do movees (LOGSORT)", () => {
       { scope: "project", uuids: [done], container: { uuid: project } },
       project,
       NOW,
+      { admitResolved: true },
     );
+    expect(pre.members.map((m) => m.uuid)).not.toContain(done);
+    expect(pre.resolvedMembers).toHaveLength(0);
     const reason = pre.rejected.find((r) => r.uuid === done)?.reason ?? "";
     expect(reason).toContain("Logbook");
     expect(reason).toContain("--completed-at");
   });
 
-  it("refuses an unswept resolved to-do with a distinct (reopen-first) message", () => {
-    // Hold the completion UNSWEPT: logInterval 4 (Manually) with a manualLogDate
-    // BEFORE the stopDate keeps the row in the live body.
-    fixture.db
-      .prepare(`INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES (?, 4, ?)`)
-      .run("settings-1", 1_780_000_000);
+  it("refuses an unswept resolved movee on a NON-native path (native-only condition)", () => {
+    // admitResolved=false models every bounce/move/day-axis orchestrator: the
+    // uncertified protocol keeps the resolved movee refused with the native-only copy.
+    unsweptSettings();
     const project = seedProject(fixture.db, { title: "P" });
     const done = seedTodo(fixture.db, {
       title: "Done",
@@ -264,10 +326,149 @@ describe("universal reorder — resolved to-do movees (LOGSORT)", () => {
       project,
       NOW,
     );
+    expect(pre.resolvedMembers).toHaveLength(0);
     const reason = pre.rejected.find((r) => r.uuid === done)?.reason ?? "";
     expect(reason).toContain("resolved");
+    expect(reason).toContain("native");
     expect(reason).toContain("reopen");
     expect(reason).not.toContain("Logbook");
+  });
+
+  it("ADMITS an unswept resolved movee on the pure-native index path (permit)", () => {
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    const done = seedTodo(fixture.db, {
+      title: "Done",
+      project,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 2,
+    });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "project", uuids: [done], container: { uuid: project } },
+      project,
+      NOW,
+      { admitResolved: true },
+    );
+    expect(pre.rejected).toHaveLength(0);
+    expect(pre.members.map((m) => m.uuid)).toContain(done);
+    expect(pre.resolvedMembers).toEqual([
+      expect.objectContaining({ uuid: done, status: "completed" }),
+    ]);
+  });
+
+  it("a canceled (status=2) unswept movee is admitted just like a completed one", () => {
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    const cxl = seedTodo(fixture.db, {
+      title: "Cxl",
+      project,
+      status: "canceled",
+      stopDate: 1_785_000_000,
+      index: 1,
+    });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "project", uuids: [cxl], container: { uuid: project } },
+      project,
+      NOW,
+      { admitResolved: true },
+    );
+    expect(pre.rejected).toHaveLength(0);
+    expect(pre.resolvedMembers).toEqual([
+      expect.objectContaining({ uuid: cxl, status: "canceled" }),
+    ]);
+  });
+
+  it("permits a MIXED open + unswept-resolved wire end-to-end, resolved row NOT reopened", async () => {
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    const open1 = seedTodo(fixture.db, { title: "Open1", project, index: 1 });
+    const done = seedTodo(fixture.db, {
+      title: "Done",
+      project,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 2,
+    });
+    const { vector, calls } = nativeVectorIndexOnly();
+    const result = await runUniversalReorder(deps([vector]), {
+      uuids: [done, open1],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-ok");
+    expect(calls.join(" ")).toContain("with ids");
+    // The resolved row moved by index but stayed resolved (no reopen) — the ORD-13 law.
+    const row = fixture.db
+      .prepare(`SELECT status, stopDate FROM TMTask WHERE uuid = ?`)
+      .get(done) as { status: number; stopDate: number | null };
+    expect(row.status).toBe(3);
+    expect(row.stopDate).toBe(1_785_000_000);
+  });
+
+  it("the delta byte-lock FAILS the reorder when a resolved movee is reopened", async () => {
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    seedTodo(fixture.db, { title: "Open1", project, index: 1 });
+    const done = seedTodo(fixture.db, {
+      title: "Done",
+      project,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 2,
+    });
+    const { vector } = reopeningVector();
+    const result = await runUniversalReorder(
+      deps([vector]),
+      { uuids: [done], position: { at: "first" } },
+      { verifyTimeoutMs: 100 },
+    );
+    // The reopening vector violates the frozen (status/stoppedDate/umd) lock → verify fails.
+    expect(result.kind).not.toBe("move-ok");
+  });
+
+  it("refuses an unswept resolved movee end-to-end when native is UNAVAILABLE", async () => {
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    seedTodo(fixture.db, { title: "Open1", project, index: 1 });
+    const done = seedTodo(fixture.db, {
+      title: "Done",
+      project,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 2,
+    });
+    const { vector } = nativeVectorIndexOnly();
+    // sdef canary fails → native unavailable → project routes to the PROJROOT move
+    // fallback, which is uncertified for resolved rows → refused (native-only copy).
+    const result = await runUniversalReorder(deps([vector], { sdefProbe: () => false }), {
+      uuids: [done],
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-refused");
+    if (result.kind === "move-refused") {
+      expect(result.detail).toContain("resolved");
+      expect(result.detail).toContain("native");
+    }
+  });
+
+  it("does NOT admit a resolved movee on a day-axis (todayIndex) scope", () => {
+    // The permit is index-axis only; a `today` scope keys on todayIndex, so even with
+    // admitResolved the resolved row stays refused (--in <date> day-axis exclusion).
+    unsweptSettings();
+    const done = seedTodo(fixture.db, {
+      title: "Done",
+      status: "completed",
+      stopDate: 1_785_000_000,
+      start: "active",
+      index: 1,
+    });
+    const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [done] }, null, NOW, {
+      admitResolved: true,
+    });
+    expect(pre.resolvedMembers).toHaveLength(0);
+    expect(pre.members.map((m) => m.uuid)).not.toContain(done);
   });
 });
 
@@ -288,5 +489,32 @@ describe("universal reorder — O06 heading-child protection", () => {
     expect(pre.members.map((m) => m.uuid)).toContain(bodyChild);
     const rej = pre.rejected.find((r) => r.uuid === headedChild)?.reason ?? "";
     expect(rej).toContain("heading");
+  });
+
+  it("O06 protection takes precedence over the ORD-13 permit for a resolved headed child", () => {
+    // A resolved child that ALSO lives under a heading rejects for the reparent
+    // hazard (O06), not the resolved-permit condition — even with admitResolved.
+    unsweptSettings();
+    const project = seedProject(fixture.db, { title: "P" });
+    const heading = seedHeading(fixture.db, { title: "H", project, index: 1 });
+    const headedDone = seedTodo(fixture.db, {
+      title: "HeadedDone",
+      project,
+      heading,
+      status: "completed",
+      stopDate: 1_785_000_000,
+      index: 1,
+    });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "project", uuids: [headedDone], container: { uuid: project } },
+      project,
+      NOW,
+      { admitResolved: true },
+    );
+    expect(pre.resolvedMembers).toHaveLength(0);
+    const rej = pre.rejected.find((r) => r.uuid === headedDone)?.reason ?? "";
+    expect(rej).toContain("heading");
+    expect(rej).not.toContain("Logbook");
   });
 });

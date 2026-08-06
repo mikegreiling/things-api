@@ -71,6 +71,16 @@ export interface ReorderPre {
   mixedTypes: boolean;
   /** Full wire list: requested order first, remaining members after. */
   wireList: string[];
+  /**
+   * Requested movees that are UNSWEPT-RESOLVED to-dos ADMITTED as members under
+   * the LOGSORT ORD-13 permit (only ever non-empty on the pure-native `index`
+   * wire — the exact leg family LOGSORT certified). Carries each row's pre-op
+   * `status` (completed/canceled) and host-local `stoppedDate` so the reorder
+   * delta can lock the byte-level invariant (index-only, no reopen: status +
+   * stoppedDate + umd unchanged). Empty on every non-native / day-axis / swept
+   * path, where a resolved movee stays refused.
+   */
+  resolvedMembers: { uuid: string; status: TaskStatus; stoppedDate: IsoDate | null }[];
 }
 
 /** area.delete: live member census of the area (non-trashed direct rows). */
@@ -947,27 +957,40 @@ interface MemberRow {
  */
 /**
  * A precise refusal reason for a RESOLVED (completed/canceled) to-do handed to a
- * reorder, or null when the row is not a resolved to-do (LOGSORT laws / doctrine
- * R6). A SWEPT to-do lives in the Logbook — reorder has no Logbook order axis, so
- * point at reactivation (`things todo reopen`) or, for Logbook re-dating,
- * `--completed-at`. An UNSWEPT resolved to-do is a live-body resident that LOGSORT
- * proves re-ranks cleanly index-only, but that permit is not yet wired on this
- * surface (it must run native-only — the move/bounce fallbacks are uncertified for
- * resolved rows), so it is refused honestly, distinct from a plain non-member.
+ * reorder that could NOT be admitted, or null when the row is not a resolved
+ * to-do (LOGSORT ORD-13 / doctrine R6). Two distinct refusals:
+ *
+ *  - SWEPT (in the Logbook): reorder has no Logbook order axis, so point at
+ *    reactivation (`things todo reopen`) or `--completed-at` to re-date it.
+ *  - UNSWEPT-resolved (a live-body resident): LOGSORT proves it re-ranks cleanly
+ *    index-only, and the permit ADMITS it — but ONLY on the pure-native `index`
+ *    wire (the exact leg family LOGSORT certified). This refusal fires when the
+ *    row reaches a NON-native / day-axis protocol (a move/bounce/materialization
+ *    leg is uncertified for resolved rows and could reopen or misfile it), so it
+ *    is refused honestly, distinct from a plain non-member.
+ *
+ * Sweptness is derived at CALL time against the live log boundary
+ * ({@link logBoundary}) under the consumer `zone`, the same derivation reads use.
  */
-function resolvedTodoReorderReason(db: DatabaseSync, uuid: string, now: Date): string | null {
+function resolvedTodoReorderReason(
+  db: DatabaseSync,
+  uuid: string,
+  now: Date,
+  zone?: string,
+): string | null {
   const r = db
     .prepare("SELECT type, status, stopDate FROM TMTask WHERE uuid = ? AND trashed = 0")
     .get(uuid) as { type: number; status: number; stopDate: number | null } | undefined;
   if (r === undefined || r.type !== 0 || r.status === 0) return null;
   const verb = r.status === 2 ? "canceled" : "completed";
-  const boundaryEpoch = logBoundary(db, now).getTime() / 1000;
+  const boundaryEpoch = logBoundary(db, now, zone).getTime() / 1000;
   const swept = r.stopDate !== null && r.stopDate <= boundaryEpoch;
   return swept
     ? `is a swept ${verb} to-do (in the Logbook) — reorder has no Logbook order to change; ` +
         "reactivate it first (`things todo reopen`), or use `--completed-at` to re-date it in the Logbook"
-    : `is a ${verb} (resolved) to-do — reordering resolved to-dos is not yet wired on this ` +
-        "surface (reopen it first with `things todo reopen`)";
+    : `is a ${verb} (resolved) to-do — reordering a resolved to-do is only certified on the native ` +
+        "in-place index reorder (LOGSORT ORD-13); this path uses an uncertified protocol for resolved " +
+        "rows (reopen it first with `things todo reopen`)";
 }
 
 export function computeReorderPre(
@@ -975,6 +998,7 @@ export function computeReorderPre(
   params: ReorderParams,
   containerUuid: string | null,
   now: Date,
+  opts: { admitResolved?: boolean; zone?: string | undefined } = {},
 ): ReorderPre {
   const todayIso = localToday(now);
   const packedToday = encodePackedDate(todayIso);
@@ -988,21 +1012,44 @@ export function computeReorderPre(
       ? "todayIndex"
       : "index";
 
+  // LOGSORT ORD-13 permit: admit UNSWEPT-resolved to-do movees ONLY on the pure-
+  // native `index` wire (the private-verb in-place reorder — the exact leg family
+  // LOGSORT certified). `admitResolved` is passed true ONLY by the native `reorder`
+  // op's preRead (the sole caller that runs that wire); every bounce/move/day-axis
+  // orchestrator leaves it false, so a resolved movee reaching an uncertified
+  // protocol stays refused. The `key === "index"` gate additionally excludes the
+  // day-axis scopes (today/container-day/tomorrow — todayIndex), so `--in <date>`
+  // day-axis targets never admit a resolved row.
+  const boundaryEpoch = logBoundary(db, now, opts.zone).getTime() / 1000;
+  const admitResolved = (opts.admitResolved ?? false) && key === "index";
+  // Admitted rows: open (status 0) PLUS — under the permit — UNSWEPT-resolved
+  // to-dos (type 0, closed, stopDate strictly ABOVE the live log boundary). SWEPT
+  // resolved rows (stopDate <= boundary) are NEVER admitted (a re-rank reopens
+  // them); they fall through to the swept refusal.
+  const statusClause = admitResolved
+    ? "(status = 0 OR (type = 0 AND status != 0 AND stopDate IS NOT NULL AND stopDate > ?))"
+    : "status = 0";
+  const statusBinds: number[] = admitResolved ? [boundaryEpoch] : [];
+
   const rowsOf = (
     where: string,
     binds: (string | number)[],
     rankCol: string,
     templateClause: string,
+    statusExpr: string,
+    statusExprBinds: number[],
   ): MemberRow[] =>
     (
       db
         .prepare(
           `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate
            FROM TMTask
-           WHERE trashed = 0 AND status = 0 AND ${templateClause} AND ${where}
+           WHERE trashed = 0 AND ${statusExpr} AND ${templateClause} AND ${where}
            ORDER BY ${rankCol} ASC`,
         )
-        .all(...binds) as unknown as (Omit<MemberRow, "isTemplate"> & { isTemplate: number })[]
+        .all(...statusExprBinds, ...binds) as unknown as (Omit<MemberRow, "isTemplate"> & {
+        isTemplate: number;
+      })[]
     ).map((r) => {
       const m: MemberRow = {
         uuid: r.uuid,
@@ -1016,14 +1063,17 @@ export function computeReorderPre(
     });
 
   // Every scope EXCEPT the day-block scopes excludes templates (NOT_TEMPLATE_ROW).
+  // The index-scope `select` carries the permit's relaxed status clause; the
+  // day-block `selectWithTemplates` never does (todayIndex axis — resolved rows
+  // are refused there per LOGSORT ORD-13).
   const select = (where: string, binds: (string | number)[], rankCol: string): MemberRow[] =>
-    rowsOf(where, binds, rankCol, NOT_TEMPLATE_ROW);
+    rowsOf(where, binds, rankCol, NOT_TEMPLATE_ROW, statusClause, statusBinds);
   // The `day`/`tomorrow` day-block scopes ADMIT templates as first-class members
   // (their strictly-future projection sits on the block todayIndex axis — TMPLSORT/
   // PTMPL); the leg family in reorder.ts splits per class (never a when=/deadline leg
   // on a template — the §1 crash).
   const selectWithTemplates = (where: string, binds: (string | number)[]): MemberRow[] =>
-    rowsOf(where, binds, "todayIndex", "1=1");
+    rowsOf(where, binds, "todayIndex", "1=1", "status = 0", []);
 
   let members: MemberRow[] = [];
   const rejectedCandidates = new Map<string, string>();
@@ -1417,14 +1467,36 @@ export function computeReorderPre(
     if (member === undefined) {
       rejected.push({
         uuid,
+        // O06 heading-child protection (rejectedCandidates) takes precedence over
+        // the resolved-to-do refusal — a headed resolved child rejects for the
+        // reparent hazard, not the reorder-permit condition.
         reason:
           rejectedCandidates.get(uuid) ??
-          resolvedTodoReorderReason(db, uuid, now) ??
+          resolvedTodoReorderReason(db, uuid, now, opts.zone) ??
           "is not an open member of this scope",
       });
       continue;
     }
     if (member.type === 1) projectMembers.push(uuid);
+  }
+
+  // LOGSORT ORD-13: the requested movees ADMITTED as members that are UNSWEPT-
+  // resolved to-dos (only ever non-empty under the pure-native `index` permit).
+  // Their pre-op status + host-local stoppedDate feed the delta byte-lock.
+  const resolvedMembers: ReorderPre["resolvedMembers"] = [];
+  if (admitResolved) {
+    for (const uuid of params.uuids) {
+      if (!memberSet.has(uuid)) continue;
+      const r = db.prepare("SELECT status, stopDate FROM TMTask WHERE uuid = ?").get(uuid) as
+        | { status: number; stopDate: number | null }
+        | undefined;
+      if (r === undefined || r.status === 0) continue;
+      resolvedMembers.push({
+        uuid,
+        status: TASK_STATUS_FROM_DB[r.status] ?? "completed",
+        stoppedDate: r.stopDate === null ? null : hostLocalIsoDate(r.stopDate),
+      });
+    }
   }
 
   const requestedTypes = new Set(
@@ -1465,7 +1537,16 @@ export function computeReorderPre(
     projectMembers,
     mixedTypes,
     wireList,
+    resolvedMembers,
   };
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** Host-local calendar date (`YYYY-MM-DD`) of a stored epoch-seconds timestamp — matches the verify layer's `stoppedDate` day view (delta getField). */
+function hostLocalIsoDate(epochSeconds: number): IsoDate {
+  const d = new Date(epochSeconds * 1000);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}` as IsoDate;
 }
 
 function rowStartDate(db: DatabaseSync, uuid: string): number | null {
