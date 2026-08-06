@@ -127,6 +127,16 @@ describe("AppleScript compilation goldens", () => {
     expect(inv.payload).toBe('tell application "Things3" to delete to do id "U-1"');
   });
 
+  it("log-now compiles the AppleScript `log completed now` (applescript-only)", () => {
+    const inv = COMMANDS["log-now"].compile({}, "applescript", emptyPreState(), { token: null });
+    expect(inv.vector).toBe("applescript");
+    expect(inv.payload).toBe('tell application "Things3" to log completed now');
+    // No headless spelling on any other vector — the planner never selects one.
+    expect(() =>
+      COMMANDS["log-now"].compile({}, "url-scheme", emptyPreState(), { token: null }),
+    ).toThrow();
+  });
+
   it("tag.add with parent emits a two-statement tell block", () => {
     const pre = emptyPreState();
     pre.parentTag = { resolved: { uuid: "TAG-P", title: "prio" }, matches: 1 };

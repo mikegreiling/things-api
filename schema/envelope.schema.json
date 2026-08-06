@@ -158,6 +158,10 @@
           "additionalProperties": false,
           "description": "Whole-view aggregate counts (ADDITIVE). Present ONLY on the `today` view: the app's sidebar count split — `dueOrOverdue` (open members whose deadline is due or overdue) vs. `other` (the rest). A convenience aggregate an agent would otherwise recompute over the rows; it lives here so `data` stays pure domain rows. Both counts are OPEN members only, and a `0` is meaningful."
         },
+        "logging": {
+          "$ref": "#/definitions/LogState",
+          "description": "The Logbook's log-move cadence fact (ADDITIVE). Present ONLY on the `logbook` view: the \"Move completed items to Logbook\" setting in Cultured Code's own words (`cadence` ∈ Immediately | Daily | Manually) plus — under Manually only — `lastLoggedAt`, the ISO-8601 instant of the last explicit log. A whole-view fact an agent would otherwise have no way to read; it lives here so `data` stays pure logged rows (the `meta.counts` precedent). Absent for every other view."
+        },
         "scope": {
           "type": "object",
           "properties": {
@@ -203,6 +207,26 @@
       "required": ["shown", "total", "limit", "truncated"],
       "additionalProperties": false,
       "description": "The single truncation-metadata shape for every read (the `meta.truncation` field). `shown` items were returned of `total` that matched after all filters; `limit` is the effective cap (null when the caller asked for all rows, and always null on a grouped view whose caps are per-block); `truncated` is the UNIVERSAL completeness check — true exactly when anything was dropped (`shown < total`, or any block hid rows). The dropped remainder is `total - shown`.\n\nThis is the WHOLE-VIEW rollup only. Per-bucket completeness rides INLINE on the data records (read-shape v2 R1): each `children`/`sections`/`projects` bucket carries its own `total`, present iff it was capped. The pre-v2 `blocks[]` descriptor-join sidecar is RETIRED from the wire entirely (doctrine v2 PR 5) — the per-block detail the TTY renderers need is internal render plumbing ( {@link  GroupBlock } ), never serialized."
+    },
+    "LogState": {
+      "type": "object",
+      "properties": {
+        "cadence": {
+          "$ref": "#/definitions/LogCadence"
+        },
+        "lastLoggedAt": {
+          "type": "string",
+          "description": "ISO-8601 instant of the last explicit log — present under Manually only."
+        }
+      },
+      "required": ["cadence"],
+      "additionalProperties": false,
+      "description": "A VIEW-LEVEL fact about the Logbook: the log-move cadence in Cultured Code's own Settings words, plus — under Manually only — the instant of the last explicit log (`TMSettings.manualLogDate`), as an ISO-8601 string (an INSTANT, so a consumer renders its calendar day in their own zone; the wire carries the exact instant). Rides `meta.logging` on the wire (never a data row) — the `meta.counts` precedent for a whole-view aggregate."
+    },
+    "LogCadence": {
+      "type": "string",
+      "enum": ["Immediately", "Daily", "Manually"],
+      "description": "The Cultured Code words for the \"Move completed items to Logbook\" cadence — the exact Settings-dropdown labels (`logInterval` 0=Immediately · 1=Daily · 4=Manually; there is NO weekly/monthly in Things 3.22.x, oddities §8c). Kept in the app's own vocabulary so consumer copy never invents a lifecycle word."
     },
     "ErrorEnvelope": {
       "type": "object",

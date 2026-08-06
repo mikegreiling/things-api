@@ -30,6 +30,7 @@ import {
 import type { RefPromoter } from "./read/shape.ts";
 import { areaView, type AreaView } from "./read/area-view.ts";
 import { isLooseRef, looseShadowNotice, shadowingLooseArea } from "./read/pseudo-area.ts";
+import { logState, type LogState } from "./read/log-boundary.ts";
 import { projectView, type ProjectView } from "./read/project-view.ts";
 import { snapshotView, type Snapshot } from "./read/snapshot.ts";
 import { classifyShowTarget, type ShowTarget } from "./read/show-target.ts";
@@ -252,6 +253,15 @@ export interface BoundedList<T> {
 }
 
 /**
+ * A bounded Logbook list: the shown logged rows plus the view-level log-move
+ * cadence fact ({@link LogState}) — surfaced as `meta.logging`, rendered as the
+ * card header on a TTY. A sibling of `filter`, never part of the JSON `data`.
+ */
+export interface BoundedLogbook extends BoundedList<ListItem> {
+  logging: LogState;
+}
+
+/**
  * A bounded global `upcoming` list: the flat {@link truncateList} slice (rendered
  * as-is, grouped by day in the renderer) plus `upcomingTotals` — the PRE-cap
  * per-day-block sizes keyed by `when`, from which each `data.sections` day block's
@@ -442,10 +452,13 @@ export interface ThingsClient {
     someday(
       options?: SomedayFilter & GroupedBound & ClockScopedRead & AreaScopedRead,
     ): BoundedSectionsView;
-    /** Logbook entries (most recent first), bounded (default 50). */
-    logbook(
-      options?: Omit<LogbookFilter, "limit"> & ListBound & ClockScopedRead,
-    ): BoundedList<ListItem>;
+    /**
+     * Logbook entries (most recent first), bounded (default 50), plus the
+     * view-level log-move cadence fact ({@link LogState}) surfaced as
+     * `meta.logging` — the "Move completed items to Logbook" setting in CC's own
+     * words, and the last-logged instant under Manually.
+     */
+    logbook(options?: Omit<LogbookFilter, "limit"> & ListBound & ClockScopedRead): BoundedLogbook;
     /** Trashed items (most recently modified first), bounded (default 50). */
     trash(options?: ListBound & ClockScopedRead): BoundedList<ListItem>;
     /**
@@ -761,6 +774,14 @@ export interface ThingsClient {
     ): Promise<MutationResult>;
     deleteTag(target: string, options?: WriteOptions): Promise<MutationResult>;
     emptyTrash(options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Move completed items into the Logbook now (`log completed now`). The result
+     * discloses how many items were logged (`observed.logged`); when nothing is
+     * pending it is a clean no-op (`logged: 0`, not an error). IRREVERSIBLE — the
+     * log-move boundary cannot be rewound by any official surface, so no undo token
+     * is emitted.
+     */
+    logNow(options?: WriteOptions): Promise<MutationResult>;
     /**
      * Reorder within Today / This Evening / a project / an area. Partial
      * uuid lists are placed on top; the rest keep their current order.
@@ -1105,7 +1126,12 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         // only resolves the target for the additive `filter` annotation so the
         // meta shape matches the post-filtered views.
         const areaFilter = o?.area !== undefined ? { area: areaFilterTarget(o.area) } : undefined;
-        return { items: data, truncation, ...(areaFilter !== undefined && { filter: areaFilter }) };
+        return {
+          items: data,
+          truncation,
+          logging: logState(conn.db),
+          ...(areaFilter !== undefined && { filter: areaFilter }),
+        };
       },
       trash: (o) => {
         let items = trashView(conn.db, now(), { limit: null }, zoneOf(o));
@@ -1343,6 +1369,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       updateTag: (target, patch, o) => run("tag.update", { target, ...patch }, o),
       deleteTag: (target, o) => run("tag.delete", { target }, o),
       emptyTrash: (o) => run("trash.empty", {}, o),
+      logNow: (o) => run("log-now", {}, o),
       reorder: (params, o) => runReorder(writeDeps, params, o ?? {}),
       batch: (ops, o, onResult) => runBatch(writeDeps, ops, o ?? {}, onResult),
       undo: (o, onItem) => runUndo(writeDeps, auditDir(env), o ?? {}, onItem),

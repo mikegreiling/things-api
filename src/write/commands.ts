@@ -17,6 +17,7 @@ import {
 } from "../model/dates.ts";
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
+import { manualLogDateEpoch, pendingLogCount } from "../read/log-boundary.ts";
 import { isLooseRef } from "../read/pseudo-area.ts";
 import { reminderIsLive } from "../read/stage.ts";
 import type { HazardId } from "./guards.ts";
@@ -2683,6 +2684,29 @@ const trashEmpty: CommandSpec<"trash.empty"> = {
   },
 };
 
+const logNow: CommandSpec<"log-now"> = {
+  op: "log-now",
+  hazards: [],
+  preRead(db, _params, now, zone) {
+    const pre = emptyPreState();
+    // The resolved-but-unlogged census the verb will move (the disclosed count),
+    // and the pre-op boundary stamp the delta compares against.
+    pre.logNow = {
+      pending: pendingLogCount(db, now, zone),
+      manualLogDatePre: manualLogDateEpoch(db),
+    };
+    return pre;
+  },
+  expectedDelta(pre) {
+    const ln = pre.logNow ?? { pending: 0, manualLogDatePre: null };
+    return { mode: "logged-now", pending: ln.pending, manualLogDatePre: ln.manualLogDatePre };
+  },
+  compile(_params, vector) {
+    if (vector !== "applescript") unsupportedVector(this.op, vector);
+    return osa("log completed now");
+  },
+};
+
 export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "todo.add": todoAdd,
   "todo.update": todoUpdate,
@@ -2736,4 +2760,5 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
   "project.add-repeating": projectAddRepeating,
+  "log-now": logNow,
 };

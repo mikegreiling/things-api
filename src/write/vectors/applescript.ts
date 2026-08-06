@@ -156,6 +156,16 @@ export const APPLESCRIPT_MATRIX: VectorMatrix = {
     evidence: ["A27"],
     notes: "PERMANENT — hard-deletes every trashed row",
   },
+  "log-now": {
+    support: "yes",
+    disruption: 0,
+    validation: "validated",
+    evidence: ["A28", "LOGNOW", "plog1"],
+    notes:
+      "`log completed now` advances TMSettings.manualLogDate to move resolved-but-unlogged items " +
+      "into the Logbook — mutates ZERO task rows (the sweep is a derived boundary); a no-op when " +
+      "nothing is pending (advances only when there are completions to log)",
+  },
   "todo.set-dates": {
     support: "yes",
     disruption: 0,

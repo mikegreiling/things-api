@@ -1506,6 +1506,16 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
+  "log-now": {
+    class: "irreversible",
+    register() {
+      it("planUndo reports it irreversible (the log-move boundary cannot be rewound)", () => {
+        const plan = planUndo(auditRecord({ op: "log-now", uuid: null }), NOW);
+        expect(plan.kind).toBe("irreversible");
+        expect(plan.reason).toContain("Logbook");
+      });
+    },
+  },
 
   // ---- ui (GUI) vector: reversible pause↔resume pair, the rest irreversible
 

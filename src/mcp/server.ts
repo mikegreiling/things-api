@@ -1075,6 +1075,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const {
                 items,
                 truncation,
+                logging,
                 filter: fm,
               } = c.read.logbook({
                 ...filter,
@@ -1083,9 +1084,12 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 limit,
               });
               filterMeta = fm;
+              // The log-move cadence fact rides the metadata block (the CLI
+              // meta.logging analog, exactly as today's counts do).
               return truncatedResult(
                 shapeReadPayload("logbook", items, full, c.refPromoter()),
                 truncation,
+                { logging },
               );
             }
             case "trash": {
@@ -2741,6 +2745,20 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ),
         ),
       ),
+  );
+
+  server.registerTool(
+    "log_now",
+    {
+      description:
+        "Move completed items to the Logbook now. The result discloses how many items were moved " +
+        "(observed.logged); when none are waiting it logs nothing — a clean no-op, not an error. " +
+        "This cannot be undone.",
+      inputSchema: { ...dryRunShape, ...opIdShape },
+      annotations: DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => mutationResult(await getClient().write.logNow(writeOptions(args)))),
   );
 
   // -------------------------------------------------- generic + discovery

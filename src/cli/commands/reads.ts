@@ -80,6 +80,7 @@ import {
   type EnvelopeMeta,
   type GroupedLimits,
   type ListItem,
+  type LogState,
   type TodayView,
   type ViewFilter,
 } from "../../index.ts";
@@ -853,6 +854,9 @@ export function registerReadCommands(program: Command): void {
           opts.until !== undefined && `--until ${shellQuote(opts.until)}`,
           ...tagInvocationParts(opts),
         ]);
+        // Captured inside `fn` (where the db read happens) and read back by the
+        // render callback — the log-move cadence card header (TTY) and meta.logging.
+        let logging: LogState | undefined;
         runRead(
           opts,
           "logbook",
@@ -860,6 +864,7 @@ export function registerReadCommands(program: Command): void {
             const {
               items,
               truncation,
+              logging: lg,
               filter: areaFilter,
             } = c.read.logbook({
               ...(opts.area !== undefined && { area: opts.area }),
@@ -869,15 +874,17 @@ export function registerReadCommands(program: Command): void {
               ...tagFilterFields(opts),
               limit: effectiveLimit,
             });
+            logging = lg;
             const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: items,
               truncation,
+              logging: lg,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
             };
           },
-          (items: ListItem[]) => renderLogbook(items),
+          (items: ListItem[]) => renderLogbook(items, logging),
           base,
           "logbook",
         );

@@ -196,6 +196,42 @@ describe("cli end-to-end (fixture db)", () => {
     expect(envelope.meta.counts).toEqual({ dueOrOverdue: 0, other: 2 });
   });
 
+  it("things logbook --json carries the log-move cadence on meta.logging (Manually + lastLoggedAt)", () => {
+    fx = buildFixtureDb();
+    const manual = Math.floor(Date.now() / 1000) - 60;
+    fx.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 4, ?)")
+      .run(manual);
+    // Completed BEFORE the boundary → logged (appears in the Logbook).
+    seedTodo(fx.db, { title: "logged win", status: "completed", stopDate: manual - 3600 });
+
+    const { stdout, exitCode } = runCli(["logbook", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.kind).toBe("logbook");
+    // The cadence fact rides meta.logging (never the data rows).
+    expect(env.meta.logging.cadence).toBe("Manually");
+    expect(typeof env.meta.logging.lastLoggedAt).toBe("string");
+    expect("logging" in env.data).toBe(false);
+    expect(env.data.items.map((i: { title: string }) => i.title)).toEqual(["logged win"]);
+  });
+
+  it("things logbook meta.logging is Immediately with no lastLoggedAt under the golden default", () => {
+    fx = buildFixtureDb(); // no TMSettings row → logInterval defaults to Immediately
+    const { stdout, exitCode } = runCli(["logbook", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.meta.logging).toEqual({ cadence: "Immediately" });
+  });
+
+  it("things logbook renders the cadence card header on a TTY", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "old win", status: "completed", stopDate: 1_700_000_000 });
+    const { stdout, exitCode } = runCli(["logbook", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("cadence: Immediately");
+  });
+
   it("things today puts ★/⏾ in the section headers, not on the rows; counts at the top", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "morning", startDate: localToday(), todayIndex: 1 });

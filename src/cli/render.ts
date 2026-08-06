@@ -18,6 +18,7 @@ import {
   type GroupBlock,
   type GroupedLimits,
   type ListItem,
+  type LogState,
   type Project,
   type SidebarSection,
   REF_PREFIX_LEN,
@@ -43,6 +44,7 @@ import {
   projectTitleAccent,
   provisionalPip,
   REMINDER_MARK,
+  shortDate,
   todayStar,
   todoBox,
 } from "./glyphs.ts";
@@ -680,6 +682,24 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
 }
 
 /**
+ * The log-move cadence card header (TTY only): the "Move completed items to
+ * Logbook" setting in Cultured Code's own words, as indented `key: value`
+ * metadata lines — the same header convention `things today` / `area show` use.
+ * Under Manually the last explicit log's day is shown too (the instant resolved
+ * in the CONSUMER zone, the viewer-local Z-LOGVIEW convention the row dates use).
+ */
+export function logbookHeaderLines(logging: LogState, now?: Date): string[] {
+  const lines = [`  ${dim("cadence:")} ${logging.cadence}`];
+  if (logging.lastLoggedAt !== undefined) {
+    const zone = renderZone();
+    const todayIso = localToday(now ?? renderNow(), zone);
+    const day = shortDate(instantDateIso(new Date(logging.lastLoggedAt), zone), todayIso);
+    lines.push(`  ${dim("last logged:")} ${day}`);
+  }
+  return lines;
+}
+
+/**
  * Logbook rows under GUI-style date headings, month granularity throughout
  * — `── July ──` within the current year, `── March 2025 ──` beyond (finer
  * than the GUI's bare per-year buckets, deliberately). Truncation past the
@@ -687,8 +707,20 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
  * Resolved is the Logbook's NORM, so rows pass `resolvedNormal`: completed
  * titles render plain and canceled titles keep their strikethrough but drop
  * the dim (the blue `[✓]`/`[×]` marks and logged date are unchanged).
+ *
+ * `logging` (the log-move cadence fact) leads the render as the card header when
+ * given; the empty Logbook still shows the header (the cadence is a fact about
+ * an empty Logbook too), then `(empty)`.
  */
-export function renderLogbook(items: ListItem[], now?: Date): string[] {
+export function renderLogbook(items: ListItem[], logging?: LogState, now?: Date): string[] {
+  const header = logging !== undefined ? logbookHeaderLines(logging, now) : [];
+  const body = renderLogbookBody(items, now);
+  // Exactly one blank between the cadence header and the body (the today/area-
+  // show header spacing); an empty Logbook still shows the header, then `(empty)`.
+  return header.length > 0 ? [...header, "", ...body] : body;
+}
+
+function renderLogbookBody(items: ListItem[], now?: Date): string[] {
   if (items.length === 0) return ["(empty)"];
   const w = uuidDisplayWidth(items);
   const zone = renderZone();

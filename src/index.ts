@@ -162,6 +162,9 @@ export { resolveClock, clockMeta, ClockError } from "./model/clock.ts";
 export type { EffectiveClock, ClockMeta } from "./model/clock.ts";
 export type { ClockScopedRead } from "./client.ts";
 export type { ListItem, SidebarSection, TodayView } from "./read/views.ts";
+// The Logbook log-move cadence fact (surfaced as `meta.logging`): CC's own
+// Settings words + the last-logged instant under Manually.
+export type { LogCadence, LogState } from "./read/log-boundary.ts";
 export type { ProjectView } from "./read/project-view.ts";
 export type { AreaView } from "./read/area-view.ts";
 export {

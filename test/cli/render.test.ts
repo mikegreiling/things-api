@@ -501,7 +501,7 @@ describe("logbook", () => {
   it("renders month headings (year appended beyond the current year) and no heading rows", () => {
     fixture = buildFixtureDb();
     const { area } = seedLoggedWorld(fixture);
-    const lines = renderLogbook(logbookView(fixture.db, undefined, { area }), NOW);
+    const lines = renderLogbook(logbookView(fixture.db, undefined, { area }), undefined, NOW);
     expect(lines[0]).toBe("── July ──");
     expect(lines).toContain("── June ──");
     expect(lines).toContain("── March 2025 ──");
@@ -510,6 +510,53 @@ describe("logbook", () => {
     const nested = lines.find((l) => l.includes("Heading child win"));
     expect(nested).toContain("(Garage)");
     expect(lines.join("\n")).not.toContain("Shelving");
+  });
+
+  it("leads with the log-move cadence card header (CC's Settings words)", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Win",
+      status: "completed",
+      stopDate: stopAt("2026-07-01T12:00:00Z"),
+    });
+    const lines = renderLogbook(logbookView(fixture.db, undefined, {}), { cadence: "Daily" }, NOW);
+    expect(lines[0]).toBe("  cadence: Daily");
+    // Exactly one blank between the header and the first month block.
+    expect(lines[1]).toBe("");
+    expect(lines[2]).toBe("── July ──");
+  });
+
+  it("under Manually the header also shows the last-logged day", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Win",
+      status: "completed",
+      stopDate: stopAt("2026-07-01T12:00:00Z"),
+    });
+    const lines = renderLogbook(
+      logbookView(fixture.db, undefined, {}),
+      { cadence: "Manually", lastLoggedAt: "2026-07-03T12:00:00Z" },
+      NOW,
+    );
+    expect(lines[0]).toBe("  cadence: Manually");
+    expect(lines[1]).toBe("  last logged: Jul 3");
+  });
+
+  it("shows the cadence header even for an empty Logbook", () => {
+    const lines = renderLogbook([], { cadence: "Immediately" }, NOW);
+    expect(lines[0]).toBe("  cadence: Immediately");
+    expect(lines.at(-1)).toBe("(empty)");
+  });
+
+  it("omits the header when no cadence fact is passed (bare row render)", () => {
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Win",
+      status: "completed",
+      stopDate: stopAt("2026-07-01T12:00:00Z"),
+    });
+    const lines = renderLogbook(logbookView(fixture.db, undefined, {}), undefined, NOW);
+    expect(lines[0]).toBe("── July ──");
   });
 
   it("excludes closed items the log-move sweep has not passed (completion ≠ logged)", () => {
@@ -624,6 +671,25 @@ describe("logbook render-zone audit (host-zone formatting regression lock)", () 
     expect(lines[0]).toBe("── July ──");
     const row = lines.find((l) => l.includes("Boundary win"));
     expect(row).toContain("Jul 31");
+  });
+
+  // The Manually header's `last logged` day is an INSTANT rendered viewer-local,
+  // exactly like the row logged-date — a near-midnight manualLogDate lands on a
+  // different calendar day in two zones, and the header must track the consumer
+  // zone, never the host zone (#414 render-zone audit).
+  it("the Manually header's last-logged day follows the consumer zone (ahead → next month)", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: ZONE_AUDIT_NOW, zone: "Pacific/Kiritimati" }); // UTC+14
+    const lines = renderLogbook([], { cadence: "Manually", lastLoggedAt: NEAR_MIDNIGHT });
+    expect(lines[0]).toBe("  cadence: Manually");
+    expect(lines[1]).toBe("  last logged: Aug 1"); // 2026-07-31T12:30Z +14 → Aug 1
+  });
+
+  it("the Manually header's last-logged day follows the consumer zone (behind → stays July)", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: ZONE_AUDIT_NOW, zone: "Pacific/Midway" }); // UTC−11
+    const lines = renderLogbook([], { cadence: "Manually", lastLoggedAt: NEAR_MIDNIGHT });
+    expect(lines[1]).toBe("  last logged: Jul 31");
   });
 });
 

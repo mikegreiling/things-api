@@ -66,6 +66,74 @@ export function logBoundary(db: DatabaseSync, now = new Date(), zone?: string): 
   return manual !== null && manual > auto ? manual : auto;
 }
 
+/**
+ * The Cultured Code words for the "Move completed items to Logbook" cadence —
+ * the exact Settings-dropdown labels (`logInterval` 0=Immediately · 1=Daily ·
+ * 4=Manually; there is NO weekly/monthly in Things 3.22.x, oddities §8c). Kept
+ * in the app's own vocabulary so consumer copy never invents a lifecycle word.
+ */
+export type LogCadence = "Immediately" | "Daily" | "Manually";
+
+/**
+ * A VIEW-LEVEL fact about the Logbook: the log-move cadence in Cultured Code's
+ * own Settings words, plus — under Manually only — the instant of the last
+ * explicit log (`TMSettings.manualLogDate`), as an ISO-8601 string (an INSTANT,
+ * so a consumer renders its calendar day in their own zone; the wire carries the
+ * exact instant). Rides `meta.logging` on the wire (never a data row) — the
+ * `meta.counts` precedent for a whole-view aggregate.
+ */
+export interface LogState {
+  cadence: LogCadence;
+  /** ISO-8601 instant of the last explicit log — present under Manually only. */
+  lastLoggedAt?: string;
+}
+
+/**
+ * Read the log-move cadence fact from the `TMSettings` singleton. The golden
+ * default is Immediately (`logInterval` absent/0 → boundary is `now`, so nothing
+ * is ever pending). `manualLogDate` is surfaced as `lastLoggedAt` ONLY under
+ * Manually — under Immediately/Daily any stored value is a stale artifact (a
+ * settings-flip stamp), not the operative cadence.
+ */
+export function logState(db: DatabaseSync): LogState {
+  const row = db.prepare("SELECT logInterval, manualLogDate FROM TMSettings").get() as
+    | { logInterval: number | null; manualLogDate: number | null }
+    | undefined;
+  const interval = row?.logInterval ?? 0;
+  const cadence: LogCadence =
+    interval === 0 ? "Immediately" : interval === 1 ? "Daily" : "Manually";
+  const manual = row?.manualLogDate ?? null;
+  return cadence === "Manually" && manual !== null
+    ? { cadence, lastLoggedAt: new Date(manual * 1000).toISOString() }
+    : { cadence };
+}
+
+/**
+ * How many closed items sit resolved-but-NOT-yet-logged — the boundary predicate
+ * INVERTED (`status IN (2,3) AND stopDate > logBoundary`). This is the count an
+ * AppleScript `log completed now` would move into the Logbook; it is 0 under the
+ * default Immediately cadence (the boundary is `now`). Feeds `log-now`'s pre-read
+ * so the result can disclose how many items were logged (and the count==0 no-op).
+ */
+export function pendingLogCount(db: DatabaseSync, now = new Date(), zone?: string): number {
+  const boundaryEpoch = logBoundary(db, now, zone).getTime() / 1000;
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM TMTask WHERE trashed = 0 AND status IN (2, 3) " +
+        "AND stopDate IS NOT NULL AND stopDate > ?",
+    )
+    .get(boundaryEpoch) as { n: number };
+  return row.n;
+}
+
+/** The current `TMSettings.manualLogDate` (epoch seconds), or null. */
+export function manualLogDateEpoch(db: DatabaseSync): number | null {
+  const row = db.prepare("SELECT manualLogDate FROM TMSettings").get() as
+    | { manualLogDate: number | null }
+    | undefined;
+  return row?.manualLogDate ?? null;
+}
+
 /** Stamp `derived.logged` on mapped entities (closed AND at/before the boundary). */
 export function markLogged<
   T extends { status: string; stopped: Date | null; derived: { logged: boolean } },

@@ -40,6 +40,7 @@ import {
   type UpcomingBlockTotals,
   type Truncation,
   type ViewFilterMeta,
+  type LogState,
 } from "../index.ts";
 
 /**
@@ -172,6 +173,12 @@ export interface PagedResult<T> {
    */
   counts?: { dueOrOverdue: number; other: number };
   /**
+   * The Logbook's log-move cadence fact (logbook view only) — carried into
+   * `meta.logging` and rendered as the TTY card header. Absent for every other
+   * view.
+   */
+  logging?: LogState;
+  /**
    * Pre-cap Today / This-Evening bucket sizes (today view only) — supply each
    * `children` bucket's inline `total` when {@link wrapEnvelopeData} builds the
    * `today` payload. Absent for every other view.
@@ -251,6 +258,7 @@ export function runRead<T>(
       kind: kindOverride,
       filter,
       counts,
+      logging,
       todayTotals,
       areaTotals,
       upcomingTotals,
@@ -282,6 +290,7 @@ export function runRead<T>(
       ...(clock !== undefined && { clock }),
       ...(filter !== undefined && { filter }),
       ...(counts !== undefined && { counts }),
+      ...(logging !== undefined && { logging }),
       ...(scope !== undefined && { scope }),
     };
     // Human output gets the note once on STDERR (never mixed into the piped
