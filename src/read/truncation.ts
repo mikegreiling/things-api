@@ -28,13 +28,18 @@ const whole = (total: number, limit: number | null): Truncation => ({
 });
 
 /**
- * Roll a grouped view's per-block counts up into the unified {@link Truncation}
- * envelope: `shown`/`total` sum every block's own rows plus its nested children,
+ * Roll a grouped view's per-block counts up into the WHOLE-VIEW {@link Truncation}
+ * rollup: `shown`/`total` sum every block's own rows plus its nested children,
  * `limit` is null (a grouped view's caps are per-block, not a single row cap),
- * and `blocks` carries the identity-bearing nesting for a consumer that wants
- * the detail. `truncated` is the OR across the blocks (computed by the caller).
+ * and `truncated` is the OR across the blocks (computed by the caller). The
+ * identity-bearing `blocks` are returned SEPARATELY (internal render plumbing) —
+ * they never ride the wire `Truncation` (doctrine v2 PR 5: the sidecar retired;
+ * each bucket's completeness rides its inline `total`, R1).
  */
-function groupedTruncation(blocks: GroupBlock[], truncated: boolean): Truncation {
+function groupedTruncation(
+  blocks: GroupBlock[],
+  truncated: boolean,
+): { truncation: Truncation; blocks: GroupBlock[] } {
   let shown = 0;
   let total = 0;
   for (const b of blocks) {
@@ -45,8 +50,22 @@ function groupedTruncation(blocks: GroupBlock[], truncated: boolean): Truncation
       total += c.total;
     }
   }
-  return { shown, total, limit: null, truncated, blocks };
+  return { truncation: { shown, total, limit: null, truncated }, blocks };
 }
+
+/**
+ * Pre-cap sidebar-section sizes (anytime/someday global catalogues), keyed by the
+ * section's area uuid (or `null` for the loose section), returned alongside the
+ * per-block-capped sections so {@link src/read/shape.ts} `withSectionTotals` can
+ * stamp each capped section's inline `total` (read-shape v2 R1, PR 5 — no
+ * `blocks[]` sidecar). Each value is the FULL (pre-cap) count of that section's
+ * flattened `items` (direct/own rows + project rows + shown-project children);
+ * `total` is emitted downstream iff `items.length < total`.
+ */
+export type SectionTotals = ReadonlyMap<string | null, number>;
+
+/** The area-uuid key (or `null` for the loose section) of one sidebar section. */
+const sectionKey = (section: SidebarSection): string | null => section.area?.uuid ?? null;
 
 /** Flat list: slice to the limit; total is the full filtered length. */
 export function truncateList<T>(
@@ -172,9 +191,15 @@ const takeUpTo = <T>(items: T[], limit: number | null): T[] =>
 export function previewSections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; truncation: Truncation } {
+): {
+  data: SidebarSection[];
+  truncation: Truncation;
+  blocks: GroupBlock[];
+  totals: SectionTotals;
+} {
   const outSections: SidebarSection[] = [];
   const blocks: GroupBlock[] = [];
+  const totals = new Map<string | null, number>();
   let truncated = false;
   for (const section of sections) {
     const { direct, projects } = splitSectionBlocks(section);
@@ -183,8 +208,12 @@ export function previewSections(
     // Project item-lists nest inside their area/loose block.
     const children: GroupBlock[] = [];
     const items: ListItem[] = [...shownDirect];
+    // The section's FULL (pre-cap) flattened size for its inline `total` (R1):
+    // direct rows + every project row + all its children.
+    let sectionTotal = direct.length;
     for (const { project, items: kids } of projects) {
       const shownChildren = takeUpTo(kids, limits.project);
+      sectionTotal += 1 + kids.length;
       if (kids.length > 0) {
         if (kids.length > shownChildren.length) truncated = true;
         children.push({
@@ -209,9 +238,10 @@ export function previewSections(
         ...(children.length > 0 && { children }),
       });
     }
+    totals.set(sectionKey(section), sectionTotal);
     outSections.push({ area: section.area, items });
   }
-  return { data: outSections, truncation: groupedTruncation(blocks, truncated) };
+  return { data: outSections, ...groupedTruncation(blocks, truncated), totals };
 }
 
 /**
@@ -224,9 +254,15 @@ export function previewSections(
 export function previewSomedaySections(
   sections: SidebarSection[],
   limits: GroupedLimits,
-): { data: SidebarSection[]; truncation: Truncation } {
+): {
+  data: SidebarSection[];
+  truncation: Truncation;
+  blocks: GroupBlock[];
+  totals: SectionTotals;
+} {
   const outSections: SidebarSection[] = [];
   const blocks: GroupBlock[] = [];
+  const totals = new Map<string | null, number>();
   let truncated = false;
   for (const section of sections) {
     const { own, children } = partitionSomedaySection(section);
@@ -235,8 +271,12 @@ export function previewSomedaySections(
     // The active-project child groups nest inside this section's own block.
     const childBlocks: GroupBlock[] = [];
     const items: ListItem[] = [...shownOwn];
+    // The section's FULL (pre-cap) flattened size for its inline `total` (R1):
+    // the own rows plus every active-project child.
+    let sectionTotal = own.length;
     for (const group of children) {
       const shown = takeUpTo(group.items, limits.project);
+      sectionTotal += group.items.length;
       if (group.items.length > shown.length) truncated = true;
       childBlocks.push({
         kind: "project",
@@ -262,9 +302,10 @@ export function previewSomedaySections(
         ...(childBlocks.length > 0 && { children: childBlocks }),
       });
     }
+    totals.set(sectionKey(section), sectionTotal);
     outSections.push({ area: section.area, items });
   }
-  return { data: outSections, truncation: groupedTruncation(blocks, truncated) };
+  return { data: outSections, ...groupedTruncation(blocks, truncated), totals };
 }
 
 /**
@@ -286,7 +327,7 @@ export function capAreaSections(
   limits: GroupedLimits,
   now?: Date,
   zone?: string,
-): { data: AreaView; truncation: Truncation; totals: AreaBucketTotals } {
+): { data: AreaView; truncation: Truncation; blocks: GroupBlock[]; totals: AreaBucketTotals } {
   const todayIso = localToday(now, zone);
   // Pre-cap scope sizes for the wire's inline `total` (R1): the direct to-dos
   // (`children.anytime`) and ALL project rows (`projects` record). Captured
@@ -328,7 +369,7 @@ export function capAreaSections(
   }
   return {
     data: { ...view, projects, active },
-    truncation: groupedTruncation(blocks, truncated),
+    ...groupedTruncation(blocks, truncated),
     totals,
   };
 }

@@ -131,14 +131,18 @@ describe("previewSections (anytime per-block preview)", () => {
   const loose: SidebarSection = { area: null, items: items(9, "l") };
 
   it("caps area blocks and project blocks with their own limits", () => {
-    const { data, truncation: meta } = previewSections([loose, grouped], { area: 4, project: 3 });
+    const { data, truncation, blocks, totals } = previewSections([loose, grouped], {
+      area: 4,
+      project: 3,
+    });
     // Loose block: 4 of 9 direct.
     expect(data[0]?.items).toHaveLength(4);
     // Area section: 4 direct + the project row + 3 children = 8 rows.
     expect(data[1]?.items).toHaveLength(8);
     expect(data[1]?.items.some((i) => i.type === "project")).toBe(true);
-    expect(meta.truncated).toBe(true);
-    expect(meta.blocks).toEqual([
+    expect(truncation.truncated).toBe(true);
+    // blocks is INTERNAL render plumbing (never the wire) — carried separately.
+    expect(blocks).toEqual([
       { kind: "loose", ref: null, title: null, shown: 4, total: 9, limit: 4 },
       {
         kind: "area",
@@ -150,24 +154,31 @@ describe("previewSections (anytime per-block preview)", () => {
         children: [{ kind: "project", ref: "p1", title: "Firmware", shown: 3, total: 8, limit: 3 }],
       },
     ]);
+    // Per-section pre-cap totals for the wire's inline `total` (R1): loose = 9
+    // direct; area = 10 direct + 1 project row + 8 children = 19. Both capped.
+    expect(totals.get(null)).toBe(9);
+    expect(totals.get("a")).toBe(19);
   });
 
   it("null caps (--all) keep every item and report no truncation", () => {
-    const { data, truncation: meta } = previewSections([grouped], { area: null, project: null });
+    const { data, truncation, blocks, totals } = previewSections([grouped], {
+      area: null,
+      project: null,
+    });
     expect(data[0]?.items).toHaveLength(19); // 10 direct + project row + 8 children
-    expect(meta.truncated).toBe(false);
-    expect(
-      (meta.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),
-    ).toBe(true);
+    expect(truncation.truncated).toBe(false);
+    expect(blocks.every((b: GroupBlock) => b.shown === b.total && b.limit === null)).toBe(true);
+    // The section shows all 19; pre-cap total equals shown, so no inline `total`.
+    expect(totals.get("a")).toBe(19);
   });
 
   it("empty blocks are omitted from the counts; project rows always survive", () => {
-    const { data, truncation: meta } = previewSections(
+    const { data, truncation, blocks } = previewSections(
       [{ area: null, items: [project("p", "Empty Proj")] }],
       { area: 3, project: 3 },
     );
-    expect(meta.blocks).toEqual([]);
-    expect(meta.truncated).toBe(false);
+    expect(blocks).toEqual([]);
+    expect(truncation.truncated).toBe(false);
     expect(data[0]?.items).toHaveLength(1); // the project row itself
   });
 });
@@ -208,11 +219,14 @@ describe("previewSomedaySections", () => {
   };
 
   it("area cap covers project rows + direct to-dos as one block; children cap per project", () => {
-    const { data, truncation: meta } = previewSomedaySections([section], { area: 4, project: 2 });
+    const { data, truncation, blocks, totals } = previewSomedaySections([section], {
+      area: 4,
+      project: 2,
+    });
     // 4 own (2 project rows + first 2 to-dos) + 2 children = 6.
     expect(data[0]?.items.map((i) => i.uuid)).toEqual(["p1", "p2", "u0", "u1", "k0", "k1"]);
-    expect(meta.truncated).toBe(true);
-    expect(meta.blocks).toEqual([
+    expect(truncation.truncated).toBe(true);
+    expect(blocks).toEqual([
       {
         kind: "area",
         ref: "a",
@@ -225,16 +239,20 @@ describe("previewSomedaySections", () => {
         children: [{ kind: "project", ref: "p1", title: "Proj 1", shown: 2, total: 3, limit: 2 }],
       },
     ]);
+    // Section pre-cap total (R1): 8 own (2 projects + 6 to-dos) + 3 children = 11.
+    expect(totals.get("a")).toBe(11);
   });
 
   it("null project cap (bare show flag) keeps every child", () => {
-    const { data, truncation: meta } = previewSomedaySections([section], {
+    const { data, truncation, blocks, totals } = previewSomedaySections([section], {
       area: 50,
       project: null,
     });
     expect(data[0]?.items).toHaveLength(11);
-    expect(meta.truncated).toBe(false);
-    expect(meta.blocks?.[0]?.children?.find((b) => b.kind === "project")?.limit).toBeNull();
+    expect(truncation.truncated).toBe(false);
+    expect(blocks[0]?.children?.find((b) => b.kind === "project")?.limit).toBeNull();
+    // All 11 shown; pre-cap total equals shown → no inline `total` downstream.
+    expect(totals.get("a")).toBe(11);
   });
 });
 
@@ -250,25 +268,24 @@ describe("capAreaSections (area show per-section caps)", () => {
     }) as unknown as AreaView;
 
   it("caps the project-rows and direct-to-dos sections independently", () => {
-    const { data, truncation } = capAreaSections(view(), { area: 4, project: 2 });
+    const { data, truncation, blocks } = capAreaSections(view(), { area: 4, project: 2 });
     expect(data.projects).toHaveLength(2);
     expect(data.active).toHaveLength(4);
     // The later section is a container of its own — never capped here.
     expect(data.scheduled[0]?.items).toHaveLength(2);
     expect(truncation.truncated).toBe(true);
-    expect(truncation.blocks).toEqual([
+    // blocks is INTERNAL render plumbing (never the wire) — carried separately.
+    expect(blocks).toEqual([
       { kind: "projects", ref: "a", title: "Busy", shown: 2, total: 5, limit: 2 },
       { kind: "area", ref: "a", title: "Busy", shown: 4, total: 7, limit: 4 },
     ]);
   });
 
   it("null caps (--all) pass both sections through untouched", () => {
-    const { data, truncation } = capAreaSections(view(), { area: null, project: null });
+    const { data, truncation, blocks } = capAreaSections(view(), { area: null, project: null });
     expect(data.projects).toHaveLength(5);
     expect(data.active).toHaveLength(7);
     expect(truncation.truncated).toBe(false);
-    expect(
-      (truncation.blocks ?? []).every((b: GroupBlock) => b.shown === b.total && b.limit === null),
-    ).toBe(true);
+    expect(blocks.every((b: GroupBlock) => b.shown === b.total && b.limit === null)).toBe(true);
   });
 });

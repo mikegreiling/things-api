@@ -448,6 +448,8 @@ export function registerReadCommands(program: Command): void {
             const {
               view,
               truncation,
+              blocks,
+              sectionTotals,
               filter: areaFilter,
             } = c.read.anytime({
               ...filter,
@@ -459,9 +461,10 @@ export function registerReadCommands(program: Command): void {
             return {
               data: view,
               truncation,
+              sectionTotals,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
-              lines: renderAnytimePreview(view, truncation, limits, base),
+              lines: renderAnytimePreview(view, blocks, limits, base),
             };
           },
           // Grouped views hand back precomputed `lines`; renderSections is the
@@ -561,6 +564,8 @@ export function registerReadCommands(program: Command): void {
             const {
               view,
               truncation,
+              blocks,
+              sectionTotals,
               filter: areaFilter,
             } = c.read.someday({
               ...filter,
@@ -571,30 +576,32 @@ export function registerReadCommands(program: Command): void {
             // Hidden-items-never-silent: when the toggle is off, one extra
             // query counts what it would reveal (someday to-dos inside active
             // projects) — summing the active-project child blocks' totals from
-            // that query's grouped metadata (projectLimit defaults to every
-            // item there, so each block's total is the full group size).
+            // that query's per-block detail (projectLimit defaults to every item
+            // there, so each block's total is the full group size). The blocks
+            // are internal render plumbing, never the wire.
             const hiddenActiveItems = showActive
               ? 0
-              : (
-                  c.read.someday({ ...filter, activeProjectItems: true }).truncation.blocks ?? []
-                ).reduce(
-                  (n, b) =>
-                    n +
-                    (b.children?.reduce(
-                      (m, child) => m + (child.kind === "project" ? child.total : 0),
-                      0,
-                    ) ?? 0),
-                  0,
-                );
+              : c.read
+                  .someday({ ...filter, activeProjectItems: true })
+                  .blocks.reduce(
+                    (n, b) =>
+                      n +
+                      (b.children?.reduce(
+                        (m, child) => m + (child.kind === "project" ? child.total : 0),
+                        0,
+                      ) ?? 0),
+                    0,
+                  );
             const warnings = looseAreaWarnings(c, opts.area);
             return {
               data: view,
               truncation,
+              sectionTotals,
               ...(areaFilter !== undefined && { filter: areaFilter }),
               ...(warnings !== undefined && { warnings }),
               lines: renderSomedayPreview(
                 view,
-                truncation,
+                blocks,
                 limits,
                 base,
                 showActive,

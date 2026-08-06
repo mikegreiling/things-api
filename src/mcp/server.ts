@@ -54,6 +54,7 @@ import {
   shapeReadPayload,
   withTodayBucketTotals,
   withAreaBucketTotals,
+  withSectionTotals,
   withUpcomingBlockTotals,
   splitWhenSugar,
   tagFilterFields,
@@ -161,10 +162,11 @@ function truncatedResult(
 }
 
 /**
- * Grouped read result (anytime/someday): the per-block-truncated sections plus
- * a second block carrying the unified {@link Truncation} counts (its `blocks`
- * hold the per-block nesting) and, when anything was hidden, a one-line note the
- * agent can read.
+ * Grouped read result (anytime/someday): the per-block-truncated sections (each
+ * capped section carrying its inline `total`, R1) plus a second block carrying
+ * the WHOLE-VIEW {@link Truncation} rollup and, when anything was hidden, a
+ * one-line note the agent can read. The pre-v2 `blocks[]` sidecar is retired —
+ * completeness rides each section's inline `total` (doctrine v2 PR 5).
  */
 function groupedResult(data: unknown, truncation: Truncation): ToolResult {
   const note = truncation.truncated
@@ -997,6 +999,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const {
                 view,
                 truncation,
+                sectionTotals,
                 filter: fm,
               } = c.read.anytime({
                 ...filter,
@@ -1007,7 +1010,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               });
               filterMeta = fm;
               return groupedResult(
-                shapeReadPayload("anytime", view, full, c.refPromoter()),
+                withSectionTotals(
+                  shapeReadPayload("anytime", view, full, c.refPromoter()),
+                  sectionTotals,
+                ),
                 truncation,
               );
             }
@@ -1043,6 +1049,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const {
                 view,
                 truncation,
+                sectionTotals,
                 filter: fm,
               } = c.read.someday({
                 ...filter,
@@ -1057,7 +1064,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               });
               filterMeta = fm;
               return groupedResult(
-                shapeReadPayload("someday", view, full, c.refPromoter()),
+                withSectionTotals(
+                  shapeReadPayload("someday", view, full, c.refPromoter()),
+                  sectionTotals,
+                ),
                 truncation,
               );
             }
@@ -1351,14 +1361,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           });
           areaNotice = notice;
           // Each capped scope's completeness rides its inline `total` (R1, PR 3);
-          // the `blocks[]` sidecar retires from the metadata block.
-          const { blocks: _blocks, ...flatTruncation } = truncation;
+          // the whole-view rollup rides `truncation` (no `blocks[]` sidecar).
           return groupedResult(
             withAreaBucketTotals(
               shapeReadPayload("area-view", view, args.full === true, getClient().refPromoter()),
               totals,
             ),
-            flatTruncation,
+            truncation,
           );
         },
         args.tz,

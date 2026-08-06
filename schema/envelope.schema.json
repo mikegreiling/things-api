@@ -96,7 +96,7 @@
         },
         "truncation": {
           "$ref": "#/definitions/Truncation",
-          "description": "The read's completeness metadata (the single truncation shape). Present on any read that could drop rows — flat views (row `limit`), the `today` view (whose per-bucket completeness rides its inline `children.{today,evening}.total`), and grouped views (anytime/someday/`area show`, `blocks`). `meta.truncation.truncated` is the universal \"did I see everything\" check."
+          "description": "The read's completeness metadata (the single truncation shape) — the WHOLE-VIEW rollup. Present on any read that could drop rows — flat views (row `limit`), the `today` view, and grouped views (anytime/someday/`area show`). Per-bucket completeness rides INLINE on the data records' own `total` (R1), never on this envelope. `meta.truncation.truncated` is the universal \"did I see everything\" check."
         },
         "resolvedCommand": {
           "type": "string",
@@ -198,62 +198,11 @@
         },
         "truncated": {
           "type": "boolean"
-        },
-        "blocks": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/GroupBlock"
-          },
-          "description": "Per-block nesting for a grouped view (anytime/someday/area card); absent otherwise."
         }
       },
       "required": ["shown", "total", "limit", "truncated"],
       "additionalProperties": false,
-      "description": "The single truncation-metadata shape for every read (the `meta.truncation` field). `shown` items were returned of `total` that matched after all filters; `limit` is the effective cap (null when the caller asked for all rows, and always null on a grouped view whose caps are per-block); `truncated` is the UNIVERSAL completeness check — true exactly when anything was dropped (`shown < total`, or any block hid rows). The dropped remainder is `total - shown`.\n\nOne optional per-shape breakdown hangs off it: `blocks` for a grouped view (anytime/someday/`area show` — the identity-carrying per-block nesting); absent on a plain flat view. The `today` view carries per-bucket completeness INLINE on its `children.{today,evening}` records (each bucket's `total`, present iff capped — read-shape v2 R1), not as a truncation sidecar."
-    },
-    "GroupBlock": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "enum": ["loose", "area", "project", "projects"]
-        },
-        "ref": {
-          "type": ["string", "null"],
-          "description": "Container reference (area or project uuid); null for the loose block."
-        },
-        "title": {
-          "type": ["string", "null"],
-          "description": "Container title; null for the loose block."
-        },
-        "shown": {
-          "type": "number"
-        },
-        "total": {
-          "type": "number"
-        },
-        "limit": {
-          "type": ["number", "null"],
-          "description": "The cap that applied to THIS block (null = uncapped)."
-        },
-        "totalProjects": {
-          "type": "number",
-          "description": "Type split for blocks that mix project rows and to-dos (someday's loose/area blocks; projects always list first, so the hidden split is `totalProjects - min(shown, totalProjects)` projects, remainder to-dos). Absent on single-type blocks."
-        },
-        "totalTodos": {
-          "type": "number"
-        },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/GroupBlock"
-          },
-          "description": "Nested project blocks (anytime item-lists / someday active-project groups). Absent when none."
-        }
-      },
-      "required": ["kind", "ref", "title", "shown", "total", "limit"],
-      "additionalProperties": false,
-      "description": "One identity-carrying block of a grouped catalogue (anytime/someday) or a sectioned detail view (`area show`). Every header/section is always rendered; only the innermost item lists are capped. Emitted for every block that has rows to cap (`total > 0`) — including a block whose rows were ALL dropped (`shown: 0`), so no truncated header is untraceable. A block with no cappable rows of its own (`total: 0`) is omitted UNLESS it wraps truncated `children` — an area whose only capped content is its project item-lists still appears as their container.\n\nBlocks are NESTED: an area/loose block carries its project blocks in `children` — in anytime the project item-lists inside the area, in someday the active-project child groups found in that section. The `area show` `projects`/`area` blocks are siblings of one area and stay top-level."
+      "description": "The single truncation-metadata shape for every read (the `meta.truncation` field). `shown` items were returned of `total` that matched after all filters; `limit` is the effective cap (null when the caller asked for all rows, and always null on a grouped view whose caps are per-block); `truncated` is the UNIVERSAL completeness check — true exactly when anything was dropped (`shown < total`, or any block hid rows). The dropped remainder is `total - shown`.\n\nThis is the WHOLE-VIEW rollup only. Per-bucket completeness rides INLINE on the data records (read-shape v2 R1): each `children`/`sections`/`projects` bucket carries its own `total`, present iff it was capped. The pre-v2 `blocks[]` descriptor-join sidecar is RETIRED from the wire entirely (doctrine v2 PR 5) — the per-block detail the TTY renderers need is internal render plumbing ( {@link  GroupBlock } ), never serialized."
     },
     "ErrorEnvelope": {
       "type": "object",

@@ -20,7 +20,7 @@ import {
 } from "../../src/read/views.ts";
 import { projectView } from "../../src/read/project-view.ts";
 import type { AreaView } from "../../src/read/area-view.ts";
-import type { Truncation } from "../../src/contracts.ts";
+import type { GroupBlock } from "../../src/contracts.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import { renderAreaView } from "../../src/cli/commands/area.ts";
 import { renderProjectView } from "../../src/cli/commands/project.ts";
@@ -1467,10 +1467,9 @@ const emptyArea = (title: string): AreaView => ({
   someday: [],
   repeating: [],
 });
-const EMPTY_TRUNC: Truncation = { shown: 0, total: 0, limit: null, truncated: false };
-
 describe("renderAreaView logbook footer (live count)", () => {
-  const trunc = EMPTY_TRUNC;
+  // No caps here, so no per-block detail — the render plumbing is empty.
+  const trunc: GroupBlock[] = [];
 
   it("groups thousands, pluralizes, and omits the line at zero / when absent", () => {
     // Non-TTY here, so dim() is identity — assert the plain footer line.

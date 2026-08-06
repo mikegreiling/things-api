@@ -22,6 +22,7 @@ export type { Truncation, GroupBlock } from "./contracts.ts";
 export type {
   TodayBucketTotals,
   AreaBucketTotals,
+  SectionTotals,
   UpcomingBlockTotals,
 } from "./read/truncation.ts";
 export { diagnose } from "./diagnose.ts";
@@ -246,6 +247,7 @@ export {
   shapeReadPayload,
   withTodayBucketTotals,
   withAreaBucketTotals,
+  withSectionTotals,
   withUpcomingBlockTotals,
 } from "./read/shape.ts";
 // The emit-side ref-promotion oracle for the JSON round-trip law: build one over

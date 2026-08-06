@@ -1089,42 +1089,33 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     for (let i = 0; i < 5; i++) seedTodo(fx!.db, { title: `loose ${i}`, index: 100 + i });
   }
 
-  it("defaults: 30 per area block, 3 per project block, with per-block grouped meta", () => {
+  it("defaults: 30 per area block, 3 per project block; each capped section carries inline `total` (R1, no blocks[])", () => {
     fx = buildFixtureDb();
     seedCatalogue();
     const { stdout, exitCode } = runCli(["anytime", "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const env = JSON.parse(stdout);
+    // Whole-view rollup on meta.truncation; the per-block `blocks[]` sidecar is
+    // RETIRED from the wire (PR 5) — completeness rides each section's inline total.
     expect(env.meta.truncation.truncated).toBe(true);
-    const blocks = env.meta.truncation.blocks as Array<{
-      kind: string;
-      total: number;
-      shown: number;
-      limit: number | null;
+    expect("blocks" in env.meta.truncation).toBe(false);
+    const sections = env.data.sections as Array<{
+      area: { title?: string } | null;
+      items: { title?: string; type: string }[];
+      total?: number;
     }>;
-    expect(blocks).toEqual(
-      expect.arrayContaining([
-        { kind: "loose", ref: null, title: null, shown: 5, total: 5, limit: 30 },
-        // The Firmware project block nests inside its area block.
-        expect.objectContaining({
-          kind: "area",
-          children: expect.arrayContaining([
-            expect.objectContaining({
-              kind: "project",
-              title: "Firmware",
-              shown: 3,
-              total: 8,
-              limit: 3,
-            }),
-          ]),
-        }),
-      ]),
-    );
+    const hobbies = sections.find((s) => s.area?.title === "Hobbies");
+    const loose = sections.find((s) => s.area === null);
+    // Hobbies is capped (Firmware's children hidden): 4 shown of a 9-row scope
+    // (1 project row + 8 children) → inline `total: 9`.
+    expect(hobbies?.total).toBe(9);
+    // Loose fits under the 30 cap → no inline `total` (R1: untruncated is silent).
+    expect(loose?.total).toBeUndefined();
     // The project ROW is always present even though its children were capped.
-    const firmware = env.data.sections
-      .flatMap((s: { items: { title?: string; type: string }[] }) => s.items)
+    const firmware = sections
+      .flatMap((s) => s.items)
       .find((i: { title?: string }) => i.title === "Firmware");
-    expect(firmware.type).toBe("project");
+    expect(firmware?.type).toBe("project");
   });
 
   it("human output drills into truncated blocks and escalates the caps that hit", () => {
@@ -1153,18 +1144,24 @@ describe("cli anytime — per-block preview (--area-limit / --project-limit)", (
     const five = JSON.parse(
       runCli(["anytime", "--project-limit", "5", "--json", "--db", fx.path]).stdout,
     );
-    const fwTop = five.meta.truncation.blocks as Array<{
-      title?: string;
-      shown: number;
-      children?: { title?: string; shown: number }[];
+    const sections = five.data.sections as Array<{
+      area: { title?: string } | null;
+      items: unknown[];
+      total?: number;
     }>;
-    const fwBlock = [...fwTop, ...fwTop.flatMap((b) => b.children ?? [])].find(
-      (b) => b.title === "Firmware",
-    );
-    expect(fwBlock?.shown).toBe(5);
+    const hobbies = sections.find((s) => s.area?.title === "Hobbies");
+    // A higher per-project cap shows 5 of Firmware's 8 children: 1 project row +
+    // 5 children = 6 items shown, still short of the 9-row scope (inline total 9).
+    expect(hobbies?.items).toHaveLength(6);
+    expect(hobbies?.total).toBe(9);
 
     const all = JSON.parse(runCli(["anytime", "--all", "--json", "--db", fx.path]).stdout);
     expect(all.meta.truncation.truncated).toBe(false);
+    // Uncapped: the whole section is shown, so no inline `total` (R1).
+    const allHobbies = (
+      all.data.sections as Array<{ area: { title?: string } | null; total?: number }>
+    ).find((s) => s.area?.title === "Hobbies");
+    expect(allHobbies?.total).toBeUndefined();
     expect(runCli(["anytime", "--all", "--db", fx.path]).stdout).not.toContain("more per group");
   });
 
@@ -1242,22 +1239,23 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     // Cap 4: a single hidden to-do stays singular.
     const singular = runCli(["someday", "--area-limit", "4", "--db", fx.path]).stdout;
     expect(singular).toContain("… 1 more to-do — `things area show 'Mixed'`");
-    // JSON meta carries the additive type split on the mixed block.
+    // On the wire the section is record-ized with its inline `total` (R1); the
+    // projects-vs-to-dos split is TTY-derived (asserted above), never serialized,
+    // and the `blocks[]` sidecar is retired (PR 5).
     const env = JSON.parse(
       runCli(["someday", "--area-limit", "1", "--json", "--db", fx.path]).stdout,
     );
-    expect(env.meta.truncation.blocks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "area",
-          title: "Mixed",
-          shown: 1,
-          total: 5,
-          totalProjects: 2,
-          totalTodos: 3,
-        }),
-      ]),
-    );
+    expect("blocks" in env.meta.truncation).toBe(false);
+    const mixed = (
+      env.data.sections as Array<{
+        area: { title?: string } | null;
+        items: unknown[];
+        total?: number;
+      }>
+    ).find((s) => s.area?.title === "Mixed");
+    // 1 own row shown of a 5-row scope (2 projects + 3 to-dos) → inline `total: 5`.
+    expect(mixed?.items).toHaveLength(1);
+    expect(mixed?.total).toBe(5);
   });
 
   it("hides active-project items by default, with a muted counting hint", () => {
@@ -1306,23 +1304,23 @@ describe("cli someday — GUI parity + --show-active-project-items", () => {
     expect(stdout).not.toContain("parked 2");
     expect(stdout).toContain("… 2 more — `things project show 'Active Proj'`");
     expect(stdout).toContain("--show-active-project-items 4");
-    // JSON meta carries the per-project block with its cap.
+    // On the wire the section is record-ized with its inline `total` (R1): the
+    // Hobbies scope is 3 own rows + Active Proj's 4 someday children = 7, of which
+    // 5 show (3 own + 2 capped children). The per-project cap detail is TTY-only
+    // (asserted above); the `blocks[]` sidecar is retired (PR 5).
     const env = JSON.parse(
       runCli(["someday", "--show-active-project-items", "2", "--json", "--db", fx.path]).stdout,
     );
-    const somedayTop = env.meta.truncation.blocks as Array<{ children?: unknown[] }>;
-    const somedayBlocks = [...somedayTop, ...somedayTop.flatMap((b) => b.children ?? [])];
-    expect(somedayBlocks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "project",
-          title: "Active Proj",
-          shown: 2,
-          total: 4,
-          limit: 2,
-        }),
-      ]),
-    );
+    expect("blocks" in env.meta.truncation).toBe(false);
+    const hobbies = (
+      env.data.sections as Array<{
+        area: { title?: string } | null;
+        items: unknown[];
+        total?: number;
+      }>
+    ).find((s) => s.area?.title === "Hobbies");
+    expect(hobbies?.items).toHaveLength(5);
+    expect(hobbies?.total).toBe(7);
     // Numeric value conflicts with --all.
     expect(
       runCli(["someday", "--show-active-project-items", "2", "--all", "--db", fx.path]).exitCode,
