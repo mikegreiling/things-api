@@ -61,6 +61,7 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 import type { WriteVector } from "./vectors/types.ts";
+import { simFenceActive } from "./vectors/simulator.ts";
 import { createDbReader, evaluateDelta } from "./verify/delta.ts";
 import { pollUntilVerified } from "./verify/poller.ts";
 
@@ -462,7 +463,16 @@ function bounceFallbackOk(
  * template requires the native surface (else it refuses honestly, naming them).
  */
 function nativeReorderAvailable(deps: WriteDeps): boolean {
-  return deps.config.allowExperimental && (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
+  if (!deps.config.allowExperimental) return false;
+  // Under the bench simulator fence the simulator STANDS IN for the private
+  // reorder surface (its `reorder` applier performs the native index re-rank
+  // directly), so the real-app sdef canary is neither reachable nor relevant —
+  // treat the command as declared. This keeps native-scope reorders hermetic and
+  // host-independent, mirroring planner.ts letting a simulating vector satisfy a
+  // forced vector and the accessibility/automation probes short-circuiting on the
+  // fence. Production (fence inactive) still consults the real sdef canary.
+  if (simFenceActive()) return true;
+  return (deps.sdefProbe ?? sdefDeclaresPrivateReorder)();
 }
 
 function resolveStrategy(deps: WriteDeps, params: ReorderParams): StrategyDecision {

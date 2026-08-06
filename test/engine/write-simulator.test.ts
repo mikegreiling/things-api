@@ -17,7 +17,13 @@ import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
+import { resolveResolutionInstant } from "../../src/write/commands.ts";
 import { runAddRepeatingProject } from "../../src/write/make-repeating-project.ts";
+import {
+  runCancelWithDate,
+  runCompleteWithDate,
+  runUpdateDates,
+} from "../../src/write/resolution-timestamps.ts";
 import { runMutation, type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { defaultVectors } from "../../src/write/vectors/registry.ts";
@@ -33,6 +39,7 @@ import {
   seedChecklistItem,
   seedHeading,
   seedProject,
+  seedSettings,
   seedTag,
   seedTodo,
 } from "../fixtures/seed.ts";
@@ -40,6 +47,10 @@ import {
 const NOW = new Date("2026-07-05T12:00:00Z");
 const NOW_EPOCH = Math.floor(NOW.getTime() / 1000);
 const TODAY = "2026-07-05"; // localToday(NOW) is date-only, tz-invariant for noon-UTC
+
+/** The exact Unix-epoch second-precision stamp a resolution timestamp materializes. */
+const stampEpoch = (iso: string): number =>
+  Math.floor(resolveResolutionInstant(iso).getTime() / 1000);
 
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
@@ -1487,6 +1498,7 @@ describe("simulator fence", () => {
 
 describe("simulator fence — host-escape guards (no live app under the fence)", () => {
   let saved: Record<string, string | undefined>;
+  let vector: WriteVector;
   beforeEach(() => {
     saved = {
       THINGS_SIM_WRITES: process.env["THINGS_SIM_WRITES"],
@@ -1498,10 +1510,14 @@ describe("simulator fence — host-escape guards (no live app under the fence)",
     process.env["THINGS_DB"] = fixture.path;
     process.env["THINGS_API_STATE_DIR"] = mkdtempSync(join(tmpdir(), "sim-state-"));
     process.env["THINGS_API_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "sim-config-"));
+    vector = createSimulatorVector(fixture.path, { now: () => NOW });
   });
   afterEach(() => {
     for (const key of Object.keys(saved)) restoreEnv(key, saved[key]);
   });
+
+  const row = (uuid: string): Record<string, unknown> =>
+    fixture.db.prepare("SELECT * FROM TMTask WHERE uuid = ?").get(uuid) as Record<string, unknown>;
 
   it("simFenceActive reflects the ambient THINGS_DB fence", () => {
     expect(simFenceActive()).toBe(true);
@@ -1544,6 +1560,158 @@ describe("simulator fence — host-escape guards (no live app under the fence)",
     // We do NOT actually invoke openInThings here (it would spawn `open`); we
     // only assert the guard predicate flips, which is what gates the exec.
     expect(simFenceActive()).toBe(false);
+  });
+
+  // ----------------------------------------------------- reorder (ORD-*)
+  describe("reorder applier (ORD-1 native-wire re-rank)", () => {
+    it("ORD-1 native forward: re-ranks a project's unheaded children into the sent index order", async () => {
+      const proj = seedProject(fixture.db, { title: "Proj" });
+      const a = seedTodo(fixture.db, { title: "A", project: proj, index: 0 });
+      const b = seedTodo(fixture.db, { title: "B", project: proj, index: 1 });
+      const c = seedTodo(fixture.db, { title: "C", project: proj, index: 2 });
+      const res = await runMutation(deps(vector), "reorder", {
+        scope: "project",
+        container: { uuid: proj },
+        uuids: [c, a, b],
+      });
+      expect(res.kind).toBe("ok");
+      const idx = (u: string) => row(u)["index"] as number;
+      expect(idx(c)).toBeLessThan(idx(a));
+      expect(idx(a)).toBeLessThan(idx(b));
+    });
+
+    it("ORD-1 partial subset: the requested block lands on top, the unrequested tail keeps its order", async () => {
+      const proj = seedProject(fixture.db, { title: "Proj" });
+      const a = seedTodo(fixture.db, { title: "A", project: proj, index: 0 });
+      const b = seedTodo(fixture.db, { title: "B", project: proj, index: 1 });
+      const c = seedTodo(fixture.db, { title: "C", project: proj, index: 2 });
+      const d = seedTodo(fixture.db, { title: "D", project: proj, index: 3 });
+      // Request only [d, b] → wire = [d, b, a, c] (requested first, tail in order).
+      const res = await runMutation(deps(vector), "reorder", {
+        scope: "project",
+        container: { uuid: proj },
+        uuids: [d, b],
+      });
+      expect(res.kind).toBe("ok");
+      const idx = (u: string) => row(u)["index"] as number;
+      expect(idx(d)).toBeLessThan(idx(b));
+      expect(idx(b)).toBeLessThan(idx(a));
+      expect(idx(a)).toBeLessThan(idx(c));
+    });
+
+    it("ORD-2 today intermix (O12): re-ranks to-dos AND projects on the shared todayIndex axis", async () => {
+      const t1 = seedTodo(fixture.db, { title: "T1", startDate: TODAY, todayIndex: 0 });
+      const p1 = seedProject(fixture.db, { title: "P1", startDate: TODAY, todayIndex: 1 });
+      const t2 = seedTodo(fixture.db, { title: "T2", startDate: TODAY, todayIndex: 2 });
+      const res = await runMutation(deps(vector), "reorder", {
+        scope: "today",
+        uuids: [t2, p1, t1],
+      });
+      expect(res.kind).toBe("ok");
+      const ti = (u: string) => row(u)["todayIndex"] as number;
+      expect(ti(t2)).toBeLessThan(ti(p1));
+      expect(ti(p1)).toBeLessThan(ti(t1));
+    });
+
+    it("ORD-18 axis-isolation: the today scope re-ranks todayIndex only, leaving index untouched", async () => {
+      const t1 = seedTodo(fixture.db, { title: "T1", startDate: TODAY, todayIndex: 0, index: 5 });
+      const t2 = seedTodo(fixture.db, { title: "T2", startDate: TODAY, todayIndex: 1, index: 6 });
+      const res = await runMutation(deps(vector), "reorder", { scope: "today", uuids: [t2, t1] });
+      expect(res.kind).toBe("ok");
+      expect(row(t1)["index"]).toBe(5); // index axis untouched (ORD-18)
+      expect(row(t2)["index"]).toBe(6);
+      expect(row(t2)["todayIndex"] as number).toBeLessThan(row(t1)["todayIndex"] as number);
+    });
+
+    it("LOGSORT ORD-13 byte-lock: an unswept-resolved movee re-ranks index-only (status/stopDate/umd unchanged)", async () => {
+      // Hold the log boundary far in the past so a recently-completed child stays UNSWEPT.
+      seedSettings(fixture.db, { logInterval: 4, manualLogDate: 1_000_000_000 });
+      const proj = seedProject(fixture.db, { title: "Proj" });
+      const open1 = seedTodo(fixture.db, { title: "Open1", project: proj, index: 0 });
+      const doneStop = NOW_EPOCH; // > boundary → unswept, so the permit admits it
+      const done = seedTodo(fixture.db, {
+        title: "Done",
+        project: proj,
+        index: 1,
+        status: "completed",
+        stopDate: doneStop,
+        modificationDate: 1_780_000_000,
+      });
+      const preUmd = row(done)["userModificationDate"];
+      const res = await runMutation(deps(vector), "reorder", {
+        scope: "project",
+        container: { uuid: proj },
+        uuids: [done, open1],
+      });
+      expect(res.kind).toBe("ok");
+      expect(row(done)["status"]).toBe(3); // still completed (no reopen)
+      expect(row(done)["stopDate"]).toBe(doneStop); // stopDate intact
+      expect(row(done)["userModificationDate"]).toBe(preUmd); // umd-silent
+      expect(row(done)["index"] as number).toBeLessThan(row(open1)["index"] as number);
+    });
+  });
+
+  // ------------------------------------ resolution timestamps (BACKDT / WG-7)
+  describe("resolution-timestamp appliers (BACKDT / WG-7)", () => {
+    it("BACKDT complete --completed-at: the to-do lands completed with the exact backdated stopDate", async () => {
+      const t = seedTodo(fixture.db, { title: "Ship it", status: "open" });
+      const res = await runCompleteWithDate(deps(vector), "todo", t, { completedAt: "2026-06-01" });
+      expect(res.kind).toBe("ok");
+      expect(row(t)["status"]).toBe(3);
+      expect(row(t)["stopDate"]).toBe(stampEpoch("2026-06-01"));
+    });
+
+    it("WG-7 flip-preserves-stopDate: cancel --completed-at ends canceled with the backdated stop intact", async () => {
+      const t = seedTodo(fixture.db, { title: "Drop it", status: "open" });
+      const res = await runCancelWithDate(deps(vector), "todo", t, { completedAt: "2026-05-15" });
+      expect(res.kind).toBe("ok");
+      expect(row(t)["status"]).toBe(2); // canceled
+      // The flip-dance's closing cancel leg must NOT clobber the backdated stopDate.
+      expect(row(t)["stopDate"]).toBe(stampEpoch("2026-05-15"));
+    });
+
+    it("BACKDT idempotent re-resolve: update --completed-at on a completed row sets the exact stamp and re-applying is stable", async () => {
+      const t = seedTodo(fixture.db, { title: "Done", status: "completed", stopDate: NOW_EPOCH });
+      const first = await runUpdateDates(deps(vector), "todo", t, { completedAt: "2026-04-01" });
+      expect(first.kind).toBe("ok");
+      expect(row(t)["stopDate"]).toBe(stampEpoch("2026-04-01"));
+      const again = await runUpdateDates(deps(vector), "todo", t, { completedAt: "2026-04-01" });
+      expect(again.kind).toBe("ok");
+      expect(row(t)["stopDate"]).toBe(stampEpoch("2026-04-01")); // stable
+      expect(row(t)["status"]).toBe(3); // still completed
+    });
+
+    it("B-PROJ-JSON born-resolved: add --completed-at creates a completed to-do with backdated stop + creation", async () => {
+      const res = await runMutation(deps(vector), "todo.add", {
+        title: "Logged already",
+        createdAt: "2026-03-01",
+        completedAt: "2026-03-10",
+      });
+      expect(res.kind).toBe("ok");
+      if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok uuid");
+      expect(row(res.uuid)["status"]).toBe(3);
+      expect(row(res.uuid)["stopDate"]).toBe(stampEpoch("2026-03-10"));
+      expect(row(res.uuid)["creationDate"]).toBe(stampEpoch("2026-03-01"));
+    });
+
+    it("born-backdated: add --created-at sets the creation stamp; the item stays open", async () => {
+      const res = await runMutation(deps(vector), "todo.add", {
+        title: "Old idea",
+        createdAt: "2025-01-15",
+      });
+      expect(res.kind).toBe("ok");
+      if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok uuid");
+      expect(row(res.uuid)["status"]).toBe(0); // open
+      expect(row(res.uuid)["creationDate"]).toBe(stampEpoch("2025-01-15"));
+    });
+
+    it("todo.set-dates exact stamp: update --created-at is status-safe on an open row", async () => {
+      const t = seedTodo(fixture.db, { title: "Keep open", status: "open" });
+      const res = await runUpdateDates(deps(vector), "todo", t, { createdAt: "2024-12-25" });
+      expect(res.kind).toBe("ok");
+      expect(row(t)["status"]).toBe(0); // still open
+      expect(row(t)["creationDate"]).toBe(stampEpoch("2024-12-25"));
+    });
   });
 });
 
