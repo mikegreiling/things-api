@@ -4,6 +4,8 @@
 
 This document supersedes [read-shape-doctrine.md](read-shape-doctrine.md) (v1, **REVERTED** 2026-08-04, retained as re-audit input). It extends [api-doctrine.md](api-doctrine.md) and obeys its §1 grammar: every read shape fits one of the five `data` wrappers — `item` / `items` / `sections` / `view` / `children` (the fifth, `children`, established by migration PR 1 as the `today` view's top-level stage-bucket wrapper, and reused nested inside a project/area `view`; documented in [contract.md](../contract.md)).
 
+The inverse audit — how well the INTERNAL entity/model vocabulary has converged on the ratified wire vocabulary this doctrine defines, and the thin set of inward renames left to do — is [vocabulary-audit.md](vocabulary-audit.md) (up-next §7.1). It confirms `shape.ts` now carries exactly ONE surviving vocabulary translation (the day-block `date`→`when`).
+
 ## 0. Lineage — what v1 got right and where it failed
 
 v1's detachment principle stands and is re-affirmed: **the data model serves programmatic/agentic consumers first; the TTY is a separate audience whose GUI-faithful presentation is derived, never encoded.** Its row conventions also stand: self-describing rows, #362 flat refs with round-trip `*Uuid` promotion, presence-keyed fields, documented orderings.
