@@ -42,6 +42,17 @@ export const ARM_ALLOWLISTS: Record<Arm, string[]> = {
   ],
   skill: ["skills/things-cli/**"],
   mcp: ["src/mcp/server.ts"],
+  // The claude-code arms share their copy levers with the pi arms: the claude-skill
+  // arm exercises the SAME skill tree (Claude Code discovers it natively), and the
+  // bare claude-cli arm's surface is the CLI help, same as `cli`.
+  "claude-cli": [
+    "src/cli/help.ts",
+    "src/cli/commands/*.ts",
+    "src/cli/excess-args.ts",
+    "src/cli/did-you-mean.ts",
+    "src/cli/verb-hint.ts",
+  ],
+  "claude-skill": ["skills/things-cli/**"],
 };
 
 /** Translate a `*`/`**` glob into an anchored RegExp over a POSIX path. */

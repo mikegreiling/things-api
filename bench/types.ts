@@ -18,7 +18,15 @@ export type Tier = 1 | 2 | 3 | 4;
 
 export type Split = "dev" | "validation" | "holdout";
 
-export type Arm = "cli" | "skill" | "mcp";
+/**
+ * The surface under test. The `cli`/`skill`/`mcp` arms run the subject through
+ * pi-agent-core (openai / openai-codex providers). The `claude-*` arms run the
+ * subject through the Claude Code engine (`claude -p`, subscription auth) with a
+ * rebuilt real-shell fence — `claude-cli` is bare (help only), `claude-skill`
+ * installs the skill into the run workdir for Claude Code's NATIVE discovery
+ * (progressive disclosure), the counterpart to the skill arm's static injection.
+ */
+export type Arm = "cli" | "skill" | "mcp" | "claude-cli" | "claude-skill";
 
 /** The pinned clock a task runs under (drives THINGS_NOW / THINGS_TZ). */
 export interface Clock {
