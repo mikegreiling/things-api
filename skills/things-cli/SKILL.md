@@ -10,7 +10,7 @@ version: 0.0.0-dev
 
 `things --help` is the one-screen index; `things <group> --help` lists a group's verbs and flags (always current for the binary you invoke); `things help <topic>` opens a contract guide — topics: `agent`, `filters`, `ids`, `move`, `output`, `repeating`, `writes`.
 
-**This skill's reference files** are exactly `model`, `contracts`, `ordering`, `errors`, `banner`, `gui` (all `references/*.md`) — do not guess other names. Read *shapes* (every view's JSON, `stage`/`when`, the compact/full tiers) live in `model`; the envelope, exit codes, undo, batch, and recurrence in `contracts`; move/reorder axes in `ordering`; the error contract in `errors`. There is no `reads`/`writes`/`data-model`/`recurrence`/`safety` file. Most tasks need only this page — open a reference only when a link below sends you there.
+**This skill's reference files** are exactly `data-model`, `contracts`, `ordering`, `errors`, `banner`, `gui` (all `references/*.md`) — do not guess other names. Read *shapes* (every view's JSON, `stage`/`when`, the compact/full tiers) live in `data-model`; the envelope, exit codes, undo, batch, and recurrence in `contracts`; move/reorder axes in `ordering`; the error contract in `errors`. There is no `reads`/`writes`/`recurrence`/`safety` file. Most tasks need only this page — open a reference only when a link below sends you there.
 
 ## Data model (read this first)
 
@@ -30,7 +30,7 @@ Reads decompose an item's position onto two derived, presence-keyed words (they 
 - **`when`** — the TIME POSITION: `today | evening | a future ISO date`, or absent. `evening` implies today; someday is a bucket (→ `stage`), never a `when`. A due deadline pulls an undated row into Today (`when: "today"`); the app re-files it into Anytime, so it derives `stage: "anytime"` (it leaves the Inbox/Someday list).
 - **`provisional: true`** marks a Today member the app has not yet materialized (the "N new to-dos" banner / `•` pip); see [references/banner.md](references/banner.md).
 
-**Absence is meaningful.** In the compact list tier a field at its default is omitted (no `status` = open, no `when` = not in Today), and inside a single-container node an item omits ancestry the node already states (absent `project`/`area` there = inherited). Full rules and the compact/full tiers: [references/model.md](references/model.md).
+**Absence is meaningful.** In the compact list tier a field at its default is omitted (no `status` = open, no `when` = not in Today), and inside a single-container node an item omits ancestry the node already states (absent `project`/`area` there = inherited). Full rules and the compact/full tiers: [references/data-model.md](references/data-model.md).
 
 ## Referring to items
 
@@ -68,7 +68,7 @@ Namespaced verb families — run `things <group> --help` for the verbs and `thin
 
 ## Going deeper
 
-- [references/model.md](references/model.md) — the full data model, `stage`/`when` derivation, the compact/full tiers, view membership, and filters.
+- [references/data-model.md](references/data-model.md) — the full data model, `stage`/`when` derivation, the compact/full tiers, view membership, and filters.
 - [references/contracts.md](references/contracts.md) — the JSON envelope, exit codes, safety/undo/idempotency, batch chaining, and recurrence.
 - [references/ordering.md](references/ordering.md) — move vs reorder in depth: axes, gates, caps, automatic fallbacks, placement guarantees, and the one dead class (templates).
 - [references/errors.md](references/errors.md) — the error contract: the candidate shape, dead-row hints, hazard acknowledgments, and the error-code registry.
