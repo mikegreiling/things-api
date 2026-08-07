@@ -182,3 +182,107 @@ unsupported) — that is by design.
   `answer` / `answer-includes` matchers), not from a separate canned field — a
   pseudo run trivially satisfies its own answer matchers so the read path proves the
   grade→report plumbing end to end.
+
+## The `claude-code` arms (`bench/claude-code.ts`) — engine facts
+
+Two arms — `claude-cli` (bare, `--help` only) and `claude-skill` (native skill) —
+run the subject through the **Claude Code engine** on the operator's subscription,
+never a metered API. Verified against Claude Code **v2.1.221** (Node 26), Max plan,
+`authMethod: claude.ai`, subject `claude-haiku-4-5-20251001`.
+
+### Engine choice: `claude -p` (headless CLI), not the Agent SDK
+
+Evaluated both `claude -p` and `@anthropic-ai/claude-agent-sdk`; chose `claude -p`.
+Rationale:
+
+- **Fits the harness.** The bench already drives every arm by spawning a child
+  process under a controlled env (the MCP arm spawns `node bin/things.js mcp`; the
+  cli/skill arms spawn `bin/things.js` per command). `claude -p` slots into that
+  exact pattern — full `env`/`cwd`/`PATH` control via `child_process`, which is
+  precisely what the rebuilt real-shell fence needs.
+- **Zero new dependency.** The `claude` binary is already installed; the Agent SDK
+  would add a package that itself just wraps the same CLI + the same subscription
+  auth, for no capability gain. (Also aligns with the repo's CLI-over-SDK doctrine.)
+- **`--tools Bash` is a HARD tool fence.** The init event reports `tools:["Bash"]` —
+  Read/Write/Edit/WebFetch/WebSearch and every other built-in are *not loaded at
+  all*, a stronger guarantee than the SDK's runtime `canUseTool` callback (which
+  gates tools that still exist). Network tools vanish by the same flag.
+- **`--output-format stream-json --verbose`** emits newline-delimited events —
+  `system/init` (lists `tools`, `skills`, `model`), `assistant` (content blocks incl.
+  `tool_use`), `user` (tool_result blocks with `is_error`), and a final `result`
+  carrying `usage`, `num_turns`, `permission_denials`, `total_cost_usd` — clean
+  programmatic usage + friction + tool-call accounting without scraping prose.
+
+### Auth — subscription, never metered
+
+- `CLAUDE_CODE_OAUTH_TOKEN` (a **subscription** OAuth token) is honored by the CLI
+  and is the auth path used. `resolveSubscriptionToken()` prefers that env var (e.g.
+  from `claude setup-token`); otherwise it reads the login **keychain** item
+  `Claude Code-credentials` (`security find-generic-password -w`, parse
+  `.claudeAiOauth.accessToken`) in the PARENT process. `ANTHROPIC_API_KEY` is never
+  set — that would meter spend, which the maintainer's constraint forbids.
+- Passing the token via env **decouples auth from both the fenced PATH and HOME**:
+  the child needs no `/usr/bin/security` on PATH and no real config dir. (Confirmed:
+  with a fenced PATH lacking `/usr/bin`, keychain reads fail — "Not logged in" — so
+  a bare fenced PATH *requires* the token env. Also confirmed: redirecting
+  `CLAUDE_CONFIG_DIR` alone breaks keychain auth; the token env survives it.)
+- **Subscription caveat:** Haiku draws on the operator's Claude plan **usage limits**
+  (rate/weekly caps), not a metered balance. Cheap but not free — size batches
+  accordingly (see the README subscription block).
+
+### The rebuilt fence (real shell)
+
+Claude Code's Bash is a REAL shell, so the just-bash VFS fence does not apply. Per
+run, `buildFence()` creates a throwaway `HOME`, a `workdir` (cwd), a fenced `bin/`,
+and a scratch `TMPDIR`, and the child is spawned with an env built from scratch
+(no parent `CLAUDE_CODE_*`, no `ANTHROPIC_API_KEY`):
+
+- **`PATH` = the fenced `bin/` only.** It holds a `things` **shim** plus a curated
+  coreutils allowlist (symlinks resolved from the host). The shim HARDCODES the
+  fixture fence env (`THINGS_DB`, `THINGS_SIM_WRITES=1`, `THINGS_API_*`, clock) and
+  `exec`s `bin/things.js` by an **absolute node path** — node is NOT on PATH. Every
+  network/escape binary (`curl` `wget` `nc` `ssh` `scp` `sqlite3` `osascript` `open`
+  `node` `python*` `ruby` `perl` `security` `git`) is unreachable by omission, so the
+  agent cannot shell out to the network or open the real Things DB behind `things`.
+- **Fail-closed preflight** (`preflight()`), aborts the run on any ambiguity: token
+  present; fixture DB exists; no forbidden binary present in the fenced bin; and the
+  shim's `things … --dry-run --json` compiles to a `simulated:` invocation (the sim
+  vector + `benchFixture` marker are wired → the real DB is unreachable via `things`).
+  This is the `claude-code` analog of the runner's `assertFenceFunctional`.
+- **Hermeticity:** `--no-session-persistence` + throwaway HOME + `--setting-sources
+  project` keep the operator's real `~/.claude` settings/plugins out. Claude Code's
+  **bundled** skills (dataviz, code-review, run, …) still appear in the init `skills`
+  list — they ship with the binary and cannot be removed by HOME/config redirect —
+  but they are IDENTICAL across both arms (pinned to the Claude Code version, which
+  is recorded in `claudeMeta`), so they cancel in the paired `claude-cli` vs
+  `claude-skill` comparison. The ONLY skill-set delta between arms is `things-cli`.
+
+### Ingestion mode (the harness experiment) + metadata
+
+- `claude-skill` installs the repo skill at `<workdir>/.claude/skills/things-cli/`
+  for Claude Code's **native discovery** (progressive disclosure: name+description
+  advertised; body read on demand). This differs from the pi `skill` arm's **static
+  injection** (full skill bytes always in `staticText` + mounted in the VFS, with an
+  explicit system-prompt advert). That difference IS the experiment. Confirmed: with
+  Bash-only, Haiku discovered the installed skill and read `references/model.md`
+  unprompted, answering from it.
+- Each transcript records `claudeMeta = { engine, claudeVersion, model,
+  ingestionMode, skillsRegistered }` so the ingestion mode is captured per run.
+
+### Token accounting mapping (Claude Code → bench fields)
+
+The `result.usage` shape differs from pi-ai; the mapping is:
+
+- `tokensIn = input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+  (the honest total context; `cache_creation` is the "cache write" analog).
+- `tokensInCached = cache_read_input_tokens`.
+- `tokensOut = output_tokens`; `turns = num_turns`.
+- `errorsSeen` = count of `tool_result` blocks with `is_error:true` + `result`'s
+  `permission_denials.length`; `toolCalls` = count of `tool_use` blocks.
+- `staticContextTokens` is **measured, not text-estimated** for these arms: the first
+  assistant turn's `cache_creation_input_tokens` ≈ the initial primed context (Claude
+  Code's internal harness system prompt + tool defs + skill descriptions), cached
+  once. This is NOT directly comparable to the pi arms' text-estimated static
+  (different tokenizer; includes Claude Code's internal prompt) — compare across
+  claude arms, and use `tokensIn` as the honest cross-engine headline.
+  `dynamicContextTokens` uses the same `estimateTokens(transcript)` method as pi.

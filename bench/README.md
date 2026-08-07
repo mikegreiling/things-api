@@ -15,6 +15,8 @@ npm run bench -- --arm cli --tasks bench/tasks --split dev --pseudo        # zer
 npm run bench -- --arm cli --model <pinned-model> --provider openai --split dev --reps 3
 npm run bench -- --arm cli --model <pinned-model> --provider openai-codex --split dev   # ChatGPT-subscription OAuth
 npm run bench -- --arm skill ... / --arm mcp ...                           # other arms
+npm run bench -- --arm claude-cli   --model claude-haiku-4-5-20251001 --split dev  # Claude Code, bare
+npm run bench -- --arm claude-skill --model claude-haiku-4-5-20251001 --split dev  # Claude Code, native skill
 ```
 
 Real runs authenticate one of two ways (artifacts always land in gitignored `bench/artifacts/`):
@@ -32,11 +34,19 @@ Real runs authenticate one of two ways (artifacts always land in gitignored `ben
   - **Subscription rate caps apply.** These calls draw on your ChatGPT plan's usage limits, not a metered API balance — a large sweep (many tasks × reps × arms) can hit the plan's rate/usage ceiling and stall or error mid-run, unlike a pay-as-you-go API key. Size batches accordingly and expect throttling.
   - **Softer model pinning.** The codex catalog exposes ChatGPT-product model ids (e.g. `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.6-sol`) whose backing weights and defaults can shift under you without an id change, so a codex-OAuth cell is a weaker reproducibility anchor than a dated API model id. Record the exact id and run date; treat cross-date comparisons on this path with care.
 
+- **`--arm claude-cli` / `--arm claude-skill`** run the subject through the **Claude Code engine** (`claude -p`, subscription auth) instead of a pi provider. No `--provider` flag is needed (it is pinned to `claude-code`). These arms rebuild the real-shell fence from scratch (see `NOTES.md` → the `claude-code` arms) — a per-run throwaway HOME/workdir, a fenced PATH whose only escape hatch is a `things` shim, tools locked to Bash, and a fail-closed preflight. Auth resolves from `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token`) or the `claude auth login` keychain item — **never `ANTHROPIC_API_KEY`**, so there is no metered API spend.
+
+  Caveats for the Claude Code subscription arms:
+  - **Subscription usage limits apply.** Calls draw on your Claude plan's rate/weekly usage caps (Haiku is the cheapest tier, but not free) — a large sweep (tasks × reps × arms) can hit the plan ceiling and throttle or stall mid-run. Size batches accordingly; pin the subject to `claude-haiku-4-5-20251001` and never default to a larger model.
+  - **Bundled skills are constant, not absent.** Claude Code's own bundled skills (dataviz, code-review, run, …) appear in both arms' skill sets; they are identical across arms (pinned to the recorded Claude Code version) and cancel in the paired comparison. The only skill-set delta between `claude-cli` and `claude-skill` is `things-cli`.
+  - **Token accounting maps but is not identical to the pi arms.** `tokensIn`/`cached`/`tokensOut`/turns/friction map cleanly from `result.usage`; `static` context is *measured* (first-turn cache-write) rather than text-estimated and includes Claude Code's internal harness prompt — compare `static` across the claude arms only, and use `tokensIn` as the cross-engine headline.
+
 Reports: `bench/report.ts` aggregates `runs.jsonl` into a scorecard; accepted-round scorecards are committed under `bench/results/`.
 
 ## Layout
 
 - `runner.ts` / `sandbox.ts` / `arms.ts` / `fixture.ts` / `grade.ts` / `report.ts` — the harness
+- `claude-code.ts` — the `claude-cli` / `claude-skill` arms: the rebuilt real-shell fence + `claude -p` driver
 - `prompts/` — fixed, versioned system prompts (hashes recorded per run)
 - `tasks/` — the task corpus (`TaskSpec` JSON; families, tiers, dev/validation/holdout splits, paraphrases)
 - `results/` — committed scorecards; `artifacts/` — gitignored raw runs/transcripts

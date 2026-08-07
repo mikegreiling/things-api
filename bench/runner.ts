@@ -38,10 +38,12 @@ import {
   type Collector,
 } from "./arms.ts";
 import { EXIT_TOKEN_BUDGET, executeSweep, type SweepUnit } from "./budget.ts";
+import { CLAUDE_PROVIDER, isClaudeArm, runClaudeCode, type ClaudeOutcome } from "./claude-code.ts";
 import { buildCodexAgentAuth, codexLoginHint, hasCodexCredential } from "./codex-auth.ts";
 import { buildBenchFixture } from "./fixture.ts";
 import { grade } from "./grade.ts";
 import { writeScorecard } from "./report.ts";
+import { cliSystemPrompt } from "./prompts/system.ts";
 import { createSandbox, type Sandbox } from "./sandbox.ts";
 import { estimateTokens } from "./tokens.ts";
 import type { Arm, Assertion, Clock, RunRecord, Split, TaskSpec } from "./types.ts";
@@ -407,31 +409,83 @@ async function runOne(
   const collector = newCollector();
   const prompt = task.prompt;
 
-  let armCtx: ArmContext;
+  // The claude-code arms run a REAL shell through Claude Code, not pi-agent-core —
+  // they build their own fence (bench/claude-code.ts) and skip the pi armCtx/sandbox.
+  // Pseudo mode stays arm-independent (replays pseudoScript through the cli sandbox),
+  // so it uses the pi path even for a claude arm label.
+  const useClaude = isClaudeArm(opts.arm) && !opts.pseudo;
+
+  let armCtx: ArmContext | undefined;
   let sandbox: Sandbox | undefined;
-  const useSandbox = opts.pseudo || opts.arm !== "mcp";
-  if (useSandbox) {
-    const files = opts.arm === "skill" ? ctx.skill.files : undefined;
-    sandbox = createSandbox({ fenceEnv, binPath: BIN_PATH, ...(files !== undefined && { files }) });
-    armCtx =
-      opts.arm === "skill"
-        ? buildSkillArm(sandbox, collector, ctx.skill.bytes)
-        : buildCliArm(sandbox, collector);
-  } else {
-    armCtx = await buildMcpArm({ fenceEnv, binPath: BIN_PATH }, collector);
+  if (!useClaude) {
+    const useSandbox = opts.pseudo || opts.arm !== "mcp";
+    if (useSandbox) {
+      const files = opts.arm === "skill" ? ctx.skill.files : undefined;
+      sandbox = createSandbox({
+        fenceEnv,
+        binPath: BIN_PATH,
+        ...(files !== undefined && { files }),
+      });
+      armCtx =
+        opts.arm === "skill"
+          ? buildSkillArm(sandbox, collector, ctx.skill.bytes)
+          : buildCliArm(sandbox, collector);
+    } else {
+      armCtx = await buildMcpArm({ fenceEnv, binPath: BIN_PATH }, collector);
+    }
   }
 
   const maxTurns = task.maxTurns ?? 30;
-  const timeoutMs = task.timeoutMs ?? 120_000;
+  const timeoutMs = task.timeoutMs ?? (useClaude ? 300_000 : 120_000);
 
   const start = performance.now();
   let outcome: ExecOutcome;
+  let staticContextTokens: number;
+  let systemPromptForRecord: string;
+  let claudeMeta: ClaudeOutcome["meta"] | undefined;
   try {
-    outcome = opts.pseudo
-      ? await runPseudo(task, prompt, sandbox as Sandbox, collector)
-      : await runAgent(armCtx, prompt, opts, maxTurns, timeoutMs);
+    if (useClaude) {
+      // Same bare framing for BOTH claude arms (no skill advert — the skill arm
+      // relies on Claude Code's native discovery, so the installed skill is the only
+      // difference between them).
+      const appendSystemPrompt = cliSystemPrompt(false);
+      const c = await runClaudeCode({
+        arm: opts.arm,
+        prompt,
+        appendSystemPrompt,
+        model: opts.model,
+        fixturePath: fixture.path,
+        clock: task.clock,
+        configDir: scratch.config,
+        stateDir: scratch.state,
+        binPath: BIN_PATH,
+        nodeExec: process.execPath,
+        skillDir: SKILL_DIR,
+        collector,
+        timeoutMs,
+      });
+      outcome = {
+        turns: c.turns,
+        tokensIn: c.tokensIn,
+        tokensInCached: c.tokensInCached,
+        tokensOut: c.tokensOut,
+        finalText: c.finalText,
+        dynamicText: c.dynamicText,
+        messages: c.messages,
+      };
+      staticContextTokens = c.staticContextTokens;
+      claudeMeta = c.meta;
+      systemPromptForRecord = `claude-code//${opts.arm}//${c.meta.claudeVersion}\n${appendSystemPrompt}`;
+    } else {
+      const ctxArm = armCtx as ArmContext;
+      outcome = opts.pseudo
+        ? await runPseudo(task, prompt, sandbox as Sandbox, collector)
+        : await runAgent(ctxArm, prompt, opts, maxTurns, timeoutMs);
+      staticContextTokens = estimateTokens(ctxArm.staticText);
+      systemPromptForRecord = ctxArm.systemPrompt;
+    }
   } finally {
-    if (armCtx.dispose) await armCtx.dispose();
+    if (armCtx?.dispose) await armCtx.dispose();
   }
   const wallMs = Math.round(performance.now() - start);
 
@@ -454,7 +508,8 @@ async function runOne(
         model,
         provider: opts.provider,
         prompt,
-        systemPrompt: armCtx.systemPrompt,
+        systemPrompt: systemPromptForRecord,
+        ...(claudeMeta !== undefined && { claudeMeta }),
         grade: gradeResult,
         metrics: {
           turns: outcome.turns,
@@ -483,7 +538,7 @@ async function runOne(
     arm: opts.arm,
     model,
     provider: opts.provider,
-    promptHash: promptHash(armCtx.systemPrompt),
+    promptHash: promptHash(systemPromptForRecord),
     gitSha: ctx.gitSha,
     success: gradeResult.success,
     safety: gradeResult.safety,
@@ -493,7 +548,7 @@ async function runOne(
     tokensIn: outcome.tokensIn,
     tokensInCached: outcome.tokensInCached,
     tokensOut: outcome.tokensOut,
-    staticContextTokens: estimateTokens(armCtx.staticText),
+    staticContextTokens,
     dynamicContextTokens: estimateTokens(outcome.dynamicText),
     wallMs,
     worldSeed: opts.noWorld ? null : opts.worldSeed,
@@ -606,7 +661,7 @@ async function main(): Promise<void> {
   program
     .name("bench-runner")
     .description("AGENTBENCH runner — seed → sandbox → agent → grade → report")
-    .option("--arm <arm>", "cli | skill | mcp", "cli")
+    .option("--arm <arm>", "cli | skill | mcp | claude-cli | claude-skill", "cli")
     .option("--model <id>", "model id (real runs)", "")
     .option("--provider <name>", "provider", "openai")
     .option("--tasks <dir>", "tasks directory", join(BENCH_DIR, "tasks"))
@@ -637,6 +692,9 @@ async function main(): Promise<void> {
         maxTotalTokens: Math.max(0, Number(raw["maxTotalTokens"]) || 0),
         ...(typeof raw["task"] === "string" && { task: raw["task"] }),
       };
+      // The claude-code arms are served by the Claude Code engine, not a pi provider —
+      // pin the recorded provider label so scorecards read consistently.
+      if (isClaudeArm(opts.arm)) opts.provider = CLAUDE_PROVIDER;
       if (!opts.pseudo && opts.model === "") {
         process.stderr.write("real runs require --model <id> (or use --pseudo)\n");
         process.exitCode = 1;
