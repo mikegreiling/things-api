@@ -685,8 +685,10 @@ export function renderUpcoming(items: ListItem[], now?: Date): string[] {
  * The log-move cadence card header (TTY only): the "Move completed items to
  * Logbook" setting in Cultured Code's own words, as indented `key: value`
  * metadata lines — the same header convention `things today` / `area show` use.
- * Under Manually the last explicit log's day is shown too (the instant resolved
- * in the CONSUMER zone, the viewer-local Z-LOGVIEW convention the row dates use).
+ * Under Daily and Manually the last explicit log's day (`lastLoggedAt`) is shown
+ * too (the instant resolved in the CONSUMER zone, the viewer-local Z-LOGVIEW
+ * convention the row dates use). Purely presence-keyed on `logging.lastLoggedAt`,
+ * so the cadence-specific presence rule lives ONCE in `logState` (log-boundary.ts).
  */
 export function logbookHeaderLines(logging: LogState, now?: Date): string[] {
   const lines = [`  ${dim("cadence:")} ${logging.cadence}`];

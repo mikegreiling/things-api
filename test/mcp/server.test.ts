@@ -335,6 +335,19 @@ describe("things MCP server", () => {
     expect(result.isError ?? false).toBe(false);
   });
 
+  it("read_view logbook carries lastLoggedAt under Daily too (manual stamp is boundary-live)", async () => {
+    const manual = Math.floor(NOW.getTime() / 1000) - 60;
+    fixture.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 1, ?)")
+      .run(manual);
+    await connect([fakeVector(null).vector]);
+    const result = await client.callTool({ name: "read_view", arguments: { view: "logbook" } });
+    const logging = loggingOf(result);
+    expect(logging?.cadence).toBe("Daily");
+    expect(typeof logging?.lastLoggedAt).toBe("string");
+    expect(result.isError ?? false).toBe(false);
+  });
+
   it("log_now moves nothing under the default Immediately cadence and reports logged: 0", async () => {
     seedTodo(fixture.db, { title: "already-logged", status: "completed", stopDate: 1_700_000_000 });
     await connect([fakeVector(null, { id: "applescript", ops: ["log-now"] }).vector]);

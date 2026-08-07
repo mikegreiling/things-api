@@ -76,7 +76,7 @@ export type LogCadence = "Immediately" | "Daily" | "Manually";
 
 /**
  * A VIEW-LEVEL fact about the Logbook: the log-move cadence in Cultured Code's
- * own Settings words, plus — under Manually only — the instant of the last
+ * own Settings words, plus — under Daily and Manually — the instant of the last
  * explicit log (`TMSettings.manualLogDate`), as an ISO-8601 string (an INSTANT,
  * so a consumer renders its calendar day in their own zone; the wire carries the
  * exact instant). Rides `meta.logging` on the wire (never a data row) — the
@@ -84,16 +84,20 @@ export type LogCadence = "Immediately" | "Daily" | "Manually";
  */
 export interface LogState {
   cadence: LogCadence;
-  /** ISO-8601 instant of the last explicit log — present under Manually only. */
+  /** ISO-8601 instant of the last explicit log — present under Daily and Manually. */
   lastLoggedAt?: string;
 }
 
 /**
  * Read the log-move cadence fact from the `TMSettings` singleton. The golden
  * default is Immediately (`logInterval` absent/0 → boundary is `now`, so nothing
- * is ever pending). `manualLogDate` is surfaced as `lastLoggedAt` ONLY under
- * Manually — under Immediately/Daily any stored value is a stale artifact (a
- * settings-flip stamp), not the operative cadence.
+ * is ever pending). `manualLogDate` is surfaced as `lastLoggedAt` under Daily AND
+ * Manually — a manual `log completed now` works under any cadence, and under Daily
+ * a `manualLogDate` newer than the daily edge IS the effective boundary
+ * (`logBoundary = max(interval edge, manualLogDate)` above), so the stamp is
+ * operationally LIVE information, not just history. Under Immediately it is OMITTED
+ * (the boundary is `now`, so any stored value is inert — a settings-flip artifact,
+ * never the operative boundary); the asymmetry is deliberate.
  */
 export function logState(db: DatabaseSync): LogState {
   const row = db.prepare("SELECT logInterval, manualLogDate FROM TMSettings").get() as
@@ -103,7 +107,7 @@ export function logState(db: DatabaseSync): LogState {
   const cadence: LogCadence =
     interval === 0 ? "Immediately" : interval === 1 ? "Daily" : "Manually";
   const manual = row?.manualLogDate ?? null;
-  return cadence === "Manually" && manual !== null
+  return cadence !== "Immediately" && manual !== null
     ? { cadence, lastLoggedAt: new Date(manual * 1000).toISOString() }
     : { cadence };
 }
