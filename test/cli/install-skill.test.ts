@@ -71,7 +71,7 @@ describe("install-skill: built-in copy fallback", () => {
       // Every bundled reference travels too (recursive copy).
       for (const ref of [
         "contracts.md",
-        "model.md",
+        "data-model.md",
         "gui.md",
         "ordering.md",
         "errors.md",
