@@ -216,12 +216,12 @@
         },
         "lastLoggedAt": {
           "type": "string",
-          "description": "ISO-8601 instant of the last explicit log — present under Manually only."
+          "description": "ISO-8601 instant of the last explicit log — present under Daily and Manually."
         }
       },
       "required": ["cadence"],
       "additionalProperties": false,
-      "description": "A VIEW-LEVEL fact about the Logbook: the log-move cadence in Cultured Code's own Settings words, plus — under Manually only — the instant of the last explicit log (`TMSettings.manualLogDate`), as an ISO-8601 string (an INSTANT, so a consumer renders its calendar day in their own zone; the wire carries the exact instant). Rides `meta.logging` on the wire (never a data row) — the `meta.counts` precedent for a whole-view aggregate."
+      "description": "A VIEW-LEVEL fact about the Logbook: the log-move cadence in Cultured Code's own Settings words, plus — under Daily and Manually — the instant of the last explicit log (`TMSettings.manualLogDate`), as an ISO-8601 string (an INSTANT, so a consumer renders its calendar day in their own zone; the wire carries the exact instant). Rides `meta.logging` on the wire (never a data row) — the `meta.counts` precedent for a whole-view aggregate."
     },
     "LogCadence": {
       "type": "string",

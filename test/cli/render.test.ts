@@ -542,6 +542,24 @@ describe("logbook", () => {
     expect(lines[1]).toBe("  last logged: Jul 3");
   });
 
+  it("under Daily the header ALSO shows the last-logged day (manual stamp is boundary-live)", () => {
+    // A manual `log-now` works under any cadence, and under Daily a manualLogDate
+    // past the daily edge IS the effective boundary — so the stamp is live info.
+    fixture = buildFixtureDb();
+    seedTodo(fixture.db, {
+      title: "Win",
+      status: "completed",
+      stopDate: stopAt("2026-07-01T12:00:00Z"),
+    });
+    const lines = renderLogbook(
+      logbookView(fixture.db, undefined, {}),
+      { cadence: "Daily", lastLoggedAt: "2026-07-03T12:00:00Z" },
+      NOW,
+    );
+    expect(lines[0]).toBe("  cadence: Daily");
+    expect(lines[1]).toBe("  last logged: Jul 3");
+  });
+
   it("shows the cadence header even for an empty Logbook", () => {
     const lines = renderLogbook([], { cadence: "Immediately" }, NOW);
     expect(lines[0]).toBe("  cadence: Immediately");
@@ -690,6 +708,16 @@ describe("logbook render-zone audit (host-zone formatting regression lock)", () 
     setRenderClock({ now: ZONE_AUDIT_NOW, zone: "Pacific/Midway" }); // UTC−11
     const lines = renderLogbook([], { cadence: "Manually", lastLoggedAt: NEAR_MIDNIGHT });
     expect(lines[1]).toBe("  last logged: Jul 31");
+  });
+
+  // Daily carries lastLoggedAt too; its day label is the SAME viewer-local instant
+  // rendering as Manually — the header is purely presence-keyed on lastLoggedAt.
+  it("the Daily header's last-logged day follows the consumer zone (ahead → next month)", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: ZONE_AUDIT_NOW, zone: "Pacific/Kiritimati" }); // UTC+14
+    const lines = renderLogbook([], { cadence: "Daily", lastLoggedAt: NEAR_MIDNIGHT });
+    expect(lines[0]).toBe("  cadence: Daily");
+    expect(lines[1]).toBe("  last logged: Aug 1"); // 2026-07-31T12:30Z +14 → Aug 1
   });
 });
 

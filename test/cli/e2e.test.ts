@@ -216,6 +216,23 @@ describe("cli end-to-end (fixture db)", () => {
     expect(env.data.items.map((i: { title: string }) => i.title)).toEqual(["logged win"]);
   });
 
+  it("things logbook --json carries lastLoggedAt on meta.logging under Daily too (manual stamp is boundary-live)", () => {
+    fx = buildFixtureDb();
+    const manual = Math.floor(Date.now() / 1000) - 60;
+    // logInterval 1 = Daily; a manualLogDate past the daily edge IS the boundary.
+    fx.db
+      .prepare("INSERT INTO TMSettings (uuid, logInterval, manualLogDate) VALUES ('S', 1, ?)")
+      .run(manual);
+    seedTodo(fx.db, { title: "logged win", status: "completed", stopDate: manual - 3600 });
+
+    const { stdout, exitCode } = runCli(["logbook", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.meta.logging.cadence).toBe("Daily");
+    expect(typeof env.meta.logging.lastLoggedAt).toBe("string");
+    expect("logging" in env.data).toBe(false);
+  });
+
   it("things logbook meta.logging is Immediately with no lastLoggedAt under the golden default", () => {
     fx = buildFixtureDb(); // no TMSettings row → logInterval defaults to Immediately
     const { stdout, exitCode } = runCli(["logbook", "--json", "--db", fx.path]);
