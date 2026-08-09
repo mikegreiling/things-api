@@ -24,7 +24,9 @@ export type Split = "dev" | "validation" | "holdout";
  * subject through the Claude Code engine (`claude -p`, subscription auth) with a
  * rebuilt real-shell fence — `claude-cli` is bare (help only), `claude-skill`
  * installs the skill into the run workdir for Claude Code's NATIVE discovery
- * (progressive disclosure), the counterpart to the skill arm's static injection.
+ * (progressive disclosure). The pi `skill` arm is likewise NATIVE — it advertises the
+ * skill via pi-agent-core's `formatSkillsForSystemPrompt` and reads the body on demand
+ * (the bench's former static injection of skill bytes is retired).
  */
 export type Arm = "cli" | "skill" | "mcp" | "claude-cli" | "claude-skill";
 
@@ -229,7 +231,12 @@ export interface RunRecord {
   /** Of `tokensIn`, the portion served from the prompt cache (provider `usage.cacheRead`). */
   tokensInCached: number;
   tokensOut: number;
-  /** System prompt + tool defs (+ skill bytes if loaded). */
+  /**
+   * System prompt + tool defs. For the pi `skill` arm this INCLUDES the native skills
+   * advertisement (part of the system prompt) but NOT the skill body — under pi-native
+   * ingestion the SKILL.md/references bytes are read on demand and count as dynamic, not
+   * static (the retired static-injection mode counted the full skill bytes here).
+   */
   staticContextTokens: number;
   /** Everything else in context (prompt, results, errors). */
   dynamicContextTokens: number;

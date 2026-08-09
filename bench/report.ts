@@ -148,6 +148,15 @@ export function renderScorecardMarkdown(sc: Scorecard): string {
       "cache-discounted, so cache-friendly arms would under-report `tok_in` if read raw._",
   );
   lines.push("");
+  lines.push(
+    "_Skill ingestion mode: `skill` = **pi-native** (the library's " +
+      "`formatSkillsForSystemPrompt` advertisement — name+description+location — in `static`; " +
+      "SKILL.md + `references/*.md` read on demand, so they count in `dynamic`, not `static`); " +
+      "`claude-skill` = Claude Code native discovery. Both **retired** the bench's former " +
+      "`static-injection` mode (full skill bytes always in `static`) — skill-arm `static`/" +
+      "`dynamic` numbers are NOT comparable across that boundary (see ROADMAP re-baseline note)._",
+  );
+  lines.push("");
   return lines.join("\n");
 }
 
