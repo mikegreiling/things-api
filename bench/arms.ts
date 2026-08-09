@@ -2,18 +2,20 @@
  * Arm builders. Each returns the system prompt + pi-agent-core tools + the static
  * context text (for token accounting) for one surface under test:
  *   - cli:   a single bash tool over the sandbox; no Things knowledge in the prompt.
- *   - skill: same bash tool + skill advertisement; the skill bytes count as static.
+ *   - skill: same bash tool + the NATIVE pi skills advertisement (name+description+location
+ *            via formatSkillsForSystemPrompt); the skill body is read on demand, NOT static.
  *   - mcp:   NO bash — the server's tools bridged verbatim; server instructions form
  *            the system prompt; init cost = instructions + serialized tool catalog.
  *
  * A shared Collector accumulates friction (error responses seen) and tool-call counts
  * across whatever tools the agent invokes.
  */
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, Skill } from "@earendil-works/pi-agent-core";
+import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 
-import { cliSystemPrompt, mcpSystemPrompt } from "./prompts/system.ts";
+import { cliSystemPrompt, mcpSystemPrompt, skillSystemPrompt } from "./prompts/system.ts";
 import type { Sandbox, ShellResult } from "./sandbox.ts";
 
 /** Mutable per-run tallies written by the tool wrappers. */
@@ -30,7 +32,11 @@ export function newCollector(): Collector {
 export interface ArmContext {
   systemPrompt: string;
   tools: AgentTool[];
-  /** Fixed context text (system prompt + tool defs [+ skill bytes]) for static tokens. */
+  /**
+   * Fixed context text for static-token accounting: system prompt + tool defs. For the
+   * skill arm the system prompt already carries the native skills advertisement; the skill
+   * BODY is NOT included here (it is read on demand → dynamic, not static).
+   */
   staticText: string;
   /** Release any spawned resources (the MCP client/child). */
   dispose?: () => Promise<void>;
@@ -71,24 +77,28 @@ function bashTool(sandbox: Sandbox, collector: Collector): AgentTool {
 
 /** Bare-CLI arm. */
 export function buildCliArm(sandbox: Sandbox, collector: Collector): ArmContext {
-  const systemPrompt = cliSystemPrompt(false);
+  const systemPrompt = cliSystemPrompt();
   const tools = [bashTool(sandbox, collector)];
   return { systemPrompt, tools, staticText: staticTextFor(systemPrompt, tools) };
 }
 
-/** CLI + skill arm. `skillBytes` is the mounted skill content, counted as static. */
-export function buildSkillArm(
-  sandbox: Sandbox,
-  collector: Collector,
-  skillBytes: string,
-): ArmContext {
-  const systemPrompt = cliSystemPrompt(true);
+/**
+ * CLI + skill arm — NATIVE pi-agent-core ingestion (no static body injection).
+ *
+ * `skills` are loaded via the library's `loadSkills` over the same file map that seeds the
+ * VFS (see runner `loadSkill` + `bench/skill-env.ts`); their `formatSkillsForSystemPrompt`
+ * advertisement (name + description + `<location>`) enters the system prompt exactly as in
+ * real pi. The skill BODY and `references/*.md` are NOT static — the model reads them on
+ * demand from the VFS mount. Static tokens therefore cover only the prompt (including the
+ * advert) + the bash tool def; the skill bytes moved into the DYNAMIC accounting, entering
+ * context only when the model actually reads them (ingestion mode `pi-native`, replacing the
+ * retired `static-injection`).
+ */
+export function buildSkillArm(sandbox: Sandbox, collector: Collector, skills: Skill[]): ArmContext {
+  const advert = formatSkillsForSystemPrompt(skills);
+  const systemPrompt = skillSystemPrompt(advert);
   const tools = [bashTool(sandbox, collector)];
-  return {
-    systemPrompt,
-    tools,
-    staticText: `${staticTextFor(systemPrompt, tools)}\n${skillBytes}`,
-  };
+  return { systemPrompt, tools, staticText: staticTextFor(systemPrompt, tools) };
 }
 
 /** Serialized static surface: system prompt + the tool definitions the model sees. */

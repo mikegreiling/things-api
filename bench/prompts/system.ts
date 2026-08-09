@@ -7,7 +7,7 @@
  * teach the model, not the prompt.
  */
 
-export const PROMPT_VERSION = "v1";
+export const PROMPT_VERSION = "v2";
 
 /** Shared final-answer contract so answer grading is identical across arms. */
 export const FINAL_ANSWER_PROTOCOL =
@@ -31,29 +31,25 @@ export const CLI_SYSTEM_PROMPT =
   "for parsing output.\n\n" +
   FINAL_ANSWER_PROTOCOL;
 
-/**
- * Skill arm = the CLI base prompt plus this advertisement. The skill tree is mounted
- * read-only in the sandbox VFS under /skill (SKILL.md + references/).
- *
- * Do NOT enumerate the reference filenames here. SKILL.md carries its own authoritative,
- * self-negating inventory of `references/*.md`; naming them a second time in this prompt
- * created a stale duplicate that rotted through the #246/#359/#435 skill restructures and
- * seeded the reference-hunt friction misattributed across bench rounds #428/#432/#435 (the
- * "guessed" filenames were exactly this advert's stale list). The non-enumerating form
- * structurally closes that rot class: the advert routes the agent to SKILL.md's inventory,
- * so the reference set can change freely without any sweep of this file.
- */
-export const SKILL_ADVERT =
-  "A reference skill for the `things` CLI is mounted in the filesystem. Before working " +
-  "by trial and error, read /skill/SKILL.md — it documents the data model, the " +
-  "available commands and their flags, output shapes, and safety/recovery notes. It " +
-  "lists its own reference files under /skill/references/ and maps each to a topic; read " +
-  "the ones relevant to your task. The skill describes the same CLI you have; prefer it " +
-  "over rediscovering the interface from --help.";
+/** The bare CLI-family system prompt (cli arm, and the append-prompt for both claude arms). */
+export function cliSystemPrompt(): string {
+  return CLI_SYSTEM_PROMPT;
+}
 
-/** The composed system prompt for the CLI-family arms. */
-export function cliSystemPrompt(withSkill: boolean): string {
-  return withSkill ? `${CLI_SYSTEM_PROMPT}\n\n${SKILL_ADVERT}` : CLI_SYSTEM_PROMPT;
+/**
+ * Skill arm = the CLI base prompt plus the NATIVE pi-agent-core skills advertisement.
+ *
+ * `advert` is `formatSkillsForSystemPrompt(skills)` output verbatim (the library's own
+ * `<available_skills>` block: name + description + `<location>` per skill, with the
+ * relative-path-resolution preamble) — the exact advertisement real pi injects. There is
+ * NO bench-authored advert and NO static injection of the skill body: only the skill's
+ * name+description+location are in-context; the SKILL.md body and its `references/*.md` are
+ * read on demand from the VFS mount at the advertised `<location>` (progressive disclosure).
+ * This makes the arm 1-to-1 with real pi's skills flow — the bespoke `SKILL_ADVERT` +
+ * static body accounting it replaced is retired (see ROADMAP.md native-ingestion round).
+ */
+export function skillSystemPrompt(advert: string): string {
+  return `${CLI_SYSTEM_PROMPT}\n\n${advert}`;
 }
 
 /** The MCP arm's system prompt: the server's own instructions, then the answer protocol. */

@@ -25,8 +25,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadSkills, type Skill } from "@earendil-works/pi-agent-core";
 import { Command } from "commander";
 
 import {
@@ -45,6 +46,7 @@ import { grade } from "./grade.ts";
 import { writeScorecard } from "./report.ts";
 import { cliSystemPrompt } from "./prompts/system.ts";
 import { createSandbox, type Sandbox } from "./sandbox.ts";
+import { createVfsSkillEnv } from "./skill-env.ts";
 import { estimateTokens } from "./tokens.ts";
 import type { Arm, Assertion, Clock, RunRecord, Split, TaskSpec } from "./types.ts";
 
@@ -113,20 +115,37 @@ function loadTasks(dir: string, split: Split | "all", taskId?: string): TaskSpec
     .toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
-function loadSkill(): { files: Record<string, string>; bytes: string } {
+// VFS mount for the skill tree, native-pi layout: a skills ROOT holding one directory
+// per skill named for the skill (SKILL.md + references/). `loadSkills` is pointed at the
+// root; the SKILL.md subdirectory basename mirrors SKILL_DIR's so the library records a
+// <location> the agent can `cat` verbatim in the sandbox, and the SKILL.md's relative
+// `references/*.md` links resolve against the skill dir to their mounts.
+const SKILL_MOUNT_ROOT = "/skills";
+const SKILL_MOUNT_DIR = `${SKILL_MOUNT_ROOT}/${basename(SKILL_DIR)}`;
+
+/**
+ * Mount the skill tree into a VFS file map AND load it through pi-agent-core's own
+ * `loadSkills` over that SAME map (via `createVfsSkillEnv`). One source of truth feeds both
+ * the native `formatSkillsForSystemPrompt` advertisement (in the skill arm's system prompt)
+ * and the agent's on-demand reads — no static body injection, no path fabrication.
+ */
+async function loadSkill(): Promise<{ files: Record<string, string>; skills: Skill[] }> {
   const files: Record<string, string> = {};
-  const skillMd = readFileSync(join(SKILL_DIR, "SKILL.md"), "utf8");
-  files["/skill/SKILL.md"] = skillMd;
-  let bytes = skillMd;
+  files[`${SKILL_MOUNT_DIR}/SKILL.md`] = readFileSync(join(SKILL_DIR, "SKILL.md"), "utf8");
   const refDir = join(SKILL_DIR, "references");
   for (const f of readdirSync(refDir)
     .filter((n) => n.endsWith(".md"))
     .toSorted()) {
-    const content = readFileSync(join(refDir, f), "utf8");
-    files[`/skill/references/${f}`] = content;
-    bytes += `\n${content}`;
+    files[`${SKILL_MOUNT_DIR}/references/${f}`] = readFileSync(join(refDir, f), "utf8");
   }
-  return { files, bytes };
+  const { skills, diagnostics } = await loadSkills(createVfsSkillEnv(files), SKILL_MOUNT_ROOT);
+  if (skills.length === 0) {
+    throw new Error(
+      `no skill loaded from ${SKILL_DIR} (mounted at ${SKILL_MOUNT_DIR}); ` +
+        `diagnostics: ${JSON.stringify(diagnostics)}`,
+    );
+  }
+  return { files, skills };
 }
 
 interface Scratch {
@@ -396,7 +415,11 @@ async function runOne(
   task: TaskSpec,
   rep: number,
   opts: RunnerOptions,
-  ctx: { gitSha: string; skill: { files: Record<string, string>; bytes: string }; outDir: string },
+  ctx: {
+    gitSha: string;
+    skill: { files: Record<string, string>; skills: Skill[] };
+    outDir: string;
+  },
 ): Promise<RunRecord> {
   const scratch = makeScratch();
   const tasksDir = isAbsolute(opts.tasks) ? opts.tasks : resolve(process.cwd(), opts.tasks);
@@ -428,7 +451,7 @@ async function runOne(
       });
       armCtx =
         opts.arm === "skill"
-          ? buildSkillArm(sandbox, collector, ctx.skill.bytes)
+          ? buildSkillArm(sandbox, collector, ctx.skill.skills)
           : buildCliArm(sandbox, collector);
     } else {
       armCtx = await buildMcpArm({ fenceEnv, binPath: BIN_PATH }, collector);
@@ -443,12 +466,21 @@ async function runOne(
   let staticContextTokens: number;
   let systemPromptForRecord: string;
   let claudeMeta: ClaudeOutcome["meta"] | undefined;
+  // Per-arm skill ingestion mode, recorded in the transcript so the accounting is
+  // self-describing. The pi `skill` arm is native (`formatSkillsForSystemPrompt` advert;
+  // body read on demand) — the former `static-injection` (full SKILL.md bytes always in
+  // static context) is retired. The claude-skill arm records its own mode in `claudeMeta`.
+  const ingestionMode =
+    !useClaude && opts.arm === "skill"
+      ? "pi-native (formatSkillsForSystemPrompt advertisement; SKILL.md + references/*.md " +
+        `read on demand from the ${SKILL_MOUNT_DIR} VFS mount — skill body is NOT static)`
+      : undefined;
   try {
     if (useClaude) {
       // Same bare framing for BOTH claude arms (no skill advert — the skill arm
       // relies on Claude Code's native discovery, so the installed skill is the only
       // difference between them).
-      const appendSystemPrompt = cliSystemPrompt(false);
+      const appendSystemPrompt = cliSystemPrompt();
       const c = await runClaudeCode({
         arm: opts.arm,
         prompt,
@@ -510,6 +542,7 @@ async function runOne(
         prompt,
         systemPrompt: systemPromptForRecord,
         ...(claudeMeta !== undefined && { claudeMeta }),
+        ...(ingestionMode !== undefined && { ingestionMode }),
         grade: gradeResult,
         metrics: {
           turns: outcome.turns,
@@ -609,7 +642,7 @@ async function run(opts: RunnerOptions): Promise<void> {
   const runsPath = join(outDir, "runs.jsonl");
   writeFileSync(runsPath, "");
 
-  const ctx = { gitSha: gitSha(), skill: loadSkill(), outDir };
+  const ctx = { gitSha: gitSha(), skill: await loadSkill(), outDir };
   const totalSelected = tasks.length * opts.reps;
   const units: SweepUnit[] = [];
   for (const task of tasks) {

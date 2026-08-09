@@ -36,6 +36,63 @@ project doctrine (doctrine lives in [CONSTITUTION.md](CONSTITUTION.md)).
   - Tools THROW to signal failure (the loop reports it to the model as `isError`);
     they do not encode errors in `content`.
 
+### Agent Skills — native ingestion (verified against 0.80.10)
+
+The library ships a full Agent Skills harness; the bench `skill` arm uses it directly
+(no bespoke advert, no vendored copy), so the arm is 1-to-1 with real pi. All three
+symbols are exported from the package ROOT (`@earendil-works/pi-agent-core`):
+
+- **`loadSkills(env: ExecutionEnv, dirs: string | string[]) → { skills: Skill[]; diagnostics }`**
+  (`dist/harness/skills.js`). Traverses each dir; a directory containing `SKILL.md` IS a
+  skill (loads it and stops — `references/` and other files are NOT loaded as skills),
+  root-level `.md` files load as skills too, `.gitignore`/`.ignore`/`.fdignore` honored.
+  Parses YAML frontmatter for `name` + `description`; `name` defaults to the parent
+  directory basename; **a skill with an empty/missing `description` is DROPPED** (only a
+  non-empty description makes it visible). `validateName` warns (non-fatally) if `name` ≠
+  parent-dir basename, isn't `^[a-z0-9-]+$`, > 64 chars, or has leading/trailing/double
+  hyphens; `description` > 1024 chars warns. Warnings are returned as `diagnostics`, not
+  thrown — the skill still loads.
+- **`Skill`** = `{ name, description, content (SKILL.md body, frontmatter stripped),
+  filePath (absolute path to SKILL.md), disableModelInvocation? }`.
+- **`formatSkillsForSystemPrompt(skills: Skill[]) → string`** (`dist/harness/system-prompt.js`).
+  The canonical advertisement: a 3-line preamble ("Read the full skill file when the task
+  matches its description. When a skill file references a relative path, resolve it against
+  the skill directory … and use that absolute path in tool commands.") + an
+  `<available_skills>` block with one `<skill>` per visible skill carrying `<name>`,
+  `<description>`, `<location>` (= `filePath`, XML-escaped). NO body — progressive
+  disclosure: name+description+location advertised, the body read on demand. Skills with
+  `disableModelInvocation` are filtered out. `formatSkillInvocation` (explicit invocation,
+  unused by the bench) wraps the whole body in a `<skill>` block instead.
+- The `Agent`/`AgentHarness` do NOT auto-inject skills; the APPLICATION composes the
+  advert into its system prompt (`AgentHarnessOptions.systemPrompt` can be a callback
+  receiving `resources.skills`). The bench uses the plain `Agent` and composes the advert
+  itself (`buildSkillArm` → `skillSystemPrompt`), which is the faithful integration.
+
+**Bench wiring (native flow over the just-bash VFS).** The subject's only filesystem is
+the just-bash VFS, so the skill must "live" at its VFS mount path. `runner.loadSkill`
+mounts the tree at `/skills/<name>/SKILL.md` + `/skills/<name>/references/*.md` (native
+layout: a skills ROOT holding one directory per skill, named for the skill) and calls
+`loadSkills(createVfsSkillEnv(files), "/skills")` over the SAME `files` map that seeds the
+VFS. `bench/skill-env.ts` (`createVfsSkillEnv`) is a read-only `ExecutionEnv` over that
+map — the loader needs only `fileInfo`/`listDir`/`readTextFile`/`canonicalPath`; writes and
+`exec` return stable failure Results (the interface forbids throwing). Because both the
+advert and the agent's reads resolve against one source of truth, the library-emitted
+`<location>` (`/skills/things-cli/SKILL.md`) is `cat`-able verbatim in the sandbox and the
+SKILL.md's relative `references/*.md` links resolve to their mounts — **no path remapping
+or fabrication**. Verified: `loadSkills` returns exactly one skill, 0 diagnostics (frontmatter
+`name: things-cli` matches the mount dir); `cat /skills/things-cli/SKILL.md` → exit 0, and
+`cat /skills/things-cli/references/data-model.md` → exit 0 in a live sandbox.
+
+**Accounting change (native vs the retired static-injection).** The advert (name +
+description + location) is the only skill text in the always-present context, so
+`staticContextTokens` for the `skill` arm ≈ prompt + advert + tool defs (~480 tok), NOT
+the ~17k the retired mode counted. Under the old mode `staticText` counted the FULL skill
+bytes as static — an accounting fiction, since the body was mounted in the VFS and read on
+demand (so it was ALSO counted in dynamic/tokIn when read). Native counts the body once, as
+dynamic, iff the model actually reads it. `PROMPT_VERSION` v1→v2 (the composed skill-arm
+`promptHash` changes: the library `<available_skills>` advert replaced the hand-written
+`SKILL_ADVERT`).
+
 ## `@earendil-works/pi-ai`
 
 - `Type` (TypeBox) is re-exported from the package root — used for tool `parameters`.
@@ -136,8 +193,9 @@ APIs, all read from `node_modules/@earendil-works/pi-ai/dist`:
   the HOST Node process, so it can `execFile(process.execPath, …)` directly.
 - Built-in commands (cat, grep, ls, jq, sed, …) are all available to the agent by
   default; we register exactly one custom command, `things`.
-- Initial VFS files via `files: { "/skill/SKILL.md": "…" }` (used to mount the skill
-  for arm B).
+- Initial VFS files via `files: { "/skills/things-cli/SKILL.md": "…", … }` (used to mount
+  the skill tree for the `skill` arm — native layout under `/skills/<name>/`; see the
+  Agent Skills section above).
 
 ## `@modelcontextprotocol/sdk` (client side)
 
@@ -176,8 +234,10 @@ unsupported) — that is by design.
   inbox` flipped the raw hash). `hashDbFiles` instead hashes every user table's rows
   (order-independent, BLOBs hex-encoded, BigInt tagged), which is invariant under
   checkpoints — stable across read-only workloads, sensitive to any real write.
-- The skill for arm B is mounted from the repo's real `skills/things-cli/` tree
-  (SKILL.md + references/), read from disk at run time.
+- The `skill` arm mounts the repo's real `skills/things-cli/` tree (SKILL.md +
+  references/) into the VFS at `/skills/things-cli/` and loads it through the library's own
+  `loadSkills` (native ingestion — see the Agent Skills section). The body is read on
+  demand, never statically injected.
 - The pseudo final answer is **synthesized from the task's answer assertions** (the
   `answer` / `answer-includes` matchers), not from a separate canned field — a
   pseudo run trivially satisfies its own answer matchers so the read path proves the
