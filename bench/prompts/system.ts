@@ -7,7 +7,7 @@
  * teach the model, not the prompt.
  */
 
-export const PROMPT_VERSION = "v0";
+export const PROMPT_VERSION = "v1";
 
 /** Shared final-answer contract so answer grading is identical across arms. */
 export const FINAL_ANSWER_PROTOCOL =
@@ -34,14 +34,22 @@ export const CLI_SYSTEM_PROMPT =
 /**
  * Skill arm = the CLI base prompt plus this advertisement. The skill tree is mounted
  * read-only in the sandbox VFS under /skill (SKILL.md + references/).
+ *
+ * Do NOT enumerate the reference filenames here. SKILL.md carries its own authoritative,
+ * self-negating inventory of `references/*.md`; naming them a second time in this prompt
+ * created a stale duplicate that rotted through the #246/#359/#435 skill restructures and
+ * seeded the reference-hunt friction misattributed across bench rounds #428/#432/#435 (the
+ * "guessed" filenames were exactly this advert's stale list). The non-enumerating form
+ * structurally closes that rot class: the advert routes the agent to SKILL.md's inventory,
+ * so the reference set can change freely without any sweep of this file.
  */
 export const SKILL_ADVERT =
   "A reference skill for the `things` CLI is mounted in the filesystem. Before working " +
   "by trial and error, read /skill/SKILL.md — it documents the data model, the " +
   "available commands and their flags, output shapes, and safety/recovery notes. It " +
-  "links to files under /skill/references/ (reads, writes, gui, data-model, recurrence, " +
-  "safety-and-recovery); read the ones relevant to your task. The skill describes the " +
-  "same CLI you have; prefer it over rediscovering the interface from --help.";
+  "lists its own reference files under /skill/references/ and maps each to a topic; read " +
+  "the ones relevant to your task. The skill describes the same CLI you have; prefer it " +
+  "over rediscovering the interface from --help.";
 
 /** The composed system prompt for the CLI-family arms. */
 export function cliSystemPrompt(withSkill: boolean): string {
