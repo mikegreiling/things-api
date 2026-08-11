@@ -1,6 +1,6 @@
 # The AX initiative — Accessibility-driven ops: state, evidence, and the forward plan
 
-Status: **ACTIVE ROADMAP** (written 2026-07-15, pre-compaction — this document is the durable plan; a fresh agent picks up HERE). Companions: [ui-vector.md](ui-vector.md) (shipped architecture), [../lab/uic1-certification.md](../lab/uic1-certification.md) (certification verdicts + the AX addressing catalog + the full Repeat-dialog field map), [../lab/axvm1-accessibility.md](../lab/axvm1-accessibility.md) (the VM grant recipe + background/lock verdicts), [../lab/ui-certification-runbook.md](../lab/ui-certification-runbook.md).
+Status: **CLOSED / HISTORICAL** (written 2026-07-15 as an active roadmap; EXECUTED and closed — PRs #142–#153 merged, all three probe campaigns done and all four build items landed). Retained as the durable record of the AX initiative's plan, evidence, and rulings; it is no longer a live pick-list (open AX-adjacent work lives in [../up-next.md](../up-next.md)). Companions: [ui-vector.md](ui-vector.md) (shipped architecture), [../lab/uic1-certification.md](../lab/uic1-certification.md) (certification verdicts + the AX addressing catalog + the full Repeat-dialog field map), [../lab/axvm1-accessibility.md](../lab/axvm1-accessibility.md) (the VM grant recipe + background/lock verdicts), [../lab/ui-certification-runbook.md](../lab/ui-certification-runbook.md).
 
 ## Where things stand (2026-07-15)
 

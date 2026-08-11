@@ -1,6 +1,6 @@
 # Read-shape doctrine v2 — buckets are reorder scopes
 
-**Status: RATIFIED (2026-08-05).** Implementation in progress — the five-PR migration of §5. The HEADSORT probe dependency is resolved (#400, evidence: [docs/lab/headsort-heading-lifecycle-reorder.md](../lab/headsort-heading-lifecycle-reorder.md), Things 3.22.12/golden-v2) and its verdict is folded into §2 R5. The shape was invariant to the outcome, as predicted; only the R5 prose and the write-surface policy note changed.
+**Status: RATIFIED (2026-08-05) — the five-PR migration of §5 is COMPLETE (shipped through 0.14.0; see §5).** The HEADSORT probe dependency was resolved (#400, evidence: [docs/lab/headsort-heading-lifecycle-reorder.md](../lab/headsort-heading-lifecycle-reorder.md), Things 3.22.12/golden-v2) and its verdict folded into §2 R5. The shape was invariant to the outcome, as predicted; only the R5 prose and the write-surface policy note changed.
 
 This document supersedes [read-shape-doctrine.md](read-shape-doctrine.md) (v1, **REVERTED** 2026-08-04, retained as re-audit input). It extends [api-doctrine.md](api-doctrine.md) and obeys its §1 grammar: every read shape fits one of the five `data` wrappers — `item` / `items` / `sections` / `view` / `children` (the fifth, `children`, established by migration PR 1 as the `today` view's top-level stage-bucket wrapper, and reused nested inside a project/area `view`; documented in [contract.md](../contract.md)).
 

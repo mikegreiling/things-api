@@ -28,7 +28,7 @@ What to do when Cultured Code ships a new Things version (routine 3.22.x patch o
 6. **Surface catalogs re-swept**:
    - **sdef diff**: dump the new app's sdef, diff against the stored one (private-command inventory, new verbs, new classes — a heading class appearing would be headline news).
    - **URL/TJSON**: re-run the T/U-suite probes; try the historically-dead shapes that CC might have fixed (heading create/move — HX shapes; repeat params; sidebar ordering).
-   - **Shortcuts action catalog**: L5 Card-5 procedure (insert every Things action, note parameters) — new actions or new parameters (repeat rules in Shortcuts would close gaps.md §2).
+   - **Shortcuts action catalog**: L5 Card-5 procedure (insert every Things action, note parameters) — new actions or new parameters (repeat rules in Shortcuts would fill the Repeating-items gap in the capability matrix).
    - **Crash catalog re-check** (oddities §7): do the schedule-class crashes still reproduce? A fix changes our guard story (keep guards, note the fix version).
 7. **Repeat rules deep-check**: dump every template rule blob from a live-ish DB copy, `decodeRecurrenceRule` each (the doctor canary does this), and if CC changed repeat handling (they hinted at it): capture the new format corpus, extend the decoder behind the version gate (`KNOWN_RULE_VERSION`), and re-validate the deadline model against app-spawned instances before trusting projections.
 8. **Certify**: update golden metadata + this runbook's certified-version line, add the fingerprint baseline, update capability-matrix/oddities with any deltas, publish a things-api release whose CHANGELOG names the newly certified Things version.

@@ -177,7 +177,7 @@ Source of truth in code: [`src/read/shape.ts`](../../src/read/shape.ts) (`shapeR
 
 **Contract:** *every* error and refusal exit — not just mutation outcomes — respects `--json`. Under `--json` the `{ok:false, error}` envelope goes to **stdout** and nothing prose goes to stderr; without it, the `error:` prose line goes to **stderr**. Flag/argument usage errors route through one shared emitter (`usageError`, `src/cli/read-driver.ts`) so this holds uniformly; there is a single envelope shape (the one merged `error.detail` object with `candidates` / `suggestions`) — never a second one.
 
-Machine-readable `error.detail` is emitted wherever disambiguation is actionable (the CLI envelope; the MCP tool result carries the same data under `details` pending its phase-2 framing sweep):
+Machine-readable `error.detail` is emitted wherever disambiguation is actionable (the CLI envelope; the MCP tool result carries the same data under `details`, its own result convention — the phase-2 framing alignment is done, MCP `details` is the shipped shape):
 
 | Error path | `error.code` | exit | `error.detail` |
 |---|---|---|---|

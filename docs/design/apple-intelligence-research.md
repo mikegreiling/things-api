@@ -31,7 +31,7 @@ The ecosystem consensus (well-argued in [App Intents vs MCP: The Routing Questio
 **`shortcuts run` is the generic-agent gateway to App Intents**, today and on 27. Shortcuts actions ARE App Intents invocations; the Shortcuts CLI is a stable, consented, headless (for output-class actions) bridge that Apple ships. Our proxy pattern — signed `.shortcut` files wrapping one intent each, driven by a verified pipeline, surfaced over OUR MCP server — is exactly the "wrap platform capability in an MCP tool" architecture the routing-question analysis prescribes. **things-api IS the Things App-Intents-to-MCP bridge**, a year before Apple ships a generic one.
 
 Consequences:
-- When Things adopts App Intents 2.0 schemas (see §4), its Shortcuts action catalog grows → we re-run the L5 Card-5 catalog sweep and mint new proxies for anything valuable (repeat-rule parameters would close gaps.md §2, the biggest wish-list item).
+- When Things adopts App Intents 2.0 schemas (see §4), its Shortcuts action catalog grows → we re-run the L5 Card-5 catalog sweep and mint new proxies for anything valuable (repeat-rule parameters would fill the Repeating-items gap in the capability matrix, the biggest wish-list item).
 - If/when Apple ships the OS MCP bridge, our MCP tool names/semantics are already agent-facing; we'd evaluate it as a NEW WRITE VECTOR (matrix + evidence, like any other), not a rewrite.
 
 ## 4. Things-specific outlook
