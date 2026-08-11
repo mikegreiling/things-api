@@ -307,6 +307,7 @@ export type WireOkKind =
   | "trash"
   | "changes"
   | "search"
+  | "deadlines"
   | "projects"
   | "areas"
   | "tags"

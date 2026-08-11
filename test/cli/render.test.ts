@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   anytimeView,
+  deadlinesView,
   logbookView,
   projectsView,
   searchView,
@@ -27,6 +28,7 @@ import { renderProjectView } from "../../src/cli/commands/project.ts";
 import { renderDetail } from "../../src/cli/commands/todo.ts";
 import {
   formatItem,
+  renderDeadlines,
   renderLegend,
   renderLogbook,
   renderProjectsSidebar,
@@ -439,6 +441,45 @@ describe("formatItem", () => {
     expect(formatItem(item, 8, { now: NOW, suppressProject: p })).not.toContain(
       "(Restore Cabinet)",
     );
+  });
+});
+
+describe("renderDeadlines", () => {
+  afterEach(() => setRenderClock({ now: () => new Date(), zone: undefined }));
+
+  it("frames the list with the house `── ⚑ Deadlines ──` header", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    seedTodo(fixture.db, { title: "Ship it", deadline: "2026-07-06", start: "active" });
+    const lines = renderDeadlines(deadlinesView(fixture.db, NOW, { repeats: false }));
+    expect(lines[0]).toBe("── ⚑ Deadlines ──");
+  });
+
+  it("LEADS each row with its deadline chip and drops the trailing copy", () => {
+    fixture = buildFixtureDb();
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    seedTodo(fixture.db, { title: "Ship it", deadline: "2026-07-06", start: "active" });
+    const lines = renderDeadlines(deadlinesView(fixture.db, NOW, { repeats: false }));
+    // uuid + box, THEN the leading deadline chip, THEN the title — no trailing ⚑.
+    expect(lines[1]).toMatch(/\[ \] ⚑ 1 day left Ship it$/);
+    expect(lines[1]!.match(/⚑/g)).toHaveLength(1);
+  });
+
+  it("renders an empty horizon as the header plus `(empty)`", () => {
+    expect(renderDeadlines([])).toEqual(["── ⚑ Deadlines ──", "(empty)"]);
+  });
+
+  it("the leading deadline chip's date label follows the CONSUMER zone (#414 zone lock)", () => {
+    fixture = buildFixtureDb();
+    // A deadline on 2026-08-01; the render instant sits near midnight UTC so the
+    // relative distance to "today" differs between two consumer zones.
+    seedTodo(fixture.db, { title: "Boundary", deadline: "2026-08-01", start: "active" });
+    const view = deadlinesView(fixture.db, new Date("2026-07-20T12:00:00Z"), { repeats: false });
+    // 2026-07-31T12:30Z is 2026-08-01 in Kiritimati (UTC+14), 2026-07-31 in Midway (UTC−11).
+    setRenderClock({ now: () => new Date("2026-07-31T12:30:00Z"), zone: "Pacific/Kiritimati" });
+    expect(renderDeadlines(view)[1]).toContain("⚑ today");
+    setRenderClock({ now: () => new Date("2026-07-31T12:30:00Z"), zone: "Pacific/Midway" });
+    expect(renderDeadlines(view)[1]).toContain("⚑ 1 day left");
   });
 });
 

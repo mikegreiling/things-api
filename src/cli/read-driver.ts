@@ -53,6 +53,7 @@ const ITEMS_WRAPPER_KINDS: ReadonlySet<string> = new Set([
   "trash",
   "changes",
   "search",
+  "deadlines",
   "projects",
   "areas",
   "tags",

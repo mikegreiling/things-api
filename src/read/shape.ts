@@ -1038,7 +1038,7 @@ function shapeSections(
  * The flat, mixed-provenance list kinds mapped to their drop spec. Only the
  * stage-PURE catalogues (inbox/someday/logbook/trash; the section-based `anytime`
  * is pure too, handled via shapeSections below) drop the bucket-implied `stage`.
- * The mixed/derived surfaces (search/changes/projects) keep it. The global
+ * The mixed/derived surfaces (search/changes/deadlines/projects) keep it. The global
  * `upcoming` view is NOT here — it reshapes into `data.sections` day blocks
  * ({@link shapeUpcomingView}), keeping `stage` (R10.2: stage-mixed — future-dated
  * `upcoming` rows beside deadline-forecast `anytime`/`someday` ones).
@@ -1049,6 +1049,8 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
   ["trash", { stage: true }],
   ["changes", NO_DROP],
   ["search", NO_DROP],
+  // deadlines is stage-MIXED (to-dos + projects, deadline-ordered) — keep `stage`.
+  ["deadlines", NO_DROP],
   ["projects", NO_DROP],
 ]);
 

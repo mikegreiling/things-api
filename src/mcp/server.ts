@@ -821,7 +821,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Read a Things list as the app presents it: today (two children buckets — " +
         "children.today and children.evening, evening expires daily; the whole-view " +
         "count due/overdue vs. other rides the result's second block), inbox, anytime, " +
-        "upcoming, someday, logbook, or trash. For upcoming, " +
+        "upcoming, someday, logbook, trash, or deadlines (a flat items list of everything " +
+        "carrying a deadline — to-dos and projects — in deadline order, most-overdue first; " +
+        "repeating items appear at their next occurrence's projected deadline; scope with " +
+        "today/overdue/project/area/tag). For upcoming, " +
         "horizon > 1 also includes future occurrences of repeating items (up to 10 each). " +
         "anytime/someday return sections in canonical order (area + items; null area = the " +
         "top-level block); children of someday/future-scheduled projects are excluded " +
@@ -836,13 +839,30 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         " " +
         REF_RULE_NOTE,
       inputSchema: {
-        view: z.enum(["today", "inbox", "anytime", "upcoming", "someday", "logbook", "trash"]),
+        view: z.enum([
+          "today",
+          "inbox",
+          "anytime",
+          "upcoming",
+          "someday",
+          "logbook",
+          "trash",
+          "deadlines",
+        ]),
         ...tagFilterShape,
         ...tzShape,
         area: z
           .string()
           .optional()
-          .describe(`today/anytime/someday/upcoming/logbook only: ${AREA_FILTER_DESC}`),
+          .describe(`today/anytime/someday/upcoming/logbook/deadlines only: ${AREA_FILTER_DESC}`),
+        today: z
+          .boolean()
+          .optional()
+          .describe("deadlines only: keep only current Today members (This Evening included)"),
+        project: z
+          .string()
+          .optional()
+          .describe("deadlines only: restrict to one project's children (uuid or unique name)"),
         evening: z.boolean().optional().describe("today only: show only the This Evening section"),
         show_active_project_items: z
           .union([z.boolean(), z.number().int().min(1)])
@@ -908,7 +928,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             { ...tagPresence(args), overdue: args.overdue },
             {
               untaggedConflict: MCP_UNTAGGED_CONFLICT,
-              overdueRejected: `overdue applies to today/inbox/anytime/someday, not ${args.view}`,
+              overdueRejected: `overdue applies to today/inbox/anytime/someday/deadlines, not ${args.view}`,
               overdueStatusWiden: "",
             },
           );
@@ -934,6 +954,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           }
           if (args.view !== "today" && args.evening === true) {
             return usage(`evening applies only to today, not ${args.view}`);
+          }
+          // The two deadlines-only scopes. `area`/`tag`/`overdue`/`limit` are
+          // shared with the other flat views; `today`/`project` are not.
+          if (args.view !== "deadlines" && args.today === true) {
+            return usage(`today applies only to deadlines, not ${args.view}`);
+          }
+          if (args.view !== "deadlines" && args.project !== undefined) {
+            return usage(`project applies only to deadlines, not ${args.view}`);
           }
           // The `area` filter applies to the area-carrying views only; inbox
           // (area-less captures) and trash have no area to scope by.
@@ -1096,6 +1124,22 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               const { items, truncation } = c.read.trash({ ...zone, limit });
               return truncatedResult(
                 shapeReadPayload("trash", items, full, c.refPromoter()),
+                truncation,
+              );
+            }
+            case "deadlines": {
+              // `project`/`area` scope inside the view (SQL), not the shared
+              // area post-filter — so no `meta.filter` here (parity with search).
+              const { items, truncation } = c.read.deadlines({
+                ...filter,
+                ...zone,
+                ...(args.today === true && { todayOnly: true }),
+                ...(args.project !== undefined && { project: args.project }),
+                ...(args.area !== undefined && { area: args.area }),
+                limit,
+              });
+              return truncatedResult(
+                shapeReadPayload("deadlines", items, full, c.refPromoter()),
                 truncation,
               );
             }
