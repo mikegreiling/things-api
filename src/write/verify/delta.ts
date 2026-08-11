@@ -8,10 +8,30 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AnyTask, TaskType } from "../../model/entities.ts";
 import { byUuid } from "../../read/detail.ts";
 
-/** Dotted path into a decoded entity; see getField for computed paths. */
+/**
+ * A JSON-serializable predicate an assertion may check IN PLACE OF equality.
+ * `arrived-on-or-before` holds iff the decoded value is a NON-NULL ISO date on
+ * or before `date` (day-precision `YYYY-MM-DD` string compare, which is
+ * chronological). It exists for the symbolic `when: today` UPDATE verify (field
+ * bug §0½.8): the app PRESERVES an item's already-arrived historical `startDate`
+ * rather than rewriting the storage byte to today (arrived-date law), so exact
+ * `startDate == today` false-fails a write that succeeded. The predicate accepts
+ * any preserved arrived date while still REJECTING an undated deadline-only pull
+ * (null `startDate`). Equality stays the check for adds and explicit ISO dates.
+ */
+export type FieldPredicate = { predicate: "arrived-on-or-before"; date: string };
+
+/**
+ * Dotted path into a decoded entity (see getField for computed paths) checked
+ * either by exact equality (`equals`) or by a {@link FieldPredicate}
+ * (`satisfies`) — exactly one is set. `equals` is the default/common form; every
+ * existing assertion uses it.
+ */
 export interface FieldAssertion {
   field: string;
-  equals: unknown;
+  equals?: unknown;
+  /** When present, the field is checked by this predicate instead of `equals`. */
+  satisfies?: FieldPredicate;
 }
 
 export interface CreateProbe {
@@ -487,6 +507,23 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   return a === b || (a === undefined && b === null) || (a === null && b === undefined);
 }
 
+/** Evaluate a {@link FieldPredicate} against a decoded field value. */
+function predicateHolds(pred: FieldPredicate, actual: unknown): boolean {
+  switch (pred.predicate) {
+    case "arrived-on-or-before":
+      // Non-null ISO date on or before the reference day. `YYYY-MM-DD` string
+      // ordering is chronological, so a lexicographic <= is a day compare; a
+      // null/undefined (undated) value is not a string and correctly fails.
+      return typeof actual === "string" && actual <= pred.date;
+  }
+}
+
+/** Does a decoded field value satisfy an assertion (predicate form or equality)? */
+function assertionHolds(assertion: FieldAssertion, actual: unknown): boolean {
+  if (assertion.satisfies !== undefined) return predicateHolds(assertion.satisfies, actual);
+  return valuesEqual(actual, assertion.equals);
+}
+
 function checkAssertions(
   entity: AnyTask | null,
   assertions: FieldAssertion[],
@@ -497,7 +534,7 @@ function checkAssertions(
   for (const a of assertions) {
     const actual = getField(entity, a.field);
     observed[a.field] = actual === undefined ? null : actual;
-    if (!valuesEqual(actual, a.equals)) pass = false;
+    if (!assertionHolds(a, actual)) pass = false;
   }
   return { pass, observed };
 }
@@ -874,7 +911,7 @@ export function evaluateDelta(
       for (const a of spec.assert) {
         const actual = fields?.[a.field];
         observed[a.field] = actual === undefined ? null : actual;
-        if (!valuesEqual(actual, a.equals)) pass = false;
+        if (!assertionHolds(a, actual)) pass = false;
       }
       // TMArea/TMTag carry no modification date: movement = any asserted
       // field departed from its captured pre-value.

@@ -313,6 +313,57 @@ describe("evaluateDelta — update", () => {
   });
 });
 
+// ----------------------- arrived-on-or-before predicate (field bug §0½.8) ----
+//
+// The `satisfies` assertion form for symbolic when:today UPDATE verification: a
+// non-null startDate on or before the reference day passes (accepting the app's
+// preserved arrived date), a null or future startDate fails.
+
+describe("evaluateDelta — arrived-on-or-before startDate predicate", () => {
+  const TODAY = "2026-08-11";
+  const predicateSpec = (uuid: string): DeltaSpec => ({
+    mode: "update",
+    uuid,
+    assert: [{ field: "startDate", satisfies: { predicate: "arrived-on-or-before", date: TODAY } }],
+  });
+
+  it("passes a PAST (already-arrived) startDate — the preserved-date case", () => {
+    withDb((db) => {
+      const uuid = seedTodo(db, { start: "active", startDate: "2026-08-01" });
+      expect(evaluateDelta(predicateSpec(uuid), createDbReader(db), EMPTY_PRE).satisfied).toBe(
+        true,
+      );
+    });
+  });
+
+  it("passes a startDate EXACTLY today", () => {
+    withDb((db) => {
+      const uuid = seedTodo(db, { start: "active", startDate: TODAY });
+      expect(evaluateDelta(predicateSpec(uuid), createDbReader(db), EMPTY_PRE).satisfied).toBe(
+        true,
+      );
+    });
+  });
+
+  it("fails a FUTURE startDate (not yet arrived)", () => {
+    withDb((db) => {
+      const uuid = seedTodo(db, { start: "active", startDate: "2026-08-20" });
+      expect(evaluateDelta(predicateSpec(uuid), createDbReader(db), EMPTY_PRE).satisfied).toBe(
+        false,
+      );
+    });
+  });
+
+  it("fails a NULL startDate (undated deadline-only pull)", () => {
+    withDb((db) => {
+      const uuid = seedTodo(db, { start: "active", startDate: null, deadline: TODAY });
+      expect(evaluateDelta(predicateSpec(uuid), createDbReader(db), EMPTY_PRE).satisfied).toBe(
+        false,
+      );
+    });
+  });
+});
+
 // ------------------------------------------------------------------- create mode
 
 describe("evaluateDelta — create", () => {
