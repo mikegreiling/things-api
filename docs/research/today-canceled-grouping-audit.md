@@ -1,5 +1,7 @@
 # Today canceled-row grouping field audit (2026-08-10)
 
+> **STATUS — REPRODUCED at byte level 2026-08-11 (MOVPLC, golden-v2 / Things 3.22.12): [../lab/movplc-move-placement-today.md](../lab/movplc-move-placement-today.md).** The disposable-VM campaign this report's "Assessment and required reproduction" called for confirmed all of its causal claims and settled its one open question — **the write set**: the native `list "Today"` reorder writes each named row's `todayIndex` to the wire order AND re-stamps its `todayIndexReferenceDate → today` (all other columns byte-identical), collapsing every entry cohort into one so the visible order becomes pure wire order. Cancellation alone reorders nothing; the raw membership move does not reorder Today (the placement leg is the sole cause); excluded canceled/stale-evening rows keep their old `tiRef` and regroup as a by-product; the census leaks derived-trashed children. Fix in flight (up-next §0½.7): a no-position container move emits no today/evening placement reorder, and `computeReorderPre` excludes derived-trashed children.
+
 ## Scope and evidence handling
 
 This report reconstructs a production Things cleanup from the CLI audit trail and the originating Codex session log. It is a field report, not immutable probe evidence: no disposable-VM reproduction has run yet.
