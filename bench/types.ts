@@ -49,7 +49,8 @@ export type SeedSpec =
   | TodoSeed
   | HeadingSeed
   | TagSeed
-  | ChecklistItemSeed;
+  | ChecklistItemSeed
+  | SettingsSeed;
 
 /** Fields common to the task-like seeds (todo / project / heading). */
 export interface TaskSeedFields {
@@ -66,6 +67,20 @@ export interface TaskSeedFields {
   evening?: boolean;
   trashed?: boolean;
   index?: number;
+  /**
+   * Manual Today/Evening rank (`TMTask.todayIndex`). Lower sorts earlier within
+   * the same entry cohort — the reader's Today comparator is `startBucket ASC,
+   * COALESCE(todayIndexReferenceDate, startDate, deadline) DESC, todayIndex ASC,
+   * uuid ASC` (src/read/predicates.ts `todayOrderBy`). Needed to fix a definite
+   * INITIAL visible order for an anchored Today-reorder task; omitted → 0.
+   */
+  todayIndex?: number;
+  /**
+   * ISO date for `TMTask.todayIndexReferenceDate` — the Today ENTRY cohort a row
+   * belongs to (newest cohort sorts first, DESC). Omit to let the comparator fall
+   * back to startDate/deadline; set it to place rows in distinct cohorts.
+   */
+  todayIndexReferenceDate?: string | null;
   /**
    * Pin the row's uuid so assertions can test identity (e.g. "the original row
    * was PRESERVED across make-repeating"). Omit for a generated uuid.
@@ -132,6 +147,26 @@ export interface ChecklistItemSeed extends SeedBase {
   container: string;
   status?: "open" | "canceled" | "completed";
   index?: number;
+}
+
+/**
+ * The `TMSettings` singleton controlling the log-move cadence (the "Move
+ * completed items to Logbook" setting; src/read/log-boundary.ts). With no
+ * settings seed the fixture has no TMSettings row and the boundary falls back to
+ * Immediately (`logInterval` 0 → boundary is now → nothing stays unswept). Seed
+ * one to hold resolved items unswept in their stage bucket and to surface a
+ * non-default cadence in `things logbook`'s `meta.logging` header (#431).
+ */
+export interface SettingsSeed extends SeedBase {
+  kind: "settings";
+  /** 0 = Immediately · 1 = Daily · 4 = Manually (the certified enum, oddities §8c). */
+  logInterval?: 0 | 1 | 4;
+  /**
+   * ISO date/datetime for the last explicit log-move (`TMSettings.manualLogDate`,
+   * stored epoch seconds). Under Manually it surfaces as `meta.logging.lastLoggedAt`
+   * and sets the boundary that holds newer resolved items unswept.
+   */
+  manualLogDate?: string | null;
 }
 
 /** A machine-checkable assertion evaluated after the agent finishes. */

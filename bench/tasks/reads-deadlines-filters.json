@@ -1,0 +1,77 @@
+{
+  "id": "reads-deadlines-filters",
+  "family": "reads",
+  "tier": 2,
+  "split": "validation",
+  "prompt": "Looking only at what's on my Today list, which items have a deadline that has already passed? Reply with JSON {\"titles\": [...], \"count\": N}.",
+  "paraphrases": [
+    "Among my current Today items, list the ones whose deadline is already overdue. JSON {\"titles\": [...], \"count\": N}.",
+    "Of the things scheduled for Today, which are past their due date? JSON {\"titles\": [...], \"count\": N}."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Fix the leaking faucet",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "deadline": "2026-07-14"
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Reply to the landlord",
+      "start": "active",
+      "deadline": "2026-07-17"
+    },
+    {
+      "kind": "todo",
+      "key": "t3",
+      "title": "Prep standup notes",
+      "start": "active",
+      "startDate": "2026-07-20"
+    },
+    {
+      "kind": "todo",
+      "key": "t4",
+      "title": "File the insurance claim",
+      "start": "active",
+      "startDate": "2026-07-25",
+      "deadline": "2026-07-12"
+    },
+    {
+      "kind": "todo",
+      "key": "t5",
+      "title": "Water the plants",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "deadline": "2026-07-30"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"titles\": string[], \"count\": number}"
+  },
+  "assertions": [
+    {
+      "type": "db-unchanged"
+    },
+    {
+      "type": "answer-includes",
+      "path": "titles",
+      "values": ["Fix the leaking faucet", "Reply to the landlord"]
+    },
+    {
+      "type": "answer",
+      "path": "count",
+      "equals": 2
+    }
+  ],
+  "maxTurns": 15,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things deadlines --today --overdue --json"]
+}
