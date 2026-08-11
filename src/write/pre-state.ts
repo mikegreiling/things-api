@@ -928,6 +928,27 @@ const NOT_TEMPLATE_ROW = "(rt1_recurrenceRule IS NULL AND repeater IS NULL)";
 
 const TEMPLATE_ROW = "(rt1_recurrenceRule IS NOT NULL OR repeater IS NOT NULL)";
 
+/**
+ * DERIVED-trash exclusion for the reorder census — the bare-column mirror of the
+ * reader's `CONTAINER_UNTRASHED` ([src/read/predicates.ts]). Project deletion is
+ * SHALLOW (A24B): only the project row flips `trashed=1`; its children keep
+ * `trashed=0` and their links, so their Trash membership is DERIVED through the
+ * container chain. Filtering the row's own `trashed` flag alone (as every census
+ * scope did) LEAKS a trashed project's Today-scheduled children into the wire, and
+ * the native `list "Today"` reorder is a blind writer (§9p) that mutates their
+ * `todayIndex`/`todayIndexReferenceDate` even though the reader hides them
+ * (MOVPLC / ORD-21). Excluding them here matches the reader: the row's heading (if
+ * any) AND its effective project (direct, or via its heading) must both be
+ * untrashed. Areas cannot be trashed, so the chain is at most heading → project.
+ */
+// Every OUTER column is qualified `TMTask.` so the nested `FROM TMTask cc/hh/h`
+// subqueries never rebind an unqualified `project`/`heading` to the inner alias.
+const EFF_PROJECT =
+  "COALESCE(TMTask.project, (SELECT h.project FROM TMTask h WHERE h.uuid = TMTask.heading))";
+const CONTAINER_UNTRASHED =
+  "(TMTask.heading IS NULL OR EXISTS (SELECT 1 FROM TMTask hh WHERE hh.uuid = TMTask.heading AND hh.trashed = 0)) " +
+  `AND (${EFF_PROJECT} IS NULL OR EXISTS (SELECT 1 FROM TMTask cc WHERE cc.uuid = ${EFF_PROJECT} AND cc.trashed = 0))`;
+
 interface MemberRow {
   uuid: string;
   title: string;
@@ -1051,7 +1072,7 @@ export function computeReorderPre(
         .prepare(
           `SELECT uuid, title, ${rankCol} AS rank, startBucket, type, ${TEMPLATE_ROW} AS isTemplate
            FROM TMTask
-           WHERE trashed = 0 AND ${statusExpr} AND ${templateClause} AND ${where}
+           WHERE trashed = 0 AND ${CONTAINER_UNTRASHED} AND ${statusExpr} AND ${templateClause} AND ${where}
            ORDER BY ${rankCol} ASC`,
         )
         .all(...statusExprBinds, ...binds) as unknown as (Omit<MemberRow, "isTemplate"> & {
