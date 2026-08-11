@@ -13,6 +13,8 @@ The whole contract is ALPHA until v1.0 (break freely, no compat machinery — [d
 - **Error-code freeze.** The `ErrorCode` union in `src/contracts.ts` (the compiler-enforced registry) is frozen at v1.0 — additions stay possible, removals/renames become breaking.
 - **Entity-vs-shaper programmatic-contract ruling.** Settle what the *programmatic* TS contract promises about entity shapes vs the emission-time shaping layer (the read-shape doctrine draws the wire boundary; the library-return boundary needs its own explicit v1.0 promise) before the covenant binds.
 - **CC report send** (the oddities package) — held until v1.0; the submission itself is an up-next needs-human item, but v1.0 is its release gate.
+- **`things watch` ships first** (maintainer gate, 2026-08-11): the change-watch command (up-next feature item) is a v1.0 prerequisite — it must be built, field-used, and stable before the contract freezes.
+- **Field mileage** (maintainer, 2026-08-11): v1.0 is deliberately unhurried — the pre-1.0 period keeps producing design corrections (the deadlines view, the Today-order field bugs), and the contract freezes only after the surface has been driven hard for a while longer.
 
 ## Cloud-account probes — blocked on a live Things Cloud account
 
