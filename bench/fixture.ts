@@ -17,6 +17,7 @@ import {
   seedChecklistItem,
   seedHeading,
   seedProject,
+  seedSettings,
   seedTag,
   seedTodo,
   tagArea,
@@ -100,6 +101,9 @@ function taskOpts(spec: TaskSeedFields): SeedTaskOpts {
   if (spec.evening !== undefined) opts.evening = spec.evening;
   if (spec.trashed !== undefined) opts.trashed = spec.trashed;
   if (spec.index !== undefined) opts.index = spec.index;
+  if (spec.todayIndex !== undefined) opts.todayIndex = spec.todayIndex;
+  if (spec.todayIndexReferenceDate !== undefined)
+    opts.todayIndexReferenceDate = spec.todayIndexReferenceDate;
   return opts;
 }
 
@@ -142,7 +146,15 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
 
   // Group by kind so containers/parents always exist before their dependents.
   // areas → tags → projects → headings → todos → checklist-items.
-  const order: SeedSpec["kind"][] = ["area", "tag", "project", "heading", "todo", "checklist-item"];
+  const order: SeedSpec["kind"][] = [
+    "settings",
+    "area",
+    "tag",
+    "project",
+    "heading",
+    "todo",
+    "checklist-item",
+  ];
   const byKind = new Map<SeedSpec["kind"], SeedSpec[]>();
   for (const s of seeds) {
     const bucket = byKind.get(s.kind) ?? [];
@@ -154,6 +166,19 @@ function applySeeds(db: DatabaseSync, seeds: SeedSpec[]): void {
     for (const s of byKind.get(kind) ?? []) {
       let uuid: string;
       switch (s.kind) {
+        case "settings": {
+          // TMSettings is a singleton keyed only by its own uuid — no container
+          // graph. manualLogDate stores epoch REAL seconds; accept an ISO instant
+          // in the task and convert. Register a sentinel handle (never a container).
+          const manual =
+            s.manualLogDate != null ? Math.floor(new Date(s.manualLogDate).getTime() / 1000) : null;
+          seedSettings(db, {
+            ...(s.logInterval !== undefined && { logInterval: s.logInterval }),
+            manualLogDate: manual,
+          });
+          uuid = s.key;
+          break;
+        }
         case "area":
           uuid = seedArea(db, s.title, s.index ?? 0);
           // Area tags live in TMAreaTag, not TMTaskTag — attachTags (tagTask)

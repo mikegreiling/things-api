@@ -1,0 +1,75 @@
+{
+  "id": "writes-reorder-today-anchored",
+  "family": "writes",
+  "tier": 2,
+  "split": "dev",
+  "prompt": "On my Today list, move 'Write the retro notes' so it sits immediately after 'Review the PRs'. Leave everything else where it is.",
+  "paraphrases": [
+    "Reposition 'Write the retro notes' on Today to right below 'Review the PRs', without disturbing the other items' order.",
+    "On Today, slot 'Write the retro notes' in just after 'Review the PRs'."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "todo",
+      "key": "t0",
+      "title": "Reply to customer emails",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 0
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Review the PRs",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 1
+    },
+    {
+      "kind": "todo",
+      "key": "t2",
+      "title": "Update the changelog",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 2
+    },
+    {
+      "kind": "todo",
+      "key": "t3",
+      "title": "Deploy the release",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 3
+    },
+    {
+      "kind": "todo",
+      "key": "t4",
+      "title": "Write the retro notes",
+      "start": "active",
+      "startDate": "2026-07-20",
+      "todayIndex": 4
+    }
+  ],
+  "assertions": [
+    {
+      "type": "sql",
+      "query": "SELECT title FROM TMTask WHERE trashed=0 AND title IN ('Reply to customer emails','Review the PRs','Update the changelog','Deploy the release','Write the retro notes') ORDER BY todayIndex",
+      "expect": [
+        { "title": "Reply to customer emails" },
+        { "title": "Review the PRs" },
+        { "title": "Write the retro notes" },
+        { "title": "Update the changelog" },
+        { "title": "Deploy the release" }
+      ]
+    }
+  ],
+  "maxTurns": 20,
+  "timeoutMs": 180000,
+  "pseudoScript": [
+    "things reorder \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Write the retro notes\")|.uuid')\" --in today --after \"$(things today --json | jq -r '.data.children.today.items[]|select(.title==\"Review the PRs\")|.uuid')\""
+  ]
+}

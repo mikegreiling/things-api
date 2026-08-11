@@ -1,0 +1,51 @@
+{
+  "id": "reads-log-cadence-holdout",
+  "family": "reads",
+  "tier": 2,
+  "split": "holdout",
+  "prompt": "How does Things move my completed to-dos into the Logbook — automatically or on my command — and when did that last happen? Reply with JSON {\"cadence\": \"...\", \"last_logged\": \"YYYY-MM-DD\"}.",
+  "paraphrases": [
+    "What's my logbook filing cadence, and the date it last ran? JSON {\"cadence\": \"...\", \"last_logged\": \"YYYY-MM-DD\"}.",
+    "Tell me how finished items get filed into the Logbook and the last time they were filed. JSON {\"cadence\": \"...\", \"last_logged\": \"YYYY-MM-DD\"}."
+  ],
+  "clock": {
+    "now": "2026-07-20T09:00:00-05:00",
+    "tz": "America/Chicago"
+  },
+  "seed": [
+    {
+      "kind": "settings",
+      "key": "cfg",
+      "logInterval": 4,
+      "manualLogDate": "2026-07-19T09:00:00-05:00"
+    },
+    {
+      "kind": "todo",
+      "key": "t1",
+      "title": "Water the ferns",
+      "start": "active"
+    }
+  ],
+  "finalAnswer": {
+    "required": true,
+    "shape": "{\"cadence\": string, \"last_logged\": string}"
+  },
+  "assertions": [
+    {
+      "type": "db-unchanged"
+    },
+    {
+      "type": "answer",
+      "path": "cadence",
+      "equals": "Manually"
+    },
+    {
+      "type": "answer",
+      "path": "last_logged",
+      "equals": "2026-07-19"
+    }
+  ],
+  "maxTurns": 15,
+  "timeoutMs": 180000,
+  "pseudoScript": ["things logbook --json"]
+}
