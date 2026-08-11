@@ -2944,6 +2944,12 @@ function bucketMembers(deps: WriteDeps, target: ScopeTarget, dayAnchor?: string)
   const pre = computeReorderPre(deps.db, params, containerUuid, deps.now?.() ?? new Date(), {
     zone: deps.zone,
   });
+  // TODWIRE — the `today` scope splices an anchored (--last/--before/--after)
+  // placement against the VISIBLE order (reader comparator), NOT the raw
+  // `todayIndex` order `pre.members` is enumerated in: the native wire preserves
+  // the visible order, so the target must be the visible-order target. Every other
+  // scope ranks on `index`/raw `todayIndex` = its visible order already.
+  if (target.scope === "today" && pre.todayVisibleOrder !== null) return pre.todayVisibleOrder;
   return pre.members.map((m) => m.uuid);
 }
 

@@ -124,6 +124,7 @@ import {
   OPEN_OR_UNSWEPT,
   OVERDUE,
   PROJECT_ANYTIME_ACTIVE,
+  todayOrderBy,
 } from "./predicates.ts";
 import { isLooseRef } from "./pseudo-area.ts";
 import { CANDIDATE_CAP } from "./shape.ts";
@@ -364,9 +365,7 @@ export function todayView(
        (t.startDate IS NOT NULL AND t.startDate <= ? AND t.start IN (1, 2))
        OR ${DEADLINE_PULLED}
      )${tf.sql}${of.sql}
-     ORDER BY t.startBucket ASC,
-              COALESCE(t.todayIndexReferenceDate, t.startDate, t.deadline) DESC,
-              t.todayIndex ASC, t.uuid ASC`,
+     ORDER BY ${todayOrderBy("t.")}`,
     [boundary.getTime() / 1000, packedToday, packedToday, ...tf.binds, ...of.binds],
   );
   const items = materialize(db, rows, boundary, packedToday);

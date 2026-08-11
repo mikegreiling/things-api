@@ -337,7 +337,18 @@ export async function runReorder(
   if (strategy.kind === "blocked") return strategy.result;
 
   if (strategy.strategy === "native") {
-    return runMutation(deps, "reorder", params, { ...options, vector: "applescript" });
+    // TODWIRE disclosure — capture the non-movee cohort re-stamp count from the
+    // PRE-write census (the same minimal wire the compile sends). It MUST be read
+    // before the reorder mutates the visible order; recomputing afterwards would
+    // see the already-satisfied order and mis-count.
+    const restampCount =
+      params.scope === "today"
+        ? computeReorderPre(deps.db, params, null, deps.now?.() ?? new Date(), {
+            zone: deps.zone,
+          }).todayRestampNonMovees.length
+        : 0;
+    const res = await runMutation(deps, "reorder", params, { ...options, vector: "applescript" });
+    return discloseTodayCohortRestamp(res, restampCount);
   }
   const result =
     strategy.strategy === "bounce"
@@ -350,6 +361,31 @@ export async function runReorder(
     return { ...result, warnings: [...(result.warnings ?? []), strategy.fallbackNote] };
   }
   return result;
+}
+
+/**
+ * TODWIRE disclosure (#V11) — a `today`-scope MINIMAL wire that must NAME
+ * non-movee rows (a `--before`/`--after`/`--last` placement names the visible
+ * PREFIX down to the insertion point, because the native `list "Today"` reorder
+ * can only RAISE a named row's `todayIndexReferenceDate` to *today*) re-stamps
+ * each named non-movee's Today entry cohort — silently collapsing its entry-date
+ * grouping. Surface the pre-captured count (`n`) on the ok result (a warning) and
+ * the dry-run plan (an invocation note), the same way the heading move discloses
+ * forced reopens. A `--first`/`--start` wire names ONLY the movees (which re-stamp
+ * inherently — a help/doc note, never a warning), so `n === 0` and nothing is
+ * added; likewise a non-ok/dry-run result.
+ */
+function discloseTodayCohortRestamp(result: ReorderResult, n: number): ReorderResult {
+  if (n === 0) return result;
+  if (result.kind !== "ok" && result.kind !== "dry-run") return result;
+  const note =
+    `${n} co-listed Today row(s) had to be named to realize this placement — reordering re-stamps ` +
+    "their Today entry cohort (the moved item(s) always re-stamp inherently), which changes only " +
+    "their Today grouping, not their schedule (MOVPLC/TODWIRE)";
+  if (result.kind === "ok") {
+    return { ...result, warnings: [...(result.warnings ?? []), note] };
+  }
+  return { ...result, plan: { ...result.plan, invocation: `${result.plan.invocation} — ${note}` } };
 }
 
 /** The three move-based SIT7 fallbacks (park + re-enter). See {@link runMoveFallback}. */

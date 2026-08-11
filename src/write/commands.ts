@@ -1631,6 +1631,13 @@ const reorder: CommandSpec<"reorder"> = {
     // Verify the REQUESTED sequence (strictly ascending ranks). The wire
     // list pins the unrequested tail too, but the caller's contract is the
     // requested prefix; tail members are covered by pre-rank tripwires.
+    // TODWIRE: on the `today` scope the wire is now MINIMAL — only the named
+    // block gets fresh (front, monotonic) `todayIndex`; the unnamed tail keeps
+    // its cohort-interleaved (non-monotonic) `todayIndex`, so the FULL
+    // `params.uuids` is NOT strictly-ascending after the write. Verify the
+    // `todayWire` (the named block) instead — it lands at the visible front in
+    // wire order with fresh ascending values, and the untouched tail rides the
+    // pre-rank tripwires. Every other scope verifies the requested prefix.
     // LOGSORT ORD-13 byte-lock: any admitted UNSWEPT-resolved movee must read
     // back index-only — status still closed, stoppedDate intact, umd unbumped
     // (a reopen would flip all three). Frozen assertions carry that into verify.
@@ -1641,12 +1648,16 @@ const reorder: CommandSpec<"reorder"> = {
         { field: "stoppedDate", equals: m.stoppedDate },
       ] satisfies FieldAssertion[],
     }));
+    const sequence =
+      params.scope === "today" && pre.reorder?.todayWire != null
+        ? pre.reorder.todayWire
+        : params.uuids;
     return {
       mode: "ordering",
       key:
         pre.reorder?.key ??
         (params.scope === "today" || params.scope === "evening" ? "todayIndex" : "index"),
-      sequence: params.uuids,
+      sequence,
       ...(frozen.length > 0 && { frozen }),
     };
   },
@@ -1672,7 +1683,15 @@ const reorder: CommandSpec<"reorder"> = {
                   : params.scope === "upcoming"
                     ? `list "Upcoming"`
                     : `list "Today"`;
-    const wire = pre.reorder?.wireList ?? params.uuids;
+    // TODWIRE — the `today` scope sends the MINIMAL visible-order wire (names only
+    // what must move; unnamed rows keep their entry cohorts + visible positions),
+    // not the OLD full `wireList` that fused every cohort (MOVPLC/ORD-20). Every
+    // other native scope keeps the full wire (their `index`/day axes do not
+    // re-stamp `tiRef`, so a full re-rank is non-damaging).
+    const wire =
+      (params.scope === "today" ? pre.reorder?.todayWire : undefined) ??
+      pre.reorder?.wireList ??
+      params.uuids;
     if (params.scope === "someday") {
       // The Someday handler STACKS each sent id above the list's current top
       // (the current top itself never moves), with OPPOSITE stack directions
