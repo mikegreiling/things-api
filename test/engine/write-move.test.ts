@@ -612,6 +612,68 @@ describe("rule 5: placement honesty class in the result payload", () => {
     expect(containerOf(t).heading).toBe(heading);
   });
 
+  it("a no-position container move into Today does NOT fire the placement reorder (MOVPLC / ORD-20)", async () => {
+    // The native `list "Today"` reorder re-stamps every named row's entry cohort and
+    // rewrites the whole view (MOVPLC); a bare container move must keep the movee's
+    // Today slot (app-default), touching no unrelated row. The membership still lands.
+    const dest = seedProject(fixture.db, { title: "Dest" });
+    const movee = seedTodo(fixture.db, {
+      title: "MOVEE",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: -100,
+    });
+    const bystander = seedTodo(fixture.db, {
+      title: "BYSTANDER",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: -50,
+    });
+    const beforeIdx = (
+      fixture.db.prepare("SELECT todayIndex AS r FROM TMTask WHERE uuid = ?").get(bystander) as {
+        r: number;
+      }
+    ).r;
+    const result = await runTodoMove(deps(), {
+      uuids: [movee],
+      destination: { kind: "project", ref: { uuid: dest } },
+    });
+    expect(result.kind).toBe("move-ok");
+    if (result.kind === "move-ok") {
+      expect(result.placementClass).toBe("app-default");
+      expect(result.placement).toBeNull();
+      expect(result.note).toContain("Today");
+    }
+    expect(containerOf(movee).project).toBe(dest); // membership landed
+    // The bystander's todayIndex is byte-untouched (no reorder fired).
+    const afterIdx = (
+      fixture.db.prepare("SELECT todayIndex AS r FROM TMTask WHERE uuid = ?").get(bystander) as {
+        r: number;
+      }
+    ).r;
+    expect(afterIdx).toBe(beforeIdx);
+  });
+
+  it("an EXPLICIT --first STILL fires the Today placement reorder (only the no-position default changed)", async () => {
+    const dest = seedProject(fixture.db, { title: "Dest" });
+    const movee = seedTodo(fixture.db, {
+      title: "MOVEE",
+      start: "active",
+      startDate: "2026-07-05",
+      todayIndex: -100,
+    });
+    const result = await runTodoMove(deps(), {
+      uuids: [movee],
+      destination: { kind: "project", ref: { uuid: dest } },
+      position: { at: "first" },
+    });
+    expect(result.kind).toBe("move-ok");
+    if (result.kind === "move-ok") {
+      expect(result.placementClass).toBe("guaranteed");
+      expect(result.placement).not.toBeNull();
+    }
+  });
+
   it("without allow-experimental the project placement degrades to app-default (honest note)", async () => {
     const dest = seedProject(fixture.db, { title: "P" });
     const t = seedTodo(fixture.db, { title: "T", start: "inbox" });

@@ -2690,6 +2690,46 @@ async function finishPlacement(
     };
   }
 
+  // A container-only move with NO explicit position must NOT fire the Today/Evening
+  // (view-axis) placement reorder. The native `list "Today"` reorder re-stamps EVERY
+  // named row's `todayIndexReferenceDate` → today (MOVPLC / ORD-20, the O03/UPCDL-2a
+  // materialize law on existing members), which collapses the entry-date cohorts and
+  // rewrites the VISIBLE order of every unrelated open Today row — a whole-view rewrite
+  // the caller never requested. The membership move ALONE already preserves the movee's
+  // Today slot (MOVPLC step 3), so a bare move keeps the movee exactly where it is
+  // (app-default) and only an explicit --first/--last/--before/--after opts into the view
+  // reorder. Index/day-scope landings keep their documented top-of-bucket placement
+  // (non-damaging: they re-rank only the destination container, no cohort collapse).
+  if (position === undefined && (landing.scope === "today" || landing.scope === "evening")) {
+    const viewNote =
+      `membership moved; landed in ${describeScope(landing)} — a container-only move with no ` +
+      "explicit position keeps the item's current Today/Evening position (app-default): the native " +
+      "Today reorder would re-stamp every co-listed row's entry cohort and rewrite the whole view " +
+      "(MOVPLC), so it is not fired without --first/--last/--before/--after";
+    if (options.dryRun === true) {
+      return {
+        kind: "move-dry-run",
+        op,
+        plan: {
+          movees,
+          membership: `${membership.length} membership leg(s)`,
+          placement: `no placement reorder (keeps current ${landing.scope} position)`,
+          placementClass: "app-default",
+          note: viewNote,
+        },
+      };
+    }
+    return {
+      kind: "move-ok",
+      op,
+      movees: moveeTitles,
+      membership,
+      placement: null,
+      placementClass: "app-default",
+      note: viewNote,
+    };
+  }
+
   if (options.dryRun === true) {
     return {
       kind: "move-dry-run",

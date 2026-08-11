@@ -490,6 +490,41 @@ describe("computeReorderPre wire lists", () => {
     expect(pre.rejected).toEqual([]);
   });
 
+  it("excludes DERIVED-trashed children — a trashed project's Today child never enters the wire (MOVPLC / ORD-21)", () => {
+    // The census must mirror the reader's CONTAINER_UNTRASHED exclusion: project
+    // deletion is shallow (A24B), so a child keeps trashed=0 while its project row
+    // flips trashed=1. Filtering the child's OWN trashed flag alone leaked it into
+    // the native `list "Today"` reorder (a blind writer, §9p), which then mutated a
+    // row the reader hides.
+    const live = seedToday("LIVE", 10);
+    const trashedProj = seedProject(fixture.db, { title: "TrashedProj", trashed: true });
+    const derived = seedTodo(fixture.db, {
+      title: "DERIVED",
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: 5,
+      project: trashedProj,
+      trashed: false,
+    });
+    const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [live] }, null, NOW);
+    expect(pre.wireList).toEqual([live]); // the derived-trashed child is NOT extended in
+    expect(pre.members.map((m) => m.uuid)).not.toContain(derived);
+    // A live child of a live project still counts.
+    const liveProj = seedProject(fixture.db, { title: "LiveProj", trashed: false });
+    const liveChild = seedTodo(fixture.db, {
+      title: "LIVECHILD",
+      start: "active",
+      startDate: TODAY_ISO,
+      todayIndex: 20,
+      project: liveProj,
+    });
+    const pre2 = computeReorderPre(fixture.db, { scope: "today", uuids: [live] }, null, NOW);
+    // wire = requested [live] then remaining by todayIndex; derived (idx 5) is still
+    // excluded, liveChild (idx 20) rides along.
+    expect(pre2.wireList).toEqual([live, liveChild]);
+    expect(pre2.members.map((m) => m.uuid)).toContain(liveChild);
+  });
+
   it("includes scheduled projects as today members (O12)", () => {
     const p = seedProject(fixture.db, {
       title: "ProjToday",
