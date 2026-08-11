@@ -170,7 +170,11 @@ function unsupportedVector(op: string, vector: VectorId): never {
   throw new Error(`${op} cannot be compiled for vector ${vector} (planner bug)`);
 }
 
-function whenAssertions(when: WhenValue, todayIso: IsoDate): FieldAssertion[] {
+function whenAssertions(
+  when: WhenValue,
+  todayIso: IsoDate,
+  opts: { mode: "add" | "update" } = { mode: "add" },
+): FieldAssertion[] {
   // Strict shape check: an unvalidated string used to flow straight into the
   // URL (e.g. "2026-07-20@09:30", the raw URL grammar) — the app would SET
   // date+reminder while verification asserted the literal string as the date,
@@ -194,9 +198,22 @@ function whenAssertions(when: WhenValue, todayIso: IsoDate): FieldAssertion[] {
       // evening sub-bucket (the presence-keyed `evening` marker absent — asserted
       // as null, which valuesEqual treats as absent). Gated to Today members under
       // the verify clock exactly as the retired `todaySection` was.
+      //
+      // The `startDate` assertion differs by op (field bug §0½.8):
+      //  - ADD mints a fresh Today item with no schedule history, so the app dates
+      //    it EXACTLY today — exact equality is right.
+      //  - UPDATE of an item ALREADY in Today whose `startDate` has already arrived
+      //    (past or today): the app PRESERVES that historical date rather than
+      //    rewriting the storage byte to today (arrived-date law). Assert the
+      //    arrived-date PREDICATE (non-null and <= today) so a preserved historical
+      //    date verifies, while an undated deadline-only pull (null startDate) is
+      //    still rejected — the item's Today membership then rests only on a
+      //    deadline, not on the requested schedule.
       return [
         { field: "start", equals: "active" },
-        { field: "startDate", equals: todayIso },
+        opts.mode === "update"
+          ? { field: "startDate", satisfies: { predicate: "arrived-on-or-before", date: todayIso } }
+          : { field: "startDate", equals: todayIso },
         { field: "today", equals: true },
         { field: "evening", equals: null },
       ];
@@ -557,7 +574,7 @@ const todoUpdate: CommandSpec<"todo.update"> = {
     const joined = expectedNotes(pre, params);
     if (joined !== undefined) assert.push({ field: "notes", equals: joined });
     if (params.when !== undefined) {
-      assert.push(...whenAssertions(params.when, ctx.todayIso));
+      assert.push(...whenAssertions(params.when, ctx.todayIso, { mode: "update" }));
       const reminder = effectiveReminder(pre, params);
       assert.push({
         field: "reminder",
@@ -996,7 +1013,7 @@ const projectUpdate: CommandSpec<"project.update"> = {
     const joined = expectedNotes(pre, params);
     if (joined !== undefined) assert.push({ field: "notes", equals: joined });
     if (params.when !== undefined) {
-      assert.push(...whenAssertions(params.when, ctx.todayIso));
+      assert.push(...whenAssertions(params.when, ctx.todayIso, { mode: "update" }));
       // Projects carry the same reminderTime codec as to-dos (A3); a bare
       // when= clears an existing reminder unless auto-preserved.
       const reminder = effectiveReminder(pre, params);
