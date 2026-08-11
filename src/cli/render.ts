@@ -133,6 +133,14 @@ export interface FormatOpts {
    * among open ones stays dim/dim-strike. Never changes the status GLYPHS.
    */
   resolvedNormal?: boolean;
+  /**
+   * LEAD the row with its deadline chip instead of trailing it — the `deadlines`
+   * view, whose identity IS the deadline. The SAME styled {@link deadlineToken}
+   * (bold red once due/overdue, bold gray upcoming) moves to the front of the
+   * meta run (right after the box) and the trailing copy is dropped, so no row
+   * carries it twice. No-op on a row with no deadline chip.
+   */
+  leadDeadline?: boolean;
 }
 
 /** Wraps a `#a #b` tag form in the row's dim styling (incl. its leading space). */
@@ -229,6 +237,11 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
           (rule.type === "fixed" || rule.startOffsetDays < 0)
         ? ` ${bold(dim("⚑"))}`
         : "";
+  // The `deadlines` view LEADS with the chip: move the same styled token to the
+  // front of the meta run and drop the trailing copy (never both). Fixed-run
+  // placement means the fitter never collapses it — a deadlines row's identity.
+  const trailingDeadline = opts.leadDeadline === true ? "" : deadline;
+  if (opts.leadDeadline === true && deadline !== "") meta.unshift(deadline.trimStart());
   const container = item.type === "to-do" ? (item.project ?? item.headingProject ?? null) : null;
   // A project-view LOGBOOK row hints its HEADING (the in-project logged toggle
   // labels the heading — HEADARC2-B) rather than the suppressed project.
@@ -295,7 +308,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
   const tailStr = tail.length > 0 ? ` ${tail.join(" ")}` : "";
   const ctxStr = context === "" ? "" : dim(context);
   const tagNames = item.tags.map((t) => t.title);
-  const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${deadline}`;
+  const full = `${left} ${styleTitle(item.title)}${tailStr}${tags}${ctxStr}${trailingDeadline}`;
   // width null (the default — pipes/grep/--json/non-TTY) means NO fitting:
   // return the fully-composed row, byte-identical to before this feature.
   if (fit === null) return full;
@@ -307,7 +320,7 @@ export function formatItem(item: ListItem, uuidWidth = 0, opts: FormatOpts = {})
     tagNames,
     styleTags,
     context: ctxStr,
-    deadline,
+    deadline: trailingDeadline,
     full,
   };
   // Fit to the effective width: never below the compact floor (a sub-floor
@@ -565,6 +578,21 @@ export function renderSearch(items: ListItem[]): string[] {
     if (match !== undefined) lines.push(`  ${dim(`⤷ ${match.field}: "${match.text}"`)}`);
   }
   return lines;
+}
+
+/**
+ * The `deadlines` view: a flat, deadline-ordered list under a house `── ⚑
+ * Deadlines ──` header, each row LEADING with its deadline chip (the view's
+ * identity IS the deadline — {@link formatItem} `leadDeadline`). The chip reuses
+ * the standard {@link deadlineToken} styling (bold red once due/overdue, bold
+ * gray upcoming), so an overdue horizon reads at a glance. The list is already
+ * in deadline order (most-overdue first); this only frames it.
+ */
+export function renderDeadlines(items: ListItem[]): string[] {
+  const header = bold("── ⚑ Deadlines ──");
+  if (items.length === 0) return [header, "(empty)"];
+  const w = uuidDisplayWidth(items);
+  return [header, ...items.map((i) => formatItem(i, w, { leadDeadline: true }))];
 }
 
 /** Hidden-later counts per sidebar group (null area = the loose block). */

@@ -471,6 +471,52 @@ describe("things MCP server", () => {
     expect("project" in fchild).toBe(false); // R6 still applies under --full
   });
 
+  describe("read_view deadlines", () => {
+    it("returns the deadline-ordered items (most-overdue first) with `stage` kept", async () => {
+      seedTodo(fixture.db, { title: "MCP-overdue", deadline: "2026-06-30", start: "active" });
+      seedProject(fixture.db, { title: "MCP-future", deadline: "2026-07-20" });
+      seedTodo(fixture.db, { title: "MCP-none", start: "active" }); // no deadline → excluded
+      await connect([fakeVector(null).vector]);
+      const result = await client.callTool({ name: "read_view", arguments: { view: "deadlines" } });
+      const items = textOf(result) as { title: string; stage?: string }[];
+      expect(items.map((i) => i.title)).toEqual(["MCP-overdue", "MCP-future"]);
+      expect(items[0]?.stage).toBeDefined(); // stage-mixed view keeps stage
+      expect(result.isError ?? false).toBe(false);
+    });
+
+    it("honors `today` and `overdue`; both compose", async () => {
+      seedTodo(fixture.db, {
+        title: "today-dl",
+        startDate: "2026-07-05",
+        deadline: "2026-06-30",
+        start: "active",
+      });
+      seedTodo(fixture.db, { title: "someday-dl", start: "someday", deadline: "2026-07-25" });
+      await connect([fakeVector(null).vector]);
+      const scoped = await client.callTool({
+        name: "read_view",
+        arguments: { view: "deadlines", today: true, overdue: true },
+      });
+      expect((textOf(scoped) as { title: string }[]).map((i) => i.title)).toEqual(["today-dl"]);
+    });
+
+    it("`today` and `project` are deadlines-only (usage error elsewhere)", async () => {
+      await connect([fakeVector(null).vector]);
+      const badToday = await client.callTool({
+        name: "read_view",
+        arguments: { view: "anytime", today: true },
+      });
+      expect(badToday.isError).toBe(true);
+      expect(textOf(badToday)).toMatchObject({ code: "usage" });
+      const badProject = await client.callTool({
+        name: "read_view",
+        arguments: { view: "inbox", project: "whatever" },
+      });
+      expect(badProject.isError).toBe(true);
+      expect(textOf(badProject)).toMatchObject({ code: "usage" });
+    });
+  });
+
   describe("read_view area filter", () => {
     it("scopes anytime to the target area and reports meta.filter", async () => {
       const alpha = seedArea(fixture.db, "Alpha", 0);

@@ -34,7 +34,7 @@ export const HELP_GROUPS: ReadonlyArray<{ title: string; commands: readonly stri
   },
   {
     title: "Browse & search",
-    commands: ["show", "open", "search", "projects", "areas", "tags", "changes"],
+    commands: ["show", "open", "search", "deadlines", "projects", "areas", "tags", "changes"],
   },
   {
     title: "Write — create and change items",
@@ -73,6 +73,7 @@ export const INDEX: Readonly<Record<string, IndexEntry>> = {
   show: { args: "<ref>", desc: "show a to-do, project, or area by id or name" },
   open: { args: "<ref>", desc: "reveal an item in the Things app on this Mac" },
   search: { args: "<query>", desc: "find items by words in their title or notes" },
+  deadlines: { args: "", desc: "everything with a deadline, most-overdue first" },
   projects: { args: "[ref]", desc: "list projects, or show one" },
   areas: { args: "[ref]", desc: "list areas, or show one" },
   tags: { args: "", desc: "list the tag hierarchy" },

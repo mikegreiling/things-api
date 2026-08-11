@@ -30,6 +30,7 @@ export type ViewName =
   | "trash"
   | "search"
   | "changes"
+  | "deadlines"
   | "projects"
   | "areas"
   | "project-show"
@@ -85,6 +86,9 @@ export const FILTER_CONTRACT: Record<ViewName, ViewFilterSpec> = {
   search: { overdue: true, tag: "inherited", bound: "flat", statusWidening: true },
   // Sync feed: neither overdue nor tags apply.
   changes: { overdue: false, tag: "rejected", bound: "flat", statusWidening: false },
+  // Deadline horizon (R9 query view): overdue narrows to open, past-deadline
+  // rows; tags are inheritance-inclusive (flat view); flat row cap.
+  deadlines: { overdue: true, tag: "inherited", bound: "flat", statusWidening: false },
   // Projects LIST is a FLAT view — each project row filtered by its own
   // (inheritance-inclusive) tags; overdue keeps past-deadline projects.
   projects: { overdue: true, tag: "inherited", bound: "none", statusWidening: false },

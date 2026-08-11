@@ -537,6 +537,54 @@ describe("cli search (Phase 12 ergonomics)", () => {
   });
 });
 
+describe("cli deadlines (fixture db)", () => {
+  const titles = titlesOf;
+
+  it("things deadlines --json emits the versioned envelope, items in deadline order", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "overdue", deadline: isoFromToday(-3), start: "active" });
+    seedProject(fx.db, { title: "soon", deadline: isoFromToday(2) });
+    seedTodo(fx.db, { title: "later", deadline: isoFromToday(10), start: "active" });
+    seedTodo(fx.db, { title: "no-deadline", start: "active" }); // excluded
+
+    const { stdout, exitCode } = runCli(["deadlines", "--json", "--db", fx.path]);
+    expect(exitCode).toBe(0);
+    const env = JSON.parse(stdout);
+    expect(env.apiVersion).toBe(1);
+    expect(env.ok).toBe(true);
+    expect(env.kind).toBe("deadlines");
+    expect(titles(stdout)).toEqual(["overdue", "soon", "later"]);
+    // stage is KEPT (stage-mixed to-dos + projects).
+    expect(env.data.items.every((i: { stage?: unknown }) => typeof i.stage === "string")).toBe(
+      true,
+    );
+  });
+
+  it("--overdue narrows to open past-deadline rows; --limit truncates with meta", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "past-1", deadline: isoFromToday(-2), start: "active" });
+    seedTodo(fx.db, { title: "past-2", deadline: isoFromToday(-1), start: "active" });
+    seedTodo(fx.db, { title: "due-today", deadline: isoFromToday(0), start: "active" }); // due, not overdue
+    seedTodo(fx.db, { title: "future", deadline: isoFromToday(5), start: "active" });
+
+    const overdue = runCli(["deadlines", "--overdue", "--json", "--db", fx.path]);
+    expect(titles(overdue.stdout)).toEqual(["past-1", "past-2"]);
+
+    const limited = runCli(["deadlines", "--limit", "1", "--json", "--db", fx.path]);
+    const env = JSON.parse(limited.stdout);
+    expect(env.data.items).toHaveLength(1);
+    expect(env.meta.truncation).toMatchObject({ shown: 1, truncated: true });
+  });
+
+  it("the TTY view leads each row with its deadline chip under the house header", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "Ship", deadline: isoFromToday(1), start: "active" });
+    const out = runTty(["deadlines", "--db", fx.path]);
+    expect(out).toContain("── ⚑ Deadlines ──");
+    expect(out).toMatch(/⚑ 1 day left Ship/);
+  });
+});
+
 describe('cli --untagged (GUI "No Tag")', () => {
   function seedTagged() {
     fx = buildFixtureDb();

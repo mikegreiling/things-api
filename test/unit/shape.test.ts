@@ -354,7 +354,8 @@ describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)
     }
     // The derived surfaces KEEP stage. (`upcoming` is stage-MIXED too, but it
     // reshapes into day-block sections — asserted in the day-block suite below.)
-    for (const kind of ["search", "changes", "projects"]) {
+    // `deadlines` is stage-MIXED (to-dos + projects, deadline-ordered) — kept.
+    for (const kind of ["search", "changes", "deadlines", "projects"]) {
       const row = first(shapeReadPayload(kind, [todo()], false));
       expect(row["stage"]).toBe("anytime"); // kept
     }

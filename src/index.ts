@@ -71,6 +71,7 @@ export type {
   UpcomingFilter,
   ViewFilter,
   ChangedItem,
+  DeadlinesFilter,
 } from "./read/views.ts";
 
 // The per-view read-filter contract: the declarative applicability table plus

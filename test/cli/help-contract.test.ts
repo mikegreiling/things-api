@@ -452,7 +452,7 @@ describe("write-command help states the contract", () => {
   });
 
   it("flat list views expose --limit/--all; grouped views expose per-block caps", () => {
-    for (const name of ["today", "inbox", "upcoming", "logbook", "trash", "changes"]) {
+    for (const name of ["today", "inbox", "upcoming", "logbook", "trash", "changes", "deadlines"]) {
       const help = helpFor(name);
       expect(help, name).toContain("--limit <n>");
       expect(help, name).toContain("--all");
@@ -484,6 +484,7 @@ describe("write-command help states the contract", () => {
       ["trash"],
       ["changes"],
       ["search"],
+      ["deadlines"],
       ["projects"],
       ["areas"],
       ["tags"],
@@ -504,7 +505,7 @@ describe("write-command help states the contract", () => {
   it("current-work views + search expose --overdue with a behavioral one-liner", () => {
     // --overdue is a content scope on the current-work views and search; the
     // one-liner states behavior and the due-today carve-out.
-    for (const name of ["today", "inbox", "anytime", "someday", "search"]) {
+    for (const name of ["today", "inbox", "anytime", "someday", "search", "deadlines"]) {
       const help = helpFor(name);
       expect(help, name).toContain("--overdue");
       expect(help, name).toContain("past their deadline");
@@ -535,7 +536,7 @@ describe("write-command help states the contract", () => {
   });
 
   it("list views + search expose --exact-tag alongside --tag", () => {
-    for (const name of ["today", "inbox", "search", "logbook"]) {
+    for (const name of ["today", "inbox", "search", "logbook", "deadlines"]) {
       const help = helpFor(name);
       expect(help).toContain("--exact-tag");
       expect(help).toContain("exclude hierarchy descendants");
@@ -670,9 +671,27 @@ describe("write-command help states the contract", () => {
   });
 
   it("list views point at `things legend` for the glyph language", () => {
-    for (const name of ["today", "inbox", "anytime", "someday", "upcoming", "logbook", "trash"]) {
+    for (const name of [
+      "today",
+      "inbox",
+      "anytime",
+      "someday",
+      "upcoming",
+      "logbook",
+      "trash",
+      "deadlines",
+    ]) {
       expect(renderedHelp(name), name).toContain("run `things legend`");
     }
+  });
+
+  it("deadlines: deadline-ordered, not reorderable, with the scope flags", () => {
+    const help = helpFor("deadlines");
+    expect(help).toContain("deadline order");
+    expect(help).toContain("not reorderable");
+    expect(help).toContain("--today");
+    expect(help).toContain("--project <ref>");
+    expect(help).toContain("--area <ref>");
   });
 
   it("today help mentions the provisional • pip (Today-only marker)", () => {

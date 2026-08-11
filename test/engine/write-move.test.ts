@@ -2678,6 +2678,19 @@ describe("reorder --in axis disambiguation (dual-axis Today/Evening members)", (
     }
   });
 
+  it("--in deadlines is refused (a non-scope query view, not a reorder axis)", async () => {
+    // `deadlines` is a presentation-ordered R9 query view — deadline order IS the
+    // view, so it is never a reorder axis. It is not a known axis, date, or
+    // container title, so the engine serves the standard unknown-token refusal.
+    const a = seedTodo(fixture.db, { title: "a", startDate: "2026-07-05", todayIndex: 1 });
+    const r = await dryReorder([a], "deadlines");
+    expect(r.kind).toBe("move-refused");
+    if (r.kind === "move-refused") {
+      expect(r.refusal).toBe("usage");
+      expect(r.detail).toContain("did not resolve to a project, area, or heading");
+    }
+  });
+
   it("--in <project> RE-RANKS Today members on the container index, preserving the Today flag", async () => {
     const proj = seedProject(fixture.db, { title: "Work" });
     const a = seedTodo(fixture.db, {

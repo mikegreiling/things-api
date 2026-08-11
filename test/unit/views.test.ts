@@ -18,6 +18,7 @@ import {
   anytimeView,
   type SidebarSection,
   changesView,
+  deadlinesView,
   inboxView,
   isTodayMember,
   liteTitleSearch,
@@ -2195,5 +2196,315 @@ describe("resolveTaskUuidPrefix", () => {
     expect(() => resolveTaskUuidPrefix(fx.db, "ABC" + "DE".repeat(2))).toThrow(
       /ambiguous|no to-do matching/,
     );
+  });
+});
+
+describe("deadlinesView", () => {
+  const titlesOf = (db: FixtureDb["db"], filter?: Parameters<typeof deadlinesView>[2]) =>
+    deadlinesView(db, NOW, filter).map((i) => i.title);
+
+  it("lists every live deadline-bearing to-do AND project, deadline ASC (most-overdue first)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "overdue", deadline: "2026-06-30", start: "active" });
+    seedTodo(fx.db, { title: "due-today", deadline: "2026-07-02", start: "active" });
+    seedProject(fx.db, { title: "future-proj", deadline: "2026-07-20" });
+    seedTodo(fx.db, { title: "inbox-dl", start: "inbox", deadline: "2026-07-10" });
+    seedTodo(fx.db, { title: "someday-dl", start: "someday", deadline: "2026-07-08" });
+    seedTodo(fx.db, { title: "no-deadline", start: "active" }); // excluded — no deadline
+    expect(titlesOf(fx.db, { repeats: false })).toEqual([
+      "overdue",
+      "due-today",
+      "someday-dl",
+      "inbox-dl",
+      "future-proj",
+    ]);
+  });
+
+  it("mixes to-dos AND projects (the wire keeps their `stage` — see shape.test)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "inbox-dl", start: "inbox", deadline: "2026-07-05" });
+    seedProject(fx.db, { title: "proj", start: "someday", deadline: "2026-07-06" });
+    const items = deadlinesView(fx.db, NOW, { repeats: false });
+    expect(items.map((i) => i.type)).toEqual(["to-do", "project"]);
+    expect(items.map((i) => i.derived.start)).toEqual(["inbox", "someday"]);
+  });
+
+  it("tiebreaks equal deadlines by todayIndex, then uuid", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { uuid: "todo-y", title: "second", deadline: "2026-07-10", todayIndex: 5 });
+    seedTodo(fx.db, { uuid: "todo-x", title: "first", deadline: "2026-07-10", todayIndex: 1 });
+    // Equal deadline AND equal todayIndex → uuid ASC breaks the final tie.
+    seedTodo(fx.db, { uuid: "todo-b", title: "b", deadline: "2026-07-11", todayIndex: 0 });
+    seedTodo(fx.db, { uuid: "todo-a", title: "a", deadline: "2026-07-11", todayIndex: 0 });
+    expect(titlesOf(fx.db, { repeats: false })).toEqual(["first", "second", "a", "b"]);
+  });
+
+  it("excludes logged, trashed, and DERIVED-trashed (container-chain) rows", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "logged",
+      deadline: "2026-06-30",
+      status: "completed",
+      stopDate: NOW_EPOCH - 999_999,
+    });
+    seedTodo(fx.db, { title: "trashed", deadline: "2026-06-30", trashed: true });
+    // Shallow project deletion (A24B): the project row is trashed, the child is
+    // not — its Trash membership is DERIVED through the container chain.
+    const deletedProj = seedProject(fx.db, { title: "gone", trashed: true });
+    seedTodo(fx.db, { title: "orphan", deadline: "2026-06-30", project: deletedProj });
+    seedTodo(fx.db, { title: "live", deadline: "2026-06-30", start: "active" });
+    expect(titlesOf(fx.db, { repeats: false })).toEqual(["live"]);
+  });
+
+  it("--overdue keeps only OPEN items strictly before today (due-today is NOT overdue)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "overdue", deadline: "2026-06-30", start: "active" });
+    seedTodo(fx.db, { title: "due-today", deadline: "2026-07-02", start: "active" });
+    seedTodo(fx.db, { title: "future", deadline: "2026-07-10", start: "active" });
+    expect(titlesOf(fx.db, { overdue: true, repeats: false })).toEqual(["overdue"]);
+  });
+
+  it("--overdue boundary rides the consumer zone (the today cutoff shifts with the zone)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, { title: "edge", deadline: "2026-07-02", start: "active" });
+    // 2026-07-02T23:30Z is 07-03 in Tokyo (deadline now past → overdue) but still
+    // 07-02 in Los Angeles (deadline is due-today → not overdue).
+    const instant = new Date("2026-07-02T23:30:00Z");
+    expect(
+      deadlinesView(fx.db, instant, { overdue: true, repeats: false }, "Asia/Tokyo").map(
+        (i) => i.title,
+      ),
+    ).toEqual(["edge"]);
+    expect(
+      deadlinesView(fx.db, instant, { overdue: true, repeats: false }, "America/Los_Angeles").map(
+        (i) => i.title,
+      ),
+    ).toEqual([]);
+  });
+
+  it("--today restricts to current Today members (evening-INCLUSIVE)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "overdue-pull",
+      deadline: "2026-06-30",
+      start: "active",
+    }); // undated + due → pulled into Today
+    seedTodo(fx.db, {
+      title: "scheduled-today",
+      startDate: "2026-07-02",
+      deadline: "2026-07-20",
+      start: "active",
+    });
+    seedTodo(fx.db, {
+      title: "evening",
+      startDate: "2026-07-02",
+      evening: true,
+      deadline: "2026-07-21",
+      start: "active",
+    });
+    seedTodo(fx.db, {
+      title: "future-sched",
+      startDate: "2026-07-10",
+      deadline: "2026-07-25",
+      start: "someday",
+    }); // not a Today member
+    seedTodo(fx.db, { title: "someday-future-dl", start: "someday", deadline: "2026-07-30" });
+    expect(titlesOf(fx.db, { todayOnly: true, repeats: false })).toEqual([
+      "overdue-pull",
+      "scheduled-today",
+      "evening",
+    ]);
+  });
+
+  it("--project scopes to a project's children (direct + headed), never the outside", () => {
+    fx = buildFixtureDb();
+    const proj = seedProject(fx.db, { title: "P", deadline: "2026-07-03" });
+    const heading = seedHeading(fx.db, { title: "H", project: proj });
+    seedTodo(fx.db, { title: "direct-child", project: proj, deadline: "2026-07-06" });
+    seedTodo(fx.db, { title: "headed-child", project: proj, heading, deadline: "2026-07-07" });
+    seedTodo(fx.db, { title: "outside", deadline: "2026-07-08", start: "active" });
+    expect(titlesOf(fx.db, { project: proj, repeats: false })).toEqual([
+      "direct-child",
+      "headed-child",
+    ]);
+  });
+
+  it("--area scopes to an area's subtree; `loose` selects the area-less rows", () => {
+    fx = buildFixtureDb();
+    const area = seedArea(fx.db, "Work");
+    const proj = seedProject(fx.db, { title: "WP", area, deadline: "2026-07-09" });
+    seedTodo(fx.db, { title: "area-direct", area, deadline: "2026-07-05" });
+    seedTodo(fx.db, { title: "proj-child", project: proj, deadline: "2026-07-06" });
+    seedTodo(fx.db, { title: "loose-dl", deadline: "2026-07-07", start: "active" });
+    expect(titlesOf(fx.db, { area, repeats: false })).toEqual(["area-direct", "proj-child", "WP"]);
+    expect(titlesOf(fx.db, { area: "loose", repeats: false })).toEqual(["loose-dl"]);
+  });
+
+  it("--tag is inheritance-inclusive and composes with --overdue", () => {
+    fx = buildFixtureDb();
+    const tag = seedTag(fx.db, "urgent");
+    const t1 = seedTodo(fx.db, {
+      title: "tagged-overdue",
+      deadline: "2026-06-30",
+      start: "active",
+    });
+    const t2 = seedTodo(fx.db, { title: "tagged-future", deadline: "2026-07-20", start: "active" });
+    tagTask(fx.db, t1, tag);
+    tagTask(fx.db, t2, tag);
+    seedTodo(fx.db, { title: "untagged", deadline: "2026-06-29", start: "active" });
+    expect(titlesOf(fx.db, { tags: ["urgent"], repeats: false })).toEqual([
+      "tagged-overdue",
+      "tagged-future",
+    ]);
+    expect(titlesOf(fx.db, { tags: ["urgent"], overdue: true, repeats: false })).toEqual([
+      "tagged-overdue",
+    ]);
+  });
+
+  it("a dismissed deadline nag does NOT filter the view (suppression governs the Today pull, not existence)", () => {
+    fx = buildFixtureDb();
+    // supp == deadline: the reschedule nag was dismissed. It drops from the Today
+    // PULL but the row still HAS a deadline, so it lists here.
+    seedTodo(fx.db, {
+      title: "dismissed",
+      start: "someday",
+      deadline: "2026-06-30",
+      deadlineSuppressionDate: "2026-06-30",
+    });
+    expect(titlesOf(fx.db, { repeats: false })).toEqual(["dismissed"]);
+  });
+});
+
+// A real, decodable DEADLINED biweekly-Sunday rule (ts=-4 ⇒ deadline is 4 days
+// AFTER the occurrence start); its `deadline` sentinel column marks it deadlined.
+const BIWEEKLY_SUNDAY_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fa</key><integer>2</integer>
+  <key>fu</key><integer>256</integer>
+  <key>of</key><array><dict><key>wd</key><integer>0</integer></dict></array>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>-4</integer>
+</dict>
+</plist>`;
+
+describe("deadlinesView — repeating-template projections", () => {
+  it("projects a deadline-bearing template at its next occurrence's projected deadline", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "cpap",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01", // deadlined sentinel
+    });
+    // next occurrence starts 07-15; ts=-4 ⇒ deadline = 07-15 + 4 = 07-19.
+    expect(deadlinesView(fx.db, NOW).map((i) => [i.title, i.deadline])).toEqual([
+      ["cpap", "2026-07-19"],
+    ]);
+  });
+
+  it("discloses projection-ness via the R11 `repeating` presence (it IS the template row)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "cpap",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+    });
+    expect(deadlinesView(fx.db, NOW)[0]?.repeating.isTemplate).toBe(true);
+  });
+
+  it("excludes deadline-LESS templates (unsupported beats guessed)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "dl-less",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+    });
+    expect(deadlinesView(fx.db, NOW)).toEqual([]);
+  });
+
+  it("excludes an UNDECODABLE rule (never guesses a deadline)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "opaque",
+      recurrenceRule: true, // non-plist bytes → decode throws
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+    });
+    expect(deadlinesView(fx.db, NOW)).toEqual([]);
+  });
+
+  it("excludes paused templates and those with no set next occurrence", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "paused",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+      instanceCreationPaused: true,
+    });
+    seedTodo(fx.db, {
+      title: "resting",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      deadline: "4001-01-01",
+    }); // no nextInstanceStartDate
+    expect(deadlinesView(fx.db, NOW)).toEqual([]);
+  });
+
+  it("no double-count: a materialized instance shows once; the template projects the NEXT occurrence", () => {
+    fx = buildFixtureDb();
+    // The already-spawned instance is a concrete deadlined row.
+    seedTodo(fx.db, { title: "inst", deadline: "2026-07-05", start: "active" });
+    // The next-instance cursor points at a FUTURE occurrence (07-15 ⇒ 07-19).
+    seedTodo(fx.db, {
+      title: "inst",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+    });
+    expect(deadlinesView(fx.db, NOW).map((i) => [i.deadline, i.repeating.isTemplate])).toEqual([
+      ["2026-07-05", false], // the concrete instance
+      ["2026-07-19", true], // the projection, on a strictly later occurrence
+    ]);
+  });
+
+  it("--overdue excludes projections by construction; every projection is strictly future", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "cpap",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+    });
+    seedTodo(fx.db, { title: "real-overdue", deadline: "2026-06-30", start: "active" });
+    expect(deadlinesView(fx.db, NOW, { overdue: true }).map((i) => i.title)).toEqual([
+      "real-overdue",
+    ]);
+    for (const i of deadlinesView(fx.db, NOW)) {
+      if (i.repeating.isTemplate) expect((i.deadline ?? "") > "2026-07-02").toBe(true);
+    }
+  });
+
+  it("--today excludes template projections (a projection is never a Today member)", () => {
+    fx = buildFixtureDb();
+    seedTodo(fx.db, {
+      title: "cpap",
+      recurrenceRuleXml: BIWEEKLY_SUNDAY_XML,
+      nextInstanceStartDate: "2026-07-15",
+      deadline: "4001-01-01",
+    });
+    seedTodo(fx.db, {
+      title: "today-real",
+      startDate: "2026-07-02",
+      deadline: "2026-07-20",
+      start: "active",
+    });
+    expect(deadlinesView(fx.db, NOW, { todayOnly: true }).map((i) => i.title)).toEqual([
+      "today-real",
+    ]);
   });
 });

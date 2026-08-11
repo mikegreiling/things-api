@@ -20,6 +20,7 @@ import {
   renderLegend,
   renderList,
   renderLogbook,
+  renderDeadlines,
   renderProjectsSidebar,
   renderSearch,
   renderSections,
@@ -1295,6 +1296,84 @@ export function registerReadCommands(program: Command): void {
       );
     });
 
+  program
+    .command("deadlines")
+    .description(
+      "Everything with a deadline — to-dos AND projects — in deadline order, most-overdue " +
+        "first (ties by Today order, then id). A repeating item with a deadline appears at its " +
+        "next occurrence's projected deadline. Scope with --today (only current Today members, " +
+        "This Evening included), --overdue (only open items already past their deadline), " +
+        "--project / --area / --tag (tag matches include hierarchy descendants). Deadline order " +
+        "IS the view — it is not reorderable.",
+    )
+    .option("--today", "only items that are current Today members (This Evening included)")
+    .option("--overdue", OVERDUE_DESC)
+    .option("--project <ref>", "restrict to one project's children (uuid or unique name)")
+    .option(
+      "--area <ref>",
+      "restrict to one area's subtree — its direct items plus its projects' children (uuid or unique name, or `loose` for area-less)",
+    )
+    .option("--tag <ref>", TAG_DESC, collectRef, [])
+    .option("--exact-tag", EXACT_TAG_DESC)
+    .option("--untagged", UNTAGGED_DESC)
+    .option("--limit <n>", LIMIT_DESC)
+    .option("--all", ALL_DESC)
+    .option("--full", FULL_DESC)
+    .option("--json", "emit versioned JSON envelope on stdout")
+    .option("--db <path>", "explicit database path")
+    .action((opts: GlobalReadOpts & Record<string, unknown>) => {
+      const json = opts["json"] === true;
+      const tagFlags: TagFlags = {
+        ...(Array.isArray(opts["tag"]) && { tag: opts["tag"] as string[] }),
+        exactTag: opts["exactTag"] === true,
+        untagged: opts["untagged"] === true,
+      };
+      const overdue = opts["overdue"] === true;
+      const validated = validateViewArgs(
+        "deadlines",
+        { ...tagFlags, overdue },
+        {
+          untaggedConflict: "--untagged does not combine with --tag/--exact-tag",
+          // deadlines honors --overdue, so this never fires (contract asserts it).
+          overdueRejected: "--overdue does not apply to deadlines",
+          overdueStatusWiden: "",
+        },
+      );
+      if (!validated.ok) {
+        usageError({ json }, validated.message);
+        return;
+      }
+      const all = opts["all"] === true;
+      const limitOpt = opts["limit"] as string | undefined;
+      const lim = parseLimit({ all, json, ...(limitOpt !== undefined && { limit: limitOpt }) });
+      if (!lim.ok) return;
+      const todayOnly = opts["today"] === true;
+      const base = invocation("deadlines", [
+        todayOnly && "--today",
+        overdue && "--overdue",
+        opts["project"] !== undefined && `--project ${shellQuote(opts["project"] as string)}`,
+        opts["area"] !== undefined && `--area ${shellQuote(opts["area"] as string)}`,
+        ...tagInvocationParts(tagFlags),
+      ]);
+      runRead(
+        opts,
+        "deadlines",
+        (c) => {
+          const { items, truncation } = c.read.deadlines({
+            limit: lim.limit,
+            ...(todayOnly && { todayOnly: true }),
+            ...(opts["project"] !== undefined && { project: opts["project"] as string }),
+            ...(opts["area"] !== undefined && { area: opts["area"] as string }),
+            ...validated.filter,
+          });
+          const warnings = looseAreaWarnings(c, opts["area"] as string | undefined);
+          return { data: items, truncation, ...(warnings !== undefined && { warnings }) };
+        },
+        renderDeadlines,
+        base,
+      );
+    });
+
   // Every row-rendering view points at `things legend` for its glyph language.
   const GLYPH_VIEWS = new Set([
     "today",
@@ -1308,6 +1387,7 @@ export function registerReadCommands(program: Command): void {
     "areas",
     "changes",
     "search",
+    "deadlines",
   ]);
   for (const c of program.commands) {
     if (c.name() === "today") {

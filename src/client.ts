@@ -39,6 +39,7 @@ import {
   anytimeView,
   areaLoggedCount,
   changesView,
+  deadlinesView,
   inboxView,
   liteTitleSearch,
   logbookView,
@@ -49,6 +50,7 @@ import {
   trashView,
   upcomingView,
   type ChangedItem,
+  type DeadlinesFilter,
   type InboxFilter,
   type LiteSearchResult,
   type ListItem,
@@ -505,6 +507,16 @@ export interface ThingsClient {
     ): LiteSearchResult;
     /** Rows created/modified since a moment — incl. trashed/logged/templates — bounded (default 50). */
     changes(options: { since: Date } & ListBound & ClockScopedRead): BoundedList<ChangedItem>;
+    /**
+     * The deadline-horizon view: every live to-do AND project carrying a
+     * deadline, ordered deadline ASC (most-overdue first), then todayIndex, then
+     * uuid; deadline-bearing repeating templates project at their next
+     * occurrence's deadline. Bounded (default 50). `todayOnly` restricts to
+     * current Today members (evening-inclusive); `overdue` keeps only open,
+     * past-deadline rows (and excludes projections); `project`/`area` scope to a
+     * container; the tag filters compose.
+     */
+    deadlines(options?: DeadlinesFilter & ListBound & ClockScopedRead): BoundedList<ListItem>;
     byUuid(uuid: string): AnyTask | null;
     /**
      * Classify a loose reference (uuid, >=6-char prefix, share link, or
@@ -1242,6 +1254,18 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
         let items = changesView(conn.db, now(), { since: o.since, limit: null }, zoneOf(o));
         // No out-of-scope uuid may leak into the delta feed (rows are live
         // TMTask, so the effective container resolves).
+        if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
+        const { data, truncation } = truncateList(items, listCap(o));
+        return { items: data, truncation };
+      },
+      deadlines: (o) => {
+        const { limit: _limit, ...filter } = o ?? {};
+        // The view is computed UNBOUNDED (project/area/tag/overdue/today scoping
+        // happens inside it); the whole-view truncation is applied here so the
+        // total behind the cut is honest.
+        let items = deadlinesView(conn.db, now(), filter, zoneOf(o));
+        // A container jail is an additive post-filter (parity with search): keep
+        // only in-scope rows so an out-of-scope deadline never leaks.
         if (scope !== undefined) items = items.filter((i) => inScopeItem(i, scope));
         const { data, truncation } = truncateList(items, listCap(o));
         return { items: data, truncation };

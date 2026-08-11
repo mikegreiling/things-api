@@ -1378,3 +1378,175 @@ export function searchView(
   const sliced = cap === null ? ranked : ranked.slice(0, cap);
   return sliced.map((m) => m.item as SearchResultItem);
 }
+
+export interface DeadlinesFilter extends ViewFilter {
+  /**
+   * Restrict to CURRENT Today members (evening-INCLUSIVE) — the same membership
+   * predicate {@link todayView} uses ({@link isTodayMember}: an arrived
+   * `startDate <= today`, or an undated due/overdue deadline). Composes as AND
+   * with the other filters; a template projection is never a Today member, so
+   * this arm also drops the projected rows by construction.
+   */
+  todayOnly?: boolean;
+  /**
+   * Scope to one PROJECT's children (uuid or unique title) — its direct
+   * children plus its headed ones (heading rows carry the project link),
+   * mirroring `search --project`.
+   */
+  project?: string;
+  /**
+   * Scope to one AREA's subtree (uuid, unique title, or `loose` for the
+   * area-less rows) — its direct items plus its projects' children, the same
+   * subtree-inclusive shape `search --area` / `logbook --area` use.
+   */
+  area?: string;
+  /**
+   * Include repeating-template PROJECTIONS (the app-materialized next
+   * occurrence's projected deadline). Default true; the CLI/MCP surfaces never
+   * turn it off — it exists so tests can isolate the concrete rows. `--overdue`
+   * already excludes projections by construction (a projection is never past).
+   */
+  repeats?: boolean;
+}
+
+/**
+ * The DEADLINE-HORIZON query view (R9 family — flat, non-scope,
+ * presentation-ordered, like {@link searchView} / {@link changesView}): every
+ * LIVE (open, untrashed, container-untrashed) to-do AND project that carries a
+ * deadline, ordered `deadline ASC` (most-overdue first), tie-broken
+ * `todayIndex ASC` then `uuid ASC`. That comparator is the certified
+ * global-`upcoming` comparator (COALESCE(startDate, deadline) ASC, todayIndex
+ * ASC, uuid) RESTRICTED to deadlined rows — ONE ordering law, two views. The
+ * output is ONE flat `items[]`, never day-block sub-arrays.
+ *
+ * Membership KEEPS `stage` (mixed to-dos + projects, like search/changes). A
+ * deadline-nag DISMISSAL does NOT filter this view — suppression governs the
+ * Today PULL, not deadline existence, so a dismissed-nag row still lists here
+ * with its deadline.
+ *
+ * REPEATING-TEMPLATE PROJECTION (ratified 2026-08-11): a deadline-bearing
+ * template is projected at its next occurrence's deadline using the SAME
+ * certified machinery global `upcoming` uses — the app-materialized next
+ * occurrence (`rt1_nextInstanceStartDate` → `repeating.nextOccurrence`) with the
+ * instance-validated deadline anchor `deadline = nextOccurrence −
+ * rule.startOffsetDays` (oddities §8a; the exact horizon-1 derivation
+ * upcomingView applies). GUARD RAIL ("unsupported beats guessed"): a template is
+ * projected ONLY when its rule DECODES and it is DEADLINED and the derived
+ * deadline is strictly future; a deadline-less template, an undecodable rule, an
+ * after-completion/paused template with no set next occurrence, and any
+ * non-future derived deadline are EXCLUDED (never a guessed date). A projected
+ * row discloses its projection-ness through the R11 `repeating` presence (it IS
+ * the template row, carrying the projected value in `deadline`). No double count:
+ * the already-materialized instance is a concrete row under the base query and
+ * the next-instance cursor points PAST it, so the projection lands on a strictly
+ * later occurrence.
+ */
+export function deadlinesView(
+  db: DatabaseSync,
+  now?: Date,
+  filter?: DeadlinesFilter,
+  zone?: string,
+): ListItem[] {
+  const todayIso = localToday(now, zone);
+  const packedToday = encodePackedDate(todayIso);
+  const boundary = logBoundary(db, now, zone);
+  const tf = tagFilter(db, filter);
+  const of = overdueFilter(filter, packedToday);
+
+  // Container scope (mirrors searchView): `--project` matches a project's own
+  // children plus its headed ones; `--area` is subtree-inclusive (own area OR
+  // the containing project's area), or the area-less rows for `loose`.
+  const scope: string[] = [];
+  const scopeBinds: unknown[] = [];
+  if (filter?.project !== undefined) {
+    const uuid = resolveProjectUuid(db, filter.project);
+    scope.push(
+      "(t.project = ? OR t.heading IN (SELECT uuid FROM TMTask WHERE type = 2 AND project = ?))",
+    );
+    scopeBinds.push(uuid, uuid);
+  }
+  if (filter?.area !== undefined) {
+    if (isLooseRef(filter.area)) {
+      scope.push(
+        `t.area IS NULL AND (${EFF_PROJECT} IS NULL OR NOT EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area IS NOT NULL))`,
+      );
+    } else {
+      const uuid = resolveAreaUuid(db, filter.area);
+      scope.push(
+        `(t.area = ? OR EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT} AND p.area = ?))`,
+      );
+      scopeBinds.push(uuid, uuid);
+    }
+  }
+  const scopeSql = scope.length > 0 ? ` AND ${scope.join(" AND ")}` : "";
+
+  // Concrete rows: open, untrashed (row AND container chain — the derived-trash
+  // exclusion matters here too), non-template, carrying a deadline. `--overdue`
+  // (open, deadline strictly before today) and the tag scope compose as AND.
+  const rows = fetchTaskRows(
+    db,
+    `${OPEN} AND ${CONTAINER_UNTRASHED} AND t.deadline IS NOT NULL${scopeSql}${tf.sql}${of.sql}`,
+    [...scopeBinds, ...tf.binds, ...of.binds],
+  );
+  let items = materialize(db, rows, boundary, packedToday);
+
+  // The comparator's tiebreak keys on the row's stored `todayIndex` (mirroring
+  // global-upcoming's within-day drag order), built from the fetched rows.
+  const todayIndexOf = new Map<string, number>(rows.map((r) => [r.uuid, r.todayIndex ?? 0]));
+
+  // Repeating-template projections. Skipped entirely under `--overdue` (a
+  // projection is strictly future, so it never matches an overdue scope) — this
+  // is the by-construction exclusion the guard rail promises.
+  if (filter?.repeats !== false && filter?.overdue !== true) {
+    const templateRows = fetchTaskRows(
+      db,
+      `t.type IN (0, 1) AND t.trashed = 0 AND t.status = 0 AND ${CONTAINER_UNTRASHED}
+       AND (t.rt1_recurrenceRule IS NOT NULL OR t.repeater IS NOT NULL)
+       AND t.rt1_instanceCreationPaused = 0
+       AND t.rt1_nextInstanceStartDate IS NOT NULL AND t.rt1_nextInstanceStartDate > ?
+       AND t.deadline IS NOT NULL${scopeSql}${tf.sql}`,
+      [packedToday, ...scopeBinds, ...tf.binds],
+    );
+    const rawByUuid = new Map(templateRows.map((r) => [r.uuid, r.rt1_recurrenceRule]));
+    for (const r of templateRows) todayIndexOf.set(r.uuid, r.todayIndex ?? 0);
+    const projections = materialize(db, templateRows, boundary, packedToday).flatMap((template) => {
+      const startDate = template.repeating.nextOccurrence ?? null;
+      // Deadline-bearing rules only; a deadline-less template spawns undeadlined
+      // instances (its own `deadline` column is byte-identical to a deadlined
+      // ts=0 rule — oddities §8a), so it never projects here.
+      if (startDate === null || template.repeating.deadlined !== true) return [];
+      const raw = rawByUuid.get(template.uuid);
+      if (raw === null || raw === undefined) return [];
+      let rule: ReturnType<typeof decodeRecurrenceRule>;
+      try {
+        rule = decodeRecurrenceRule(raw);
+      } catch {
+        return []; // undecodable rule (future Things build) — exclude, never guess a deadline
+      }
+      // The instance-validated occurrence deadline: startDate − rule.startOffsetDays.
+      const deadline = addDaysIso(startDate, -rule.startOffsetDays);
+      // Guard rail: a projection is a FUTURE spawn — a non-future derived deadline
+      // is nonsensical (the instance would already have materialized), so exclude
+      // it. This is what makes the `--overdue` exclusion hold by construction.
+      if (deadline <= todayIso) return [];
+      return [{ ...template, deadline }];
+    });
+    items = [...items, ...projections];
+  }
+
+  // `--today`: restrict to current Today members (evening-inclusive). A template
+  // projection is never a Today member (undated + future deadline), so this also
+  // drops the projections.
+  if (filter?.todayOnly === true) {
+    items = items.filter((i) => isTodayMember(i, now, zone));
+  }
+
+  // deadline ASC (most-overdue first), then todayIndex ASC, then uuid ASC —
+  // the certified global-upcoming comparator restricted to deadlined rows.
+  return items.toSorted(
+    (a, b) =>
+      (a.deadline ?? "").localeCompare(b.deadline ?? "") ||
+      (todayIndexOf.get(a.uuid) ?? 0) - (todayIndexOf.get(b.uuid) ?? 0) ||
+      a.uuid.localeCompare(b.uuid),
+  );
+}
