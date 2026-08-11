@@ -27,7 +27,7 @@ Subject: the private AppleScript command `_private_experimental_ reorder to dos 
 - **Wire list**: requests may be partial; the compiled ids list is always requested-order + every remaining eligible member in current order, so placement is deterministic (O01 proved partial sends work but leave the unlisted block's relative position underdetermined).
 - **Experimental gating**: the command is undocumented → `config allowExperimental` opt-in + a per-dispatch sdef canary (`Things.sdef` must still declare `command name="_private_experimental_ reorder to dos in"`); `things doctor` reports both.
 - **Bounce safeguards**: reverse-order bouncing (each round-trip front-inserts), every leg is a fully verified `todo.update`, membership re-checked between items, placed-prefix order re-verified after each item, ≤ 10 items, clean abort with placed/remaining detail. Note: a bounce rewrites `startDate` to today for stale-dated Today members (when= normalization) — semantics-preserving in every view, but it is a stored-field change.
-- **Heading-scoped ordering stays unautomatable** (O06) — tracked in [docs/gaps.md](../gaps.md).
+- **Heading-scoped ordering stays unautomatable** (O06) — tracked in [docs/capability-matrix.md](../capability-matrix.md).
 
 ## Sidebar & project ordering (O13–O14, Phase 14a)
 
