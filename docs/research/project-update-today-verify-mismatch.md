@@ -1,5 +1,7 @@
 # `project update --when today` false verification mismatch (2026-08-10)
 
+> **FIXED in PR #440 (2026-08-11, branch `mg/when-today-verify-fix`).** Implemented the proposed fix (option 1, predicate form): the symbolic `when: today` UPDATE verify now asserts the arrived-date predicate `startDate != null && startDate <= today` (a new JSON-serializable `satisfies`/`FieldPredicate` form on `src/write/verify/delta.ts`, selected by a `whenAssertions({ mode: "update" })` flag) for both `todo.update` and `project.update`; adds and explicit ISO dates keep exact equality, and `when: evening` is unchanged (evening is date-anchored to today exactly, so exact equality is correct there). The full 5-case matrix below is covered for both update ops and both add ops. The report content is retained unchanged for the record.
+
 ## Summary
 
 A production field observation found a false `verify-failed:mismatch` after a successful project update. An open to-do already in Today was first converted to a project successfully. A subsequent `project update` changed its title, notes, deadline, and symbolic schedule to `today`. Things saved every requested semantic property and kept the project in Today, but preserved the project's already-arrived historical `startDate` instead of normalizing that storage byte to the current date.
