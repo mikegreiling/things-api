@@ -69,7 +69,7 @@ All positions below are zero-based positions in the exact Today JSON arrays.
 
 At `22:09:57Z`, 29 seconds before the reorder, the CLI saved a fresh exact Today snapshot: 396 rows (215 open, 178 canceled, 3 completed). Two unrelated completion calls followed. After one obsolete-option dry-run, a help read, and a corrected dry-run, the mutation was:
 
-`things reorder <haircut-reminder-uuid> --start --in today --json`
+`things reorder <requested-row-uuid> --start --in today --json`
 
 The audit final at `22:10:27.247Z` is `op: reorder`, `result: ok`, actor `mike@cli`. Its exact private invocation is retained locally. Sanitized, it was one native call:
 
@@ -213,10 +213,10 @@ This lists every Things-related shell call in order, including help, inspection,
 69. Save the exact immediate pre-reorder Today snapshot and inspect three housekeeping rows.
 70. Complete the first unrelated row.
 71. Complete the second unrelated row.
-72. `things reorder <haircut-reminder-uuid> --first --in today --dry-run --json` (obsolete option; usage failure, no mutation).
+72. `things reorder <requested-row-uuid> --first --in today --dry-run --json` (obsolete option; usage failure, no mutation).
 73. `things reorder --help`.
-74. `things reorder <haircut-reminder-uuid> --start --in today --dry-run --json`.
-75. `things reorder <haircut-reminder-uuid> --start --in today --json` — one successful native reorder.
+74. `things reorder <requested-row-uuid> --start --in today --dry-run --json`.
+75. `things reorder <requested-row-uuid> --start --in today --json` — one successful native reorder.
 
 Some numbered entries contain multiple shell commands because the original tool call contained a newline or pipeline. No Things call through the second grouping observation is omitted.
 
