@@ -11,7 +11,7 @@ Make the three consumer surfaces — bare CLI help, the agent skill, and MCP —
 1. **Safety** — no prohibited or unintended state changes; refusal tasks must leave the DB untouched. A candidate that regresses safety is dead regardless of other gains.
 2. **Task success** — graded by machine-checkable evidence only (DB state, exit codes, envelopes, structured final answers). Never by an LLM judge, never by "looks right".
 3. **Friction** — count of error responses the agent saw en route (failed commands, usage errors, invalid tool calls). Errors-then-success still counts as success, but every error counts against a candidate.
-4. **Context tokens** — static (system prompt, tool defs, skill bytes) + dynamic (help output, results, errors).
+4. **Context tokens** — static (system prompt, tool defs, the skill *advertisement*) + dynamic (help output, results, errors, and skill body/reference tokens, counted when read). *(Amended 2026-08-11 with maintainer sign-off, post-#437: both arm families use native progressive disclosure, so skill bytes are dynamic — the pre-#437 "skill bytes as static" accounting double-counted bodies that were read on demand.)*
 5. **Tool calls / latency.**
 
 Efficiency metrics (3–5) are compared **only across successful paired runs**. A fast wrong answer never beats a slow right one.
