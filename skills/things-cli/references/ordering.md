@@ -58,6 +58,8 @@ A Today/Evening member has TWO order slots: its slot in the Today VIEW (`todayIn
 - `--in someday` / `--in anytime` / a container ref on a same-day forecast set reorders its CONTAINER index (its someday/anytime list order), never the day-block — the explicit axis is honored, not overridden by the day route.
 - Forcing the container index axis on a Today/Evening member PRESERVES the Today/Evening flag — a flag-safe move protocol routes it off the de-Today path. Only the someday/inbox loose axes still refuse a flagged member (their re-entry cannot preserve the flag).
 
+**A Today reorder preserves the rest of Today's grouping.** The Today view groups rows by the day each ENTERED Today (its entry cohort), newest first, then manual order within a cohort. The app's native Today reorder can only pull a named row up to *today*'s cohort, so `things reorder` composes the MINIMAL wire that realizes your placement — it names only what must move, and every other Today row keeps its entry cohort and its visible position untouched. A `--first`/`--start` moves the named row(s) to the visible top, re-dating only THEIR entry cohort to today (inherent, expected). A `--before`/`--after`/`--end` that reaches across the grouping has to name the co-listed rows ABOVE the drop point too, which re-stamps THEIR entry cohort to today (changing only their Today grouping, never their schedule) — the result `warnings` + `--dry-run` disclose how many co-listed rows that is, so a broad cohort re-date is never silent. (A container reorder — project/area/heading/inbox/someday — has no entry-cohort dimension, so this note is Today/Evening-only.)
+
 ## Mixed-stage move placement
 
 A `move` selection spanning stage sub-buckets (anytime + scheduled + someday + templates):

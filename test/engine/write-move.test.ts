@@ -1234,9 +1234,12 @@ describe("rule 5 guaranteed/app-default/prohibited split (REORDGAPS verdicts)", 
     );
     expect(r.kind).toBe("move-ok");
     if (r.kind === "move-ok") expect(r.placementClass).toBe("guaranteed");
-    // Both reranked on the Today (todayIndex) axis, in the requested order — the
-    // mixed wire list [project, to-do] was compiled and sent.
-    expect(indexOrder([proj, todo], "todayIndex")).toEqual([1, 2]);
+    // The mixed to-do+project block reordered on the Today (todayIndex) axis in the
+    // requested order — the project was accepted intermixed (no kind refusal). TODWIRE:
+    // the wire is now MINIMAL, so only what must move is renamed (here the project
+    // front-inserts above the to-do); the invariant is the resulting ORDER.
+    const [projIdx, todoIdx] = indexOrder([proj, todo], "todayIndex");
+    expect(projIdx).toBeLessThan(todoIdx as number);
   });
 
   it("the mixed-kind relaxation is Today-only — a project OUTSIDE the Today bucket still refuses", async () => {
@@ -3151,7 +3154,10 @@ describe("reorder global-axis kind intermix (day/Today/Evening — unchanged)", 
       { uuids: [proj, todo], position: { at: "first" }, in: "today" },
     );
     expect(r.kind).toBe("move-ok");
-    expect(indexOrder([proj, todo], "todayIndex")).toEqual([1, 2]);
+    // Mixed to-do+project accepted (no kind refusal); the project front-inserts above
+    // the to-do in the requested order (minimal wire — TODWIRE).
+    const [projIdx, todoIdx] = indexOrder([proj, todo], "todayIndex");
+    expect(projIdx).toBeLessThan(todoIdx as number);
   });
 
   it("--in upcoming intermixes a forecast to-do + forecast project on one day-block", async () => {

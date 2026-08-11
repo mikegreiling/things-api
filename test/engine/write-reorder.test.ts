@@ -134,12 +134,21 @@ function bounceVector(hooks: { afterLeg?: (payload: string, db: DatabaseSync) =>
   return { vector, calls };
 }
 
-function seedToday(title: string, todayIndex: number, opts: { evening?: boolean } = {}): string {
+function seedToday(
+  title: string,
+  todayIndex: number,
+  opts: { evening?: boolean; startDate?: string; cohort?: string } = {},
+): string {
   return seedTodo(fixture.db, {
     title,
     start: "active",
-    startDate: TODAY_ISO,
+    // A row scheduled on an OLDER day is still a Today member (startDate <= today);
+    // its entry cohort is COALESCE(tiRef, startDate) — so `cohort` (an explicit
+    // todayIndexReferenceDate) or an older `startDate` manufactures a distinct
+    // cohort for the multi-cohort TODWIRE tests.
+    startDate: opts.startDate ?? TODAY_ISO,
     todayIndex,
+    ...(opts.cohort !== undefined && { todayIndexReferenceDate: opts.cohort }),
     ...(opts.evening !== undefined && { evening: opts.evening }),
   });
 }
@@ -156,20 +165,82 @@ function ranks(uuids: string[], column: "todayIndex" | `"index"` = "todayIndex")
 }
 
 describe("native reorder (private command through the pipeline)", () => {
-  it("today scope: extends a partial request to the full wire list and verifies", async () => {
+  it("today scope: sends the MINIMAL visible-order wire — names only what must move (TODWIRE)", async () => {
+    // Single cohort A,B,C at visible order [A, B, C] (todayIndex 10,20,30).
     const a = seedToday("A", 10);
     const b = seedToday("B", 20);
     const c = seedToday("C", 30);
     const { vector, calls } = nativeVector();
+    // Front-insert C then A: target visible [C, A, B]. Removing C leaves [A, B]
+    // already in current relative order, so the MINIMAL wire names ONLY C — the OLD
+    // full wire "C,A,B" would needlessly re-stamp A and B's entry cohorts.
     const result = await runReorder(deps([vector]), { scope: "today", uuids: [c, a] });
     expect(result.kind).toBe("ok");
-    // Wire list = requested first, remaining member (b) after, in one call.
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain(`list "Today"`);
-    expect(calls[0]).toContain(`with ids "${c},${a},${b}"`);
+    expect(calls[0]).toContain(`with ids "${c}"`);
+    // B (never named) is not in the wire.
+    expect(calls[0]).not.toContain(b);
     const [rc, ra, rb] = ranks([c, a, b]);
     expect(rc).toBeLessThan(ra as number);
     expect(ra).toBeLessThan(rb as number);
+    // A front-insert names only movees (which re-stamp inherently) — NO non-movee
+    // re-stamp warning.
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("re-stamp")) ?? false).toBe(false);
+    }
+  });
+
+  it("today scope multi-cohort: a single-ID front-insert names ONLY the movee (unnamed cohorts untouched)", async () => {
+    // Three cohorts (07-03/04/05 by startDate; tiRef defaults to startDate). Visible
+    // order groups by cohort DESC then todayIndex ASC: [NEW, MID, OLD].
+    const oldRow = seedToday("OLD", -100, { startDate: "2026-07-03" });
+    const mid = seedToday("MID", -200, { startDate: "2026-07-04" });
+    const neu = seedToday("NEW", -300, { startDate: "2026-07-05" });
+    // The pre census computes the minimal wire directly.
+    const pre = computeReorderPre(fixture.db, { scope: "today", uuids: [oldRow] }, null, NOW);
+    // OLD front-inserts to the visible top; every other row keeps its cohort/order,
+    // so the wire names ONLY OLD (not MID/NEW).
+    expect(pre.todayWire).toEqual([oldRow]);
+    expect(pre.todayVisibleOrder).toEqual([neu, mid, oldRow]);
+    expect(pre.todayRestampNonMovees).toEqual([]); // only the movee re-stamps (inherent)
+  });
+
+  it("today scope multi-cohort: an anchored placement names the visible PREFIX + discloses the cohort re-stamp", async () => {
+    // Visible order [NEW, MID, OLD]. Place OLD directly AFTER NEW → target visible
+    // [NEW, OLD, MID]. The caller passes the FULL spliced target order (what
+    // buildReorderOrder emits for --after), named = the movee (OLD).
+    const oldRow = seedToday("OLD", -100, { startDate: "2026-07-03" });
+    const mid = seedToday("MID", -200, { startDate: "2026-07-04" });
+    const neu = seedToday("NEW", -300, { startDate: "2026-07-05" });
+    const pre = computeReorderPre(
+      fixture.db,
+      { scope: "today", uuids: [neu, oldRow, mid], named: [oldRow] },
+      null,
+      NOW,
+    );
+    // Because the native reorder can only RAISE a named row's cohort to today, the
+    // minimal wire must name the visible prefix down through the insertion point
+    // (NEW) plus the movee (OLD): [NEW, OLD]; MID (the untouched tail) stays out.
+    expect(pre.todayWire).toEqual([neu, oldRow]);
+    // NEW is a NON-movee that had to be named → its cohort re-stamps; disclosed.
+    expect(pre.todayRestampNonMovees).toEqual([neu]);
+  });
+
+  it("today scope: an anchored reorder DISCLOSES the non-movee cohort re-stamp on the ok result", async () => {
+    const oldRow = seedToday("OLD", -100, { startDate: "2026-07-03" });
+    const mid = seedToday("MID", -200, { startDate: "2026-07-04" });
+    const neu = seedToday("NEW", -300, { startDate: "2026-07-05" });
+    const { vector } = nativeVector();
+    const result = await runReorder(deps([vector]), {
+      scope: "today",
+      uuids: [neu, oldRow, mid],
+      named: [oldRow],
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.warnings?.some((w) => w.includes("re-stamp"))).toBe(true);
+    }
   });
 
   it("project scope: uuid specifier, un-headed children only", async () => {

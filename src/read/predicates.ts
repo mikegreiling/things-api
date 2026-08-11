@@ -104,3 +104,18 @@ export const CONTAINER_UNTRASHED = `(t.heading IS NULL OR EXISTS (
      SELECT 1 FROM TMTask hh WHERE hh.uuid = t.heading AND hh.trashed = 0))
  AND (${EFF_PROJECT} IS NULL OR EXISTS (
      SELECT 1 FROM TMTask cc WHERE cc.uuid = ${EFF_PROJECT} AND cc.trashed = 0))`;
+
+/**
+ * The Today/Evening VISIBLE comparator (today-order-research; the {@link ../views.ts}
+ * `todayView` ORDER BY). ONE law, ONE implementation — the reader's Today
+ * ordering AND the reorder census's visible-order enumeration (the today-axis
+ * minimal-wire builder, src/write/pre-state.ts) share it, so the wire the engine
+ * sends to `_private_experimental_ reorder to dos in list "Today"` can never
+ * drift from the order the reader renders (TODWIRE, [docs/lab/todwire-partial-wires-today.md]).
+ * `p` prefixes the columns (`"t."` for the reader's aliased rows, `""` for the
+ * bare-TMTask reorder census). `startBucket` first (today above evening), then the
+ * newest ENTRY cohort (`COALESCE(tiRef, startDate, deadline) DESC`), then the
+ * within-cohort manual order (`todayIndex ASC`), then the observed `uuid` tiebreak.
+ */
+export const todayOrderBy = (p = ""): string =>
+  `${p}startBucket ASC, COALESCE(${p}todayIndexReferenceDate, ${p}startDate, ${p}deadline) DESC, ${p}todayIndex ASC, ${p}uuid ASC`;

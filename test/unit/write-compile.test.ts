@@ -386,6 +386,9 @@ describe("resolution-timestamp op compilation goldens (§2/§5)", () => {
       projectMembers: [],
       mixedTypes: false,
       wireList: ["A", "B", "C"],
+      todayWire: null,
+      todayVisibleOrder: null,
+      todayRestampNonMovees: [],
       resolvedMembers: [],
     };
     const inv = COMMANDS["reorder"].compile(

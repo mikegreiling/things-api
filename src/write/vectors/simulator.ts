@@ -592,6 +592,33 @@ function applyReorder(sim: DatabaseSync, params: ReorderParams, ctx: ApplyCtx): 
     admitResolved: true,
     zone: ctx.zone,
   });
+  // TODWIRE — the `today` scope's native `list "Today"` wire is MINIMAL and it
+  // FRONT-INSERTS: the named block gets a fresh `todayIndex` min-space BELOW every
+  // current Today member AND every named row's `todayIndexReferenceDate` is
+  // re-stamped → today (EXP1/EXP4), while unnamed rows stay byte-untouched (their
+  // cohorts + positions preserved). Model that directly, so the simulator's Today
+  // order matches the native app for both partial and full wires.
+  if (params.scope === "today" && pre.todayWire !== null) {
+    const wire = pre.todayWire;
+    if (wire.length === 0) return;
+    const min =
+      (
+        sim
+          .prepare(
+            "SELECT MIN(todayIndex) AS m FROM TMTask WHERE trashed = 0 AND status = 0 " +
+              "AND type IN (0, 1) AND startBucket = 0 AND startDate IS NOT NULL AND start IN (1, 2)",
+          )
+          .get() as { m: number | null }
+      ).m ?? 0;
+    const base = min - wire.length;
+    const packedToday = encodePackedDate(localToday(now));
+    for (let i = 0; i < wire.length; i++) {
+      sim
+        .prepare("UPDATE TMTask SET todayIndex = ?, todayIndexReferenceDate = ? WHERE uuid = ?")
+        .run(base + i, packedToday, wire[i] as string);
+    }
+    return;
+  }
   const wire = pre.wireList;
   if (wire.length === 0) return; // a guard-admitted request always has members
   const col = pre.key === "todayIndex" ? "todayIndex" : `"index"`;

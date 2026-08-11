@@ -9,6 +9,7 @@ import type { AnyTask, TaskStatus, TaskType, Todo } from "../model/entities.ts";
 import { TASK_STATUS_FROM_DB } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { logBoundary } from "../read/log-boundary.ts";
+import { todayOrderBy } from "../read/predicates.ts";
 import { deadNameMatchHint, resolveHeadingRef, resolveNamedRef } from "../read/queries.ts";
 import type { ContainerRef, HeadingPlacement, ReorderParams } from "./operations.ts";
 
@@ -71,6 +72,38 @@ export interface ReorderPre {
   mixedTypes: boolean;
   /** Full wire list: requested order first, remaining members after. */
   wireList: string[];
+  /**
+   * TODWIRE — the MINIMAL native `list "Today"` wire (today scope only; null on
+   * every other scope). The native reorder re-stamps every NAMED row's
+   * `todayIndexReferenceDate → today` and rewrites its `todayIndex`, so the OLD
+   * full {@link wireList} fused ALL entry-date cohorts and rewrote the whole
+   * visible order on any subset reorder (MOVPLC). The today axis obeys the same
+   * partial-wire law as headings — `result = [named in wire order] ++ [unnamed in
+   * prior VISIBLE order]` — so the smallest wire realizing the request is
+   * `minimalReorderWire(currentVisibleOrder, targetVisibleOrder)` computed on the
+   * READER's Today comparator (share {@link todayOrderBy}, one law). The native
+   * compile ([commands.ts]) sends THIS; unnamed rows stay byte-untouched, their
+   * cohorts intact. Empty wire (request already satisfied) falls back to the full
+   * target order so the invocation is concrete (mirrors the heading builder).
+   */
+  todayWire: string[] | null;
+  /**
+   * TODWIRE — the current Today VISIBLE order (open bucket-0 members, reader
+   * comparator; today scope only, else null). {@link buildReorderOrder} splices an
+   * anchored placement against THIS (not the raw `todayIndex` order) so the target
+   * is the visible-order target the minimal wire realizes.
+   */
+  todayVisibleOrder: string[] | null;
+  /**
+   * TODWIRE disclosure (#V11 pattern) — the NON-movee rows the {@link todayWire}
+   * must name to realize a `--before`/`--after`/`--last` placement (the visible
+   * prefix down to the insertion point). Re-ranking each re-stamps its
+   * `todayIndexReferenceDate → today`, silently collapsing its entry cohort — so
+   * the result + `--dry-run` disclose the count. Empty for a `--first`/`--start`
+   * wire (names only the movees, which re-stamp inherently — a doc/help note, not
+   * a warning). Empty on every non-today scope.
+   */
+  todayRestampNonMovees: string[];
   /**
    * Requested movees that are UNSWEPT-RESOLVED to-dos ADMITTED as members under
    * the LOGSORT ORD-13 permit (only ever non-empty on the pure-native `index`
@@ -1550,6 +1583,45 @@ export function computeReorderPre(
       .map((m) => m.uuid),
   ];
 
+  // TODWIRE — the today-axis MINIMAL wire. The native `list "Today"` reorder
+  // re-stamps every NAMED row's `todayIndexReferenceDate → today` and rewrites its
+  // `todayIndex`, so the full `wireList` above (raw `todayIndex` order) fused every
+  // entry-date cohort and rewrote the whole visible order on ANY subset reorder
+  // (MOVPLC/ORD-20). The today axis obeys the same partial-wire law as headings —
+  // `result = [named in wire order] ++ [unnamed in prior VISIBLE order]` (TODWIRE
+  // EXP1/EXP2) — so the smallest wire realizing the request is
+  // `minimalReorderWire(currentVisibleOrder, targetVisibleOrder)` on the reader's
+  // Today comparator. currentVisibleOrder = the open bucket-0 members in visible
+  // order (unswept-canceled / stale-evening rows are never named and stay put); the
+  // target = the requested prefix (`params.uuids`) followed by the remaining members
+  // in visible order (mirrors the full-`wireList` model, but visible not raw).
+  let todayVisibleOrder: string[] | null = null;
+  let todayWire: string[] | null = null;
+  let todayRestampNonMovees: string[] = [];
+  if (params.scope === "today") {
+    todayVisibleOrder = (
+      db
+        .prepare(
+          `SELECT uuid FROM TMTask
+           WHERE trashed = 0 AND ${CONTAINER_UNTRASHED} AND status = 0 AND ${NOT_TEMPLATE_ROW}
+             AND type IN (0, 1) AND startDate IS NOT NULL AND startDate <= ? AND start IN (1, 2)
+             AND startBucket = 0
+           ORDER BY ${todayOrderBy()}`,
+        )
+        .all(packedToday) as { uuid: string }[]
+    ).map((r) => r.uuid);
+    const requestedInBucket = params.uuids.filter((u) => todayVisibleOrder?.includes(u));
+    const requestedSet = new Set(requestedInBucket);
+    const targetVisibleOrder = [
+      ...requestedInBucket,
+      ...todayVisibleOrder.filter((u) => !requestedSet.has(u)),
+    ];
+    const minimal = minimalReorderWire(todayVisibleOrder, targetVisibleOrder);
+    todayWire = minimal.length > 0 ? minimal : [...targetVisibleOrder];
+    const namedMovees = new Set(params.named ?? params.uuids);
+    todayRestampNonMovees = todayWire.filter((u) => !namedMovees.has(u));
+  }
+
   return {
     key,
     members: members.map((m) => ({
@@ -1565,6 +1637,9 @@ export function computeReorderPre(
     projectMembers,
     mixedTypes,
     wireList,
+    todayWire,
+    todayVisibleOrder,
+    todayRestampNonMovees,
     resolvedMembers,
   };
 }
