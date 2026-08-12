@@ -114,6 +114,7 @@ Recurring, autonomously-runnable encodings of the locked verdicts live in `lab/s
 | Shortcuts vector & proxies | [lab/s-campaign-results.md](../lab/s-campaign-results.md); build cards [lab/l5-build-cards.md](../lab/l5-build-cards.md); signed files `shortcuts/` (extraction pipeline: roadmap §A) |
 | Deletes (heterogeneous!) | [lab/a-suite-results.md](../lab/a-suite-results.md) A24–A27, s-campaign P12, oddities 5i |
 | Deletion records / tombstones (`TMTombstone`) — when they appear, `deletionDate`, `changes --since` viability | [lab/tomb1-results.md](../lab/tomb1-results.md) — TOMB1 (`leavesTombstone`-gated; not a general deletion log) |
+| `userModificationDate` (umd) footprint of tag + area lifecycle ops; the writable `modification date` capture-and-restore lever; status-dependent area-delete cascade | [lab/tagmod-tag-area-umd.md](../lab/tagmod-tag-area-umd.md) — TAGMOD (tag apply BUMPS members, rename/delete SILENT; tags/areas have no umd column; `set modification date` restore recipe — sync-unsafe until SYNC2) |
 | DB schema ↔ UI meaning | [atlas/schema-v26.md](../atlas/schema-v26.md) |
 | Harness mechanics / how probes run | [lab/harness.md](../lab/harness.md) |
 | The bundled `thingscli` binary (what it is — an app-settings utility, not a task API; the `firstAppLaunchDate` trial-clock + `THCDataFolderCurrentDataFolderPath` reads the lab runner relies on) | [lab/thingscli-probe.md](../lab/thingscli-probe.md) |
