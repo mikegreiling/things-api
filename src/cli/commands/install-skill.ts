@@ -34,9 +34,11 @@ import type { Command } from "commander";
 
 import { ExitCode, okEnvelope, simFenceActive, type EnvelopeMeta } from "../../index.ts";
 import {
+  appendDevBugReportingSection,
   bundledSkillDir,
   compareSemver,
   installedSkillVersion,
+  isDevVersion,
   isLegacyDevStamp,
   resolveHome,
   SKILL_NAME,
@@ -97,7 +99,13 @@ export function withStampedSkillDir<T>(srcDir: string, version: string, fn: (dir
     const staged = join(tmp, SKILL_NAME);
     cpSync(srcDir, staged, { recursive: true });
     const mdPath = join(staged, "SKILL.md");
-    writeFileSync(mdPath, stampSkillVersion(readFileSync(mdPath, "utf8"), version));
+    let md = stampSkillVersion(readFileSync(mdPath, "utf8"), version);
+    // A dev checkout (`-dev` version) gets the "Filing bugs and feature requests"
+    // CTA appended; a published install (stamped release version) never does.
+    // Done at the source copy so every location the installer materializes —
+    // canonical, ~/.claude, and any skills-CLI-detected agent dir — inherits it.
+    if (isDevVersion(version)) md = appendDevBugReportingSection(md);
+    writeFileSync(mdPath, md);
     return fn(staged);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

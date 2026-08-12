@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a defect in things-api — the CLI, the MCP server, or the library.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!CAUTION]
+        > **This is a PUBLIC issue tracker.** Never include real data from a Things database — task titles, notes, project or area names, tags, or screenshots of real content. Reproduce the problem with synthetic, invented examples only. Reports containing personal data may be edited or removed.
+
+  - type: input
+    id: version
+    attributes:
+      label: things-api version
+      description: Output of `things --version`.
+      placeholder: e.g. 0.15.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where the defect showed up.
+      options:
+        - CLI (`things …`)
+        - MCP (tool call)
+        - Library (programmatic API)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or calls that trigger the behavior. Synthetic data only.
+      placeholder: |
+        1. things todo add "Synthetic example"
+        2. things todo move <ref> --to-project "Made-up Project"
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error output
+      description: Any error message, stack trace, or nonzero exit code. Redact real data.
+      render: shell
+    validations:
+      required: false

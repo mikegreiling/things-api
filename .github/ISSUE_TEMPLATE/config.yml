@@ -1,0 +1,3 @@
+# Blank issues stay enabled so coding agents can file non-interactively via
+# `gh issue create --repo mikegreiling/things-api --title … --body …`.
+blank_issues_enabled: true
