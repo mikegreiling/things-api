@@ -13,7 +13,8 @@ import {
   type TaskRow,
 } from "../model/mappers.ts";
 import { decodeRecurrenceRule } from "../model/recurrence.ts";
-import { encodePackedDate, localToday } from "../model/dates.ts";
+import { decodePackedDate, encodePackedDate, localToday } from "../model/dates.ts";
+import type { RepeatContext } from "../model/entities.ts";
 import {
   fetchChecklistRows,
   fetchTagsForTasks,
@@ -73,7 +74,51 @@ function materializeOne(db: DatabaseSync, row: TaskRow, packedToday: number): An
     const latest = latestInstanceUuid(db, row.uuid);
     if (latest !== null) entity.repeating.latestInstance = latest;
   }
+  // The mirror of the template's Show-Latest join, from the INSTANCE side: the
+  // GUI's lower-corner repeat caption ("Repeats on Aug 19" / "Repeats 1 day after
+  // completion") is the instance's TEMPLATE context. Resolve `templateUuid` back
+  // to the template row and read its rule + projected next occurrence, so the
+  // wire `repeats` sibling of `instanceOf` (and the TTY line) render from the same
+  // decoded rule the template card emits — one recurrence vocabulary, byte-
+  // consistent. Detail-only (never on list/card rows — token economy).
+  if (entity.repeating.isInstance && entity.repeating.templateUuid !== null) {
+    const ctx = repeatContextFor(db, entity.repeating.templateUuid);
+    if (ctx !== null) entity.repeating.repeats = ctx;
+  }
   return entity;
+}
+
+/**
+ * Join a repeating INSTANCE'S template context: fetch the template row by uuid,
+ * decode its rule, and project its next occurrence. Returns null on a DANGLING
+ * FK (the template row is gone — the instance still renders, just without the
+ * caption) OR when the template carries nothing surfaceable. `next` is the
+ * template's app-materialized next occurrence and rides ONLY for a FIXED rule
+ * (after-completion has no successor date until the current instance completes —
+ * absence is the honest expression; the mode stays readable from `rule.type`).
+ * The `paused` flag is surfaced so the card can render honestly.
+ */
+function repeatContextFor(db: DatabaseSync, templateUuid: string): RepeatContext | null {
+  const tmpl = fetchTaskByUuid(db, templateUuid);
+  if (tmpl === null) return null; // dangling FK — no caption, no crash
+  const ctx: RepeatContext = {};
+  if (tmpl.rt1_recurrenceRule !== null) {
+    try {
+      ctx.rule = decodeRecurrenceRule(tmpl.rt1_recurrenceRule);
+    } catch {
+      // Undecodable rule (future Things build) — mirror the template card and
+      // surface the instance without a decoded rule rather than failing.
+    }
+  }
+  // FIXED mode only: the template's projected next occurrence IS the "Aug 19".
+  if (ctx.rule?.type === "fixed") {
+    const next = decodePackedDate(tmpl.rt1_nextInstanceStartDate);
+    if (next !== null) ctx.next = next;
+  }
+  if (tmpl.rt1_instanceCreationPaused === 1) ctx.paused = true;
+  // Presence-keyed: an instance of a template with no decodable rule, no next,
+  // and not paused carries no caption — omit `repeats` entirely (like a dangling FK).
+  return ctx.rule === undefined && ctx.next === undefined && ctx.paused === undefined ? null : ctx;
 }
 
 export function checklistFor(db: DatabaseSync, taskUuid: string): ChecklistItem[] {

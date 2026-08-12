@@ -23,6 +23,7 @@ import { projectView } from "../../src/read/project-view.ts";
 import type { AreaView } from "../../src/read/area-view.ts";
 import type { GroupBlock } from "../../src/contracts.ts";
 import { byUuid } from "../../src/read/detail.ts";
+import type { Todo } from "../../src/model/entities.ts";
 import { renderAreaView } from "../../src/cli/commands/area.ts";
 import { renderProjectView } from "../../src/cli/commands/project.ts";
 import { renderDetail } from "../../src/cli/commands/todo.ts";
@@ -72,6 +73,24 @@ afterEach(() => {
 const NOW = new Date("2026-07-05T12:00:00Z");
 
 const stopAt = (iso: string) => new Date(iso).getTime() / 1000;
+
+/** Wrap plist dict entries into a full recurrence-rule XML blob (seed helper input). */
+const ruleXml = (entries: string): string =>
+  `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${entries}</dict></plist>`;
+/** A fixed weekly-on-Sunday rule (tp=0), interval 1 — instances land on a set date. */
+const FIXED_WEEKLY_XML = ruleXml(
+  `<key>fa</key><integer>1</integer><key>fu</key><integer>256</integer>` +
+    `<key>of</key><array><dict><key>wd</key><integer>0</integer></dict></array>` +
+    `<key>rc</key><integer>0</integer><key>rrv</key><integer>4</integer>` +
+    `<key>tp</key><integer>0</integer><key>ts</key><integer>0</integer>`,
+);
+/** An after-completion daily rule (tp=1), interval 1 — no successor date until completed. */
+const AFTER_COMPLETION_DAILY_XML = ruleXml(
+  `<key>fa</key><integer>1</integer><key>fu</key><integer>16</integer>` +
+    `<key>of</key><array><dict><key>dy</key><integer>0</integer></dict></array>` +
+    `<key>rc</key><integer>0</integer><key>rrv</key><integer>4</integer>` +
+    `<key>tp</key><integer>1</integer><key>ts</key><integer>0</integer>`,
+);
 
 /** A fixed render-clock instant for the zone-audit regression (host-zone-independent). */
 const ZONE_AUDIT_NOW = () => new Date("2026-08-05T00:00:00Z");
@@ -1097,6 +1116,88 @@ describe("inherited-tags display (todo show / project show)", () => {
     expect(item.inheritedTags).toEqual([]);
     // Round-trips JSON without losing the key.
     expect(JSON.parse(JSON.stringify(item))).toHaveProperty("inheritedTags", []);
+  });
+});
+
+describe("instance repeat context — the detail card's lower-corner caption (todo show)", () => {
+  afterEach(() => setRenderClock({ now: () => new Date(), zone: undefined }));
+
+  /** Seed a template + one spawned instance; return the instance uuid + entity. */
+  const seedSeries = (ruleXmlBlob: string, over: Record<string, unknown> = {}) => {
+    fixture = buildFixtureDb();
+    const template = seedTodo(fixture.db, {
+      title: "Rotate the backups (template)",
+      recurrenceRuleXml: ruleXmlBlob,
+      ...over,
+    });
+    const instance = seedTodo(fixture.db, {
+      title: "Rotate the backups",
+      repeatingTemplate: template,
+    });
+    return { template, instance, item: byUuid(fixture.db, instance) as Todo | null };
+  };
+
+  it("FIXED: card shows `repeats: on <date>` and the entity carries the joined context", () => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    const { item } = seedSeries(FIXED_WEEKLY_XML, { nextInstanceStartDate: "2026-08-19" });
+    // The mirror join lands on the entity (proves detail.ts), FIXED mode → `next`.
+    expect(item?.repeating.repeats?.rule?.type).toBe("fixed");
+    expect(item?.repeating.repeats?.next).toBe("2026-08-19");
+    const lines = renderDetail(item).join("\n");
+    expect(lines).toContain("repeating: instance of "); // the uuid link stays the write handle
+    expect(lines).toContain("repeats: on Aug 19");
+  });
+
+  it("AFTER-COMPLETION: card shows `repeats: N day(s) after completion`, no `next`", () => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    const { item } = seedSeries(AFTER_COMPLETION_DAILY_XML);
+    expect(item?.repeating.repeats?.rule?.type).toBe("after-completion");
+    expect(item?.repeating.repeats?.next).toBeUndefined(); // no successor date yet
+    const lines = renderDetail(item).join("\n");
+    expect(lines).toContain("repeats: 1 day after completion");
+  });
+
+  it("paused template appends `(paused)` to the caption", () => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    const { item } = seedSeries(FIXED_WEEKLY_XML, {
+      nextInstanceStartDate: "2026-08-19",
+      instanceCreationPaused: true,
+    });
+    expect(item?.repeating.repeats?.paused).toBe(true);
+    const lines = renderDetail(item).join("\n");
+    expect(lines).toContain("repeats: on Aug 19 (paused)");
+  });
+
+  it("dangling template FK: the instance still renders, with no `repeats:` line", () => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    fixture = buildFixtureDb();
+    const orphan = seedTodo(fixture.db, {
+      title: "Orphaned occurrence",
+      repeatingTemplate: "no-such-template-uuid",
+    });
+    const item = byUuid(fixture.db, orphan) as Todo | null;
+    expect(item?.repeating.repeats).toBeUndefined();
+    const lines = renderDetail(item).join("\n");
+    expect(lines).toContain("repeating: instance of no-such-template-uuid");
+    expect(lines).not.toContain("repeats:");
+  });
+
+  it("logged instance keeps the repeat context (harmless caption on a completed occurrence)", () => {
+    setRenderClock({ now: () => NOW, zone: "UTC" });
+    fixture = buildFixtureDb();
+    const template = seedTodo(fixture.db, {
+      title: "Rotate the backups (template)",
+      recurrenceRuleXml: FIXED_WEEKLY_XML,
+      nextInstanceStartDate: "2026-08-19",
+    });
+    const instance = seedTodo(fixture.db, {
+      title: "Rotate the backups",
+      repeatingTemplate: template,
+      status: "completed",
+      stopDate: stopAt("2026-07-01T09:00:00Z"),
+    });
+    const lines = renderDetail(byUuid(fixture.db, instance)).join("\n");
+    expect(lines).toContain("repeats: on Aug 19");
   });
 });
 

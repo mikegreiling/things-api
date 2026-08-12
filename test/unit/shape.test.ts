@@ -316,6 +316,65 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
     expect(out["when"]).toBe("2026-08-01"); // projected next occurrence = the time position
   });
 
+  it("instance detail: FIXED template context emits `repeats` {rule, next} beside `instanceOf`", () => {
+    const rule = { type: "fixed", unit: "weekly", interval: 1, offsets: [], version: 4 };
+    const detail = todo({
+      repeating: {
+        isTemplate: false,
+        isInstance: true,
+        templateUuid: "tmpl-1",
+        repeats: { rule, next: "2026-08-19" },
+      },
+    });
+    const out = shapeReadPayload("detail", detail, false) as Obj;
+    // The instance marker + write handle stays exactly as-is (R11).
+    expect(out["instanceOf"]).toBe("tmpl-1");
+    // The template's joined repeat context — `rule` byte-consistent with a
+    // template card's `repeating.rule`, `next` the fixed-mode projection.
+    expect(out["repeats"]).toEqual({ rule, next: "2026-08-19" });
+    expect("repeating" in out).toBe(false); // an instance carries no `repeating` object
+  });
+
+  it("instance detail: AFTER-COMPLETION context emits `repeats` {rule} with NO `next`", () => {
+    const rule = { type: "after-completion", unit: "daily", interval: 1, offsets: [], version: 4 };
+    const detail = todo({
+      repeating: {
+        isTemplate: false,
+        isInstance: true,
+        templateUuid: "tmpl-2",
+        // No successor date exists until the current instance completes — the
+        // mirror join leaves `next` absent (mode readable from `rule.type`).
+        repeats: { rule },
+      },
+    });
+    const out = shapeReadPayload("detail", detail, false) as Obj;
+    expect(out["repeats"]).toEqual({ rule });
+    expect("next" in (out["repeats"] as Obj)).toBe(false);
+  });
+
+  it("instance detail: paused template surfaces `paused: true` inside `repeats`", () => {
+    const rule = { type: "fixed", unit: "monthly", interval: 1, offsets: [], version: 4 };
+    const detail = todo({
+      repeating: {
+        isTemplate: false,
+        isInstance: true,
+        templateUuid: "tmpl-3",
+        repeats: { rule, next: "2026-09-01", paused: true },
+      },
+    });
+    const out = shapeReadPayload("detail", detail, false) as Obj;
+    expect(out["repeats"]).toEqual({ rule, next: "2026-09-01", paused: true });
+  });
+
+  it("instance detail: a dangling/absent template context omits `repeats` (no crash)", () => {
+    const detail = todo({
+      repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl-gone" },
+    });
+    const out = shapeReadPayload("detail", detail, false) as Obj;
+    expect(out["instanceOf"]).toBe("tmpl-gone"); // the instance still renders
+    expect("repeats" in out).toBe(false); // no context → no key
+  });
+
   it("one project key: a headed item's owning project emits under `project`", () => {
     const row = first(
       shapeReadPayload(

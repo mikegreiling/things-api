@@ -95,8 +95,11 @@
  *   state flags); presence MEANS template. The forward pointer `nextOccurrence`
  *   moved to the top-level `when` (R12 — a template's projected date IS its time
  *   position); `latestInstance` is detail-only (SL1). An INSTANCE keeps a flat
- *   `instanceOf: <templateUuid>` and no `repeating`. A plain row keeps neither.
- *   See {@link reshapeRepeatingWire}.
+ *   `instanceOf: <templateUuid>` and no `repeating`; on a DETAIL read it also
+ *   gains a sibling `repeats: {rule?, next?, paused?}` — its template's repeat
+ *   context (the GUI's lower-corner caption), `rule` byte-consistent with the
+ *   template card's `repeating.rule` and `next` the fixed-mode next occurrence. A
+ *   plain row keeps neither. See {@link reshapeRepeatingWire}.
  * - **string tags** — `tags`/`inheritedTags` become plain arrays of names.
  * - **one project key** — a headed item's owning project (formerly
  *   `headingProject`) is merged into `project`; `headingProject` never appears.
@@ -285,8 +288,16 @@ function reshapeTodos(o: Obj): void {
  *   detail-only (populated by src/read/detail.ts on `entity.repeating`);
  *   `latestInstance` is the backward pointer symmetric to `when`.
  * - **Instance** (`isInstance`) → a flat presence-keyed `instanceOf:
- *   <templateUuid>` and NO `repeating` object. Presence of `instanceOf` MEANS
- *   instance.
+ *   <templateUuid>` (the instance marker + the write handle) and, on a DETAIL
+ *   read, a sibling `repeats` object — the template's repeat CONTEXT joined onto
+ *   the instance (`{rule?, next?, paused?}`), the GUI's lower-corner "Repeats on
+ *   Aug 19" / "Repeats 1 day after completion" caption. `rule` is the SAME decoded
+ *   shape a template card emits under `repeating.rule` (one recurrence vocabulary
+ *   on the wire); `next` is the template's projected next occurrence, FIXED mode
+ *   ONLY (absent for after-completion — no successor date exists yet); `paused`
+ *   surfaces the template's paused flag. Populated by src/read/detail.ts's mirror
+ *   join; absent when the template is unresolvable (dangling FK) or carries no
+ *   caption. NO `repeating` object on an instance.
  * - **Plain** (neither) → neither key.
  */
 function reshapeRepeatingWire(o: Obj): void {
@@ -305,6 +316,17 @@ function reshapeRepeatingWire(o: Obj): void {
     o["repeating"] = out;
   } else if (r["isInstance"] === true) {
     if (typeof r["templateUuid"] === "string") o["instanceOf"] = r["templateUuid"];
+    // The instance's TEMPLATE context (detail-only mirror join). Presence-keyed:
+    // the whole `repeats` object is omitted unless it carries at least one fact.
+    const ctx = r["repeats"];
+    if (ctx !== null && typeof ctx === "object") {
+      const c = ctx as Obj;
+      const out: Obj = {};
+      if (c["rule"] != null) out["rule"] = c["rule"]; // same shape as a template card's `repeating.rule`
+      if (typeof c["next"] === "string") out["next"] = c["next"]; // FIXED mode only
+      if (c["paused"] === true) out["paused"] = true;
+      if (Object.keys(out).length > 0) o["repeats"] = out;
+    }
   }
 }
 

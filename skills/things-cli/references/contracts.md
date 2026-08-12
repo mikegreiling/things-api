@@ -60,4 +60,4 @@ Full rule vocabulary and worked examples: **`things help repeating`**. The stabl
 - Repeating operations require `--allow-disruptive` (including dry runs) and a required `--interval <n>` alongside `--frequency` (`--interval 1` for every unit).
 - New repeater: add the item first (`things todo add "<title>" --json`), then `things todo make-repeating <returned-uuid> --frequency <f> --interval 1 [--weekdays …] --allow-disruptive`.
 - Multiple weekdays go in ONE rule (`--weekdays monday,thursday,friday`) — never create two repeaters for "every Thursday and Friday".
-- `things show <ref> --json` on an occurrence exposes `repeating.templateUuid` — use it as the `<ref>` for `reschedule-repeat`.
+- `things show <ref> --json` on an occurrence exposes `instanceOf` (the `<templateUuid>`) — use it as the `<ref>` for `reschedule-repeat`. That detail read also carries `repeats: {rule?, next?, paused?}`, the instance's joined template context (the GUI's lower-corner "Repeats on …" caption); `repeats.next` is the projected next occurrence for a fixed rule (absent for after-completion).

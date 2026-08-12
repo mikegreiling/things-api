@@ -145,6 +145,7 @@ export type {
   IsoDateGroup,
   Project,
   Ref,
+  RepeatContext,
   RepeatingInfo,
   StartState,
   Tag,

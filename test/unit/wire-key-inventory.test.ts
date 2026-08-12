@@ -56,6 +56,7 @@ const EMISSION_DERIVED = new Set<string>([
   "todos",
   "repeating",
   "instanceOf",
+  "repeats",
   "projectIsTemplate",
   "areaUuid",
   "projectUuid",
@@ -206,7 +207,17 @@ describe("wire-key inventory lock (derived substrate segregation)", () => {
         today: true,
         reminder: "09:00", // top-level live reminder ⇒ the `reminder` wire key
         project: { uuid: "proj-1", title: "Q3", isRepeatingTemplate: true }, // ⇒ projectIsTemplate
-        repeating: { isTemplate: false, isInstance: true, templateUuid: "tmpl-1" }, // ⇒ instanceOf
+        repeating: {
+          isTemplate: false,
+          isInstance: true,
+          templateUuid: "tmpl-1", // ⇒ instanceOf
+          // ⇒ repeats (the template's joined repeat context, detail-only).
+          repeats: {
+            rule: { type: "fixed", unit: "weekly", interval: 1 },
+            next: "2099-01-08",
+            paused: true,
+          },
+        },
       }),
       "detail",
       true,

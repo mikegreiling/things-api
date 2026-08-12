@@ -1254,6 +1254,33 @@ describe("things MCP server", () => {
     expect("repeating" in instance).toBe(false);
   });
 
+  it("get_item — an INSTANCE's `repeats` context rides the shared detail shaping (MCP parity)", async () => {
+    // A FIXED weekly rule (tp=0) so the mirror join decodes it and projects `next`.
+    const FIXED_WEEKLY_XML =
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
+      `<key>fa</key><integer>1</integer><key>fu</key><integer>256</integer>` +
+      `<key>of</key><array><dict><key>wd</key><integer>0</integer></dict></array>` +
+      `<key>rc</key><integer>0</integer><key>rrv</key><integer>4</integer>` +
+      `<key>tp</key><integer>0</integer><key>ts</key><integer>0</integer></dict></plist>`;
+    const tmpl = seedTodo(fixture.db, {
+      title: "mcp fixed tpl",
+      recurrenceRuleXml: FIXED_WEEKLY_XML,
+      nextInstanceStartDate: "2026-08-19",
+    });
+    const occ = seedTodo(fixture.db, { title: "mcp occ", repeatingTemplate: tmpl });
+    await connect([fakeVector(null).vector]);
+    const instance = textOf(
+      await client.callTool({ name: "get_item", arguments: { uuid: occ } }),
+    ) as Record<string, unknown>;
+    // The instance marker + write handle is unchanged; the joined repeat context
+    // rides beside it as `repeats` (same shaping path the CLI detail uses).
+    expect(instance["instanceOf"]).toBe(tmpl);
+    const repeats = instance["repeats"] as Record<string, unknown>;
+    expect((repeats["rule"] as Record<string, unknown>)["type"]).toBe("fixed");
+    expect(repeats["next"]).toBe("2026-08-19"); // FIXED mode → the projected next occurrence
+    expect("repeating" in instance).toBe(false);
+  });
+
   it("get_item keeps inheritedTags when non-empty (reversal guard)", async () => {
     const area = seedArea(fixture.db, "InhArea");
     const areaTag = seedTag(fixture.db, "inh-area-tag");

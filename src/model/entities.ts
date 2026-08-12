@@ -68,6 +68,42 @@ export interface RepeatingInfo {
    * has no instances. Never on a list/card row (token economy).
    */
   latestInstance?: string;
+  /**
+   * INSTANCES, detail reads only: the repeat CONTEXT this instance inherits from
+   * its template — the GUI's lower-corner "Repeats on Aug 19" / "Repeats 1 day
+   * after completion" caption. Populated by the detail read's mirror join
+   * (src/read/detail.ts) by resolving `templateUuid` back to the template row and
+   * decoding its rule; the shaping transform emits it as the wire `repeats`
+   * sibling of `instanceOf`. Absent when the template row is missing/unresolvable
+   * (dangling FK), or carries no surfaceable context. Only on an instance; never
+   * on a template (which carries `rule`/`nextOccurrence` directly) or a list row.
+   */
+  repeats?: RepeatContext;
+}
+
+/**
+ * The repeat CONTEXT surfaced on a repeating INSTANCE'S detail card — the join
+ * of its template's series state onto the instance, so the card can render the
+ * GUI's lower-corner repeat caption without re-fetching the template. Byte-
+ * consistent with the template card's own emission for the same template: `rule`
+ * is the SAME {@link RepeatRule} `decodeRecurrenceRule` produces for the template.
+ */
+export interface RepeatContext {
+  /**
+   * The template's decoded repeat rule — the SAME shape a template card emits
+   * under `repeating.rule`. Omitted when the template's rule is absent or
+   * undecodable (a future Things build), mirroring the template card.
+   */
+  rule?: RepeatRule;
+  /**
+   * FIXED mode only: the template's already-computed next-occurrence projection
+   * (the "Aug 19" in the GUI). ABSENT for after-completion mode — no successor
+   * date exists until the current instance completes, so absence is the honest
+   * expression (the mode stays readable from `rule.type`).
+   */
+  next?: IsoDate;
+  /** The template's paused flag — surfaced so the card can render honestly (`(paused)`). Omitted when false. */
+  paused?: boolean;
 }
 
 /**
