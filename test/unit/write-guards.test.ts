@@ -52,6 +52,32 @@ describe("H-REPEAT-SCHEDULE", () => {
     expect(check("todo.update", { uuid: normal, when: "today" })).toBeNull();
     expect(check("todo.complete", { uuid: normal })).toBeNull();
   });
+
+  it("refuses project.delete on a repeating project template (kind-parity with todo.delete, WG-8)", () => {
+    // CLONE C3/C4: trashing a project template retains the rule but clears the
+    // fixed next-instance cursor, orphans the live instance, and is non-restorable
+    // via AS move (301). The guard fails closed, exactly as todo.delete does.
+    const template = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    expect(check("project.delete", { uuid: template })?.hazard).toBe("H-REPEAT-SCHEDULE");
+  });
+
+  it("allows project.delete on a plain project and on a repeating INSTANCE (series-preserving, C5)", () => {
+    // An instance carries the template FK but no recurrence rule of its own, so it
+    // is not a template row — trashing it is clean and series-preserving (C5).
+    const template = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const instance = seedProject(fixture.db, { title: "Occurrence", repeatingTemplate: template });
+    const plain = seedProject(fixture.db, { title: "Plain" });
+    expect(check("project.delete", { uuid: instance })).toBeNull();
+    expect(check("project.delete", { uuid: plain })).toBeNull();
+  });
 });
 
 describe("H-TEMPLATE-CHILD-RESTORE", () => {
