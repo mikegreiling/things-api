@@ -59,6 +59,7 @@ const REPEAT_SENSITIVE = new Set<OperationKind>([
   "todo.reopen",
   "todo.move",
   "todo.delete",
+  "project.delete", // trashing a repeating project template breaks the series (CLONE C3/C4: rule retained but next-instance cursor cleared, live instance orphaned, non-restorable via AS move → 301) — kind-parity with todo.delete (WG-8)
   "todo.duplicate", // unvalidated on templates (E07 probed a plain to-do)
   "todo.restore", // unvalidated on templates (E15 probed a plain to-do)
   "project.move", // unvalidated on repeating projects (E14 probed a plain project)
