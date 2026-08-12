@@ -1,0 +1,33 @@
+name: Feature request
+description: Request a new capability, or a change to how an existing one behaves.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!CAUTION]
+        > **This is a PUBLIC issue tracker.** Never include real data from a Things database — task titles, notes, project or area names, tags, or screenshots of real content. Describe the request with synthetic, invented examples only. Reports containing personal data may be edited or removed.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing
+      description: The capability you need, or the behavior that gets in your way. What are you trying to do that `things` cannot do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: How you would like it to work — the command, tool call, or result you have in mind. Use synthetic examples.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Other ways you have tried to get there, and why they fall short.
+    validations:
+      required: false

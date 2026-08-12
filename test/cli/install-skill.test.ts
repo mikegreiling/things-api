@@ -22,6 +22,7 @@ import {
   bundledSkillVersion,
   compareSemver,
   installedSkillVersion,
+  isDevVersion,
   parseSemver,
   parseSkillVersion,
   skillLocations,
@@ -111,6 +112,77 @@ describe("install-skill: built-in copy fallback", () => {
     const md = readFileSync(join(canonical, "SKILL.md"), "utf8");
     expect(md).not.toContain("STALE");
     expect(installedSkillVersion(canonical)).toBe(BIN);
+  });
+});
+
+describe("install-skill: dev-checkout bug-reporting CTA", () => {
+  it("a dev (-dev) install appends the bug/feature-request section with the redaction rail", () => {
+    // BIN is 1.2.3-dev — a source checkout, so the CTA rides every location.
+    const h = newHome();
+    installSkill({}, fallbackDeps(h));
+    for (const loc of skillLocations(h)) {
+      const md = readFileSync(join(loc.dir, "SKILL.md"), "utf8");
+      expect(md, loc.label).toContain("Filing bugs and feature requests");
+      expect(md, loc.label).toContain("gh issue create --repo mikegreiling/things-api");
+      // The redaction rail is unmissable and mandatory.
+      expect(md, loc.label).toContain("PUBLIC");
+      expect(md, loc.label).toMatch(/synthetic/i);
+      // Appending the section leaves the version stamp intact.
+      expect(installedSkillVersion(loc.dir), loc.label).toBe(BIN);
+    }
+  });
+
+  it("a stamped release (non-dev) install does NOT get the section", () => {
+    const h = newHome();
+    installSkill({}, { ...fallbackDeps(h), binaryVersion: "1.2.3" });
+    for (const loc of skillLocations(h)) {
+      const md = readFileSync(join(loc.dir, "SKILL.md"), "utf8");
+      expect(md, loc.label).not.toContain("Filing bugs and feature requests");
+      expect(installedSkillVersion(loc.dir), loc.label).toBe("1.2.3");
+    }
+  });
+
+  it("the skills-CLI path also hands a dev copy carrying the section", () => {
+    const h = newHome();
+    let handedHasSection: boolean | null = null;
+    installSkill(
+      {},
+      {
+        home: h,
+        binaryVersion: BIN,
+        simulated: false,
+        // Read the handed temp copy WHILE it still exists.
+        runSkillsCli: (dir) => {
+          handedHasSection = readFileSync(join(dir, "SKILL.md"), "utf8").includes(
+            "Filing bugs and feature requests",
+          );
+          return true;
+        },
+        copyInto: () => {},
+      },
+    );
+    expect(handedHasSection).toBe(true);
+  });
+
+  it("the skills-CLI path hands a plain copy (no CTA) for a stamped release", () => {
+    const h = newHome();
+    let handedHasSection: boolean | null = null;
+    installSkill(
+      {},
+      {
+        home: h,
+        binaryVersion: "1.2.3",
+        simulated: false,
+        runSkillsCli: (dir) => {
+          handedHasSection = readFileSync(join(dir, "SKILL.md"), "utf8").includes(
+            "Filing bugs and feature requests",
+          );
+          return true;
+        },
+        copyInto: () => {},
+      },
+    );
+    expect(handedHasSection).toBe(false);
   });
 });
 
@@ -312,6 +384,13 @@ describe("skill version helpers", () => {
     expect(v).not.toBeNull();
     expect(parseSemver(v)).not.toBeNull();
     expect(existsSync(join(bundledSkillDir(), "SKILL.md"))).toBe(true);
+  });
+
+  it("isDevVersion detects the -dev suffix (source checkout), else false", () => {
+    expect(isDevVersion("1.2.3-dev")).toBe(true);
+    expect(isDevVersion("0.0.0-dev")).toBe(true);
+    expect(isDevVersion("1.2.3")).toBe(false);
+    expect(isDevVersion(null)).toBe(false);
   });
 
   it("compareSemver orders X.Y.Z (suffix-tolerant), null on non-semver", () => {

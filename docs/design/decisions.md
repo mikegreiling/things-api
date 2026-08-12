@@ -32,3 +32,7 @@ One line per ruling: **date · ruling · evidence**. This register exists to pre
 ## Scope rulings
 
 - **(standing) · Archived/"ignored" tags, emoji-stripping opt-in, pseudo-archived areas — SHELVED INDEFINITELY.** First-class support is not planned; revisit only if real usage surfaces a need. The leading-symbol-significant rule already protects emoji-prefixed archival tags for free (v0.6.0). Evidence: roadmap history (shelved item 4).
+
+## Process / workflow rulings
+
+- **2026-08-12 · GitHub issues adopted as INTAKE-ONLY for bug reports and feature requests (maintainer).** The repo's GitHub issue tracker is the intake surface (so other coding agents that drive the CLI daily can file via `gh issue create` instead of PRing docs/up-next.md); it is NEVER the archive. Durable state stays in-repo: accepted items graduate into [up-next.md](../up-next.md) with an issue link, rulings land here, evidence lands in `docs/lab/`, and the issue closes with a pointer. The tracker is PUBLIC, so every intake surface (issue forms, the dev-checkout skill CTA) loudly requires synthetic/redacted repro data — never real task titles, notes, or project/area names. Evidence: `.github/ISSUE_TEMPLATE/`, `install-skill` dev CTA.

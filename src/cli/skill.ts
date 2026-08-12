@@ -126,6 +126,49 @@ export function isLegacyDevStamp(v: string | null): boolean {
   return v === "0.0.0-dev" || v === "0.0.0";
 }
 
+/**
+ * True when a version string is a source-checkout build — its version carries a
+ * `-dev` suffix (`resolveCliVersion` appends it when the running module is live
+ * TS). A published install never matches. Drives the dev-only bug-reporting CTA
+ * that `install-skill` appends to the installed skill.
+ */
+export function isDevVersion(v: string | null): boolean {
+  return v !== null && v.endsWith("-dev");
+}
+
+/**
+ * The "Filing bugs and feature requests" section `install-skill` appends to the
+ * installed SKILL.md when (and only when) the installing binary is a dev
+ * checkout. It tells an agent running live source where defects and missing
+ * capabilities go, gives the exact non-interactive `gh` command, and carries the
+ * redaction rail: the tracker is public, so repro data must be synthetic. A
+ * published install never receives this — a real release version has no `-dev`
+ * suffix, so the section is absent from tarball installs.
+ */
+export const DEV_BUG_REPORTING_SECTION = `## Filing bugs and feature requests
+
+You are running a development checkout of \`things\` (its version ends in \`-dev\`). When a command misbehaves or a capability you need is missing, file it on the public issue tracker at github.com/mikegreiling/things-api, straight from the terminal:
+
+\`\`\`
+gh issue create --repo mikegreiling/things-api \\
+  --title "<one-line summary>" \\
+  --body "things --version output; surface (CLI / MCP / library); steps to reproduce; expected vs actual behavior; any error output"
+\`\`\`
+
+**The tracker is PUBLIC.** Use synthetic, redacted repro data ONLY — never real task titles, notes, project or area names, tags, or anything else copied from the user's Things database. Reproduce the behavior with invented throwaway examples.
+`;
+
+/**
+ * Append {@link DEV_BUG_REPORTING_SECTION} to a SKILL.md body, ensuring exactly
+ * one blank line before it. Pure string transform; `install-skill` runs it on
+ * the stamped temp copy for a dev install, so every materialized location
+ * inherits the section. The repo's own SKILL.md is never touched.
+ */
+export function appendDevBugReportingSection(md: string): string {
+  const base = md.endsWith("\n") ? md : `${md}\n`;
+  return `${base}\n${DEV_BUG_REPORTING_SECTION}`;
+}
+
 /** A parsed `major.minor.patch`, ignoring any `-dev`/prerelease suffix. */
 export interface Semver {
   major: number;
