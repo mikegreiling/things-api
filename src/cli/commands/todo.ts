@@ -4,7 +4,7 @@
  */
 import type { Command } from "commander";
 
-import { localToday, templateStatus, type AnyTask } from "../../index.ts";
+import { localToday, templateStatus, type AnyTask, type RepeatContext } from "../../index.ts";
 import { blue, bold, dim, green, red } from "../style.ts";
 import {
   containerLabel,
@@ -25,6 +25,36 @@ import { DidYouMeanError } from "../did-you-mean.ts";
 // The opened resource shows its tags green (GUI: list pills are gray).
 const tagList = (tags: Array<{ title: string }>) =>
   green(`#${tags.map((t) => t.title).join(" #")}`);
+
+/** The unit noun the after-completion caption phrases (singular; pluralized by the caller). */
+const REPEAT_UNIT_NOUN: Record<string, string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
+
+/**
+ * The GUI's lower-corner repeat caption for a repeating INSTANCE, from its
+ * template's joined context (src/read/detail.ts `repeats`): FIXED mode reads
+ * `on <date>` (the "Repeats on Aug 19" projection); after-completion reads
+ * `<N> <unit>(s) after completion` (the "Repeats 1 day after completion" form —
+ * N/unit are the rule's own interval + frequency, singular/plural correct). A
+ * paused template appends a dim `(paused)`. Returns null when the context carries
+ * no renderable caption (no decodable rule, or a fixed rule with no projected
+ * date) — the `repeating: instance of …` line still stands on its own.
+ */
+function repeatContextValue(ctx: RepeatContext, todayIso: string): string | null {
+  const paused = ctx.paused === true ? dim(" (paused)") : "";
+  const rule = ctx.rule;
+  if (rule === undefined) return null;
+  if (rule.type === "fixed") {
+    return ctx.next != null ? `on ${shortDate(ctx.next, todayIso)}${paused}` : null;
+  }
+  const noun = REPEAT_UNIT_NOUN[rule.unit] ?? rule.unit;
+  const n = rule.interval;
+  return `${n} ${noun}${n === 1 ? "" : "s"} after completion${paused}`;
+}
 
 /**
  * The detail card, project-card grammar: type-labeled title row (the box
@@ -113,7 +143,13 @@ export function renderDetail(item: AnyTask | null): string[] {
     const state = item.repeating.nextOccurrence != null && st === "waiting" ? "scheduled" : st;
     meta("repeating", `TEMPLATE, ${state} (occurrences appear in upcoming)`);
   }
-  if (item.repeating.isInstance) meta("repeating", `instance of ${item.repeating.templateUuid}`);
+  if (item.repeating.isInstance) {
+    meta("repeating", `instance of ${item.repeating.templateUuid}`);
+    // The GUI's lower-corner repeat context, joined from the template (detail
+    // read). The uuid link above stays the write handle; this is the caption.
+    if (item.repeating.repeats !== undefined)
+      meta("repeats", repeatContextValue(item.repeating.repeats, todayIso));
+  }
   if (item.notes !== "") lines.push("", item.notes);
   if (item.type === "to-do" && item.checklist && item.checklist.length > 0) {
     lines.push("", dim("checklist:"));
