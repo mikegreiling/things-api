@@ -14,7 +14,9 @@ Sections are blocker-classes: **needs-Mike** (a decision, near-zero effort) · *
 
 ## VM-batchable — autonomous lab campaigns
 
-*(None standing right now. The remaining probes ride their parent feature items — the SYNCLAT on-hardware repro is needs-human, and the appliance-mode MASVM1 licensing probe lives in [roadmap.md](roadmap.md). The macOS 27 regression VM is calendar-pinned below. New probes get their own entry here when they're batchable and unblocked.)*
+*(Remaining probes ride their parent feature items — the SYNCLAT on-hardware repro is needs-human, and the appliance-mode MASVM1 licensing probe lives in [roadmap.md](roadmap.md). The macOS 27 regression VM is calendar-pinned below. New probes get their own entry here when they're batchable and unblocked.)*
+
+- **Timestamp side-effect gaps (from the [timestamps.md](reference/timestamps.md) corpus sweep — §1c/§2c).** A small one-clone campaign could close the UNPROBED cells the inventory surfaced: (a) **checklist-write `umd`** — does adding/checking/editing a `TMChecklistItem` bump the owning to-do's `umd`? (directly gates the `things watch` `modified` granularity question); (b) **`project.dissolve-heading` surviving-children `umd`** (DISS1 captured index-preserved, not umd); (c) **`project.move-heading-to-project` heading `umd`** (HXPC1 called it a single-row change but didn't assert the umd byte); (d) **plain (non-instance) Convert-to-Project `creationDate`** value and **`project.promote-heading` new-project `creationDate`** value (both are settled identity replacements — new uuid — but the stamp VALUE was never captured; both are GUI/AX-only). Low priority; batch behind any other AX-vector sitting.
 
 ## needs-human — short in-person sittings
 
