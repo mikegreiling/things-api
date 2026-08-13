@@ -2962,6 +2962,12 @@ function legOptions(options: WriteOptions): WriteOptions {
   if (options.acknowledgeProjectReopen !== undefined) {
     legs.acknowledgeProjectReopen = options.acknowledgeProjectReopen;
   }
+  // --preserve-modified rides each leg: a move/reorder leg's own `runMutation`
+  // captures its target's umd before the leg and restores it after. Per-leg
+  // restore only ever LOWERS umd (never above the captured pre), so across a
+  // multi-leg bounce the touched rows still end at-or-below their original umd —
+  // the timeline-silent direction (a restored row never re-surfaces in `changes`).
+  if (options.preserveModified === true) legs.preserveModified = true;
   return legs;
 }
 

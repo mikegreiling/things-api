@@ -48,6 +48,14 @@ export interface AuditRecord {
    * of re-created). Absent on records with no client idempotency id.
    */
   opId?: string;
+  /**
+   * `--preserve-modified` capture (ADDITIVE): the pre-write `userModificationDate`
+   * of each captured target row (uuid → epoch seconds, or null for a row the op
+   * created), recorded on the `ok` record only when the flag was active. Cheap
+   * provenance that enables a future SYMMETRIC undo (restore the umd the mutation
+   * bumped) without a separate read. Absent on writes made without the flag.
+   */
+  preModDates?: Record<string, number | null>;
   /** Normalized requested delta (params as given, post-normalization). */
   requested: Record<string, unknown>;
   /** Asserted-field subset of the pre-state (null when target didn't exist). */
