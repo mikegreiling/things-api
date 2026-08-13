@@ -484,6 +484,18 @@ const dryRunShape = {
   dry_run: z.boolean().optional().describe("Preview the planned change without applying anything"),
 };
 
+const preserveModifiedShape = {
+  preserve_modified: z
+    .boolean()
+    .optional()
+    .describe(
+      "Keep this change off the modification-date timeline: capture each pre-existing edited " +
+        "item's modification date and restore it (to the whole second) after the change, so a " +
+        "changes/watch query keyed on it does not surface the edit. A no-op on a pure create. " +
+        "UNSYNCED databases only — its interaction with Things Cloud sync is unproven.",
+    ),
+};
+
 /**
  * The per-call idempotency key for a single write tool — the analogue of a batch
  * line's op_id. A resubmission carrying the same key is recognized as already
@@ -678,6 +690,8 @@ interface WriteOptionArgs {
   allow_non_empty_area?: boolean | undefined;
   dangerously_drive_gui?: boolean | undefined;
   create_tags?: boolean | undefined;
+  /** Keep the change off the modification-date timeline (restore each edited row's umd). */
+  preserve_modified?: boolean | undefined;
   /** Per-call IANA zone (write tools that accept `when`): normalizes today/evening to the zone. */
   tz?: string | undefined;
   /** Single-op idempotency key (the single-mutation write tools). */
@@ -721,6 +735,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     ...(args.allow_non_empty_area === true && { allowNonEmptyArea: true }),
     ...(args.dangerously_drive_gui === true && { dangerouslyDriveGui: true }),
     ...(args.create_tags === true && { createTags: true }),
+    ...(args.preserve_modified === true && { preserveModified: true }),
     ...(args.tz !== undefined && { zone: args.tz }),
     ...(args.op_id !== undefined && { opId: assertOpId(args.op_id) }),
   });
@@ -1537,6 +1552,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1630,6 +1646,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         ...createTagsShape,
         ...tzShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1780,6 +1797,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ),
         ...tzShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -1903,6 +1921,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("Confirm moving into a completed/canceled project (this reopens it)"),
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -1952,6 +1971,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         mode: z.enum(["replace", "add"]).optional().describe("Default: replace"),
         ...createTagsShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -2025,6 +2045,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("replace: confirm discarding the existing items and their checked states"),
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2116,6 +2137,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("kind tag: confirm permanent deletion of ALL nested child tags too"),
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: DESTRUCTIVE,
@@ -2146,7 +2168,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Restore a trashed to-do or project. A to-do returns to the Inbox without its " +
         "previous schedule or project/area. A project is restored in place: its schedule, " +
         "area, and children come back exactly as they were.",
-      inputSchema: { uuid: z.string(), ...dryRunShape, ...opIdShape },
+      inputSchema: { uuid: z.string(), ...dryRunShape, ...preserveModifiedShape, ...opIdShape },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
@@ -2243,6 +2265,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe("add/move: place immediately after this heading (title or uuid)"),
         ...driveGuiShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: DESTRUCTIVE,
     },
@@ -2375,6 +2398,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         uuid: z.string().describe("the to-do's uuid"),
         ...driveGuiShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: DESTRUCTIVE,
@@ -2399,7 +2423,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Things proxy shortcuts when installed (in place, and the only path for a repeating " +
         "to-do); otherwise a non-repeating dated to-do falls back to a URL re-schedule that " +
         "briefly moves it to Today and back. Reversible with the undo tool.",
-      inputSchema: { uuid: z.string(), ...dryRunShape },
+      inputSchema: { uuid: z.string(), ...dryRunShape, ...preserveModifiedShape },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
@@ -2560,6 +2584,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         start_days_earlier: repeatRuleShape.start_days_earlier,
         ...driveGuiShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: DESTRUCTIVE,
     },
@@ -2635,7 +2660,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Duplicate a to-do or project and return the copy's uuid; a duplicated project " +
         "includes its children. Not available for repeating items.",
-      inputSchema: { uuid: z.string(), ...dryRunShape, ...opIdShape },
+      inputSchema: { uuid: z.string(), ...dryRunShape, ...preserveModifiedShape, ...opIdShape },
       annotations: NON_DESTRUCTIVE,
     },
     async (args) =>
@@ -2677,6 +2702,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ),
         ...tzShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -2719,6 +2745,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         no_area: z.boolean().optional().describe("Leave the current area (a project's detach)"),
         ...positionShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -2751,6 +2778,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         tags: z.array(z.string()).optional().describe(`Tags — ${TAG_REF_FORMAT}`),
         ...createTagsShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -2776,6 +2804,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         title: z.string(),
         parent: z.string().optional().describe("Existing parent tag name"),
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: NON_DESTRUCTIVE,
@@ -2798,7 +2827,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "Move completed items to the Logbook now. The result discloses how many items were moved " +
         "(observed.logged); when none are waiting it logs nothing — a clean no-op, not an error. " +
         "This cannot be undone.",
-      inputSchema: { ...dryRunShape, ...opIdShape },
+      inputSchema: { ...dryRunShape, ...preserveModifiedShape, ...opIdShape },
       annotations: DESTRUCTIVE,
     },
     async (args) =>
@@ -2834,6 +2863,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .optional()
           .describe("area.delete: delete a non-empty area together with its contents"),
         ...dryRunShape,
+        ...preserveModifiedShape,
         ...opIdShape,
       },
       annotations: DESTRUCTIVE,
@@ -2896,6 +2926,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe("Ops in execution order"),
         fail_fast: z.boolean().optional().describe("Skip remaining ops after the first failure"),
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: DESTRUCTIVE,
     },
@@ -2996,6 +3027,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           ),
         ...driveGuiShape,
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: NON_DESTRUCTIVE,
     },
@@ -3056,6 +3088,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               "refusing.",
           ),
         ...dryRunShape,
+        ...preserveModifiedShape,
       },
       annotations: DESTRUCTIVE,
     },

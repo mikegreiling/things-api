@@ -43,6 +43,11 @@ import {
 } from "./operations.ts";
 import { planVector } from "./planner.ts";
 import type { PreState } from "./pre-state.ts";
+import {
+  restoreModDates,
+  type ModRestoreTarget,
+  type PreserveModifiedFailure,
+} from "./preserve-modified.ts";
 import { REVERSIBILITY } from "./reversibility.ts";
 import { certificationOf } from "./vectors/ui-certification.ts";
 import type { CompiledInvocation, VectorId, WriteVector } from "./vectors/types.ts";
@@ -71,6 +76,18 @@ export interface WriteOptions extends Acknowledgements {
   verifyTimeoutMs?: number;
   /** Return the plan without executing (nothing is audited). */
   dryRun?: boolean;
+  /**
+   * Keep this change off the `userModificationDate` (`umd`) timeline. When set,
+   * the pipeline captures every pre-existing TARGET row's `umd` before the write
+   * and — after the change verifies — restores it through the AppleScript `set
+   * modification date` leg (preserve-modified.ts), so a `changes`/watch query
+   * keyed on `umd` does not surface the edit. Rows the op CREATES are untouched
+   * (their `umd` is legitimately new); a create-only op (add) is a silent no-op.
+   * BEST-EFFORT: a failed restore never fails the (already-verified) mutation —
+   * it is disclosed per row on the result. Restore lands on `floor(umd0)` (the
+   * AppleScript 1-second floor) and is proven only on an UNSYNCED store (SYNC2).
+   */
+  preserveModified?: boolean;
   /**
    * Skip the post-execute state VERIFY poll for this write, treating a clean
    * transport (exit 0) as ok. Fail-loud on the transport itself is preserved (a
@@ -181,6 +198,20 @@ export type MutationResult =
        * the ORIGINAL mutation's identity. Absent on a normal (executed) result.
        */
       alreadyApplied?: true;
+      /**
+       * `--preserve-modified` disclosure (ADDITIVE, presence-keyed): the count of
+       * pre-existing target rows whose `userModificationDate` was restored to its
+       * pre-write value (to the floored second) so the change stays off the
+       * `changes`/watch timeline. Present only when the flag did real work —
+       * absent on a create-only or already-silent op, where restore is a no-op.
+       */
+      preservedModified?: number;
+      /**
+       * `--preserve-modified` per-row failures (ADDITIVE): rows the restore leg
+       * could not neutralize. Best-effort — the mutation itself stands; these are
+       * disclosed, never fatal. Absent when every restore leg succeeded.
+       */
+      preserveFailures?: PreserveModifiedFailure[];
     }
   | {
       kind: "verify-failed";
@@ -918,7 +949,36 @@ export async function runMutation<K extends OperationKind>(
           : delta.mode === "ordering"
             ? (delta.subject ?? null)
             : null);
-      audit({ ...auditCommon, result: "ok", uuid });
+      // --preserve-modified: after the change verifies, restore the pre-write
+      // `userModificationDate` of every pre-existing TARGET row the op BUMPED, so
+      // the edit stays off the umd-keyed `changes`/watch timeline (TAGMOD T5).
+      // The pre-read already captured each asserted/cascade row's umd
+      // (preCapture.modDates); a null capture is a row the op CREATED (skip it),
+      // and a row whose umd did not rise needs no restore (a silent op — no-op).
+      // Best-effort: a failed restore is disclosed per row, never fatal (the
+      // mutation already stands). The captured pre-values ride the audit record
+      // when the flag is active (enables a future symmetric undo).
+      let preserve: { restored: number; failures: PreserveModifiedFailure[] } | null = null;
+      let preModDatesAudit: PreModDates | undefined;
+      if (options.preserveModified === true) {
+        const postReader = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone);
+        const captured: PreModDates = {};
+        const targets: ModRestoreTarget[] = [];
+        for (const [tUuid, preUmd] of Object.entries(preCapture.modDates)) {
+          captured[tUuid] = preUmd;
+          if (preUmd === null) continue; // a row the op created — legitimately new umd
+          const post = postReader.modDateOf(tUuid);
+          if (post !== null && post > preUmd) targets.push({ uuid: tUuid, preUmd });
+        }
+        if (Object.keys(captured).length > 0) preModDatesAudit = captured;
+        preserve = await restoreModDates(deps.db, deps.vectors, targets);
+      }
+      audit({
+        ...auditCommon,
+        result: "ok",
+        uuid,
+        ...(preModDatesAudit !== undefined && { preModDates: preModDatesAudit }),
+      });
       if (deps.environment !== undefined) {
         deps.environment.record(deps.environment.capture());
       }
@@ -992,6 +1052,15 @@ export async function runMutation<K extends OperationKind>(
         tier: effectiveTier,
         ...(resultToken !== undefined && { undoToken: resultToken }),
         ...(outcome.repeating !== undefined && { repeating: outcome.repeating }),
+        // Disclose --preserve-modified only when it did real work (restored a
+        // bump or hit a restore failure) — a create-only / already-silent op
+        // stays clean (no `preservedModified: 0` noise).
+        ...(preserve !== null &&
+          (preserve.restored > 0 || preserve.failures.length > 0) && {
+            preservedModified: preserve.restored,
+          }),
+        ...(preserve !== null &&
+          preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
         ...(warnings.length > 0 && { warnings }),
       };
     }

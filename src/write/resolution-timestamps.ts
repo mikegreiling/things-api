@@ -25,7 +25,8 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import type { DeltaSpec } from "./verify/delta.ts";
+import { restoreModDates, type PreserveModifiedFailure } from "./preserve-modified.ts";
+import { createDbReader, type DeltaSpec } from "./verify/delta.ts";
 
 export type ResolutionKind = "todo" | "project";
 export type CompleteChildren = "require-resolved" | "auto-complete";
@@ -153,6 +154,15 @@ async function runComposite(
 ): Promise<MutationResult> {
   if (options.dryRun === true) return dryRunComposite(summaryOp, uuid, legs, finalDelta);
 
+  // --preserve-modified: capture the target's umd BEFORE the first leg (each flip
+  // bumps it) and restore ONCE after the last (never per-leg — the leg options
+  // strip the flag). Single-target by construction (the resolution-timestamp
+  // compounds operate on one to-do/project).
+  const preUmd =
+    options.preserveModified === true
+      ? createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid)
+      : null;
+
   const startedAt = deps.now?.() ?? new Date();
   const txnId = newTxnId(startedAt);
   const disclosure = legs.map((l, i) => `${i + 1}. ${l.describe}`).join(" → ");
@@ -185,11 +195,26 @@ async function runComposite(
     invocation: `${summaryOp} (${legs.length}-leg): ${disclosure}`,
   });
   const ok = last as Extract<MutationResult, { kind: "ok" }>;
+
+  // Restore the captured umd once, after the last leg (best-effort, per row).
+  let preserve: { restored: number; failures: PreserveModifiedFailure[] } | null = null;
+  if (options.preserveModified === true && preUmd !== null) {
+    const post = createDbReader(deps.db, deps.now?.() ?? new Date(), deps.zone).modDateOf(uuid);
+    const targets = post !== null && post > preUmd ? [{ uuid, preUmd }] : [];
+    preserve = await restoreModDates(deps.db, deps.vectors, targets);
+  }
+
   return {
     ...ok,
     op: summaryOp,
     uuid,
     undoToken: txnId,
+    ...(preserve !== null &&
+      (preserve.restored > 0 || preserve.failures.length > 0) && {
+        preservedModified: preserve.restored,
+      }),
+    ...(preserve !== null &&
+      preserve.failures.length > 0 && { preserveFailures: preserve.failures }),
     warnings: [...(ok.warnings ?? []), `applied as ${legs.length} non-atomic legs: ${disclosure}`],
   };
 }

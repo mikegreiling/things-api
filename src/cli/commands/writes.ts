@@ -65,6 +65,7 @@ interface WriteFlagOpts {
   actor?: string;
   dangerouslyDriveGui?: boolean;
   opId?: string;
+  preserveModified?: boolean;
 }
 
 function addWriteFlags(cmd: Command): Command {
@@ -72,6 +73,13 @@ function addWriteFlags(cmd: Command): Command {
     .option("--json", "emit versioned JSON envelope on stdout")
     .option("--db <path>", "explicit database path")
     .option("--dry-run", "preview the planned change and its expected effect; nothing executes")
+    .option(
+      "--preserve-modified",
+      "keep this change off the modification-date timeline: capture each pre-existing edited " +
+        "item's modification date and restore it (to the whole second) after the change, so a " +
+        "changes/watch query keyed on it does not surface the edit. A no-op on a pure create. " +
+        "UNSYNCED databases only — its interaction with Things Cloud sync is unproven.",
+    )
     .option(
       "--vector <id>",
       "force how the change is delivered: url-scheme | applescript | shortcuts | ui",
@@ -164,6 +172,7 @@ function writeOptionsFrom(opts: WriteFlagOpts, extra: Partial<WriteOptions> = {}
     ...(opts.actor !== undefined && { actor: opts.actor }),
     ...(opts.dangerouslyDriveGui === true && { dangerouslyDriveGui: true }),
     ...(opts.opId !== undefined && { opId: opts.opId }),
+    ...(opts.preserveModified === true && { preserveModified: true }),
     ...extra,
   };
 }
@@ -337,6 +346,30 @@ async function runWrite(
   }
 }
 
+/**
+ * TTY disclosure for `--preserve-modified` on a verified ok result: a dim line
+ * naming how many pre-existing rows' modification date was restored (kept off
+ * the `changes`/watch timeline), plus a stderr warning per row the best-effort
+ * restore could not neutralize. Silent when the flag did no work (the field is
+ * absent — a pure create, or an already-silent op).
+ */
+function emitPreserveNote(result: {
+  preservedModified?: number;
+  preserveFailures?: { uuid: string; detail: string }[];
+}): void {
+  if (result.preservedModified === undefined) return;
+  const failed = result.preserveFailures ?? [];
+  const tail = failed.length > 0 ? `; ${failed.length} could not be restored (see warnings)` : "";
+  process.stdout.write(
+    dim(
+      `  preserved modification date on ${result.preservedModified} item(s) — kept off the changes timeline${tail}\n`,
+    ),
+  );
+  for (const f of failed) {
+    process.stderr.write(`warning: preserve-modified: ${f.uuid}: ${f.detail}\n`);
+  }
+}
+
 function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMeta): void {
   switch (result.kind) {
     case "bounce-aborted": {
@@ -378,6 +411,7 @@ function emitResult(result: ReorderResult, opts: WriteFlagOpts, meta: EnvelopeMe
             ? "already applied — matched op-id in the change history, not re-run"
             : `vector=${result.vector}, tier=${result.tier}, verified`;
         process.stdout.write(`ok ${result.op}${uuid} (${status})\n`);
+        emitPreserveNote(result);
       }
       process.exitCode = ExitCode.Ok;
       return;
