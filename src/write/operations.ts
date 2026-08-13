@@ -58,6 +58,8 @@ export const OPERATION_KINDS = [
   "area.reorder",
   "project.make-repeating",
   "project.add-repeating",
+  "todo.clone",
+  "project.clone",
   "log-now",
 ] as const;
 
@@ -378,6 +380,39 @@ export interface TodoEditChecklistItemParams {
   newTitle?: string;
 }
 
+/**
+ * A structured child to-do in a `project.add` json import (the clone / rich-import
+ * path). Children are born OPEN (a mixed open+logged project cannot be born in one
+ * atomic import — §5b/A5; logged/canceled children need a follow-up complete/cancel
+ * leg). Placement under a heading is POSITIONAL in {@link ProjectAddParams.items}:
+ * a child inherits the nearest PRECEDING heading, so a project-root child must be
+ * ordered BEFORE any heading (A4). Checklist items are birthed with their titles
+ * (unchecked); a child's per-item checked state is not reproduced (a residual).
+ */
+export interface ProjectChildSpec {
+  title: string;
+  notes?: string;
+  when?: WhenValue;
+  deadline?: IsoDate;
+  tags?: string[];
+  checklistItems?: string[];
+}
+
+/** A heading node in a `project.add` json import (produces a real type=2 row, HX0/A4). */
+export interface ProjectHeadingSpec {
+  title: string;
+}
+
+/**
+ * One ordered node of a `project.add` json import's structure: a child to-do or a
+ * heading. The array ORDER is the layout — a `heading` node opens a section that
+ * every following `to-do` node joins until the next heading; `to-do` nodes before
+ * the first heading are project-root children (A4 positional inheritance).
+ */
+export type ProjectItemSpec =
+  | ({ kind: "to-do" } & ProjectChildSpec)
+  | ({ kind: "heading" } & ProjectHeadingSpec);
+
 export interface ProjectAddParams {
   title: string;
   notes?: string;
@@ -385,6 +420,13 @@ export interface ProjectAddParams {
   when?: WhenValue;
   deadline?: IsoDate;
   todos?: string[];
+  /**
+   * Structured headings + children born with the project in ONE `things:///json`
+   * import (HX0/A4). The clone path builds this; `project add` exposes only the
+   * flat `todos`. Exclusive with `todos` (a caller uses one or the other). All
+   * children are born OPEN. See {@link ProjectItemSpec}.
+   */
+  items?: ProjectItemSpec[];
   /**
    * Born-backdated creation timestamp (ISO date or datetime). Compiles through
    * `things:///json`; date-only normalizes to noon in the effective zone (§5).
@@ -729,6 +771,30 @@ export interface ProjectAddRepeatingParams {
   interval: number;
 }
 
+/**
+ * `todo.clone` / `project.clone` — a faithful content COPY of an existing item
+ * through official write surfaces (the CLONE verdict-A fidelity matrix). The
+ * clone is a NEW capture: a new uuid, born now, landing at its container's native
+ * position (no implicit reorder). Delivered by the clone orchestrator
+ * (src/write/clone.ts) as a compound over ordinary cataloged legs — never
+ * dispatched directly through the pipeline. Refuses a trashed source (restore it
+ * first), a repeating template (its rule is not reproducible on any write
+ * surface), and — for a project — a subtree holding a live nested repeating
+ * template (named in the refusal).
+ */
+export interface CloneParams {
+  /** The source item to clone (uuid or unique >=6-char prefix). */
+  uuid: string;
+  /** Override the clone's title. Default: the source's title verbatim (no " copy" suffix). */
+  title?: string;
+  /**
+   * Copy the source's creation date onto the clone (via `--created-at`, MINUTE
+   * resolution — sub-minute precision is lost). Default OFF: a clone is a new
+   * capture, created now.
+   */
+  preserveCreated?: boolean;
+}
+
 export interface OperationParamsMap {
   "todo.add": TodoAddParams;
   "todo.update": TodoUpdateParams;
@@ -782,6 +848,8 @@ export interface OperationParamsMap {
   "area.reorder": AreaReorderParams;
   "project.make-repeating": RepeatRuleParams;
   "project.add-repeating": ProjectAddRepeatingParams;
+  "todo.clone": CloneParams;
+  "project.clone": CloneParams;
   "log-now": EmptyParams;
 }
 

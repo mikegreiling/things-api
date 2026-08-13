@@ -1144,8 +1144,9 @@ describe("instance repeat context — the detail card's lower-corner caption (to
     expect(item?.repeating.repeats?.rule?.type).toBe("fixed");
     expect(item?.repeating.repeats?.next).toBe("2026-08-19");
     const lines = renderDetail(item).join("\n");
-    expect(lines).toContain("repeating: instance of "); // the uuid link stays the write handle
-    expect(lines).toContain("repeats: on Aug 19");
+    // ONE merged line: caption + the instance-of write handle in parens.
+    expect(lines).toContain("repeats: on Aug 19 (instance of ");
+    expect(lines).not.toContain("repeating: instance of ");
   });
 
   it("AFTER-COMPLETION: card shows `repeats: N day(s) after completion`, no `next`", () => {
@@ -1154,7 +1155,7 @@ describe("instance repeat context — the detail card's lower-corner caption (to
     expect(item?.repeating.repeats?.rule?.type).toBe("after-completion");
     expect(item?.repeating.repeats?.next).toBeUndefined(); // no successor date yet
     const lines = renderDetail(item).join("\n");
-    expect(lines).toContain("repeats: 1 day after completion");
+    expect(lines).toContain("repeats: 1 day after completion (instance of ");
   });
 
   it("paused template appends `(paused)` to the caption", () => {
@@ -1165,7 +1166,8 @@ describe("instance repeat context — the detail card's lower-corner caption (to
     });
     expect(item?.repeating.repeats?.paused).toBe(true);
     const lines = renderDetail(item).join("\n");
-    expect(lines).toContain("repeats: on Aug 19 (paused)");
+    // Paused folds into the merged parenthetical alongside the instance-of handle.
+    expect(lines).toContain("repeats: on Aug 19 (paused; instance of ");
   });
 
   it("dangling template FK: the instance still renders, with no `repeats:` line", () => {
@@ -1178,8 +1180,10 @@ describe("instance repeat context — the detail card's lower-corner caption (to
     const item = byUuid(fixture.db, orphan) as Todo | null;
     expect(item?.repeating.repeats).toBeUndefined();
     const lines = renderDetail(item).join("\n");
-    expect(lines).toContain("repeating: instance of no-such-template-uuid");
-    expect(lines).not.toContain("repeats:");
+    // No caption to merge — the line is just the instance-of write handle, under
+    // the single `repeats:` label.
+    expect(lines).toContain("repeats: instance of no-such-template-uuid");
+    expect(lines).not.toContain("repeating: instance of");
   });
 
   it("logged instance keeps the repeat context (harmless caption on a completed occurrence)", () => {

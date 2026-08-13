@@ -2674,6 +2674,47 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       }),
   );
 
+  server.registerTool(
+    "clone_item",
+    {
+      description:
+        "Clone a to-do or project — a faithful content copy through official write surfaces and " +
+        "return the clone's uuid. Copies title, notes, tags, when, reminder, deadline, checklist " +
+        "items and their checked state, container, and completed/canceled state with the exact " +
+        "original timestamp; a project also copies its area, headings, and children. The clone is " +
+        "a new capture (a new uuid, created now, at its container's usual position). Refuses a " +
+        "trashed source, a repeating template, and a project holding a nested repeating template. " +
+        "Undo trashes the clone. Not the same as duplicate_item (Things' own native copy).",
+      inputSchema: {
+        uuid: z.string(),
+        title: z
+          .string()
+          .optional()
+          .describe("Give the clone a different title (default: the source's title)"),
+        preserve_created: z
+          .boolean()
+          .optional()
+          .describe("Copy the source's creation date onto the clone (minute resolution)"),
+        ...dryRunShape,
+        ...opIdShape,
+      },
+      annotations: NON_DESTRUCTIVE,
+    },
+    async (args) =>
+      guard(async () => {
+        const c = getClient();
+        const clone = {
+          ...(args.title !== undefined && { title: args.title }),
+          ...(args.preserve_created === true && { preserveCreated: true }),
+        };
+        return mutationResult(
+          itemType(args.uuid) === "to-do"
+            ? await c.write.cloneTodo(args.uuid, clone, writeOptions(args))
+            : await c.write.cloneProject(args.uuid, clone, writeOptions(args)),
+        );
+      }),
+  );
+
   // -------------------------------------------------------------- projects
 
   server.registerTool(

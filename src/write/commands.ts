@@ -25,6 +25,7 @@ import type {
   ContainerRef,
   OperationKind,
   OperationParamsMap,
+  ProjectItemSpec,
   RepeatRuleParams,
   WhenValue,
 } from "./operations.ts";
@@ -822,6 +823,32 @@ function checklistItemsJsonAttr(
   }));
 }
 
+/**
+ * Build a project json import's `items` array from a structured
+ * {@link ProjectItemSpec} list (the clone / rich-import path). Order IS the
+ * layout: a `heading` node produces a `{type:"heading"}` row and every following
+ * `to-do` node inherits it positionally (A4); a `to-do` before the first heading
+ * is a project-root child. Children are born OPEN — no `completed` attribute.
+ */
+function projectItemsJsonAttr(items: ProjectItemSpec[]): Record<string, unknown>[] {
+  return items.map((it) => {
+    if (it.kind === "heading") {
+      return { type: "heading", attributes: { title: it.title } };
+    }
+    const attrs: Record<string, unknown> = { title: it.title };
+    if (it.notes !== undefined) attrs["notes"] = it.notes;
+    if (it.when !== undefined) attrs["when"] = it.when;
+    if (it.deadline !== undefined) attrs["deadline"] = it.deadline;
+    if (it.tags !== undefined) attrs["tags"] = it.tags;
+    if (it.checklistItems !== undefined) {
+      attrs["checklist-items"] = checklistItemsJsonAttr(
+        it.checklistItems.map((title) => ({ title })),
+      );
+    }
+    return { type: "to-do", attributes: attrs };
+  });
+}
+
 function checklistSpecs(items: (string | { title: string; completed?: boolean })[]): {
   specs: { title: string; completed: boolean }[];
   needsJson: boolean;
@@ -906,6 +933,32 @@ const todoEditChecklistItem: CommandSpec<"todo.edit-checklist-item"> = {
   },
 };
 
+const CLONE_ORCHESTRATED_ONLY =
+  "todo.clone / project.clone are delivered by the runCloneTodo / runCloneProject orchestrators (a " +
+  "compound over todo.add / project.add plus checklist / terminal-state follow-up legs); they have " +
+  "no atomic surface and are never dispatched directly through the pipeline";
+
+function cloneStub<K extends "todo.clone" | "project.clone">(op: K): CommandSpec<K> {
+  return {
+    op,
+    hazards: [],
+    preRead(db, params) {
+      const pre = emptyPreState();
+      pre.target = loadTarget(db, params.uuid);
+      return pre;
+    },
+    expectedDelta() {
+      throw new Error(CLONE_ORCHESTRATED_ONLY);
+    },
+    compile() {
+      throw new Error(CLONE_ORCHESTRATED_ONLY);
+    },
+  };
+}
+
+const todoClone = cloneStub("todo.clone");
+const projectClone = cloneStub("project.clone");
+
 const todoDelete: CommandSpec<"todo.delete"> = {
   op: "todo.delete",
   hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
@@ -935,6 +988,15 @@ const projectAdd: CommandSpec<"project.add"> = {
       throw new RangeError(
         "--completed-at cannot seed child to-dos: a completed-project import reverts to open " +
           "unless every child is resolved (§5b) — create the project resolved, then add logged children",
+      );
+    }
+    if (params.todos !== undefined && params.items !== undefined) {
+      throw new RangeError("project.add takes either `todos` or structured `items`, not both");
+    }
+    if (params.completedAt !== undefined && params.items !== undefined && params.items.length > 0) {
+      throw new RangeError(
+        "--completed-at cannot seed child items: a completed-project import reverts to open " +
+          "unless every child is resolved (§5b)",
       );
     }
     const pre = emptyPreState();
@@ -967,14 +1029,18 @@ const projectAdd: CommandSpec<"project.add"> = {
   },
   compile(params, vector, pre, ctx) {
     if (vector !== "url-scheme") unsupportedVector(this.op, vector);
-    if (addHasTimestamps(params)) {
+    // The json import is required for born-timestamps AND for structured `items`
+    // (headings / rich children) — the plain add-project URL carries neither.
+    if (addHasTimestamps(params) || params.items !== undefined) {
       const attrs: Record<string, unknown> = { title: params.title };
       if (params.notes !== undefined) attrs["notes"] = params.notes;
       Object.assign(attrs, addDateAttributes(params, ctx.zone));
       if (params.completedAt === undefined) {
         if (params.when !== undefined) attrs["when"] = params.when;
         if (params.deadline !== undefined) attrs["deadline"] = params.deadline;
-        if (params.todos !== undefined) {
+        if (params.items !== undefined) {
+          attrs["items"] = projectItemsJsonAttr(params.items);
+        } else if (params.todos !== undefined) {
           attrs["items"] = params.todos.map((t) => ({ type: "to-do", attributes: { title: t } }));
         }
       }
@@ -2796,5 +2862,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
   "project.add-repeating": projectAddRepeating,
+  "todo.clone": todoClone,
+  "project.clone": projectClone,
   "log-now": logNow,
 };

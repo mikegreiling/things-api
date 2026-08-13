@@ -447,6 +447,38 @@ const CASES: Record<OperationKind, CaseDef> = {
       });
     },
   },
+  "todo.clone": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo trashes the minted clone to-do", async () => {
+        const uuid = seedTodo(fixture.db, { title: "Cloned" });
+        writeAudit([auditRecord({ op: "todo.clone", uuid })]);
+        const del = osaVector(["todo.delete"], (id) => set(id, "trashed = ?", [1]));
+        const items = await runUndo(deps([del.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("todo.delete");
+        expect(items[0]?.outcome).toBe("ok");
+      });
+      it("irreversible when the clone's uuid was never discovered", () => {
+        expect(planUndo(auditRecord({ op: "todo.clone", uuid: null }), NOW).kind).toBe(
+          "irreversible",
+        );
+      });
+    },
+  },
+  "project.clone": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo trashes the minted clone project (children ride along)", async () => {
+        const uuid = seedProject(fixture.db, { title: "ClonedProj" });
+        writeAudit([auditRecord({ op: "project.clone", uuid })]);
+        const del = osaVector(["project.delete"], (id) => set(id, "trashed = ?", [1]));
+        const items = await runUndo(deps([del.vector]), auditDir);
+        expect(items[0]?.plan.steps[0]?.op).toBe("project.delete");
+        expect(items[0]?.plan.notes.join(" ")).toContain("Trash");
+        expect(items[0]?.outcome).toBe("ok");
+      });
+    },
+  },
   "area.add": {
     class: "reversible",
     register() {

@@ -104,6 +104,7 @@ import { AREA_PREVIEW_LIMIT, DEFAULT_LIST_LIMIT, PROJECT_PREVIEW_LIMIT } from ".
 import type {
   AreaAddParams,
   AreaUpdateParams,
+  CloneParams,
   ContainerRef,
   ProjectCancelParams,
   OperationKind,
@@ -151,6 +152,7 @@ import {
 import { runClearReminder } from "./write/clear-reminder.ts";
 import { runEditChecklist } from "./write/edit-checklist.ts";
 import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
+import { runCloneProject, runCloneTodo } from "./write/clone.ts";
 import {
   runCancelWithDate,
   runCompleteWithDate,
@@ -607,6 +609,20 @@ export interface ThingsClient {
     deleteTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /** Duplicate a to-do; the copy's uuid is on the result. */
     duplicateTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Clone a to-do — a faithful content copy through official write surfaces
+     * (title, notes, tags, when stage, reminder, deadline, checklist items incl.
+     * checked state, container, and completed/canceled terminal state with the
+     * exact stopDate). A NEW capture: new uuid, born now (pass
+     * `preserveCreated` to copy the source's creation date at minute resolution),
+     * landing at its container's native position. Refuses a trashed source and a
+     * repeating template. The clone's uuid is on the result; undo trashes it.
+     */
+    cloneTodo(
+      uuid: string,
+      clone?: Omit<CloneParams, "uuid">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     /** Restore a TRASHED to-do: it returns to the Inbox, de-scheduled. */
     restoreTodo(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
@@ -741,6 +757,21 @@ export interface ThingsClient {
     restoreProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /** Duplicate a project INCLUDING its children; the copy's uuid is on the result. */
     duplicateProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
+    /**
+     * Clone a project — a faithful content copy through official write surfaces:
+     * area membership, headings, headed + root children (one `things:///json`
+     * import), notes/deadline, plus logged/canceled children and the project's own
+     * terminal state reproduced with exact stopDates. A NEW capture (new uuid,
+     * born now; `preserveCreated` copies the creation date at minute resolution).
+     * Refuses a trashed source, a repeating template, and a subtree holding a live
+     * nested repeating template (named in the refusal). Undo trashes the clone
+     * and every child it minted.
+     */
+    cloneProject(
+      uuid: string,
+      clone?: Omit<CloneParams, "uuid">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
      * Turn an existing project into a repeating series. Drives the local Things
@@ -1325,6 +1356,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       replaceChecklist: (uuid, items, o) => run("todo.replace-checklist", { uuid, items }, o),
       deleteTodo: (uuid, o) => run("todo.delete", { uuid }, o),
       duplicateTodo: (uuid, o) => run("todo.duplicate", { uuid }, o),
+      cloneTodo: (uuid, clone, o) => runCloneTodo(writeDeps, { uuid, ...clone }, o ?? {}),
       restoreTodo: (uuid, o) => run("todo.restore", { uuid }, o),
       addHeading: (project, title, placement, o) =>
         runAddHeading(writeDeps, project, title, placement, o ?? {}),
@@ -1374,6 +1406,7 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       reopenProject: (uuid, o) => runProjectReopen(writeDeps, uuid, o ?? {}),
       restoreProject: (uuid, o) => run("project.restore", { uuid }, o),
       duplicateProject: (uuid, o) => run("project.duplicate", { uuid }, o),
+      cloneProject: (uuid, clone, o) => runCloneProject(writeDeps, { uuid, ...clone }, o ?? {}),
       deleteProject: (uuid, o) => run("project.delete", { uuid }, o),
       makeRepeatingProject: (uuid, rule, o) =>
         runMakeRepeatingProject(writeDeps, { uuid, ...rule }, o ?? {}),
