@@ -727,6 +727,32 @@ export function planUndo(
         notes,
       };
     }
+    // A clone (todo.clone / project.clone): the summary record heads the txn whose
+    // legs (the base add, checklist checks, terminal-state flips) are ordinary
+    // `leg`-role mutations excluded from independent undo. The single undoable unit
+    // is the whole clone, and its inverse is trashing the minted root — a project
+    // clone's minted children ride to the Trash with it (shallow delete), so no
+    // per-child inverse is replayed (the child uuids are captured on the record for
+    // the audit trail, not for undo).
+    case "todo.clone": {
+      if (uuid === null) return irreversible("the clone's uuid was never discovered");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "todo.delete", params: { uuid } }],
+        notes,
+      };
+    }
+    case "project.clone": {
+      if (uuid === null) return irreversible("the clone's uuid was never discovered");
+      notes.push("the cloned project (and every child it minted) moves to the Trash");
+      return {
+        target,
+        kind: "invertible",
+        steps: [{ op: "project.delete", params: { uuid } }],
+        notes,
+      };
+    }
     case "area.add": {
       if (uuid === null) return irreversible("the created uuid was never discovered");
       notes.push("area deletion is PERMANENT — requires --dangerously-permanent");

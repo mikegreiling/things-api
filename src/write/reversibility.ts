@@ -62,6 +62,14 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "reversible",
     note: "inverse deletes the duplicated project to the Trash",
   },
+  "todo.clone": {
+    class: "reversible",
+    note: "inverse trashes the minted clone to-do (single leg); irreversible only if the clone's uuid was never discovered",
+  },
+  "project.clone": {
+    class: "reversible",
+    note: "inverse trashes the minted clone project (and the children it carried) to the Trash; irreversible only if the clone's uuid was never discovered",
+  },
   "area.add": {
     class: "reversible",
     ack: "permanent",

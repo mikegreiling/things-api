@@ -55,7 +55,7 @@ Views and lookups — pass `--json` whenever you will act on the output: `things
 
 ## Writing
 
-Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating), `things project …` (add/update/move/complete/… plus the heading verbs), `things area …`, `things tag …`, plus `things batch` (JSONL — chain created uuids across lines with `tempId`/`$ref`, retry safely with `opId`, undo the whole run with its `undoToken`), `things undo`, `things reorder`, and `things log-now` (move completed items into the Logbook now; reports how many moved, a clean no-op when none are pending, and cannot be undone).
+Namespaced verb families — run `things <group> --help` for the verbs and `things <group> <verb> --help` for exact flags: `things todo …` (add/update/complete/cancel/reopen/move/delete/restore/tags/checklist/make-repeating/clone), `things project …` (add/update/move/complete/… plus clone and the heading verbs), `things area …`, `things tag …`, plus `things batch` (JSONL — chain created uuids across lines with `tempId`/`$ref`, retry safely with `opId`, undo the whole run with its `undoToken`), `things undo`, `things reorder`, and `things log-now` (move completed items into the Logbook now; reports how many moved, a clean no-op when none are pending, and cannot be undone).
 
 **Scheduling is an update, not a move**: `things todo update <ref> --when today|evening|anytime|someday|YYYY-MM-DD` schedules or parks an item; `move` changes its CONTAINER only.
 

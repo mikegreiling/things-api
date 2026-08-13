@@ -278,6 +278,7 @@ const EXPECTED_TOOLS = [
   // to-dos AND projects
   "restore_item",
   "duplicate_item",
+  "clone_item",
   // projects
   "add_project",
   "move_project",
@@ -2737,6 +2738,21 @@ describe("things MCP server", () => {
       ] as const) {
         const outcome = textOf(
           await client.callTool({ name: "duplicate_item", arguments: { uuid, dry_run: true } }),
+        ) as { kind: string; op: string };
+        expect(outcome.op).toBe(op);
+      }
+    });
+
+    it("clone_item dispatches on the item's type (dry-run)", async () => {
+      const todo = seedTodo(fixture.db, { title: "clone me" });
+      const project = seedProject(fixture.db, { title: "clone proj" });
+      await connect([fakeVector(null).vector]);
+      for (const [uuid, op] of [
+        [todo, "todo.clone"],
+        [project, "project.clone"],
+      ] as const) {
+        const outcome = textOf(
+          await client.callTool({ name: "clone_item", arguments: { uuid, dry_run: true } }),
         ) as { kind: string; op: string };
         expect(outcome.op).toBe(op);
       }

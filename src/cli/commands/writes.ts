@@ -868,6 +868,14 @@ function group(program: Command, name: string, description: string): Command {
 const containerRef = (value: string | undefined): { uuid?: string; title?: string } | undefined =>
   value === undefined ? undefined : { uuid: value, title: value };
 
+/** The clone-specific args (`--title` / `--preserve-created`) for todo/project clone. */
+const cloneArgs = (
+  opts: Record<string, unknown>,
+): { title?: string; preserveCreated?: boolean } => ({
+  ...(opts["title"] !== undefined && { title: opts["title"] as string }),
+  ...(opts["preserveCreated"] === true && { preserveCreated: true }),
+});
+
 export function registerWriteCommands(program: Command): void {
   const todo = group(program, "todo", "To-do–scoped operations");
 
@@ -1199,6 +1207,26 @@ export function registerWriteCommands(program: Command): void {
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.duplicateTodo(uuid, writeOptionsFrom(opts)));
+  });
+
+  addWriteFlags(
+    todo
+      .command("clone <uuid>")
+      .description(
+        "Clone a to-do — a faithful content copy (title, notes, tags, when, reminder, deadline, " +
+          "checklist items and their checked state, container, and completed/canceled state with " +
+          "the exact original timestamp). The clone is a new capture: a new uuid, created now, at " +
+          "its container's usual position; the clone's uuid is printed on success. Refuses a " +
+          "trashed source (restore it first) and a repeating template. Undo trashes the clone.",
+      )
+      .option("--title <text>", "give the clone a different title (default: the source's title)")
+      .option(
+        "--preserve-created",
+        "copy the source's creation date onto the clone (minute resolution) instead of now",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const clone = cloneArgs(opts);
+    await runWrite(opts, (c) => c.write.cloneTodo(uuid, clone, writeOptionsFrom(opts)));
   });
 
   addCreateTagsFlag(
@@ -2079,6 +2107,28 @@ export function registerWriteCommands(program: Command): void {
       ),
   ).action(async (uuid: string, opts: WriteFlagOpts) => {
     await runWrite(opts, (c) => c.write.duplicateProject(uuid, writeOptionsFrom(opts)));
+  });
+
+  addWriteFlags(
+    project
+      .command("clone <ref>")
+      .description(
+        "Clone a project (target by uuid or unique name) — a faithful content copy: area, " +
+          "headings, headed and root children (one import), notes and deadline, plus " +
+          "logged/canceled children and the project's own completed/canceled state with the " +
+          "exact original timestamps. The clone is a new capture (new uuid, created now); its " +
+          "uuid is printed on success. Refuses a trashed source, a repeating template, and a " +
+          "project holding a nested repeating template (named in the refusal). Undo trashes the " +
+          "clone and every child it minted.",
+      )
+      .option("--title <text>", "give the clone a different title (default: the source's title)")
+      .option(
+        "--preserve-created",
+        "copy the source's creation date onto the clone (minute resolution) instead of now",
+      ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const clone = cloneArgs(opts);
+    await runWrite(opts, (c) => c.write.cloneProject(uuid, clone, writeOptionsFrom(opts)));
   });
 
   addWriteFlags(

@@ -33,6 +33,7 @@ export const HAZARD_IDS = [
   "H-NO-REMINDER",
   "H-UI-DRIVE",
   "H-PROJECT-REPEAT",
+  "H-CLONE-SOURCE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -562,6 +563,12 @@ const GUARDS: Record<HazardId, GuardFn> = {
         "process (see docs/setup.md)",
     };
   },
+  // Clone refusals (trashed source, repeating-template source/target, a live
+  // nested repeating template in a project subtree) are raised DIRECTLY by the
+  // clone orchestrator (src/write/clone.ts), which never routes through the
+  // pipeline's evaluateGuards — so this guard is a no-op here (the id exists for
+  // the blocked-result taxonomy, not for a pre-read predicate).
+  "H-CLONE-SOURCE": () => null,
 };
 
 export function evaluateGuards(hazards: HazardId[], input: GuardInput): GuardBlock | null {

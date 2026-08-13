@@ -105,6 +105,37 @@ describe("dry-run plans", () => {
     expect(String(plan["invocation"])).toContain("duplicate=true");
   });
 
+  it("todo clone --dry-run discloses the leg sequence", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Cloneable" });
+    await run(["todo", "clone", uuid, "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["op"]).toBe("todo.clone");
+    expect(String(plan["invocation"])).toContain("todo.add");
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("todo clone refuses a repeating template source (blocked)", async () => {
+    const uuid = seedTodo(fixture.db, { title: "Weekly", recurrenceRule: true });
+    await run(["todo", "clone", uuid, "--json"]);
+    const env = envelope();
+    expect(env["ok"]).toBe(false);
+    const err = env["error"] as Record<string, unknown>;
+    expect(String(err["message"])).toContain("recurrence rule cannot be reproduced");
+  });
+
+  it("project clone --dry-run discloses the json-import + terminal legs", async () => {
+    const proj = seedProject(fixture.db, { title: "Cloneable project" });
+    seedTodo(fixture.db, { title: "child", project: proj });
+    await run(["project", "clone", proj, "--dry-run", "--json"]);
+    const env = envelope();
+    expect(env["kind"]).toBe("mutation-plan");
+    const plan = env["data"] as Record<string, unknown>;
+    expect(plan["op"]).toBe("project.clone");
+    expect(String(plan["invocation"])).toContain("project.add");
+  });
+
   it("todo restore --dry-run plans move-to-Inbox for a trashed to-do (E15)", async () => {
     const uuid = seedTodo(fixture.db, { title: "trashed", trashed: true });
     await run(["todo", "restore", uuid, "--dry-run", "--json"]);

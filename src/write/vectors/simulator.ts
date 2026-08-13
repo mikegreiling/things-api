@@ -1656,7 +1656,37 @@ const APPLIERS: Partial<Record<OperationKind, Applier>> = {
       creationDate: born.creationDate,
       stopDate: born.stopDate,
     });
-    // `todos` seed children are not asserted by the delta and are omitted.
+    // Structured `items` (the clone / rich-import path): headings + children born
+    // OPEN in project `index` order, positional heading inheritance (A4). The
+    // flat `todos` seed list is not asserted by the delta and stays omitted.
+    if (params.items !== undefined) {
+      let currentHeading: string | null = null;
+      for (const it of params.items) {
+        if (it.kind === "heading") {
+          currentHeading = genUuid();
+          insertTask(sim, 2, ctx, { uuid: currentHeading, title: it.title, project: uuid });
+          continue;
+        }
+        const childUuid = genUuid();
+        const cs = scheduleColumns(it.when, ctx.todayIso, true);
+        insertTask(sim, 0, ctx, {
+          uuid: childUuid,
+          title: it.title,
+          notes: it.notes ?? "",
+          start: cs.start,
+          startDate: cs.startDate,
+          startBucket: cs.startBucket,
+          deadline: it.deadline !== undefined ? encodePackedDate(it.deadline) : null,
+          // A child reached via a heading has project NULL (DB invariant); a root
+          // child sits directly under the project.
+          project: currentHeading === null ? uuid : null,
+          heading: currentHeading,
+        });
+        if (it.tags !== undefined) setTaskTags(sim, childUuid, it.tags);
+        if (it.checklistItems !== undefined)
+          replaceChecklist(sim, childUuid, it.checklistItems, ctx);
+      }
+    }
   }),
 
   "project.update": op<"project.update">((sim, params, ctx) => applyEntityUpdate(sim, params, ctx)),
