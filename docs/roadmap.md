@@ -18,7 +18,7 @@ The whole contract is ALPHA until v1.0 (break freely, no compat machinery — [d
 
 ## Cloud-account probes — blocked on a live Things Cloud account
 
-SYNC2 characterized the sync model on a throwaway account (3-way per-attribute merge, `BSSyncronyMetadata` populating 0→11 rows on attach) but a durable account is needed to go further: the real last-sync-signal taxonomy, on-hardware push/pull cadence, and any sender-side behavior the VM can't reproduce (the SYNCLAT residue). Parked until an account is available. Evidence: [docs/lab/headless-research.md](lab/headless-research.md) (SYNC2).
+SYNC2 characterized the sync model on a throwaway account (3-way per-attribute merge, `BSSyncronyMetadata` populating 0→11 rows on attach) but a durable account is needed to go further: the real last-sync-signal taxonomy, on-hardware push/pull cadence, and any sender-side behavior the VM can't reproduce (the SYNCLAT residue). Parked until an account is available. Evidence: [docs/lab/headless-research.md](lab/headless-research.md) (SYNC2). **SERDEL rider (S5, golden-v2/3.22.12):** a spawned repeating occurrence stamps its `creationDate` at the occurrence-day's `00:00:00` in the spawning process's zone (07-06 = `1783296000`, etc.), but the UTC lab VM cannot disambiguate "local midnight" from "UTC midnight" — proving locality (and the two-device dedupe-WINNER when the same occurrence materializes on two zones/clocks) needs a **non-UTC VM** and a live account; fold this into the sync/cross-zone campaign when the account lands. Evidence: [docs/lab/serdel-series-removal.md](lab/serdel-series-removal.md) S5.
 
 ## On-hardware certification — the final confirmation axis for the ui vector
 
