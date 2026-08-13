@@ -39,21 +39,21 @@ const REPEAT_UNIT_NOUN: Record<string, string> = {
  * template's joined context (src/read/detail.ts `repeats`): FIXED mode reads
  * `on <date>` (the "Repeats on Aug 19" projection); after-completion reads
  * `<N> <unit>(s) after completion` (the "Repeats 1 day after completion" form —
- * N/unit are the rule's own interval + frequency, singular/plural correct). A
- * paused template appends a dim `(paused)`. Returns null when the context carries
- * no renderable caption (no decodable rule, or a fixed rule with no projected
- * date) — the `repeating: instance of …` line still stands on its own.
+ * N/unit are the rule's own interval + frequency, singular/plural correct).
+ * Returns null when the context carries no renderable caption (no decodable rule,
+ * or a fixed rule with no projected date). The `paused` flag is surfaced
+ * SEPARATELY so the caller can fold it into the merged `repeats:` line with the
+ * instance-of handle. See {@link renderDetail}.
  */
 function repeatContextValue(ctx: RepeatContext, todayIso: string): string | null {
-  const paused = ctx.paused === true ? dim(" (paused)") : "";
   const rule = ctx.rule;
   if (rule === undefined) return null;
   if (rule.type === "fixed") {
-    return ctx.next != null ? `on ${shortDate(ctx.next, todayIso)}${paused}` : null;
+    return ctx.next != null ? `on ${shortDate(ctx.next, todayIso)}` : null;
   }
   const noun = REPEAT_UNIT_NOUN[rule.unit] ?? rule.unit;
   const n = rule.interval;
-  return `${n} ${noun}${n === 1 ? "" : "s"} after completion${paused}`;
+  return `${n} ${noun}${n === 1 ? "" : "s"} after completion`;
 }
 
 /**
@@ -144,11 +144,23 @@ export function renderDetail(item: AnyTask | null): string[] {
     meta("repeating", `TEMPLATE, ${state} (occurrences appear in upcoming)`);
   }
   if (item.repeating.isInstance) {
-    meta("repeating", `instance of ${item.repeating.templateUuid}`);
-    // The GUI's lower-corner repeat context, joined from the template (detail
-    // read). The uuid link above stays the write handle; this is the caption.
-    if (item.repeating.repeats !== undefined)
-      meta("repeats", repeatContextValue(item.repeating.repeats, todayIso));
+    // ONE merged line: the GUI's lower-corner caption plus the instance-of write
+    // handle, e.g. `repeats: on Aug 19 (instance of <uuid>)` /
+    // `repeats: 1 day after completion (instance of <uuid>)`; a paused template
+    // folds in as `(paused; instance of <uuid>)`. With no renderable caption
+    // (dangling FK / undecodable rule) the line is just `instance of <uuid>`
+    // (paused appended). JSON wire is unchanged (`instanceOf` + `repeats` stay
+    // separate keys, src/read/shape.ts).
+    const tmpl = item.repeating.templateUuid;
+    const instanceOf = `instance of ${tmpl}`;
+    const ctx = item.repeating.repeats;
+    const caption = ctx !== undefined ? repeatContextValue(ctx, todayIso) : null;
+    const paused = ctx?.paused === true;
+    if (caption !== null) {
+      meta("repeats", `${caption} (${paused ? "paused; " : ""}${instanceOf})`);
+    } else {
+      meta("repeats", `${instanceOf}${paused ? dim(" (paused)") : ""}`);
+    }
   }
   if (item.notes !== "") lines.push("", item.notes);
   if (item.type === "to-do" && item.checklist && item.checklist.length > 0) {
