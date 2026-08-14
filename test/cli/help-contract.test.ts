@@ -19,6 +19,7 @@ import {
   TOPIC_NAMES,
 } from "../../src/cli/help.ts";
 import { resolveInvocation } from "../../src/cli/resolve-invocation.ts";
+import { UI_DRIVE_OPS } from "../../src/write/operations.ts";
 import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
 
@@ -707,6 +708,39 @@ describe("write-command help states the contract", () => {
     expect(help).toContain("Add Shortcut");
     expect(help).toContain("Always Allow");
     expect(help).toContain("--check");
+  });
+});
+
+describe("ui-vector drive-gui flag completeness lock", () => {
+  // Every operation the catalog gates behind the GUI drive (UI_DRIVE_OPS) MUST
+  // expose --dangerously-drive-gui on its own CLI command. Without the decorator
+  // the command is UNINVOKABLE: passing the flag errors "unknown option", while
+  // omitting it fail-closes on the drive acknowledgement (H-UI-DRIVE) — every
+  // path a dead end. Driving this lock off the catalog rather than a hand-list
+  // means a newly-added ui-vector op that forgets the decorator fails HERE, not
+  // silently at a user's terminal. An operation kind's dotted name IS its
+  // command path (`todo.make-repeating` → `things todo make-repeating`).
+  const program = buildProgram();
+  const commandFor = (op: string): Command => {
+    let cmd = program as unknown as Command;
+    for (const name of op.split(".")) {
+      const next = cmd.commands.find((c) => c.name() === name);
+      if (next === undefined) {
+        throw new Error(
+          `no CLI command \`things ${op.split(".").join(" ")}\` for ui-vector op ${op}`,
+        );
+      }
+      cmd = next;
+    }
+    return cmd;
+  };
+
+  it.each([...UI_DRIVE_OPS])("%s exposes --dangerously-drive-gui", (op) => {
+    const longs = commandFor(op).options.map((o) => o.long);
+    expect(
+      longs,
+      `\`things ${op.split(".").join(" ")}\` must offer --dangerously-drive-gui`,
+    ).toContain("--dangerously-drive-gui");
   });
 });
 
