@@ -160,7 +160,7 @@ describe("batch temp-id chaining", () => {
     expect(typeof tempIdMapping["b"]).toBe("string");
   });
 
-  it("make-repeating is REFUSED inside a batch (promote-via-clone compound), naming the standalone command; its tempId binds nothing so a dotted $ref fails", async () => {
+  it("make-repeating is REFUSED inside a batch (promote-via-clone compound): the whole batch refuses statically before anything runs", async () => {
     const src = seedTodo(fixture.db, {
       title: "Water plants",
       start: "active",
@@ -173,11 +173,11 @@ describe("batch temp-id chaining", () => {
         tempId: "rep",
         options: { dangerouslyDriveGui: true },
       },
-      // A later line depending on the (now-refused) make-repeating cannot resolve.
+      // A later line depending on the (now-refused) make-repeating.
       { op: "todo.complete", params: { uuid: "$rep.instance" } },
     ]);
-    // The make-repeating line is refused as a non-atomic compound; it must not run
-    // the old destructive native promote.
+    // The make-repeating line is a STATIC compound error: it refuses the WHOLE
+    // batch up front (Change 1) — it never runs the old destructive native promote.
     const first = results[0]?.outcome;
     expect(first?.kind).toBe("invalid");
     if (first?.kind === "invalid") {
@@ -187,12 +187,10 @@ describe("batch temp-id chaining", () => {
     // The source is untouched — nothing was promoted or trashed.
     expect(row(src)?.["trashed"]).toBe(0);
     expect(row(src)?.["rt1_recurrenceRule"]).toBeNull();
-    // Its tempId bound nothing, so the dependent dotted $ref fails closed.
+    // Nothing bound and the dependent line is reported not-run (the batch refused
+    // as a unit before any leg dispatched).
     expect(tempIdMapping["rep"]).toBeUndefined();
-    expect(results[1]?.outcome.kind).toBe("invalid");
-    if (results[1]?.outcome.kind === "invalid") {
-      expect(results[1].outcome.detail).toContain("unresolved-temp-ref");
-    }
+    expect(results[1]?.outcome.kind).toBe("skipped");
   });
 });
 

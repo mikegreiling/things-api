@@ -254,13 +254,39 @@ export function scanAuditIntegrity(records: AuditRecord[]): AuditIntegrity {
 }
 
 /**
+ * The set of mutation undo-tokens that have ALREADY been undone: derived from
+ * the inverse records on the trail (an `ok` record under an `undo:*` actor whose
+ * `undoOf` back-references the mutation it reversed). This is the same linkage
+ * the `--txn` already-undone check reads, generalized to a set.
+ */
+function undoneTokens(records: AuditRecord[]): Set<string> {
+  const undone = new Set<string>();
+  for (const r of records) {
+    if (r.result === "ok" && r.actor.startsWith("undo:") && typeof r.undoOf === "string") {
+      undone.add(r.undoOf);
+    }
+  }
+  return undone;
+}
+
+/**
  * The undoable targets to unwind, NEWEST FIRST (undo unwinds a stack).
  *
  *  - `txn` wins when present: the ONE record whose undo token matches (or an
- *    empty array — the caller distinguishes not-found from already-undone).
+ *    empty array — the caller distinguishes not-found from already-undone). The
+ *    already-undone exclusion below does NOT apply to `--txn`: surgical targeting
+ *    keeps the loud "already undone" error (runUndo raises it before selecting).
  *  - otherwise the last `last` records, optionally narrowed to actor `by`
  *    (exact match; "*"/undefined = every actor). `by` NEVER matches an
  *    `undo:<actor>` record — those are excluded from undoability entirely.
+ *
+ * ALREADY-UNDONE records are EXCLUDED from `--last`/`--by` selection (Change 3),
+ * so `--last N` always means "the N newest NOT-YET-undone mutations" and a
+ * repeated `undo --last N` walks progressively deeper into history instead of
+ * re-selecting the same records (whose inverses would trip the precondition
+ * guard). IRREVERSIBLE records are NOT excluded — they were never undone, so
+ * they keep COUNTING toward N and being reported every pass (reaching silently
+ * past one to undo something older would be a dangerous surprise).
  */
 export function selectUndoTargets(
   records: AuditRecord[],
@@ -271,10 +297,12 @@ export function selectUndoTargets(
     const match = undoable.find((r) => undoToken(r) === selector.txn);
     return match === undefined ? [] : [match];
   }
+  const undone = undoneTokens(records);
+  const notUndone = undoable.filter((r) => !undone.has(undoToken(r)));
   const byActor =
     selector.by === undefined || selector.by === "*"
-      ? undoable
-      : undoable.filter((r) => r.actor === selector.by);
+      ? notUndone
+      : notUndone.filter((r) => r.actor === selector.by);
   return byActor.slice(-Math.max(1, selector.last ?? 1)).toReversed();
 }
 

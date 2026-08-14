@@ -421,7 +421,7 @@ describe("write-command help states the contract", () => {
     const help = helpFor("batch");
     expect(help).toContain("NO transactions");
     expect(help).toContain("acknowledgeTagSubtree");
-    expect(help).toContain("--fail-fast");
+    expect(help).toContain("--continue-on-error");
     expect(help).toContain("--dry-run");
     expect(help).toContain("0 all ok");
   });

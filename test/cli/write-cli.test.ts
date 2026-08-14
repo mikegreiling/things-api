@@ -480,7 +480,7 @@ describe("capabilities", () => {
 });
 
 describe("batch (Phase 13)", () => {
-  it("streams per-op JSONL, handles bad lines, exits with worst severity", async () => {
+  it("a torn JSON line refuses the WHOLE batch (static preflight), naming it; nothing else runs", async () => {
     const uuid = seedTodo(fixture.db, { title: "batch-target" });
     const batchFile = join(stateDir, "ops.jsonl");
     const { writeFileSync } = await import("node:fs");
@@ -499,13 +499,14 @@ describe("batch (Phase 13)", () => {
       .split("\n")
       .map((l) => JSON.parse(l));
     expect(lines).toHaveLength(4); // 3 results + summary
-    expect(lines[0].outcome).toBe("dry-run");
+    // The torn line is the invalid one (its JSON error is preserved); the other
+    // two are reported not-run — the batch is refused before anything is planned.
+    expect(lines[0].outcome).toBe("skipped");
     expect(lines[1].outcome).toBe("invalid");
     expect(lines[1].detail).toMatch(/not valid JSON/);
-    // trash.empty dry-run still hits the H-PERMANENT-DELETE guard first
-    expect(lines[2].outcome).toBe("blocked");
-    expect(lines[3].summary).toEqual({ total: 3, ok: 1, failed: 2, skipped: 0 });
-    expect(process.exitCode).toBe(4); // blocked outranks invalid
+    expect(lines[2].outcome).toBe("skipped");
+    expect(lines[3].summary).toEqual({ total: 3, ok: 0, failed: 1, skipped: 2 });
+    expect(process.exitCode).toBe(3); // invalid/verify-failed
   });
 
   it("a batch of only unsupported ops exits 6 (Unsupported), not 3", async () => {
@@ -530,7 +531,9 @@ describe("batch (Phase 13)", () => {
         }),
       ].join("\n"),
     );
-    await run(["batch", batchFile, "--dry-run"]);
+    // --continue-on-error so BOTH unsupported ops are evaluated (the default
+    // would stop after the first, reporting the second not-run).
+    await run(["batch", batchFile, "--dry-run", "--continue-on-error"]);
     const lines = stdout
       .join("")
       .trim()
@@ -557,7 +560,8 @@ describe("batch (Phase 13)", () => {
         JSON.stringify({ op: "trash.empty", params: {} }), // H-PERMANENT-DELETE -> blocked
       ].join("\n"),
     );
-    await run(["batch", batchFile, "--dry-run"]);
+    // --continue-on-error so both runtime failures are evaluated for the exit rank.
+    await run(["batch", batchFile, "--dry-run", "--continue-on-error"]);
     const lines = stdout
       .join("")
       .trim()
@@ -571,8 +575,11 @@ describe("batch (Phase 13)", () => {
 
   it("mixed batch: unsupported outranks verify-failed/invalid (exit 6)", async () => {
     const a = seedTodo(fixture.db, { title: "u1" });
+    const b = seedTodo(fixture.db, { title: "u2" });
     const batchFile = join(stateDir, "mixed-unsupported.jsonl");
     const { writeFileSync } = await import("node:fs");
+    // A RUNTIME invalid (exclusive notes/appendNotes throws per-line) — valid
+    // JSON, so it passes the static preflight and streams as `invalid`.
     writeFileSync(
       batchFile,
       [
@@ -581,10 +588,11 @@ describe("batch (Phase 13)", () => {
           params: { uuid: a },
           options: { vector: "url-scheme" },
         }), // unsupported
-        "not json {", // invalid -> feeds the verify-failed catch-all
+        JSON.stringify({ op: "todo.update", params: { uuid: b, notes: "x", appendNotes: "y" } }), // invalid (exclusive)
       ].join("\n"),
     );
-    await run(["batch", batchFile, "--dry-run"]);
+    // --continue-on-error so both failures are evaluated for the exit rank.
+    await run(["batch", batchFile, "--dry-run", "--continue-on-error"]);
     const lines = stdout
       .join("")
       .trim()
@@ -595,7 +603,7 @@ describe("batch (Phase 13)", () => {
     expect(process.exitCode).toBe(6);
   });
 
-  it("--fail-fast skips after the first failure", async () => {
+  it("stops on the first failure by DEFAULT, reporting the rest not-run + resume guidance", async () => {
     const uuid = seedTodo(fixture.db, { title: "ff" });
     const batchFile = join(stateDir, "ff.jsonl");
     const { writeFileSync } = await import("node:fs");
@@ -606,7 +614,7 @@ describe("batch (Phase 13)", () => {
         JSON.stringify({ op: "todo.update", params: { uuid, title: "x" } }),
       ].join("\n"),
     );
-    await run(["batch", batchFile, "--dry-run", "--fail-fast"]);
+    await run(["batch", batchFile]);
     const lines = stdout
       .join("")
       .trim()
@@ -614,6 +622,31 @@ describe("batch (Phase 13)", () => {
       .map((l) => JSON.parse(l));
     expect(lines[0].outcome).toBe("blocked");
     expect(lines[1].outcome).toBe("skipped");
+    // The trailing summary carries resume guidance (1 line did not run).
+    const summary = lines.at(-1).summary;
+    expect(summary.resumption.notRun).toBe(1);
+  });
+
+  it("--continue-on-error runs past a failed op (each reports its own outcome)", async () => {
+    const batchFile = join(stateDir, "cont.jsonl");
+    const { writeFileSync } = await import("node:fs");
+    // Two guard-blocked ops (neither executes a vector): the DEFAULT would stop
+    // after the first (second → skipped); --continue-on-error runs both.
+    writeFileSync(
+      batchFile,
+      [
+        JSON.stringify({ op: "trash.empty", params: {} }),
+        JSON.stringify({ op: "trash.empty", params: {} }),
+      ].join("\n"),
+    );
+    await run(["batch", batchFile, "--continue-on-error"]);
+    const lines = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines[0].outcome).toBe("blocked");
+    expect(lines[1].outcome).toBe("blocked");
   });
 });
 

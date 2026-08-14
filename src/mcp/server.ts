@@ -2965,16 +2965,21 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
     {
       description:
         "Run several operations in order, each independently — there are no transactions, " +
-        "and a failure does not roll back earlier operations. Per-operation results return " +
-        "in order; fail_fast skips the remainder after the first failure. " +
+        "and a failure does not roll back earlier operations. A statically-invalid operation " +
+        "(bad shape, unknown op, a $ref to an undeclared/forward temp_id, a duplicate temp_id) " +
+        "refuses the WHOLE batch before anything runs, naming every bad operation. Otherwise " +
+        "per-operation results return in order. By DEFAULT a runtime failure STOPS the batch " +
+        "(later operations reported not-run, with resume guidance in the summary); " +
+        "continue_on_error runs past failures. " +
         "CHAINING: an operation that creates something may carry temp_id (a handle); a LATER " +
         'operation references that new uuid as "$handle" in any id/container field (dotted ' +
         '"$handle.instance"/"$handle.replaced" reach a repeating op\'s spawned instance / ' +
         "replaced source). A temp_id is valid only on a creating operation (not tag.add — " +
         "reference a tag by title) and unique per batch. IDEMPOTENCY: op_id makes resubmission " +
         "safe — an operation matching an earlier success is reported already-applied, not " +
-        "re-created. The result adds temp_id_mapping (handle → uuid) and undo_token, which " +
-        "reverses the whole batch as one unit via the undo tool.",
+        "re-created (put an op_id on EVERY operation so a stopped batch can be resubmitted " +
+        "verbatim to resume). The result adds temp_id_mapping (handle → uuid) and undo_token, " +
+        "which reverses the whole batch as one unit via the undo tool.",
       inputSchema: {
         ops: z
           .array(
@@ -3004,7 +3009,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
             }),
           )
           .describe("Ops in execution order"),
-        fail_fast: z.boolean().optional().describe("Skip remaining ops after the first failure"),
+        continue_on_error: z
+          .boolean()
+          .optional()
+          .describe("Run past a failed op instead of stopping (default: stop on failure)"),
         ...dryRunShape,
         ...preserveModifiedShape,
       },
@@ -3037,7 +3045,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         });
         const batchResult = await getClient().write.batch(ops, {
           ...(args.dry_run === true && { dryRun: true }),
-          ...(args.fail_fast === true && { failFast: true }),
+          ...(args.continue_on_error === true && { continueOnError: true }),
           actor: mcpActor(),
         });
         // First block: the per-op results, each FLATTENED to the wire shape (a
@@ -3047,7 +3055,9 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         // bound temp ids.
         const lines = batchResult.results.map(flattenBatchLine);
         const hasSummary =
-          batchResult.undoToken !== undefined || Object.keys(batchResult.tempIdMapping).length > 0;
+          batchResult.undoToken !== undefined ||
+          batchResult.resumption !== undefined ||
+          Object.keys(batchResult.tempIdMapping).length > 0;
         if (!hasSummary) return jsonResult(lines);
         return {
           content: [
@@ -3057,6 +3067,10 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
               text: JSON.stringify({
                 tempIdMapping: batchResult.tempIdMapping,
                 ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
+                // Resume guidance when a runtime failure stopped the batch (Change 2).
+                ...(batchResult.resumption !== undefined && {
+                  resumption: batchResult.resumption,
+                }),
               }),
             },
           ],
@@ -3132,9 +3146,14 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "cannot be undone here). By default this undoes only changes made through THIS " +
         "connection — this client's own writes; it will not touch the user's own edits, or " +
         'another client\'s, unless you pass by="*" (all authors) or a specific author name; ' +
-        "pass a txn token to undo one exact change. Some changes cannot be reversed — " +
-        "permanent deletions, or changes whose prior state is unknown — and are reported as " +
-        "irreversible; a to-do brought back from an undone delete returns to the Inbox " +
+        "pass a txn token to undo one exact change. last/by select the N newest NOT-YET-undone " +
+        "changes: a change already undone is SKIPPED, so repeating undo with last:N walks " +
+        "progressively deeper into history instead of re-selecting the same changes. An " +
+        "irreversible change is NOT skipped — it still counts toward N and is reported every " +
+        "pass, so you see it rather than silently reaching past it. Some changes cannot be " +
+        "reversed — permanent deletions, or changes whose prior state is unknown — and are " +
+        "reported as irreversible; a to-do brought back from an undone delete returns to the " +
+        "Inbox " +
         "without its schedule. Undoing the creation of an area or tag deletes it " +
         "permanently — requires dangerously_permanent. An undo is refused when the item " +
         "changed outside this interface since (its list or project, status, schedule, " +

@@ -2552,24 +2552,28 @@ export function registerWriteCommands(program: Command): void {
       "Run MANY mutations from JSONL (file, or stdin when omitted/'-'): one op per line, " +
         '{"op": "<kind>", "params": {...}, "options": {...}} — see `things capabilities` for ' +
         "op kinds and params. Ops run sequentially and independently — NO transactions; a " +
-        "failure does not roll back earlier ops. Per-op results stream as JSONL. Per-op " +
+        "failure does not roll back earlier ops. A statically-invalid line (bad shape, unknown " +
+        "op, a $ref to an undeclared/forward tempId, a duplicate tempId) refuses the WHOLE " +
+        "batch before anything runs, naming every bad line. Otherwise ops run and per-op " +
+        "results stream as JSONL. Per-op " +
         "options carry the confirmation flags (acknowledgeChecklistReset, " +
         "acknowledgeProjectReopen, dangerouslyPermanent, acknowledgeTagSubtree). " +
         "CHAINING: an op that creates something may carry a `tempId` (a handle like " +
         '"proj1"); a LATER op references that new uuid as "$proj1" in any id/container ' +
         'param (dotted "$proj1.instance"/"$proj1.replaced" reach a repeating op\'s spawned ' +
         "instance / replaced source). A tempId is valid only on a creating op (not tag.add — " +
-        "reference a tag by title) and unique per batch; an unresolved/forward $ref fails just " +
-        "that line. IDEMPOTENCY: a line's `opId` makes resubmission safe — a matching earlier " +
-        "success is reported already-applied, not re-created. The trailing summary line adds " +
-        "`tempIdMapping` (handle → uuid) and `undoToken` — undo the WHOLE batch with " +
-        "`things undo --txn <undoToken>`. " +
-        "--dry-run plans everything without executing; --fail-fast skips the rest after " +
-        "the first failure. Exit (worst failure wins): 0 all ok · 3 any verify-failed/invalid " +
-        "· 4 any blocked · 5 any drift-blocked · 6 any unsupported.",
+        "reference a tag by title) and unique per batch. IDEMPOTENCY: a line's `opId` makes " +
+        "resubmission safe — a matching earlier success is reported already-applied, not " +
+        "re-created (put an opId on EVERY line so a stopped batch can be resubmitted verbatim " +
+        "to resume). The trailing summary line adds `tempIdMapping` (handle → uuid) and " +
+        "`undoToken` — undo the WHOLE batch with `things undo --txn <undoToken>`. " +
+        "By DEFAULT a runtime failure STOPS the batch (later lines reported not-run, with resume " +
+        "guidance in the summary); --continue-on-error runs past failures. --dry-run plans " +
+        "everything without executing. Exit (worst failure wins): 0 all ok · 3 any " +
+        "verify-failed/invalid · 4 any blocked · 5 any drift-blocked · 6 any unsupported.",
     )
     .option("--dry-run", "plan every op; execute nothing")
-    .option("--fail-fast", "skip remaining ops after the first failure")
+    .option("--continue-on-error", "run past a failed op instead of stopping (default: stop)")
     .option("--json", "JSONL results + summary on stdout (also the default)")
     .option("--db <path>", "explicit database path")
     .option("--actor <name>", "author name recorded for the whole batch")
@@ -2609,7 +2613,7 @@ export function registerWriteCommands(program: Command): void {
           ops,
           {
             ...(opts.dryRun !== undefined && { dryRun: opts.dryRun }),
-            ...(opts["failFast"] === true && { failFast: true }),
+            ...(opts["continueOnError"] === true && { continueOnError: true }),
             ...(opts.actor !== undefined && { actor: opts.actor }),
           },
           (r) => {
@@ -2632,6 +2636,10 @@ export function registerWriteCommands(program: Command): void {
             // (undo the whole submission with `things undo --txn <token>`).
             ...(hasMapping && { tempIdMapping: batchResult.tempIdMapping }),
             ...(batchResult.undoToken !== undefined && { undoToken: batchResult.undoToken }),
+            // ADDITIVE: resume guidance when a runtime failure stopped the batch
+            // (Change 2) — how many lines did not run and whether a verbatim
+            // resubmission is safe.
+            ...(batchResult.resumption !== undefined && { resumption: batchResult.resumption }),
           },
         };
         process.stdout.write(`${JSON.stringify(summary)}\n`);
@@ -2653,8 +2661,13 @@ export function registerWriteCommands(program: Command): void {
         "author's changes (e.g. `--by mcp` to clean up after an agent), or --txn <token> " +
         "to undo one exact change by the `undoToken` its result returned (immune to any " +
         "changes made in between). Changes made directly in the Things app cannot be " +
-        "undone here. IRREVERSIBLE changes are reported, not guessed: permanent deletes " +
-        "and changes whose prior state is unknown. Partial restores carry notes (e.g. a " +
+        "undone here. --last/--by select the N newest NOT-YET-undone changes: a change already " +
+        "undone is SKIPPED, so repeating `undo --last N` walks progressively deeper into " +
+        "history rather than re-selecting the same changes. An IRREVERSIBLE change is NOT " +
+        "skipped — it still counts toward N and is reported every pass (so you always see it " +
+        "rather than silently reaching past it). IRREVERSIBLE changes are reported, not " +
+        "guessed: permanent deletes and changes whose prior state is unknown. Partial " +
+        "restores carry notes (e.g. a " +
         "delete-undo lands in the Inbox de-scheduled). --dry-run shows every inverse plan " +
         "without executing. Undoing a CREATED area/tag deletes it permanently — requires " +
         "--dangerously-permanent. An undo is refused when the item changed outside things-api " +

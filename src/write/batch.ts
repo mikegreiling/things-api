@@ -14,9 +14,11 @@
  *    ref-accepting param (project/area/target/uuid/…). Dotted access reaches an
  *    identity-replacement op's other discovered uuids: `$name.instance` (the
  *    spawned occurrence) and `$name.replaced` (the destroyed source). Refs
- *    resolve STRICTLY (fail-closed) as each leg lands — a `$` value naming no
- *    declared tempId, a forward reference, or a reference to a leg that bound
- *    nothing fails that one line before dispatch; independent later lines run.
+ *    resolve STRICTLY (fail-closed). A `$` value naming no declared tempId or a
+ *    forward reference is a STATIC error caught by the whole-batch preflight
+ *    (the batch is refused before anything runs). A reference to an earlier leg
+ *    that BOUND NOTHING (its op failed/skipped) is a RUNTIME miss that fails
+ *    that one line as it lands.
  *  - opId (`opId`): a client idempotency id. Before dispatch, a line with an
  *    opId is matched against the recent change history; a prior `ok` record with
  *    the same id means the line is SKIPPED (reported already-applied with the
@@ -97,6 +99,22 @@ export interface BatchItemResult {
   opId?: string;
 }
 
+/**
+ * Resume guidance after a stop-on-failure halt (Change 2). Present only when a
+ * runtime failure halted the batch with lines left not-run. Tells the caller
+ * whether the SAME batch can be resubmitted verbatim to resume.
+ */
+export interface BatchResumption {
+  /** How many lines were reported not-run after the halt. */
+  notRun: number;
+  /** True iff every line that COMMITTED a change carried an opId (safe verbatim rerun). */
+  verbatimSafe: boolean;
+  /** Indices of committed lines that lacked an opId — a verbatim rerun would RE-RUN these. */
+  nonIdempotentIndices: number[];
+  /** Human-readable resume story (mirrored into the CLI/MCP summary). */
+  detail: string;
+}
+
 /** The whole-batch result: the per-op stream plus the batch-level additions. */
 export interface BatchResult {
   results: BatchItemResult[];
@@ -108,11 +126,21 @@ export interface BatchResult {
    * all-rejected batch, or one where no leg reached the pipeline.
    */
   undoToken?: string;
+  /**
+   * Resume guidance — present only when a runtime failure HALTED the batch
+   * (stop-on-failure default) leaving lines not-run (ADDITIVE).
+   */
+  resumption?: BatchResumption;
 }
 
 export interface BatchOptions {
-  /** Stop at the first non-ok outcome; remaining ops report kind "skipped". */
-  failFast?: boolean;
+  /**
+   * Run PAST a runtime per-line failure instead of halting. The default is
+   * stop-on-failure (Change 2): a runtime failure halts the batch and every
+   * later line is reported not-run. Set this to restore the old proceed-past
+   * behavior (every line runs regardless of earlier failures).
+   */
+  continueOnError?: boolean;
   /** Plan every op without executing (each result is its dry-run plan). */
   dryRun?: boolean;
   actor?: string;
@@ -154,9 +182,10 @@ const UUID_MINTING_OPS = new Set<string>([
   "project.promote-heading",
   // NB: `*.make-repeating` mints a uuid but is REFUSED as a batch leg
   // (BATCH_UNSUPPORTED_COMPOUND) — it stays listed here so a tempId on it clears
-  // the declaration pre-flight and the line gets the informative per-line compound
-  // refusal (binding nothing) instead of poisoning the whole batch. The
-  // add-repeating COMPOUNDS mint uuids too but are likewise refused standalone.
+  // the tempId-declaration pre-flight and is then caught by the static compound
+  // check (which now refuses the WHOLE batch, Change 1) with the informative
+  // compound detail rather than a bare "tempId not valid here". The add-repeating
+  // COMPOUNDS mint uuids too but are likewise refused standalone.
 ]);
 
 const TEMP_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
@@ -187,24 +216,32 @@ interface Binding {
   replaced: string | null;
 }
 
-/** True when an outcome should be treated as a failure for --fail-fast/exit. */
+/** True when an outcome should be treated as a failure (halt / exit code). */
 export function outcomeFailed(outcome: BatchItemOutcome): boolean {
   return outcome.kind !== "ok" && outcome.kind !== "dry-run" && outcome.kind !== "already-applied";
 }
 
 /**
- * Pre-flight scan of every declared `tempId`, BEFORE any leg runs. Returns the
- * name→line index of valid declarations and, per offending line, the usage
- * detail. Any declaration error rejects the WHOLE batch (nothing executes) —
- * a temp-id script with a bad/duplicate/misplaced handle is a structural error,
- * like a torn JSONL line.
+ * STATIC preflight over EVERY line, BEFORE any leg runs (Change 1). Returns the
+ * name→line index of valid tempId declarations and, per statically-invalid line,
+ * the usage detail. "Statically detectable" means checkable with NO DB/app state:
+ * a torn/non-object line, missing/unknown op, a BATCH_UNSUPPORTED_COMPOUND op,
+ * non-object params, a malformed opId, a malformed/misplaced/duplicate tempId
+ * declaration, and a `$ref` naming a tempId that NO EARLIER line declares
+ * (unresolved or forward). ANY hit rejects the WHOLE batch (nothing executes) —
+ * a script with a structural error is refused as a unit. RUNTIME failures
+ * (verify-failed, guards, param-shape throws, a ref to a leg that BOUND NOTHING)
+ * are not detectable here and keep their per-line semantics in `runLine`.
  */
-function validateDeclarations(ops: BatchOp[]): {
+function preflightBatch(ops: BatchOp[]): {
   declIndex: Map<string, number>;
   errors: Map<number, string>;
 } {
   const declIndex = new Map<string, number>();
   const errors = new Map<number, string>();
+
+  // Pass 1 — validate every tempId DECLARATION and index the valid ones (so the
+  // ref check below can tell "declared earlier" from "unresolved"/"forward").
   for (let i = 0; i < ops.length; i++) {
     const entry = ops[i];
     if (typeof entry !== "object" || entry === null) continue;
@@ -235,7 +272,87 @@ function validateDeclarations(ops: BatchOp[]): {
     }
     declIndex.set(tempId, i);
   }
+
+  // Pass 2 — per-line STATIC shape + static ref checks (skip lines already
+  // flagged by a declaration error; one detail per line is enough to refuse).
+  for (let i = 0; i < ops.length; i++) {
+    if (errors.has(i)) continue;
+    const detail = staticLineError(ops[i] as BatchOp, i, declIndex);
+    if (detail !== undefined) errors.set(i, detail);
+  }
+
   return { declIndex, errors };
+}
+
+/** One line's STATIC shape/ref error (no DB/app state), or undefined when clean. */
+function staticLineError(
+  entry: BatchOp,
+  index: number,
+  declIndex: Map<string, number>,
+): string | undefined {
+  if (typeof entry !== "object" || entry === null || typeof entry.op !== "string") {
+    return "each op needs {op, params}";
+  }
+  if (!KNOWN_OPS.has(entry.op)) {
+    return `unknown op "${entry.op}" — see \`things capabilities\``;
+  }
+  if (BATCH_UNSUPPORTED_COMPOUND.has(entry.op)) {
+    return (
+      `"${entry.op}" is a promote-via-clone COMPOUND (clone/add → GUI promote → trash), not a ` +
+      "single atomic op — it does not compose inside a batch. Run it as a standalone command " +
+      "(`things todo|project make-repeating` / `add-repeating`)"
+    );
+  }
+  if (typeof entry.params !== "object" || entry.params === null) {
+    return "params must be an object";
+  }
+  if (entry.opId !== undefined && !OP_ID_RE.test(entry.opId)) {
+    return "opId must match [A-Za-z0-9_-] and be 1–64 characters";
+  }
+  return staticRefError(entry.params, declIndex, index);
+}
+
+/**
+ * STATIC `$ref` check for one line's ref-accepting params: a `$name` that names
+ * a tempId NO EARLIER line declares — either declared nowhere (unresolved) or
+ * declared on this/a later line (forward). Both are structural and refuse the
+ * whole batch. A ref to a tempId declared EARLIER is fine here (whether the leg
+ * actually bound a uuid is a RUNTIME question, resolved in `runLine`).
+ */
+function staticRefError(
+  params: Record<string, unknown>,
+  declIndex: Map<string, number>,
+  currentIndex: number,
+): string | undefined {
+  const check = (value: unknown): string | undefined => {
+    if (!isRef(value)) return undefined;
+    const { name } = parseRef(value);
+    const declaredAt = declIndex.get(name);
+    if (declaredAt === undefined) {
+      return `unresolved-temp-ref: "${value}" names no tempId declared in this batch`;
+    }
+    if (declaredAt > currentIndex) {
+      return `unresolved-temp-ref: "${value}" is a forward reference — tempId "${name}" is declared later (line ${declaredAt + 1})`;
+    }
+    return undefined;
+  };
+  for (const key of Object.keys(params)) {
+    if (!REF_KEYS.has(key)) continue;
+    const value = params[key];
+    if (isRef(value)) {
+      const e = check(value);
+      if (e !== undefined) return e;
+    } else if (Array.isArray(value)) {
+      for (const el of value) {
+        const e = check(el);
+        if (e !== undefined) return e;
+      }
+    } else if (typeof value === "object" && value !== null) {
+      const e = check((value as Record<string, unknown>)["uuid"]);
+      if (e !== undefined) return e;
+    }
+  }
+  return undefined;
 }
 
 /** Parse a `"$name"` / `"$name.instance"` token into its handle + accessor. */
@@ -421,19 +538,23 @@ export async function runBatch(
   const bindings = new Map<string, Binding>();
   const tempIdMapping: Record<string, string> = {};
 
-  // Pre-flight: validate every temp-id declaration BEFORE any leg runs.
-  const { declIndex, errors: declErrors } = validateDeclarations(ops);
-  if (declErrors.size > 0) {
+  // STATIC preflight (Change 1): scan EVERY line for a structural error BEFORE
+  // any leg runs — dry-run takes the same pass. On any hit the WHOLE batch is
+  // refused: the offending lines report `invalid` (enumerating every one), all
+  // others report `skipped`, and nothing is dispatched.
+  const { declIndex, errors: staticErrors } = preflightBatch(ops);
+  if (staticErrors.size > 0) {
     const results: BatchItemResult[] = ops.map((entry, index) => {
       const op = String((entry as { op?: unknown } | null)?.op);
-      const detail = declErrors.get(index);
+      const detail = staticErrors.get(index);
       const outcome: BatchItemOutcome =
         detail !== undefined
           ? { kind: "invalid", op, detail }
           : {
               kind: "skipped",
               op,
-              detail: "not run — the batch has a temp-id declaration error (see the invalid line)",
+              detail:
+                "not run — the batch was refused before executing (a line is statically invalid; see the invalid line(s))",
             };
       const result: BatchItemResult = { index, op, outcome };
       onResult?.(result);
@@ -452,6 +573,7 @@ export async function runBatch(
   const results: BatchItemResult[] = [];
   let halted = false;
   let legsDispatched = 0;
+  let notRun = 0;
 
   /** Bind (or rebind) a temp id to a discovered uuid so later `$refs` resolve. */
   const bind = (tempId: string, binding: Binding): void => {
@@ -466,48 +588,9 @@ export async function runBatch(
     tempId: string | undefined,
     opId: string | undefined,
   ): Promise<{ outcome: BatchItemOutcome; boundUuid?: string }> => {
-    if (typeof entry !== "object" || entry === null || typeof entry.op !== "string") {
-      return {
-        outcome: {
-          kind: "invalid",
-          op: String((entry as { op?: unknown })?.op),
-          detail: "each op needs {op, params}",
-        },
-      };
-    }
-    if (!KNOWN_OPS.has(entry.op)) {
-      return {
-        outcome: {
-          kind: "invalid",
-          op: entry.op,
-          detail: `unknown op "${entry.op}" — see \`things capabilities\``,
-        },
-      };
-    }
-    if (BATCH_UNSUPPORTED_COMPOUND.has(entry.op)) {
-      return {
-        outcome: {
-          kind: "invalid",
-          op: entry.op,
-          detail:
-            `"${entry.op}" is a promote-via-clone COMPOUND (clone/add → GUI promote → trash), not a ` +
-            "single atomic op — it does not compose inside a batch. Run it as a standalone command " +
-            "(`things todo|project make-repeating` / `add-repeating`)",
-        },
-      };
-    }
-    if (typeof entry.params !== "object" || entry.params === null) {
-      return { outcome: { kind: "invalid", op: entry.op, detail: "params must be an object" } };
-    }
-    if (opId !== undefined && !OP_ID_RE.test(opId)) {
-      return {
-        outcome: {
-          kind: "invalid",
-          op: entry.op,
-          detail: "opId must match [A-Za-z0-9_-] and be 1–64 characters",
-        },
-      };
-    }
+    // Every STATIC shape/op/opId/ref check already passed the whole-batch
+    // preflight above (a hit there refuses the batch and this loop never runs),
+    // so `entry` is a well-formed op with object params and a valid opId here.
     // opId idempotency: an earlier submission already applied this line — skip,
     // report already-applied with the recorded uuid, and rebind it so later
     // $refs still resolve.
@@ -632,10 +715,13 @@ export async function runBatch(
     let outcome: BatchItemOutcome;
     let boundUuid: string | undefined;
     if (halted) {
+      notRun += 1;
       outcome = {
         kind: "skipped",
         op: String(entry?.op),
-        detail: "skipped after earlier failure (--fail-fast)",
+        detail:
+          "not run — a preceding line failed and the batch stops on failure by default " +
+          "(pass --continue-on-error / continueOnError to run past failures)",
       };
     } else {
       ({ outcome, boundUuid } = await runLine(entry, index, tempId, opId));
@@ -651,7 +737,18 @@ export async function runBatch(
     };
     results.push(result);
     onResult?.(result);
-    if (options.failFast === true && !halted && outcomeFailed(outcome)) halted = true;
+    // Stop-on-failure is the DEFAULT (Change 2): a runtime failure halts the
+    // batch so every later line is reported not-run. `continueOnError` restores
+    // the old proceed-past behavior. Dry-run never halts — a preview shows the
+    // WHOLE plan.
+    if (
+      options.dryRun !== true &&
+      options.continueOnError !== true &&
+      !halted &&
+      outcomeFailed(outcome)
+    ) {
+      halted = true;
+    }
   }
 
   // Write the batch summary (and mint the batch undo token) when at least one
@@ -663,5 +760,33 @@ export async function runBatch(
     undoToken = txnId;
   }
 
-  return { results, tempIdMapping, ...(undoToken !== undefined && { undoToken }) };
+  // Resume guidance (Change 2): only when a runtime failure HALTED the batch
+  // with lines left not-run. A verbatim rerun is SAFE iff every COMMITTED line
+  // (kind "ok") carried an opId — those replay as already-applied (skipped),
+  // while the failed line is retried and the not-run lines run for the first
+  // time. A committed line without an opId would RE-RUN (e.g. a duplicate
+  // create), so it is named.
+  let resumption: BatchResumption | undefined;
+  if (options.dryRun !== true && halted && notRun > 0) {
+    const nonIdempotentIndices = results
+      .filter((r) => r.outcome.kind === "ok" && r.opId === undefined)
+      .map((r) => r.index);
+    const verbatimSafe = nonIdempotentIndices.length === 0;
+    const detail = verbatimSafe
+      ? `${notRun} line(s) did not run after the batch stopped on a failure. Every committed ` +
+        "line carried an opId, so the SAME batch can be resubmitted verbatim to resume — " +
+        "already-applied lines are skipped and the run continues past the failure."
+      : `${notRun} line(s) did not run after the batch stopped on a failure. Resubmitting the ` +
+        `SAME batch verbatim would RE-RUN line(s) ${nonIdempotentIndices.join(", ")} (they ` +
+        "committed a change but carry no opId, so they are not idempotent) — add an opId to " +
+        "every line before resubmitting, or drop the already-applied lines.";
+    resumption = { notRun, verbatimSafe, nonIdempotentIndices, detail };
+  }
+
+  return {
+    results,
+    tempIdMapping,
+    ...(undoToken !== undefined && { undoToken }),
+    ...(resumption !== undefined && { resumption }),
+  };
 }
