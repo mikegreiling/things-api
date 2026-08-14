@@ -308,12 +308,12 @@ This makes those verbs **RESERVED WORDS** in bare-noun sugar position: an area l
 
 ### Scheduling intent on `move` is redirected to `update --when`
 
-`things todo move <ref>` and `things project move <ref>` change an item's **container** (`--area`/`--project`/`--heading`; a to-do also `--inbox`/`--detach`) — they never change its **schedule**. An agent that means "move X to Someday" reaches for spellings `move` does not accept and would otherwise get a bare unknown-option / excess-argument usage error that never names the command which actually schedules an item. So, BEFORE commander parses (like the bare-verb hint above), a `move` invocation carrying scheduling vocabulary is answered with the concrete working command:
+`things todo move <ref>` and `things project move <ref>` change an item's **container** — a to-do via `--to-project`/`--to-heading`/`--to-area` or the detach family `--no-heading`/`--loose` (and `--inbox`); a project via `--to-area`/`--no-area` — they never change its **schedule**. An agent that means "move X to Someday" reaches for spellings `move` does not accept and would otherwise get a bare unknown-option / excess-argument usage error that never names the command which actually schedules an item. So, BEFORE commander parses (like the bare-verb hint above), a `move` invocation carrying scheduling vocabulary is answered with the concrete working command:
 
 - a scheduling **flag** (`--to`, `--when`, `--someday`, `--today`, `--evening`, `--anytime`, `--date`, `--schedule`) or a bare **positional** term (`someday`, `today`, `evening`, `anytime`, a `YYYY-MM-DD` date) → `things <group> update <ref> --when <value>` (the recognized term, else `someday` — the park default);
 - a bare **`inbox`** positional on `todo move` → `things todo move <ref> --inbox` (the real Inbox-return; `--when inbox` is not a value). A project has no Inbox, so `project move … inbox` is left to commander.
 
-It **never fires on a valid move**: every trapped spelling is already a usage error, so the accepted grammar is unchanged. `--inbox` and `--detach` stay genuine `move` flags (never trapped), and a value flag whose value merely looks like a term (`--heading someday`, an area literally named `today`) is left alone — the known value flags are skipped before the positional scan. Exit class is **Usage** (exit 2); under `--json` the suggestion rides `error.details.suggestions`. (`src/cli/move-hint.ts`.)
+It **never fires on a valid move**: every trapped spelling is already a usage error, so the accepted grammar is unchanged. `--inbox` stays a genuine `move` flag (never trapped); the removed `--detach` is now a teaching stub that errors toward the replacement family (`--no-heading`/`--loose`/`--no-area`). A value flag whose value merely looks like a term (`--to-heading someday`, an area literally named `today`) is left alone — the known value flags are skipped before the positional scan. Exit class is **Usage** (exit 2); under `--json` the suggestion rides `error.details.suggestions`. (`src/cli/move-hint.ts`.)
 
 ### The `reorder --in` axis vocabulary
 
@@ -334,9 +334,11 @@ An explicit stage-list or container axis on a same-day forecast set reorders its
 - **No dual canonical orders / full type-verb transposition.** We will not also accept `things show area Hobbies`. One order keeps the name/verb collision surface small and the grammar teachable.
 - **No stateful context (`things cd`).** No "current project" a subsequent command inherits. Statelessness is a safety feature: every write names its full target, so nothing depends on invisible session state that a script or agent could get wrong.
 
-## Phase 2 (specified, NOT built) — resource-scoped closed-enum verbs
+## Phase 2 (UNRATIFIED SKETCH — not built, not decided) — resource-scoped closed-enum verbs
 
-The honest home for heading ergonomics and other subordinate-resource actions is a gh-style, fixed-slot form:
+> **Status (2026-08-14).** This is a design SKETCH, not a ratified plan. Since it was written, heading ergonomics SHIPPED (0.14.0) — but via the CONVENTIONAL verb-first spelling `things project add-heading <ref> <title>` (and the sibling `rename-heading`/`move-heading`/`dissolve-heading`/`promote-heading`), NOT the fixed-slot `things project <ref> add-heading <title>` form sketched below. So the concrete heading-creation gap this section motivated is CLOSED; what remains open — and unratified — is the GENERAL resource-scoped closed-enum verb pattern (position-2-ref / position-3-verb) for *other* subordinate resources, and whether it is wanted at all now that headings are done. That go/no-go is not queued; this sketch is kept as design material for it, not as a committed target.
+
+The honest home for heading ergonomics and other subordinate-resource actions was proposed as a gh-style, fixed-slot form:
 
 ```
 things project <ref> add-heading <title>
@@ -345,6 +347,6 @@ things project <ref> add-todo <title>
 
 Fixed slots: **position 2 = the resource ref**, **position 3 = a verb from a closed enum** (`add-heading`, `add-todo`, …), everything else via flags. The closed enum is the key discipline — it keeps this from drifting into the free-form write grammar ruled out above, and the fixed ref slot means no ambiguity about what the action targets.
 
-This is where heading creation *belongs* ergonomically: headings are subordinate resources of a project, so `things project <ref> add-heading` reads correctly. The type-consistent `things heading add` stays (so heading is a first-class type like every other), but the scoped verb is the natural way to reach it.
+This section argued heading creation *belonged* ergonomically here, in a fixed-slot form. In the event it shipped differently: the CONVENTIONAL verb-first spelling `things project add-heading <project> <title>` (the `add-heading <project> <title>` subcommand under the `project` group) became the canonical, and no top-level `heading` group / `things heading add` command was built (heading is first-class as a read TYPE and an operation kind, but its CLI mutations are reached through the `project`-scoped verbs). So the fixed-slot form above was NOT the spelling adopted.
 
-Not built here. This document specifies the shape so the Phase-2 implementation has a target.
+This remains an UNRATIFIED SKETCH: the general resource-scoped closed-enum verb pattern is neither built nor decided. The document keeps the shape as design material for that open go/no-go, not as a committed target.

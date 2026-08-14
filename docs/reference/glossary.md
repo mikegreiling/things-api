@@ -25,7 +25,7 @@ House vocabulary for the Things lifecycle, preferring **Cultured Code's own GUI 
 
 ## Scheduling
 
-- **when** — CC's GUI word (the "When" field) and our derived consumer field: the time-axis position (`today` / `evening` / ISO date / `someday`), replacing raw substrate in consumer payloads (contract R12).
+- **when** — CC's GUI word (the "When" field) and our derived consumer field: the time-axis position (`today` / `evening` / ISO date / `someday`), replacing raw substrate in consumer payloads (contract RS7).
 - **start / startDate** — DB substrate: `start` is the coarse bucket enum, `startDate` the raw scheduled date. Consumer surfaces never say "start" (reserved substrate vocabulary; the `*Date` suffix convention marks raw substrate — see the naming discussion behind heading `archived`). Enum details live in the [schema atlas](../atlas/schema-v26.md).
 - **deadline** — same word in GUI, DB, and API; no divergence.
 

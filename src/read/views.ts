@@ -432,7 +432,7 @@ export function inboxView(
     where.push("t.creationDate <= ?");
     binds.push(filter.until.getTime() / 1000);
   }
-  // R13 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
+  // RS8 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
   // undated Inbox row into Today AND removes it from the GUI Inbox list — even
   // while its raw `start` still reads 0. EXCLUDE the pulled rows so the flat
   // inbox view stays GUI-faithful; reuse the Today deadline arm verbatim so the
@@ -477,7 +477,7 @@ export function anytimeView(
   // cascade-excluded — the checked project row represents them. The boundary is
   // threaded into the SQL filter and materialize so presence and `logged` agree.
   //
-  // R13 (BANNER1b, law L-A): Anytime is a SUPERSET of Today's to-dos — a
+  // RS8 (BANNER1b, law L-A): Anytime is a SUPERSET of Today's to-dos — a
   // due-deadline pull re-files an undated Inbox/Someday row into Anytime (out of
   // its origin bucket) even while its raw `start` still reads 0/2. So the
   // membership arm is ANYTIME_SELF *OR* the Today deadline-pull arm (reused
@@ -753,7 +753,7 @@ export function somedayView(
     ? `EXISTS (SELECT 1 FROM TMTask p WHERE p.uuid = ${EFF_PROJECT}
          AND p.trashed = 0 AND p.status = 0 AND ${ANYTIME_SELF("p")})`
     : "0";
-  // R13 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
+  // RS8 (BANNER1 Q1b, law L-A): a due/overdue un-dismissed deadline pulls an
   // undated Someday row into Today AND removes it from the GUI Someday list —
   // even while its raw `start` still reads 2. EXCLUDE the pulled rows so the flat
   // someday view stays GUI-faithful; reuse the Today deadline arm verbatim so the
@@ -1435,7 +1435,7 @@ export interface DeadlinesFilter extends ViewFilter {
  * deadline is strictly future; a deadline-less template, an undecodable rule, an
  * after-completion/paused template with no set next occurrence, and any
  * non-future derived deadline are EXCLUDED (never a guessed date). A projected
- * row discloses its projection-ness through the R11 `repeating` presence (it IS
+ * row discloses its projection-ness through the RS6 `repeating` presence (it IS
  * the template row, carrying the projected value in `deadline`). No double count:
  * the already-materialized instance is a concrete row under the base query and
  * the next-instance cursor points PAST it, so the projection lands on a strictly

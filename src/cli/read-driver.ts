@@ -112,11 +112,11 @@ export interface GlobalReadOpts {
   json?: boolean;
   db?: string;
   /**
-   * Force the FULL detail tier (R7) in a list context — restore the per-row
+   * Force the FULL detail tier (RS2) in a list context — restore the per-row
    * density a compact list drops (`created`/`modified`, the full `repeating`
    * block, full `notes`, the default-valued fields). Set by the `--full` flag on
    * the list-emitting commands; absent = the compact default. The no-redundant-
-   * ancestry pruning (R6) is applied regardless.
+   * ancestry pruning (RS1) is applied regardless.
    */
   full?: boolean;
 }

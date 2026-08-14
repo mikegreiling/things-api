@@ -1,16 +1,16 @@
 /**
- * The read-payload SHAPING transform: the token-economy rules R6 and R7, the
- * universal item-DTO reshapes (R9), and the R10 lifecycle taxonomy — applied at
+ * The read-payload SHAPING transform: the token-economy rules RS1 and RS2, the
+ * universal item-DTO reshapes (RS4), and the RS5 lifecycle taxonomy — applied at
  * the JSON emit boundary of the read surfaces (the CLI `--json` read envelope,
  * src/cli/read-driver.ts, and the MCP read tool results, src/mcp/server.ts), the
  * same boundaries omit-empty runs at. Shaping runs BEFORE omit-empty. The
  * human-render path keeps the full, unshaped entities, so this is JSON-only.
  *
- * Both R6/R7 are deterministic BY VIEW KIND / SECTION — the emitter knows whether
+ * Both RS1/RS2 are deterministic BY VIEW KIND / SECTION — the emitter knows whether
  * it is inside a single-container view, a lifecycle bucket, or a mixed list —
  * never a per-item heuristic.
  *
- * ## R10 — the `stage` lifecycle taxonomy (every tier, every kind incl. detail)
+ * ## RS5 — the `stage` lifecycle taxonomy (every tier, every kind incl. detail)
  * The three former wire fields `start` / `logged` / `trashed` are DELETED from
  * every item and replaced by ONE derived `stage` ∈ `inbox | upcoming | anytime |
  * someday | logbook | trash` (src/read/stage.ts `deriveStage`, the single pure
@@ -18,11 +18,11 @@
  * bucket a view puts an item in). Today/evening membership is a SEPARATE
  * presence-keyed axis — `today: true` / `evening: true` (evening implies today) —
  * derived in the mapper with the Today view's own two-arm predicate.
- * - `stage` is DROPPED only where the enclosing node PROVABLY states it — the R6
+ * - `stage` is DROPPED only where the enclosing node PROVABLY states it — the RS1
  *   rule (drop only what the node provably says). That is the stage-PURE flat
  *   views (inbox, `anytime`, someday, logbook, trash) and the stage-named card
  *   sub-buckets (anytime/upcoming/someday/logbook/trash, which the bucketer splits
- *   BY stage). The `anytime` catalogue is stage-PURE (R10.2): every member is an
+ *   BY stage). The `anytime` catalogue is stage-PURE (RS5.2): every member is an
  *   Anytime-view row (ANYTIME_SELF) — undated-active, arrived-active, or arrived
  *   someday-scheduled — and an ARRIVED dated row derives `anytime` (Upcoming is
  *   STRICTLY FUTURE, UPC1), so the field is redundant there.
@@ -38,7 +38,7 @@
  *   which every consumer now reads directly (the human render, the write-verify
  *   delta, the today-view evening split).
  *
- * ## R12 — `when`, the derived TIME-AXIS position (replaces startDate + markers)
+ * ## RS7 — `when`, the derived TIME-AXIS position (replaces startDate + markers)
  * Today/evening membership and the scheduled/projected date collapse onto ONE
  * derived, presence-keyed field `when` (src/read/stage.ts `deriveWhen`): `"today"`
  * / `"evening"` (Today-view membership, from the SAME `today`/`evening` markers the
@@ -63,11 +63,11 @@
  *   it). KEPT everywhere
  *   else it is present — including the flat `upcoming`/`anytime`/`inbox`/`someday`
  *   catalogues, search, changes (a deadline-pulled row reads `when: "today"` in the
- *   mixed search/changes surfaces, informatively; note R13 re-files it to stage
+ *   mixed search/changes surfaces, informatively; note RS8 re-files it to stage
  *   `anytime` and the flat inbox/someday views now EXCLUDE it — it appears in the
  *   `anytime` catalogue instead, `when: "today"` kept, stage dropped as pure).
  *
- * ## R13 — provisional Today members + GUI-faithful pulled-row membership
+ * ## RS8 — provisional Today members + GUI-faithful pulled-row membership
  * BANNER1 / BANNER1b (docs/lab/banner1-research.md). Two coupled facts:
  * - **`provisional: true`** — a presence-keyed marker on every Today member the GUI
  *   pips / counts in the "You have N new to-dos" banner: a Today member NOT yet
@@ -84,16 +84,16 @@
  *   key-implied `when`. The flat someday/inbox views EXCLUDE pulled rows and the anytime view
  *   INCLUDES them (src/read/views.ts + predicates.ts DEADLINE_PULLED) — GUI fidelity.
  *
- * ## Universal item-DTO reshapes (R9 — EVERY tier, EVERY read kind incl. detail)
+ * ## Universal item-DTO reshapes (RS4 — EVERY tier, EVERY read kind incl. detail)
  * - **checklist nesting** — flat counts → presence-keyed `checklist: {open,total}`.
  * - **todos counts** — a project's flat leaf-action counts → presence-keyed
  *   `todos: {open, total}` (omit when total 0).
- * - **repeating template/instance split (R11)** — the wire drops the
+ * - **repeating template/instance split (RS6)** — the wire drops the
  *   `isTemplate`/`isInstance` discriminators; key presence carries the fact. A
  *   TEMPLATE keeps a nested `repeating: {paused?, deadlined?, rule?,
  *   latestInstance?}` — the series object (rule config + backward pointer +
  *   state flags); presence MEANS template. The forward pointer `nextOccurrence`
- *   moved to the top-level `when` (R12 — a template's projected date IS its time
+ *   moved to the top-level `when` (RS7 — a template's projected date IS its time
  *   position); `latestInstance` is detail-only (SL1). An INSTANCE keeps a flat
  *   `instanceOf: <templateUuid>` and no `repeating`; on a DETAIL read it also
  *   gains a sibling `repeats: {rule?, next?, paused?}` — its template's repeat
@@ -104,18 +104,18 @@
  * - **one project key** — a headed item's owning project (formerly
  *   `headingProject`) is merged into `project`; `headingProject` never appears.
  *
- * ## R6 — no-redundant-ancestry (both tiers)
+ * ## RS1 — no-redundant-ancestry (both tiers)
  * project-view children drop `project`+`area` (heading-group members also drop
  * `heading`); area-view children/project-cards drop `area`; anytime/someday
  * section items drop `area`. Mixed lists keep every ref. (In the COMPACT tier the
- * `heading` ref is additionally dropped everywhere — R7.)
+ * `heading` ref is additionally dropped everywhere — RS2.)
  *
- * ## R7 — named detail tiers (compact | full)
+ * ## RS2 — named detail tiers (compact | full)
  * List contexts default to COMPACT; `detail`/`show` and `--full` / `full:true`
  * use FULL. Compact drops `created`/`modified`, the full `notes` string (a
  * presence-keyed `hasNotes: true` marks a row with notes), and the `heading` ref;
- * `status` is omitted when `open`. FULL keeps them but still applies R6, the
- * universal reshapes, and R10.
+ * `status` is omitted when `open`. FULL keeps them but still applies RS1, the
+ * universal reshapes, and RS5.
  */
 import { deriveStage, deriveWhen, whenIsProvisional, type Stage, type When } from "./stage.ts";
 import type { StartState } from "../model/entities.ts";
@@ -191,7 +191,7 @@ function flattenRef(
   if (forceUuid || !promoter.roundTrips(kind, title, uuid, projectUuid)) o[uuidKey] = uuid;
 }
 
-/** What a given view context drops from an item: redundant ancestry + R10 bucket/marker implications. */
+/** What a given view context drops from an item: redundant ancestry + RS5 bucket/marker implications. */
 interface ItemDrop {
   project?: boolean;
   area?: boolean;
@@ -205,7 +205,7 @@ interface ItemDrop {
   keepHeading?: boolean;
   /** Drop the `stage` field — the enclosing view/section states it. */
   stage?: boolean;
-  /** Drop the derived `when` field — the today view's section key states it (R12). */
+  /** Drop the derived `when` field — the today view's section key states it (RS7). */
   when?: boolean;
 }
 
@@ -272,7 +272,7 @@ function reshapeTodos(o: Obj): void {
 }
 
 /**
- * R11 — rewrite the internal `repeating` block into the wire's template/instance
+ * RS6 — rewrite the internal `repeating` block into the wire's template/instance
  * split, mutating `o` in place. The internal entity carries the full
  * RepeatingInfo (`isTemplate`/`isInstance`/`templateUuid`/…); the wire loses the
  * `isTemplate`/`isInstance` discriminators entirely and instead lets KEY
@@ -283,7 +283,7 @@ function reshapeTodos(o: Obj): void {
  *   template (an unadorned template emits `repeating: {}` — a bare `{}` is NOT
  *   pruned by omit-empty, so the presence signal survives). The inner false
  *   booleans are default-pruned (presence-keyed). The forward pointer
- *   `nextOccurrence` moved OUT to the top-level `when` (R12 — a template's
+ *   `nextOccurrence` moved OUT to the top-level `when` (RS7 — a template's
  *   projected date IS its time position); `rule` and `latestInstance` stay
  *   detail-only (populated by src/read/detail.ts on `entity.repeating`);
  *   `latestInstance` is the backward pointer symmetric to `when`.
@@ -311,7 +311,7 @@ function reshapeRepeatingWire(o: Obj): void {
     if (r["deadlined"] === true) out["deadlined"] = true;
     if (r["rule"] != null) out["rule"] = r["rule"]; // detail read only
     // The SL1 "Show Latest" pick — detail-only; the backward pointer symmetric to
-    // the top-level `when` (the forward pointer, R12).
+    // the top-level `when` (the forward pointer, RS7).
     if (typeof r["latestInstance"] === "string") out["latestInstance"] = r["latestInstance"];
     o["repeating"] = out;
   } else if (r["isInstance"] === true) {
@@ -330,7 +330,7 @@ function reshapeRepeatingWire(o: Obj): void {
   }
 }
 
-/** The R10 stage input read straight off a materialized task entity's `derived` bag. */
+/** The RS5 stage input read straight off a materialized task entity's `derived` bag. */
 function stageOf(s: Obj): ReturnType<typeof deriveStage> {
   const repeating = s["repeating"];
   const isTemplate =
@@ -351,7 +351,7 @@ function stageOf(s: Obj): ReturnType<typeof deriveStage> {
   });
 }
 
-/** The R12 `when` input read straight off a materialized task entity (given its stage). */
+/** The RS7 `when` input read straight off a materialized task entity (given its stage). */
 function whenOf(s: Obj, stage: Stage): ReturnType<typeof deriveWhen> {
   const repeating = s["repeating"];
   const isTemplate =
@@ -375,9 +375,9 @@ function whenOf(s: Obj, stage: Stage): ReturnType<typeof deriveWhen> {
 }
 
 /**
- * Shape ONE task entity (to-do or project): the universal reshapes, the R10/R12
- * stage/`when` rewrite, then the R6 ancestry drops, then — when `compact` — the
- * R7 default-pruning. A shallow copy is taken so unknown sibling keys
+ * Shape ONE task entity (to-do or project): the universal reshapes, the RS5/RS7
+ * stage/`when` rewrite, then the RS1 ancestry drops, then — when `compact` — the
+ * RS2 default-pruning. A shallow copy is taken so unknown sibling keys
  * (`changeKind` on a changes row, `match` on a search hit) pass through
  * untouched. Non-task values (areas, tags, refs, headings) are returned as-is.
  */
@@ -387,8 +387,8 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   const type = s["type"];
   if (type !== "to-do" && type !== "project") return src; // not a shaped entity
   const stage = stageOf(s); // from the ORIGINAL fields, before any reshape
-  const when = whenOf(s, stage); // R12 — derived from the same fields + markers
-  // R13 (BANNER1 law L-B): a Today member is PROVISIONAL — the GUI pips it and
+  const when = whenOf(s, stage); // RS7 — derived from the same fields + markers
+  // RS8 (BANNER1 law L-B): a Today member is PROVISIONAL — the GUI pips it and
   // counts it in the "You have N new to-dos" banner — until the app MATERIALIZES
   // it (start:=1, startDate:=today). Presence-keyed marker, derived from the SAME
   // inputs as the stage/`when` axes (never an independent re-derivation): the row
@@ -406,7 +406,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   );
   const o: Obj = { ...s };
 
-  // R9 universal reshapes (every tier, every kind incl. detail).
+  // RS4 universal reshapes (every tier, every kind incl. detail).
   reshapeChecklist(o);
   reshapeTodos(o);
   flattenTags(o);
@@ -415,8 +415,8 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   delete o["headingProject"];
 
   // The ENTIRE internal derivation substrate leaves the wire in ONE structural
-  // drop (one-vocabulary Batch 2, Option B): `start`/`logged`/`trashed` (R10 —
-  // replaced by `stage`), `today`/`evening` (R12 — replaced by `when`), and the
+  // drop (one-vocabulary Batch 2, Option B): `start`/`logged`/`trashed` (RS5 —
+  // replaced by `stage`), `today`/`evening` (RS7 — replaced by `when`), and the
   // raw `reminder` byte all live in the nested `o.derived` bag. §9n: the
   // top-level consumer `reminder` is ALREADY the live-gated value (null once the
   // byte is presentation-dead — its `startDate` gone strictly past), gated at the
@@ -425,20 +425,20 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   // from the derivations above.
   delete o["derived"];
   if (drop.stage !== true) o["stage"] = stage;
-  // R12 — `when` is emitted unless the enclosing context provably states the
+  // RS7 — `when` is emitted unless the enclosing context provably states the
   // position (the today view's sections; a card date-group in rebucketChildren).
   if (drop.when !== true && when !== undefined) o["when"] = when;
-  // R13 — the provisional banner marker (never dropped; presence-keyed).
+  // RS8 — the provisional banner marker (never dropped; presence-keyed).
   if (provisional) o["provisional"] = true;
 
   // The owning project's uuid scopes the heading round-trip (headings resolve
-  // within their project). Captured BEFORE the R6 project-drop so a project-view
+  // within their project). Captured BEFORE the RS1 project-drop so a project-view
   // LOGBOOK row — whose `project` is dropped as redundant, yet which KEEPS its
   // heading ref (drop.keepHeading) — can still promote its `headingUuid` in the
   // project's scope.
   const projectUuid = refUuid(o["project"]);
 
-  // R6 — drop redundant ancestry (both tiers).
+  // RS1 — drop redundant ancestry (both tiers).
   if (drop.project === true) delete o["project"];
   if (drop.area === true) delete o["area"];
   if (drop.heading === true) delete o["heading"];
@@ -457,7 +457,7 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   // `isRepeatingTemplate` marker, so re-emit it here as a flat presence-keyed
   // sibling of the `project` ref (never `false`), riding wherever `project`
   // rides. A heading-nested row already merged its owning project into `project`
-  // above, so direct AND headed template children mark; the R6 project-drop
+  // above, so direct AND headed template children mark; the RS1 project-drop
   // above already removed `project` where the view implies it, so a project-view
   // child carries no orphaned marker. Both tiers — it is a correctness signal,
   // not detail. Only project refs ever carry the flag (area/heading never do).
@@ -467,13 +467,13 @@ function shapeItem(src: unknown, drop: ItemDrop, compact: boolean, promoter: Ref
   if (!compact || drop.keepHeading === true)
     flattenRef(o, "heading", "headingUuid", "heading", forceUuid, promoter, projectUuid);
 
-  // R12 — FULL/DETAIL keep the raw `startDate` beside `when` as the SUBSTRATE
+  // RS7 — FULL/DETAIL keep the raw `startDate` beside `when` as the SUBSTRATE
   // (`startDate` = what is stored, `when` = where it sits). COMPACT drops it below
   // (the position `when` carries is what a list needs).
   if (!compact) return o;
 
-  // R7 compact — default-pruning (absence = the default).
-  delete o["startDate"]; // R12 — position lives in `when`; substrate is full-tier only
+  // RS2 compact — default-pruning (absence = the default).
+  delete o["startDate"]; // RS7 — position lives in `when`; substrate is full-tier only
   if (o["status"] === "open") delete o["status"];
   delete o["created"];
   delete o["modified"];
@@ -505,7 +505,7 @@ function withShapedItems(base: Obj, drop: ItemDrop, compact: boolean, promoter: 
   return out;
 }
 
-/** A child entity carrying the fields the R10 re-bucketer needs. */
+/** A child entity carrying the fields the RS5 re-bucketer needs. */
 interface Child extends Obj {
   startDate?: string | null;
   todayIndex?: number;
@@ -519,7 +519,7 @@ interface WireDateGroup {
 
 /**
  * Re-bucket a project's / area's / heading's live (non-logbook/trash) children
- * into the R10 card shape by their derived {@link deriveStage} — so the bucket an
+ * into the RS5 card shape by their derived {@link deriveStage} — so the bucket an
  * item lands in ALWAYS equals its `stage`:
  * - `anytime` — stage anytime, in encounter order;
  * - `upcoming` — stage upcoming, day-grouped `[{when, items}]` (a dated row under
@@ -566,7 +566,7 @@ function rebucketChildren(
           datedByKey.set(date, []);
           datedOrder.push(date);
         }
-        // R12 — inside a date-group the group states the date, so a member whose
+        // RS7 — inside a date-group the group states the date, so a member whose
         // `when` equals it drops it (every scheduled row and every projected
         // template does — that IS the group key).
         const shaped = shape(c);
@@ -604,7 +604,7 @@ function flattenGroups(groups: unknown): unknown[] {
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 /**
- * The R6 ref drop for the un-headed BODY's four `children` bucket records (v2):
+ * The RS1 ref drop for the un-headed BODY's four `children` bucket records (v2):
  * every body child drops project/area (the card states them), the bucket-implied
  * stage (each of `anytime`/`upcoming`/`someday`/`logbook` is stage-pure), and the
  * heading ref — a body child is by construction un-headed (its `heading` is null),
@@ -613,7 +613,7 @@ const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
  */
 const PROJECT_CHILD_DROP: ItemDrop = { project: true, area: true, heading: true, stage: true };
 /**
- * The R6 ref drop for a HEADING's four `children` bucket records (v2): a headed
+ * The RS1 ref drop for a HEADING's four `children` bucket records (v2): a headed
  * child drops project/area (the card states them), the heading ref (its position
  * UNDER `headings[].children` states membership — structural, #362 / task item 6),
  * and the bucket-implied stage. Applied uniformly to the heading's live buckets
@@ -626,10 +626,10 @@ const AREA_CHILD_DROP: ItemDrop = { area: true, stage: true };
 const AREA_PROJECTS_DROP: ItemDrop = { area: true };
 /**
  * Anytime sidebar-section items: stage-PURE → drop area + the section-implied
- * stage (R10.2). Every Anytime-view member derives `anytime`: ANYTIME_SELF
+ * stage (RS5.2). Every Anytime-view member derives `anytime`: ANYTIME_SELF
  * (undated-active, arrived-active, arrived someday-scheduled) — an ARRIVED dated
  * row is Anytime, not Upcoming (Upcoming is STRICTLY FUTURE, UPC1) — AND, since
- * R13, the DEADLINE-PULLED undated Inbox/Someday rows the view now includes
+ * RS8, the DEADLINE-PULLED undated Inbox/Someday rows the view now includes
  * (BANNER1b), which derive `anytime` too (deriveStage step 2½: a Today-marked
  * undated row is a pull → anytime). Repeating templates are excluded from the
  * view (NOT_TEMPLATE), so no stage-`upcoming` row can appear here — still pure.
@@ -641,8 +641,8 @@ const SOMEDAY_SECTION_DROP: ItemDrop = { area: true, stage: true };
 const NO_DROP: ItemDrop = {};
 /**
  * The today view's two `children` bucket records: drop the key-implied `when`
- * (R12 — the `today`/`evening` bucket key states it) AND the bucket-implied
- * `stage` (R13). Every Today member now derives stage `anytime` by construction —
+ * (RS7 — the `today`/`evening` bucket key states it) AND the bucket-implied
+ * `stage` (RS8). Every Today member now derives stage `anytime` by construction —
  * an ARRIVED `startDate` (step 5) or a DEADLINE PULL (step 2½) both derive
  * `anytime`, and there are no future-dated or undated-someday Today members — so
  * both buckets are provably stage-PURE `anytime` and the field is redundant there
@@ -765,7 +765,7 @@ function shapeProjectView(view: Obj, compact: boolean, promoter: RefPromoter): O
     });
   });
   return {
-    // The card NODE keeps everything but is still an item DTO (universal + R10 reshapes).
+    // The card NODE keeps everything but is still an item DTO (universal + RS5 reshapes).
     project: shapeItem(view["project"], NO_DROP, false, promoter),
     children: shapeContainerChildren(view["bodyChildren"], PROJECT_CHILD_DROP, compact, promoter),
     headings: headingContainers,
@@ -915,7 +915,7 @@ function shapeUpcomingView(items: unknown[], compact: boolean, promoter: RefProm
       datedByKey.set(key, []);
       datedOrder.push(key);
     }
-    // R12 — inside a dated block the block states the date, so a member whose
+    // RS7 — inside a dated block the block states the date, so a member whose
     // `when` equals it drops it (a scheduled row's when IS the key). A forecast
     // row has no `when`; a horizon-projected row whose `when` diverges keeps it.
     if (shaped !== null && typeof shaped === "object" && (shaped as Obj)["when"] === key) {
@@ -1062,7 +1062,7 @@ function shapeSections(
  * is pure too, handled via shapeSections below) drop the bucket-implied `stage`.
  * The mixed/derived surfaces (search/changes/deadlines/projects) keep it. The global
  * `upcoming` view is NOT here — it reshapes into `data.sections` day blocks
- * ({@link shapeUpcomingView}), keeping `stage` (R10.2: stage-mixed — future-dated
+ * ({@link shapeUpcomingView}), keeping `stage` (RS5.2: stage-mixed — future-dated
  * `upcoming` rows beside deadline-forecast `anytime`/`someday` ones).
  */
 const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
@@ -1077,8 +1077,8 @@ const FLAT_LIST_DROP: ReadonlyMap<string, ItemDrop> = new Map([
 ]);
 
 /**
- * Apply the universal reshapes + R6 + R7 + R10 to a read payload for one view
- * `kind`. `full` forces the FULL tier (R7 default-pruning off, everything else
+ * Apply the universal reshapes + RS1 + RS2 + RS5 to a read payload for one view
+ * `kind`. `full` forces the FULL tier (RS2 default-pruning off, everything else
  * applied); an unrecognized kind passes through unchanged. The input is never
  * mutated (shallow copies throughout), so the human-render path keeps the full
  * entities.
@@ -1137,7 +1137,7 @@ export type CandidateType = "to-do" | "project" | "heading" | "area" | "tag";
  * - `type` — names the kind, EXCEPT to-do: absent `type` = to-do (present for
  *   `project` / `heading` / `area` / `tag`), the same convention the item wire uses.
  * - `area` / `project` — container hint as a TITLE string, present only when set.
- * - `stage` / `when` — the R10/R12 lifecycle words, present only for a to-do /
+ * - `stage` / `when` — the RS5/RS7 lifecycle words, present only for a to-do /
  *   project candidate whose source row carries the materialized lifecycle fields
  *   (a thin uuid+title resolver row carries neither — presence-keyed, so absent).
  * A trashed / logged candidate needs no boolean: `stage` already reads `"trash"`

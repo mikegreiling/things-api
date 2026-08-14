@@ -119,7 +119,7 @@ function seedDualCitizens() {
   });
 
   // A LOOSE undated row whose due-today deadline PULLS it into Today + Anytime
-  // (R13) and OUT of Someday — a today-axis dual citizen.
+  // (RS8) and OUT of Someday — a today-axis dual citizen.
   const loosePull = seedTodo(fx.db, {
     title: "loose-pull",
     start: "someday",
@@ -211,7 +211,7 @@ describe("R7 cross-view seating — global someday/anytime show dual citizens ca
     const secs = shapeReadPayload("anytime", anytimeView(fx.db, NOW), false) as Section[];
     const uuids = flat(secs).map((i) => i["uuid"]);
     expect(uuids).toContain(s.aAnytime); // area-direct anytime dual citizen, canonically
-    expect(uuids).toContain(s.loosePull); // R13: a due-deadline pull files under Anytime
+    expect(uuids).toContain(s.loosePull); // RS8: a due-deadline pull files under Anytime
     // Stage is DROPPED (the anytime catalogue is stage-pure).
     expect("stage" in rowByUuid(flat(secs), s.aAnytime)!).toBe(false);
     expectNoDuplicateUuid("anytime", secs);

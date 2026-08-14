@@ -1,5 +1,5 @@
 /**
- * R10 lifecycle taxonomy: the pure {@link deriveStage} derivation matrix, the
+ * RS5 lifecycle taxonomy: the pure {@link deriveStage} derivation matrix, the
  * today/evening marker corners (GUI-verified UPC1 / F-DL, oddities §8d–8e), and a
  * property-style consistency check that every item's derived `stage` equals the
  * bucket a view (flat catalogue or card sub-bucket) puts it in — the invariant
@@ -126,7 +126,7 @@ describe("reminderIsLive — the §9n stale-reminder boundary", () => {
   });
 });
 
-describe("deriveWhen — the time-axis position matrix (R12)", () => {
+describe("deriveWhen — the time-axis position matrix (RS7)", () => {
   it("evening marker → `evening` (wins over today)", () => {
     expect(deriveWhen(whenBase({ today: true, evening: true }))).toBe("evening");
   });
@@ -207,8 +207,8 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
     expect(markerRow("dl-active").evening).toBeUndefined();
   });
 
-  it("SOMEDAY item with a due/overdue UNsuppressed deadline → PULLED to stage anytime + today:true (R13)", () => {
-    // R13 (BANNER1b, L-A): a due-deadline pull re-files an undated Someday row into
+  it("SOMEDAY item with a due/overdue UNsuppressed deadline → PULLED to stage anytime + today:true (RS8)", () => {
+    // RS8 (BANNER1b, L-A): a due-deadline pull re-files an undated Someday row into
     // ANYTIME (the GUI removes it from Someday and adds it to Anytime at pull time),
     // so it derives its DESTINATION `anytime`, not its origin `someday`.
     fx = buildFixtureDb();
@@ -240,7 +240,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
   it("banner-materialized form (start=1, startDate:=deadline=today) → stage anytime + today:true", () => {
     // UPC1 §8d: acknowledging the "new to-dos" banner mutates the item to start=1,
     // startDate := deadline (= today). That is an ARRIVED When-date, so under the
-    // strictly-future Upcoming law (UPC1 §8, R10.2) it derives ANYTIME + today,
+    // strictly-future Upcoming law (UPC1 §8, RS5.2) it derives ANYTIME + today,
     // NOT upcoming (an arrived-dated open item is in Today + Anytime).
     fx = buildFixtureDb();
     seedTodo(fx.db, {
@@ -264,7 +264,7 @@ describe("today/evening markers — the GUI-verified corners (UPC1 / F-DL, oddit
 /** `when` derived over a real materialized entity, mirroring src/read/shape.ts `whenOf`. */
 const whenOfEntity = (i: ListItem): ReturnType<typeof deriveWhen> => entityWhen(i);
 
-describe("deriveWhen — over real entities through the read pipeline (R12)", () => {
+describe("deriveWhen — over real entities through the read pipeline (RS7)", () => {
   it("banner-materialized UPC1 case (start=1, startDate:=deadline=today) → when `today`", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, {
@@ -280,7 +280,7 @@ describe("deriveWhen — over real entities through the read pipeline (R12)", ()
     expect(wire["when"]).toBe("today");
   });
 
-  it("deadline-pulled inbox/someday rows re-file to the ANYTIME catalogue (R13): gone from inbox/someday, stage dropped, when today", () => {
+  it("deadline-pulled inbox/someday rows re-file to the ANYTIME catalogue (RS8): gone from inbox/someday, stage dropped, when today", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "in-dl", start: "inbox", startDate: null, deadline: "2026-07-02" });
     seedTodo(fx.db, {
@@ -289,7 +289,7 @@ describe("deriveWhen — over real entities through the read pipeline (R12)", ()
       startDate: null,
       deadline: "2026-07-01",
     });
-    // R13: the pulled rows are EXCLUDED from the flat inbox/someday views (the GUI
+    // RS8: the pulled rows are EXCLUDED from the flat inbox/someday views (the GUI
     // removes them from those lists even before materialization).
     expect(inboxView(fx.db, NOW).some((r) => r.title === "in-dl")).toBe(false);
     expect(
@@ -312,7 +312,7 @@ describe("deriveWhen — over real entities through the read pipeline (R12)", ()
   });
 });
 
-describe("property — `when` ∈ {today, evening} ⟺ Today-view membership (R12)", () => {
+describe("property — `when` ∈ {today, evening} ⟺ Today-view membership (RS7)", () => {
   it("no when-derivation can disagree with the Today view the star renders", () => {
     fx = buildFixtureDb();
     // A spread that exercises BOTH today arms + non-members across stages.
@@ -391,7 +391,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     seedTodo(fx.db, { title: "zz-some", start: "someday", startDate: null });
     seedTodo(fx.db, { title: "zz-log", status: "completed", stopDate: NOW_EPOCH - 3600 }); // swept
     seedTodo(fx.db, { title: "zz-trash", trashed: true });
-    // Anytime is stage-PURE (R10.2): an undated active row AND an ARRIVED-dated
+    // Anytime is stage-PURE (RS5.2): an undated active row AND an ARRIVED-dated
     // (startDate <= today) row BOTH derive stage `anytime` — Upcoming is strictly
     // future, so an arrived When-date is Anytime + Today, never Upcoming.
     seedTodo(fx.db, { title: "zz-any", start: "active", startDate: null });
@@ -419,7 +419,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
 
     // Pure catalogues: every member derives the one stage the view names, and
     // the wire DROPS the field (the view provably states it). `anytime` is now
-    // among them (R10.2) — its arrived-dated members derive `anytime`.
+    // among them (RS5.2) — its arrived-dated members derive `anytime`.
     const pure: Array<[string, unknown, string]> = [
       ["inbox", inboxView(fx.db, NOW), "inbox"],
       ["anytime", anytimeView(fx.db, NOW), "anytime"],
@@ -433,7 +433,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
         expect("stage" in row).toBe(false);
     }
 
-    // The R10.2 correction is load-bearing: the arrived-dated row IS an Anytime
+    // The RS5.2 correction is load-bearing: the arrived-dated row IS an Anytime
     // member, derives `anytime` (not `upcoming`), and its stage is DROPPED.
     const anyWire = flatten(shapeReadPayload("anytime", anytimeView(fx.db, NOW), true));
     const arrivedRow = anyWire.find((r) => r["uuid"] === arrived);
@@ -468,7 +468,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
       seedTodo(fx.db, { title: "c-anytime", project: proj, start: "active", startDate: null }),
       seedTodo(fx.db, { title: "c-upfut", project: proj, startDate: "2026-08-01" }),
       // ARRIVED When-date (today): rebuckets to `anytime`, NOT the upcoming
-      // date-groups — Upcoming is strictly future (R10.2).
+      // date-groups — Upcoming is strictly future (RS5.2).
       seedTodo(fx.db, { title: "c-uptoday", project: proj, startDate: "2026-07-02" }),
       seedTodo(fx.db, { title: "c-someday", project: proj, start: "someday", startDate: null }),
       seedTodo(fx.db, { title: "c-tmpl", project: proj, recurrenceRule: true }),
@@ -531,7 +531,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
     expect("trash" in body).toBe(false);
     const cTrash = children[6]!;
     expect(stageOf.has(cTrash)).toBe(false);
-    // R10.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
+    // RS5.2: the arrived (today) child `c-uptoday` sits in `anytime`, and NO
     // upcoming block is keyed on its arrived date — Upcoming holds only future
     // dates + the date-less template block.
     const cUpToday = children[2]!;
@@ -540,7 +540,7 @@ describe("property — the emitted stage equals deriveStage, present exactly whe
   });
 });
 
-describe("R13 property — every Today-view member derives stage `anytime` (justifies the today-section stage drop)", () => {
+describe("RS8 property — every Today-view member derives stage `anytime` (justifies the today-section stage drop)", () => {
   it("the today sections are stage-PURE `anytime`, so dropping stage there is lossless — STRICT", () => {
     fx = buildFixtureDb();
     // A spread across every Today-membership arm AND every origin bucket.
@@ -602,7 +602,7 @@ describe("R13 property — every Today-view member derives stage `anytime` (just
 const provOf = (rows: Array<Record<string, unknown>>, title: string) =>
   rows.find((r) => r["title"] === title)?.["provisional"];
 
-describe("R13 — provisional Today members (BANNER1 law L-B) + banner-count reconstruction", () => {
+describe("RS8 — provisional Today members (BANNER1 law L-B) + banner-count reconstruction", () => {
   it("all five BANNER1b entrant classes → provisional; user-placed + materialized → NOT; suppressed → not a Today member", () => {
     fx = buildFixtureDb();
     // The five AUTONOMOUS entrant classes, pre-OK (unmaterialized):

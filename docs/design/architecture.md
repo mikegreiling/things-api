@@ -146,56 +146,82 @@ The ENTIRE contract described in this document — the programmatic TS API, the 
 
 At **v1.0 this flips** — compatibility discipline begins (semantic-versioned breaking changes, migration notes, and, where warranted, bridges) — and **this subsection, together with the `AGENTS.md` Conventions entry and the `docs/up-next.md` §0½ signpost, is REMOVED as part of the v1.0 release** (`grep -rn ALPHA-CONTRACT`).
 
-> **Kickoff snapshot — the shapes below have since evolved.** The entity fields and read/mutation signatures in this section are the ORIGINAL design sketch and are retained for the rationale. The current entity model, wire shapes, and read API are canonical elsewhere: the derived `stage`/`when`/`provisional` + `repeating`/`instanceOf`/`repeats` reshape (no `todaySection`, no `isTemplate`/`isInstance` discriminators) live in [../contract.md](../contract.md), [contracts.md](contracts.md), and [vocabulary-audit.md](vocabulary-audit.md); the read views (`today` → `data.children`, the read-shape-v2 project/area `view`) live in [read-shape-doctrine.md](read-shape-doctrine.md). Read those for what ships today.
+The shapes below are the INTERNAL entity model (`model/entities.ts`) and the library read surface. What ships on the JSON WIRE is a shaped projection of them (`src/read/shape.ts`): the field-by-field wire shape is canonical in [../contract.md](../contract.md) / [contracts.md](contracts.md) (the row-shaping rules **RS1–RS8**), and the view STRUCTURE (`data` wrappers, the read-shape-v2 `children`-recursive `view`) in [read-shape-doctrine.md](read-shape-doctrine.md). This section states the design rationale; those docs are authoritative for emitted shapes.
 
 ### Entities (`model/entities.ts`) — enums verified against live DB
 
 ```ts
-export type TaskStatus   = 'open' | 'canceled' | 'completed';   // status 0 | 2 | 3
-export type StartState   = 'inbox' | 'active' | 'someday';      // start 0 | 1 | 2
-export type TodaySection = 'today' | 'evening';                 // startBucket 0 | 1
-export type TaskType     = 'to-do' | 'project' | 'heading';     // type 0 | 1 | 2
+export type TaskStatus = 'open' | 'canceled' | 'completed';   // status 0 | 2 | 3
+export type StartState = 'inbox' | 'active' | 'someday';      // start 0 | 1 | 2
+export type TaskType   = 'to-do' | 'project' | 'heading';     // type 0 | 1 | 2
 
-export interface Todo {
-  uuid: string; type: 'to-do';
-  title: string; notes: string;
-  status: TaskStatus; trashed: boolean;
-  start: StartState;
-  startDate: string | null;          // ISO yyyy-mm-dd, decoded from packed int
-  todaySection: TodaySection | null; // only meaningful when scheduled today
-  deadline: string | null;
-  area: Ref | null; project: Ref | null; heading: Ref | null;  // Ref = { uuid, title }
-  tags: Ref[];                       // DIRECT tags only — mirrors DB truth
-  inheritedTags?: Ref[];             // opt-in computed ancestry tags (area/project)
-  repeating: { isTemplate: boolean; isInstance: boolean; templateUuid: string | null };
-  checklist?: ChecklistItem[];       // opt-in include
-  index: number; todayIndex: number; // sparse rank keys; expose raw, never renumber
+interface TaskCommon {
+  uuid: string; title: string; notes: string;
+  status: TaskStatus;
+  startDate: IsoDate | null;         // the "When" date (decoded from a packed int)
+  deadline: IsoDate | null;
+  reminder: ReminderTime | null;     // LIVE-gated time-of-day (raw byte lives in `derived`)
+  area: Ref | null;                  // Ref = { uuid, title, isRepeatingTemplate? }
+  tags: TagRef[];                    // NAME-only (tag uuids are internal)
+  inheritedTags?: TagRef[];          // computed ancestry tags — detail/card reads
+  repeating: RepeatingInfo;          // series state (below)
   created: Date; modified: Date; stopped: Date | null;
+  derived: DerivedSubstrate;         // internal derivation substrate — NEVER on the wire
 }
-// Project = Todo-like + counts; Area, Tag (parent hierarchy), Heading, ChecklistItem similar.
+export interface Todo extends TaskCommon {
+  type: 'to-do';
+  project: Ref | null; heading: Ref | null;   // heading set ⟹ project column is NULL
+  headingProject?: Ref;                        // owning project resolved THROUGH the heading
+  checklist?: ChecklistItem[];
+  checklistItemsCount: number; openChecklistItemsCount: number;
+}
+// Project = TaskCommon + leaf-action counts; Area / Tag (parent hierarchy) / Heading /
+// ChecklistItem are their own shapes.
 ```
 
-Design rules baked in: direct vs inherited tags are separate fields (T18); repeating flags are first-class (T12/T16 hazards key off them); order keys are exposed raw as sparse ranks (validated sparse-key behavior); `todaySection` decodes `startBucket` (the thing things.py cannot do).
+The two substrate carriers that feed emission — segregated so the wire boundary is a clean cut:
+
+```ts
+// The DERIVATION SUBSTRATE: raw lifecycle + Today/reminder markers that feed the
+// emission-time `stage` / `when` / `provisional` fields and the render/verify paths.
+// `src/read/shape.ts` drops the whole bag in ONE `delete o.derived`; a wire-key-inventory
+// lock test guarantees a new substrate field cannot leak onto the JSON.
+export interface DerivedSubstrate {
+  start: StartState; logged: boolean; trashed: boolean;
+  today?: true; evening?: true;      // presence-keyed Today / This-Evening markers
+  reminder: ReminderTime | null;     // RAW stored byte (may be stale / presentation-dead, §9n)
+}
+// A repeating TEMPLATE's series state; an INSTANCE carries templateUuid (+ a detail `repeats`).
+export interface RepeatingInfo {
+  isTemplate: boolean; isInstance: boolean; templateUuid: string | null;
+  nextOccurrence?: IsoDate | null; paused?: boolean; deadlined?: boolean;
+  rule?: RepeatRule;                 // detail reads only
+  latestInstance?: string;           // the GUI "Show Latest" pick — detail only
+  repeats?: RepeatContext;           // instance detail: the template's caption context, joined
+}
+// The instance-side repeat caption context (byte-consistent with the template's own emission).
+export interface RepeatContext { rule?: RepeatRule; next?: IsoDate; paused?: boolean; }
+```
+
+At the wire boundary these project through the row-shaping rules (RS1–RS8): the `derived` bag is dropped and replaced by the derived `stage` / `when` / `provisional` fields, and `repeating`'s `isTemplate`/`isInstance` discriminators collapse into presence — a template emits a `repeating` object, an instance a flat `instanceOf`, an instance's detail read a joined `repeats` (**RS6**, [contracts.md](contracts.md)).
+
+Design rules baked in: direct vs inherited tags stay separate fields (T18); the repeating series state is first-class so the write hazard guards (T12/T16) key off it; and the derivation substrate lives in the `derived` bag so raw lifecycle words and the stale-reminder byte can never leak past the wire cut (the thing a flat model cannot guarantee).
 
 ### Read API (`ThingsClient.read`)
 
+Each read view returns a `data` payload fitting one of the five doctrine wrappers — `item` / `items` / `sections` / `view` / `children`. The shapes and every bucket ordering are canonical in [../contract.md](../contract.md) (Read views) and [read-shape-doctrine.md](read-shape-doctrine.md); a few in brief:
+
 ```ts
-read.today(): { today: Todo[]; evening: Todo[] }          // each sorted by todayIndex (validated comparator)
-read.inbox(): Todo[]                                       // start='inbox', sorted by index
-read.anytime() / read.someday() / read.upcoming({ days? })
-read.logbook({ limit?, since? }) / read.trash()
-read.projects({ area? }): Project[]
-read.projectView(uuid): ProjectView                        // THE composite view:
-// { project, active: Todo[], headings: { heading, items }[],
-//   later: { scheduled: { date, items }[], repeating: Todo[], someday: Todo[] },
-//   logged: Todo[], trashed: Todo[] }
-read.areas({ includeItems? }) / read.tags()
-read.byUuid(uuid): Todo | Project | Heading | null         // includes repeating templates (raw SQL, unlike things.py)
-read.search(query, { in? })
-read.snapshot(): Snapshot                                  // full normalized dump for diffing/backup
+today                        → data.children = { today: {items}, evening: {items} }   // counts on meta.counts
+inbox                        → data.items                                              // single scope
+anytime / someday            → data.sections = [{ area, items, total? } …]             // area-rank sections
+upcoming                     → data.sections = [{ when, items, total? } …]             // chronological day blocks
+logbook / trash / search / changes / deadlines → data.items                            // non-scope, documented order
+project view                 → data.view = { project, children, headings[] }           // read-shape v2
+area view                    → data.view = { area|null, children, projects }
 ```
 
-`projectView` deliberately mirrors validated UI composition (T17 / "later items" findings) instead of a flat `include_items` feed, and dedupes heading children (the things.py double-listing trap). Flat child feeds use a `tasks WHERE project=? OR heading IN (project's headings)` query.
+`children` is RECURSIVE and stage-keyed — `{ anytime, upcoming[], someday, logbook }`, each bucket a `{ items, total? }` record — and `headings[]` nests the SAME `children` shape; the bucket keys double as `things reorder --in <token>` scopes. The `view` deliberately mirrors the GUI's own composition (heading children deduped — the things.py double-listing trap avoided) rather than a flat `include_items` feed. All the nesting rules — why a bucket exists, day-block arrays, the `{when: null}` resting block, dual-citizen seating — are in [read-shape-doctrine.md](read-shape-doctrine.md).
 
 ### Mutation API — command → vector → verification
 

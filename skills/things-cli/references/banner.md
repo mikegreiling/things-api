@@ -11,7 +11,7 @@ When items arrive in Today on their own, Things shows a yellow "You have N new t
 - `provisional` reuses the same Today markers `when` does, so it can never disagree with the ★ the row would render.
 - **The pip is Today-view-only.** In the app's Anytime list the same provisional row shows the ordinary Today ★ and no pip. So the TTY renders `•` only in `things today` (Today and This Evening sections); the wire `provisional` field is present on every surface, but the `•` glyph is not.
 
-**A provisional row is already a full Today member** — visible, sortable, and mutable through every ordinary write. Model it as `stage: "anytime"` + `when: "today"` + `provisional: true`: at pull time the app re-files a deadline-pulled Inbox/Someday row into Anytime (R13/BANNER1b), so it is EXCLUDED from the Inbox/Someday lists and INCLUDED in Anytime even though the user never chose to leave those buckets — the derived stage reflects where the app actually shows it.
+**A provisional row is already a full Today member** — visible, sortable, and mutable through every ordinary write. Model it as `stage: "anytime"` + `when: "today"` + `provisional: true`: at pull time the app re-files a deadline-pulled Inbox/Someday row into Anytime (RS8/BANNER1b), so it is EXCLUDED from the Inbox/Someday lists and INCLUDED in Anytime even though the user never chose to leave those buckets — the derived stage reflects where the app actually shows it.
 
 ## There is no `today ok` — dismissing the banner is a data mutation
 

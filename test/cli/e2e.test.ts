@@ -323,7 +323,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect(env.meta.counts).toEqual({ dueOrOverdue: 0, other: 75 });
   });
 
-  it("things todo show — R11 template wire (repeating rule facts, no discriminators)", () => {
+  it("things todo show — RS6 template wire (repeating rule facts, no discriminators)", () => {
     fx = buildFixtureDb();
     const uuid = seedTodo(fx.db, {
       title: "template",
@@ -333,7 +333,7 @@ describe("cli end-to-end (fixture db)", () => {
     const { stdout, exitCode } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     expect(exitCode).toBe(0);
     const item = JSON.parse(stdout).data.item;
-    // Presence of `repeating` MEANS template; the discriminators are gone. R12:
+    // Presence of `repeating` MEANS template; the discriminators are gone. RS7:
     // `nextOccurrence` moved OUT to the top-level `when` — a bare template with a
     // projection carries `repeating: {}` (a bare {} survives omit-empty).
     expect(item.repeating).toEqual({});
@@ -348,7 +348,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect("checklist" in item).toBe(false);
   });
 
-  it("things todo show — R12 paused template has no projection → no `when`", () => {
+  it("things todo show — RS7 paused template has no projection → no `when`", () => {
     fx = buildFixtureDb();
     const uuid = seedTodo(fx.db, {
       title: "paused-template",
@@ -358,13 +358,13 @@ describe("cli end-to-end (fixture db)", () => {
     });
     const { stdout } = runCli(["todo", "show", uuid, "--json", "--db", fx.path]);
     const item = JSON.parse(stdout).data.item;
-    // R12: no projected date → no `when`; `repeating` carries the state flags only.
+    // RS7: no projected date → no `when`; `repeating` carries the state flags only.
     expect(item.repeating).toEqual({ paused: true });
     expect("when" in item).toBe(false);
     expect("nextOccurrence" in item.repeating).toBe(false);
   });
 
-  it("things todo show — R11 instance carries flat instanceOf, no repeating", () => {
+  it("things todo show — RS6 instance carries flat instanceOf, no repeating", () => {
     fx = buildFixtureDb();
     const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
     const inst = seedTodo(fx.db, { title: "occurrence", repeatingTemplate: tmpl });
@@ -375,7 +375,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect("latestInstance" in item).toBe(false);
   });
 
-  it("things todo show — R11 latestInstance = max(creationDate) instance, even when COMPLETED (SL1 D1)", () => {
+  it("things todo show — RS6 latestInstance = max(creationDate) instance, even when COMPLETED (SL1 D1)", () => {
     fx = buildFixtureDb();
     const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
     // Divergent creationDate / startDate / status per SL1: the newest-spawned
@@ -402,7 +402,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect(item.repeating.latestInstance).toBe(newest);
   });
 
-  it("things todo show — R11 latestInstance SKIPS a TRASHED max-creation instance (SL2 L1)", () => {
+  it("things todo show — RS6 latestInstance SKIPS a TRASHED max-creation instance (SL2 L1)", () => {
     fx = buildFixtureDb();
     const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
     // The newest-spawned (max creationDate) instance is TRASHED — the GUI Show
@@ -424,7 +424,7 @@ describe("cli end-to-end (fixture db)", () => {
     expect(item.repeating.latestInstance).toBe(survivor);
   });
 
-  it("things todo show — R11 no latestInstance when every instance is trashed (SL2 L1c)", () => {
+  it("things todo show — RS6 no latestInstance when every instance is trashed (SL2 L1c)", () => {
     fx = buildFixtureDb();
     const tmpl = seedTodo(fx.db, { title: "tpl", recurrenceRule: true });
     seedTodo(fx.db, { title: "occ-gone", repeatingTemplate: tmpl, trashed: true });
@@ -2495,7 +2495,7 @@ describe("overdue filter (cli)", () => {
     fx = buildFixtureDb();
     // 55 overdue inbox captures > the default 50: a content scope must not lift
     // the cap the way a range bound (--since/--until) would. The deadlines are
-    // SUPPRESSED (supp == deadline) so R13's deadline-pull exclusion does NOT
+    // SUPPRESSED (supp == deadline) so RS8's deadline-pull exclusion does NOT
     // remove them from the Inbox list — an unsuppressed overdue capture would be
     // pulled into Today and gone from Inbox (see the inbox --overdue unit test).
     for (let i = 0; i < 55; i++) {
@@ -2681,7 +2681,7 @@ describe("overdue in container views (cli)", () => {
   });
 });
 
-describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
+describe("cli end-to-end — RS1/RS2 token economy (fixture db)", () => {
   it("inbox defaults to the compact tier; --full restores the full record", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, { title: "capture", start: "inbox", notes: "one short line" });
@@ -2692,7 +2692,7 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     expect(crow.uuid).toBeDefined();
     expect(crow.title).toBe("capture");
     expect("status" in crow).toBe(false); // open
-    // R10: start/logged/trashed replaced by the derived `stage`; the inbox
+    // RS5: start/logged/trashed replaced by the derived `stage`; the inbox
     // catalogue is stage-scoped, so `stage` itself is bucket-implied (dropped).
     expect("start" in crow).toBe(false);
     expect("logged" in crow).toBe(false);
@@ -2828,7 +2828,7 @@ describe("cli end-to-end — R6/R7 token economy (fixture db)", () => {
     seedTodo(fx.db, { title: "gone forever", trashed: true });
 
     const trash = JSON.parse(runCli(["trash", "--json", "--db", fx.path]).stdout);
-    // R10: trashed is gone; the trash view implies the stage, so it is dropped.
+    // RS5: trashed is gone; the trash view implies the stage, so it is dropped.
     expect("trashed" in trash.data.items[0]).toBe(false);
     expect("stage" in trash.data.items[0]).toBe(false);
 
