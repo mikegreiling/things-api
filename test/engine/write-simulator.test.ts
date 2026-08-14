@@ -241,6 +241,34 @@ describe("simulator write vector — covered operations", () => {
     expect(row(uuid)["start"]).toBe(0);
   });
 
+  it("todo.delete of a repeating TEMPLATE: ok, NO undo token, discloses series-stop + left-behind instance + Put Back", async () => {
+    const template = seedTodo(fixture.db, {
+      title: "Daily standup",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    // The series' live current occurrence — left in place by the shallow trash.
+    const instance = seedTodo(fixture.db, {
+      title: "Daily standup",
+      start: "active",
+      startDate: "2026-07-05",
+      repeatingTemplate: template,
+    });
+    const res = await runMutation(deps(vector), "todo.delete", { uuid: template });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok") throw new Error("expected ok");
+    // The template is trashed; the instance is NOT co-trashed (shallow, SERDEL S1).
+    expect(row(template)["trashed"]).toBe(1);
+    expect(row(instance)["trashed"]).toBe(0);
+    // Irreversible headlessly — no undo token is emitted (log-now precedent).
+    expect(res.undoToken).toBeUndefined();
+    // The three disclosures ride the warnings, naming the current instance uuid.
+    const w = (res.warnings ?? []).join(" ");
+    expect(w).toContain("no longer generate new occurrences");
+    expect(w).toContain(instance);
+    expect(w).toContain("Put Back");
+  });
+
   it("todo.move: into a project, into an area, to inbox", async () => {
     const proj = seedProject(fixture.db, { title: "Proj" });
     const area = seedArea(fixture.db, "Area");

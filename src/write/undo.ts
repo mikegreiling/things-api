@@ -63,13 +63,6 @@ export interface UndoStep {
     acknowledgeChecklistReset?: boolean;
     dangerouslyPermanent?: boolean;
     /**
-     * SANCTIONED-INTERNAL series-removal (promote undo): threaded onto the
-     * `todo.delete`/`project.delete` legs that trash a minted repeating template
-     * so H-REPEAT-SCHEDULE exempts them (the SERDEL trash-both). Never set for any
-     * consumer-reachable step. See pipeline WriteOptions.internalSeriesRemoval.
-     */
-    internalSeriesRemoval?: boolean;
-    /**
      * A precondition the PLAN already found violated (checklist undos resolve
      * against the CURRENT list at plan time). When present, runUndo refuses
      * this step (blocked/environment) instead of executing — same shape as the
@@ -754,12 +747,11 @@ export function planUndo(
 
     // Promote-via-clone (make/add-repeating): the SUMMARY record captured the
     // minted template, its current instance, and — for make-repeating — the
-    // trashed original. Undo is the SERDEL trash-both (raw-AS delete BOTH rows,
-    // routed through the sanctioned-internal series-removal path so
-    // H-REPEAT-SCHEDULE exempts the template delete), then (make-repeating only)
-    // restore the original from the Trash. This undo cannot itself be undone
-    // headlessly — a trashed template's only revival is the app's Trash ▸ Put
-    // Back (SERDEL S2/S3) — disclosed here.
+    // trashed original. Undo is the SERDEL trash-both (delete BOTH rows — a
+    // template delete is a plain, publicly-allowed delete now, ruling 2026-08-13),
+    // then (make-repeating only) restore the original from the Trash. This undo
+    // cannot itself be undone headlessly — a trashed template's only revival is
+    // the app's Trash ▸ Put Back (SERDEL S2/S3) — disclosed here.
     case "todo.make-repeating":
     case "project.make-repeating":
     case "todo.add-repeating":
@@ -775,20 +767,10 @@ export function planUndo(
       const kind = record.op.startsWith("project.") ? "project" : "todo";
       const deleteOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
       const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
-      const steps: UndoStep[] = [
-        {
-          op: deleteOp,
-          params: { uuid: templateUuid },
-          options: { internalSeriesRemoval: true },
-        },
-      ];
+      const steps: UndoStep[] = [{ op: deleteOp, params: { uuid: templateUuid } }];
       const instanceUuid = obs["instanceUuid"];
       if (typeof instanceUuid === "string" && instanceUuid !== templateUuid) {
-        steps.push({
-          op: deleteOp,
-          params: { uuid: instanceUuid },
-          options: { internalSeriesRemoval: true },
-        });
+        steps.push({ op: deleteOp, params: { uuid: instanceUuid } });
       }
       const originalUuid = obs["originalUuid"];
       if (typeof originalUuid === "string") {
@@ -2001,10 +1983,6 @@ export async function runUndo(
           // already acknowledged when they made it — carry the drive ack so it
           // is not re-gated by H-UI-DRIVE.
           ...(isUiDriveOp(step.op) && { dangerouslyDriveGui: true }),
-          // Sanctioned-internal series-removal (promote undo): exempt a template
-          // delete from H-REPEAT-SCHEDULE (the trash-both legs). Only the promote
-          // undo plan sets this — no consumer-reachable step carries it.
-          ...(step.options?.internalSeriesRemoval === true && { internalSeriesRemoval: true }),
         };
         const result =
           step.op === "reorder"

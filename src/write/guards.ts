@@ -49,47 +49,51 @@ export interface GuardInput {
   params: Record<string, unknown>;
   pre: PreState;
   acks: Acknowledgements;
-  /**
-   * SANCTIONED-INTERNAL series-removal path (never set by a consumer — the CLI/
-   * MCP surfaces cannot reach it). Set ONLY by the promote-undo executor when it
-   * trashes a minted template + its current instance (the SERDEL-validated
-   * trash-both, S1/S2). It exempts `todo.delete`/`project.delete` from
-   * H-REPEAT-SCHEDULE — the ONE place a repeating template may be trashed
-   * headlessly. The guard's PUBLIC refusal (a bare `todo delete <template>` /
-   * `project delete <template>`) stays fully intact; this flag rides an option
-   * the consumer entry points never thread.
-   */
-  internalSeriesRemoval?: boolean;
 }
 
 type GuardFn = (input: GuardInput) => GuardBlock | null;
 
-/** Ops where a schedule/status-class write on a repeating template is destructive. */
+/**
+ * Ops where a schedule/status-class write on a repeating template is destructive.
+ * NB: `todo.delete`/`project.delete` are NOT here — trashing a template is now
+ * ALLOWED with disclosure (ruling 2026-08-13; it is byte-identical to the GUI's
+ * own Edit ▸ Delete, SERDEL S1, and human-recoverable via Trash ▸ Put Back). The
+ * pipeline attaches the series-stops / instances-left / no-headless-restore
+ * disclosure and emits no undo token. `todo.restore`/`project.restore` STAY here
+ * but take a dedicated Put-Back message (a trashed template cannot be revived
+ * headlessly — AS move-to-Inbox → 301, RSIM-S S-R3).
+ */
 const REPEAT_SENSITIVE = new Set<OperationKind>([
   "todo.complete",
   "todo.cancel",
   "todo.reopen",
   "todo.move",
-  "todo.delete",
-  "project.delete", // trashing a repeating project template breaks the series (CLONE C3/C4: rule retained but next-instance cursor cleared, live instance orphaned, non-restorable via AS move → 301) — kind-parity with todo.delete (WG-8)
   "todo.duplicate", // unvalidated on templates (E07 probed a plain to-do)
-  "todo.restore", // unvalidated on templates (E15 probed a plain to-do)
+  "todo.restore", // a trashed template cannot be restored headlessly (Put Back only)
   "project.move", // unvalidated on repeating projects (E14 probed a plain project)
   "project.duplicate", // unvalidated on repeating projects (E17 probed a plain project)
   "project.cancel", // unvalidated on repeating projects (P01 probed a plain project)
   "project.reopen", // unvalidated on repeating projects (P02/P05 probed plain projects)
-  "project.restore", // unvalidated on repeating projects (P06 probed a plain project)
+  "project.restore", // a trashed template cannot be restored headlessly (Put Back only)
 ]);
 
 const GUARDS: Record<HazardId, GuardFn> = {
-  "H-REPEAT-SCHEDULE": ({ op, params, pre, internalSeriesRemoval }) => {
+  "H-REPEAT-SCHEDULE": ({ op, params, pre }) => {
     if (!isRepeatingTemplate(pre.target)) return null;
-    // Sanctioned-internal series removal (promote undo): the trash-both legs may
-    // delete the minted template. This exemption is the ONLY headless path to
-    // trash a template; a consumer `todo/project delete <template>` never sets
-    // the flag and stays blocked below (see GuardInput.internalSeriesRemoval).
-    if (internalSeriesRemoval === true && (op === "todo.delete" || op === "project.delete")) {
-      return null;
+    // A trashed repeating template cannot be brought back headlessly: our restore
+    // moves the row to the Inbox, and the app forbids moving a template out to a
+    // list (AS 301, RSIM-S S-R3). Refuse categorically and point at the app's own
+    // recovery (Trash ▸ Put Back, which restores the template AND resumes the
+    // schedule — SERDEL S2/S3).
+    if (op === "todo.restore" || op === "project.restore") {
+      return {
+        hazard: "H-REPEAT-SCHEDULE",
+        detail:
+          "the target is a trashed repeating series — it cannot be brought back outside the Things app",
+        remediation:
+          "restore the series from the Things app's Trash (Put Back) — this returns the template " +
+          "and resumes its schedule",
+      };
     }
     const touchesSchedule =
       op === "todo.update" && (params["when"] !== undefined || params["deadline"] !== undefined);
@@ -98,7 +102,7 @@ const GUARDS: Record<HazardId, GuardFn> = {
       hazard: "H-REPEAT-SCHEDULE",
       detail:
         "target is a repeating template: URL scheduling writes crash Things (T12/U12); " +
-        "status/move/delete on templates are unvalidated",
+        "status/move on templates are unvalidated",
       remediation:
         "edit the repeat rule in the Things app; title/notes updates and checklist " +
         "replacement remain allowed on templates",
