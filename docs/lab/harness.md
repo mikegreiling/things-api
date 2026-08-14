@@ -19,6 +19,10 @@ The **AXVM1 L3-accessibility layer** (new in v2) grants Accessibility to the ssh
 
 Every campaign/evidence doc in `docs/lab/` MUST state, in its header, the Things version it was probed under **and** the golden id it ran against (e.g. `things-lab-golden-v1` · Things 3.22.11 · pinned clock 2026-07-05). This is not optional decoration — it is the provenance that makes a result re-checkable when a later app build moves the surface. **Evidence docs are IMMUTABLE snapshots:** they are never re-stamped or version-amended when a law is re-confirmed under a new golden — a re-confirmation accrues in the living ledger ([assumption-register](../reference/assumption-register.md), *Confirmed under* column), never by editing the historical evidence. The register is the one doc whose version list grows; every other campaign doc names exactly the golden it was born under.
 
+## Durable artifacts (must outlive the run)
+
+Most run artifacts are ephemeral (`lab/artifacts/<runId>/`, gitignored, safe to delete). A few must **outlive the run** — above all the **durable Things Cloud account credentials** (`lab/artifacts/sync-durable-account/`). These are written to the **PRIMARY checkout's** gitignored `lab/artifacts/` **by absolute path** — never only to an agent worktree's copy. A worktree's gitignored files do NOT travel with a merge, and the orchestrator's worktree cleanup destroys them: that is exactly how durable Things Cloud account #1 was orphaned (2026-08-14; a fresh account #2 had to be minted as a one-time replacement — [sync3-dedupe-tiebreak.md](sync3-dedupe-tiebreak.md) account-provenance note). The rule applies to any credential, coordinate dump, or seed that a *future* run depends on: absolute-path it into the primary `lab/artifacts/`, never a worktree-relative path.
+
 ## Running
 
 ```sh
