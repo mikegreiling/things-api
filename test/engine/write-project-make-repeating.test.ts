@@ -15,10 +15,8 @@ import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import { classifyProjectRepeat } from "../../src/write/pre-state.ts";
-import {
-  runAddRepeatingProject,
-  runMakeRepeatingProject,
-} from "../../src/write/make-repeating-project.ts";
+import { promoteProjectViaGui } from "../../src/write/make-repeating-project.ts";
+import { runAddRepeatingProject } from "../../src/write/promote-clone.ts";
 import type { WriteDeps, WriteOptions } from "../../src/write/pipeline.ts";
 import { projectMakeRepeatingRecipe } from "../../src/write/vectors/ui-recipes.ts";
 import { createUiVector, type UiCommand, type UiRunResult } from "../../src/write/vectors/ui.ts";
@@ -318,11 +316,11 @@ describe("ui driver — select-row (pure-AX AXSelectedRows, UIC4-a)", () => {
 
 // --------------------------------------------------- orchestrator: refusals
 
-describe("runMakeRepeatingProject — refusals + gating", () => {
+describe("promoteProjectViaGui — refusals + gating", () => {
   it("blocks (no vector touched) when the GUI-drive ack is missing", async () => {
     const uuid = seedProject(fixture.db, { title: "P", start: "someday" });
     const ui = promotingUiVector("P", () => uuid);
-    const res = await runMakeRepeatingProject(deps([ui.vector]), {
+    const res = await promoteProjectViaGui(deps([ui.vector]), {
       uuid,
       frequency: "weekly",
       interval: 1,
@@ -334,7 +332,7 @@ describe("runMakeRepeatingProject — refusals + gating", () => {
 
   it("refuses an already-repeating project with H-PROJECT-REPEAT", async () => {
     const uuid = seedProject(fixture.db, { title: "P", start: "someday", recurrenceRule: true });
-    const res = await runMakeRepeatingProject(
+    const res = await promoteProjectViaGui(
       deps([promotingUiVector("P", () => uuid).vector]),
       { uuid, frequency: "weekly", interval: 1 },
       GUI,
@@ -345,7 +343,7 @@ describe("runMakeRepeatingProject — refusals + gating", () => {
   it("refuses a non-project target with H-UNKNOWN-DESTINATION", async () => {
     const uuid = seedProject(fixture.db, { title: "P" });
     // Point at a bogus uuid → not found → not-a-project refusal.
-    const res = await runMakeRepeatingProject(
+    const res = await promoteProjectViaGui(
       deps([promotingUiVector("P", () => uuid).vector]),
       { uuid: "NOPE-000000", frequency: "weekly", interval: 1 },
       GUI,
@@ -357,7 +355,7 @@ describe("runMakeRepeatingProject — refusals + gating", () => {
 
   it("dry-run surfaces the Someday coercion for an area-less anytime project", async () => {
     const uuid = seedProject(fixture.db, { title: "P", start: "active" });
-    const res = await runMakeRepeatingProject(
+    const res = await promoteProjectViaGui(
       deps([promotingUiVector("P", () => uuid).vector]),
       { uuid, frequency: "weekly", interval: 3 },
       { dryRun: true },
@@ -372,11 +370,11 @@ describe("runMakeRepeatingProject — refusals + gating", () => {
 
 // ------------------------------------------------- orchestrator: happy paths
 
-describe("runMakeRepeatingProject — drives", () => {
+describe("promoteProjectViaGui — drives", () => {
   it("area/someday: a single pure-AX drive discovers the new template uuid", async () => {
     const uuid = seedProject(fixture.db, { title: "P", start: "someday" });
     const ui = promotingUiVector("P", () => uuid);
-    const res = await runMakeRepeatingProject(
+    const res = await promoteProjectViaGui(
       deps([ui.vector]),
       { uuid, frequency: "weekly", interval: 1 },
       GUI,
@@ -399,7 +397,7 @@ describe("runMakeRepeatingProject — drives", () => {
         .run(NOW_EPOCH + 1, uuid);
     });
     const ui = promotingUiVector("P", () => uuid);
-    const res = await runMakeRepeatingProject(
+    const res = await promoteProjectViaGui(
       deps([url.vector, ui.vector]),
       { uuid, frequency: "weekly", interval: 1 },
       GUI,

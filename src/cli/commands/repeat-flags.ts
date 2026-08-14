@@ -8,6 +8,7 @@
 import type { Command } from "commander";
 
 import type {
+  AddRepeatingRuleFields,
   MonthlyAnchor,
   RepeatFrequency,
   RepeatRuleParams,
@@ -48,6 +49,52 @@ export function addRepeatRuleFlags(cmd: Command): Command {
       "--start-days-earlier <n>",
       "with --deadline: start each occurrence N days before its deadline",
     );
+}
+
+/**
+ * The CALENDAR-ANCHOR subset of the rule flags — for the add-repeating
+ * composites, whose base add already owns `--deadline <date>` / `--reminder`
+ * (the item's own), so the rule-level `--deadline` / `--reminder` /
+ * `--start-days-earlier` (which would collide) are intentionally absent. A
+ * deadlined repeat is set with a follow-up `reschedule-repeat`.
+ */
+export function addRepeatCalendarFlags(cmd: Command): Command {
+  return cmd
+    .option(
+      "--after-completion",
+      "repeat N units AFTER each occurrence is completed (not on a fixed schedule)",
+    )
+    .option(
+      "--weekdays <days>",
+      "weekly only: comma-separated weekdays, e.g. monday,wednesday,friday",
+    )
+    .option("--on-day <day>", "monthly/yearly only: a day of the month (1–31, or 'last')")
+    .option(
+      "--on-weekday <weekday>",
+      "monthly/yearly only: a weekday for an nth-weekday rule (with --on-ordinal)",
+    )
+    .option(
+      "--on-ordinal <n>",
+      "monthly/yearly only: which weekday (1–5, or 'last') with --on-weekday",
+    )
+    .option("--yearly-month <n>", "yearly only: the month (1–12)")
+    .option("--ends-after <n>", "stop after N occurrences (1–999)")
+    .option("--ends-on <date>", "YYYY-MM-DD — stop after this date");
+}
+
+/** Map the calendar-anchor rule flags (add-repeating), excluding the base-add-owned fields. */
+export function addRepeatingRuleFieldsFromOpts(
+  opts: Record<string, unknown>,
+  frequency: RepeatFrequency,
+  interval: number,
+): AddRepeatingRuleFields {
+  const {
+    reminder: _r,
+    deadline: _d,
+    startDaysEarlier: _s,
+    ...rest
+  } = repeatRuleFlagsFromOpts(opts, frequency);
+  return { frequency, interval, ...rest };
 }
 
 // The raw CLI strings are cast to the vocabulary types WITHOUT validation here —

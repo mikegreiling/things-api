@@ -1604,12 +1604,63 @@ const CASES: Record<OperationKind, CaseDef> = {
     },
   },
   "todo.make-repeating": {
-    class: "irreversible",
+    class: "reversible-with-loss",
     register() {
-      it("planUndo reports it irreversible (identity replacement — new template uuid)", () => {
-        const plan = planUndo(auditRecord({ op: "todo.make-repeating", uuid: "T-1" }), NOW);
+      it("round-trip + LOSS: undo trashes the template + instance (trash-both) and restores the original", async () => {
+        const template = seedTodo(fixture.db, { title: "Water plants", recurrenceRule: true });
+        const instance = seedTodo(fixture.db, {
+          title: "Water plants",
+          repeatingTemplate: template,
+        });
+        const original = seedTodo(fixture.db, { title: "Water plants", trashed: true });
+        writeAudit([
+          auditRecord({
+            op: "todo.make-repeating",
+            uuid: template,
+            vector: "ui",
+            disruption: 3,
+            txn: { id: "txn-mrt", role: "summary" },
+            observed: { templateUuid: template, instanceUuid: instance, originalUuid: original },
+          }),
+        ]);
+        const del = osaVector(["todo.delete"], (id) => set(id, "trashed = ?", [1]));
+        const restore = osaVector(["todo.restore"], (id) =>
+          set(id, "trashed = ?, start = ?, startDate = ?", [0, 0, null]),
+        );
+        const items = await runUndo(deps([del.vector, restore.vector]), auditDir);
+        expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual([
+          "todo.delete",
+          "todo.delete",
+          "todo.restore",
+        ]);
+        // Trash-both landed + original revived (documented loss: Inbox de-scheduled).
+        expect(items[0]?.plan.notes.join(" ")).toContain("Inbox de-scheduled");
+        expect(items[0]?.plan.notes.join(" ")).toContain("Put Back");
+        for (const id of [template, instance]) {
+          expect(
+            (
+              fixture.db.prepare("SELECT trashed FROM TMTask WHERE uuid=?").get(id) as {
+                trashed: number;
+              }
+            ).trashed,
+          ).toBe(1);
+        }
+        expect(
+          (
+            fixture.db.prepare("SELECT trashed FROM TMTask WHERE uuid=?").get(original) as {
+              trashed: number;
+            }
+          ).trashed,
+        ).toBe(0);
+      });
+      it("irreversible when the minted template uuid was not captured", () => {
+        const plan = planUndo(
+          auditRecord({ op: "todo.make-repeating", uuid: "T-1", observed: {} }),
+          NOW,
+        );
         expect(plan.kind).toBe("irreversible");
-        expect(plan.reason).toContain("identity replacement");
+        expect(plan.reason).toContain("template uuid was not captured");
       });
     },
   },
@@ -1837,12 +1888,51 @@ const CASES: Record<OperationKind, CaseDef> = {
     },
   },
   "project.make-repeating": {
-    class: "irreversible",
+    class: "reversible-with-loss",
     register() {
-      it("planUndo reports it irreversible (identity replacement — new template project uuid)", () => {
-        const plan = planUndo(auditRecord({ op: "project.make-repeating", uuid: "P-1" }), NOW);
+      it("round-trip + LOSS: undo trashes the template + instance and restores the original in place", async () => {
+        const template = seedProject(fixture.db, { title: "Weekly review", recurrenceRule: true });
+        const instance = seedProject(fixture.db, {
+          title: "Weekly review",
+          repeatingTemplate: template,
+        });
+        const original = seedProject(fixture.db, { title: "Weekly review", trashed: true });
+        writeAudit([
+          auditRecord({
+            op: "project.make-repeating",
+            uuid: template,
+            vector: "ui",
+            disruption: 3,
+            txn: { id: "txn-mrp", role: "summary" },
+            observed: { templateUuid: template, instanceUuid: instance, originalUuid: original },
+          }),
+        ]);
+        const del = osaVector(["project.delete"], (id) => set(id, "trashed = ?", [1]));
+        const restore = osaVector(["project.restore"], (id) => set(id, "trashed = ?", [0]));
+        const items = await runUndo(deps([del.vector, restore.vector]), auditDir);
+        expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual([
+          "project.delete",
+          "project.delete",
+          "project.restore",
+        ]);
+        expect(items[0]?.plan.notes.join(" ")).toContain("in place");
+        expect(items[0]?.plan.notes.join(" ")).toContain("Put Back");
+        expect(
+          (
+            fixture.db.prepare("SELECT trashed FROM TMTask WHERE uuid=?").get(original) as {
+              trashed: number;
+            }
+          ).trashed,
+        ).toBe(0);
+      });
+      it("irreversible when the minted template uuid was not captured", () => {
+        const plan = planUndo(
+          auditRecord({ op: "project.make-repeating", uuid: "P-1", observed: {} }),
+          NOW,
+        );
         expect(plan.kind).toBe("irreversible");
-        expect(plan.reason).toContain("identity replacement");
+        expect(plan.reason).toContain("template uuid was not captured");
       });
     },
   },
@@ -1870,12 +1960,60 @@ const CASES: Record<OperationKind, CaseDef> = {
     },
   },
   "project.add-repeating": {
-    class: "irreversible",
+    class: "reversible",
     register() {
-      it("planUndo reports it irreversible (create-then-promote; the created uuid is destroyed)", () => {
-        const plan = planUndo(auditRecord({ op: "project.add-repeating", uuid: "P-1" }), NOW);
+      it("round-trip: undo trashes the created series (template + instance), no original to restore", async () => {
+        const template = seedProject(fixture.db, { title: "Finances", recurrenceRule: true });
+        const instance = seedProject(fixture.db, {
+          title: "Finances",
+          repeatingTemplate: template,
+        });
+        writeAudit([
+          auditRecord({
+            op: "project.add-repeating",
+            uuid: template,
+            vector: "ui",
+            disruption: 3,
+            txn: { id: "txn-arp", role: "summary" },
+            observed: { templateUuid: template, instanceUuid: instance },
+          }),
+        ]);
+        const del = osaVector(["project.delete"], (id) => set(id, "trashed = ?", [1]));
+        const items = await runUndo(deps([del.vector]), auditDir);
+        expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual(["project.delete", "project.delete"]);
+        expect(items[0]?.plan.notes.join(" ")).toContain("trash-both");
+      });
+    },
+  },
+  "todo.add-repeating": {
+    class: "reversible",
+    register() {
+      it("round-trip: undo trashes the created series (template + instance), no original to restore", async () => {
+        const template = seedTodo(fixture.db, { title: "Standup", recurrenceRule: true });
+        const instance = seedTodo(fixture.db, { title: "Standup", repeatingTemplate: template });
+        writeAudit([
+          auditRecord({
+            op: "todo.add-repeating",
+            uuid: template,
+            vector: "ui",
+            disruption: 3,
+            txn: { id: "txn-art", role: "summary" },
+            observed: { templateUuid: template, instanceUuid: instance },
+          }),
+        ]);
+        const del = osaVector(["todo.delete"], (id) => set(id, "trashed = ?", [1]));
+        const items = await runUndo(deps([del.vector]), auditDir);
+        expect(items[0]?.outcome).toBe("ok");
+        expect(items[0]?.plan.steps.map((s) => s.op)).toEqual(["todo.delete", "todo.delete"]);
+        expect(items[0]?.plan.notes.join(" ")).toContain("trash-both");
+      });
+      it("irreversible when the minted template uuid was not captured", () => {
+        const plan = planUndo(
+          auditRecord({ op: "todo.add-repeating", uuid: "T-1", observed: {} }),
+          NOW,
+        );
         expect(plan.kind).toBe("irreversible");
-        expect(plan.reason).toContain("identity replacement");
       });
     },
   },

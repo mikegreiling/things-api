@@ -18,7 +18,7 @@ import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
 import { encodePackedDate, encodeReminderTime } from "../../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
 import { resolveResolutionInstant } from "../../src/write/commands.ts";
-import { runAddRepeatingProject } from "../../src/write/make-repeating-project.ts";
+import { runAddRepeatingProject } from "../../src/write/promote-clone.ts";
 import {
   runCancelWithDate,
   runCompleteWithDate,

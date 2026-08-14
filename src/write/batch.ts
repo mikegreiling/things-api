@@ -121,6 +121,17 @@ export interface BatchOptions {
 const KNOWN_OPS = new Set<string>(OPERATION_KINDS);
 
 /**
+ * The add-repeating COMPOUNDS — each is a multi-leg orchestration (add → native
+ * GUI promote), delivered only by its dedicated orchestrator and never
+ * dispatchable through the pipeline, so they cannot be a batch leg. Refused
+ * per-line with a pointer to the standalone command. (The `make-repeating` ops
+ * DO dispatch the native GUI leg through the pipeline and stay batchable — a
+ * batch make-repeating is the destructive native promote, not promote-via-clone;
+ * for the recoverable form run the standalone command.)
+ */
+const BATCH_UNSUPPORTED_COMPOUND = new Set<string>(["todo.add-repeating", "project.add-repeating"]);
+
+/**
  * Ops that MINT a uuid, so may declare a `tempId` — the ratified rule is
  * "anything that creates a new uuid". NB: `tag.add` is deliberately absent (tags
  * have no uuid — identity is the title).
@@ -128,7 +139,6 @@ const KNOWN_OPS = new Set<string>(OPERATION_KINDS);
 const UUID_MINTING_OPS = new Set<string>([
   "todo.add",
   "project.add",
-  "project.add-repeating",
   "area.add",
   "project.add-heading",
   "todo.duplicate",
@@ -137,6 +147,8 @@ const UUID_MINTING_OPS = new Set<string>([
   "project.make-repeating",
   "todo.convert-to-project",
   "project.promote-heading",
+  // NB: the add-repeating COMPOUNDS mint uuids but are refused in a batch
+  // (BATCH_UNSUPPORTED_COMPOUND) — run them standalone.
 ]);
 
 const TEMP_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
@@ -461,6 +473,18 @@ export async function runBatch(
           kind: "invalid",
           op: entry.op,
           detail: `unknown op "${entry.op}" — see \`things capabilities\``,
+        },
+      };
+    }
+    if (BATCH_UNSUPPORTED_COMPOUND.has(entry.op)) {
+      return {
+        outcome: {
+          kind: "invalid",
+          op: entry.op,
+          detail:
+            `"${entry.op}" is a promote-via-clone COMPOUND (clone/add → GUI promote → trash), not a ` +
+            "single atomic op — it does not compose inside a batch. Run it as a standalone command " +
+            "(`things todo|project make-repeating` / `add-repeating`)",
         },
       };
     }

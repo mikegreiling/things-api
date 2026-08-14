@@ -416,16 +416,19 @@ someday orders bounce; --before/--after co-touches siblings; caps 30; flags=fals
   repeating: `REPEATING — rules for recurring to-dos and projects
 
 Verbs: \`things todo|project make-repeating <ref>\` (turn an existing item into a
-repeater), \`things project add-repeating "<title>"\`, \`… reschedule-repeat <ref>\`
-(change a rule in place). Every rule takes \`--frequency <daily|weekly|monthly|yearly>\`
-and a required \`--interval <n>\` (\`--interval 1\` = every unit). Repeating operations
-require \`--allow-disruptive\`, including \`--dry-run\` previews.
+repeater), \`things todo|project add-repeating "<title>"\` (create + make repeating in
+one call), \`… reschedule-repeat <ref>\` (change a rule in place). Every rule takes
+\`--frequency <daily|weekly|monthly|yearly>\` and a required \`--interval <n>\`
+(\`--interval 1\` = every unit). Repeating operations drive the app's Repeat dialog, so
+they require \`--dangerously-drive-gui\`, including \`--dry-run\` previews.
+
+make-repeating is RECOVERABLE (promote-via-clone): it copies the item, promotes the
+copy, and moves the ORIGINAL to the Trash — so \`things undo\` reverses it (removes the
+new series and restores the original). It refuses a project holding a nested repeater.
 
 Two modes:
-  fixed (default)      occurrences land on calendar dates. NOTE: this REPLACES the
-                       item — the response returns the new uuids (see below).
-  --after-completion   next occurrence lands N units after you complete the current
-                       one. The item keeps its uuid.
+  fixed (default)      occurrences land on calendar dates.
+  --after-completion   next occurrence lands N units after you complete the current one.
 
 Shaping the rule (compose with the frequency):
   --weekdays mon,thu,fri      weekly: MULTIPLE days in ONE rule — never make two
@@ -440,9 +443,9 @@ Shaping the rule (compose with the frequency):
 
 make-repeating returns a \`repeating\` block: \`instanceUuid\` is the visible current
 occurrence (use it to reach the item), \`templateUuid\` the recurring rule (use it as
-the <ref> for \`reschedule-repeat\`), and \`replacedUuid\` the original when it was
-replaced. Typical chain: \`things todo add "<title>" --json\`, then
-\`things todo make-repeating <returned-uuid> --frequency … --allow-disruptive\`.`,
+the <ref> for \`reschedule-repeat\`), and \`replacedUuid\` the disposable copy; a warning
+names the trashed original. New repeater in ONE call:
+\`things todo add-repeating "<title>" --frequency … --interval 1 --dangerously-drive-gui\`.`,
 };
 
 /** The valid topic names, in the order the "unknown topic" hint lists them. */

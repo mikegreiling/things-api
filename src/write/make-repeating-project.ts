@@ -1,25 +1,25 @@
 /**
- * project.make-repeating + project.add-repeating orchestrators (UIC4).
- *
- * make-repeating drives a project into a repeating series purely via AX: the
- * project is selected as a content-table ROW (settable AXSelectedRows, UIC4-a),
- * then Items ▸ Repeat… opens the same dialog the to-do op uses. The row is
- * reachable in the project's AREA view or the SOMEDAY view, but an area-less
- * ANYTIME project renders as a header there (UIC4-d) — this orchestrator coerces
- * it to Someday first (a cleanup-free intermediate step, UIC4-c/d: make-repeating
+ * promoteProjectViaGui — the INTERNAL project-promote leg (UIC4), the native
+ * mechanism the promote-via-clone orchestrators (promote-clone.ts) drive on a
+ * DISPOSABLE clone. It drives a project into a repeating series purely via AX:
+ * the project is selected as a content-table ROW (settable AXSelectedRows,
+ * UIC4-a), then Items ▸ Repeat… opens the same dialog the to-do op uses. The row
+ * is reachable in the project's AREA view or the SOMEDAY view, but an area-less
+ * ANYTIME project renders as a header there (UIC4-d) — this helper coerces it to
+ * Someday first (a cleanup-free intermediate step, UIC4-c/d: make-repeating
  * normalizes start to someday regardless, so the coercion leaves no residue),
  * then delegates to the pure-AX drive. The area / someday cases need no coercion
  * and delegate directly.
  *
- * add-repeating is the two-step composite (UIC4-f roadmap ruling #2): create
- * the project seeded into a pure-AX taxonomy (an area, or Someday), THEN promote
- * it with make-repeating. The two legs are NOT atomic — the created project
- * persists even if the promote refuses.
+ * This is NO LONGER a public op on its own — `project.make-repeating` (the public
+ * verb) is `clone(X) → promoteProjectViaGui(the clone) → trash(X)` in
+ * promote-clone.ts (promote-via-clone ratified 2026-08-11/13). The native dialog
+ * remains the internal mechanism, not a user-facing direct-promote mode.
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { resolveProjectWriteTarget } from "../read/queries.ts";
 import { assertRepeatRule } from "./commands.ts";
-import type { ProjectAddRepeatingParams, RepeatRuleParams } from "./operations.ts";
+import type { RepeatRuleParams } from "./operations.ts";
 import { classifyProjectRepeat, loadTarget, type ProjectRepeatTaxonomy } from "./pre-state.ts";
 import {
   fingerprintLabel,
@@ -29,7 +29,7 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 
-/** The two-key GUI-drive block, shared by both orchestrators (mirrors H-UI-DRIVE). */
+/** The two-key GUI-drive block (mirrors H-UI-DRIVE). */
 function blockedUiDrive(op: "project.make-repeating" | "project.add-repeating"): MutationResult {
   return {
     kind: "blocked",
@@ -94,7 +94,7 @@ function legOptions(
   return out;
 }
 
-export async function runMakeRepeatingProject(
+export async function promoteProjectViaGui(
   deps: WriteDeps,
   params: RepeatRuleParams,
   options: WriteOptions = {},
@@ -209,100 +209,6 @@ export async function runMakeRepeatingProject(
     invocation: `make-repeating(project, coerced from anytime) id=${uuid} → template ${drive.uuid ?? "?"}`,
   });
   return { ...drive, ...(drive.warnings !== undefined && { warnings: drive.warnings }) };
-}
-
-export async function runAddRepeatingProject(
-  deps: WriteDeps,
-  params: ProjectAddRepeatingParams,
-  options: WriteOptions = {},
-): Promise<MutationResult> {
-  // add-repeating carries only the base rule vocabulary (the promote can be
-  // followed by a reschedule for a richer rule); validate just that.
-  assertRepeatRule({ frequency: params.frequency, interval: params.interval });
-
-  // The promote drives the GUI — block before creating anything if the ack is missing.
-  if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
-    return blockedUiDrive("project.add-repeating");
-  }
-
-  // Seed a pure-AX taxonomy: an area lands a selectable AREA-view row; otherwise
-  // create in Someday (UIC4-f) so the promote skips the anytime-header problem.
-  const seedWhen = params.area === undefined ? "someday" : undefined;
-
-  if (options.dryRun === true) {
-    const where = params.area !== undefined ? "the target area (Anytime)" : "Someday";
-    return {
-      kind: "dry-run",
-      op: "project.add-repeating",
-      plan: {
-        op: "project.add-repeating",
-        vector: "ui",
-        tier: 3,
-        invocation:
-          `create project "${params.title}" in ${where} (persists on its own) → then make-repeating ` +
-          `(select row → Items ▸ Repeat… → frequency=${params.frequency}, interval=${params.interval})`,
-        expectedDelta: {
-          mode: "create",
-          probe: { title: params.title, type: "project", sinceEpoch: 0 },
-          assert: [{ field: "repeating.isTemplate", equals: true }],
-        },
-        hazardsChecked: ["H-UI-DRIVE"],
-      },
-    };
-  }
-
-  const startedAt = deps.now?.() ?? new Date();
-  const txnId = newTxnId(startedAt);
-
-  const add = await runMutation(
-    deps,
-    "project.add",
-    {
-      title: params.title,
-      ...(params.notes !== undefined && { notes: params.notes }),
-      ...(params.area !== undefined && { area: params.area }),
-      ...(seedWhen !== undefined && { when: seedWhen }),
-      ...(params.deadline !== undefined && { deadline: params.deadline }),
-      ...(params.todos !== undefined && { todos: params.todos }),
-    },
-    legOptions(options, { id: txnId, role: "leg" }, "url-scheme"),
-  );
-  if (add.kind !== "ok" || add.uuid === null) {
-    return add.kind === "ok"
-      ? {
-          kind: "verify-failed",
-          op: "project.add-repeating",
-          reason: "mismatch",
-          expected: {
-            mode: "create",
-            probe: { title: params.title, type: "project", sinceEpoch: 0 },
-            assert: [],
-          },
-          observed: null,
-          detail:
-            "the project was created but its uuid was not discovered — cannot promote it to repeating",
-        }
-      : add;
-  }
-
-  const promote = await runMakeRepeatingProject(
-    deps,
-    { uuid: add.uuid, frequency: params.frequency, interval: params.interval },
-    legOptions(options, { id: txnId, role: "leg" }, "ui"),
-  );
-  if (promote.kind !== "ok") {
-    // Honest: the project was created (and persists) but the promote did not land.
-    return promote;
-  }
-
-  appendSummary(deps, {
-    startedAt,
-    uuid: promote.uuid,
-    txnId,
-    op: "project.add-repeating",
-    invocation: `add-repeating project "${params.title}" → template ${promote.uuid ?? "?"}`,
-  });
-  return { ...promote, op: "project.add-repeating" };
 }
 
 // --------------------------------------------------------------------- audit

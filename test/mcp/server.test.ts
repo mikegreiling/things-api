@@ -2498,7 +2498,7 @@ describe("things MCP server", () => {
       expect(outcome.op).toBe("project.make-repeating");
     });
 
-    it("scope project action add blocks before creating, plans with the ack, and requires scope project (was create_repeating_project)", async () => {
+    it("action add blocks before creating, plans with the ack, and works for BOTH scopes (was create_repeating_project)", async () => {
       await connect([fakeVector(null).vector]);
       const blocked = await client.callTool({
         name: "repeat",
@@ -2528,19 +2528,22 @@ describe("things MCP server", () => {
       ) as { kind: string; op: string };
       expect(outcome.op).toBe("project.add-repeating");
 
-      const wrongScope = await client.callTool({
-        name: "repeat",
-        arguments: {
-          scope: "todo",
-          action: "add",
-          title: "x",
-          frequency: "weekly",
-          interval: 1,
-          dangerously_drive_gui: true,
-        },
-      });
-      expect(wrongScope.isError).toBe(true);
-      expect((textOf(wrongScope) as { code: string }).code).toBe("usage");
+      // scope todo action add is now supported (todo.add-repeating).
+      const todoAdd = textOf(
+        await client.callTool({
+          name: "repeat",
+          arguments: {
+            scope: "todo",
+            action: "add",
+            title: "Standup",
+            frequency: "weekly",
+            interval: 1,
+            dangerously_drive_gui: true,
+            dry_run: true,
+          },
+        }),
+      ) as { kind: string; op: string };
+      expect(todoAdd.op).toBe("todo.add-repeating");
     });
   });
 

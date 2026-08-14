@@ -49,6 +49,17 @@ export interface GuardInput {
   params: Record<string, unknown>;
   pre: PreState;
   acks: Acknowledgements;
+  /**
+   * SANCTIONED-INTERNAL series-removal path (never set by a consumer — the CLI/
+   * MCP surfaces cannot reach it). Set ONLY by the promote-undo executor when it
+   * trashes a minted template + its current instance (the SERDEL-validated
+   * trash-both, S1/S2). It exempts `todo.delete`/`project.delete` from
+   * H-REPEAT-SCHEDULE — the ONE place a repeating template may be trashed
+   * headlessly. The guard's PUBLIC refusal (a bare `todo delete <template>` /
+   * `project delete <template>`) stays fully intact; this flag rides an option
+   * the consumer entry points never thread.
+   */
+  internalSeriesRemoval?: boolean;
 }
 
 type GuardFn = (input: GuardInput) => GuardBlock | null;
@@ -71,8 +82,15 @@ const REPEAT_SENSITIVE = new Set<OperationKind>([
 ]);
 
 const GUARDS: Record<HazardId, GuardFn> = {
-  "H-REPEAT-SCHEDULE": ({ op, params, pre }) => {
+  "H-REPEAT-SCHEDULE": ({ op, params, pre, internalSeriesRemoval }) => {
     if (!isRepeatingTemplate(pre.target)) return null;
+    // Sanctioned-internal series removal (promote undo): the trash-both legs may
+    // delete the minted template. This exemption is the ONLY headless path to
+    // trash a template; a consumer `todo/project delete <template>` never sets
+    // the flag and stays blocked below (see GuardInput.internalSeriesRemoval).
+    if (internalSeriesRemoval === true && (op === "todo.delete" || op === "project.delete")) {
+      return null;
+    }
     const touchesSchedule =
       op === "todo.update" && (params["when"] !== undefined || params["deadline"] !== undefined);
     if (!touchesSchedule && !REPEAT_SENSITIVE.has(op)) return null;

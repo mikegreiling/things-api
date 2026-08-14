@@ -1,8 +1,11 @@
 /**
- * Response enrichment for make-repeating conversions: the ok MutationResult
+ * Response enrichment for the INTERNAL native make-repeating leg (the mechanism
+ * the promote-via-clone orchestrators drive on a clone): the ok MutationResult
  * carries a `repeating` block (template + instance + replaced uuids, plus
- * childrenReplaced for projects), and — being irreversible — NO undoToken.
- * Every vector is a fake driven through the WriteDeps seam; no app is touched.
+ * childrenReplaced for projects). These dispatch the native op directly (as the
+ * orchestrator would internally); the PUBLIC make-repeating result + undo shape
+ * live in write-promote-clone.test.ts. Every vector is a fake driven through the
+ * WriteDeps seam; no app is touched.
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
-import { runMakeRepeatingProject } from "../../src/write/make-repeating-project.ts";
 import { runMutation, type WriteDeps, type WriteOptions } from "../../src/write/pipeline.ts";
 import type {
   CompiledInvocation,
@@ -120,7 +122,6 @@ describe("todo.make-repeating — repeating block + undoToken suppression", () =
       replacedUuid: source,
     });
     expect(res.repeating).not.toHaveProperty("childrenReplaced"); // to-do
-    expect(res.undoToken).toBeUndefined(); // irreversible → no token
   });
 
   it("PRESERVED fate: instanceUuid = original, replacedUuid = null", async () => {
@@ -153,7 +154,7 @@ describe("todo.make-repeating — repeating block + undoToken suppression", () =
 });
 
 describe("project.make-repeating — repeating block with childrenReplaced", () => {
-  it("carries childrenReplaced and suppresses the undoToken", async () => {
+  it("carries childrenReplaced (native leg enrichment)", async () => {
     const source = seedProject(fixture.db, {
       uuid: "PROJ",
       title: "Weekly review",
@@ -178,8 +179,9 @@ describe("project.make-repeating — repeating block with childrenReplaced", () 
         creationDate: NOW_EPOCH,
       });
     });
-    const res = await runMakeRepeatingProject(
+    const res = await runMutation(
       deps([vector]),
+      "project.make-repeating",
       { uuid: source, frequency: "weekly", interval: 1 },
       GUI,
     );
@@ -191,6 +193,5 @@ describe("project.make-repeating — repeating block with childrenReplaced", () 
       replacedUuid: "PROJ",
       childrenReplaced: 2,
     });
-    expect(res.undoToken).toBeUndefined();
   });
 });

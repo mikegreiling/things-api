@@ -283,9 +283,13 @@ export { outcomeFailed } from "./write/batch.ts";
 export { OP_ID_RE } from "./write/opid.ts";
 export { BOUNCE_MAX_ITEMS } from "./write/reorder.ts";
 export type {
+  AddRepeatingRuleFields,
   MonthlyAnchor,
+  ProjectAddRepeatingParams,
+  RepeatEnds,
   RepeatFrequency,
   RepeatRuleParams,
+  TodoAddRepeatingParams,
   Weekday,
   WeekdayOrdinal,
   YearlyAnchor,

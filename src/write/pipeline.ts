@@ -138,6 +138,15 @@ export interface WriteOptions extends Acknowledgements {
    * stay on the host clock.
    */
   normalizeWhen?: boolean;
+  /**
+   * SANCTIONED-INTERNAL series-removal (promote undo): exempts a
+   * `todo.delete`/`project.delete` on a repeating TEMPLATE from H-REPEAT-SCHEDULE
+   * so the trash-both legs can remove a minted series (SERDEL S1/S2). NEVER set
+   * by a consumer entry point (the client `run`, batch, CLI, MCP do not thread
+   * it) — only the promote-undo executor sets it. The guard's public refusal on a
+   * bare template delete is untouched. See guards.ts GuardInput.internalSeriesRemoval.
+   */
+  internalSeriesRemoval?: boolean;
 }
 
 export interface MutationPlan {
@@ -610,6 +619,7 @@ export async function runMutation<K extends OperationKind>(
       params: params as Record<string, unknown>,
       pre,
       acks,
+      ...(options.internalSeriesRemoval === true && { internalSeriesRemoval: true }),
     });
     if (block !== null) {
       audit({ result: blockedCode({ hazard: block.hazard, reason: "hazard" }) });
