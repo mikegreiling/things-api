@@ -4,7 +4,7 @@
 
 ## 1. Why
 
-The native promote (the GUI Repeat… dialog, our only template-minting surface — E13/AS-302/Shortcuts all disproven) is destructive and nondeterministic from the caller's seat: the source row is usually hard-deleted (identity replacement, oddities §8g), and whether it survives depends on the RSIM source-fate lottery (a to-do preserves iff it carries a deadline; a project iff its subtree holds a nested repeater or has no open child). Reimplementing promote as a compound over a disposable clone fixes both at once:
+The native promote (the GUI Repeat… dialog, our only template-minting surface — E13/AS-302/Shortcuts all disproven) is destructive and nondeterministic from the caller's seat: the source row is usually hard-deleted (identity replacement, oddities §8g), and whether it survives depends on the RSIM source-fate lottery — reconciled (SRCFATE 2026-08-14, [lab/srcfate-reconciliation-sweep.md](../lab/srcfate-reconciliation-sweep.md)) to a single primitive: **the source is PRESERVED iff its subtree contains a terminal element — a completed/canceled child OR a checked (completed) checklist item anywhere — OR (to-do) a deadline OR (project) a nested repeater; otherwise DELETED.** (This generalizes the earlier narrower statements — "a to-do preserves iff it carries a deadline; a project iff a nested repeater or no open child" — since a checked checklist item preserves a to-do with no deadline, and a terminal element preserves a project even alongside open siblings.) Reimplementing promote as a compound over a disposable clone fixes both at once:
 
 ```
 clone(X) → native-promote(the clone) → trash(X)
