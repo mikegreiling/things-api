@@ -58,6 +58,7 @@ export const OPERATION_KINDS = [
   "area.reorder",
   "project.make-repeating",
   "project.add-repeating",
+  "todo.add-repeating",
   "todo.clone",
   "project.clone",
   "log-now",
@@ -86,7 +87,7 @@ export const UI_DRIVE_OPS: readonly OperationKind[] = [
   // Pure-AX (UIC4): the project is selected as a content-table ROW via a
   // settable AXSelectedRows, then Items ▸ Repeat… drives the same dialog. The
   // area-less-anytime taxonomy needs a Someday coercion first, orchestrated by
-  // runMakeRepeatingProject — but the drive itself is a ui-vector op.
+  // promoteProjectViaGui — but the drive itself is a ui-vector op.
   "project.make-repeating",
   // HEADXPROJ: the heading row's `…` ellipsis → Move… menu → keyboard-driven
   // project picker (HID-click the title-carrying "More. <title>" button, then
@@ -753,22 +754,81 @@ export interface RepeatRuleParams {
 }
 
 /**
- * Create a project and, in the same call, promote it to a repeating series
- * (the two-step composite of UIC4-f). The create seeds a pure-AX taxonomy —
- * an `area` lands the project as a selectable AREA-view row; otherwise it is
- * created in Someday — so the promote never needs a coercion. The two legs are
- * NOT atomic: the created project persists even if the promote refuses.
+ * The calendar-anchor subset of the Repeat-dialog rule vocabulary the
+ * add-repeating composites carry on their PROMOTE leg (frequency/interval plus
+ * the after-completion + weekly/monthly/yearly/ends anchors). The deadline-
+ * coupled rule fields (rule `deadline`, `startDaysEarlier`) and the rule-level
+ * `reminder` (which the GUI vector refuses, UIC6-g) are intentionally EXCLUDED
+ * here — they collide with the base add's own concrete `deadline`/`reminder`,
+ * and a deadlined repeat is set with a follow-up `reschedule-repeat`.
  */
-export interface ProjectAddRepeatingParams {
+export interface AddRepeatingRuleFields {
+  frequency: RepeatFrequency;
+  /** "every N units", 1–99. */
+  interval: number;
+  /** After-COMPLETION cadence (rule type tp=1) instead of a fixed schedule. */
+  afterCompletion?: boolean;
+  /** WEEKLY only: the set of weekdays the rule fires on. */
+  weekdays?: Weekday[];
+  /** MONTHLY only: the day-of-month or nth-weekday anchor. */
+  monthly?: MonthlyAnchor;
+  /** YEARLY only: the month + day anchor. */
+  yearly?: YearlyAnchor;
+  /** The "Ends" bound (dialog default: never). */
+  ends?: RepeatEnds;
+}
+
+/**
+ * Create a project and, in the same call, promote it to a repeating series
+ * (the add→promote composite, UIC4-f). The create leg carries the COMPLETE
+ * project add vocabulary — notes, area, deadline, `when`, and the structured
+ * `items` (headings + children, #461) — and the promote leg carries the full
+ * calendar-anchor rule vocabulary ({@link AddRepeatingRuleFields}). The create
+ * seeds a pure-AX taxonomy (an `area` lands a selectable AREA-view row; otherwise
+ * Someday) so the promote never needs a coercion. The two legs are NOT atomic:
+ * the created project persists even if the promote refuses.
+ */
+export interface ProjectAddRepeatingParams extends AddRepeatingRuleFields {
   title: string;
   notes?: string;
   /** Destination area (uuid or unique name); when omitted the project is created in Someday. */
   area?: ContainerRef;
+  when?: WhenValue;
   deadline?: IsoDate;
+  /** Flat child to-do titles (born open). Exclusive with `items`. */
   todos?: string[];
-  frequency: RepeatFrequency;
-  /** "every N units", 1–99. */
-  interval: number;
+  /**
+   * Structured headings + children born with the project in ONE json import
+   * (#461); exclusive with `todos`. See {@link ProjectItemSpec}.
+   */
+  items?: ProjectItemSpec[];
+  /** Born-backdated creation timestamp (ISO date or datetime). */
+  createdAt?: string;
+}
+
+/**
+ * Create a to-do and, in the same call, promote it to a repeating series (the
+ * add→promote composite closing §0.2). The create leg carries the COMPLETE
+ * to-do add vocabulary (title/notes/tags/when/deadline/reminder/checklist +
+ * `--created-at` + container), and the promote leg carries the full calendar-
+ * anchor rule vocabulary ({@link AddRepeatingRuleFields}). The two legs are NOT
+ * atomic: the created to-do persists even if the promote refuses.
+ */
+export interface TodoAddRepeatingParams extends AddRepeatingRuleFields {
+  title: string;
+  notes?: string;
+  when?: WhenValue;
+  /** Time-of-day reminder on the created to-do (requires a schedulable `when`). */
+  reminder?: ReminderTime;
+  deadline?: IsoDate;
+  tags?: string[];
+  checklistItems?: string[];
+  project?: ContainerRef;
+  area?: ContainerRef;
+  /** Existing heading inside the target project (placement only). */
+  heading?: string;
+  /** Born-backdated creation timestamp (ISO date or datetime). */
+  createdAt?: string;
 }
 
 /**
@@ -848,6 +908,7 @@ export interface OperationParamsMap {
   "area.reorder": AreaReorderParams;
   "project.make-repeating": RepeatRuleParams;
   "project.add-repeating": ProjectAddRepeatingParams;
+  "todo.add-repeating": TodoAddRepeatingParams;
   "todo.clone": CloneParams;
   "project.clone": CloneParams;
   "log-now": EmptyParams;

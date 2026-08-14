@@ -9,7 +9,12 @@ import type { Command } from "commander";
 
 import { readFileSync } from "node:fs";
 
-import { addRepeatRuleFlags, repeatRuleFlagsFromOpts } from "./repeat-flags.ts";
+import {
+  addRepeatCalendarFlags,
+  addRepeatingRuleFieldsFromOpts,
+  addRepeatRuleFlags,
+  repeatRuleFlagsFromOpts,
+} from "./repeat-flags.ts";
 import {
   aggregateExitCode,
   blockedCode,
@@ -1398,48 +1403,68 @@ export function registerWriteCommands(program: Command): void {
   const REPEAT_FREQ_HELP = "daily | weekly | monthly | yearly";
   const REPEAT_INTERVAL_HELP = "every N units (1–99)";
 
-  for (const [verb, op, desc] of [
-    [
-      "make-repeating",
-      "todo.make-repeating",
-      "Turn a plain to-do into a repeating one. This REPLACES the to-do with a new repeating " +
-        "series — the original disappears and a fresh recurring item takes its place " +
-        "(cannot be undone). Set the rule with the flags below; see `things help repeating`.",
-    ],
-    [
-      "reschedule-repeat",
-      "todo.reschedule-repeat",
-      "Change an existing repeating to-do's rule in place (the item keeps its identity). Set the " +
-        "new rule with the flags below; see `things help repeating`. `things undo` restores the " +
-        "previous rule.",
-    ],
-  ] as const) {
-    addDriveGuiFlag(
-      addRepeatRuleFlags(
-        addWriteFlags(
-          todo
-            .command(`${verb} <uuid>`)
-            .description(desc)
-            .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-            .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
-        ),
+  // make-repeating is promote-via-clone: a disposable copy is promoted and the
+  // ORIGINAL moves to the Trash, so `things undo` reverses it (removes the new
+  // series and restores the original).
+  addDriveGuiFlag(
+    addRepeatRuleFlags(
+      addWriteFlags(
+        todo
+          .command("make-repeating <uuid>")
+          .description(
+            "Turn a plain to-do into a repeating one. A disposable copy is promoted and the " +
+              "ORIGINAL is moved to the Trash — so `things undo` reverses it (it removes the new " +
+              "series and restores the original). The new template's uuid is printed. Set the rule " +
+              "with the flags below; see `things help repeating`.",
+          )
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
       ),
-    ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
-      const frequency = opts["frequency"] as RepeatFrequency;
-      await runWrite(opts, (c) =>
-        c.write.run(
-          op,
-          {
-            uuid,
-            frequency,
-            interval: Number(opts["interval"]),
-            ...repeatRuleFlagsFromOpts(opts, frequency),
-          },
-          writeOptionsFrom(opts),
-        ),
-      );
-    });
-  }
+    ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const frequency = opts["frequency"] as RepeatFrequency;
+    await runWrite(opts, (c) =>
+      c.write.makeRepeatingTodo(
+        uuid,
+        {
+          frequency,
+          interval: Number(opts["interval"]),
+          ...repeatRuleFlagsFromOpts(opts, frequency),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addDriveGuiFlag(
+    addRepeatRuleFlags(
+      addWriteFlags(
+        todo
+          .command("reschedule-repeat <uuid>")
+          .description(
+            "Change an existing repeating to-do's rule in place (the item keeps its identity). Set " +
+              "the new rule with the flags below; see `things help repeating`. `things undo` " +
+              "restores the previous rule.",
+          )
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
+    ),
+  ).action(async (uuid: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const frequency = opts["frequency"] as RepeatFrequency;
+    await runWrite(opts, (c) =>
+      c.write.run(
+        "todo.reschedule-repeat",
+        {
+          uuid,
+          frequency,
+          interval: Number(opts["interval"]),
+          ...repeatRuleFlagsFromOpts(opts, frequency),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
 
   for (const [verb, op, desc] of [
     [
@@ -1754,11 +1779,11 @@ export function registerWriteCommands(program: Command): void {
         project
           .command("make-repeating <ref>")
           .description(
-            "Turn a project into a repeating one. This REPLACES the project with a new repeating " +
-              "series — the original disappears and a fresh recurring project takes its place (its " +
-              "area is kept; cannot be undone). An Anytime project with no area is moved to Someday " +
-              "first (a cleanup-free intermediate step, shown in --dry-run). Set the rule with the " +
-              "flags below; see `things help repeating`.",
+            "Turn a project into a repeating one. A disposable copy is promoted and the ORIGINAL is " +
+              "moved to the Trash — so `things undo` reverses it (it removes the new series and " +
+              "restores the original). Refuses a project that holds a nested repeating template. An " +
+              "Anytime project with no area is moved to Someday first (a cleanup-free intermediate " +
+              "step, shown in --dry-run). Set the rule with the flags below; see `things help repeating`.",
           )
           .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
           .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
@@ -1781,25 +1806,30 @@ export function registerWriteCommands(program: Command): void {
   });
 
   addDriveGuiFlag(
-    addWriteFlags(
-      project
-        .command("add-repeating <title>")
-        .description(
-          "Create a project and turn it into a repeating series in ONE call. Two operations: the " +
-            "project is created first and PERSISTS even if the make-repeating step refuses; then it " +
-            "is promoted (which drives the GUI). Give --area to place it, or omit it to create in " +
-            "Someday. The new repeating project's uuid is printed on success.",
-        )
-        .option("--notes <text>", "notes body")
-        .option("--area <ref>", "destination area (uuid or unique name)")
-        .option("--deadline <date>", "YYYY-MM-DD")
-        .option("--todo <title>", "initial child to-do (repeatable)", collect, [])
-        .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
-        .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+    addRepeatCalendarFlags(
+      addWriteFlags(
+        project
+          .command("add-repeating <title>")
+          .description(
+            "Create a project and turn it into a repeating series in ONE call. Two legs: the project " +
+              "is created (notes/area/when/deadline/child to-dos) and PERSISTS even if the promote " +
+              "refuses; then it is promoted (which drives the GUI). Give --area to place it, or omit " +
+              "it to create in Someday. The new repeating project's uuid is printed; `things undo` " +
+              "removes the created series (trash-both).",
+          )
+          .option("--notes <text>", "notes body")
+          .option("--area <ref>", "destination area (uuid or unique name)")
+          .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+          .option("--deadline <date>", "YYYY-MM-DD")
+          .option("--todo <title>", "initial child to-do (repeatable)", collect, [])
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
     ),
   ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
     const todos = opts["todo"] as string[];
     const area = containerRef(opts["area"] as string | undefined);
+    const frequency = opts["frequency"] as RepeatFrequency;
     if (opIdCompoundRefused(opts, "project add-repeating")) return;
     await runWrite(opts, (c) =>
       c.write.addRepeatingProject(
@@ -1807,10 +1837,66 @@ export function registerWriteCommands(program: Command): void {
           title,
           ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
           ...(area !== undefined && { area }),
+          ...(opts["when"] !== undefined && { when: opts["when"] as never }),
           ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as string }),
           ...(todos.length > 0 && { todos }),
-          frequency: opts["frequency"] as RepeatFrequency,
-          interval: Number(opts["interval"]),
+          ...addRepeatingRuleFieldsFromOpts(opts, frequency, Number(opts["interval"])),
+        },
+        writeOptionsFrom(opts),
+      ),
+    );
+  });
+
+  addDriveGuiFlag(
+    addRepeatCalendarFlags(
+      addWriteFlags(
+        todo
+          .command("add-repeating <title>")
+          .description(
+            "Create a to-do and turn it into a repeating series in ONE call. Two legs: the to-do is " +
+              "created (notes/tags/when/deadline/reminder/checklist/--created-at) and PERSISTS even " +
+              "if the promote refuses; then it is promoted (which drives the GUI). The new repeating " +
+              "template's uuid is printed; `things undo` removes the created series (trash-both).",
+          )
+          .option("--notes <text>", "notes body")
+          .option("--when <value>", "today | evening | anytime | someday | YYYY-MM-DD")
+          .option("--reminder <time>", "HH:mm reminder (needs a schedulable --when)")
+          .option("--deadline <date>", "YYYY-MM-DD")
+          .option("--tag <name>", "tag to attach (repeatable)", collect, [])
+          .option("--checklist-item <title>", "checklist item (repeatable)", collect, [])
+          .option("--project <ref>", "destination project (uuid or unique name)")
+          .option("--area <ref>", "destination area (uuid or unique name)")
+          .option("--heading <title>", "existing heading inside the target project")
+          .option(
+            "--created-at <iso>",
+            "born with this creation timestamp (ISO date or datetime; a date is noon in the effective zone)",
+          )
+          .requiredOption("--frequency <freq>", REPEAT_FREQ_HELP)
+          .requiredOption("--interval <n>", REPEAT_INTERVAL_HELP),
+      ),
+    ),
+  ).action(async (title: string, opts: WriteFlagOpts & Record<string, unknown>) => {
+    const tags = opts["tag"] as string[];
+    const checklistItems = opts["checklistItem"] as string[];
+    const projectRef = containerRef(opts["project"] as string | undefined);
+    const area = containerRef(opts["area"] as string | undefined);
+    const frequency = opts["frequency"] as RepeatFrequency;
+    if (opIdCompoundRefused(opts, "todo add-repeating")) return;
+    await runWrite(opts, (c) =>
+      c.write.addRepeatingTodo(
+        {
+          title,
+          ...(opts["notes"] !== undefined && { notes: opts["notes"] as string }),
+          ...(opts["when"] !== undefined && { when: opts["when"] as never }),
+          ...(opts["reminder"] !== undefined && { reminder: opts["reminder"] as never }),
+          ...(opts["deadline"] !== undefined && { deadline: opts["deadline"] as never }),
+          ...(tags.length > 0 && { tags }),
+          ...(checklistItems.length > 0 && { checklistItems }),
+          ...(projectRef !== undefined && { project: projectRef }),
+          ...(area !== undefined && { area }),
+          ...(opts["heading"] !== undefined && { heading: opts["heading"] as string }),
+          ...(opts["createdAt"] !== undefined && { createdAt: opts["createdAt"] as string }),
+          ...addRepeatingRuleFieldsFromOpts(opts, frequency, Number(opts["interval"])),
         },
         writeOptionsFrom(opts),
       ),

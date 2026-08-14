@@ -2535,16 +2535,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
       description:
         "Manage recurrence on a to-do or project (scope) by driving the local Things app's " +
         "interface — every action needs dangerously_drive_gui. action start: turn a plain item " +
-        "into a repeating one — this REPLACES it with a new series and cannot be undone (give " +
-        "frequency + interval and optionally the weekday set, monthly/yearly day, end bound, " +
-        "reminder, or per-occurrence deadline); returns a repeating block with instanceUuid (the " +
-        "visible occurrence), templateUuid (the rule), and replacedUuid. action reschedule: " +
-        "change a repeating item's rule in place, keeping the same item (undoable — it restores " +
-        "the previous rule). action pause/resume: stop or restart its new occurrences, keeping " +
-        "the rule. action add (scope project only): create a project and make it repeating in " +
-        "one call — the project is created first and PERSISTS even if the make-repeating step " +
-        "refuses; give an area to place it or omit it to create in Someday (only frequency and " +
-        "interval are supported); returns the new project's uuid.",
+        "into a repeating one (promote-via-clone: a disposable copy is promoted and the ORIGINAL " +
+        "is moved to the Trash, so undo reverses it — it removes the new series and restores the " +
+        "original); give frequency + interval and optionally the weekday set, monthly/yearly day, " +
+        "end bound, or per-occurrence deadline; returns a repeating block with instanceUuid (the " +
+        "visible occurrence), templateUuid (the rule), and replacedUuid. A project holding a " +
+        "nested repeating template is refused. action reschedule: change a repeating item's rule " +
+        "in place, keeping the same item (undoable — it restores the previous rule). action " +
+        "pause/resume: stop or restart its new occurrences, keeping the rule. action add: create " +
+        "an item and make it repeating in one call — it is created first and PERSISTS even if the " +
+        "promote refuses (give a title; for a project give an area to place it or omit it to " +
+        "create in Someday); undo removes the created series. Returns the new template's uuid.",
       inputSchema: {
         scope: z.enum(["todo", "project"]),
         action: z.enum(["start", "reschedule", "pause", "resume", "add"]),
@@ -2554,13 +2555,13 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .describe(
             "start/reschedule/pause/resume: the item (a project also accepts a unique name)",
           ),
-        title: z.string().optional().describe("add (project): the new project's title"),
-        notes: z.string().optional().describe("add (project): notes"),
+        title: z.string().optional().describe("add: the new item's title"),
+        notes: z.string().optional().describe("add: notes"),
         area: z.string().optional().describe(`add (project): destination area (${REF_FORMAT})`),
         project_deadline: z
           .string()
           .optional()
-          .describe(`add (project): the project's due date — ${DATE_FORMAT}`),
+          .describe(`add: the item's due date — ${DATE_FORMAT}`),
         todos: z.array(z.string()).optional().describe("add (project): initial child to-do titles"),
         frequency: z
           .enum(["daily", "weekly", "monthly", "yearly"])
@@ -2596,10 +2597,33 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         const opts = writeOptions(args);
         const { frequency, interval } = args;
         if (args.action === "add") {
-          if (args.scope !== "project") return usage('action "add" requires scope "project"');
           if (args.title === undefined) return usage('action "add" requires title');
           if (frequency === undefined || interval === undefined) {
             return usage('action "add" requires frequency and interval');
+          }
+          // add-repeating carries only the calendar-anchor rule fields; the base
+          // add owns the item's own deadline, and the rule reminder/start-offset
+          // are set with a follow-up reschedule.
+          const {
+            reminder: _reminder,
+            deadline: _deadline,
+            startDaysEarlier: _sde,
+            ...ruleExtras
+          } = repeatExtras(args, frequency);
+          if (args.scope === "todo") {
+            return mutationResult(
+              await c.write.addRepeatingTodo(
+                {
+                  title: args.title,
+                  ...(args.notes !== undefined && { notes: args.notes }),
+                  ...(args.project_deadline !== undefined && { deadline: args.project_deadline }),
+                  frequency,
+                  interval,
+                  ...ruleExtras,
+                },
+                opts,
+              ),
+            );
           }
           return mutationResult(
             await c.write.addRepeatingProject(
@@ -2611,6 +2635,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
                 ...(args.todos !== undefined && { todos: args.todos }),
                 frequency,
                 interval,
+                ...ruleExtras,
               },
               opts,
             ),
@@ -2634,9 +2659,17 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         }
         const extras = repeatExtras(args, frequency);
         if (args.scope === "todo") {
-          const op = args.action === "start" ? "todo.make-repeating" : "todo.reschedule-repeat";
+          if (args.action === "start") {
+            return mutationResult(
+              await c.write.makeRepeatingTodo(args.uuid, { frequency, interval, ...extras }, opts),
+            );
+          }
           return mutationResult(
-            await c.write.run(op, { uuid: args.uuid, frequency, interval, ...extras }, opts),
+            await c.write.run(
+              "todo.reschedule-repeat",
+              { uuid: args.uuid, frequency, interval, ...extras },
+              opts,
+            ),
           );
         }
         // scope project

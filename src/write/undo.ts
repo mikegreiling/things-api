@@ -50,6 +50,7 @@ import { getField } from "./verify/delta.ts";
 import { isRepeatingTemplate, loadTarget } from "./pre-state.ts";
 import { isUiDriveOp, type OperationKind, type ReorderParams } from "./operations.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
+import { restoreModDates, type ModRestoreTarget } from "./preserve-modified.ts";
 import { ruleToInverseParams } from "./repeat-rule.ts";
 import { runMutation, type MutationResult, type WriteDeps, type WriteOptions } from "./pipeline.ts";
 import { runReorder, type ReorderResult } from "./reorder.ts";
@@ -61,6 +62,13 @@ export interface UndoStep {
   options?: {
     acknowledgeChecklistReset?: boolean;
     dangerouslyPermanent?: boolean;
+    /**
+     * SANCTIONED-INTERNAL series-removal (promote undo): threaded onto the
+     * `todo.delete`/`project.delete` legs that trash a minted repeating template
+     * so H-REPEAT-SCHEDULE exempts them (the SERDEL trash-both). Never set for any
+     * consumer-reachable step. See pipeline WriteOptions.internalSeriesRemoval.
+     */
+    internalSeriesRemoval?: boolean;
     /**
      * A precondition the PLAN already found violated (checklist undos resolve
      * against the CURRENT list at plan time). When present, runUndo refuses
@@ -339,19 +347,9 @@ export const IRREVERSIBLE: Partial<Record<string, string>> = {
   "project.add-heading":
     "a created heading can only be removed by deleting it, which has no headless surface " +
     "(heading delete is interactive-only) — archive it in the app instead",
-  "todo.make-repeating":
-    "making a to-do repeat is an identity replacement (UI2-a): the original uuid is destroyed " +
-    "and a new template row is born — there is no un-repeat that restores the original",
   "todo.convert-to-project":
     "converting a to-do to a project is an identity replacement (UI2-d): the to-do uuid is " +
     "destroyed and a new project is born — the app offers no convert-back",
-  "project.make-repeating":
-    "making a project repeat is an identity replacement (UIC4-b): the original project uuid is " +
-    "destroyed and a new template project is born — there is no un-repeat that restores the original",
-  "project.add-repeating":
-    "the composite creates a project then promotes it (identity replacement, UIC4-b): the " +
-    "created uuid is destroyed by the promote and a new repeating template is born — delete the " +
-    "resulting repeating project in the app",
   "project.promote-heading":
     "promoting a heading to a project is an identity replacement (UI2-d): the heading uuid is " +
     "destroyed and a new project is born — no convert-back",
@@ -752,6 +750,61 @@ export function planUndo(
         steps: [{ op: "project.delete", params: { uuid } }],
         notes,
       };
+    }
+
+    // Promote-via-clone (make/add-repeating): the SUMMARY record captured the
+    // minted template, its current instance, and — for make-repeating — the
+    // trashed original. Undo is the SERDEL trash-both (raw-AS delete BOTH rows,
+    // routed through the sanctioned-internal series-removal path so
+    // H-REPEAT-SCHEDULE exempts the template delete), then (make-repeating only)
+    // restore the original from the Trash. This undo cannot itself be undone
+    // headlessly — a trashed template's only revival is the app's Trash ▸ Put
+    // Back (SERDEL S2/S3) — disclosed here.
+    case "todo.make-repeating":
+    case "project.make-repeating":
+    case "todo.add-repeating":
+    case "project.add-repeating": {
+      const obs = record.observed ?? {};
+      const templateUuid = obs["templateUuid"];
+      if (typeof templateUuid !== "string") {
+        return irreversible(
+          "the minted template uuid was not captured on this record — remove the repeating " +
+            "series in the Things app (delete the template, then its current instance)",
+        );
+      }
+      const kind = record.op.startsWith("project.") ? "project" : "todo";
+      const deleteOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
+      const restoreOp: OperationKind = kind === "project" ? "project.restore" : "todo.restore";
+      const steps: UndoStep[] = [
+        {
+          op: deleteOp,
+          params: { uuid: templateUuid },
+          options: { internalSeriesRemoval: true },
+        },
+      ];
+      const instanceUuid = obs["instanceUuid"];
+      if (typeof instanceUuid === "string" && instanceUuid !== templateUuid) {
+        steps.push({
+          op: deleteOp,
+          params: { uuid: instanceUuid },
+          options: { internalSeriesRemoval: true },
+        });
+      }
+      const originalUuid = obs["originalUuid"];
+      if (typeof originalUuid === "string") {
+        steps.push({ op: restoreOp, params: { uuid: originalUuid } });
+        notes.push(
+          kind === "todo"
+            ? "the original to-do is restored from the Trash — it lands in the Inbox de-scheduled (E15)"
+            : "the original project is restored from the Trash in place (P06)",
+        );
+      }
+      notes.push(
+        "removing the series trashes the minted template AND its current instance (trash-both, " +
+          "SERDEL); this undo cannot itself be undone headlessly — a trashed template's only " +
+          "revival is the app's Trash ▸ Put Back",
+      );
+      return { target, kind: "invertible", steps, notes };
     }
     case "area.add": {
       if (uuid === null) return irreversible("the created uuid was never discovered");
@@ -1890,6 +1943,16 @@ export async function runUndo(
           break;
         }
       }
+      // Preview the symmetric umd-restore (a --preserve-modified original).
+      if (record.preModDates !== undefined) {
+        const n = Object.values(record.preModDates).filter((v) => typeof v === "number").length;
+        if (n > 0) {
+          plan.notes.push(
+            `would restore the modification date on ${n} row(s) after the inverse (this undo ` +
+              "stays off the changes/watch timeline, symmetric with the --preserve-modified original)",
+          );
+        }
+      }
       item = { plan, results: preview, outcome: "dry-run" };
     } else {
       const results: (MutationResult | ReorderResult)[] = [];
@@ -1938,6 +2001,10 @@ export async function runUndo(
           // already acknowledged when they made it — carry the drive ack so it
           // is not re-gated by H-UI-DRIVE.
           ...(isUiDriveOp(step.op) && { dangerouslyDriveGui: true }),
+          // Sanctioned-internal series-removal (promote undo): exempt a template
+          // delete from H-REPEAT-SCHEDULE (the trash-both legs). Only the promote
+          // undo plan sets this — no consumer-reachable step carries it.
+          ...(step.options?.internalSeriesRemoval === true && { internalSeriesRemoval: true }),
         };
         const result =
           step.op === "reorder"
@@ -1954,6 +2021,32 @@ export async function runUndo(
         if (result.kind !== "ok") {
           failed = true;
           break;
+        }
+      }
+      // Symmetric umd-restore (2026-08-13 ruling): a forward op that ran with
+      // --preserve-modified recorded each touched row's pre-write
+      // userModificationDate on `preModDates`. After the inverse legs land, put
+      // those umd values back (floor(preUmd)) so the UNDO is ALSO off the
+      // changes/watch timeline — matching the forward op's silence. Best-effort:
+      // a failed restore is disclosed, never fatal (the inverse already stands).
+      // Records without preModDates (the default) are untouched.
+      if (!failed && record.preModDates !== undefined) {
+        const umdTargets: ModRestoreTarget[] = Object.entries(record.preModDates)
+          .filter((e): e is [string, number] => typeof e[1] === "number")
+          .map(([tUuid, preUmd]) => ({ uuid: tUuid, preUmd }));
+        if (umdTargets.length > 0) {
+          const restore = await restoreModDates(deps.db, deps.vectors, umdTargets);
+          if (restore.restored > 0) {
+            plan.notes.push(
+              `restored the modification date on ${restore.restored} row(s) so this undo stays ` +
+                "off the changes/watch timeline (symmetric with the --preserve-modified original)",
+            );
+          }
+          for (const f of restore.failures) {
+            plan.notes.push(
+              `could not restore the modification date on ${f.uuid}: ${f.detail} (non-fatal)`,
+            );
+          }
         }
       }
       const okCount = results.filter((r) => r.kind === "ok").length;

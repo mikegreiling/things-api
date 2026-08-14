@@ -2394,7 +2394,7 @@ const projectResumeRepeat: CommandSpec<"project.resume-repeat"> = {
 
 // project.make-repeating: the pure-AX row-selection op (UIC4). The command
 // spec drives the area / someday cases; the area-less-anytime coercion is done
-// by the runMakeRepeatingProject orchestrator BEFORE this spec sees the target,
+// by the promoteProjectViaGui internal orchestrator BEFORE this spec sees the target,
 // so by drive time the taxonomy is always area or someday. A DIRECT dispatch on
 // an anytime project is refused by H-PROJECT-REPEAT (with the orchestrator as
 // the remediation).
@@ -2482,6 +2482,28 @@ const projectAddRepeating: CommandSpec<"project.add-repeating"> = {
   },
   compile() {
     throw new Error(ADD_REPEATING_ORCHESTRATED);
+  },
+};
+
+// todo.add-repeating is delivered by the runAddRepeatingTodo orchestrator
+// (todo.add THEN native promote); it has no atomic surface and is never
+// dispatched directly through the pipeline (promote-clone.ts).
+const TODO_ADD_REPEATING_ORCHESTRATED =
+  "todo.add-repeating is delivered by the runAddRepeatingTodo orchestrator (create the to-do, " +
+  "then promote it to a repeating series); it has no atomic surface and is never dispatched " +
+  "directly through the pipeline";
+
+const todoAddRepeating: CommandSpec<"todo.add-repeating"> = {
+  op: "todo.add-repeating",
+  hazards: [],
+  preRead() {
+    return emptyPreState();
+  },
+  expectedDelta() {
+    throw new Error(TODO_ADD_REPEATING_ORCHESTRATED);
+  },
+  compile() {
+    throw new Error(TODO_ADD_REPEATING_ORCHESTRATED);
   },
 };
 
@@ -2862,6 +2884,7 @@ export const COMMANDS: { [K in OperationKind]: CommandSpec<K> } = {
   "area.reorder": areaReorderSidebar,
   "project.make-repeating": projectMakeRepeating,
   "project.add-repeating": projectAddRepeating,
+  "todo.add-repeating": todoAddRepeating,
   "todo.clone": todoClone,
   "project.clone": projectClone,
   "log-now": logNow,

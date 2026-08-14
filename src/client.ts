@@ -116,6 +116,7 @@ import type {
   RepeatRuleParams,
   ReorderParams,
   TagAddParams,
+  TodoAddRepeatingParams,
   TagUpdateParams,
   HeadingArchiveParams,
   HeadingUnarchiveParams,
@@ -151,7 +152,12 @@ import {
 } from "./write/heading.ts";
 import { runClearReminder } from "./write/clear-reminder.ts";
 import { runEditChecklist } from "./write/edit-checklist.ts";
-import { runAddRepeatingProject, runMakeRepeatingProject } from "./write/make-repeating-project.ts";
+import {
+  runAddRepeatingProject,
+  runAddRepeatingTodo,
+  runMakeRepeatingProject,
+  runMakeRepeatingTodo,
+} from "./write/promote-clone.ts";
 import { runCloneProject, runCloneTodo } from "./write/clone.ts";
 import {
   runCancelWithDate,
@@ -774,13 +780,14 @@ export interface ThingsClient {
     ): Promise<MutationResult>;
     deleteProject(uuid: string, options?: WriteOptions): Promise<MutationResult>;
     /**
-     * Turn an existing project into a repeating series. Drives the local Things
-     * app through the Accessibility API (two-key gated: `ui.enabled` config +
-     * `dangerouslyDriveGui`). This REPLACES the project with a new repeating
-     * template (its area is kept, its schedule is normalized to Someday); the
-     * original's identity is gone and it cannot be undone. The new template's
-     * uuid is on the result. An area-less Anytime project is moved to Someday
-     * first — a cleanup-free intermediate step surfaced in the plan.
+     * Turn an existing project into a repeating series (promote-via-clone). A
+     * disposable copy is made, the copy is promoted (driving the local Things app
+     * through the Accessibility API — two-key gated: `ui.enabled` config +
+     * `dangerouslyDriveGui`), and the ORIGINAL is moved to the Trash. The result
+     * carries the minted template uuid plus the trashed original's uuid; unlike
+     * before, `things undo` reverses it — it removes the new series (trash-both)
+     * and restores the original. Refuses a project holding a nested repeating
+     * template (H-CLONE-SOURCE, no --flatten).
      */
     makeRepeatingProject(
       uuid: string,
@@ -789,13 +796,39 @@ export interface ThingsClient {
     ): Promise<MutationResult>;
     /**
      * Create a project and, in the same call, turn it into a repeating series.
-     * TWO operations: the project is created first (and persists even if the
-     * make-repeating step refuses); then it is promoted (which drives the GUI —
-     * two-key gated, same as makeRepeatingProject). Give an `area` to place it,
-     * or omit it to create in Someday. The new template's uuid is on the result.
+     * TWO legs: the project is created with the FULL project add vocabulary (notes,
+     * area, deadline, `when`, structured `items`) — and persists even if the
+     * promote refuses — then it is promoted (driving the GUI — two-key gated, same
+     * as makeRepeatingProject). Give an `area` to place it, or omit it to create in
+     * Someday. The new template's uuid is on the result; `things undo` removes the
+     * created series (trash-both).
      */
     addRepeatingProject(
       params: ProjectAddRepeatingParams,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Turn an existing to-do into a repeating series (promote-via-clone). A
+     * disposable copy is made, the copy is promoted (driving the local Things app —
+     * two-key gated), and the ORIGINAL is moved to the Trash. The result carries
+     * the minted template uuid plus the trashed original's uuid; `things undo`
+     * reverses it (removes the new series and restores the original).
+     */
+    makeRepeatingTodo(
+      uuid: string,
+      rule: Omit<RepeatRuleParams, "uuid">,
+      options?: WriteOptions,
+    ): Promise<MutationResult>;
+    /**
+     * Create a to-do and, in the same call, turn it into a repeating series. TWO
+     * legs: the to-do is created with the full to-do add vocabulary (notes, tags,
+     * when, deadline, reminder, checklist, `--created-at`, container) — and persists
+     * even if the promote refuses — then it is promoted (driving the GUI — two-key
+     * gated). The new template's uuid is on the result; `things undo` removes the
+     * created series (trash-both).
+     */
+    addRepeatingTodo(
+      params: TodoAddRepeatingParams,
       options?: WriteOptions,
     ): Promise<MutationResult>;
     /** Replace a project's full tag set (an empty list clears all tags). */
@@ -1411,6 +1444,9 @@ export function openThings(options: OpenOptions = {}): ThingsClient {
       makeRepeatingProject: (uuid, rule, o) =>
         runMakeRepeatingProject(writeDeps, { uuid, ...rule }, o ?? {}),
       addRepeatingProject: (params, o) => runAddRepeatingProject(writeDeps, params, o ?? {}),
+      makeRepeatingTodo: (uuid, rule, o) =>
+        runMakeRepeatingTodo(writeDeps, { uuid, ...rule }, o ?? {}),
+      addRepeatingTodo: (params, o) => runAddRepeatingTodo(writeDeps, params, o ?? {}),
       setProjectTags: (uuid, tags, o) => run("project.set-tags", { uuid, tags }, o),
       addProjectTags(uuid, tags, o) {
         const current = byUuid(conn.db, uuid);

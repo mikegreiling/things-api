@@ -223,21 +223,9 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
     class: "irreversible",
     note: "a created heading has no headless delete surface (heading delete is interactive-only) — archive it in the app instead",
   },
-  "todo.make-repeating": {
-    class: "irreversible",
-    note: "making a to-do repeat is an identity REPLACEMENT (UI2-a): the original uuid is destroyed and a new template row is born — there is no un-repeat that restores the original",
-  },
   "todo.convert-to-project": {
     class: "irreversible",
     note: "converting a to-do to a project is an identity REPLACEMENT (UI2-d): the to-do uuid is destroyed and a new project uuid is born (notes preserved); the app offers no convert-back",
-  },
-  "project.make-repeating": {
-    class: "irreversible",
-    note: "making a project repeat is an identity REPLACEMENT (UIC4-b): the original project uuid is destroyed and a new template project is born (area preserved, start normalized to someday) — there is no un-repeat that restores the original",
-  },
-  "project.add-repeating": {
-    class: "irreversible",
-    note: "the composite CREATES a project then promotes it (identity replacement, UIC4-b): the created uuid is destroyed by the promote and a new repeating template is born — no automated inverse captures it; delete the resulting repeating project in the app",
   },
   "project.promote-heading": {
     class: "irreversible",
@@ -258,6 +246,24 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   "project.reschedule-repeat": {
     class: "conditional",
     note: "the project's rule mutates in place (identity preserved, UIC2-a); re-drives reschedule with the captured prior rule (same faithfulness boundary as todo.reschedule-repeat) — invertible when the prior rule was captured, decodable, and dialog-expressible; irreversible otherwise. A per-instance reminder time is not restored",
+  },
+
+  // ---- promote-via-clone (make/add-repeating) → undo is trash-both (+restore) --
+  "todo.make-repeating": {
+    class: "reversible-with-loss",
+    note: "promote-via-clone: the minted template + its current instance are the inverse's target — undo TRASHES BOTH (the SERDEL trash-both) and restores the original to-do from the Trash (it lands in the Inbox DE-SCHEDULED, E15). The trashed template leaves no tombstone and its own un-delete is GUI-only (Trash ▸ Put Back), so this undo cannot itself be undone headlessly",
+  },
+  "project.make-repeating": {
+    class: "reversible-with-loss",
+    note: "promote-via-clone: undo TRASHES the minted template + its current instance (trash-both) and restores the original project IN PLACE (P06). The trashed template leaves no tombstone and its own un-delete is GUI-only (Put Back), so this undo cannot itself be undone headlessly",
+  },
+  "todo.add-repeating": {
+    class: "reversible",
+    note: "the composite creates a to-do then promotes it; undo TRASHES the minted template + its current instance (SERDEL trash-both) — the whole created series moves to the Trash. Re-creating the series is GUI-only (the template leaves no tombstone; use Trash ▸ Put Back), so this undo is not itself headlessly undoable",
+  },
+  "project.add-repeating": {
+    class: "reversible",
+    note: "the composite creates a project then promotes it; undo TRASHES the minted template + its current instance (SERDEL trash-both) — the whole created series moves to the Trash. Re-creating the series is GUI-only, so this undo is not itself headlessly undoable",
   },
 
   // ---- ui-vector reversible pairs -----------------------------------------

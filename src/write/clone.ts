@@ -174,6 +174,10 @@ function appendSummary(
     mintedChildren: string[];
     txnId: string;
     invocation: string;
+    /** "summary" for a standalone clone; "leg" when EMBEDDED as one leg of a
+     * larger compound (promote-via-clone) — a leg is excluded from independent
+     * undo, so the parent's summary is the single undoable unit. */
+    role?: "summary" | "leg";
   },
 ): void {
   const fp = deps.fingerprint();
@@ -188,7 +192,7 @@ function appendSummary(
     disruption: 0,
     invocation: args.invocation,
     requested: { source: args.source, mintedChildren: args.mintedChildren },
-    txn: { id: args.txnId, role: "summary" },
+    txn: { id: args.txnId, role: args.role ?? "summary" },
     pre: null,
     observed: { uuid: args.uuid, mintedChildren: args.mintedChildren },
     result: "ok",
@@ -315,7 +319,10 @@ export async function runCloneTodo(
   }
 
   const startedAt = deps.now?.() ?? new Date();
-  const txnId = newTxnId(startedAt);
+  // Embedded (promote-via-clone): when the caller passes a leg-role txn, share
+  // its id and record THIS clone's summary as a leg (subsumed by the parent).
+  const embedded = options.txn?.role === "leg";
+  const txnId = options.txn?.id ?? newTxnId(startedAt);
   const applied: string[] = [];
 
   const add = await runLeg(
@@ -378,6 +385,7 @@ export async function runCloneTodo(
     source: srcUuid,
     mintedChildren: [],
     txnId,
+    role: embedded ? "leg" : "summary",
     invocation: `todo.clone ${srcUuid} → ${cloneUuid} (${applied.length} legs)`,
   });
 
@@ -527,7 +535,8 @@ export async function runCloneProject(
   }
 
   const startedAt = now;
-  const txnId = newTxnId(startedAt);
+  const embedded = options.txn?.role === "leg";
+  const txnId = options.txn?.id ?? newTxnId(startedAt);
   const applied: string[] = [];
 
   const addParams: Record<string, unknown> = {
@@ -621,6 +630,7 @@ export async function runCloneProject(
     source: srcUuid,
     mintedChildren,
     txnId,
+    role: embedded ? "leg" : "summary",
     invocation: `project.clone ${srcUuid} → ${cloneUuid} (${applied.length} legs, ${mintedChildren.length} children)`,
   });
 
