@@ -142,6 +142,17 @@ export interface WriteOptions extends Acknowledgements {
    * stay on the host clock.
    */
   normalizeWhen?: boolean;
+  /**
+   * TEMPLATE-DIRECT clone (template-clone via re-promote): tells the clone
+   * orchestrator to copy a repeating TEMPLATE source's content as a PLAIN item
+   * (recurrence stripped — no rule, no schedule/reminder), instead of refusing it
+   * (H-CLONE-SOURCE). NEVER set by a consumer entry point (the CLI/MCP/batch/client
+   * do not thread it) — only `cloneTemplateViaRepromote` sets it on the embedded
+   * clone leg, which it then native-promotes with the source's decoded rule. A bare
+   * `todo/project clone` of a template still routes through the compound (which sets
+   * this flag internally). See promote-clone.ts cloneTemplateViaRepromote.
+   */
+  cloneTemplateAsPlain?: boolean;
 }
 
 export interface MutationPlan {
