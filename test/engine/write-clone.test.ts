@@ -169,6 +169,47 @@ describe("todo.clone", () => {
     expect(res.warnings?.some((w) => w.includes("MINUTE resolution"))).toBe(true);
   });
 
+  it("--preserve-created + a reminder: splits the reminder into a follow-up leg (no reminder+createdAt collision)", async () => {
+    // A single add cannot carry both a reminder and a backdated createdAt (the
+    // json import forbids the pair) — the compound used to abort at the clone
+    // leg (UIC8 C1c). The reminder must ride a separate todo.update leg.
+    const src = seedTodo(fixture.db, {
+      title: "Take meds",
+      start: "active",
+      startDate: TODAY,
+      reminder: "08:00",
+      creationDate: CREATED_EPOCH,
+    });
+    const res = await runCloneTodo(deps(vector), { uuid: src, preserveCreated: true });
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    const c = row(res.uuid);
+    // Both dimensions reproduced: the backdated creationDate AND the reminder.
+    expect(c["creationDate"]).toBe(CREATED_EPOCH);
+    expect(c["reminderTime"]).toBe(encodeReminderTime("08:00"));
+    expect(c["startDate"]).toBe(encodePackedDate(TODAY));
+    // The reminder was reproduced by a distinct leg (disclosed in the applied list).
+    expect(res.warnings?.join(" ")).toContain("reproduced reminder");
+  });
+
+  it("dry-run discloses the reminder follow-up leg under --preserve-created", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Dry reminder",
+      start: "active",
+      startDate: TODAY,
+      reminder: "08:00",
+      creationDate: CREATED_EPOCH,
+    });
+    const res = await runCloneTodo(
+      deps(vector),
+      { uuid: src, preserveCreated: true },
+      { dryRun: true },
+    );
+    if (res.kind !== "dry-run") throw new Error("expected dry-run");
+    expect(res.plan.invocation).toContain("todo.update (reproduce reminder)");
+    expect(res.plan.invocation).toContain("created-at");
+  });
+
   it("reproduces a pre-checked checklist item (post-check follow-up leg)", async () => {
     const src = seedTodo(fixture.db, { title: "Trip prep" });
     seedChecklistItem(fixture.db, src, "passport", { status: "open" });

@@ -27,6 +27,12 @@
 #   C5  failure rollback (LAST — revokes Accessibility): force a promote failure
 #       mid-compound → X rolled back OUT of the Trash, honest error.
 #
+# RE-CERT (PR mg/uic8-fixes, 2026-08-13): two UIC8 findings were fixed — C1c
+# (reminder-bearing make-repeating aborted at the clone leg on the reminder+
+# createdAt collision) and C6 (--preserve-modified silently ignored by the promote
+# compounds). C1c and C6 below now assert the HAPPY path (previously they asserted
+# the findings). Everything else (C1/C2/C3/C4/C5) is unchanged from the original run.
+#
 # METHOD mirrors research-clone.sh. golden-v2 carries the baked L3-accessibility
 # grant (auth_value=2, reboot-verified) so there is NO VNC grant step — the ui
 # vector drives via System Events over SSH. Airgap + pin clock 2026-07-05 12:00,
@@ -407,12 +413,14 @@ note "  C1b template decoded rule (expect fa=2 after-completion): $(rsum "$(jval
 rrem() { gq "SELECT COALESCE((SELECT reminderTime FROM TMTask WHERE uuid='$1'),'NULL')"; }
 chkstate() { gq "SELECT group_concat(title||':'||status,',') FROM (SELECT title,status FROM TMChecklistItem WHERE task='$1' ORDER BY \"index\")"; }
 
-# NB: the CLI refuses --reminder together with --created-at (a backdated item cannot
-# also carry a reminder — intentional guard), so the content-rich case is split into
-# a REMINDER sub-case (C1c) and a BACKDATED --created-at sub-case (C1c2); together they
-# cover notes/tags/checklist-with-a-checked-item/reminder/when=date + a backdated creationDate.
+# NB: the CLI still refuses `todo add --reminder --created-at` together at SEED time
+# (a backdated item cannot also carry a reminder — intentional add guard), so the
+# content-rich case is seeded as a REMINDER sub-case (C1c) and a BACKDATED
+# --created-at sub-case (C1c2); together they cover notes/tags/checklist-with-a-
+# checked-item/reminder/when=date + a backdated creationDate. C1c is the RE-CERT of
+# the reminder-bearing make-repeating (previously blocked; fixed in PR mg/uic8-fixes).
 
-note ""; note "### C1c — content-rich to-do: notes/tags/checklist(+checked)/reminder/when=today, FIXED daily/1 ###"
+note ""; note "### C1c — content-rich REMINDER-bearing to-do: notes/tags/checklist(+checked)/reminder/when=today, FIXED daily/1 (RE-CERT post-fix) ###"
 G todo add \"U8-C1c\" --notes \"rich-body\" --tags \"cltag1,cltag2\" --create-tags --checklist-item ck1 --checklist-item ck2 --when today --reminder 09:30 > "$OUT/json/c1c-seed.log" 2>&1
 sleep 1
 XC=$(uidt "U8-C1c"); note "  seed X=$XC ($([ -z "$XC" ] && echo "SEED FAILED: $(tail -1 "$OUT/json/c1c-seed.log")" || echo ok))"
@@ -423,19 +431,17 @@ note "  X reminderTime=$REMC  checklist=$CHKC"
 snap c1c-pre; warm
 jd c1c todo make-repeating "$XC" --frequency daily --interval 1 --dangerously-drive-gui
 settle; snap c1c-post
-note "  --- C1c delta (FINDING: expect NO change — the clone leg refuses) ---"; diff_c c1c-pre c1c-post "U8-C1c"
-# FINDING (captured, up-next): make-repeating on a reminder-bearing dated-`when` to-do
-# currently FAILS — clone(X, --preserve-created) reproduces the source reminder AND a
-# createdAt in ONE base add (clone.ts todoAddParams), which commands.ts:325 forbids
-# ("--reminder is not available with --created-at"). The compound aborts at the clone
-# leg (before trashing X), so X is left completely untouched — the honest fail-safe.
-assert_eq "C1c: reminder+dated-when make-repeating fails at the clone leg (exit 1)" "1" "$(cat "$OUT/json/c1c.exit")"
-assert_grep "C1c: error IS the clone reminder+createdAt collision" "reminder is not available with --created-at" "$OUT/json/c1c.json"
-assert_eq "C1c: X left UNTOUCHED (not trashed)" "0" "$(rtrash "$XC")"
-assert_eq "C1c: X reminderTime intact (untouched)" "$REMC" "$(rrem "$XC")"
-assert_eq "C1c: X checklist intact (untouched)" "$CHKC" "$(chkstate "$XC")"
-assert_eq "C1c: X still a plain to-do (no rule minted)" "0" "$(rrule "$XC")"
-note "  [FINDING] C1c: reminder-bearing make-repeating is BLOCKED by the clone reminder+createdAt collision (up-next). The content-rich HAPPY path is certified by C1c2; the reminder byte is confirmed intact on the untouched source here."
+note "  --- C1c delta (RE-CERT: reminder-bearing make-repeating now SUCCEEDS) ---"; diff_c c1c-pre c1c-post "U8-C1c"
+# FIX (PR mg/uic8-fixes): make-repeating always clones with --preserve-created, so a
+# reminder-bearing source used to collide (reminder+createdAt in one add). The clone
+# now splits the reminder into a follow-up `todo.update` leg, so the compound lands:
+# X → Trash byte-intact incl. its reminder byte, and the reminder is reproduced on
+# the clone/instance side (the clone became the current instance, RSIM-T preserve).
+check_make_repeating "C1c" "$XC" c1c "$CREC" "$NOTC" "U8-C1c"
+INSTC=$(jval c1c repeating.instanceUuid)
+assert_eq "C1c: X reminderTime byte-intact in Trash" "$REMC" "$(rrem "$XC")"
+assert_eq "C1c: X checklist byte-intact (ck1 checked) in Trash" "$CHKC" "$(chkstate "$XC")"
+assert_eq "C1c: reminder reproduced on the spawned instance (clone/instance side)" "$REMC" "$(rrem "$INSTC")"
 
 note ""; note "### C1c2 — content-rich to-do: notes/tags/checklist(+checked)/when=date + backdated --created-at, FIXED daily/1 ###"
 G todo add \"U8-C1c2\" --notes \"rich-body2\" --tags \"cltag1,cltag2\" --create-tags --checklist-item ck1 --checklist-item ck2 --when 2026-07-10 --created-at 2026-06-01T08:00 > "$OUT/json/c1c2-seed.log" 2>&1
@@ -667,27 +673,32 @@ note "  C4d decoded rule (expect fa after-completion): $(rsum "$T4D")"
 # WORKLIST C6 — symmetric umd-undo smoke (--preserve-modified)
 # =====================================================================
 note ""; note "################################################################"
-note "# C6 — --preserve-modified make-repeating then undo (symmetric umd smoke)"
+note "# C6 — --preserve-modified make-repeating then undo (symmetric umd smoke, RE-CERT)"
 note "################################################################"
+# Restore lands on floor(umd0) (AppleScript `date` has no sub-second, 1-s floor),
+# so compare on the floored second, not the raw fractional REAL.
+flr() { awk -v x="$1" 'BEGIN{printf "%d", int(x)}'; }
 G todo add \"U8-C6\" --notes \"c6-body\" >/dev/null 2>&1; sleep 1
-X6=$(uidt "U8-C6"); UMD0=$(rumd "$X6"); CRE6=$(rcre "$X6"); note "  seed X=$X6 umd0=$UMD0"
+X6=$(uidt "U8-C6"); UMD0=$(rumd "$X6"); CRE6=$(rcre "$X6"); F0=$(flr "$UMD0"); note "  seed X=$X6 umd0=$UMD0 (floor=$F0)"
 warm
 jd c6 todo make-repeating "$X6" --frequency weekly --interval 1 --preserve-modified --dangerously-drive-gui
 settle
-UMD1=$(rumd "$X6"); TOK6=$(jval c6 undoToken)
-note "  after make-repeating --preserve-modified: X trashed=$(rtrash "$X6") umd1=$UMD1 (umd0=$UMD0)"
+UMD1=$(rumd "$X6"); F1=$(flr "$UMD1"); TOK6=$(jval c6 undoToken)
+note "  after make-repeating --preserve-modified: X trashed=$(rtrash "$X6") umd1=$UMD1 (floor=$F1; umd0 floor=$F0)"
 PREMOD=$(lab_ssh "$IP" "grep -l preModDates ~/.local/state/things-api/audit/*.jsonl 2>/dev/null | head -1" </dev/null || true)
 note "  audit files carrying preModDates: ${PREMOD:-NONE}"
+# FIX (PR mg/uic8-fixes): --preserve-modified is now threaded onto the trash-X leg
+# (forward preservation) and X's pre-write umd rides the summary record's
+# preModDates (so the symmetric undo restore fires).
+assert_ntmt "C6: audit summary carries preModDates (--preserve-modified threaded)" "$PREMOD"
+assert_eq "C6: forward — X's umd preserved through the trash leg (floor(umd0))" "$F0" "$F1"
+assert_eq "C6: X trashed by make-repeating (recoverable)" "1" "$(rtrash "$X6")"
 jd c6-undo undo --txn "$TOK6"
-UMD2=$(rumd "$X6")
-note "  after undo: X trashed=$(rtrash "$X6") umd2=$UMD2  (umd0=$UMD0 umd1=$UMD1)"
+UMD2=$(rumd "$X6"); F2=$(flr "$UMD2")
+note "  after undo: X trashed=$(rtrash "$X6") umd2=$UMD2 (floor=$F2)  (umd0 floor=$F0)"
 assert_eq "C6: X restored live by undo" "0" "$(rtrash "$X6")"
 assert_eq "C6: X creationDate intact" "$CRE6" "$(rcre "$X6")"
-if [ "$UMD2" = "$UMD0" ]; then
-  ok "C6: symmetric umd-restore WORKS (umd2==umd0)"
-else
-  note "  [FINDING] C6: umd NOT restored to pre-write (umd2=$UMD2 != umd0=$UMD0) — --preserve-modified appears not threaded through the promote compound (legOptions omits it; the summary record carries no preModDates). Captured for up-next, not a make-repeating contract regression."
-fi
+assert_eq "C6: symmetric umd-restore on undo (floor(umd2)==floor(umd0))" "$F0" "$F2"
 
 # =====================================================================
 # WORKLIST C5 — failure rollback (LAST: revokes Accessibility)
