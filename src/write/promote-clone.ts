@@ -43,7 +43,7 @@ import {
   type WriteOptions,
 } from "./pipeline.ts";
 import { assertRepeatRule } from "./repeat-rule.ts";
-import type { RepeatingDiscovery } from "./verify/delta.ts";
+import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 
 type PromoteOp =
   | "todo.make-repeating"
@@ -62,11 +62,17 @@ function newTxnId(now: Date): string {
   return `txn-${now.getTime().toString(36)}-${process.pid.toString(36)}`;
 }
 
-/** Forward the caller's audit/timeout/GUI knobs onto a delegated leg. */
+/**
+ * Forward the caller's audit/timeout/GUI knobs onto a delegated leg. `extra`
+ * carries per-leg additions — `preserveModified` is threaded ONLY onto the legs
+ * that touch a PRE-EXISTING row (the trash-X leg); the clone/promote legs mint
+ * fresh rows, where the flag would be a no-op.
+ */
 function legOptions(
   base: WriteOptions,
   txnId: string,
   vector?: WriteOptions["vector"],
+  extra?: Partial<WriteOptions>,
 ): WriteOptions {
   const out: WriteOptions = { txn: { id: txnId, role: "leg" } };
   if (vector !== undefined) out.vector = vector;
@@ -75,6 +81,7 @@ function legOptions(
   if (base.dangerouslyDriveGui !== undefined) out.dangerouslyDriveGui = base.dangerouslyDriveGui;
   if (base.maxDisruption !== undefined) out.maxDisruption = base.maxDisruption;
   if (base.zone !== undefined) out.zone = base.zone;
+  if (extra?.preserveModified === true) out.preserveModified = true;
   return out;
 }
 
@@ -133,6 +140,9 @@ function appendPromoteSummary(
     originalUuid?: string;
     invocation: string;
     requested: Record<string, unknown>;
+    /** The trashed original's pre-write umd (--preserve-modified) — drives the
+     * symmetric undo restore (undo.ts) so the reversal is also timeline-silent. */
+    preModDates?: PreModDates;
   },
 ): void {
   const fp = deps.fingerprint();
@@ -156,6 +166,7 @@ function appendPromoteSummary(
     pre: null,
     observed,
     result: "ok",
+    ...(args.preModDates !== undefined && { preModDates: args.preModDates }),
     verify: null,
     durationMs: (deps.now?.() ?? new Date()).getTime() - args.startedAt.getTime(),
     env: {
@@ -304,6 +315,17 @@ async function makeRepeatingViaClone(
   }
   const cloneUuid = clone.uuid;
 
+  // --preserve-modified: X is the ONLY pre-existing row the compound touches (the
+  // clone/promote legs mint fresh rows). Capture its pre-write umd BEFORE the
+  // trash bumps it — the trash leg restores it forward, and the value rides the
+  // summary record's preModDates so the symmetric undo restore fires on the
+  // revived X (undo.ts, 2026-08-13 ruling). The clone leg above reads X but never
+  // writes it, so its umd is still pristine here.
+  const preserveModified = options.preserveModified === true;
+  const preUmd = preserveModified
+    ? createDbReader(deps.db, now, deps.zone).modDateOf(srcUuid)
+    : null;
+
   // 2. Trash the original BEFORE promoting — the clone already holds X's content,
   // and a live same-titled X would make the promote's project row-selection
   // ambiguous (H-PROJECT-REPEAT). X survives in the Trash (the recoverable half).
@@ -311,7 +333,12 @@ async function makeRepeatingViaClone(
     deps,
     `${kind}.delete`,
     { uuid: srcUuid },
-    legOptions(options, txnId),
+    legOptions(
+      options,
+      txnId,
+      undefined,
+      preserveModified ? { preserveModified: true } : undefined,
+    ),
   );
   if (trash.kind !== "ok") {
     return {
@@ -378,6 +405,7 @@ async function makeRepeatingViaClone(
     originalUuid: srcUuid,
     invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote ${cloneUuid} → template ${templateUuid}`,
     requested: params as unknown as Record<string, unknown>,
+    ...(preserveModified && preUmd !== null && { preModDates: { [srcUuid]: preUmd } }),
   });
 
   return promoteOk({

@@ -30,6 +30,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AuditRecord } from "../audit/schema.ts";
+import type { ReminderTime } from "../model/dates.ts";
 import type { Todo } from "../model/entities.ts";
 import { byUuid } from "../read/detail.ts";
 import { projectChildren } from "./pre-state.ts";
@@ -118,6 +119,22 @@ function isDatedWhen(when: WhenValue | undefined): boolean {
     when === "evening" ||
     (typeof when === "string" && /^\d{4}-\d{2}-\d{2}$/.test(when))
   );
+}
+
+/**
+ * The item reminder to reproduce on an OPEN, dated source — the `when` it must be
+ * re-supplied with (a reminder requires a schedulable `when` in the same call,
+ * H-REMINDER-SCOPE) and the `HH:mm` byte. `undefined` when there is nothing to
+ * reproduce (resolved item, undated `when`, or no reminder). This is the same
+ * predicate {@link todoAddParams} uses to decide whether the base add carries a
+ * reminder — factored out so the caller can sequence it into a SEPARATE leg when
+ * it would otherwise collide with a backdated `createdAt` (see runCloneTodo).
+ */
+function reproducibleReminder(src: Todo): { when: WhenValue; reminder: ReminderTime } | undefined {
+  if (src.status !== "open") return undefined;
+  const when = scheduleWhen(src);
+  if (!isDatedWhen(when) || when === undefined || src.derived.reminder === null) return undefined;
+  return { when, reminder: src.derived.reminder };
 }
 
 // ------------------------------------------------------------------ leg runner
@@ -209,17 +226,25 @@ function appendSummary(
 
 // ============================================================== todo.clone
 
-/** The base `todo.add` params reproducing a source to-do's content (born OPEN). */
+/**
+ * The base `todo.add` params reproducing a source to-do's content (born OPEN).
+ * `omitReminder` drops the reproduced reminder from THIS add — used when the copy
+ * also backdates its creation (`--preserve-created`), because a single add cannot
+ * carry both `reminder` and `createdAt` (the json import forbids it,
+ * commands.ts assertAddTimestamps); the caller then reproduces the reminder in a
+ * separate `todo.update` leg.
+ */
 function todoAddParams(
   src: Todo,
   title: string,
   preserveCreated: boolean,
   zone: string | undefined,
+  omitReminder: boolean,
 ): Record<string, unknown> {
   const resolved = src.status !== "open";
   const when = resolved ? undefined : scheduleWhen(src);
   const reminder =
-    !resolved && isDatedWhen(when) && src.derived.reminder !== null
+    !omitReminder && !resolved && isDatedWhen(when) && src.derived.reminder !== null
       ? src.derived.reminder
       : undefined;
   const deadline = realDeadline(src.deadline);
@@ -288,13 +313,21 @@ export async function runCloneTodo(
   const preserveCreated = params.preserveCreated === true;
   const zone = options.zone ?? deps.zone;
   const finalDelta = createDelta(title, "to-do");
+  // A reminder + a backdated creationDate cannot ride ONE add (the json import
+  // forbids the pair, commands.ts assertAddTimestamps). When both apply, the
+  // base add carries createdAt only and the reminder is reproduced in a
+  // follow-up `todo.update` leg (still inside the clone txn).
+  const reminderSplit = preserveCreated ? reproducibleReminder(src) : undefined;
 
   if (options.dryRun === true) {
     const checklist = src.checklist ?? [];
     const steps = [
-      "todo.add (title, notes, tags, when, reminder, deadline, checklist, container" +
+      "todo.add (title, notes, tags, when" +
+        (reminderSplit === undefined ? ", reminder" : "") +
+        ", deadline, checklist, container" +
         (preserveCreated ? ", created-at" : "") +
         ")",
+      ...(reminderSplit !== undefined ? ["todo.update (reproduce reminder)"] : []),
       ...(checklist.some((c) => c.status === "completed")
         ? ["todo.replace-checklist (reproduce checked items)"]
         : []),
@@ -328,7 +361,7 @@ export async function runCloneTodo(
   const add = await runLeg(
     deps,
     "todo.add",
-    todoAddParams(src, title, preserveCreated, zone),
+    todoAddParams(src, title, preserveCreated, zone, reminderSplit !== undefined),
     legOptions(options, txnId, "url-scheme"),
     "copy content",
   );
@@ -347,6 +380,23 @@ export async function runCloneTodo(
   applied.push("copied content");
   const baseVector = add.result.vector;
   const baseTier = add.result.tier;
+
+  // Reminder follow-up (only when it was split off the base add for a backdated
+  // creation): re-supply the source `when` together with the reminder so the
+  // R-suite guard (H-REMINDER-SCOPE) accepts it. The CLONE campaign proved a
+  // when+reminder leg reproduces an item reminder faithfully.
+  if (reminderSplit !== undefined) {
+    const leg = await runLeg(
+      deps,
+      "todo.update",
+      { uuid: cloneUuid, when: reminderSplit.when, reminder: reminderSplit.reminder },
+      legOptions(options, txnId, "url-scheme"),
+      "reproduce reminder",
+    );
+    if (leg.result.kind !== "ok")
+      return legFailure("todo.clone", cloneUuid, applied, leg, finalDelta);
+    applied.push("reproduced reminder");
+  }
 
   // Checked checklist items → one json replace leg (P18).
   const checklist = src.checklist ?? [];

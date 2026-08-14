@@ -29,6 +29,8 @@ import { buildFixtureDb, type FixtureDb } from "../fixtures/build-db.ts";
 import { seedArea, seedProject, seedTodo } from "../fixtures/seed.ts";
 
 const NOW = new Date("2026-07-05T12:00:00Z");
+/** A pre-write umd well before NOW — the value --preserve-modified must return X to. */
+const PAST_UMD = 1_700_000_000;
 
 let fixture: FixtureDb;
 let auditRecords: AuditRecord[];
@@ -72,6 +74,28 @@ function projectTrashVector(): WriteVector {
       const id = /id "([^"]+)"/.exec(inv.payload)?.[1] ?? "";
       const trashed = inv.payload.includes("delete") ? 1 : 0;
       fixture.db.prepare("UPDATE TMTask SET trashed = ? WHERE uuid = ?").run(trashed, id);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
+}
+
+/**
+ * An AppleScript vector simulating the `--preserve-modified` restore leg: a
+ * `set modification date` write returns the target row's umd to {@link PAST_UMD}
+ * (CI has no real app; the value is what a real restore floors to). Its matrix is
+ * empty so runMutation never selects it — restoreModDates finds it by id.
+ */
+function umdRestoreVector(): WriteVector {
+  return {
+    id: "applescript",
+    matrix: {},
+    async execute(inv) {
+      const m = /set modification date of (?:to do|project) id "([^"]+)"/.exec(inv.payload);
+      if (m?.[1] !== undefined) {
+        fixture.db
+          .prepare("UPDATE TMTask SET userModificationDate = ? WHERE uuid = ?")
+          .run(PAST_UMD, m[1]);
+      }
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   };
@@ -199,6 +223,51 @@ describe("todo.make-repeating — promote-via-clone", () => {
     expect(items[0]?.plan.notes.join(" ")).toContain("Put Back");
   });
 
+  it("--preserve-modified: keeps X's umd off the timeline forward and records preModDates on the summary", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Silent standup",
+      start: "active",
+      modificationDate: PAST_UMD,
+    });
+    const res = await runMakeRepeatingTodo(
+      deps([vector, umdRestoreVector()]),
+      { uuid: src, frequency: "weekly", interval: 1 },
+      { ...GUI, preserveModified: true },
+    );
+    if (res.kind !== "ok") throw new Error("expected ok");
+    // X is in the Trash but its umd was NOT bumped by the trash leg (restored).
+    expect(row(src)?.["trashed"]).toBe(1);
+    expect(row(src)?.["userModificationDate"]).toBe(PAST_UMD);
+    // The summary record captures X's pre-write umd so the undo restore can fire.
+    const summary = auditRecords.find(
+      (r) => r.op === "todo.make-repeating" && r.txn?.role === "summary",
+    );
+    expect(summary?.preModDates).toEqual({ [src]: PAST_UMD });
+  });
+
+  it("--preserve-modified: undo restores X AND puts its umd back (symmetric timeline silence)", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Silent daily",
+      start: "active",
+      modificationDate: PAST_UMD,
+    });
+    const made = await runMakeRepeatingTodo(
+      deps([vector, umdRestoreVector()]),
+      { uuid: src, frequency: "daily", interval: 1 },
+      { ...GUI, preserveModified: true },
+    );
+    if (made.kind !== "ok" || made.undoToken === undefined) throw new Error("expected ok + token");
+    flushAudit();
+
+    const items = await runUndo(deps([vector, umdRestoreVector()]), auditDir, {
+      txn: made.undoToken,
+    });
+    expect(items[0]?.outcome).toBe("ok");
+    // X is revived AND its umd is back at the pre-write value (undo stayed silent).
+    expect(row(src)?.["trashed"]).toBe(0);
+    expect(row(src)?.["userModificationDate"]).toBe(PAST_UMD);
+  });
+
   it("blocks (no clone minted) when the GUI-drive ack is missing", async () => {
     const src = seedTodo(fixture.db, { title: "T", start: "active" });
     const res = await runMakeRepeatingTodo(deps(vector), {
@@ -304,5 +373,19 @@ describe("add-repeating — add → native promote", () => {
     });
     expect(res).toMatchObject({ kind: "blocked", hazard: "H-UI-DRIVE" });
     expect(auditRecords.some((r) => r.op === "todo.add")).toBe(false);
+  });
+
+  it("--preserve-modified is a clean no-op (no pre-existing rows; summary carries no preModDates)", async () => {
+    const res = await runAddRepeatingTodo(
+      deps([vector, umdRestoreVector()]),
+      { title: "Fresh habit", when: "someday", frequency: "weekly", interval: 1 },
+      { ...GUI, preserveModified: true },
+    );
+    expect(res.kind).toBe("ok");
+    const summary = auditRecords.find(
+      (r) => r.op === "todo.add-repeating" && r.txn?.role === "summary",
+    );
+    expect(summary).toBeDefined();
+    expect(summary?.preModDates).toBeUndefined();
   });
 });
