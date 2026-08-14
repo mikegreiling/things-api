@@ -29,69 +29,77 @@ CLI shebang: `#!/usr/bin/env -S node --disable-warning=ExperimentalWarning` (BSD
 
 ## 1. Package structure
 
+The tree below reflects the CURRENT module layout (the kickoff sketch has since grown — the MCP surface, the read-shape shaping layer, the recurrence/clone/ui-vector machinery, and the contract core all landed). Representative modules are annotated; the `cli/commands/`, `write/vectors/`, and larger leaf groups are summarized rather than fully enumerated.
+
 ```
 things-api/
   package.json
   tsconfig.json
   .oxlintrc.json
+  schema/
+    envelope.schema.json          # generated from WireEnvelope (npm run schema:gen)
   src/
-    index.ts                      # library entry: openThings(), all public types
+    index.ts                      # library entry: openThings(), all public types (the ONE consumer barrel)
     client.ts                     # ThingsClient: wires db + read + write + audit + config
+    contracts.ts                  # CORE contract: WireEnvelope, exit-code table, ErrorCode registry
     config.ts                     # profiles (workstation | dedicated-server), env, path resolution
     paths.ts                      # XDG-style state/config dirs, THINGS_DB discovery glob
+    diagnose.ts                   # doctor/capabilities/shortcut-proxy accessors (behind the air gap)
+    surface-copy.ts               # shared consumer-vocabulary strings (banned-vocab discipline)
+    sync-health.ts                # BSSyncronyMetadata read → doctor sync-state signals
     db/
-      locate.ts                   # find ThingsData-*/main.sqlite; multi-match policy
-      connection.ts               # node:sqlite wrapper (readOnly, timeout, WAL policy notes)
-      schema.ts                   # SINGLE SOURCE OF TRUTH: every table/column/enum we depend on
-      fingerprint.ts              # compute normalized structure hash, compare vs baseline
-      baselines/
-        index.ts                  # registry: databaseVersion -> baseline
-        db-v26.ts                 # typed baseline const (columns, hash, enum domains, app versions)
+      locate.ts  connection.ts    # find main.sqlite; node:sqlite readOnly/WAL wrapper
+      schema.ts                   # SINGLE SOURCE OF TRUTH: tables/columns/enums we depend on
+      fingerprint.ts              # normalized structure hash vs baseline
+      baselines/index.ts  db-v26.ts
     model/
       entities.ts                 # Todo, Project, Area, Tag, Heading, ChecklistItem + enums
-      dates.ts                    # packed-int date codec (y<<16|m<<12|d<<7), epoch-REAL codec
-      mappers.ts                  # row -> entity (pure functions)
+      dates.ts  clock.ts          # packed-int/epoch date codecs; consumer clock resolution
+      mappers.ts                  # row -> entity (pure)
+      serialize.ts                # omit-empty entity serialization
+      when-sugar.ts               # <when>@<time> parser (shared by both surfaces)
+      recurrence.ts  occurrences.ts # rule decode + next-occurrence projection
     read/
-      queries.ts                  # parameterized SQL, explicit column lists (loud on drift)
-      views.ts                    # today/inbox/anytime/upcoming/someday/logbook/trash
-      project-view.ts             # composite project view (active/later/logged/trash segments)
-      comparators.ts              # per-view ordering: (startBucket, todayIndex), index, etc.
-      tags.ts                     # direct tags + inherited-tag resolution (area/project ancestry)
+      queries.ts  views.ts        # parameterized SQL; today/inbox/anytime/upcoming/someday/logbook/trash/search/changes/deadlines
+      project-view.ts  area-view.ts # composite container views
+      shape.ts  stage.ts          # wire-shaping (shapeReadPayload) + derived stage/when/provisional
+      detail.ts  truncation.ts    # detail-tier enrichment (repeats); bounded views + inline total
+      predicates.ts  filter-contract.ts  scope.ts  area-filter.ts  tag-filters (tags.ts)
+      sections.ts  sidebar-order.ts  caps.ts  search-rank.ts  pseudo-area.ts  log-boundary.ts
+      show-target.ts  snapshot.ts
     write/
-      operations.ts               # OperationKind catalog + param types
-      commands.ts                 # CommandSpec definitions: hazards + expectedDelta + compile
-      guards.ts                   # hazard guard implementations (H-* ids)
-      planner.ts                  # vector selection under disruption policy
-      pipeline.ts                 # pre-read -> guards -> execute -> verify -> audit
+      operations.ts  commands.ts  guards.ts  planner.ts  pipeline.ts   # catalog, specs, H-* guards, vector selection, pre-read→guards→execute→verify→audit
+      move.ts  reorder.ts  heading.ts  checklist.ts  edit-checklist.ts  clear-reminder.ts  reopen.ts
+      clone.ts  promote-clone.ts  make-repeating-project.ts  repeat-rule.ts  recurrence-rule-blob.ts   # promote-via-clone machinery
+      batch.ts  opid.ts  undo.ts  reversibility.ts  preserve-modified.ts  resolution-timestamps.ts
+      pre-state.ts  lock.ts  scope-guard.ts  availability.ts  capabilities.ts  environment.ts  experimental.ts  failure-hints.ts  tag-refs.ts
+      accessibility-probe.ts  automation-probe.ts
       vectors/
-        types.ts                  # WriteVector interface, capability matrix types
-        registry.ts               # vector registration (pluggable)
-        url-scheme.ts             # things:/// compiler + `open` executor + token handling
-        url-scheme.matrix.ts      # per-operation support/disruption/validation metadata
-        applescript.ts            # stub: registered, matrix entries validation:'unvalidated'
-        shortcuts.ts              # stub: same
+        types.ts  registry.ts     # WriteVector interface + pluggable registration
+        url-scheme.ts  applescript.ts  shortcuts.ts  simulator.ts
+        ui.ts  ui-drag.ts  ui-recipes.ts  ui-certification.ts   # the ui (AX/HID) vector + certification
       verify/
-        delta.ts                  # DeltaSpec + assertion combinators
-        poller.ts                 # polling loop, backoff, timeout classification
+        delta.ts  poller.ts       # DeltaSpec/assertions; polling loop + timeout classification
     audit/
-      schema.ts                   # AuditRecord v1 (versioned)
-      log.ts                      # JSONL append, monthly files, redaction
+      schema.ts  log.ts           # AuditRecord (versioned); JSONL append, monthly files, redaction
     cli/
       main.ts                     # commander program assembly (bin target)
-      output.ts                   # human vs --json envelope rendering (stdout=data, stderr=logs)
-      exit-codes.ts               # stable exit-code table
+      read-driver.ts  render.ts   # --json envelope emission (stdout=data, stderr=logs); TTY render
+      help.ts  glyphs.ts  style.ts  width.ts  clock.ts  period.ts  ...  # presentation helpers (intra-surface only)
       commands/
-        doctor.ts  today.ts  inbox.ts  anytime.ts  upcoming.ts  someday.ts
-        logbook.ts  trash.ts  projects.ts  project.ts  areas.ts  tags.ts
-        todo.ts     capabilities.ts  snapshot.ts  config.ts  search.ts
+        doctor.ts  reads.ts  writes.ts  todo.ts  project.ts  area.ts  show.ts
+        snapshot.ts  setup.ts  mcp.ts  install-skill.ts  repeat-flags.ts
+    mcp/
+      server.ts                   # MCP consumer surface (lazy-loaded; zod + MCP SDK); shares shapeReadPayload
   test/
     fixtures/
       schema-v26.sql              # DDL snapshot of real Things schema (sanitized)
-      seed.ts                     # typed row builders (makeTodo, makeProject, ...)
-    unit/                         # mappers, dates, comparators, fingerprint, url compile, guards
+      seed.ts  build-db.ts        # typed row builders; temp SQLite construction
+    unit/                         # mappers, dates, shape, stage, guards, fingerprint, import-boundary, ...
     engine/                       # verification poller vs simulated-latency fixture DB
-    cli/                          # commander programmatic runs, --json golden output
-    live/                         # @live-tagged, THINGS_LIVE=1 gated (VM workstream runs these)
+    cli/                          # commander programmatic runs, --json golden output, --help contract
+    mcp/                          # MCP server tool tests
+    contract/                     # envelope-schema three-way-sync test
 ```
 
 `package.json` shape:
@@ -137,6 +145,8 @@ The MCP server is itself a consumer surface (not part of the client library API)
 The ENTIRE contract described in this document — the programmatic TS API, the CLI vocabulary, the JSON result/error shapes, the MCP tool surface, the audit-trail record format, and the error codes — is **ALPHA until package v1.0 ships.** There is exactly one consumer: the maintainer. Until v1.0, breaking changes are made **freely and cleanly, with no bridge left behind** — no compatibility shims, no alias maps, no deprecation windows, no legacy-format readers. When a shape is renamed or dropped, the old shape is deleted outright and any stale on-disk data or older caller simply stops being understood (a pre-rename audit record, for instance, carries an op-kind the current code no longer recognizes, so it becomes non-undoable and is ignored — the intended, accepted consequence). This is doctrine, not a case-by-case call: such machinery is treated as pollution and is not to be added or proposed while the contract is alpha.
 
 At **v1.0 this flips** — compatibility discipline begins (semantic-versioned breaking changes, migration notes, and, where warranted, bridges) — and **this subsection, together with the `AGENTS.md` Conventions entry and the `docs/up-next.md` §0½ signpost, is REMOVED as part of the v1.0 release** (`grep -rn ALPHA-CONTRACT`).
+
+> **Kickoff snapshot — the shapes below have since evolved.** The entity fields and read/mutation signatures in this section are the ORIGINAL design sketch and are retained for the rationale. The current entity model, wire shapes, and read API are canonical elsewhere: the derived `stage`/`when`/`provisional` + `repeating`/`instanceOf`/`repeats` reshape (no `todaySection`, no `isTemplate`/`isInstance` discriminators) live in [../contract.md](../contract.md), [contracts.md](contracts.md), and [vocabulary-audit.md](vocabulary-audit.md); the read views (`today` → `data.children`, the read-shape-v2 project/area `view`) live in [read-shape-doctrine.md](read-shape-doctrine.md). Read those for what ships today.
 
 ### Entities (`model/entities.ts`) — enums verified against live DB
 

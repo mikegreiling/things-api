@@ -24,7 +24,7 @@ The long-blocked SYNC2 campaign is UNBLOCKED and largely landed. A **durable thr
 - **SY-3** cross-device repeating-instance **dedupe** (the same occurrence materialized on two disconnected devices collapses to ONE on reconvergence — no duplicate) and the **SERDEL S5 zone residual RESOLVED** — a spawned occurrence stamps `creationDate` at the occurrence-day midnight in the **spawning device's local zone** (the non-UTC VM disambiguated it).
 
 Remaining residuals (the account no longer gates them — they need real HARDWARE or are micro-follow-ups):
-- **On-hardware push/pull cadence + the SYNCLAT sender-side stale-panel repro** — the VM has no APNs push-wake, so real receiver latency and Mike's cold-connection observation cannot be reproduced in-VM; an on-hardware sitting, not an account gate. Evidence: [docs/lab/synclat-results.md](lab/synclat-results.md).
+- **On-hardware push/pull cadence measurement** — the VM has no APNs push-wake, so real receiver latency cannot be reproduced in-VM; an on-hardware sitting, not an account gate. (The SYNCLAT sender-side stale-panel repro that used to ride this line is **PARKED INDEFINITELY, wait-and-see** — see [design/decisions.md](design/decisions.md) 2026-08-14; it has not recurred, revisit only if the maintainer observes it again.) Evidence: [docs/lab/synclat-results.md](lab/synclat-results.md).
 - **SY-3 dedupe winner tiebreak** — WHY the non-UTC / later-`creationDate` row won is not isolated by one run (later `creationDate` vs sync arrival order); re-probe with forced opposite reconnect order via the durable account.
 
 ## On-hardware certification — the final confirmation axis for the ui vector
