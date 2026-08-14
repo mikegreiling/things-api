@@ -15,12 +15,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
+import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
+import { runCloneProject, runCloneTodo } from "../../src/write/clone.ts";
+import type { RepeatRuleParams } from "../../src/write/operations.ts";
 import {
   runAddRepeatingProject,
   runAddRepeatingTodo,
   runMakeRepeatingProject,
   runMakeRepeatingTodo,
 } from "../../src/write/promote-clone.ts";
+import { composeRepeatRuleSpec, ruleXml } from "../../src/write/recurrence-rule-blob.ts";
 import { type WriteDeps } from "../../src/write/pipeline.ts";
 import { runUndo } from "../../src/write/undo.ts";
 import { createSimulatorVector } from "../../src/write/vectors/simulator.ts";
@@ -387,5 +391,232 @@ describe("add-repeating — add → native promote", () => {
     );
     expect(summary).toBeDefined();
     expect(summary?.preModDates).toBeUndefined();
+  });
+});
+
+// ============================================ template-direct clone (re-promote)
+//
+// Cloning a repeating TEMPLATE = clone its content as a PLAIN item, then
+// native-promote the clone with the SOURCE's decoded rule (ruling 2026-08-13(d)).
+// Result = the add-repeating contract; undo = trash-both; refuse an inexpressible
+// or undecodable rule. The clone/promote legs ride the simulator vector.
+
+/** A real, decodable `rt1_recurrenceRule` blob for the given rule vocabulary. */
+function templateRuleXml(rule: Omit<RepeatRuleParams, "uuid">): string {
+  return ruleXml(composeRepeatRuleSpec({ uuid: "seed", ...rule }, "2026-07-05", 0));
+}
+
+/** Seed a repeating TEMPLATE to-do carrying `rule` (born someday, one pending occurrence). */
+function seedTemplateTodo(rule: Omit<RepeatRuleParams, "uuid">, title = "Recurring chore"): string {
+  return seedTodo(fixture.db, {
+    title,
+    start: "someday",
+    recurrenceRuleXml: templateRuleXml(rule),
+    nextInstanceStartDate: "2026-07-12",
+  });
+}
+
+function summaryOf(op: string): AuditRecord | undefined {
+  return auditRecords.find((r) => r.op === op && r.txn?.role === "summary");
+}
+
+describe("template-direct clone via re-promote — todo", () => {
+  it("clones a daily template's content + rule as a NEW series (add-repeating contract)", async () => {
+    const src = seedTemplateTodo({ frequency: "daily", interval: 1 });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+
+    // Recorded as an add-repeating (the compound's product is a fresh series).
+    expect(res.op).toBe("todo.add-repeating");
+    expect(res.repeating?.templateUuid).toBe(res.uuid);
+    expect(res.repeating?.instanceUuid).toBeDefined();
+    expect(res.undoToken).toBeDefined();
+    // The new-series-identity disclosure is present.
+    expect((res.warnings ?? []).join(" ")).toContain("NEW repeating series");
+    // The SOURCE template is untouched (we cloned it, not moved it).
+    expect(row(src)?.["trashed"]).toBe(0);
+
+    // The summary maps the decoded rule onto the promote vocabulary (no original).
+    const summary = summaryOf("todo.add-repeating");
+    expect(summary?.observed).not.toHaveProperty("originalUuid");
+    expect(summary?.requested).toMatchObject({ frequency: "daily", interval: 1 });
+    // The clone is an EMBEDDED leg, never an independent todo.clone summary.
+    expect(auditRecords.some((r) => r.op === "todo.clone" && r.txn?.role === "summary")).toBe(
+      false,
+    );
+    expect(auditRecords.some((r) => r.op === "todo.clone" && r.txn?.role === "leg")).toBe(true);
+  });
+
+  it("maps a weekly-with-weekdays rule onto the promote vocabulary", async () => {
+    const src = seedTemplateTodo({
+      frequency: "weekly",
+      interval: 1,
+      weekdays: ["monday", "wednesday", "friday"],
+    });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    expect(summaryOf("todo.add-repeating")?.requested).toMatchObject({
+      frequency: "weekly",
+      interval: 1,
+      weekdays: ["monday", "wednesday", "friday"],
+    });
+  });
+
+  it("maps a monthly nth-weekday (ordinal) anchor", async () => {
+    const src = seedTemplateTodo({
+      frequency: "monthly",
+      interval: 1,
+      monthly: { weekday: "tuesday", ordinal: 2 },
+    });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    expect(summaryOf("todo.add-repeating")?.requested).toMatchObject({
+      frequency: "monthly",
+      monthly: { weekday: "tuesday", ordinal: 2 },
+    });
+  });
+
+  it("maps an after-completion rule (minted template decodes back to after-completion)", async () => {
+    const src = seedTemplateTodo({ frequency: "weekly", interval: 2, afterCompletion: true });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(summaryOf("todo.add-repeating")?.requested).toMatchObject({
+      frequency: "weekly",
+      interval: 2,
+      afterCompletion: true,
+    });
+    // Round-trip: the minted template's rule decodes to an after-completion rule.
+    const minted = row(res.uuid)?.["rt1_recurrenceRule"];
+    const decoded = decodeRecurrenceRule(minted);
+    expect(decoded.type).toBe("after-completion");
+    expect(decoded.unit).toBe("weekly");
+    expect(decoded.interval).toBe(2);
+  });
+
+  it("refuses an INEXPRESSIBLE rule (two end bounds), naming the feature; nothing minted", async () => {
+    // A rule with BOTH an end date AND an occurrence count — the Repeat dialog's
+    // Ends is single-choice, so ruleToInverseParams returns null.
+    const bothBoundsXml = ruleXml({
+      tp: 0,
+      fu: 16,
+      fa: 1,
+      ed: Math.floor(Date.parse("2027-01-01T00:00:00Z") / 1000),
+      rc: 5,
+      anchor: 0,
+    });
+    const src = seedTodo(fixture.db, {
+      title: "Two-bound daily",
+      start: "someday",
+      recurrenceRuleXml: bothBoundsXml,
+    });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res).toMatchObject({
+      kind: "blocked",
+      op: "todo.add-repeating",
+      hazard: "H-CLONE-SOURCE",
+    });
+    if (res.kind === "blocked") {
+      expect(res.detail).toContain("date");
+      expect(res.detail).toContain("occurrence count");
+    }
+    // No series was minted (the refusal fired before any create).
+    expect(auditRecords.some((r) => r.op === "todo.clone")).toBe(false);
+  });
+
+  it("refuses an UNDECODABLE rule (unrecognized format) fail-closed", async () => {
+    const src = seedTodo(fixture.db, { title: "Opaque", recurrenceRule: true });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res).toMatchObject({ kind: "blocked", hazard: "H-CLONE-SOURCE" });
+    if (res.kind === "blocked") expect(res.detail).toContain("could not be decoded");
+  });
+
+  it("blocks (nothing minted) when the GUI-drive ack is missing", async () => {
+    const src = seedTemplateTodo({ frequency: "daily", interval: 1 });
+    const res = await runCloneTodo(deps(vector), { uuid: src });
+    expect(res).toMatchObject({ kind: "blocked", op: "todo.add-repeating", hazard: "H-UI-DRIVE" });
+    expect(auditRecords.some((r) => r.op === "todo.clone")).toBe(false);
+  });
+
+  it("discloses that a PAUSED source is cloned UNPAUSED", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Paused chore",
+      start: "someday",
+      recurrenceRuleXml: templateRuleXml({ frequency: "weekly", interval: 1 }),
+      instanceCreationPaused: true,
+    });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    const warns = (res.kind === "ok" ? (res.warnings ?? []) : []).join(" ");
+    expect(warns).toContain("PAUSED");
+    expect(warns).toContain("UNPAUSED");
+  });
+
+  it("undo trashes the new series (trash-both) and leaves the SOURCE template untouched", async () => {
+    const src = seedTemplateTodo({ frequency: "daily", interval: 1 });
+    const made = await runCloneTodo(deps(vector), { uuid: src }, GUI);
+    if (made.kind !== "ok" || made.uuid === null || made.undoToken === undefined) {
+      throw new Error("expected ok with token");
+    }
+    const templateUuid = made.uuid;
+    const instanceUuid = made.repeating?.instanceUuid ?? null;
+    flushAudit();
+
+    const items = await runUndo(deps(vector), auditDir, { txn: made.undoToken });
+    expect(items[0]?.outcome).toBe("ok");
+    expect(row(templateUuid)?.["trashed"]).toBe(1);
+    if (instanceUuid !== null && instanceUuid !== templateUuid) {
+      expect(row(instanceUuid)?.["trashed"]).toBe(1);
+    }
+    // No original was trashed by the forward op, so undo restores nothing — the
+    // source template stays exactly where it was.
+    expect(row(src)?.["trashed"]).toBe(0);
+  });
+
+  it("dry-run previews clone → make-repeating without minting anything", async () => {
+    const src = seedTemplateTodo({ frequency: "daily", interval: 1 });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, { dryRun: true });
+    expect(res.kind).toBe("dry-run");
+    if (res.kind === "dry-run") {
+      expect(res.plan.invocation).toContain("clone the template");
+      expect(res.plan.invocation).toContain("make-repeating");
+    }
+    expect(auditRecords.some((r) => r.op === "todo.clone")).toBe(false);
+  });
+});
+
+describe("template-direct clone via re-promote — project", () => {
+  it("clones a project template's content + rule as a NEW series (area kept)", async () => {
+    const area = seedArea(fixture.db, "Ops");
+    const src = seedProject(fixture.db, {
+      title: "Weekly review",
+      area,
+      start: "someday",
+      recurrenceRuleXml: templateRuleXml({ frequency: "weekly", interval: 1 }),
+    });
+    const res = await runCloneProject(deps([vector, projectTrashVector()]), { uuid: src }, GUI);
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(res.op).toBe("project.add-repeating");
+    expect(res.repeating?.templateUuid).toBe(res.uuid);
+    expect(row(res.uuid)?.["area"]).toBe(area);
+    expect(row(src)?.["trashed"]).toBe(0); // source template untouched
+  });
+
+  it("refuses a template project holding a nested repeating template (nested-repeater UNCHANGED)", async () => {
+    const src = seedProject(fixture.db, {
+      title: "Repeater host",
+      start: "someday",
+      recurrenceRuleXml: templateRuleXml({ frequency: "weekly", interval: 1 }),
+    });
+    seedTodo(fixture.db, { title: "nested daily", project: src, recurrenceRule: true });
+    const res = await runCloneProject(deps(vector), { uuid: src }, GUI);
+    expect(res).toMatchObject({ kind: "blocked", op: "project.add-repeating" });
+    if (res.kind === "blocked") {
+      expect(res.hazard).toBe("H-CLONE-SOURCE");
+      expect(res.detail).toContain("nested repeating template");
+    }
+    expect(row(src)?.["trashed"]).toBe(0);
   });
 });

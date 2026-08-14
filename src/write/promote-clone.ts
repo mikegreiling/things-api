@@ -24,12 +24,15 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
+import type { Project, Todo } from "../model/entities.ts";
+import type { RepeatRule } from "../model/recurrence.ts";
 import { byUuid } from "../read/detail.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { runCloneProject, runCloneTodo } from "./clone.ts";
 import { promoteProjectViaGui } from "./make-repeating-project.ts";
 import type {
   AddRepeatingRuleFields,
+  CloneParams,
   OperationKind,
   ProjectAddRepeatingParams,
   RepeatRuleParams,
@@ -42,7 +45,7 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
-import { assertRepeatRule } from "./repeat-rule.ts";
+import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 
 type PromoteOp =
@@ -610,4 +613,238 @@ export function runAddRepeatingProject(
     ...(add.createdAt !== undefined && { createdAt: add.createdAt }),
   };
   return addRepeatingViaCreate(deps, "project", addParams, rule, add.title, options);
+}
+
+// ====================================================== template-direct clone
+
+/**
+ * The new-series-identity disclosure: a template clone is NOT linked to the
+ * source — it is a fresh series with its own uuid, and references to the source
+ * (its instances, its uuid) do not transfer.
+ */
+const NEW_SERIES_NOTE =
+  "cloning a repeating template mints a NEW repeating series with its own identity — it is not " +
+  "linked to the source template, and references to the source (its instances, its uuid) do not " +
+  "transfer to the clone";
+
+/** A fail-closed H-CLONE-SOURCE refusal for a template that cannot be cloned. */
+function blockedCloneSource(op: PromoteOp, detail: string, remediation: string): MutationResult {
+  return { kind: "blocked", op, reason: "hazard", hazard: "H-CLONE-SOURCE", detail, remediation };
+}
+
+/**
+ * Name the specific feature that puts a decoded rule OUTSIDE the promote
+ * vocabulary (used only when {@link ruleToInverseParams} returns null — the SAME
+ * boundary the reschedule undo rides). Two shapes the Repeat dialog cannot
+ * produce: two simultaneous end bounds, and a multi-anchor month/year rule.
+ */
+function inexpressibleReason(rule: RepeatRule): string {
+  if (rule.endDate !== null && rule.remainingCount !== null) {
+    return (
+      "the source rule ends on BOTH a date and an occurrence count, which the repeat vocabulary " +
+      "cannot express (its Ends bound is a single choice)"
+    );
+  }
+  const anchors = rule.offsets.filter(
+    (o) => o.day !== undefined || o.weekday !== undefined || o.month !== undefined,
+  );
+  if ((rule.unit === "monthly" || rule.unit === "yearly") && anchors.length > 1) {
+    return (
+      `the source ${rule.unit} rule fires on multiple calendar anchors, which the repeat ` +
+      `vocabulary cannot express (it sets exactly one ${rule.unit} anchor)`
+    );
+  }
+  return "the source recurrence rule uses a shape the repeat vocabulary cannot express";
+}
+
+/**
+ * TEMPLATE-DIRECT clone (ruling 2026-08-13(d)): cloning a repeating TEMPLATE =
+ * clone its content as a PLAIN item, then native-promote the clone with the
+ * SOURCE's decoded rule — a NEW series identity, NO instances cloned, one instance
+ * spawns immediately per the create law (identical to a from-scratch
+ * add-repeating). Delegated to from `runCloneTodo`/`runCloneProject`'s
+ * template-source branch (clone.ts).
+ *
+ * The compound:
+ *   1. decode the source's rule (`repeating.rule`) — undecodable ⇒ refuse;
+ *   2. map it onto the promote vocabulary (`ruleToInverseParams` + the template's
+ *      deadline flag) — inexpressible (two end bounds / multi-anchor month-year) ⇒
+ *      refuse, naming the feature (the SAME boundary the reschedule undo rides);
+ *   3. gate on the GUI-drive ack (the promote leg drives the app) BEFORE minting;
+ *   4. mint the plain clone (embedded leg, recurrence stripped — `cloneTemplateAsPlain`);
+ *   5. native-promote the clone with the FULL decoded rule (incl. deadline/start-earlier).
+ *
+ * Result = the add-repeating contract (template uuid + `repeating{templateUuid,
+ * instanceUuid|null}`); undo = trash-both (no original to restore). A PAUSED
+ * source mints the new series UNPAUSED (pause is not part of the rule vocabulary),
+ * disclosed. `--title`/`--preserve-created` behave as in ordinary clone (a
+ * delete-fate promote may replace the clone row, so preserve-created is
+ * best-effort on the surviving series — disclosed).
+ */
+export async function cloneTemplateViaRepromote(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  src: Todo | Project,
+  srcUuid: string,
+  params: CloneParams,
+  options: WriteOptions,
+): Promise<MutationResult> {
+  const op: PromoteOp = kind === "project" ? "project.add-repeating" : "todo.add-repeating";
+  const expectedType = kind === "project" ? "project" : "to-do";
+  const title = params.title ?? src.title;
+
+  // 1. Decode the source template's rule (detail reads populate repeating.rule;
+  //    an undecodable rule — a future Things schema — is omitted).
+  const rule = src.repeating.rule;
+  if (rule === undefined) {
+    return blockedCloneSource(
+      op,
+      `the source ${expectedType} is a repeating template whose recurrence rule could not be ` +
+        "decoded (an unrecognized rule format), so the series cannot be reproduced",
+      "re-create the repeat in the Things app on a fresh " + expectedType,
+    );
+  }
+
+  // 2. Map the decoded rule onto the promote vocabulary — refuse fail-closed when
+  //    it falls outside what the Repeat dialog can express (name the feature).
+  const inverse = ruleToInverseParams(rule, src.repeating.deadlined === true);
+  if (inverse === null) {
+    return blockedCloneSource(
+      op,
+      `${inexpressibleReason(rule)} — so this template cannot be cloned faithfully`,
+      "re-create the repeat in the Things app on a fresh " + expectedType,
+    );
+  }
+
+  // 3. The promote leg drives the GUI — block before minting a clone if the ack
+  //    is missing (nothing created). An expressibility refusal above takes
+  //    precedence (more informative than the drive block).
+  if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
+    return blockedUiDrive(op);
+  }
+
+  if (options.dryRun === true) {
+    return {
+      kind: "dry-run",
+      op,
+      plan: {
+        op,
+        vector: "ui",
+        tier: 3,
+        invocation:
+          `clone the template ${srcUuid} as a plain ${expectedType} (content only, recurrence ` +
+          `stripped) → make-repeating the clone with the source's rule (Repeat… → ` +
+          `frequency=${inverse.frequency}, interval=${inverse.interval})`,
+        expectedDelta: {
+          mode: "create",
+          probe: { title, type: expectedType, sinceEpoch: 0 },
+          assert: [{ field: "repeating.isTemplate", equals: true }],
+        },
+        hazardsChecked: ["H-CLONE-SOURCE", "H-UI-DRIVE"],
+      },
+    };
+  }
+
+  const startedAt = deps.now?.() ?? new Date();
+  const txnId = newTxnId(startedAt);
+
+  // 4. Mint the plain clone as an embedded leg — cloneTemplateAsPlain reaches the
+  //    clone orchestrator's plain-content path (recurrence + schedule stripped);
+  //    --title/--preserve-created ride through the CloneParams.
+  const cloneParams: CloneParams = {
+    uuid: srcUuid,
+    ...(params.title !== undefined && { title: params.title }),
+    ...(params.preserveCreated === true && { preserveCreated: true }),
+  };
+  const cloneOptions: WriteOptions = { ...legOptions(options, txnId), cloneTemplateAsPlain: true };
+  const clone =
+    kind === "project"
+      ? await runCloneProject(deps, cloneParams, cloneOptions)
+      : await runCloneTodo(deps, cloneParams, cloneOptions);
+  if (clone.kind !== "ok" || clone.uuid === null) {
+    // A nested-repeater refusal (a template CONTAINING a nested repeater) or any
+    // clone failure surfaces coherently here — re-label it to the compound op.
+    return clone.kind === "ok"
+      ? {
+          kind: "verify-failed",
+          op,
+          reason: "mismatch",
+          expected: {
+            mode: "create",
+            probe: { title, type: expectedType, sinceEpoch: 0 },
+            assert: [],
+          },
+          observed: null,
+          detail:
+            "the plain clone was created but its uuid was not discovered — nothing was promoted",
+        }
+      : { ...clone, op };
+  }
+  const cloneUuid = clone.uuid;
+
+  // 5. Native-promote the clone with the FULL decoded rule (ruleToInverseParams
+  //    carries deadline/start-earlier + the calendar anchors + ends).
+  const ruleParams: RepeatRuleParams = { uuid: cloneUuid, ...inverse };
+  const promote =
+    kind === "project"
+      ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
+      : await runMutation(
+          deps,
+          "todo.make-repeating",
+          ruleParams,
+          legOptions(options, txnId, "ui"),
+        );
+  if (promote.kind !== "ok") {
+    // The plain clone persists but was not promoted — honest report (no original
+    // to roll back; the clone is a fresh row the caller can trash and retry).
+    return {
+      ...promote,
+      op,
+      ...("detail" in promote
+        ? {
+            detail:
+              `${promote.detail} — the plain clone (uuid ${cloneUuid}) was created but the promote ` +
+              `did not land; trash the clone with \`things ${kind} delete ${cloneUuid}\` and retry`,
+          }
+        : {}),
+    } as MutationResult;
+  }
+  const { templateUuid, instanceUuid } = discoveryOf(promote);
+
+  const warnings: string[] = [NEW_SERIES_NOTE, PLACEMENT_NOTE];
+  if (params.preserveCreated === true) {
+    warnings.push(
+      "--preserve-created is best-effort on a template clone: the promote may replace the clone " +
+        "row with the new template, whose creation date is the conversion time",
+    );
+  }
+  if (src.repeating.paused === true) {
+    warnings.push(
+      `the source template was PAUSED; the new series is created UNPAUSED and begins spawning — ` +
+        `pause it with \`things ${kind} pause-repeat\` if you want it suspended`,
+    );
+  }
+  if (promote.warnings !== undefined) warnings.push(...promote.warnings);
+
+  // Summary WITHOUT originalUuid → undo is the add-repeating trash-both (remove
+  // the minted series; there is no original to restore).
+  appendPromoteSummary(deps, {
+    startedAt,
+    op,
+    txnId,
+    templateUuid,
+    instanceUuid,
+    invocation: `${kind}.clone (template) ${srcUuid}: clone → promote ${cloneUuid} → template ${templateUuid}`,
+    requested: { source: srcUuid, title, ...inverse },
+  });
+
+  return promoteOk({
+    op,
+    templateUuid,
+    instanceUuid,
+    replacedUuid: cloneUuid,
+    title,
+    txnId,
+    warnings,
+  });
 }

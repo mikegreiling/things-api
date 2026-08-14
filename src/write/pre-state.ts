@@ -729,10 +729,16 @@ function sameTitleRowCount(
     "areaUuid" in container ? "area = ?" : "area IS NULL AND start = 2 AND startDate IS NULL";
   const binds: (string | number)[] =
     "areaUuid" in container ? [title, excludeUuid, container.areaUuid] : [title, excludeUuid];
+  // Repeating TEMPLATE rows (rt1_recurrenceRule / repeater set) are HIDDEN — they
+  // never render as selectable rows in a list view, so a same-titled template
+  // sibling cannot create a row-selection ambiguity. Exclude them from the count
+  // (this is what lets a template-direct clone re-promote a clone that keeps the
+  // source template's title + area — the source template is invisible).
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM TMTask
-       WHERE type = 1 AND trashed = 0 AND title = ? COLLATE NOCASE AND uuid != ? AND ${containerWhere}`,
+       WHERE type = 1 AND trashed = 0 AND title = ? COLLATE NOCASE AND uuid != ?
+         AND rt1_recurrenceRule IS NULL AND repeater IS NULL AND ${containerWhere}`,
     )
     .get(...binds) as { n: number };
   return row.n;

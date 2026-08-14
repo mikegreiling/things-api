@@ -116,13 +116,23 @@ describe("dry-run plans", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it("todo clone refuses a repeating template source (blocked)", async () => {
-    const uuid = seedTodo(fixture.db, { title: "Weekly", recurrenceRule: true });
+  it("todo clone of a repeating template needs the GUI-drive ack (re-promote)", async () => {
+    // A template is cloned as a NEW repeating series (clone content → re-promote
+    // with the source's rule), which drives the app — so it blocks without the
+    // ack. A decodable FIXED weekly rule (tp=0) so it reaches the drive gate.
+    const FIXED_WEEKLY_XML =
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
+      `<key>fa</key><integer>1</integer><key>fu</key><integer>256</integer>` +
+      `<key>of</key><array><dict><key>wd</key><integer>0</integer></dict></array>` +
+      `<key>rc</key><integer>0</integer><key>rrv</key><integer>4</integer>` +
+      `<key>tp</key><integer>0</integer><key>ts</key><integer>0</integer></dict></plist>`;
+    const uuid = seedTodo(fixture.db, { title: "Weekly", recurrenceRuleXml: FIXED_WEEKLY_XML });
     await run(["todo", "clone", uuid, "--json"]);
     const env = envelope();
     expect(env["ok"]).toBe(false);
     const err = env["error"] as Record<string, unknown>;
-    expect(String(err["message"])).toContain("recurrence rule cannot be reproduced");
+    expect(String(err["code"])).toContain("H-UI-DRIVE");
+    expect(String(err["remediation"])).toContain("dangerously-drive-gui");
   });
 
   it("project clone --dry-run discloses the json-import + terminal legs", async () => {

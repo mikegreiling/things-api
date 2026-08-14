@@ -38,6 +38,7 @@ import { projectView } from "../read/project-view.ts";
 import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
 import { entityStage, entityWhen } from "../read/stage.ts";
 import type { CloneParams, OperationKind, ProjectItemSpec, WhenValue } from "./operations.ts";
+import { cloneTemplateViaRepromote } from "./promote-clone.ts";
 import {
   fingerprintLabel,
   runMutation,
@@ -240,11 +241,19 @@ function todoAddParams(
   preserveCreated: boolean,
   zone: string | undefined,
   omitReminder: boolean,
+  templateContent: boolean,
 ): Record<string, unknown> {
   const resolved = src.status !== "open";
-  const when = resolved ? undefined : scheduleWhen(src);
+  // A TEMPLATE cloned as plain content carries NO schedule/reminder — the
+  // recurrence (and the "starting" date) come from the promote leg that follows,
+  // so the plain clone is born unscheduled (from-scratch add-repeating semantics).
+  const when = resolved || templateContent ? undefined : scheduleWhen(src);
   const reminder =
-    !omitReminder && !resolved && isDatedWhen(when) && src.derived.reminder !== null
+    !omitReminder &&
+    !templateContent &&
+    !resolved &&
+    isDatedWhen(when) &&
+    src.derived.reminder !== null
       ? src.derived.reminder
       : undefined;
   const deadline = realDeadline(src.deadline);
@@ -299,15 +308,14 @@ export async function runCloneTodo(
       "restore it first with `things todo restore <uuid>`, then clone",
     );
   }
-  if (src.repeating.isTemplate) {
-    return blocked(
-      "todo.clone",
-      "the source is a repeating template; its recurrence rule cannot be reproduced on any " +
-        "official write surface (the rule is settable only via the make-repeating GUI, which " +
-        "mints a new series identity)",
-      "re-create the repeat in the Things app on a fresh to-do",
-    );
+  if (src.repeating.isTemplate && options.cloneTemplateAsPlain !== true) {
+    // Cloning a repeating template = clone its content as a PLAIN item, then
+    // native-promote the clone with the SOURCE's decoded rule (a NEW series
+    // identity; no instances cloned). The compound sets cloneTemplateAsPlain on
+    // the embedded clone leg to reach the plain-content path below.
+    return cloneTemplateViaRepromote(deps, "todo", src, srcUuid, params, options);
   }
+  const templateContent = src.repeating.isTemplate; // reached only in plain mode
 
   const title = params.title ?? src.title;
   const preserveCreated = params.preserveCreated === true;
@@ -317,7 +325,7 @@ export async function runCloneTodo(
   // forbids the pair, commands.ts assertAddTimestamps). When both apply, the
   // base add carries createdAt only and the reminder is reproduced in a
   // follow-up `todo.update` leg (still inside the clone txn).
-  const reminderSplit = preserveCreated ? reproducibleReminder(src) : undefined;
+  const reminderSplit = preserveCreated && !templateContent ? reproducibleReminder(src) : undefined;
 
   if (options.dryRun === true) {
     const checklist = src.checklist ?? [];
@@ -361,7 +369,7 @@ export async function runCloneTodo(
   const add = await runLeg(
     deps,
     "todo.add",
-    todoAddParams(src, title, preserveCreated, zone, reminderSplit !== undefined),
+    todoAddParams(src, title, preserveCreated, zone, reminderSplit !== undefined, templateContent),
     legOptions(options, txnId, "url-scheme"),
     "copy content",
   );
@@ -528,13 +536,13 @@ export async function runCloneProject(
       "restore it first with `things project restore <uuid>`, then clone",
     );
   }
-  if (src.repeating.isTemplate) {
-    return blocked(
-      "project.clone",
-      "the source is a repeating template; its recurrence rule cannot be reproduced on any " +
-        "official write surface",
-      "re-create the repeat in the Things app on a fresh project",
-    );
+  if (src.repeating.isTemplate && options.cloneTemplateAsPlain !== true) {
+    // Cloning a repeating template = clone its content (incl. child/heading
+    // structure) as a PLAIN project, then native-promote the clone with the
+    // SOURCE's decoded rule. The nested-repeater refusal below still fires on the
+    // embedded plain-clone leg (a template CONTAINING a nested repeater is
+    // unclonable — this change is about the template AS the source).
+    return cloneTemplateViaRepromote(deps, "project", src, srcUuid, params, options);
   }
   // A6: a live nested repeating template inside the subtree is UNCLONABLE.
   const nestedTemplate = projectChildren(deps.db, srcUuid).find((c) => c.repeating.isTemplate);

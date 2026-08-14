@@ -2718,8 +2718,11 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
         "items and their checked state, container, and completed/canceled state with the exact " +
         "original timestamp; a project also copies its area, headings, and children. The clone is " +
         "a new capture (a new uuid, created now, at its container's usual position). Refuses a " +
-        "trashed source, a repeating template, and a project holding a nested repeating template. " +
-        "Undo trashes the clone. Not the same as duplicate_item (Things' own native copy).",
+        "trashed source and a project holding a nested repeating template. A repeating template is " +
+        "cloned as a NEW repeating series (its content plus the source's rule, minted fresh — no " +
+        "instances copied); this drives the app (requires dangerously_drive_gui) and refuses a " +
+        "rule the Repeat dialog cannot express. Undo trashes the clone (a template clone trashes " +
+        "the new series). Not the same as duplicate_item (Things' own native copy).",
       inputSchema: {
         uuid: z.string(),
         title: z
@@ -2730,6 +2733,7 @@ export function createThingsMcpServer(options: McpServerOptions = {}): McpServer
           .boolean()
           .optional()
           .describe("Copy the source's creation date onto the clone (minute resolution)"),
+        ...driveGuiShape,
         ...dryRunShape,
         ...opIdShape,
       },

@@ -261,12 +261,17 @@ describe("todo.clone", () => {
     expect(res.remediation).toContain("restore");
   });
 
-  it("refuses a repeating template source", async () => {
+  it("a repeating template with an undecodable rule refuses fail-closed (H-CLONE-SOURCE)", async () => {
+    // A template source now routes to the template-clone compound (re-promote);
+    // an UNDECODABLE rule (the fake blob) refuses before minting anything. A
+    // decodable template's full re-promote path is covered in
+    // write-promote-clone.test.ts (template-direct clone).
     const src = seedTodo(fixture.db, { title: "Weekly review", recurrenceRule: true });
-    const res = await runCloneTodo(deps(vector), { uuid: src });
+    const res = await runCloneTodo(deps(vector), { uuid: src }, { dangerouslyDriveGui: true });
     expect(res.kind).toBe("blocked");
     if (res.kind !== "blocked") throw new Error("expected blocked");
-    expect(res.detail).toContain("recurrence rule cannot be reproduced");
+    expect(res.hazard).toBe("H-CLONE-SOURCE");
+    expect(res.detail).toContain("could not be decoded");
   });
 
   it("dry-run discloses the leg sequence without mutating", async () => {
