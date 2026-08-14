@@ -166,10 +166,12 @@ leak without threading scope through every command's `preRead`.
   the project equivalents, `heading.rename/archive/unarchive`.
 - **`todo.duplicate` / `project.duplicate`:** allowed iff source in scope — the
   copy inherits the source's container, so it stays in scope (amendment 3).
-- **Moves:** `todo.move` destination gated; `--inbox` / `--detach` → structural
-  refuse. `project.move` under an **area scope**: destination area == the scope
-  area is allowed (idempotent — amendment 5); any other → nullified (parity);
-  `--detach` → refuse. Under a **project scope** → refuse.
+- **Moves:** `todo.move` destination gated; `--inbox` / `--loose` (the detach
+  spellings that leave the container hierarchy) → structural refuse (`--no-heading`
+  stays in the project, so it is governed by target-parity, not this refusal).
+  `project.move` under an **area scope**: destination area == the scope area is
+  allowed (idempotent — amendment 5); any other → nullified (parity); `--no-area`
+  (the project detach) → refuse. Under a **project scope** → refuse.
 - **Delete / restore:** `todo.delete` / `project.delete` allowed iff target in
   scope (trashes in place). `todo.restore` → **refuse** (returns to the Inbox,
   outside scope — structural). `project.restore` restores in place → allowed iff

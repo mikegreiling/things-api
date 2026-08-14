@@ -12,10 +12,10 @@ Four layers, DB → consumer:
 
 1. **DB row** — `TaskRow` / `ChecklistRow` (`src/model/mappers.ts`). The raw SQLite columns: packed-date ints, integer enums, `startBucket`, `index`, `todayIndex`, the `rt1_*` recurrence columns, `deadlineSuppressionDate`, `effectiveArea`. This interface is a **cleanly-segregated substrate layer** — it is a distinct type, never exported, never a consumer surface.
 2. **Internal entity** — `Todo` / `Project` / `Heading` / `Area` (`src/model/entities.ts`), produced by the mappers. This is where DB columns are decoded and **normalized to the consumer vocabulary at the DB boundary** (the doctrine's normalization point): DB `creationDate → created`, `userModificationDate → modified`, `stopDate → stopped`, packed `startDate → IsoDate startDate`, integer enums → string unions. The entity is ALSO the shape the **programmatic TS API** (`src/client.ts`, re-exported via `src/index.ts`) hands back — so under ALPHA-CONTRACT it is itself a consumer surface, and the only one that sees the un-shaped vocabulary.
-3. **Wire shaping** — `src/read/shape.ts` (`shapeReadPayload`), applied ONLY at the two thin consumer boundaries (`src/cli/read-driver.ts` and `src/mcp/server.ts`), never in `client.ts`. This is where the read-shape doctrine ([read-shape-doctrine.md](read-shape-doctrine.md) for structure; [contracts.md](contracts.md)/[../contract.md](../contract.md) R6–R13 for row shaping) derives `stage`/`when`/`provisional`, groups counts into `checklist`/`todos`, presence-keys `repeating`/`instanceOf`/`archived`, flattens refs to bare titles + `*Uuid` siblings, and applies the compact/full tier drops.
+3. **Wire shaping** — `src/read/shape.ts` (`shapeReadPayload`), applied ONLY at the two thin consumer boundaries (`src/cli/read-driver.ts` and `src/mcp/server.ts`), never in `client.ts`. This is where the read-shape doctrine ([read-shape-doctrine.md](read-shape-doctrine.md) for structure; [contracts.md](contracts.md)/[../contract.md](../contract.md) RS1–RS8 for row shaping) derives `stage`/`when`/`provisional`, groups counts into `checklist`/`todos`, presence-keys `repeating`/`instanceOf`/`archived`, flattens refs to bare titles + `*Uuid` siblings, and applies the compact/full tier drops.
 4. **TTY render** — `src/cli/render.ts` consumes the un-shaped entities (NOT the wire) for the human view. Legitimately separate (surface-copy + width-fitting); out of scope for unification per the §7.1 caveat.
 
-**The load-bearing finding up front:** the R1–R13 read-shape doctrine has ALREADY unified the overwhelming majority of the vocabulary. The DB→entity boundary normalization is correct and complete (no DB column name leaks past the mapper). The entity→wire divergences are almost entirely legitimate emission-time derivations (`stage`/`when`/`provisional`/`hasNotes`/`checklist`/`todos`/`repeating`/`instanceOf`/`archived`/ref-flatten) or already SAME-NAME. **The genuine rename surface is thin.** The real structural win §7.1 is reaching for is not a pile of renames — it is (a) removing the ONE surviving translation in `shape.ts` (the day-block `date`→`when`), and (b) making the entity-level internal substrate fields VISIBLY DISTINCT from the consumer vocabulary they currently sit intermixed with. The audit's value is that this classification is TRUE, not that the rename count is high.
+**The load-bearing finding up front:** the read-shape doctrine (structural R1–R9 + row-shaping RS1–RS8) has ALREADY unified the overwhelming majority of the vocabulary. The DB→entity boundary normalization is correct and complete (no DB column name leaks past the mapper). The entity→wire divergences are almost entirely legitimate emission-time derivations (`stage`/`when`/`provisional`/`hasNotes`/`checklist`/`todos`/`repeating`/`instanceOf`/`archived`/ref-flatten) or already SAME-NAME. **The genuine rename surface is thin.** The real structural win §7.1 is reaching for is not a pile of renames — it is (a) removing the ONE surviving translation in `shape.ts` (the day-block `date`→`when`), and (b) making the entity-level internal substrate fields VISIBLY DISTINCT from the consumer vocabulary they currently sit intermixed with. The audit's value is that this classification is TRUE, not that the rename count is high.
 
 ## 1. The audit table
 
@@ -27,26 +27,26 @@ Every consumer-facing key, its internal representation(s), and its classificatio
 |---|---|---|---|
 | `uuid` | `entity.uuid` (DB `uuid`) | SAME | |
 | `title` | `entity.title` (DB `title`) | SAME | |
-| `notes` (full) / `hasNotes` (compact) | `entity.notes` (DB `notes`) | SAME + COMPUTED | `notes` SAME on full; compact drops it for the presence-keyed `hasNotes` (token-economy, R7). |
-| `status` | `entity.status` (DB `status` int via `TASK_STATUS_FROM_DB`) | SAME | Enum decoded at mapper; compact omits when `open` (absence=default, R7). |
+| `notes` (full) / `hasNotes` (compact) | `entity.notes` (DB `notes`) | SAME + COMPUTED | `notes` SAME on full; compact drops it for the presence-keyed `hasNotes` (token-economy, RS2). |
+| `status` | `entity.status` (DB `status` int via `TASK_STATUS_FROM_DB`) | SAME | Enum decoded at mapper; compact omits when `open` (absence=default, RS2). |
 | `stage` | derived from `entity.start` + `logged` + `trashed` via `deriveStage` | COMPUTED | Response-clock-dependent (needs today + logbook boundary); cannot be pre-baked on the entity. NOT a rename of any single field — it replaces three. |
-| `when` | derived from `startDate` + `today`/`evening` markers + `repeating.nextOccurrence` via `deriveWhen` | COMPUTED | R12. Semantically distinct from raw `startDate` (position vs stored value) — the honesty case: this is NOT a `startDate` rename. |
-| `provisional` | derived from the same Today markers + `start`/`startDate` via `whenIsProvisional` | COMPUTED | R13/BANNER1; presence-keyed, never dropped. |
+| `when` | derived from `startDate` + `today`/`evening` markers + `repeating.nextOccurrence` via `deriveWhen` | COMPUTED | RS7. Semantically distinct from raw `startDate` (position vs stored value) — the honesty case: this is NOT a `startDate` rename. |
+| `provisional` | derived from the same Today markers + `start`/`startDate` via `whenIsProvisional` | COMPUTED | RS8/BANNER1; presence-keyed, never dropped. |
 | `startDate` (full/detail only) | `entity.startDate` (DB packed `startDate` → `IsoDate`) | SAME | The raw substrate behind `when`, kept on full tier under its own name. Compact drops it. |
 | `deadline` | `entity.deadline` (DB packed `deadline`; nulled for templates) | SAME | Template `deadline` sentinel handled at mapper → `repeating.deadlined`. |
 | `reminder` | `entity.reminder` (DB `reminderTime` → `ReminderTime`), gated by `reminderLive` | SAME + COMPUTED | Name SAME; emit gated by the internal `reminderLive` marker (§9n stale-bell rule). |
 | `area` + `areaUuid` | `entity.area: Ref {uuid,title}` (DB `effectiveArea` → resolved Ref) | COMPUTED | Ref flattened to bare title; `areaUuid` sibling added iff the title does not round-trip (live-DB oracle). Promote, not rename. |
 | `project` + `projectUuid` | `entity.project: Ref` **merged with** `entity.headingProject` | COMPUTED (promote) | `headingProject` is PROMOTED into `project` when `project` is null (a headed to-do's owning project). Allowed group/promote — not a rename. |
 | `projectIsTemplate` | `entity.project.isRepeatingTemplate?: true` (on the Ref) | COMPUTED (promote) | Re-emitted as a flat row sibling because the ref flattens to a string; presence-keyed. |
-| `heading` + `headingUuid` | `entity.heading: Ref` | COMPUTED | Ref flatten; compact-dropped outside project views (R7). |
+| `heading` + `headingUuid` | `entity.heading: Ref` | COMPUTED | Ref flatten; compact-dropped outside project views (RS2). |
 | `tags` / `inheritedTags` | `entity.tags: TagRef[] {title}` / `inheritedTags` | COMPUTED (drop wrapper) | Flattened to `string[]` of names (tag uuids were never on the wire). Key name unchanged; the `{title}` wrapper is dropped. |
-| `repeating` `{paused?,deadlined?,rule?,latestInstance?}` | `entity.repeating: RepeatingInfo` (`isTemplate`/`isInstance`/`templateUuid`/`nextOccurrence`/…) | COMPUTED (R11 reshape) | Presence MEANS template; `isTemplate`/`isInstance` discriminators dropped; `nextOccurrence`→`when` (R12). |
-| `instanceOf` | `entity.repeating.templateUuid` (when `isInstance`) | COMPUTED (promote+presence-key) | Lifted out of `repeating` and presence-keyed. Contains a rename (`templateUuid`→`instanceOf`) folded into the R11 reshape — classified COMPUTED, not a pure rename (the reshape is load-bearing). |
-| `checklist` `{open,total,items?}` | `checklistItemsCount` + `openChecklistItemsCount` (+ `checklist[]` on detail) | COMPUTED (group) | R9 count-grouping. |
-| `todos` `{open,total}` | `untrashedLeafActionsCount` + `openUntrashedLeafActionsCount` | COMPUTED (group) | R9 count-grouping. |
+| `repeating` `{paused?,deadlined?,rule?,latestInstance?}` | `entity.repeating: RepeatingInfo` (`isTemplate`/`isInstance`/`templateUuid`/`nextOccurrence`/…) | COMPUTED (RS6 reshape) | Presence MEANS template; `isTemplate`/`isInstance` discriminators dropped; `nextOccurrence`→`when` (RS7). |
+| `instanceOf` | `entity.repeating.templateUuid` (when `isInstance`) | COMPUTED (promote+presence-key) | Lifted out of `repeating` and presence-keyed. Contains a rename (`templateUuid`→`instanceOf`) folded into the RS6 reshape — classified COMPUTED, not a pure rename (the reshape is load-bearing). |
+| `checklist` `{open,total,items?}` | `checklistItemsCount` + `openChecklistItemsCount` (+ `checklist[]` on detail) | COMPUTED (group) | RS4 count-grouping. |
+| `todos` `{open,total}` | `untrashedLeafActionsCount` + `openUntrashedLeafActionsCount` | COMPUTED (group) | RS4 count-grouping. |
 | `created` / `modified` (full only) | `entity.created` / `entity.modified` (DB `creationDate` / `userModificationDate`) | SAME | DB→entity normalization is the doctrine working correctly. Compact drops both. |
 | `stopped` | `entity.stopped` (DB `stopDate` → `Date`) | SAME | **The suspected `stopDate`-vs-`stopped` divergence does NOT exist as a rename** — the DB column is normalized to `stopped` at the mapper, and `stopped` is the wire name. Already unified. (Honesty check per the brief: this is a resolved case, not a candidate.) |
-| `type` | `entity.type` (DB `type` int via `TASK_TYPE_FROM_DB`) | SAME | Absent `type` = to-do (presence convention, R7). |
+| `type` | `entity.type` (DB `type` int via `TASK_TYPE_FROM_DB`) | SAME | Absent `type` = to-do (presence convention, RS2). |
 
 ### 1b. Read wire — grouping / container structures
 
@@ -95,7 +95,7 @@ These live on `TaskCommon` / subtypes, INTERMIXED with the consumer-facing field
 | `start: StartState` | raw lifecycle; feeds `stage`/`when` | **INTERMIXED** | Also handed to the programmatic-API consumer. Cannot be renamed to `stage` (raw vs clock-derived). |
 | `logged: boolean` | raw lifecycle (refined by `markLogged`); feeds `stage` | **INTERMIXED** | |
 | `trashed: boolean` | raw lifecycle; feeds `stage` | **INTERMIXED** | |
-| `todaySection: TodaySection \| null` | R10.1-retired; feeds render (evening styling) + write-verify delta | **INTERMIXED** | Redundant with the `evening` marker + raw `startBucket` — a candidate for outright DELETION (not just segregation). |
+| `todaySection: TodaySection \| null` | RS5.1-retired; feeds render (evening styling) + write-verify delta | **INTERMIXED** | Redundant with the `evening` marker + raw `startBucket` — a candidate for outright DELETION (not just segregation). |
 | `today?: true` | derived marker; feeds `when`/`stage`/`provisional` | **INTERMIXED** | Presence-keyed; looks like a wire field, is not. |
 | `evening?: true` | derived marker; feeds `when` | **INTERMIXED** | |
 | `reminderLive?: true` | derived marker; gates `reminder` emit + render bell | **INTERMIXED** | |
@@ -135,9 +135,9 @@ These live on `TaskCommon` / subtypes, INTERMIXED with the consumer-facing field
 ### Non-renames confirmed by the audit (honesty rules)
 
 - **`stopDate` vs `stopped`:** NOT a rename — already normalized at the mapper; `stopped` is both the entity and wire name. Resolved.
-- **`startDate` vs `when`:** NOT a rename — `when` is a CLOCK-DERIVED position (R12), `startDate` is the stored substrate; different facts, both correctly named. Marking `startDate`→`when` a rename would be false.
+- **`startDate` vs `when`:** NOT a rename — `when` is a CLOCK-DERIVED position (RS7), `startDate` is the stored substrate; different facts, both correctly named. Marking `startDate`→`when` a rename would be false.
 - **`status` (int) vs `stage`:** NOT a rename — `stage` is derived from `start`/`logged`/`trashed` (three fields), not from `status`; `status` stays `status`. Different axes.
-- **`todaySection` vs `evening`:** NOT a live rename — `todaySection` is already RETIRED from the wire (R10.1); it survives only as internal substrate. It is a SEGREGATION (and possibly DELETION) target, not a rename.
+- **`todaySection` vs `evening`:** NOT a live rename — `todaySection` is already RETIRED from the wire (RS5.1); it survives only as internal substrate. It is a SEGREGATION (and possibly DELETION) target, not a rename.
 - **`start`/`logged`/`trashed`:** NOT renames — they are the raw substrate the wire replaces with the clock-derived `stage`/`when`; they cannot be pre-baked as `stage`/`when` without a response clock. SUBSTRATE.
 - **read `when` vs write `--when`:** NOT a rename to resolve — a ratified, documented shared name for two related concepts (derived position vs input control).
 
@@ -195,7 +195,7 @@ This is a golden key-inventory lock: it enforces (b)+(c) directly, and after Bat
 ## 5. Cross-references
 
 - Scope of record: [docs/up-next.md](../up-next.md) §7.1.
-- Wire doctrine this audit is measured against: [read-shape-doctrine.md](read-shape-doctrine.md) (structure, R1–R9) plus the row-shaping R6–R13 in [contracts.md](contracts.md) / [../contract.md](../contract.md).
+- Wire doctrine this audit is measured against: [read-shape-doctrine.md](read-shape-doctrine.md) (structure, R1–R9) plus the row-shaping RS1–RS8 in [contracts.md](contracts.md) / [../contract.md](../contract.md).
 - Ratified consumer vocabulary: [../contract.md](../contract.md) (the glossary + "Read views — shapes and orderings").
 - Entity + layer topology: [architecture.md](architecture.md) §2 (Entities, Read API, Consumer boundary).
 - ALPHA-CONTRACT (why the inward renames + entity break carry no compat machinery): [architecture.md](architecture.md) §Alpha contract; [../../AGENTS.md](../../AGENTS.md) Conventions.

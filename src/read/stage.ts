@@ -1,5 +1,5 @@
 /**
- * The R10 lifecycle taxonomy: ONE derived per-item field, `stage`, that replaces
+ * The RS5 lifecycle taxonomy: ONE derived per-item field, `stage`, that replaces
  * the three former wire fields `start` / `logged` / `trashed`. It names an item's
  * primary lifecycle bucket in the same six words the sidebar and the view cards
  * use, so a consumer reads one word instead of cross-referencing three.
@@ -24,7 +24,7 @@
  *    A completed/canceled row NOT yet past the boundary has `logged=false` here,
  *    so it FALLS THROUGH and keeps its live stage below (Mike's explicit ruling).
  * 2½. a DEADLINE-PULLED undated row (`today` marker set ∧ `startDate IS NULL`) →
- *    `anytime` — R13 (BANNER1 / BANNER1b, law L-A): a due-deadline pull re-files
+ *    `anytime` — RS8 (BANNER1 / BANNER1b, law L-A): a due-deadline pull re-files
  *    an undated Inbox/Someday row into ANYTIME (the GUI removes it from
  *    Someday/Inbox and adds it to Anytime at pull time, even while raw `start`
  *    still reads 0/2). It derives its DESTINATION, not its origin. Ordered ABOVE
@@ -62,7 +62,7 @@
  * docs/lab/upcoming-research.md, summarized in docs/things-app-oddities.md
  * §8d–8e). A SOMEDAY or INBOX item with a due/overdue UNsuppressed deadline is
  * PULLED into Today+Anytime, so it too reads `stage: "anytime"` AND `today: true`
- * (R13 / BANNER1b — the GUI files a pulled row under Anytime, out of its origin
+ * (RS8 / BANNER1b — the GUI files a pulled row under Anytime, out of its origin
  * bucket, §8s); the same item once its deadline is SUPPRESSED
  * (`deadlineSuppressionDate` stamped — a side effect of rescheduling an
  * overdue-deadline item, oddities §8e) is NOT pulled: no today marker, so it
@@ -106,7 +106,7 @@ export interface StageInput {
 export function deriveStage(item: StageInput): Stage {
   if (item.trashed) return "trash";
   if (item.logged) return "logbook";
-  // R13 (BANNER1 / BANNER1b, law L-A): a due-deadline PULL re-files an undated
+  // RS8 (BANNER1 / BANNER1b, law L-A): a due-deadline PULL re-files an undated
   // row (Inbox or Someday origin) into ANYTIME — the GUI removes it from the
   // Someday/Inbox lists and adds it to the Anytime list at pull time, even while
   // its raw `start` still reads 0/2 (Anytime ⊇ Today's to-dos). The row carries
@@ -129,7 +129,7 @@ export function deriveStage(item: StageInput): Stage {
 }
 
 /**
- * An item's TIME-AXIS POSITION (R12) — a presence-keyed value complementary to
+ * An item's TIME-AXIS POSITION (RS7) — a presence-keyed value complementary to
  * {@link Stage}. The doctrine line: **`stage` enumerates the sidebar BUCKETS an
  * item lives in; `when` enumerates its TIME POSITIONS (today | evening | a future
  * date).** Someday is deliberately NOT a `when` value — it is a bucket, so it
@@ -237,7 +237,7 @@ export function entityWhen(item: EntityDerivable): When | undefined {
 }
 
 /**
- * The R13 provisional-marker LAW (BANNER1 L-B) — the ONE predicate the wire emit
+ * The RS8 provisional-marker LAW (BANNER1 L-B) — the ONE predicate the wire emit
  * boundary (`shape.ts`) and the TTY pip (`render.ts` renderToday) share, so a
  * rendered `•` can NEVER disagree with the emitted `provisional`. A Today member
  * (a today/evening `when`) the app has not yet MATERIALIZED: `start != active OR

@@ -240,7 +240,7 @@ const KIND_LABEL: Record<number, string> = { 0: "to-do", 1: "project", 2: "headi
  * The display bucket a row sits in — the anchor single-bucket rule keys on it.
  *
  * DATE-FIRST precedence, mirroring the read layer's settled semantics
- * (src/read/stage.ts deriveStage, post-R10.2/R12): a `startDate` is classified
+ * (src/read/stage.ts deriveStage, post-RS5.2/RS7): a `startDate` is classified
  * by its date BEFORE `start` is consulted, because the app's ONLY representation
  * of a future-scheduled item is `start=2` + a future `startDate` (UPC1 upcoming
  * cohort, BANNER1 scheduled arrivals; live prod scan 2026-07-30: 4/4

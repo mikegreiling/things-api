@@ -333,7 +333,7 @@ describe("list views", () => {
   });
 });
 
-describe("R13 — GUI-faithful deadline-pull membership (BANNER1 / BANNER1b)", () => {
+describe("RS8 — GUI-faithful deadline-pull membership (BANNER1 / BANNER1b)", () => {
   // Law L-A: a due/overdue unsuppressed deadline pulls an undated Inbox/Someday
   // row OUT of its origin list and INTO Today + Anytime, even while its raw
   // `start` still reads 0/2 (the app already does this before materialization).
@@ -397,7 +397,7 @@ describe("R13 — GUI-faithful deadline-pull membership (BANNER1 / BANNER1b)", (
     const stay = seedTodo(fx.db, { title: "sd-stay-tagged", start: "someday", startDate: null });
     tagTask(fx.db, stay, t);
     // Filtering by the tag still excludes the pulled row from someday and still
-    // includes it in anytime — the R13 exclusion and the tag scope AND together.
+    // includes it in anytime — the RS8 exclusion and the tag scope AND together.
     expect(flat(somedayView(fx.db, NOW, { tag: "urgent" })).map((i) => i.title)).toEqual([
       "sd-stay-tagged",
     ]);
@@ -1217,9 +1217,9 @@ describe("overdue filter (open items past their deadline)", () => {
     expect([...view.today, ...view.evening].map((i) => i.title)).toEqual(["today-overdue"]);
   });
 
-  it("inbox: an UNSUPPRESSED overdue capture is deadline-PULLED out (R13); a suppressed one stays and --overdue keeps it", () => {
+  it("inbox: an UNSUPPRESSED overdue capture is deadline-PULLED out (RS8); a suppressed one stays and --overdue keeps it", () => {
     fx = buildFixtureDb();
-    // Unsuppressed overdue undated inbox row = a deadline pull → R13 removes it
+    // Unsuppressed overdue undated inbox row = a deadline pull → RS8 removes it
     // from the Inbox list entirely (GUI-faithful), so --overdue can't surface it.
     seedTodo(fx.db, { title: "inbox-overdue", start: "inbox", deadline: "2026-07-01" });
     // A SUPPRESSED overdue capture is NOT a pull — it stays in Inbox, and its
@@ -1238,9 +1238,9 @@ describe("overdue filter (open items past their deadline)", () => {
     ]);
   });
 
-  it("someday: an UNSUPPRESSED overdue item is deadline-PULLED out (R13); a suppressed one stays and --overdue keeps it", () => {
+  it("someday: an UNSUPPRESSED overdue item is deadline-PULLED out (RS8); a suppressed one stays and --overdue keeps it", () => {
     fx = buildFixtureDb();
-    // Unsuppressed overdue someday row = a deadline pull → gone from Someday (R13).
+    // Unsuppressed overdue someday row = a deadline pull → gone from Someday (RS8).
     seedTodo(fx.db, { title: "someday-overdue", start: "someday", deadline: "2026-07-01" });
     // Suppressed (the realistic case — suppression is stamped by rescheduling an
     // overdue item to Someday) → not a pull, stays, and --overdue keeps it.
@@ -2406,7 +2406,7 @@ describe("deadlinesView — repeating-template projections", () => {
     ]);
   });
 
-  it("discloses projection-ness via the R11 `repeating` presence (it IS the template row)", () => {
+  it("discloses projection-ness via the RS6 `repeating` presence (it IS the template row)", () => {
     fx = buildFixtureDb();
     seedTodo(fx.db, {
       title: "cpap",

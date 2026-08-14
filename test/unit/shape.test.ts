@@ -1,7 +1,7 @@
 /**
- * The read-payload shaping transform (src/read/shape.ts): R6 (no-redundant-
- * ancestry), R7 (named detail tiers), the R9 universal reshapes (checklist /
- * todos / string tags / one project key / repeating), and the R10 lifecycle
+ * The read-payload shaping transform (src/read/shape.ts): RS1 (no-redundant-
+ * ancestry), RS2 (named detail tiers), the RS4 universal reshapes (checklist /
+ * todos / string tags / one project key / repeating), and the RS5 lifecycle
  * taxonomy (`stage` replaces start/logged/trashed; today/evening markers; card
  * bucket rename/reshape; bucket-implied stage/marker dropping). Pure function,
  * exercised on hand-built synthetic payloads (no DB). The exhaustive `stage`
@@ -113,13 +113,13 @@ const mkHeadingContainer = (uuid: string, status: string, stopped: Date | null):
   children: [],
 });
 
-describe("shapeReadPayload — R7 compact tier (flat list)", () => {
+describe("shapeReadPayload — RS2 compact tier (flat list)", () => {
   it("compact keeps identity + structural facts; start/logged/trashed gone, stage kept on mixed", () => {
     const row = first(shapeReadPayload("search", [todo()], false)); // search = mixed → keep stage
     for (const k of ["uuid", "title"]) expect(k in row).toBe(true);
     expect("type" in row).toBe(false); // absent `type` = to-do
     for (const k of ["tags"]) expect(k in row).toBe(true);
-    // R10: the three lifecycle fields are gone; the one derived word replaces them.
+    // RS5: the three lifecycle fields are gone; the one derived word replaces them.
     expect("start" in row).toBe(false);
     expect("logged" in row).toBe(false);
     expect("trashed" in row).toBe(false);
@@ -214,7 +214,7 @@ describe("shapeReadPayload — §9n reminder (live-gated top-level; raw substrat
   });
 });
 
-describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () => {
+describe("shapeReadPayload — RS4 universal reshapes (both tiers, detail)", () => {
   it("string tags fold from {title} objects to a plain array of names", () => {
     for (const full of [false, true]) {
       const row = first(
@@ -280,7 +280,7 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
     }
   });
 
-  it("detail nests checklist items and reshapes repeating (R11 template wire)", () => {
+  it("detail nests checklist items and reshapes repeating (RS6 template wire)", () => {
     const detail = todo({
       checklist: [
         { title: "a", status: "completed" },
@@ -303,9 +303,9 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
         { title: "b", status: "open" },
       ],
     });
-    // R11: the wire loses isTemplate/isInstance — presence of `repeating` MEANS
+    // RS6: the wire loses isTemplate/isInstance — presence of `repeating` MEANS
     // template; it carries only the rule facts (false booleans default-pruned).
-    // R12: `nextOccurrence` moved OUT to the top-level `when` (the template's
+    // RS7: `nextOccurrence` moved OUT to the top-level `when` (the template's
     // projected date IS its time position).
     expect(out["repeating"]).toEqual({ paused: true });
     expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(false);
@@ -327,7 +327,7 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
       },
     });
     const out = shapeReadPayload("detail", detail, false) as Obj;
-    // The instance marker + write handle stays exactly as-is (R11).
+    // The instance marker + write handle stays exactly as-is (RS6).
     expect(out["instanceOf"]).toBe("tmpl-1");
     // The template's joined repeat context — `rule` byte-consistent with a
     // template card's `repeating.rule`, `next` the fixed-mode projection.
@@ -405,8 +405,8 @@ describe("shapeReadPayload — R9 universal reshapes (both tiers, detail)", () =
   });
 });
 
-describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)", () => {
-  it("stage-PURE catalogues drop the field; stage-MIXED + derived surfaces keep it (R10.1)", () => {
+describe("shapeReadPayload — RS5 stage on flat views (bucket-implied dropping)", () => {
+  it("stage-PURE catalogues drop the field; stage-MIXED + derived surfaces keep it (RS5.1)", () => {
     for (const kind of ["inbox", "logbook", "trash"]) {
       const row = first(shapeReadPayload(kind, [todo()], false));
       expect("stage" in row).toBe(false); // provably stated by the pure view
@@ -432,7 +432,7 @@ describe("shapeReadPayload — R10 stage on flat views (bucket-implied dropping)
   });
 });
 
-describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
+describe("shapeReadPayload — RS7 `when` (derived time-axis position)", () => {
   it("the today/evening marker KEYS never appear on the wire — `when` replaces them", () => {
     for (const full of [false, true]) {
       const row = first(shapeReadPayload("search", [todo({ today: true, evening: true })], full));
@@ -447,7 +447,7 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
   it("a future-scheduled row reads `when: <iso>`; compact drops startDate, full keeps it", () => {
     const compact = first(shapeReadPayload("search", [todo({ startDate: "2026-08-01" })], false));
     expect(compact["when"]).toBe("2026-08-01");
-    expect("startDate" in compact).toBe(false); // R12: compact drops the substrate
+    expect("startDate" in compact).toBe(false); // RS7: compact drops the substrate
     const full = first(shapeReadPayload("search", [todo({ startDate: "2026-08-01" })], true));
     expect(full["when"]).toBe("2026-08-01");
     expect(full["startDate"]).toBe("2026-08-01"); // full/detail keep startDate beside when
@@ -466,8 +466,8 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
     const e = ((out["evening"] as Obj)["items"] as Obj[])[0]!;
     expect("when" in t).toBe(false); // bucket key states today
     expect("when" in e).toBe(false); // bucket key states evening
-    // R13: every Today member derives stage `anytime`, so both buckets are
-    // stage-PURE and the field is DROPPED (was kept as "mixed" pre-R13).
+    // RS8: every Today member derives stage `anytime`, so both buckets are
+    // stage-PURE and the field is DROPPED (was kept as "mixed" pre-RS8).
     expect("stage" in t).toBe(false);
     expect("stage" in e).toBe(false);
     // The whole-view counts aggregate is NOT in the shaped data.
@@ -505,7 +505,7 @@ describe("shapeReadPayload — R12 `when` (derived time-axis position)", () => {
   });
 });
 
-describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
+describe("shapeReadPayload — RS1 no-redundant-ancestry by view kind", () => {
   it("mixed lists keep every ref (search, full tier)", () => {
     const row = first(shapeReadPayload("search", [todo()], true));
     expect(row["project"]).toBeDefined();
@@ -513,12 +513,12 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(row["heading"]).toBeDefined();
   });
 
-  it("anytime & someday sections both drop area + stage (both stage-pure, R10.2)", () => {
+  it("anytime & someday sections both drop area + stage (both stage-pure, RS5.2)", () => {
     const sections = [{ area: { uuid: "area-1", title: "Work" }, items: [todo()] }];
     const anytime = shapeReadPayload("anytime", sections, true) as Obj[];
     const aItem = (anytime[0]!["items"] as Obj[])[0]!;
     expect("area" in aItem).toBe(false);
-    expect("stage" in aItem).toBe(false); // R10.2: anytime is stage-pure → dropped
+    expect("stage" in aItem).toBe(false); // RS5.2: anytime is stage-pure → dropped
     expect(aItem["project"]).toBeDefined();
     expect(aItem["heading"]).toBeDefined();
     expect(anytime[0]!["area"]).toEqual({ uuid: "area-1", title: "Work" });
@@ -725,7 +725,7 @@ describe("shapeReadPayload — R6 no-redundant-ancestry by view kind", () => {
     expect(upcoming.map((g) => g.when)).toEqual(["2026-08-01", null]);
     expect(upcoming[0]!.items.map((i) => i["uuid"])).toEqual(["loose-up"]);
     expect(upcoming[1]!.items.map((i) => i["uuid"])).toEqual(["loose-tmpl"]);
-    // R12: inside a day block `when` drops (the block states it); the full tier
+    // RS7: inside a day block `when` drops (the block states it); the full tier
     // keeps the raw `startDate` substrate.
     expect("when" in upcoming[0]!.items[0]!).toBe(false);
     expect(upcoming[0]!.items[0]!["startDate"]).toBe("2026-08-01");
@@ -1175,7 +1175,7 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
 
   it("project-view children drop the project ref → NO orphaned marker (loose + heading-nested)", () => {
     const view = {
-      // The project card node's OWN template nature rides its `repeating` key (R11),
+      // The project card node's OWN template nature rides its `repeating` key (RS6),
       // not this child-container marker — asserted below.
       project: project({
         title: "Weekly Review",
@@ -1220,20 +1220,20 @@ describe("shapeReadPayload — projectIsTemplate container marker (the JSON twin
     };
     const out = shapeReadPayload("project-view", view, false) as Obj;
     const loose = ((out["children"] as Obj)["anytime"] as Obj)["items"] as Obj[];
-    expect("project" in loose[0]!).toBe(false); // R6 drops the container in a project view
+    expect("project" in loose[0]!).toBe(false); // RS1 drops the container in a project view
     expect("projectIsTemplate" in loose[0]!).toBe(false); // marker drops WITH the project ref
     const grp = (out["headings"] as Obj[])[0]!;
     const hChild = ((grp["children"] as Obj)["anytime"] as Obj)["items"] as Obj[];
     expect("project" in hChild[0]!).toBe(false);
     expect("projectIsTemplate" in hChild[0]!).toBe(false);
-    // The project card node exposes its OWN template nature via `repeating` (R11) —
+    // The project card node exposes its OWN template nature via `repeating` (RS6) —
     // the child-container marker never attaches to the card itself.
     expect((out["project"] as Obj)["repeating"]).toBeDefined();
     expect("projectIsTemplate" in (out["project"] as Obj)).toBe(false);
   });
 });
 
-describe("shapeReadPayload — R11 repeating template/instance split", () => {
+describe("shapeReadPayload — RS6 repeating template/instance split", () => {
   it("template LIST row: repeating present with rule facts; no discriminators, no latestInstance", () => {
     const row = first(
       shapeReadPayload(
@@ -1253,7 +1253,7 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
         false,
       ),
     );
-    // R12: `nextOccurrence` moved OUT to `when`; `repeating` keeps only rule facts.
+    // RS7: `nextOccurrence` moved OUT to `when`; `repeating` keeps only rule facts.
     expect(row["repeating"]).toEqual({ deadlined: true });
     expect(row["when"]).toBe("2026-08-01"); // projected next occurrence
     // Presence of `repeating` MEANS template — the discriminators are gone.
@@ -1279,7 +1279,7 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
       }),
       false,
     ) as Obj;
-    // R12: no projected date → no `when`; `repeating` carries the state flags only
+    // RS7: no projected date → no `when`; `repeating` carries the state flags only
     // (and presence of `repeating` still MEANS template — a bare {} would survive).
     expect(out["repeating"]).toEqual({ paused: true });
     expect("nextOccurrence" in (out["repeating"] as Obj)).toBe(false);
@@ -1327,7 +1327,7 @@ describe("shapeReadPayload — R11 repeating template/instance split", () => {
       false,
     ) as Obj;
     // latestInstance nests INSIDE `repeating` — the backward pointer, symmetric to
-    // the top-level `when` forward pointer (R12: nextOccurrence moved to `when`).
+    // the top-level `when` forward pointer (RS7: nextOccurrence moved to `when`).
     expect("latestInstance" in out).toBe(false);
     expect(out["repeating"]).toEqual({ latestInstance: "inst-99" });
     expect(out["when"]).toBe("2026-08-01");

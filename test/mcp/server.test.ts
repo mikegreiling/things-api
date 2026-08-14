@@ -392,7 +392,7 @@ describe("things MCP server", () => {
     expect("when" in secs[0]!.items[0]!).toBe(false);
   });
 
-  it("read_view surfaces the R13 provisional marker; today buckets drop stage; pulled row re-files to anytime", async () => {
+  it("read_view surfaces the RS8 provisional marker; today buckets drop stage; pulled row re-files to anytime", async () => {
     // A deadline-pulled SOMEDAY row (unmaterialized) is a provisional Today member.
     seedTodo(fixture.db, {
       title: "MCP-Pull",
@@ -410,7 +410,7 @@ describe("things MCP server", () => {
     const pull = today.today.items.find((i) => i["title"] === "MCP-Pull")!;
     const placed = today.today.items.find((i) => i["title"] === "MCP-Placed")!;
     expect(pull["provisional"]).toBe(true); // the banner pip, as data
-    expect("stage" in pull).toBe(false); // today buckets are stage-pure (R13)
+    expect("stage" in pull).toBe(false); // today buckets are stage-pure (RS8)
     expect(placed["provisional"]).toBeUndefined(); // materialized → not provisional
 
     // GUI fidelity: the pulled row is GONE from someday, PRESENT in anytime.
@@ -427,7 +427,7 @@ describe("things MCP server", () => {
     expect(anyPull["when"]).toBe("today");
   });
 
-  it("read_view defaults to the compact tier; full: true restores the full record (R7)", async () => {
+  it("read_view defaults to the compact tier; full: true restores the full record (RS2)", async () => {
     seedTodo(fixture.db, { title: "MCP-compact", start: "inbox" });
     await connect([fakeVector(null).vector]);
 
@@ -448,7 +448,7 @@ describe("things MCP server", () => {
     expect("modified" in frow).toBe(true);
   });
 
-  it("get_project honors the full param and applies R6 ancestry stripping", async () => {
+  it("get_project honors the full param and applies RS1 ancestry stripping", async () => {
     const area = seedArea(fixture.db, "MCP-Area", 0);
     const proj = seedProject(fixture.db, { title: "MCP-Proj", area });
     seedTodo(fixture.db, { title: "child", project: proj });
@@ -459,7 +459,7 @@ describe("things MCP server", () => {
       await client.callTool({ name: "get_project", arguments: { uuid: proj } }),
     ) as PView;
     const child = compact.children.anytime.items[0]!;
-    // R6: a project-view child drops project + area (the card states them).
+    // RS1: a project-view child drops project + area (the card states them).
     expect("project" in child).toBe(false);
     expect("area" in child).toBe(false);
     expect("created" in child).toBe(false); // compact
@@ -469,7 +469,7 @@ describe("things MCP server", () => {
     ) as PView;
     const fchild = full.children.anytime.items[0]!;
     expect("created" in fchild).toBe(true); // full restores density
-    expect("project" in fchild).toBe(false); // R6 still applies under --full
+    expect("project" in fchild).toBe(false); // RS1 still applies under --full
   });
 
   describe("read_view deadlines", () => {
@@ -1213,7 +1213,7 @@ describe("things MCP server", () => {
     }
     // The reversal: an empty inherited-tag set is absent, not [].
     expect("inheritedTags" in item).toBe(false);
-    // R10: start/logged/trashed are gone; the derived `stage` is kept on a detail.
+    // RS5: start/logged/trashed are gone; the derived `stage` is kept on a detail.
     expect(item["stage"]).toBe("anytime");
     expect("logged" in item).toBe(false);
     expect("start" in item).toBe(false);
@@ -1226,7 +1226,7 @@ describe("things MCP server", () => {
     expect("repeating" in item).toBe(false);
   });
 
-  it("get_item — R11 template/instance split rides the shared library shaping", async () => {
+  it("get_item — RS6 template/instance split rides the shared library shaping", async () => {
     const tmpl = seedTodo(fixture.db, {
       title: "mcp tpl",
       recurrenceRule: true,
@@ -1242,7 +1242,7 @@ describe("things MCP server", () => {
       await client.callTool({ name: "get_item", arguments: { uuid: tmpl } }),
     ) as Record<string, unknown>;
     // Template wire: presence of `repeating` MEANS template; the discriminators
-    // are gone. R12: the forward pointer `nextOccurrence` moved to the top-level
+    // are gone. RS7: the forward pointer `nextOccurrence` moved to the top-level
     // `when`; `repeating` keeps the backward pointer `latestInstance` (detail).
     expect(template["repeating"]).toEqual({ latestInstance: newest });
     expect(template["when"]).toBe("2026-08-01");
