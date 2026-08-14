@@ -110,12 +110,12 @@ export const REVERSIBILITY: Record<OperationKind, ReversibilityEntry> = {
   // ---- delete / restore ---------------------------------------------------
   "todo.delete": {
     class: "reversible-with-loss",
-    note: "inverse restores from the Trash but lands in the Inbox DE-SCHEDULED (E15) — the prior list/schedule was not captured by the delete",
+    note: "inverse restores from the Trash but lands in the Inbox DE-SCHEDULED (E15) — the prior list/schedule was not captured by the delete. EXCEPTION: deleting a repeating TEMPLATE is IRREVERSIBLE headlessly (the app forbids restoring a template out to a list, AS 301) — no undo token is emitted and the result discloses Trash ▸ Put Back as the only revival (SERDEL S2/S3, ruling 2026-08-13)",
   },
   "todo.restore": { class: "reversible", note: "inverse re-deletes the to-do to the Trash" },
   "project.delete": {
     class: "reversible",
-    note: "inverse restores the project IN PLACE (P06) — schedule/area/children keep their state",
+    note: "inverse restores the project IN PLACE (P06) — schedule/area/children keep their state. EXCEPTION: deleting a repeating project TEMPLATE is IRREVERSIBLE headlessly (Put Back only) — no undo token, disclosed in the result (ruling 2026-08-13)",
   },
   "project.restore": { class: "reversible", note: "inverse re-deletes the project to the Trash" },
 

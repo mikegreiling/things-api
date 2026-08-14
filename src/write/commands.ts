@@ -1353,7 +1353,10 @@ const projectReopen: CommandSpec<"project.reopen"> = {
 
 const projectRestore: CommandSpec<"project.restore"> = {
   op: "project.restore",
-  hazards: ["H-UNKNOWN-DESTINATION"],
+  // H-REPEAT-SCHEDULE: a trashed repeating PROJECT template cannot be restored
+  // headlessly (Put Back only) — refuse categorically instead of the raw AS-301
+  // no-op. (The to-do path already carries it; kind-parity, 2026-08-13.)
+  hazards: ["H-UNKNOWN-DESTINATION", "H-REPEAT-SCHEDULE"],
   preRead(db, params) {
     const pre = emptyPreState();
     pre.target = loadTarget(db, params.uuid);

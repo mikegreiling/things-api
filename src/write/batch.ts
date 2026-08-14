@@ -121,15 +121,20 @@ export interface BatchOptions {
 const KNOWN_OPS = new Set<string>(OPERATION_KINDS);
 
 /**
- * The add-repeating COMPOUNDS — each is a multi-leg orchestration (add → native
- * GUI promote), delivered only by its dedicated orchestrator and never
- * dispatchable through the pipeline, so they cannot be a batch leg. Refused
- * per-line with a pointer to the standalone command. (The `make-repeating` ops
- * DO dispatch the native GUI leg through the pipeline and stay batchable — a
- * batch make-repeating is the destructive native promote, not promote-via-clone;
- * for the recoverable form run the standalone command.)
+ * The promote COMPOUNDS — each is a multi-leg orchestration (make-repeating:
+ * clone → native GUI promote → trash; add-repeating: add → native GUI promote),
+ * delivered only by its dedicated orchestrator and NOT dispatchable through the
+ * pipeline as one atomic op, so none can be a batch leg. Refused per-line with a
+ * pointer to the standalone command. (make-repeating joined this set with the
+ * promote-via-clone rewrite — ruling 2026-08-13; the old batch path ran the
+ * destructive native promote, which is deleted per ALPHA-CONTRACT.)
  */
-const BATCH_UNSUPPORTED_COMPOUND = new Set<string>(["todo.add-repeating", "project.add-repeating"]);
+const BATCH_UNSUPPORTED_COMPOUND = new Set<string>([
+  "todo.make-repeating",
+  "project.make-repeating",
+  "todo.add-repeating",
+  "project.add-repeating",
+]);
 
 /**
  * Ops that MINT a uuid, so may declare a `tempId` — the ratified rule is
@@ -147,8 +152,11 @@ const UUID_MINTING_OPS = new Set<string>([
   "project.make-repeating",
   "todo.convert-to-project",
   "project.promote-heading",
-  // NB: the add-repeating COMPOUNDS mint uuids but are refused in a batch
-  // (BATCH_UNSUPPORTED_COMPOUND) — run them standalone.
+  // NB: `*.make-repeating` mints a uuid but is REFUSED as a batch leg
+  // (BATCH_UNSUPPORTED_COMPOUND) — it stays listed here so a tempId on it clears
+  // the declaration pre-flight and the line gets the informative per-line compound
+  // refusal (binding nothing) instead of poisoning the whole batch. The
+  // add-repeating COMPOUNDS mint uuids too but are likewise refused standalone.
 ]);
 
 const TEMP_ID_RE = /^[A-Za-z0-9_-]{1,32}$/;

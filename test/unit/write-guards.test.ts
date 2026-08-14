@@ -34,7 +34,7 @@ function check<K extends OperationKind>(
 }
 
 describe("H-REPEAT-SCHEDULE", () => {
-  it("blocks when/deadline updates and status ops on repeating templates", () => {
+  it("blocks when/deadline updates and status/move ops on repeating templates", () => {
     const uuid = seedTodo(fixture.db, {
       title: "Template",
       recurrenceRule: true,
@@ -42,7 +42,49 @@ describe("H-REPEAT-SCHEDULE", () => {
     });
     expect(check("todo.update", { uuid, when: "today" })?.hazard).toBe("H-REPEAT-SCHEDULE");
     expect(check("todo.complete", { uuid })?.hazard).toBe("H-REPEAT-SCHEDULE");
-    expect(check("todo.delete", { uuid })?.hazard).toBe("H-REPEAT-SCHEDULE");
+  });
+
+  it("ALLOWS deleting a repeating template (byte-identical to the GUI's own delete; disclosure + Put Back ride the result, ruling 2026-08-13)", () => {
+    // The delete arm of H-REPEAT-SCHEDULE was lifted: trashing a template is the
+    // GUI's own Edit ▸ Delete (SERDEL S1), human-recoverable via Trash ▸ Put Back.
+    // The guard no longer refuses it — the pipeline attaches the disclosure.
+    const todoTemplate = seedTodo(fixture.db, {
+      title: "Template",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    const projectTemplate = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+    });
+    expect(check("todo.delete", { uuid: todoTemplate })).toBeNull();
+    expect(check("project.delete", { uuid: projectTemplate })).toBeNull();
+  });
+
+  it("refuses restoring a trashed repeating template with a Put-Back message (todo + project)", () => {
+    // A trashed template cannot be revived headlessly (our restore is move-to-Inbox;
+    // the app forbids moving a template out to a list, AS 301) — so restore refuses
+    // categorically and points at the app's Trash ▸ Put Back, not the raw AS no-op.
+    const todoTemplate = seedTodo(fixture.db, {
+      title: "Template",
+      recurrenceRule: true,
+      start: "someday",
+      trashed: true,
+    });
+    const projectTemplate = seedProject(fixture.db, {
+      title: "Repeating",
+      recurrenceRule: true,
+      start: "someday",
+      trashed: true,
+    });
+    const todoBlock = check("todo.restore", { uuid: todoTemplate });
+    expect(todoBlock?.hazard).toBe("H-REPEAT-SCHEDULE");
+    expect(todoBlock?.detail).toContain("trashed repeating series");
+    expect(todoBlock?.remediation).toContain("Put Back");
+    const projectBlock = check("project.restore", { uuid: projectTemplate });
+    expect(projectBlock?.hazard).toBe("H-REPEAT-SCHEDULE");
+    expect(projectBlock?.remediation).toContain("Put Back");
   });
 
   it("allows title/notes updates on templates (validated U12B) and everything on normal todos", () => {
@@ -53,19 +95,7 @@ describe("H-REPEAT-SCHEDULE", () => {
     expect(check("todo.complete", { uuid: normal })).toBeNull();
   });
 
-  it("refuses project.delete on a repeating project template (kind-parity with todo.delete, WG-8)", () => {
-    // CLONE C3/C4: trashing a project template retains the rule but clears the
-    // fixed next-instance cursor, orphans the live instance, and is non-restorable
-    // via AS move (301). The guard fails closed, exactly as todo.delete does.
-    const template = seedProject(fixture.db, {
-      title: "Repeating",
-      recurrenceRule: true,
-      start: "someday",
-    });
-    expect(check("project.delete", { uuid: template })?.hazard).toBe("H-REPEAT-SCHEDULE");
-  });
-
-  it("allows project.delete on a plain project and on a repeating INSTANCE (series-preserving, C5)", () => {
+  it("allows delete on a plain project/to-do and on a repeating INSTANCE (series-preserving, C5)", () => {
     // An instance carries the template FK but no recurrence rule of its own, so it
     // is not a template row — trashing it is clean and series-preserving (C5).
     const template = seedProject(fixture.db, {

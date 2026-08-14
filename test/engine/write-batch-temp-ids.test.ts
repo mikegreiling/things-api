@@ -160,7 +160,7 @@ describe("batch temp-id chaining", () => {
     expect(typeof tempIdMapping["b"]).toBe("string");
   });
 
-  it("dotted access on a make-repeating leg: bind the template; $x.instance targets the spawned occurrence", async () => {
+  it("make-repeating is REFUSED inside a batch (promote-via-clone compound), naming the standalone command; its tempId binds nothing so a dotted $ref fails", async () => {
     const src = seedTodo(fixture.db, {
       title: "Water plants",
       start: "active",
@@ -173,27 +173,26 @@ describe("batch temp-id chaining", () => {
         tempId: "rep",
         options: { dangerouslyDriveGui: true },
       },
-      // The occurrence — NOT the hidden template — is the visible item to act on.
+      // A later line depending on the (now-refused) make-repeating cannot resolve.
       { op: "todo.complete", params: { uuid: "$rep.instance" } },
     ]);
-    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "ok"]);
-
-    // Primary handle = the template (result.uuid).
-    const templateUuid = tempIdMapping["rep"];
-    expect(templateUuid).toBeDefined();
-    const repeatingResult = results[0]?.outcome;
-    if (repeatingResult?.kind !== "ok") throw new Error("expected make-repeating ok");
-    const instanceUuid = repeatingResult.repeating?.instanceUuid;
-    expect(instanceUuid).toBeDefined();
-    expect(instanceUuid).not.toBe(templateUuid);
-
-    // The complete leg resolved "$rep.instance" to the spawned occurrence, and
-    // that is the row now completed — the template is untouched.
-    const completeResult = results[1]?.outcome;
-    if (completeResult?.kind !== "ok") throw new Error("expected complete ok");
-    expect(completeResult.uuid).toBe(instanceUuid);
-    expect(row(instanceUuid as string)?.["status"]).toBe(3);
-    expect(row(templateUuid as string)?.["status"]).toBe(0);
+    // The make-repeating line is refused as a non-atomic compound; it must not run
+    // the old destructive native promote.
+    const first = results[0]?.outcome;
+    expect(first?.kind).toBe("invalid");
+    if (first?.kind === "invalid") {
+      expect(first.detail).toContain("COMPOUND");
+      expect(first.detail).toContain("make-repeating");
+    }
+    // The source is untouched — nothing was promoted or trashed.
+    expect(row(src)?.["trashed"]).toBe(0);
+    expect(row(src)?.["rt1_recurrenceRule"]).toBeNull();
+    // Its tempId bound nothing, so the dependent dotted $ref fails closed.
+    expect(tempIdMapping["rep"]).toBeUndefined();
+    expect(results[1]?.outcome.kind).toBe("invalid");
+    if (results[1]?.outcome.kind === "invalid") {
+      expect(results[1].outcome.detail).toContain("unresolved-temp-ref");
+    }
   });
 });
 

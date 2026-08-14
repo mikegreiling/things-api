@@ -15,7 +15,11 @@ import { blockedCode, verifyFailedCode } from "../contracts.ts";
 import type { DisruptionTier, ThingsApiConfig } from "../config.ts";
 import type { FingerprintStatus } from "../db/fingerprint.ts";
 import { localToday } from "../model/dates.ts";
-import { resolveProjectWriteTarget, resolveTaskUuidPrefix } from "../read/queries.ts";
+import {
+  liveSeriesInstances,
+  resolveProjectWriteTarget,
+  resolveTaskUuidPrefix,
+} from "../read/queries.ts";
 import { namedProjectClause, taskMembershipClause, type ResolvedScope } from "../read/scope.ts";
 import { evaluateScope } from "./scope-guard.ts";
 import { readShortcutProxies, readUrlSchemeEnabled, type ShortcutsState } from "./availability.ts";
@@ -42,7 +46,7 @@ import {
   type OperationParamsMap,
 } from "./operations.ts";
 import { planVector } from "./planner.ts";
-import type { PreState } from "./pre-state.ts";
+import { isRepeatingTemplate, type PreState } from "./pre-state.ts";
 import {
   restoreModDates,
   type ModRestoreTarget,
@@ -138,15 +142,6 @@ export interface WriteOptions extends Acknowledgements {
    * stay on the host clock.
    */
   normalizeWhen?: boolean;
-  /**
-   * SANCTIONED-INTERNAL series-removal (promote undo): exempts a
-   * `todo.delete`/`project.delete` on a repeating TEMPLATE from H-REPEAT-SCHEDULE
-   * so the trash-both legs can remove a minted series (SERDEL S1/S2). NEVER set
-   * by a consumer entry point (the client `run`, batch, CLI, MCP do not thread
-   * it) — only the promote-undo executor sets it. The guard's public refusal on a
-   * bare template delete is untouched. See guards.ts GuardInput.internalSeriesRemoval.
-   */
-  internalSeriesRemoval?: boolean;
 }
 
 export interface MutationPlan {
@@ -619,7 +614,6 @@ export async function runMutation<K extends OperationKind>(
       params: params as Record<string, unknown>,
       pre,
       acks,
-      ...(options.internalSeriesRemoval === true && { internalSeriesRemoval: true }),
     });
     if (block !== null) {
       audit({ result: blockedCode({ hazard: block.hazard, reason: "hazard" }) });
@@ -992,12 +986,19 @@ export async function runMutation<K extends OperationKind>(
       if (deps.environment !== undefined) {
         deps.environment.record(deps.environment.capture());
       }
+      // Deleting a repeating TEMPLATE is allowed (byte-identical to the GUI's own
+      // Edit ▸ Delete, SERDEL S1) but is IRREVERSIBLE headlessly — the app forbids
+      // restoring a template out to a list (AS 301), so its only revival is Trash ▸
+      // Put Back. Treat it like an irreversible op (no undo token) and disclose the
+      // consequences below. Trashing an INSTANCE (no rule of its own) is unaffected.
+      const templateDelete =
+        (op === "todo.delete" || op === "project.delete") && isRepeatingTemplate(pre.target);
       // The undo token identifies THIS record on the trail (see undoToken); a
       // leg's token would be its shared txn id, but legs are never undone
       // directly, so we only surface it for non-leg writes. Irreversible ops get
       // NO token: `undo --txn` can only refuse it, so emitting one is misleading.
       const resultToken =
-        options.txn?.role === "leg" || REVERSIBILITY[op].class === "irreversible"
+        options.txn?.role === "leg" || REVERSIBILITY[op].class === "irreversible" || templateDelete
           ? undefined
           : undoToken({
               ts: startedAt.toISOString(),
@@ -1008,6 +1009,26 @@ export async function runMutation<K extends OperationKind>(
               ...(options.txn !== undefined && { txn: options.txn }),
             });
       const warnings: string[] = [];
+      // Template-delete disclosure (public deletes only — internal trash-both legs
+      // run under a txn and aggregate their own result). The series stops, its live
+      // instances are left in place (count + name the current occurrence), and the
+      // only revival is the app's Trash ▸ Put Back.
+      if (templateDelete && options.txn?.role !== "leg" && pre.target !== null) {
+        const kindNoun = op === "project.delete" ? "project" : "to-do";
+        const series = liveSeriesInstances(deps.db, pre.target.uuid);
+        warnings.push("this repeating series will no longer generate new occurrences");
+        if (series.count > 0) {
+          warnings.push(
+            `its ${series.count} existing occurrence${series.count === 1 ? " was" : "s were"} ` +
+              "left in place (not moved to the Trash)" +
+              (series.currentUuid !== null ? ` — the current one is ${series.currentUuid}` : ""),
+          );
+        }
+        warnings.push(
+          `this cannot be undone here — to bring the series back, use the Things app's Trash ` +
+            `(Put Back on the ${kindNoun})`,
+        );
+      }
       if (transportRecovered) {
         warnings.push(
           "the GUI drive reported a transport error, but a follow-up re-read confirmed the " +

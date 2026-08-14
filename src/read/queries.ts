@@ -986,6 +986,26 @@ export function latestInstanceUuid(db: DatabaseSync, templateUuid: string): stri
   return row?.uuid ?? null;
 }
 
+/**
+ * The live (untrashed) instances of a repeating series: how many exist and which
+ * is the current occurrence (the newest-spawned untrashed one, per the Show
+ * Latest law — {@link latestInstanceUuid}). Used to DISCLOSE what a template
+ * delete leaves behind: trashing a template is SHALLOW (SERDEL S1/S2) — the
+ * series stops generating but its live instances are NOT co-trashed, so the
+ * disclosure names the count and the current occurrence uuid.
+ */
+export function liveSeriesInstances(
+  db: DatabaseSync,
+  templateUuid: string,
+): { count: number; currentUuid: string | null } {
+  const count = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM TMTask WHERE rt1_repeatingTemplate = ? AND trashed = 0")
+      .get(templateUuid) as { n: number }
+  ).n;
+  return { count, currentUuid: latestInstanceUuid(db, templateUuid) };
+}
+
 export function fetchChecklistRows(db: DatabaseSync, taskUuid: string): ChecklistRow[] {
   const sql = `SELECT ${selectList("TMChecklistItem")} FROM TMChecklistItem WHERE task = ? ORDER BY ${q("index")} ASC`;
   return db.prepare(sql).all(taskUuid) as unknown as ChecklistRow[];
