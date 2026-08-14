@@ -1,6 +1,8 @@
 /**
- * Batch pipeline tests: each op runs the full mutation pipeline; invalid
- * lines and thrown param-shape errors surface per-op; --fail-fast skips.
+ * Batch pipeline tests: each op runs the full mutation pipeline. A statically
+ * invalid line refuses the WHOLE batch up front (Change 1); a runtime failure
+ * STOPS the batch by default with the rest reported not-run (Change 2), while
+ * `continueOnError` runs past failures; thrown param-shape errors surface per-op.
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +88,7 @@ function touch(uuid: string, sets: string): void {
 }
 
 describe("runBatch", () => {
-  it("streams per-op outcomes: ok, blocked, invalid, thrown param conflicts", async () => {
+  it("continueOnError streams per-op outcomes: ok, blocked, thrown param conflicts", async () => {
     const a = seedTodo(fixture.db, { title: "A" });
     const b = seedTodo(fixture.db, { title: "B", notes: "x" });
     const vector = vectorApplying({
@@ -96,13 +98,16 @@ describe("runBatch", () => {
     const ops: BatchOp[] = [
       { op: "todo.complete", params: { uuid: a } },
       { op: "trash.empty", params: {} }, // blocked: no dangerouslyPermanent
-      { op: "nope.bogus" as never, params: {} }, // invalid: unknown op
       { op: "todo.update", params: { uuid: b, notes: "y", appendNotes: "z" } }, // throws: exclusive
     ];
-    const { results } = await runBatch(deps(vector), ops, {}, (r) => streamed.push(r.index));
-    expect(streamed).toEqual([0, 1, 2, 3]);
-    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "blocked", "invalid", "invalid"]);
-    expect(results[3]?.outcome.kind === "invalid" && results[3].outcome.detail).toMatch(
+    // continueOnError runs past the blocked line so every per-op outcome streams
+    // (the default would STOP at the blocked line — covered separately below).
+    const { results } = await runBatch(deps(vector), ops, { continueOnError: true }, (r) =>
+      streamed.push(r.index),
+    );
+    expect(streamed).toEqual([0, 1, 2]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "blocked", "invalid"]);
+    expect(results[2]?.outcome.kind === "invalid" && results[2].outcome.detail).toMatch(
       /exclusive/,
     );
     // ok + blocked both audited (invalid ops never reach the pipeline); the ok
@@ -113,16 +118,30 @@ describe("runBatch", () => {
     ).toEqual(["ok", "blocked:H-PERMANENT-DELETE"]);
   });
 
-  it("failFast skips everything after the first failure", async () => {
+  it("stop-on-failure is the DEFAULT: a runtime failure halts, the rest report not-run", async () => {
     const a = seedTodo(fixture.db, { title: "A" });
     const vector = vectorApplying({});
     const ops: BatchOp[] = [
-      { op: "trash.empty", params: {} }, // blocked
-      { op: "todo.complete", params: { uuid: a } },
+      { op: "trash.empty", params: {} }, // blocked → halts
+      { op: "todo.complete", params: { uuid: a } }, // not run
     ];
-    const { results } = await runBatch(deps(vector), ops, { failFast: true });
+    const { results } = await runBatch(deps(vector), ops);
     expect(results.map((r) => r.outcome.kind)).toEqual(["blocked", "skipped"]);
+    expect(results[1]?.outcome.kind === "skipped" && results[1].outcome.detail).toMatch(/not run/);
     expect(outcomeFailed(results[1]!.outcome)).toBe(true);
+  });
+
+  it("continueOnError restores the old proceed-past behavior", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    const vector = vectorApplying({
+      [`id=${a}`]: () => touch(a, "status = 3, stopDate = 1783300000"),
+    });
+    const ops: BatchOp[] = [
+      { op: "trash.empty", params: {} }, // blocked
+      { op: "todo.complete", params: { uuid: a } }, // still runs
+    ];
+    const { results } = await runBatch(deps(vector), ops, { continueOnError: true });
+    expect(results.map((r) => r.outcome.kind)).toEqual(["blocked", "ok"]);
   });
 
   it("dryRun plans every op without executing or auditing", async () => {
@@ -204,30 +223,128 @@ describe("runBatch", () => {
     expect(executed).toBe(0);
   });
 
-  it("strict $-refs: unresolved and forward references fail their own line; independent legs still run", async () => {
+  it("static $-refs (unresolved / forward) refuse the WHOLE batch before anything runs", async () => {
     const a = seedTodo(fixture.db, { title: "A" });
-    const vector = vectorApplying({
-      [`id=${a}`]: () => touch(a, "status = 3, stopDate = 1783300000"),
-    });
-    const { results } = await runBatch(deps(vector), [
+    let executed = 0;
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix: MATRIX,
+      async execute() {
+        executed++;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const { results, undoToken } = await runBatch(deps(vector), [
       // unresolved: "$ghost" names no declared tempId anywhere in the batch
       { op: "todo.complete", params: { uuid: "$ghost" } },
       // forward: "$later" IS declared, but on a LATER line
       { op: "todo.complete", params: { uuid: "$later" } },
-      // an independent, valid leg — must still run despite the two failures above
+      // an otherwise-runnable leg — refused with the rest (the batch is a unit)
       { op: "todo.complete", params: { uuid: a } },
-      // declares "later" (so line 1 is a forward ref, not merely unresolved);
-      // project.add is out of this fake vector's matrix, so it is unsupported —
-      // the declaration is what matters for the forward-ref classification.
+      // declares "later" (so line 1 is a forward ref, not merely unresolved)
       { op: "project.add", params: { title: "P" }, tempId: "later" },
     ]);
-    expect(results.map((r) => r.outcome.kind)).toEqual(["invalid", "invalid", "ok", "unsupported"]);
+    // Both static-ref lines are enumerated invalid; the clean lines report
+    // not-run; NOTHING is dispatched.
+    expect(results.map((r) => r.outcome.kind)).toEqual([
+      "invalid",
+      "invalid",
+      "skipped",
+      "skipped",
+    ]);
     expect(results[0]?.outcome.kind === "invalid" && results[0].outcome.detail).toMatch(
       /unresolved-temp-ref/,
     );
     expect(results[1]?.outcome.kind === "invalid" && results[1].outcome.detail).toMatch(
       /forward reference/,
     );
+    expect(undoToken).toBeUndefined();
+    expect(executed).toBe(0);
+    expect(auditRecords).toHaveLength(0);
+  });
+
+  it("static preflight enumerates EVERY invalid line and dispatches nothing (dry-run parity)", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    let executed = 0;
+    const vector: WriteVector = {
+      id: "url-scheme",
+      matrix: MATRIX,
+      async execute() {
+        executed++;
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const ops: BatchOp[] = [
+      { op: "nope.bogus" as never, params: {} }, // unknown op
+      { op: "todo.complete", params: { uuid: a } }, // valid
+      { op: "todo.make-repeating" as never, params: { uuid: a } }, // compound refused in a batch
+      { op: "todo.update", params: {}, opId: "not a valid id!" }, // malformed opId
+    ];
+    const run = await runBatch(deps(vector), ops);
+    // Every statically-invalid line is enumerated; the one clean line is not-run.
+    expect(run.results.map((r) => r.outcome.kind)).toEqual([
+      "invalid",
+      "skipped",
+      "invalid",
+      "invalid",
+    ]);
+    expect(run.results[0]?.outcome.kind === "invalid" && run.results[0].outcome.detail).toMatch(
+      /unknown op/,
+    );
+    expect(run.results[2]?.outcome.kind === "invalid" && run.results[2].outcome.detail).toMatch(
+      /COMPOUND/,
+    );
+    expect(run.results[3]?.outcome.kind === "invalid" && run.results[3].outcome.detail).toMatch(
+      /opId must match/,
+    );
+    expect(executed).toBe(0);
+    expect(auditRecords).toHaveLength(0);
+
+    // dry-run takes the SAME pass and refuses identically.
+    const dry = await runBatch(deps(vector), ops, { dryRun: true });
+    expect(dry.results.map((r) => r.outcome.kind)).toEqual([
+      "invalid",
+      "skipped",
+      "invalid",
+      "invalid",
+    ]);
+    expect(executed).toBe(0);
+  });
+
+  it("resume guidance: every committed line carried an opId → verbatim rerun is safe", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    const b = seedTodo(fixture.db, { title: "B" });
+    const vector = vectorApplying({
+      [`id=${a}`]: () => touch(a, "status = 3, stopDate = 1783300000"),
+    });
+    const { results, resumption } = await runBatch(deps(vector), [
+      { op: "todo.complete", params: { uuid: a }, opId: "op-a" }, // ok (has opId)
+      { op: "trash.empty", params: {} }, // blocked → halts
+      { op: "todo.complete", params: { uuid: b }, opId: "op-b" }, // not run
+    ]);
+    expect(results.map((r) => r.outcome.kind)).toEqual(["ok", "blocked", "skipped"]);
+    expect(resumption).toBeDefined();
+    expect(resumption?.notRun).toBe(1);
+    expect(resumption?.verbatimSafe).toBe(true);
+    expect(resumption?.nonIdempotentIndices).toEqual([]);
+    expect(resumption?.detail).toMatch(/resubmitted verbatim/);
+  });
+
+  it("resume guidance: a committed line lacked an opId → names the index that would re-run", async () => {
+    const a = seedTodo(fixture.db, { title: "A" });
+    const b = seedTodo(fixture.db, { title: "B" });
+    const vector = vectorApplying({
+      [`id=${a}`]: () => touch(a, "status = 3, stopDate = 1783300000"),
+    });
+    const { resumption } = await runBatch(deps(vector), [
+      { op: "todo.complete", params: { uuid: a } }, // ok, NO opId
+      { op: "trash.empty", params: {} }, // blocked → halts
+      { op: "todo.complete", params: { uuid: b } }, // not run
+    ]);
+    expect(resumption?.notRun).toBe(1);
+    expect(resumption?.verbatimSafe).toBe(false);
+    expect(resumption?.nonIdempotentIndices).toEqual([0]);
+    expect(resumption?.detail).toMatch(/RE-RUN line\(s\) 0/);
   });
 
   it("tempId is valid on project.duplicate (a uuid-minting op) and binds the discovered copy", async () => {

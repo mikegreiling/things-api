@@ -156,6 +156,60 @@ describe("selectUndoTargets", () => {
     expect(undoToken(summary)).toBe("txn-abc");
     expect(selectUndoTargets([summary], { txn: "txn-abc" }).map((t) => t.uuid)).toEqual(["H1"]);
   });
+
+  it("EXCLUDES already-undone records: repeated --last walks progressively deeper (Change 3)", () => {
+    const A = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "A", actor: "mike" });
+    const B = record({ ts: "2026-07-05T09:10:00Z", op: "todo.add", uuid: "B", actor: "mike" });
+    const C = record({ ts: "2026-07-05T09:20:00Z", op: "todo.add", uuid: "C", actor: "mike" });
+    // Before any undo, --last 1 takes the newest (C).
+    expect(selectUndoTargets([A, B, C], { last: 1 }).map((t) => t.uuid)).toEqual(["C"]);
+    // Undo the two newest (C then B): their inverse records back-reference them.
+    const undoC = record({
+      ts: "2026-07-05T09:30:00Z",
+      op: "todo.delete",
+      uuid: "C",
+      actor: "undo:mike",
+      undoOf: undoToken(C),
+    });
+    const undoB = record({
+      ts: "2026-07-05T09:40:00Z",
+      op: "todo.delete",
+      uuid: "B",
+      actor: "undo:mike",
+      undoOf: undoToken(B),
+    });
+    const all = [A, B, C, undoC, undoB];
+    // Now --last 1 skips the two already-undone records and targets the third-newest original.
+    expect(selectUndoTargets(all, { last: 1 }).map((t) => t.uuid)).toEqual(["A"]);
+    // --by walks deeper too (exact-actor selection over not-yet-undone records).
+    expect(selectUndoTargets(all, { by: "mike", last: 5 }).map((t) => t.uuid)).toEqual(["A"]);
+  });
+
+  it("an IRREVERSIBLE record is NOT skipped — it still consumes a --last slot", () => {
+    const A = record({ ts: "2026-07-05T09:00:00Z", op: "todo.add", uuid: "A", actor: "mike" });
+    // area.delete is irreversible (IRREVERSIBLE map) but still an undoable record:
+    // selection does not special-case reversibility, so it counts toward N.
+    const IRR = record({
+      ts: "2026-07-05T09:10:00Z",
+      op: "area.delete",
+      uuid: "AR",
+      actor: "mike",
+    });
+    const C = record({ ts: "2026-07-05T09:20:00Z", op: "todo.add", uuid: "C", actor: "mike" });
+    const undoC = record({
+      ts: "2026-07-05T09:30:00Z",
+      op: "todo.delete",
+      uuid: "C",
+      actor: "undo:mike",
+      undoOf: undoToken(C),
+    });
+    // C is already undone (skipped); the irreversible record still fills a slot,
+    // newest-first, alongside the older reversible one.
+    expect(selectUndoTargets([A, IRR, C, undoC], { last: 2 }).map((t) => t.uuid)).toEqual([
+      "AR",
+      "A",
+    ]);
+  });
 });
 
 describe("undoToken", () => {

@@ -1977,7 +1977,8 @@ describe("things MCP server", () => {
 
   // Each batch line is FLATTENED to the wire shape (parity with the CLI JSONL):
   // { index, op, outcome: "<tag>", ...hoisted variant fields }. A failure that is
-  // not the last op leaves the rest "skipped" under fail_fast.
+  // not the last op leaves the rest "skipped" (stop-on-failure is the default);
+  // continue_on_error runs past failures.
   describe("batch — op cast + per-op option mapping", () => {
     it("runs several ops in order, each independently (dry-run)", async () => {
       await connect([fakeVector(null).vector]);
@@ -1997,9 +1998,9 @@ describe("things MCP server", () => {
       expect(results.map((r) => r.outcome)).toEqual(["dry-run", "dry-run"]);
     });
 
-    it("fail_fast skips every op after the first failure", async () => {
+    it("stops after the first failure by DEFAULT (the trailing op is not run)", async () => {
       // trash.empty without the permanent-delete ack blocks (a pre-vector
-      // hazard); with fail_fast the trailing add is never attempted.
+      // hazard); by default the batch stops, so the trailing add is not attempted.
       await connect([
         fakeVector(null, { id: "applescript", ops: ["trash.empty", "todo.add"] }).vector,
       ]);
@@ -2011,13 +2012,31 @@ describe("things MCP server", () => {
               { op: "trash.empty", params: {} },
               { op: "todo.add", params: { title: "never" } },
             ],
-            fail_fast: true,
-            dry_run: true,
           },
         }),
       ) as { outcome: string }[];
       expect(results[0]?.outcome).toBe("blocked");
       expect(results[1]?.outcome).toBe("skipped");
+    });
+
+    it("continue_on_error runs past a failed op", async () => {
+      // Two guard-blocked ops: the default would stop after the first; with
+      // continue_on_error both run and report their own outcome (no vector runs).
+      await connect([fakeVector(null, { id: "applescript", ops: ["trash.empty"] }).vector]);
+      const results = textOf(
+        await client.callTool({
+          name: "batch",
+          arguments: {
+            ops: [
+              { op: "trash.empty", params: {} },
+              { op: "trash.empty", params: {} },
+            ],
+            continue_on_error: true,
+          },
+        }),
+      ) as { outcome: string }[];
+      expect(results[0]?.outcome).toBe("blocked");
+      expect(results[1]?.outcome).toBe("blocked");
     });
 
     it("maps a second snake_case per-op acknowledgement (checklist reset) into the engine", async () => {
