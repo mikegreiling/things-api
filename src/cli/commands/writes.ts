@@ -78,7 +78,9 @@ function addWriteFlags(cmd: Command): Command {
       "keep this change off the modification-date timeline: capture each pre-existing edited " +
         "item's modification date and restore it (to the whole second) after the change, so a " +
         "changes/watch query keyed on it does not surface the edit. A no-op on a pure create. " +
-        "UNSYNCED databases only — its interaction with Things Cloud sync is unproven.",
+        "Safe with Things Cloud: the restored date syncs to your other devices and stays put, so " +
+        "the item stays off the timeline everywhere — unless another device edits the same item " +
+        "at nearly the same time, which re-dates it.",
     )
     .option(
       "--vector <id>",
