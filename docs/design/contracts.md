@@ -1,6 +1,6 @@
 # CLI Contracts
 
-These are the stable, agent-facing contracts of the `things` CLI. They bind from Phase 0 onward; breaking either requires a major version bump. Source of truth in code: [`src/cli/exit-codes.ts`](../../src/cli/exit-codes.ts) and [`src/cli/output.ts`](../../src/cli/output.ts), both covered by regression tests.
+These are the stable, agent-facing contracts of the `things` CLI. They bind from Phase 0 onward; breaking either requires a major version bump. Source of truth in code: [`src/contracts.ts`](../../src/contracts.ts) (the exit-code contract + the `WireEnvelope` shape, in the core so thin surfaces depend on it) and the CLI emission boundary [`src/cli/read-driver.ts`](../../src/cli/read-driver.ts) (stdout = envelope, stderr = human/log), both covered by regression tests.
 
 ## Exit codes
 
@@ -99,6 +99,10 @@ Internal machinery (undo inverse scheduling, reorder bounce legs) converses with
 ### Deployment note — host timezone alignment
 
 Changing the host's system **timezone** is safe: it relabels wall clocks but leaves absolute instants (and therefore Things Cloud's edit-timestamp sync ordering) unchanged. Changing the host's **clock** is NOT — Things Cloud merges are edit-timestamp-ordered (3-way merge, not last-writer-wins; see `docs/lab/headless-research.md` SYNC2), so clock skew corrupts merge ordering on a sync-live library. For a dedicated single-consumer host, aligning the system timezone with the consumer's (`sudo systemsetup -settimezone <zone>`) makes app-today ≡ consumer-today, so `when: evening` works natively and this consumer-timezone feature is only needed to serve OTHER zones.
+
+### Sync trigger timing (the model agents form expectations against)
+
+A verified write is committed to the LOCAL database immediately (that is what `ok` attests), and it begins syncing OUT within ~2–3 s — every write vector advances the sender's `BSSyncronyMetadata` last-attempt signal that fast (Things syncs on-change, with no periodic heartbeat). Cross-device latency is therefore the RECEIVER'S pull/APNs-wake cadence, NOT a sender-side delay: a change the writing host has committed and pushed can still take a while to appear on another device because that device wakes and pulls on its own schedule (in a VM with no APNs push-wake this can look like minutes). This is characterized, not a bug — there is no post-write sync-nudge to add (decisions.md 2026-07-23 SYNCLAT). Evidence: [docs/lab/synclat-results.md](../lab/synclat-results.md), [docs/lab/sync2b-durable-account.md](../lab/sync2b-durable-account.md) (SYNC2B).
 
 ## Detail tiers and no-redundant-ancestry (R6/R7)
 

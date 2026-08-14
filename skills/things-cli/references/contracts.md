@@ -38,6 +38,10 @@ A nonzero exit is informative, not a dead end — it means the write did not sil
 - Some operations are disruptive and require an explicit flag, **including their dry runs**: `--allow-disruptive` permits an op that briefly steals window focus; an op that visibly DRIVES the Things UI needs both `--allow-disruptive` and `--allow-very-disruptive` (the two-key gate). `things capabilities` lists each operation's support and any preconditions.
 - If a request needs a capability the tool reports as unsupported, say so plainly rather than improvising through unrelated commands.
 
+## Cross-device sync timing
+
+A verified write is committed to the LOCAL Things database immediately — `ok`/exit 0 means it is present here, right now, and every read on this host sees it at once. Propagation to Things Cloud is prompt too: a change starts syncing out within about 2–3 seconds (Things syncs on change, with no periodic heartbeat to wait for). When another device seems slow to show a change, that lag is the RECEIVING device's own pull/wake cadence — not a delay on the writing side — so do not treat "the write hasn't appeared on my phone yet" as a failed or pending write. Conversely, a change made on ANOTHER device lands in this host's database only once this host has pulled it; if you need to observe an edit made elsewhere, allow for that receive-side cadence rather than assuming it is already here.
+
 ## Bulk creation (contract summary)
 
 - **Several to-dos at once**: `things todo add "T1" "T2" "T3" [shared flags]`. Every shared flag (`--project`/`--area`/`--heading`/`--when`/`--tags`/`--deadline`/…) applies to each title; titles land in argument order. `--stdin` reads newline-delimited titles from stdin (blank lines skipped) instead of positional args (the two are mutually exclusive). `--id-only` prints exactly one uuid per line in creation order — pipe it to chain follow-up commands (mutually exclusive with `--json`).

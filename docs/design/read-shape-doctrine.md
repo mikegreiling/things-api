@@ -1,254 +1,84 @@
-# Read-shape doctrine — JSON models semantic state; TTY projects GUI placement
+# Read-shape doctrine — buckets are reorder scopes
 
-**Status: SUPERSEDED by [read-shape-doctrine-v2.md](read-shape-doctrine-v2.md) (ratified 2026-08-05; migration COMPLETE). Retained as the v1 decision record.** This is a historical record, not what currently ships. The v1 doctrine was implemented across the five sequential PRs (§6) #375–#379, shipped in 0.13.0, then reverted wholesale (in reverse order) — the `today` / project / area JSON views were restored to their pre-0.13.0 bucketed shapes (`today` `sections[]` + `badge`, per-stage project buckets + `logbookHeadings`, area direct-to-do stage buckets) and `meta.counts` was removed. The re-audit that reversal triggered concluded in v2 (now the shipping doctrine). This document is kept unchanged below as the durable record of the v1 doctrine as ratified and implemented, and the maintainer's rulings on the contentious calls (§4) and per-view verdicts (§3) — the inputs v2 was decided against.
+This is the read-shape doctrine the package ships: how a read `data` payload is structured, why buckets nest the way they do, and the rulings that decided the contentious calls. It extends [api-doctrine.md](api-doctrine.md) and obeys its §1 grammar: every read shape fits one of the five `data` wrappers — `item` / `items` / `sections` / `view` / `children` (the fifth, `children`, is the `today` view's top-level stage-bucket wrapper, and is reused nested inside a project/area `view`; documented in [contract.md](../contract.md)).
 
-This document extends [api-doctrine.md](api-doctrine.md) (the design canon) and is the *why/what* behind the contract change it drives. It obeys api-doctrine §1 (the ten-sentence grammar): every target shape still fits an existing `data` wrapper (`item` / `items` / `sections` / `view`) — no sixth container is invented.
+The inverse audit — how well the INTERNAL entity/model vocabulary has converged on the wire vocabulary this doctrine defines, and the thin set of inward renames left to do — is [vocabulary-audit.md](vocabulary-audit.md). It confirms `shape.ts` now carries exactly ONE surviving vocabulary translation (the day-block `date`→`when`).
+
+## 0. Foundations
+
+Two principles are load-bearing and everything below rests on them:
+
+- **The data model serves programmatic/agentic consumers first; the TTY is a separate audience whose GUI-faithful presentation is derived, never encoded.** The wire is shaped for a machine reading state; the human render (`src/cli/render.ts`) reconstructs the exact GUI layout from row attributes and is fully detached from the wire.
+- **Row conventions.** Every row is self-describing: #362 flat refs with round-trip `*Uuid` promotion, presence-keyed fields, documented orderings. Structure a consumer can cheaply discard (flatten) beats structure a consumer must expensively reconstruct — every row stays self-describing, so flattening is always one expression away; scope boundaries are not.
+
+Which (container × stage × kind × day) sets form atomic reorder scopes is exactly the probe-built map, and it is not recoverable from a flat array even in principle. So the wire encodes those scopes as nested buckets — a consumer never has to re-derive the reorder map from prose at read time.
 
 ## 1. The doctrine
 
-> **JSON models semantic state; TTY projects GUI placement.** A JSON bucket may exist only if it encodes a STATE of the data (stage, schedule axis, archived-ness, order structure). Anything encoding WHERE the GUI renders something (a toggle, a visual grouping, a section split that duplicates information already on the rows) belongs to the TTY projection, derived from row attributes. Corollaries: agents value completeness-per-query (one bucket per semantic question), stable documented orderings, and self-describing rows (refs per the #362 flat-ref conventions); duplicated or split state across buckets is a defect; a bucket whose membership is derivable from an attribute already on its rows must justify itself by ORDER structure (like live heading groups, which encode the project's real index axis) or die.
-
-### 1.1 The operational test (applied uniformly below)
-
-A JSON bucket **survives** iff it encodes an **order axis or a state that is NOT already recoverable from attributes on its own rows**. It **dies** — dissolving into a flat list whose rows each carry the distinguishing attribute — iff both its *membership* and its *ordering* are recoverable from row attributes.
-
-This single test resolves the whole surface into two families:
-
-- **KEEP (order-axis buckets).** The bucket's *ordering* is a user-controlled axis the rows do not carry: a heading's `index`, an area's sidebar rank, a project's sidebar rank. Membership may be a row attribute, but the *order* is not, so the bucket earns its place. (This is exactly why the doctrine names live heading groups.)
-- **DISSOLVE (attribute-split buckets).** The bucket partitions rows by an attribute each row already carries (or can carry): `stage`, `when`, `heading`, `changeKind`, `type`. Both membership and order fall out of the attribute + a documented sort. The split is GUI placement → it belongs to the TTY.
-
-The two axes that already exist to make rows self-describing — `stage` (the sidebar bucket) and `when` (the time position) — are the workhorses: every stage-split bucket dissolves because `stage`/`when` re-derive it. The flat-ref conventions (#362: `project`/`area`/`heading` as bare-title strings with `*Uuid` siblings when the title would not round-trip) are what let a dissolved row still name its container.
-
-## 2. Legend for the tables
-
-Each row: **bucket/key** → **encodes** (semantic state / order structure / GUI placement / mixed) → **verdict** → **target shape** → **migration note** (what breaks for a consumer).
-
-Verdicts: **KEEP** (survives unchanged) · **KEEP (order axis)** (survives, justified by ordering) · **DISSOLVE** (→ flat list + attribute) · **MERGE** (folds into another bucket) · **RESHAPE** (survives but changes form).
-
-"Already clean" = the current shape already satisfies the doctrine; listed for completeness and to lock it against future drift.
-
----
-
-## 3. Per-view audit (ratified verdicts)
-
-### 3.1 `today` — **landed (PR 1)**
-
-Was: `data: { sections:[{key:"today"},{key:"evening"}], badge }`. Now: `data: { items }`, with the whole-view counts on `meta.counts`.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| `today` / `evening` sections | GUI placement — the Today-proper and This-Evening render sub-regions. Each member's section is exactly its `when` (`"today"` / `"evening"`). | **DISSOLVE** | one flat `items[]` (the `items` wrapper) in comparator order, each row carrying `when` + `provisional`; `stage` still dropped (stage-pure `anytime`). | `data.sections` disappears; read `data.items`. `when` reappears on the row (was section-dropped). This-Evening membership = `when === "evening"`. |
-| `badge {dueOrOverdue, other}` | derived aggregate (the app's sidebar count). Recoverable per-row (`deadline <= today`, open-membership). | **KEEP as `meta.counts`** (ruling #C1) | moved to `meta.counts = {dueOrOverdue, other}`; the word "badge" is purged from all consumer copy. | read `meta.counts`, not `data.badge`. |
-
-Order (now documented in [../contract.md](../contract.md)): `startBucket ASC, COALESCE(todayIndexReferenceDate, startDate, deadline) DESC, todayIndex ASC, uuid ASC`. The TTY re-projects the two GUI sections from `when`, renders the counts as card-style metadata lines at the top, and keeps its clean `── ★ Today ──` header (ruling #C1). `meta.truncation.sections` (the per-render-section shown/total breakdown) survives — it is completeness metadata for the two TTY sections, not a data bucket, and keeps This Evening honest under a single global cap.
-
-### 3.2 `inbox` — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | stage-pure (`inbox`) list; `stage` dropped as implied. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: `index ASC`.
-
-### 3.3 `anytime` — `data: { sections:[{area, items}] }`
-
-Sidebar sections by area (loose/null-area block first), rows drop `area` + `stage` (pure).
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| `sections[].area` grouping | order structure — the area **sidebar rank** (`TMArea.index`), a user-controlled axis NOT carried on any row. Analogous to heading `index`. | **KEEP (order axis)** — ruling #C2 KEEP | unchanged (`sections` wrapper, `{area, items}`), area rank = array order. | none. |
-| within-section project clustering | order structure — a project row followed by its children (project sidebar order). | **KEEP (order axis)** | unchanged; children carry `project`, drop `area`. | none. |
-| `items[]` rows | stage-pure Anytime members; `stage`/`area` dropped as implied. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: sidebar (area rank → within-area drag order → project-then-children).
-
-### 3.4 `someday` — `data: { sections:[{area, items}] }`
-
-Same wire shape as `anytime`. The "own block" / active-project-children partition (`partitionSomedaySection`) is a **render-only** structure — it is NOT in the JSON. The JSON is area sections whose `items` are ordered `projects, direct to-dos, then active-project children`.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| `sections[].area` grouping | order structure — area sidebar rank. | **KEEP (order axis)** — ruling #C2 KEEP | unchanged. | none. |
-| in-section ordering (projects → direct → children) | GUI placement — a within-section visual ordering derivable from `type` + `project`/`when`. | **KEEP** (documented order) | keep the documented order; the TTY re-clusters. | none. |
-| `items[]` rows | stage-pure Someday members; `stage`/`area` dropped. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: sidebar.
-
-### 3.5 `upcoming` — `data: { items }`
-
-The GLOBAL upcoming view is **already flat** — one `items[]`, each row carrying `when` (a future ISO date), `stage` KEPT (mixed: future-dated `upcoming` rows + deadline-forecast `anytime`/`someday` rows). Resting templates trail with no `when`.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | mixed-stage, date-ordered by `COALESCE(startDate, deadline)`; the date is carried per-row as `when`. | **KEEP (already clean)** | unchanged. The reference precedent: the global upcoming already chose `when`-per-row over date-group buckets. | none. |
-
-Order: `COALESCE(startDate, deadline) ASC, todayIndex ASC, uuid`. This view is the exemplar the card date-groups (§3.12) are conformed to.
-
-### 3.6 `logbook` — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | stage-pure (`logbook`); `stage` dropped. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: `stopDate DESC` (semantic: recency of completion).
-
-### 3.7 `trash` — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | stage-pure (`trash`); `stage` dropped. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: `userModificationDate DESC` — a **presentation-derived** recency order (not a user-controlled axis). Stated as such in the contract.
-
-### 3.8 `search` — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | mixed provenance; `stage` KEPT (mixed), refs kept (mixed list). | **KEEP (already clean)** | unchanged. | none. |
-| per-row `match {field,text}` | semantic — match provenance (heading/notes/checklist). | **KEEP** | unchanged; presence-keyed. | none. |
-
-Order: relevance rank (`compareSearchMatches`) — presentation-derived by nature, appropriate for search; stated as such.
-
-### 3.9 `changes` — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` | mixed (incl. trashed/logged/templates); `stage` KEPT. | **KEEP (already clean)** | unchanged. | none. |
-| per-row `changeKind` | semantic state — created vs modified. | **KEEP** | unchanged. | none. |
-
-Order: `userModificationDate DESC`.
-
-### 3.10 `projects` (listing) — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` (Project rows) | mixed-stage listing in sidebar order; `stage` KEPT; rows carry `area` (self-describing). | **KEEP (already clean)** | unchanged. | none. |
-
-Order: sidebar (area rank → active-first → drag order); `--later` appends scheduled/someday per group. The area-rank ordering is an order axis NOT on the rows (same class as #C2).
-
-### 3.11 `areas` (listing) — `data: { items }`
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| flat `items[]` (Area rows) | catalog; tags folded to names; no lifecycle buckets. | **KEEP (already clean)** | unchanged. | none. |
-
-Order: `TMArea.index` (sidebar rank). This listing is the natural home for the area-rank axis §3.3/§3.4/§3.10 depend on.
-
-### 3.12 `project-view` (`data: { view }`) — **landed (PRs 2–3)**
-
-The end-state shape is live: PR 2 dissolved the unheaded + per-heading stage sub-buckets into one flat `items[]` (index order, each headed row carrying its `heading` ref); PR 3 flattened `headings[]` to the catalog `[{uuid,title,archived?}]` (ALL headings — live + swept archived — in index order, collapsing empties under a content scope), dissolved `logbookHeadings`, and merged all swept children into ONE flat `logbook` (`stopDate DESC`, each carrying its `heading` ref, `stage` KEPT since the bucket is mixed — it can hold an odd open child stranded under an archived heading).
-
-Current buckets: `project` (card node) · `anytime[]` · `upcoming[{date,items}]` · `someday[]` (all UNHEADED) · `headings[{heading:{uuid,title,archived?}, anytime[], upcoming[{date,items}], someday[]}]` (live heading groups with per-heading stage sub-buckets) · `logbook[]` (flat swept rows) · `logbookHeadings[{heading, items[]}]` (archived-heading groups) · `openChildrenWhileResolved` · `openChildrenUnderArchivedHeading`.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| `project` (card node) | the entity. | **KEEP** | full DTO, unchanged. | none. |
-| unheaded `anytime`/`upcoming`/`someday` | stage/date split of unheaded live children — `stage`/`when` are row attributes. | **DISSOLVE** → live `items[]` (PR 2) | fold into ONE flat `items[]` of all LIVE children, project `index` order, each carrying `stage` + `when` (+ `heading` ref if headed). | three buckets → one; membership re-derived from `stage`/`when`. |
-| `headings[]` (live groups) | order structure — the heading `index` axis (which headings exist, in order, incl. EMPTY ones); PLUS per-heading stage sub-buckets (attribute splits). | **RESHAPE** → index-ordered catalog (PR 3, ruling #C3) | `headings[]` becomes a flat catalog `[{uuid, title, archived?}]` in index order; heading membership rides each row's `heading` ref in the flat `items[]`. | nested per-heading buckets gone; reconstruct a heading's members by filtering `items[]` on `heading` (uuid) in catalog order. |
-| per-heading stage sub-buckets | stage split within a heading — no independent order axis (within-heading order is `index`). | **DISSOLVE** (PR 2) | headed rows join the flat `items[]` carrying `heading` + `stage` + `when`. | see above. |
-| `logbook[]` (flat swept) | stage-pure (all logged); KEEPS `heading` ref (two-view sublabel asymmetry, HEADARC2-B). | **RESHAPE / MERGE target** (PR 3, ruling #C4) | key stays **`logbook`** (matches the stage word and the global view kind); absorbs the swept children of ARCHIVED headings too, each with its `heading` ref; one flat `stopDate DESC` list. | swept-heading children now appear here, not in a separate group. |
-| `logbookHeadings[{heading,items}]` | GUI placement — the logged-region grouping of archived-heading children. Membership = each child's `heading` ref; archived-ness = the catalog's `archived`. | **DISSOLVE** (PR 3) | gone. Archived-heading children move into flat `logbook[]` (heading ref per row); the archived heading itself is a `headings[]` catalog row with `archived` set. | consumers reading `logbookHeadings` now read `logbook[]` + join on `heading`, and read archived-ness from the `headings[]` catalog. |
-| `openChildrenWhileResolved` / `openChildrenUnderArchivedHeading` | semantic advisories (§6¾ / HEADARC2-C). | **KEEP** | unchanged (presence/count). | none. |
-
-**Ratified project-view shape (end state after PRs 2–3):**
-```
-view: {
-  project: {…full node…},
-  headings: [ {uuid, title, archived?} … ],   // index-ordered catalog (all headings, live + archived); archived only, no stage/status (ruling #C3a)
-  items:    [ …all LIVE children, project index order, each row: stage, when?, heading? (uuid ref if headed) … ],
-  logbook:  [ …all SWEPT children, stopDate DESC, each row: heading? (uuid ref if under a heading) … ],
-  openChildrenWhileResolved: N,
-  openChildrenUnderArchivedHeading: N
-}
-```
-One bucket per semantic question: the heading **order axis** (`headings`), the live children (`items`), the done children (`logbook`), and the two advisories. Every row is self-describing (stage/when/heading refs). The TTY reconstructs the exact current GUI-faithful rendering (heading groups, sub-bucket placement, HEADARC2 logged-region fidelity) from row attributes — byte-stable across PRs 2–3.
-
-Orderings: `headings` = heading `index ASC`; `items` = child `index ASC`; `logbook` = `stopDate DESC` (open odd children null-last).
-
-### 3.13 `area-view` (`data: { view }`) — **landed (PR 4)**
-
-Current buckets: `area` (node, or `null` for loose) · `anytime[]` (direct to-dos) · `projects[]` (mixed-stage project rows) · `upcoming[{date,items}]` · `someday[]`.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| `area` (node, or `null`) | the entity (or the loose pseudo-area). | **KEEP** | unchanged. | none. |
-| `anytime`/`upcoming`/`someday` (direct) | stage/date split of direct to-dos. | **DISSOLVE** → `items[]` (PR 4) | fold direct-to-do buckets into ONE flat `items[]`, index order, `stage`+`when` per row (drop `area`, node states it). | three buckets → one; re-derive from `stage`/`when`. |
-| `projects[]` | order structure — the area's child-project **sidebar rank**, a distinct axis from the direct-to-do `index`; mixed-stage (rows carry `stage`, someday/scheduled projects included). | **KEEP (order axis)** | unchanged (flat, mixed-stage, sidebar order). The someday-projects / active-projects render split is TTY-only. | none. The area-show "projects vs someday-projects vs direct vs upcoming vs loose" *variants* collapse to TTY renderings of `projects[]` + `items[]`. |
-
-**Ratified area-view shape (end state after PR 4):**
-```
-view: {
-  area: {…} | null,
-  projects: [ …child projects, sidebar order, each row: stage, when? … ],   // KEEP — distinct order axis
-  items:    [ …direct to-dos, index order, each row: stage, when? … ]        // DISSOLVED from anytime/upcoming/someday
-}
-```
-The deliberate asymmetry with project-view: an area has TWO order axes (project sidebar rank, direct-to-do index), so it keeps two flat lists; a project has one (child index), so it keeps one `items[]` + the heading catalog.
-
-Orderings: `projects` = sidebar rank (active-first within group); `items` = `index ASC`.
-
-### 3.14 `detail` / `show` card nodes — `data: { item }`
-
-`show` is a router (to-do → `detail`, project → `project-view`, area → `area-view`); it introduces no distinct shape. `detail` is the FULL record with every ref, `stage`, `when`, and raw `startDate` — maximally self-describing.
-
-| bucket/key | encodes | verdict | target shape | migration note |
-|---|---|---|---|---|
-| the single item DTO | full entity state; no buckets. | **KEEP (already clean)** | unchanged. | none. |
-
-### 3.15 tag views
-
-`things tags` returns a flat `Tag[]` catalog with no lifecycle buckets — nothing to audit under this doctrine. A `--tag` FILTER is a scope on the views above, not a view. **KEEP (out of scope / already clean).**
-
----
-
-## 4. Ratified rulings (the contentious calls, decided)
-
-The audit surfaced six contentious calls; the maintainer's rulings are final and are baked into §3.
-
-- **#C1 — `today.badge` → `meta.counts`, and purge "badge".** The whole-view count moves to `meta.counts = {dueOrOverdue, other}` so `data` stays pure domain rows. The word "badge" is eliminated from all consumer-facing surfaces (JSON keys, TTY output, help copy, MCP descriptions, skill, contract) and added to the banned-vocabulary regression lists ([surface-copy.md](surface-copy.md) rule 6). Evidence docs describing the app's GUI banner/badge stay as they are. TTY: the today header is clean (`── ★ Today ──`) and the counts render at the TOP as card-style metadata lines (indented `key: value`), matching the `things area show` / `things project show` header-metadata convention.
-- **#C2 — anytime/someday area grouping: KEEP `sections`.** The area **sidebar rank** is a real user-controlled order axis not carried on any row, and it is the axis per-block truncation (`meta.truncation.blocks[]`) hangs on — so it earns its place exactly like live heading groups. The section order IS the area rank (documented). This applies equally to the `projects` listing's area-rank ordering.
-- **#C3 — project-view `headings[]`: flat catalog + refs.** `headings[]` = `[{uuid, title, archived?}]` in index order; membership rides each row's `heading` ref in a single `items[]`.
-- **#C3a — swept-heading sweep axis: `archived` only.** A heading emits `archived` (the archive timestamp) and nothing else — no `stage`, no `status` on heading nodes. Sweptness (archived AND past the logbook boundary) is pure GUI placement, TTY-derived from `archived` + the boundary.
-- **#C4 — flattened logged bucket key is `logbook`.** The project-view's flat swept bucket keeps the key **`logbook`** (matches the stage word and the global `logbook` view kind), carries ALL swept children (of open AND archived headings) each with its `heading` ref, and `logbookHeadings` is deleted. The two-view sublabel asymmetry (HEADARC2-B) is preserved and extends uniformly to archived-heading children.
-- **#C5 — wrapper machinery: prune only what dies naturally.** Dissolving `today` moved it to the `items` wrapper; because #C2 KEEPS anytime/someday on the `sections` wrapper, the `sections` wrapper still has users and stays. Only machinery that loses its last user is pruned.
-- **#C6 — ordering contract.** Every surviving bucket's ordering is documented in [../contract.md](../contract.md); presentation-derived orders (trash recency, search rank) are documented as such.
-
----
-
-## 5. Ordering audit
-
-For every surviving bucket, its order and whether it is a user-controlled axis or presentation-derived. All are documented in [../contract.md](../contract.md) (ruling #C6).
-
-| view / bucket | order | user-axis or presentation-derived |
-|---|---|---|
-| today items | startBucket, referenceDate DESC, todayIndex, uuid | mixed (index axis + recency) |
-| inbox | `index ASC` | user axis (drag order) |
-| anytime / someday sections | area rank → within-area drag → project-then-children | user axis (sidebar) |
-| upcoming | `COALESCE(startDate,deadline) ASC`, todayIndex, uuid | schedule axis |
-| logbook | `stopDate DESC` | recency (semantic: completion time) |
-| trash | `userModificationDate DESC` | **presentation-derived** (recency) |
-| search | relevance rank | **presentation-derived** (appropriate) |
-| changes | `userModificationDate DESC` | recency |
-| projects listing | sidebar (area rank → active-first → drag) | user axis |
-| areas listing | `TMArea.index` | user axis (sidebar rank) |
-| project-view `headings` | heading `index ASC` | user axis |
-| project-view `items` | child `index ASC` | user axis |
-| project-view `logbook` | `stopDate DESC`, open-odd null-last | recency |
-| area-view `projects` | sidebar rank, active-first | user axis |
-| area-view `items` | `index ASC` | user axis |
-
-Two orders are purely presentation-derived (trash recency, search rank) and are documented as such; the rest are real user-controlled axes pinned in the contract.
-
----
-
-## 6. Migration — five sequential PRs
-
-Ordered so each step is independently green and self-merged before the next (ALPHA-CONTRACT: break freely, no shims). Each PR carries its own contract + schema regen + CHANGELOG, per-view snapshot/fixture updates, JSON-shape regression tests, and (PRs 2–4) TTY byte-stability tests.
-
-1. **`mg/today-dissolve` — today dissolve (§3.1) + this doctrine doc.** `sections` → flat `items[]` + `when`; `badge` → `meta.counts`; the "badge" vocabulary purge; the TTY redesign (clean header + counts at top). **Landed.**
-2. **`mg/project-children-dissolve` — project-view children dissolve (§3.12).** Unheaded + per-heading stage sub-buckets → one flat `items[]` in project index order, every row carrying `stage`/`when`/`heading` ref; `headings[]` becomes the memberless live-heading catalog. TTY byte-stable (the library retains the structured groups for the GUI-faithful projection — it owns the clock + `todayIndex`; the wire is flat). **Landed.**
-3. **`mg/headings-catalog-logbook-flatten` — headings catalog + logbook flatten (§3.12, rulings #C3/#C3a/#C4).** `headings[]` → index-ordered catalog `[{uuid,title,archived?}]` (all headings, live + swept archived); `logbookHeadings` dissolves; single flat `logbook` bucket (stopDate DESC) absorbing archived-heading children, each with its `heading` ref, `stage` kept (mixed). All HEADARC2 TTY invariants preserved (byte-stable — the library keeps its structured logged-region grouping for the projection). **Landed.**
-4. **`mg/area-view-dissolve` — area-view dissolve (§3.13).** Direct `anytime`/`upcoming`/`someday` → one flat `items[]` (index order, `stage`/`when` per row); `projects[]` KEPT (the distinct sidebar-rank order axis). TTY + truncation byte-stable (the library keeps its structured direct-to-do grouping; the per-block `area` cap on the open/current rows is preserved and mirrored onto the flat `items[]`). **Landed.**
-5. **`mg/ordering-contract-docs` — ordering contract + skill sweep (ruling #C6).** Documented every kept bucket's ordering in [../contract.md](../contract.md) (a "Read views — shapes and orderings" table; the envelope schema models only the envelope layer, so the `data` bucket orderings live in prose there, per the schema's coverage boundary); flagged the presentation-derived orders (trash recency, search relevance) as such; swept [contracts.md](contracts.md) and the skill (`SKILL.md`, `references/model.md`/`contracts.md`) for the flat shapes across all five PRs; fixed the §5o "desktop GUI is stricter" lede to platform-accurate wording. **Landed.**
-
-Living-doc updates ride each PR (per AGENTS.md): [../contract.md](../contract.md), [contracts.md](contracts.md), `CHANGELOG.md` (Unreleased, breaking), and the capability-matrix if a read verdict changes.
+> **JSON structure mirrors the write surface.** A nested bucket exists iff it is (a) a **reorder scope** — a group whose rows can be handed to `things reorder` and permuted — or (b) an **order-axis grouping** whose order is not carried on its rows (ruling #C2). Bucket keys are the stage vocabulary and double as `--in` tokens; a day block's `when` is its `--in` token. Array order is the current axis order. Non-sortable collections never nest: they are flat lists with documented presentation orders. The TTY projection remains fully derivable from the data and fully detached from it.
+
+## 2. Shape rules
+
+- **R1 — bucket record.** Every bucket is `{ items, total? }`. `total` is present **iff** `items` is capped (`items.length < total`); an untruncated bucket does not restate its own length. Completeness is always answerable locally — no sidecar join.
+- **R2 — `children` is the stage vocabulary.** A container's `children` object has fixed keys drawn from the stage words: `anytime`, `upcoming` (a day-block **array**), `someday`, `logbook`. Keys (and day-block `when` values) are exactly the `--in` tokens of `things reorder`.
+- **R3 — day blocks are arrays.** `upcoming: [ { when, items, total? } … ]`, chronological. Never dynamic object keys: JSON object key order is not semantically meaningful across serializers, dynamic keys degrade schema/typing, and a bare keyed array leaves no home for `when`-adjacent or truncation metadata. **Resting recurring templates** (stopped/paused/waiting rules with no next projection) ride a single trailing `{ when: null, items }` block — they are genuinely *upcoming with no projected date*, so `null` is the apt value of a real property, not a sentinel entity (ruling #V8). This applies uniformly wherever an `upcoming` array appears: the global upcoming view, project/area `children.upcoming`, and recursively inside headings. The `when: null` block **is part of the scope vocabulary** — these templates are drag-sortable in the GUI — but its headless protocol is undiscovered: `--in` accepts its token and the engine serves the canonical *not-yet-implemented* refusal, distinct from *not sortable* (ruling #V10). The token word is decided at wiring time (house candidate: `resting`; check for CC-canonical language first).
+- **R4 — recursion, no sentinels.** A heading is a sub-container: `{ uuid, title, archived?, children }` with the same `children` shape. The un-headed region is the container's **own** `children` (the project body), not a `null`-heading pseudo-entity. The degenerate (heading-less) project stays flat and obvious.
+- **R5 — `headings[]` is the heading axis.** Array order = heading `index` order. ALL headings appear here — open, archived-unswept, archived-swept — one entity, one place, `archived` (ISO datetime, presence-keyed) as the sole lifecycle mark (ruling #C3a: never `stage`/`status` on headings). *Scope completeness (HEADSORT, #400):* every lifecycle class is **reachable** — the reorder verb re-ranks open, unswept-archived, and swept-archived headings into exact sent order, no child/FK drift — so the array is a complete scope for reachability. The one hazard: re-ranking an ARCHIVED heading (either sweep state) also **reopens** it (`status→open`, `archived` cleared, umd bump); the app offers no index-only reposition of an archived heading (register ORD-12). Engine policy (#V11): **allow unguarded, like the GUI, with disclosure.** The engine composes archived-free wires whenever the target order is achievable without writing an archived row — bystander archived headings not in the wire are certified untouched (HEADSORT H-UNSWEPT; matches the maintainer's GUI drag-around observation) — and when the target order *forces* an archived row into the wire, it proceeds and **discloses** the reopened headings (result warning; visible in `--dry-run`'s leg plan). Never a silent unarchive, never a hard guard.
+- **R6 — `logbook` is the one non-sortable stage key.** Per-container (project body and each heading own their `children.logbook`). Completed rows have no user order axis; `--in logbook` **always refuses** — even though `--completed-at` backdating can re-seat Logbook entries by changing their timestamps, sort order is an incoherent way to express that intent. The refusal may point at `--completed-at` when the attempt looks like backdating (maintainer ruling 2026-08-05). The GUI's unified logbook region — loose logged rows interleaved with swept-archived-heading groups (HEADARC2/HEADARC3 laws) — is **TTY-derived**: coalesce `children.logbook` across the body and all headings, order per the certified laws. Both GUI presentations (muted heading sublabel for live-heading children; group header for swept headings) are renderings of the same structural fact and are not encoded.
+- **R7 — dual citizens appear once per view, seated GUI-faithfully.** A someday/anytime row with a deadline (or any row with membership on both axes) is seated in its **canonical stage bucket** in container views (project/area: the someday item is in `someday`, never also in a day block) and at its **projected day** in projection views (global `upcoming`). Template projections seat at their projected day wherever they render — the projection *is* their seat. No uuid appears twice in one view; every bucket is therefore a complete, non-overlapping scope for its view.
+- **R8 — metadata lives on the node it describes.** Bucket-local completeness rides the bucket (`total`, R1). View-level aggregates ride `meta` (today's `counts { dueOrOverdue, other }`; ruling #C1 — the word "badge" stays banned from all consumer surfaces). The `meta.truncation.blocks[]` descriptor-join sidecar is retired in favor of inline `total`.
+- **R9 — flat list views stay flat.** Single-scope views (`inbox`; the `areas` listing = the area sidebar-rank scope) keep bare `items[]` — the whole list is the scope. Non-sortable views (`logbook`, `trash`, `search`, `changes`; the `projects` listing) keep bare `items[]` — declared non-scopes. Scope-ness per view is declared in the contract's shapes-and-orderings table; the structural `children` machinery is for mixed container/projection views.
+
+> **Note on rule numbering.** These R1–R9 are the *structural / nesting* rules. A separate, overlapping set of *row-shaping* rules (no-redundant-ancestry, detail tiers, the `stage`/`when` derivations) is also numbered R6–R13 in [contracts.md](contracts.md) and [../contract.md](../contract.md); the two schemes share digits but govern different layers (structure here vs per-row emission there). See the report note in [decisions.md](decisions.md) if the collision needs resolving.
+
+## 3. Per-view shapes
+
+"Unchanged" = the shape already satisfied this doctrine.
+
+| view | shape |
+|---|---|
+| `today` | `data.children = { today: {items}, evening: {items} }`; counts on `meta.counts` (word "badge" banned — #C1) |
+| `inbox` | `data.items` (single scope, `--in inbox`) |
+| `anytime` (global) | `data.sections = [ { area, items, total? } … ]`. Order-axis grouping (#C2): area sidebar rank. Sections are windows onto per-container scopes (#V9): loose + area-direct rows are FIRST-CLASS sortable here (for loose rows this is their only GUI surface); the project-children adjacency drag (silent heading inheritance, oddities §9v) is the one compound hazard — explicit compound op only |
+| `someday` (global) | same as `anytime`; dual citizens seat here canonically (R7) |
+| `upcoming` (global) | `data.sections = [ { when, items, total? } … ]` — dated day blocks, then one trailing `{ when: null, items }` resting block (R3) |
+| `logbook` (global) | `data.items` (`stopDate DESC`) — non-scope |
+| `trash` | `data.items` — non-scope, presentation order |
+| `search` | `data.items` + per-row `match` — non-scope |
+| `changes` | `data.items` + per-row `changeKind` — non-scope |
+| `deadlines` | `data.items` (to-dos + projects, `stage` kept) — non-scope, `deadline ASC, todayIndex ASC, uuid` (the global-`upcoming` comparator restricted to deadlined rows — one law, two views); deadline-bearing templates project at their next occurrence's deadline (see addendum) |
+| `projects` listing | `data.items` — non-scope; the sidebar-rank scopes live in `area-view.projects` |
+| `areas` listing | `data.items` — IS the area-rank scope, reachable via the universal `reorder` |
+| `project-view` | `data.view = { project, children, headings[] }` per §2 R2–R6: stage buckets under `children` (+ per-container `logbook`); `headings[]` recursive, all lifecycle classes, no `logbookHeadings`, no root logbook |
+| `area-view` | `data.view = { area \| null, children: { anytime, upcoming[], someday }, projects: {items, total?} }`: direct to-dos under `children` records; `projects` record-ized (a real scope: child-project sidebar rank); NO `logbook` key — the area logbook stays a query view (#346) |
+| `detail` / `show` router | `data.item` |
+| `tags` | flat catalog — out of scope |
+
+Anomalous open children seat in the normal recursive buckets, never in bespoke advisory keys (ruling #V12): an open child under an archived heading rides that heading's `children.anytime` (the heading's `archived` mark makes the anomaly self-evident); an open child of a resolved/logged project rides the project's `children` when the project view is read. The data surfaces what the GUI hides (§5-family strandings), so the state is noticeable and correctable — no bespoke counter keys for corner states the GUI itself ignores. (The trash analogue is already handled: our `trash` view is a flat `trashed=1` query, so trashed children of trashed projects — invisible in the GUI, oddity §6½ — are ordinary rows for us.)
+
+## 4. Rulings log (maintainer, 2026-08-04 → 05)
+
+- **#V1 — headings option A.** Un-headed children are the container's own `children`; `headings[]` holds real entities only. Rejected: `{uuid: null}` pseudo-heading sentinel (unreorderable, non-self-describing, taxes the degenerate case).
+- **#V2 — day blocks as arrays** (upcoming option A). Rejected: dynamic date keys (key-order fragility, schema degradation, no metadata home) and uniform stage-record arrays (loses `children.anytime` addressing; order carries no information).
+- **#V3 — uniform bucket records with inline `total`.** Presence ⟺ capped. Retires the truncation sidecar join.
+- **#V4 — logbook as a per-container stage bucket** (maintainer's shape). Rejected: the union-timeline counter-proposal — its live/archived two-family asymmetry re-encoded GUI placement as structure.
+- **#V5 — dual citizens once per view, canonical stage in containers.** GUI-faithful; keeps every bucket a complete non-overlapping scope.
+- **#V6 — the original-audit rulings hold on these shapes:** #C1 (today counts on `meta.counts` + the word "badge" banned from all consumer surfaces), #C2 (the global anytime/someday area sections — an order-axis grouping by area sidebar rank), #C3a (a heading's lifecycle is `archived` only — never `stage`/`status`), and #C6 (every kept bucket's ordering is documented in [../contract.md](../contract.md), presentation-derived orders flagged as such). Their substance now lives in the R-rules and per-view table above and in the contract's shapes-and-orderings table.
+- **#V7 — HEADSORT resolved** (#400, `07c6c41`): all three heading lifecycle classes reachable in exact order (swept reachability = novel path #3½); archived re-rank reopens the heading (ORD-12; oddities §5o addendum — the first reopen surface requiring no open child). R5 carries the shipped engine policy.
+- **#V8 — resting recurring templates ride a trailing `{when: null, items}` block** in every `upcoming` array (maintainer, 2026-08-05, overruling the draft's sibling-`resting`-key shape): "upcoming with no projected date" is a real state and `null` its apt value — unlike the rejected `{uuid: null}` heading sentinel, which fabricated an entity. Uniform across global upcoming and all container/heading `children.upcoming`.
+- **#V9 (refined per maintainer read-through, 2026-08-05)** — the global anytime/someday area sections are **windows onto real per-container scopes**, and for two row families this window is the *primary or only* GUI reorder surface: **loose to-dos** (no project/area — Anytime/Someday is their only home) and **area-direct to-dos** (visible only in `area show` and these views). Reorders whose movees are loose or area-direct rows are FIRST-CLASS — they target the same certified per-container index scopes as the area-view `items` buckets, and the view is a legitimate place to express them. The compound hazard is narrowed to **project-children**: the GUI's adjacency drag there silently inherits the drop-neighbor's heading (oddities §9v), so any API counterpart for cross-heading project-children placement is an explicit compound op with disclosed reparenting, never an implicit `reorder`.
+- **#V10 — GUI-parity expressibility** (maintainer, 2026-08-05): any operation completable in the GUI is *expressible* in the API surface — targetable vocabulary exists even where no headless path is known yet, served with an explicit not-yet-implemented refusal (distinct from not-sortable / refused-by-design). Exception: surfaces deliberately abandoned (ordering within the macOS-only **Tags window** — there is no top-level tag view on any platform) get no phantom vocabulary. First application: the `when: null` resting block's `--in` token (R3).
+- **#V11 — heading-reorder policy: unguarded with disclosure** (maintainer, 2026-08-05): archived headings are reorderable exactly as in the GUI; the engine minimizes reopens by composing archived-free wires when the target order permits (bystanders certified untouched, H-UNSWEPT), and discloses any forced reopens in the result and `--dry-run`. No hard guard, no silent side effect.
+- **#V12 — advisory keys deleted** (maintainer, 2026-08-05): `openChildrenWhileResolved` / `openChildrenUnderArchivedHeading` do not survive. Anomalous open children render in the normal recursive buckets, never hidden — the anomaly is self-evident from the row's `stage` against its container's lifecycle marks. Corner states the GUI ignores don't earn bespoke keys.
+
+## 5. Shipped shapes
+
+The doctrine is fully shipped (through 0.14.0). The authoritative wire shapes and orderings live in [../contract.md](../contract.md) (the "Read views — shapes and orderings" table + glossary), essentials mirrored in [contracts.md](contracts.md), and the skill (`skills/things-cli/`) teaches them end-to-end. The reconciliation pins from the build:
+
+- The global-upcoming day-block key law is `startDate ?? (template ? null : deadline)` — a scheduled row seats under its `startDate`, a NON-template deadline-forecast row under its `deadline`, a date-less template under the `null` resting block (`src/read/shape.ts` `upcomingBlockKey`, twinned in `src/read/truncation.ts` for the pre-cap sizer and `src/cli/render.ts` `groupDate` — one law, three call sites).
+- The R1 `total`-presence law applies uniformly to `today.children`, the `anytime`/`someday`/`upcoming` `sections`, the container `children` buckets, and `area-view.projects` — always present iff `items.length < total`.
+- `logbook` and the `when: null` resting block remain declared-but-refused reorder tokens (R6 / #V10) — the resting block serves the canonical *not-yet-implemented* refusal, distinct from *not-sortable*.
+
+**Addendum (2026-08-11, `deadlines` query view — additive, R9 family, non-contentious).** A flat read view whose identity IS the ordering: `things deadlines` / `read_view deadlines` — one flat `data.items[]` of every LIVE (open, untrashed, container-untrashed) to-do AND project carrying a deadline, `stage` kept (stage-mixed, like search/changes). Ordering is `deadline ASC` (most-overdue first), then `todayIndex ASC`, then `uuid` — the SAME comparator global-`upcoming` uses (`COALESCE(startDate, deadline) ASC, todayIndex ASC, uuid`) RESTRICTED to deadlined rows: **one ordering law, two views**. Declared NON-SCOPE (`--in deadlines` refused with the standard unknown-token copy). Deadline-nag DISMISSAL does not filter it (suppression governs the Today pull, not deadline existence). Deadline-bearing repeating templates are PROJECTED at their next occurrence's deadline (`nextOccurrence − rule.startOffsetDays`, the certified horizon-1 machinery `upcomingView` uses — same call, not a reimplementation); a deadline-less template, an undecodable rule, and a paused/after-completion one with no set next occurrence are EXCLUDED (guard rail: "unsupported beats guessed"). `--overdue` excludes projections by construction (a projection is strictly future); `--today` (Today members, evening-inclusive) excludes templates. The authoritative shape/ordering line lives in `docs/contract.md` (Read views table).
+
+**Addendum (2026-08-12, instance `repeats` context — DETAIL-tier enrichment, R11 family, non-contentious).** Ratified from GUI screenshots: the Things card shows an INSTANCE its repeat context in the lower corner ("Repeats on Aug 19" fixed / "Repeats 1 day after completion" after-completion). Our `todo show` / `project show` detail card previously carried only the instance link (`instanceOf`); it now ALSO carries a presence-keyed sibling `repeats: {rule?, next?, paused?}` — the template's series state joined onto the instance by the detail read's MIRROR of the template's Show-Latest join (`src/read/detail.ts` resolves `templateUuid` back to the template row, decodes its rule). `rule` is the SAME `decodeRecurrenceRule` output a template card emits under `repeating.rule` (one recurrence vocabulary, byte-consistent for the same template); `next` is the template's app-materialized next occurrence, **FIXED mode ONLY** (after-completion has no successor date until the current instance completes — absence is the honest expression, the mode stays in `rule.type`); `paused` mirrors the template's paused flag. DETAIL/`show` tier ONLY (never list rows — token economy), through the SAME `shapeReadPayload("detail", …)` path CLI and MCP share (MCP parity is automatic). Edge cases: a dangling/unresolvable template FK omits `repeats` entirely (no crash); a logged/trashed instance keeps the harmless context. TTY: the card gains a `repeats:` line adjacent to the `repeating: instance of …` line (kept — the uuid is the write handle) — `repeats: on <date>` (fixed) / `repeats: <N> <unit>(s) after completion` (after-completion, singular/plural correct), with a dim `(paused)` suffix when paused. Authoritative shape lives in `docs/contract.md` (the `repeats` glossary row) and `docs/design/contracts.md` (reshape (5)).
