@@ -50,6 +50,7 @@ import {
   resolveProject,
   resolveTag,
 } from "../pre-state.ts";
+import { fixedSpawnPlan } from "../repeat-anchor.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
@@ -1092,10 +1093,33 @@ function applyMakeRepeatingFixed(
   // hidden template and the instance each receive a plain copy. To-dos have none.
   const subtree = type === 1 ? readProjectSubtree(sim, params.uuid) : null;
   const todayIso = ctx.todayIso;
-  const nextIso = addUnitsIso(todayIso, params.frequency, params.interval);
   const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
   const startEarlier = params.startDaysEarlier ?? 0;
-  const spec = composeRepeatRuleSpec(params, todayIso, epochOfIso(nextIso));
+
+  // ANCH1 (issue #476, docs/lab/anch1-repeat-anchor.md): the app anchors a FIXED
+  // rule's first occurrence to the next calendar match ON OR AFTER today (NOT
+  // today+interval), materializes an instance ONLY when today is itself an
+  // occurrence, and defaults a weekday-less weekly rule to SUNDAY. Daily/weekly
+  // follow this plan; monthly/yearly keep the prior today+interval model (their
+  // default-anchor law is unprobed).
+  const plan =
+    params.frequency === "daily" || params.frequency === "weekly"
+      ? fixedSpawnPlan(params, todayIso)
+      : {
+          refIso: todayIso,
+          instanceStartIso: todayIso as string | null,
+          cursorIso: addUnitsIso(todayIso, params.frequency, params.interval),
+          instanceCount: 1 as 0 | 1,
+        };
+
+  // A PRESERVED source is relinked as the current-occurrence instance (count 1); a
+  // DELETE-fate source spawns a fresh instance only when today is an occurrence.
+  const sourceBecomesInstance =
+    (type === 0 && src.deadline !== null) ||
+    (subtree !== null && fixedProjectPreservesSource(subtree));
+  const instanceCount: 0 | 1 = sourceBecomesInstance ? 1 : plan.instanceCount;
+
+  const spec = composeRepeatRuleSpec(params, plan.refIso, epochOfIso(plan.refIso));
   const templateUuid = genUuid();
 
   // The hidden template row is identical in both fixed-project fates.
@@ -1109,16 +1133,17 @@ function applyMakeRepeatingFixed(
     startDate: null,
     deadline: deadlined ? encodePackedDate(DEADLINE_SENTINEL_ISO) : null,
     recurrenceRuleXml: ruleXml(spec),
-    instanceCreationCount: 1,
-    instanceCreationStartDate: encodePackedDate(nextIso),
-    nextInstanceStartDate: encodePackedDate(nextIso),
+    instanceCreationCount: instanceCount,
+    instanceCreationStartDate: encodePackedDate(plan.cursorIso),
+    nextInstanceStartDate: encodePackedDate(plan.cursorIso),
   });
   copyTaskTags(sim, params.uuid, templateUuid);
 
-  // The current occurrence's start (deadlined series back off `startDaysEarlier`;
-  // decode identity deadline = startDate − ts; deadlined creation is not itself
-  // RSIM-drive-proven).
-  const instStartIso = deadlined ? addDaysIso(todayIso, -startEarlier) : todayIso;
+  // The current occurrence date (the app dates the instance here; a preserved
+  // source is relinked at this date). Deadlined series back off `startDaysEarlier`
+  // (decode identity deadline = startDate − ts).
+  const occIso = plan.instanceStartIso ?? plan.refIso;
+  const instStartIso = deadlined ? addDaysIso(occIso, -startEarlier) : occIso;
 
   // §RSIM-T: a fixed TO-DO carrying a deadline PRESERVES its source — relink it in
   // place as the current-occurrence instance; only the template was minted above.
@@ -1149,23 +1174,28 @@ function applyMakeRepeatingFixed(
   // RSIM-P P1: template-side children are completely PLAIN (no per-child link).
   if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, templateUuid);
 
-  // ONE instance at the current occurrence (start=someday pending maintenance
-  // promotion). A deadlined series dates the instance's deadline at the occurrence.
-  const instanceUuid = genUuid();
-  insertRecurrenceRow(sim, ctx, {
-    uuid: instanceUuid,
-    type,
-    title: src.title,
-    notes: src.notes,
-    area: src.area,
-    start: START.someday,
-    startDate: encodePackedDate(instStartIso),
-    deadline: deadlined ? encodePackedDate(todayIso) : null,
-    repeatingTemplate: templateUuid,
-  });
-  copyTaskTags(sim, params.uuid, instanceUuid);
-  // RSIM-P P1: FIXED instance-side children are ALSO plain — no per-child link.
-  if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, instanceUuid);
+  // ANCH1: a fixed rule materializes its current-occurrence instance ONLY when
+  // today is itself an occurrence (plan.instanceStartIso non-null). When the first
+  // occurrence is in the future, NO instance spawns — the template + cursor stand
+  // alone until that date (A2). (start=someday pending maintenance promotion; a
+  // deadlined series dates the instance's deadline at the occurrence.)
+  if (plan.instanceStartIso !== null) {
+    const instanceUuid = genUuid();
+    insertRecurrenceRow(sim, ctx, {
+      uuid: instanceUuid,
+      type,
+      title: src.title,
+      notes: src.notes,
+      area: src.area,
+      start: START.someday,
+      startDate: encodePackedDate(instStartIso),
+      deadline: deadlined ? encodePackedDate(occIso) : null,
+      repeatingTemplate: templateUuid,
+    });
+    copyTaskTags(sim, params.uuid, instanceUuid);
+    // RSIM-P P1: FIXED instance-side children are ALSO plain — no per-child link.
+    if (subtree !== null) materializeSubtreeCopy(sim, ctx, subtree, instanceUuid);
+  }
 
   // RSIM-P P1: hard-delete the whole source subtree, then the source project.
   if (subtree !== null) deleteProjectSubtree(sim, subtree);

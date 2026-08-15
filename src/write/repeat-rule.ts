@@ -144,6 +144,20 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
         "an after-completion rule has no calendar day — remove weekdays/monthly/yearly, or drop afterCompletion for a fixed schedule",
       );
     }
+    // ANCH1 (issue #476, golden-v2/3.22.12): an after-completion repeat can't be
+    // given an end bound through this path — after-completion mode does not expose
+    // the Ends control the fixed schedule does, so BOTH an end date and an
+    // occurrence count fail to apply (an ends-on-date drive dies looking for the
+    // "on date" option; an ends-after drive silently fails to set the count).
+    // Refuse it BEFORE any mutation rather than letting the GUI drive die and roll
+    // back. `never` (the default, no bound) is fine.
+    if (params.ends !== undefined && params.ends.kind !== "never") {
+      throw new RangeError(
+        "an after-completion repeat can't be given an end bound through this command — create it " +
+          "without an end (it repeats until you stop it), or use a fixed schedule (drop " +
+          "afterCompletion) to end on a date or after a number of times",
+      );
+    }
   }
 
   if (params.weekdays !== undefined) {

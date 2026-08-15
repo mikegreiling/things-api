@@ -34,6 +34,7 @@ export const HAZARD_IDS = [
   "H-UI-DRIVE",
   "H-PROJECT-REPEAT",
   "H-CLONE-SOURCE",
+  "H-REPEAT-ANCHOR",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -591,6 +592,11 @@ const GUARDS: Record<HazardId, GuardFn> = {
   // pipeline's evaluateGuards — so this guard is a no-op here (the id exists for
   // the blocked-result taxonomy, not for a pre-read predicate).
   "H-CLONE-SOURCE": () => null,
+  // The fixed-recurrence anchor refusal (issue #476, ANCH1) is raised DIRECTLY by
+  // the promote-via-clone orchestrator (src/write/promote-clone.ts) from the
+  // requested first-occurrence date + today — not from a pre-read predicate — so
+  // this guard is a no-op here (the id exists for the blocked-result taxonomy).
+  "H-REPEAT-ANCHOR": () => null,
 };
 
 export function evaluateGuards(hazards: HazardId[], input: GuardInput): GuardBlock | null {
