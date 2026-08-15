@@ -24,6 +24,7 @@
  */
 import type { AuditRecord } from "../audit/schema.ts";
 import { undoToken } from "../audit/schema.ts";
+import { localToday, type IsoDate } from "../model/dates.ts";
 import type { Project, Todo } from "../model/entities.ts";
 import type { RepeatRule } from "../model/recurrence.ts";
 import { byUuid } from "../read/detail.ts";
@@ -45,6 +46,12 @@ import {
   type WriteDeps,
   type WriteOptions,
 } from "./pipeline.ts";
+import {
+  appAnchorDescription,
+  deriveWeeklyWeekdays,
+  isIsoDate,
+  requestedPhaseHonored,
+} from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
 
@@ -101,6 +108,47 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
     remediation:
       "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also requires " +
       "`things config set ui-enabled true` and Accessibility granted to this process (see docs/setup.md)",
+  };
+}
+
+const UNIT_WORD: Record<RepeatRuleParams["frequency"], string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
+
+/**
+ * The fixed-recurrence ANCHOR fail-closed refusal (issue #476, ANCH1). Built when
+ * the app's today-anchored first occurrence would DROP the requested date — a
+ * wrong-phase series. Names where the app WILL place the series and how to
+ * proceed. Callers gate on {@link requestedPhaseHonored} first, applying the
+ * {@link deriveWeeklyWeekdays} weekday to `rule` so the message names the derived
+ * weekday, not the app's Sunday default.
+ */
+function blockedRepeatAnchor(
+  op: PromoteOp,
+  rule: Pick<RepeatRuleParams, "frequency" | "interval" | "weekdays" | "afterCompletion">,
+  todayIso: IsoDate,
+  requestedIso: IsoDate,
+): MutationResult {
+  const anchor = appAnchorDescription(rule, todayIso);
+  const first = anchor.split(" ")[0] ?? todayIso;
+  const unit = UNIT_WORD[rule.frequency];
+  return {
+    kind: "blocked",
+    op,
+    reason: "hazard",
+    hazard: "H-REPEAT-ANCHOR",
+    detail:
+      `the Things app anchors a fixed repeat's first occurrence to ${anchor} and ignores the ` +
+      `item's own scheduled date, so an every-${rule.interval}-${unit} series would fall on ` +
+      `${first} and every ${rule.interval} ${unit}s after — never on the requested ${requestedIso}, ` +
+      "which it would skip",
+    remediation:
+      `reschedule the item to ${first} (or clear its scheduled date) if that first occurrence is ` +
+      `acceptable, then retry; to start the series exactly on ${requestedIso}, set the repeat in ` +
+      "the Things app",
   };
 }
 
@@ -254,6 +302,22 @@ async function makeRepeatingViaClone(
     };
   }
 
+  // ANCH1 (issue #476): the app anchors a FIXED repeat's first occurrence to the
+  // next calendar match on/after TODAY and ignores the item's own scheduled date.
+  // Derive the weekly weekday from that date (so the series fires on the intended
+  // weekday, not the app's Sunday default) and refuse fail-closed BEFORE minting a
+  // clone when the app's phase would DROP the requested first occurrence.
+  const anchorIso = src.startDate;
+  const derivedWeekdays = deriveWeeklyWeekdays(params, anchorIso);
+  const effParams: RepeatRuleParams =
+    derivedWeekdays !== undefined ? { ...params, weekdays: derivedWeekdays } : params;
+  if (
+    isIsoDate(anchorIso) &&
+    !requestedPhaseHonored(effParams, localToday(now, deps.zone), anchorIso)
+  ) {
+    return blockedRepeatAnchor(op, effParams, localToday(now, deps.zone), anchorIso);
+  }
+
   // The promote leg drives the GUI — block before minting a clone if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
     return blockedUiDrive(op);
@@ -269,7 +333,7 @@ async function makeRepeatingViaClone(
         tier: 3,
         invocation:
           `clone ${srcUuid} (--preserve-created) → make-repeating the clone (Repeat… → ` +
-          `frequency=${params.frequency}, interval=${params.interval}) → trash the original ${srcUuid}`,
+          `frequency=${effParams.frequency}, interval=${effParams.interval}) → trash the original ${srcUuid}`,
         expectedDelta: {
           mode: "create",
           probe: { title: src.title, type: expectedType, sinceEpoch: 0 },
@@ -358,8 +422,8 @@ async function makeRepeatingViaClone(
     } as MutationResult;
   }
 
-  // 3. Native-promote the clone.
-  const rule = ruleParamsFor(cloneUuid, params);
+  // 3. Native-promote the clone (with the ANCH1-derived weekday, if any).
+  const rule = ruleParamsFor(cloneUuid, effParams);
   const promote =
     kind === "project"
       ? await promoteProjectViaGui(deps, rule, legOptions(options, txnId, "ui"))
@@ -407,7 +471,7 @@ async function makeRepeatingViaClone(
     instanceUuid,
     originalUuid: srcUuid,
     invocation: `${op}: clone ${srcUuid} → trash ${srcUuid} → promote ${cloneUuid} → template ${templateUuid}`,
-    requested: params as unknown as Record<string, unknown>,
+    requested: effParams as unknown as Record<string, unknown>,
     ...(preserveModified && preUmd !== null && { preModDates: { [srcUuid]: preUmd } }),
   });
 
@@ -455,6 +519,21 @@ async function addRepeatingViaCreate(
 ): Promise<MutationResult> {
   const op: PromoteOp = kind === "project" ? "project.add-repeating" : "todo.add-repeating";
   assertRepeatRule(rule);
+
+  // ANCH1 (issue #476): the fixed-repeat first occurrence is anchored from TODAY,
+  // not from --when. Derive the weekly weekday from --when (so the series fires on
+  // the intended weekday, not the app's Sunday default) and refuse fail-closed
+  // BEFORE creating anything when the app's phase would drop the requested date.
+  const anchorIso = isIsoDate(addParams["when"]) ? (addParams["when"] as IsoDate) : null;
+  const derivedWeekdays = deriveWeeklyWeekdays(rule, anchorIso);
+  const effRule: AddRepeatingRuleFields =
+    derivedWeekdays !== undefined ? { ...rule, weekdays: derivedWeekdays } : rule;
+  if (anchorIso !== null) {
+    const now = deps.now?.() ?? new Date();
+    if (!requestedPhaseHonored(effRule, localToday(now, deps.zone), anchorIso)) {
+      return blockedRepeatAnchor(op, effRule, localToday(now, deps.zone), anchorIso);
+    }
+  }
 
   // The promote leg drives the GUI — block before creating anything if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
@@ -512,8 +591,8 @@ async function addRepeatingViaCreate(
   }
   const createdUuid = add.uuid;
 
-  // 2. Native-promote the fresh row.
-  const ruleParams = ruleParamsFor(createdUuid, rule);
+  // 2. Native-promote the fresh row (with the ANCH1-derived weekday, if any).
+  const ruleParams = ruleParamsFor(createdUuid, effRule);
   const promote =
     kind === "project"
       ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
@@ -539,7 +618,7 @@ async function addRepeatingViaCreate(
     templateUuid,
     instanceUuid,
     invocation: `${op}: add "${title}" ${createdUuid} → template ${templateUuid}`,
-    requested: { title, ...rule },
+    requested: { title, ...effRule },
   });
 
   return promoteOk({

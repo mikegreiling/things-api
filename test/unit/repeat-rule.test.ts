@@ -114,6 +114,32 @@ describe("assertRepeatRule — after-completion", () => {
       /after-completion rule has no calendar day/,
     );
   });
+  it("refuses after-completion + ANY end bound — on-date OR after (issue #476 item 5)", () => {
+    // Neither an end date nor an occurrence count can be driven in after-completion
+    // mode (ANCH1-B FIX4: both fail — the Ends control isn't reachable there).
+    bad(
+      {
+        frequency: "weekly",
+        interval: 2,
+        afterCompletion: true,
+        ends: { kind: "on-date", date: "2026-12-30" },
+      },
+      /after-completion repeat can't be given an end bound/,
+    );
+    bad(
+      {
+        frequency: "weekly",
+        interval: 2,
+        afterCompletion: true,
+        ends: { kind: "after", count: 5 },
+      },
+      /after-completion repeat can't be given an end bound/,
+    );
+  });
+  it("allows after-completion with no end bound (never / absent)", () => {
+    ok({ frequency: "weekly", interval: 2, afterCompletion: true, ends: { kind: "never" } });
+    ok({ frequency: "weekly", interval: 2, afterCompletion: true });
+  });
 });
 
 describe("assertRepeatRule — ends bound", () => {

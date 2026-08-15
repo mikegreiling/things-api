@@ -644,6 +644,58 @@ describe("simulator write vector — covered operations", () => {
     }
   });
 
+  it("todo.make-repeating FIXED weekly, explicit weekday NOT today (ANCH1 #476): future first occurrence → template + cursor, ZERO instances", async () => {
+    // NOW is Sunday 2026-07-05; a weekly/2 Wednesday rule anchors its first
+    // occurrence to Wed 2026-07-08 (future), so NO instance spawns — the template
+    // carries a cursor at 07-08 (interval-INDEPENDENT first occurrence).
+    const src = seedTodo(fixture.db, {
+      title: "Alt Wed",
+      start: "active",
+      startDate: "2026-07-08",
+    });
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 2, weekdays: ["wednesday"] },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok with template uuid");
+    const tmpl = row(res.uuid);
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(0);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-08"));
+    expect(decodeTemplate(res.uuid)).toMatchObject({
+      unit: "weekly",
+      interval: 2,
+      offsets: [{ weekday: 3 }],
+    });
+    expect(instancesOf(res.uuid)).toHaveLength(0); // future first occurrence → no instance yet
+  });
+
+  it("todo.make-repeating FIXED weekly, target weekday IS today (ANCH1 #476): instance today, cursor next cycle", async () => {
+    // A weekly/2 SUNDAY rule on a Sunday: today is the occurrence → one instance at
+    // today, cursor at +2 weeks (2026-07-19).
+    const src = seedTodo(fixture.db, {
+      title: "Alt Sun",
+      start: "active",
+      startDate: "2026-07-05",
+    });
+    const res = await runMutation(
+      deps(vector),
+      "todo.make-repeating",
+      { uuid: src, frequency: "weekly", interval: 2, weekdays: ["sunday"] },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    const tmpl = row(res.uuid);
+    expect(tmpl["rt1_instanceCreationCount"]).toBe(1);
+    expect(tmpl["rt1_nextInstanceStartDate"]).toBe(encodePackedDate("2026-07-19"));
+    const inst = instancesOf(res.uuid);
+    expect(inst).toHaveLength(1);
+    expect(inst[0]?.["startDate"]).toBe(encodePackedDate("2026-07-05"));
+  });
+
   it("todo.make-repeating FIXED with a DEADLINE (RSIM-T): source PRESERVED as the instance, only the template minted", async () => {
     const tag = seedTag(fixture.db, "billing");
     // A deadline is the SOLE to-do fixed-preserve trigger (RSIM-T: deadline 1/1
