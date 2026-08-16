@@ -171,3 +171,27 @@ describe("repeat dialog recipe — shared by reschedule + project", () => {
     expect(l).toContain("weekday += thursday");
   });
 });
+
+// ADR1 (issue #480): before the to-do recipe presses Items ▸ Repeat…, it asserts
+// the reveal actually landed an eligible selection — so a disabled-menu no-op
+// (the row was not selected) fails early + named, never as a dialog-wait timeout.
+describe("repeat dialog recipe — ADR1 eligibility assertion (#480)", () => {
+  it("asserts eligibility BEFORE pressing Items ▸ Repeat…", () => {
+    const steps = makeRepeatingRecipe("T-7", "weekly", 2).steps;
+    const assertIdx = steps.findIndex((s) => s.primitive === "assert-eligible");
+    const pressIdx = steps.findIndex(
+      (s) => s.primitive === "press" && s.path?.includes('menu item "Repeat…"') === true,
+    );
+    expect(assertIdx).toBeGreaterThanOrEqual(0);
+    expect(pressIdx).toBeGreaterThan(assertIdx);
+  });
+
+  it("the assertion carries the target uuid + the Repeat… menu path and is dynamic (uncanaried)", () => {
+    const step = makeRepeatingRecipe("T-7", "weekly", 2).steps.find(
+      (s) => s.primitive === "assert-eligible",
+    );
+    expect(step?.value).toBe("T-7");
+    expect(step?.path).toContain('menu item "Repeat…"');
+    expect(step?.dynamic).toBe(true);
+  });
+});

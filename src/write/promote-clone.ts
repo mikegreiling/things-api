@@ -107,6 +107,46 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
 }
 
 /**
+ * Auto-trash a promote composite's own seeded item after its promote leg failed
+ * (RATIFIED RULING 2026-08-15, issue #480). The add/add-repeating legs are NOT
+ * atomic: the seed persists even when the promote no-ops. The seed is OUR
+ * artifact — recreatable verbatim from the command args — and the Trash is
+ * recoverable, so we trash it inside the same txn and disclose it. The
+ * distinction the failure MUST make honest: an auto-trash that SUCCEEDS points
+ * the caller at `restore` (the row is in the Trash); one that FAILS points at
+ * `delete` with the seed's REAL, resolvable uuid (never a buried, non-actionable
+ * uuid — the #480 second bug). Returns a `detail` patch appended to the promote
+ * result's own message (best-effort: a non-`detail` result shape is left as-is).
+ */
+async function cleanupSeed(
+  deps: WriteDeps,
+  kind: "todo" | "project",
+  createdUuid: string,
+  promote: MutationResult,
+  options: WriteOptions,
+  txnId: string,
+): Promise<{ detail?: string }> {
+  const expectedType = kind === "project" ? "project" : "to-do";
+  const trashOp: OperationKind = kind === "project" ? "project.delete" : "todo.delete";
+  const trashed = await runMutation(
+    deps,
+    trashOp,
+    { uuid: createdUuid },
+    legOptions(options, txnId),
+  );
+  const cleanupNote =
+    trashed.kind === "ok"
+      ? `the seeded ${expectedType} (uuid ${createdUuid}) was created but the promote did not land, ` +
+        `so it was moved to the Trash — recreate it from the command args, or restore it with ` +
+        `\`things ${kind} restore ${createdUuid}\``
+      : `the seeded ${expectedType} (uuid ${createdUuid}) was created but the promote did not land, ` +
+        `and it could NOT be auto-trashed — remove it with \`things ${kind} delete ${createdUuid}\``;
+  return "detail" in promote
+    ? { detail: `${(promote as { detail: string }).detail} — ${cleanupNote}` }
+    : {};
+}
+
+/**
  * Pick the rule fields (frequency/interval + calendar anchors) as a
  * RepeatRuleParams, plus the requested first-occurrence date to drive into the
  * dialog's "Next:" field (ANCH2, issue #476). `nextIso` is the item's scheduled
@@ -126,9 +166,10 @@ function ruleParamsFor(
     ...(rule.monthly !== undefined && { monthly: rule.monthly }),
     ...(rule.yearly !== undefined && { yearly: rule.yearly }),
     ...(rule.ends !== undefined && { ends: rule.ends }),
-    // make-repeating carries a rule-level reminder through the promote (ANCH2:
-    // the repeat reminder picker is drivable); add-repeating's base item owns its
-    // own reminder, so AddRepeatingRuleFields never sets this.
+    // The repeat reminder picker is drivable (ANCH2). make-repeating carries a
+    // rule-level reminder through; add-repeating threads the base to-do's
+    // --reminder here too (ADR1 #480), since the dialog conversion otherwise drops
+    // the seed's one-off reminder from the series.
     ...(rule.reminder !== undefined && { reminder: rule.reminder }),
     ...(nextIso !== undefined && rule.afterCompletion !== true && { next: nextIso }),
   };
@@ -538,6 +579,20 @@ async function addRepeatingViaCreate(
   const effRule: AddRepeatingRuleFields =
     derivedWeekdays !== undefined ? { ...rule, weekdays: derivedWeekdays } : rule;
 
+  // ADR1 (issue #480, requested behavior #3): carry the base to-do's --reminder
+  // onto the SERIES. The create leg sets a one-off reminderTime on the seed, but
+  // the Repeat-dialog conversion does NOT preserve it — the dialog OWNS the repeat
+  // reminder via its "Add reminders" control — so a base reminder was silently
+  // dropped from the template (verified empty on golden-v2,
+  // docs/lab/adr1-add-repeating-reveal.md). Drive the dialog's reminder with the
+  // base time so every spawned occurrence carries it (ANCH2: the reminder picker
+  // commits reminderTime deterministically). Projects have no reminder vocabulary,
+  // so addParams never carries one there.
+  const baseReminder =
+    typeof addParams["reminder"] === "string" ? (addParams["reminder"] as string) : undefined;
+  const effRuleWithReminder: AddRepeatingRuleFields & Partial<Pick<RepeatRuleParams, "reminder">> =
+    baseReminder !== undefined ? { ...effRule, reminder: baseReminder } : effRule;
+
   // The promote leg drives the GUI — block before creating anything if the ack is missing.
   if (options.dangerouslyDriveGui !== true && options.dryRun !== true) {
     return blockedUiDrive(op);
@@ -594,8 +649,9 @@ async function addRepeatingViaCreate(
   }
   const createdUuid = add.uuid;
 
-  // 2. Native-promote the fresh row (with the ANCH2 Next drive + derived weekday).
-  const ruleParams = ruleParamsFor(createdUuid, effRule, nextIso);
+  // 2. Native-promote the fresh row (ANCH2 Next drive + derived weekday + the
+  //    base reminder driven onto the series, ADR1).
+  const ruleParams = ruleParamsFor(createdUuid, effRuleWithReminder, nextIso);
   const promote =
     kind === "project"
       ? await promoteProjectViaGui(deps, ruleParams, legOptions(options, txnId, "ui"))
@@ -606,13 +662,23 @@ async function addRepeatingViaCreate(
           legOptions(options, txnId, "ui"),
         );
   if (promote.kind !== "ok") {
-    // Honest: the item was created (and persists) but the promote did not land.
-    return { ...promote, op } as MutationResult;
+    // The seed persists (the two legs are not atomic) but the promote did not
+    // land. RATIFIED RULING (2026-08-15, issue #480): auto-trash our OWN seed
+    // inside the txn — it is our artifact, recreatable verbatim from the command
+    // args, and the Trash is recoverable — then disclose it. If the auto-trash
+    // itself fails, the result carries the seed's REAL, resolvable uuid with a
+    // working `delete` remediation, so cleanup is never ambiguous (the #480
+    // second bug: a failed add-repeating left a residue whose reported uuid was
+    // not actionable).
+    const patch = await cleanupSeed(deps, kind, createdUuid, promote, options, txnId);
+    return { ...promote, op, ...patch } as MutationResult;
   }
   const { templateUuid, instanceUuid } = discoveryOf(promote);
 
   // Post-drive verify (ANCH2): the driven Next must have landed as the first
   // occurrence — fail closed on mismatch rather than report a wrong-phase ok.
+  // The series EXISTS here (promote landed) but on the wrong phase, so this is a
+  // genuine partial success, NOT a seed to trash — reported for correction.
   if (nextIso !== undefined) {
     const landed = firstOccurrenceOf(deps.db, templateUuid);
     if (landed !== nextIso) return nextMismatch(op, templateUuid, nextIso, landed);
