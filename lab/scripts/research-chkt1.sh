@@ -52,10 +52,11 @@ if [ ! -d node_modules/commander ]; then
   npm ci >"$OUT/npm-ci.log" 2>&1 || { note "FATAL: npm ci failed (see npm-ci.log)."; exit 1; }
 fi
 
-# ---------------- clone + boot (no VNC — golden-v2 AX baked) ----------------
-note "cloning things-lab-golden-v2 -> $VM"
+# ---------------- clone + boot (no VNC — golden AX baked) ----------------
+GOLDEN="${GOLDEN:-things-lab-golden-v2}"
+note "cloning $GOLDEN -> $VM"
 tart delete "$VM" >/dev/null 2>&1 || true
-tart clone things-lab-golden-v2 "$VM"
+tart clone "$GOLDEN" "$VM"
 (tart run "$VM" --no-graphics >"$OUT/tart-run.log" 2>&1 &)
 IP=$(lab_wait_for_ssh "$VM" 300) || { note "FATAL: no SSH"; exit 1; }
 note "ssh up at $IP"
@@ -288,6 +289,6 @@ fi
 
 # =====================================================================
 note ""; note "############### CHKT1 COMPLETE ###############"
-note "env: Things $TVER / macOS $MVER / DB v26 / golden-v2 / clock start 2026-07-05"
+note "env: Things $TVER / macOS $MVER / DB v26 / $GOLDEN / clock start 2026-07-05"
 note "template=$TPL  instance0=$INS0  plain=$PLAIN"
 note "artifacts under $OUT (report.txt, drive/*.log, ax/*.txt)"

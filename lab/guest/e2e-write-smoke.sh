@@ -268,14 +268,17 @@ else
   echo "FAIL experimental-off refusal did not name the template / gate / canonical code"; FAILURES=$((FAILURES + 1))
 fi
 
-echo "== suite-audit gap closure: cancel / backdate / add-logged / project tags / heading ops =="
+echo "== suite-audit gap closure: cancel / backdate / born-logged / project tags / heading ops =="
 run_step 0 "seed to-do for cancel" todo add "E2E-CANCELME"
 CXL=$(json_get "d['data']['uuid']")
 run_step 0 "todo cancel" todo cancel "$CXL"
 run_step 0 "reopen the canceled to-do" todo reopen "$CXL"
 run_step 0 "complete it for backdating" todo complete "$CXL"
-run_step 0 "todo backdate (completion + creation, applescript)" todo backdate "$CXL" --completed-on 2025-01-15 --created-on 2024-06-01
-run_step 0 "todo add-logged (json at-creation import)" todo add-logged "E2E-LOGGED" --completed-on 2025-03-01 --created-on 2025-02-01
+# backdate = rewrite an existing item's timestamps via `todo update --created-at/--completed-at`
+# (the bespoke `todo backdate` command was removed; see src/cli/commands/writes.ts NB).
+run_step 0 "todo update backdate (completion + creation)" todo update "$CXL" --created-at 2024-06-01 --completed-at 2025-01-15
+# born-logged import = `todo add --created-at/--completed-at` (replaces the removed `todo add-logged`).
+run_step 0 "todo add born-logged (at-creation import)" todo add "E2E-LOGGED" --created-at 2025-02-01 --completed-at 2025-03-01
 run_step 0 "project tags (full replacement)" project tags "$RPROJ" --set lab-tag-1
 run_step 0 "heading rename (project rename-heading, by-uuid sel)" project rename-heading "$HPROJ" "$H1" --to "E2E-H1-RENAMED"
 run_step 0 "seed a child under the heading" todo add "E2E-HCHILD" --project "$HPROJ" --heading "E2E-H1-RENAMED"
