@@ -194,7 +194,11 @@ describe("runClearReminder — vector selection + URL bounce", () => {
     expect(summary?.observed).toEqual({ reminder: null, startDate: "2026-07-20" });
   });
 
-  it("BLOCKS a REPEATING item with the setup remediation when proxies are absent (never bounces)", async () => {
+  it("REFUSES a repeating TEMPLATE that has a reminder — no surface clears a rule reminder (RRX1)", async () => {
+    // RRX1 (golden-v2/3.22.12): a template's reminder IS a real reminderTime
+    // column value, but the Shortcuts clear is a silent no-op there, so the op
+    // must refuse rather than route to Shortcuts (which would verify-fail) — no
+    // vector is ever dispatched, whatever the proxy state.
     const uuid = seedTodo(fixture.db, {
       title: "repeating",
       startDate: "2026-07-20",
@@ -202,38 +206,44 @@ describe("runClearReminder — vector selection + URL bounce", () => {
       recurrenceRule: true,
     });
     const { vector: url, calls: urlCalls } = urlVector(() => {
-      throw new Error("the bounce must not run on a repeating item");
+      throw new Error("the bounce must not run on a repeating template");
     });
     const { vector: sc, calls: scCalls } = shortcutsVector(() => {
-      throw new Error("no proxy is installed");
+      throw new Error("the Shortcuts clear must not run on a repeating template");
     });
 
-    const result = await runClearReminder(deps([url, sc], []), { uuid });
-    expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") {
-      expect(result.reason).toBe("environment");
-      expect(result.remediation).toContain("things setup shortcuts");
+    // Proxy present AND absent, and every vector selection, all refuse identically.
+    for (const proxies of [[], ["things-proxy-set-detail"]]) {
+      for (const opts of [
+        {},
+        { vector: "shortcuts" as const },
+        { vector: "url-scheme" as const },
+      ]) {
+        const result = await runClearReminder(deps([url, sc], proxies), { uuid }, opts);
+        expect(result.kind).toBe("blocked");
+        if (result.kind === "blocked") {
+          expect(result.reason).toBe("hazard");
+          expect(result.hazard).toBe("H-REPEAT-SCHEDULE");
+          expect(result.remediation).toContain("repeat editor");
+        }
+      }
     }
     expect(urlCalls).toHaveLength(0);
     expect(scCalls).toHaveLength(0);
   });
 
-  it("--vector url-scheme on a repeating item is refused (would crash Things)", async () => {
+  it("a reminderLESS repeating template is caught by H-NO-REMINDER (nothing to clear)", async () => {
     const uuid = seedTodo(fixture.db, {
-      title: "repeating",
+      title: "repeating-no-reminder",
       startDate: "2026-07-20",
-      reminder: "09:30",
       recurrenceRule: true,
     });
-    const { vector, calls } = urlVector(() => {
+    const { vector, calls } = shortcutsVector(() => {
       throw new Error("must not dispatch");
     });
-    const result = await runClearReminder(deps([vector], []), { uuid }, { vector: "url-scheme" });
+    const result = await runClearReminder(deps([vector], ["things-proxy-set-detail"]), { uuid });
     expect(result.kind).toBe("blocked");
-    if (result.kind === "blocked") {
-      expect(result.hazard).toBe("H-REPEAT-SCHEDULE");
-      expect(result.detail).toContain("CRASHES");
-    }
+    if (result.kind === "blocked") expect(result.hazard).toBe("H-NO-REMINDER");
     expect(calls).toHaveLength(0);
   });
 

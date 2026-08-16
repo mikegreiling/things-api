@@ -728,7 +728,7 @@ function blockedCloneSource(op: PromoteOp, detail: string, remediation: string):
  * produce: two simultaneous end bounds, and a multi-anchor month/year rule.
  */
 function inexpressibleReason(rule: RepeatRule): string {
-  if (rule.endDate !== null && rule.remainingCount !== null) {
+  if (rule.endDate !== null && rule.occurrenceCount !== null) {
     return (
       "the source rule ends on BOTH a date and an occurrence count, which the repeat vocabulary " +
       "cannot express (its Ends bound is a single choice)"

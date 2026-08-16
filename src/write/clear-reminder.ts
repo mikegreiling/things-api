@@ -2,9 +2,11 @@
  * todo.clear-dated-reminder orchestrator — two delivery paths, one op.
  *
  * ATOMIC (Shortcuts): `things-proxy-set-detail` Reminder Time = "" clears a
- * dated reminder IN PLACE — startDate untouched, one call, headless, and the
- * ONLY path that works on a repeating template (scf P3b). Preferred whenever
- * the proxies are installed.
+ * dated reminder IN PLACE — startDate untouched, one call, headless. Preferred
+ * whenever the proxies are installed. It does NOT work on a repeating TEMPLATE:
+ * a template's reminder is a repeat-rule property and the Shortcuts clear is a
+ * silent no-op there (RRX1, golden-v2/3.22.12), so a repeating template is
+ * refused outright (see runClearReminder) rather than routed to this no-op.
  *
  * URL BOUNCE (fallback, NON-REPEATING only): two verified todo.update legs —
  * leg 1 `when=today` (the keyword clear drops the reminder, R07, and moves the
@@ -46,19 +48,10 @@ export async function runClearReminder(
   const uuid = resolveTaskUuidPrefix(deps.db, params.uuid);
   const forced = options.vector;
 
-  // Dry-run previews the primary (atomic Shortcuts) plan unless the caller
-  // forces the URL bounce — cheap and host-independent (no proxy probe).
-  if (options.dryRun === true && forced !== "url-scheme") {
-    return runMutation(
-      deps,
-      "todo.clear-dated-reminder",
-      { uuid },
-      { ...options, vector: "shortcuts" },
-    );
-  }
-
   // Uniform pre-checks (no reminder to clear / wrong target type) via the op's
-  // own hazard set — identical result whichever path we'd pick.
+  // own hazard set — identical result whichever path we'd pick, and evaluated
+  // for dry-run too so a preview surfaces the same block. Host-independent (DB
+  // reads only; no proxy probe).
   const target = loadTarget(deps.db, uuid);
   const pre = emptyPreState();
   pre.target = target;
@@ -84,9 +77,17 @@ export async function runClearReminder(
     };
   }
 
-  const repeating = isRepeatingTemplate(target);
-
-  if (forced === "url-scheme" && repeating) {
+  // A repeating TEMPLATE's reminder is a repeat-RULE property. On 3.22.12 (RRX1)
+  // it IS stored in the `reminderTime` column on the template AND its spawned
+  // instances, but NO automation surface can clear it in place: the Shortcuts
+  // `set-detail Reminder Time=""` is a silent no-op (proxy exits 0, the column is
+  // unchanged), the AppleScript de-schedule is refused (error 301), and a URL
+  // when= bounce CRASHES Things (§1). Earlier (RCLEAR / 3.22.11) the template's
+  // reminderTime was NULL, so H-NO-REMINDER caught this; now that the column
+  // carries a real value the op must refuse EXPLICITLY, else the Shortcuts path
+  // no-ops and the op verify-fails. (A reminderLESS template was already caught
+  // by H-NO-REMINDER above; this only fires when the template has a reminder.)
+  if (isRepeatingTemplate(target)) {
     appendClearAudit(deps, {
       uuid,
       startedAt: deps.now?.() ?? new Date(),
@@ -98,24 +99,26 @@ export async function runClearReminder(
       reason: "hazard",
       hazard: "H-REPEAT-SCHEDULE",
       detail:
-        "the URL bounce is unusable on a repeating template — a URL when= re-schedule CRASHES " +
-        "Things (R09); only the atomic Shortcuts clear is safe here",
-      remediation:
-        "install the proxies (`things setup shortcuts`) and omit --vector, or clear it in the app",
+        "this is a repeating series — its reminder is part of the repeat rule, and no automation " +
+        "surface can clear it in place (the Shortcuts clear silently does nothing, the AppleScript " +
+        "de-schedule is refused, and a URL re-schedule crashes the app)",
+      remediation: "change the reminder in the app's repeat editor",
     };
   }
 
-  // Repeating items are Shortcuts-only: delegate to the atomic path, which
-  // either clears (proxy present) or blocks with the setup remediation
-  // (proxy absent) — exactly the desired repeating behavior.
+  // Dry-run previews the atomic Shortcuts plan unless the caller forces the URL
+  // bounce — host-independent (no proxy probe).
+  if (options.dryRun === true && forced !== "url-scheme") {
+    return runMutation(
+      deps,
+      "todo.clear-dated-reminder",
+      { uuid },
+      { ...options, vector: "shortcuts" },
+    );
+  }
+
   const useShortcuts =
-    forced === "shortcuts"
-      ? true
-      : forced === "url-scheme"
-        ? false
-        : repeating
-          ? true
-          : proxiesInstalled(deps);
+    forced === "shortcuts" ? true : forced === "url-scheme" ? false : proxiesInstalled(deps);
 
   if (useShortcuts) {
     return runMutation(

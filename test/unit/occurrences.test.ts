@@ -19,7 +19,7 @@ function rule(partial: Partial<RepeatRule>): RepeatRule {
     startOffsetDays: 0,
     offsets: [],
     endDate: null,
-    remainingCount: null,
+    occurrenceCount: null,
     version: 4,
     ...partial,
   };
@@ -119,8 +119,8 @@ describe("generateEventDates", () => {
     expect(dates).toEqual(["2026-07-10", "2026-07-17"]);
   });
 
-  it("caps at the rule's remainingCount", () => {
-    const dates = generateEventDates(rule({ unit: "daily", remainingCount: 2 }), "2026-07-10", {
+  it("caps at the rule's occurrenceCount (the configured 'ends after N' total)", () => {
+    const dates = generateEventDates(rule({ unit: "daily", occurrenceCount: 2 }), "2026-07-10", {
       count: 5,
     });
     expect(dates).toEqual(["2026-07-10", "2026-07-11"]);

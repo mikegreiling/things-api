@@ -198,7 +198,7 @@ function rule(partial: Partial<RepeatRule>): RepeatRule {
     startOffsetDays: 0,
     offsets: [],
     endDate: null,
-    remainingCount: null,
+    occurrenceCount: null,
     version: 4,
     ...partial,
   };
@@ -257,7 +257,7 @@ describe("ruleToInverseParams — round-trips (validates its own output)", () =>
     expect(inv.weekdays).toBeUndefined();
   });
   it("ends after N", () => {
-    expect(roundTrips(rule({ remainingCount: 5 }))).toMatchObject({
+    expect(roundTrips(rule({ occurrenceCount: 5 }))).toMatchObject({
       ends: { kind: "after", count: 5 },
     });
   });
@@ -275,7 +275,7 @@ describe("ruleToInverseParams — round-trips (validates its own output)", () =>
 describe("ruleToInverseParams — inexpressible shapes (dialog cannot produce)", () => {
   it("null for a rule with BOTH an end date and a remaining count", () => {
     expect(
-      ruleToInverseParams(rule({ endDate: "2027-01-01", remainingCount: 5 }), false),
+      ruleToInverseParams(rule({ endDate: "2027-01-01", occurrenceCount: 5 }), false),
     ).toBeNull();
   });
   it("null for a monthly rule with multiple anchors", () => {
