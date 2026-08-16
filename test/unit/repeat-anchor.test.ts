@@ -1,18 +1,20 @@
 /**
- * The fixed-recurrence anchor law helpers (issue #476, ANCH1). The pinned "today"
- * is Sunday 2026-07-05 throughout (the ANCH1 clock): the next Wednesday is
- * 2026-07-08 and the next Sunday is today itself. Evidence: docs/lab/anch1-repeat-anchor.md.
+ * The fixed-recurrence DEFAULT-anchor helpers + weekly-weekday derivation (issue
+ * #476). The pinned "today" is Sunday 2026-07-05 throughout: the next Wednesday
+ * is 2026-07-08 and the next Sunday is today itself. The wrong-phase REFUSAL
+ * these once fed was deleted (ANCH2: the Repeat dialog's "Next:" field is drivable
+ * and honored, so the promote verbs DRIVE the first occurrence rather than refuse
+ * — docs/lab/anch2-next-field.md); the helpers below remain as the DEFAULT spawn
+ * model the simulator uses when no first occurrence is requested.
  */
 import { describe, expect, it } from "vitest";
 
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
 import {
-  appAnchorDescription,
   deriveWeeklyWeekdays,
   fixedFirstOccurrence,
   fixedSpawnPlan,
   nextFixedOccurrenceAfter,
-  requestedPhaseHonored,
   weekdayOfIso,
 } from "../../src/write/repeat-anchor.ts";
 
@@ -70,59 +72,6 @@ describe("fixedFirstOccurrence — next calendar match on/after today", () => {
   });
 });
 
-describe("requestedPhaseHonored — the wrong-phase refusal predicate (issue #476 item 2)", () => {
-  it("interval-2 weekly: DROPS a source date one week off the app's phase", () => {
-    // App anchors Wed 07-08; the interval-2 grid is {07-08, 07-22, …}. 07-15 is off-phase.
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-15")).toBe(false);
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-29")).toBe(false);
-  });
-  it("interval-2 weekly: HONORS a source date ON the app's phase", () => {
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-08")).toBe(true); // the anchor
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-22")).toBe(true); // +1 cycle
-  });
-  it("source date that IS the target weekday but the app's own anchor → honored", () => {
-    // The classic issue-item-2 case: the source is scheduled on the target weekday.
-    // When that date equals the app anchor phase it is honored (07-08), else dropped (07-15).
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-08")).toBe(true);
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-15")).toBe(false);
-  });
-  it("interval-1 weekly: phase is irrelevant — always honored", () => {
-    expect(requestedPhaseHonored(weekly(1, ["wednesday"]), TODAY, "2026-07-15")).toBe(true);
-    expect(requestedPhaseHonored(weekly(1, ["wednesday"]), TODAY, "2026-07-22")).toBe(true);
-  });
-  it("a source date on a DIFFERENT weekday than the rule is no phase claim → honored", () => {
-    // Source on a Thursday but the rule fires Wednesday: not a pattern match.
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "2026-07-16")).toBe(true);
-  });
-  it("interval-2 daily: honors an even-day offset, drops an odd one", () => {
-    const daily2: Rule = { frequency: "daily", interval: 2 };
-    expect(requestedPhaseHonored(daily2, TODAY, "2026-07-07")).toBe(true); // +2
-    expect(requestedPhaseHonored(daily2, TODAY, "2026-07-08")).toBe(false); // +3
-  });
-  it("after-completion, keyword when, and monthly/yearly are never refused", () => {
-    expect(
-      requestedPhaseHonored(
-        { frequency: "weekly", interval: 2, afterCompletion: true },
-        TODAY,
-        "2026-07-15",
-      ),
-    ).toBe(true);
-    expect(requestedPhaseHonored(weekly(2, ["wednesday"]), TODAY, "someday")).toBe(true);
-    expect(requestedPhaseHonored({ frequency: "monthly", interval: 2 }, TODAY, "2026-09-15")).toBe(
-      true,
-    );
-  });
-  it("multi-weekday interval-2: active-week grid decides membership", () => {
-    const r = weekly(2, ["monday", "wednesday"]);
-    // App anchor = Mon 07-06 (week 0). Week 0 active: 07-06(Mon), 07-08(Wed) honored.
-    expect(requestedPhaseHonored(r, TODAY, "2026-07-06")).toBe(true);
-    expect(requestedPhaseHonored(r, TODAY, "2026-07-08")).toBe(true);
-    // Week 1 (07-13/07-15) inactive; week 2 (07-20/07-22) active.
-    expect(requestedPhaseHonored(r, TODAY, "2026-07-15")).toBe(false);
-    expect(requestedPhaseHonored(r, TODAY, "2026-07-20")).toBe(true);
-  });
-});
-
 describe("nextFixedOccurrenceAfter + fixedSpawnPlan — the app spawn shape", () => {
   it("weekly Wednesday from Sunday: future first occ → no instance, cursor = the first occ", () => {
     const plan = fixedSpawnPlan(weekly(2, ["wednesday"]), TODAY);
@@ -142,13 +91,5 @@ describe("nextFixedOccurrenceAfter + fixedSpawnPlan — the app spawn shape", ()
     expect(plan.instanceStartIso).toBe(TODAY);
     expect(plan.cursorIso).toBe("2026-07-07");
     expect(nextFixedOccurrenceAfter({ frequency: "daily", interval: 2 }, TODAY)).toBe("2026-07-07");
-  });
-});
-
-describe("appAnchorDescription", () => {
-  it("names the app's first occurrence and its weekday", () => {
-    expect(appAnchorDescription(weekly(2, ["wednesday"]), TODAY)).toBe(
-      "2026-07-08 (the next wednesday on or after today)",
-    );
   });
 });

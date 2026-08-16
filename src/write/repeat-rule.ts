@@ -199,18 +199,22 @@ export function assertRepeatRule(params: Omit<RepeatRuleParams, "uuid">): void {
     if (!/^\d{1,2}:\d{2}$/.test(params.reminder)) {
       throw new RangeError(`invalid reminder ${JSON.stringify(params.reminder)} — expected HH:mm`);
     }
-    // UIC6-g: the Repeat dialog's reminder-time control is an AXDateTimeArea
-    // whose committed time CANNOT be set through the Accessibility surface —
-    // it ignores AXValue writes (unlike the "ends on date" picker, which
-    // honors them) and silently commits its default instead. Rather than write
-    // a WRONG reminder time, the op refuses. (Set the reminder in the app after
-    // the series exists; every other rule field IS drivable.) See
-    // docs/lab/uic6-rule-vocabulary.md and docs/things-app-oddities.md.
-    throw new RangeError(
-      "a repeat reminder time cannot be set through the GUI vector — Things' reminder picker " +
-        "ignores programmatic time entry (UIC6-g); create the series without --reminder and set the " +
-        "reminder in the app",
-    );
+    // ANCH2 (docs/lab/anch2-next-field.md): the reminder-time AXDateTimeArea IS
+    // drivable — UIC6-g's "ignores programmatic time entry" was a targeting
+    // artifact (the old set-datetime primitive wrote into the "first" date area,
+    // never the reminder). With deterministic targeting the picker commits the
+    // requested time exactly (probes: 09:00, 14:30), so --reminder is honored.
+  }
+
+  if (params.next !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(params.next)) {
+      throw new RangeError(`invalid next ${JSON.stringify(params.next)} — expected YYYY-MM-DD`);
+    }
+    if (params.afterCompletion === true) {
+      throw new RangeError(
+        "a first-occurrence date (next/--when) does not apply to an after-completion repeat — it has no calendar",
+      );
+    }
   }
 
   if (params.startDaysEarlier !== undefined) {

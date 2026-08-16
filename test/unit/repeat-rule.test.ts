@@ -165,11 +165,19 @@ describe("assertRepeatRule — reminders + deadline offset", () => {
     ok({ frequency: "daily", interval: 1, deadline: true, startDaysEarlier: 3 });
     ok({ frequency: "daily", interval: 1, startDaysEarlier: 0 });
   });
-  it("refuses a reminder time — the GUI reminder picker is undrivable (UIC6-g)", () => {
-    // Even a well-formed HH:mm is refused: the Repeat dialog's reminder-time
-    // control ignores programmatic writes and would commit a WRONG time.
-    bad({ frequency: "daily", interval: 1, reminder: "09:30" }, /reminder time cannot be set/);
+  it("accepts a well-formed reminder time (ANCH2: the picker IS drivable with deterministic targeting)", () => {
+    // UIC6-g's "undrivable" was a targeting artifact; a well-formed HH:mm is now
+    // honored, a malformed one still refused.
+    ok({ frequency: "daily", interval: 1, reminder: "09:30" });
     bad({ frequency: "daily", interval: 1, reminder: "9am" }, /invalid reminder/);
+  });
+  it("validates the first-occurrence date (next) and refuses it under after-completion", () => {
+    ok({ frequency: "weekly", interval: 2, next: "2026-08-26" });
+    bad({ frequency: "weekly", interval: 1, next: "8/26/2026" }, /invalid next/);
+    bad(
+      { frequency: "weekly", interval: 2, afterCompletion: true, next: "2026-08-26" },
+      /does not apply to an after-completion repeat/,
+    );
   });
   it("refuses a start offset without a deadline", () => {
     bad({ frequency: "daily", interval: 1, startDaysEarlier: -1 }, /invalid startDaysEarlier/);

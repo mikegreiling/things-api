@@ -43,6 +43,11 @@ export function addRepeatRuleFlags(cmd: Command): Command {
     .option("--yearly-month <n>", "yearly only: the month (1–12)")
     .option("--ends-after <n>", "stop after N occurrences (1–999)")
     .option("--ends-on <date>", "YYYY-MM-DD — stop after this date")
+    .option(
+      "--when <date>",
+      "YYYY-MM-DD — the first occurrence (drives the Repeat dialog's Next field); " +
+        "make-repeating defaults to the item's scheduled date",
+    )
     .option("--reminder <time>", "HH:mm — a reminder time on each occurrence")
     .option("--deadline", "give each occurrence a deadline")
     .option(
@@ -156,6 +161,7 @@ export function repeatRuleFlagsFromOpts(
   }
 
   if (typeof opts["reminder"] === "string") fields.reminder = opts["reminder"];
+  if (typeof opts["when"] === "string") fields.next = opts["when"];
   if (opts["deadline"] === true) fields.deadline = true;
   if (opts["startDaysEarlier"] !== undefined) {
     fields.startDaysEarlier = Number(opts["startDaysEarlier"]);
