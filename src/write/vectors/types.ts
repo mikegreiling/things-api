@@ -4,6 +4,7 @@
  * the lab (url-scheme.matrix / applescript.matrix), never hardcoded logic.
  */
 import type { DisruptionTier } from "../../config.ts";
+import type { HazardId } from "../guards.ts";
 import type { OperationKind } from "../operations.ts";
 
 export type VectorId = "url-scheme" | "applescript" | "shortcuts" | "ui";
@@ -49,6 +50,18 @@ export interface UiRecipe {
   /** The item the recipe acts on (revealed/selected via things:///show?id=). */
   targetUuid: string;
   steps: UiStep[];
+  /**
+   * DIALOG-class recipe: it opens a SHEET on the main Things window (the Repeat
+   * editor, the Convert confirm, the Move picker) and waits for it through the
+   * Accessibility tree. Such a recipe needs a Things window that is AX-reachable
+   * on the current Space — on a locked screen or in a full-screen app's Space
+   * the sheet opens on an unreachable window and the wait times out (SESSGATE,
+   * #480). The driver runs a session-reachability probe after the reveal and
+   * refuses (`blocked`) when the window is unreachable. Menu-only recipes (todo
+   * pause/resume — a pure menu-item press that works even under lock, AXVM1) do
+   * NOT set this and are never gated.
+   */
+  needsWindowReachability?: boolean;
 }
 
 export type UiPrimitive =
@@ -245,12 +258,30 @@ export interface ExecuteResult {
   stderr: string;
   /** The transport was killed by its own deadline — the signature of an unanswered consent dialog. */
   timedOut?: boolean;
+  /**
+   * The vector REFUSED at runtime BEFORE touching the app — a precondition it
+   * can only check live (the ui vector's session-reachability gate: a locked
+   * screen / full-screen Space leaves no AX-reachable Things window for the
+   * dialog, SESSGATE #480). The pipeline maps this to a `blocked` outcome
+   * (exit 4), never a transport failure — nothing was mutated.
+   */
+  blocked?: { hazard: HazardId; detail: string; remediation: string };
 }
 
 export interface WriteVector {
   id: VectorId;
   matrix: VectorMatrix;
   execute(invocation: CompiledInvocation): Promise<ExecuteResult>;
+  /**
+   * ui vector ONLY: probe whether a Things window is AX-reachable on the current
+   * Space, so a promote ORCHESTRATOR can gate BEFORE it seeds a row (SESSGATE
+   * #480). It returns a not-reachable verdict scoped "session" (locked screen /
+   * full-screen — the certain-failure case the orchestrator refuses on, zero
+   * mutation) or "window" (only Things' window is off-Space — the orchestrator
+   * proceeds; the in-drive gate relocates it). Absent on the real transport
+   * vectors and the simulator, so a caller with no ui vector simply skips the gate.
+   */
+  probeReachability?: () => Promise<import("./session-reachability.ts").ReachabilityVerdict>;
   /**
    * The bench-harness SIMULATOR vector (src/write/vectors/simulator.ts). It
    * presents under a real {@link VectorId} but applies mutations via SQL from

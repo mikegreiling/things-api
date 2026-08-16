@@ -878,6 +878,22 @@ export async function runMutation<K extends OperationKind>(
 
     const executeResult = await vector.execute(invocation);
 
+    // A vector that REFUSED at runtime before touching the app (the ui vector's
+    // session-reachability gate: a locked / full-screen session leaves no
+    // AX-reachable Things window for the dialog, SESSGATE #480). Nothing was
+    // mutated → a `blocked` outcome (exit 4), never a transport failure.
+    if (executeResult.blocked !== undefined) {
+      const { hazard, detail, remediation } = executeResult.blocked;
+      audit({
+        result: blockedCode({ hazard, reason: "hazard" }),
+        vector: vector.id,
+        disruption: effectiveTier,
+        invocation: invocation.redactedPayload,
+        pre: flattenPreFields(preCapture.fields),
+      });
+      return { kind: "blocked", op, reason: "hazard", hazard, detail, remediation };
+    }
+
     // Verify under the injected clock (deps.now/deps.zone), never the wall
     // clock: an `evening`/`today` write dated pinned-today must read back IN
     // Today at verify time, or its today/evening marker assertion fails under a

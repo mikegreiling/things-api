@@ -34,6 +34,12 @@ export const HAZARD_IDS = [
   "H-UI-DRIVE",
   "H-PROJECT-REPEAT",
   "H-CLONE-SOURCE",
+  // A RUNTIME gate, not a pre-read guard: a dialog-class ui-drive op refuses when
+  // the Mac's session is AX-blind (screen locked / full-screen Space) so the
+  // Repeat/confirm sheet would open on an unreachable window (SESSGATE, #480). It
+  // is enforced in the ui vector and the promote orchestrators — never here — and
+  // listed only so the HazardId type accepts it on the blocked result it produces.
+  "H-UI-SESSION-UNREACHABLE",
 ] as const;
 
 export type HazardId = (typeof HAZARD_IDS)[number];
@@ -591,6 +597,10 @@ const GUARDS: Record<HazardId, GuardFn> = {
   // pipeline's evaluateGuards — so this guard is a no-op here (the id exists for
   // the blocked-result taxonomy, not for a pre-read predicate).
   "H-CLONE-SOURCE": () => null,
+  // A RUNTIME reachability gate (SESSGATE, #480), not a pre-read predicate: the
+  // ui vector's drive and the promote orchestrators probe the live session and
+  // raise this DIRECTLY. No-op here (the id exists for the blocked-result taxonomy).
+  "H-UI-SESSION-UNREACHABLE": () => null,
 };
 
 export function evaluateGuards(hazards: HazardId[], input: GuardInput): GuardBlock | null {

@@ -157,6 +157,7 @@ export function convertToProjectRecipe(
   return {
     op,
     targetUuid,
+    needsWindowReachability: true,
     steps: [
       ...preamble(targetUuid),
       menuPress("Items ▸ Convert to Project…", `menu item "Convert to Project…" of ${ITEMS_MENU}`),
@@ -190,6 +191,7 @@ export function headingConvertToProjectRecipe(projectUuid: string, ordinal: numb
   return {
     op: "project.promote-heading",
     targetUuid: projectUuid,
+    needsWindowReachability: true,
     steps: [
       {
         primitive: "reveal",
@@ -573,6 +575,7 @@ export function makeRepeatingRecipe(
   return {
     op: "todo.make-repeating",
     targetUuid,
+    needsWindowReachability: true,
     steps: [
       ...preamble(targetUuid),
       // ADR1 (#480): the reveal is assumed to select the to-do row, but on some
@@ -617,6 +620,7 @@ export function projectMakeRepeatingRecipe(
   return {
     op: "project.make-repeating",
     targetUuid: projectUuid,
+    needsWindowReachability: true,
     steps: [
       {
         primitive: "reveal",
@@ -667,6 +671,7 @@ export function rescheduleRepeatRecipe(
   return {
     op: "todo.reschedule-repeat",
     targetUuid,
+    needsWindowReachability: true,
     steps: [
       ...preamble(targetUuid),
       menuPress(
@@ -798,6 +803,7 @@ export function projectRescheduleRepeatRecipe(
   return {
     op: "project.reschedule-repeat",
     targetUuid,
+    needsWindowReachability: true,
     steps: [
       ...projectPreamble(targetUuid),
       openProjectRepeatPopover(),
@@ -854,6 +860,7 @@ export function moveHeadingToProjectRecipe(
   return {
     op: "project.move-heading-to-project",
     targetUuid: sourceProjectUuid,
+    needsWindowReachability: true,
     steps: [
       {
         primitive: "reveal",

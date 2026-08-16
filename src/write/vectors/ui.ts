@@ -30,6 +30,11 @@ import { execFile } from "node:child_process";
 import type { ThingsApiConfig } from "../../config.ts";
 import { UI_DRIVE_OPS } from "../operations.ts";
 import { escapeAppleScript } from "./applescript.ts";
+import {
+  H_UI_SESSION_UNREACHABLE,
+  probeSessionReachability,
+  type ReachabilityVerdict,
+} from "./session-reachability.ts";
 import { certificationOf } from "./ui-certification.ts";
 import { driveSidebarAreaReorder, jxaSidebarSnapshotScript, type UiDriveAux } from "./ui-drag.ts";
 import type {
@@ -334,6 +339,30 @@ export function axAbortScript(): string {
 }
 
 /**
+ * The PROVEN app-level clearance / relocation maneuver (SESSGATE, #480, live-host
+ * recovery): close the front Things window — which takes an attached modal sheet
+ * with it — then reopen and activate. Runs entirely through Things' own
+ * AppleScript dictionary, so it works WITHOUT the Accessibility tree (the exact
+ * property needed when the session is AX-blind). Two uses:
+ *   - CLEANUP: clear a stuck modal sheet a failed drive left open (unblocks the
+ *     app-wide AppleScript-mutation freeze that sheet imposes);
+ *   - RELOCATION: pull a window that was on another Space back to the current one
+ *     so its dialog can open AX-reachably (the wrong-Space recovery branch).
+ * `reopen` restores the default window on the CURRENT Space; `activate` foregrounds
+ * it. Returns "OK".
+ */
+export function axCloseReopenActivateScript(): string {
+  return `tell application "Things3"
+  try
+    close window 1
+  end try
+  reopen
+  activate
+end tell
+return "OK"`;
+}
+
+/**
  * sheet-open probe: is a modal SHEET attached to the Things standard window, OR
  * a detached repeat-editor / popover window (an `AXUnknown` that is not the
  * 40×40 utility window) present right now? Returns "true"/"false". Used to (d)
@@ -368,19 +397,105 @@ async function sheetStillOpen(run: UiRunner): Promise<boolean> {
 }
 
 /**
- * Send Escape and VERIFY the sheet/popover is gone (0½ defect (d): the abort
- * must never claim dismissal it did not confirm). Retries Escape ONCE if the
- * first is not honored. Returns whether dismissal was verified — the caller
- * words its partial-state report accordingly (fail-closed: on an unverifiable
- * dismissal it must warn the sheet may remain open).
+ * The outcome of clearing a half-open dialog after a failed drive:
+ *   - "dismissed"     — Escape dismissed it and the (AX-reachable) sheet probe
+ *                       CONFIRMED it gone;
+ *   - "cleared-blind" — the session was AX-blind (locked / off-Space), so Escape
+ *                       and the sheet probe are untrustworthy; the PROVEN
+ *                       app-level close+reopen ran to clear it (cannot be
+ *                       AX-confirmed, but the maneuver works blind — SESSGATE);
+ *   - "may-remain"    — a reachable but stubborn sheet that Escape would not
+ *                       dismiss (fail-closed: warn it may still be open).
  */
-async function verifiedAbort(run: UiRunner): Promise<{ dismissed: boolean }> {
+type ClearResult = { state: "dismissed" | "cleared-blind" | "may-remain" };
+
+/**
+ * Clear a half-open sheet/popover a failed drive left behind — HONESTLY (SESSGATE
+ * #480 fix; supersedes the old verifiedAbort, whose AX-blind sheet probe returned
+ * "gone" it could not actually see, letting the still-open modal freeze the
+ * app-wide AppleScript mutations the caller then attempted — the auto-trash
+ * silent-noop). Escape first; then:
+ *   - AX-BLIND (a not-reachable probe): Escape may never have reached the sheet
+ *     and the sheet probe cannot see it, so run the app-level close+reopen that
+ *     works blind (it takes the stuck sheet with the window). Reported as
+ *     "cleared-blind" — never falsely "confirmed gone".
+ *   - REACHABLE: the sheet probe is trustworthy — confirm the dismissal (retry
+ *     Escape once), and if it will not go, warn "may remain".
+ */
+async function clearDialog(run: UiRunner): Promise<ClearResult> {
   const escape = (): Promise<UiRunResult> =>
     run({ primitive: "key", label: "abort (Escape)", script: axAbortScript() }, STEP_TIMEOUT_MS);
   await escape();
-  if (!(await sheetStillOpen(run))) return { dismissed: true };
+  const reach = await probeSessionReachability(run, STEP_TIMEOUT_MS);
+  if (!reach.reachable) {
+    // Cannot trust Escape or the sheet probe while AX-blind — use the proven
+    // app-level maneuver, which clears a stuck sheet without the Accessibility tree.
+    await run(
+      {
+        primitive: "resolve",
+        label: "clear a stuck dialog (close the Things window and reopen it)",
+        script: axCloseReopenActivateScript(),
+      },
+      STEP_TIMEOUT_MS,
+    );
+    return { state: "cleared-blind" };
+  }
+  if (!(await sheetStillOpen(run))) return { state: "dismissed" };
   await escape(); // one retry
-  return { dismissed: !(await sheetStillOpen(run)) };
+  return { state: (await sheetStillOpen(run)) ? "may-remain" : "dismissed" };
+}
+
+/**
+ * The dialog-class reachability GATE (SESSGATE, #480), run AFTER the reveal/
+ * activate preamble (which surfaces a window in a healthy session) and BEFORE any
+ * menu press. Three outcomes matched to the live session state:
+ *   - reachable                  → proceed;
+ *   - not reachable, "session"   → REFUSE (locked screen / full-screen Space —
+ *                                  the certain-failure case): block, zero mutation;
+ *   - not reachable, "window"    → RELOCATE: only Things' window is off the
+ *                                  current Space, so run the app-level close+reopen
+ *                                  that pulls it back, then RE-PROBE closed-loop.
+ *                                  Reachable now → proceed (disclosed); still not →
+ *                                  block with the Space remediation.
+ */
+async function ensureWindowReachable(
+  run: UiRunner,
+): Promise<
+  | { ok: true; relocated: boolean }
+  | { ok: false; verdict: Extract<ReachabilityVerdict, { reachable: false }> }
+> {
+  const first = await probeSessionReachability(run, STEP_TIMEOUT_MS);
+  if (first.reachable) return { ok: true, relocated: false };
+  if (first.scope === "session") return { ok: false, verdict: first };
+  // scope "window": Things' window is on another Space (or absent) while the
+  // session is otherwise fine — try to bring it to the current Space, then re-probe.
+  await run(
+    {
+      primitive: "resolve",
+      label: "move the Things window to the current desktop",
+      script: axCloseReopenActivateScript(),
+    },
+    STEP_TIMEOUT_MS,
+  );
+  const second = await probeSessionReachability(run, STEP_TIMEOUT_MS);
+  if (second.reachable) return { ok: true, relocated: true };
+  return { ok: false, verdict: second.reachable ? first : second };
+}
+
+/** The blocked ExecuteResult a dialog-class op returns when the session is unreachable. */
+function blockedReachability(
+  verdict: Extract<ReachabilityVerdict, { reachable: false }>,
+): ExecuteResult {
+  return {
+    exitCode: 4,
+    stdout: "",
+    stderr: `${verdict.detail} ${verdict.remediation}`,
+    blocked: {
+      hazard: H_UI_SESSION_UNREACHABLE,
+      detail: verdict.detail,
+      remediation: verdict.remediation,
+    },
+  };
 }
 
 /**
@@ -723,19 +838,29 @@ async function driveClickElement(
 
 async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<ExecuteResult> {
   const done: string[] = [];
-  // `dismissed`: true = abort verified the sheet gone; false = abort could NOT
-  // confirm dismissal (warn it may remain open — 0½ defect (d): never claim a
-  // dismissal we did not see); undefined = no sheet was opened / no abort ran.
-  const partial = (failed: string, why: string, dismissed?: boolean): ExecuteResult => {
+  // A note prepended to the success summary when the drive had to RELOCATE the
+  // Things window to the current Space to open its dialog (SESSGATE wrong-Space
+  // recovery) — surfaced to the caller as a disclosure warning.
+  let relocationNote = "";
+  // `clear`: how a half-open sheet was cleaned up after a failure (honest — never
+  // claim a dismissal we could not see, SESSGATE #480); undefined = no sheet was
+  // opened / no cleanup ran (a benign preamble/canary failure).
+  const partial = (failed: string, why: string, clear?: ClearResult): ExecuteResult => {
     const base = `ui drive stopped at "${failed}" (${why}). Completed: ${done.join(" → ") || "nothing"}.`;
     const cleanup =
-      dismissed === true
-        ? " The open sheet/popover was dismissed (Escape, confirmed gone)."
-        : dismissed === false
-          ? " WARNING: a sheet or popover may still be open in Things — Escape did not dismiss it." +
-            " Dismiss it manually before retrying (a leftover sheet disables the menu bar and will" +
-            " make the next drive's preflight fail)."
-          : "";
+      clear === undefined
+        ? ""
+        : clear.state === "dismissed"
+          ? " The open sheet/popover was dismissed (Escape, confirmed gone)."
+          : clear.state === "cleared-blind"
+            ? " Things had no window reachable on the current screen (the Mac may be locked, or a" +
+              " full-screen app is covering the desktop), so the open dialog could not be confirmed" +
+              " through the on-screen layer — the Things window was closed and reopened to clear it," +
+              " discarding any partially-entered rule. Unlock the Mac or leave the full-screen app" +
+              " before retrying."
+            : " WARNING: a sheet or popover may still be open in Things — Escape did not dismiss it." +
+              " Dismiss it manually before retrying (a leftover sheet disables the menu bar and will" +
+              " make the next drive's preflight fail).";
     return refusal(base + cleanup);
   };
 
@@ -763,6 +888,22 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
   }
   // Let the selection settle so the menu bar repopulates before the canary reads it.
   if (idx > 0) await new Promise((r) => setTimeout(r, SETTLE_AFTER_REVEAL_MS));
+
+  // 0½. Session-reachability GATE for dialog-class ops (SESSGATE, #480). A recipe
+  //     that opens a sheet on the main window needs that window AX-reachable on
+  //     the current Space. Probed AFTER the preamble (which surfaces a window in a
+  //     healthy session) and BEFORE the canary/press (no mutation yet): a locked /
+  //     full-screen session REFUSES (blocked, zero mutation); a window merely on
+  //     another Space is RELOCATED back and disclosed. Menu-only recipes skip this.
+  if (recipe.needsWindowReachability === true) {
+    const reach = await ensureWindowReachable(run);
+    if (!reach.ok) return blockedReachability(reach.verdict);
+    if (reach.relocated) {
+      relocationNote =
+        "the Things window was on another desktop, so it was moved to the desktop you're viewing " +
+        "to open the dialog. ";
+    }
+  }
 
   // 1. Recipe canary: resolve every statically-reachable element (now that the
   //    target is selected). A miss refuses the whole drive before anything is
@@ -812,12 +953,8 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       );
       if (!ok) {
         // the abort keystroke must land (and be verified) before returning the partial-state report
-        const { dismissed } = await verifiedAbort(run);
-        return partial(
-          step.label,
-          "the expected element never appeared within the timeout",
-          dismissed,
-        );
+        const clear = await clearDialog(run);
+        return partial(step.label, "the expected element never appeared within the timeout", clear);
       }
       done.push(step.label);
       continue;
@@ -841,12 +978,12 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       const effective = await resolveStepPath(step, run);
       if (effective === null) {
         // dismiss whatever opened (and verify) before reporting
-        const { dismissed } = await verifiedAbort(run);
+        const clear = await clearDialog(run);
         return partial(
           step.label,
           "none of its expected element shapes resolved (neither the attached sheet nor the " +
             "detached repeat editor window)",
-          dismissed,
+          clear,
         );
       }
       step = { ...step, path: effective };
@@ -860,7 +997,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       const res = await run(command, STEP_TIMEOUT_MS);
       if (!res.ok || res.stdout.trim() !== "OK") {
         // clear any transient state (and verify) before reporting
-        const { dismissed } = await verifiedAbort(run);
+        const clear = await clearDialog(run);
         const noMatch =
           step.primitive === "select-heading-row"
             ? "the project view exposed no selectable heading row at the target position — the " +
@@ -874,7 +1011,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
             : res.timedOut === true
               ? "the row-selection step timed out"
               : res.stderr.trim() || "the row-selection step failed",
-          dismissed,
+          clear,
         );
       }
       done.push(step.label);
@@ -890,7 +1027,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       const verdict = res.stdout.trim();
       if (!res.ok || verdict !== "OK") {
         // clear any transient state (and verify) before reporting
-        const { dismissed } = await verifiedAbort(run);
+        const clear = await clearDialog(run);
         return partial(
           step.label,
           res.ok
@@ -900,7 +1037,7 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
             : res.timedOut === true
               ? "the eligibility check timed out"
               : res.stderr.trim() || "the eligibility check failed",
-          dismissed,
+          clear,
         );
       }
       done.push(step.label);
@@ -912,10 +1049,9 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
       // the click depends on the UI state the previous step produced
       const outcome = await driveClickElement(step, run);
       if (!outcome.ok) {
-        // dismiss whatever the click opened (and verify) before reporting
-        const dismissed =
-          outcome.needsAbort === true ? (await verifiedAbort(run)).dismissed : undefined;
-        return partial(step.label, outcome.why ?? "the click failed", dismissed);
+        // clear whatever the click opened (honest cleanup) before reporting
+        const clear = outcome.needsAbort === true ? await clearDialog(run) : undefined;
+        return partial(step.label, outcome.why ?? "the click failed", clear);
       }
       done.push(step.label);
       continue;
@@ -923,20 +1059,25 @@ async function drive(recipe: UiRecipe, run: UiRunner, aux: UiDriveAux): Promise<
     // each recipe step depends on the UI state the previous step produced; they cannot be parallelized
     const res = await run(command, STEP_TIMEOUT_MS);
     if (!res.ok) {
-      // dismiss the half-open sheet/popover (and verify) before reporting partial state
-      const dismissed =
+      // clear the half-open sheet/popover (honest — never claim an unconfirmed
+      // dismissal) before reporting partial state
+      const clear =
         step.primitive !== "reveal" && step.primitive !== "activate"
-          ? (await verifiedAbort(run)).dismissed
+          ? await clearDialog(run)
           : undefined;
       return partial(
         step.label,
         res.timedOut === true ? "the step timed out" : res.stderr.trim() || "the step failed",
-        dismissed,
+        clear,
       );
     }
     done.push(step.label);
   }
-  return { exitCode: 0, stdout: `drove ${done.length} step(s): ${done.join(" → ")}`, stderr: "" };
+  return {
+    exitCode: 0,
+    stdout: `${relocationNote}drove ${done.length} step(s): ${done.join(" → ")}`,
+    stderr: "",
+  };
 }
 
 async function waitForElement(
@@ -1046,5 +1187,10 @@ export function createUiVector(
       }
       return drive(invocation.recipe, run, aux);
     },
+    // Pre-seed gate seam for the promote orchestrators (SESSGATE, #480): probe the
+    // live session BEFORE they seed a row, so a locked/full-screen session refuses
+    // with zero mutation. Present regardless of `enabled` (the orchestrator has
+    // already cleared the H-UI-DRIVE ack by the time it consults this).
+    probeReachability: () => probeSessionReachability(run, STEP_TIMEOUT_MS),
   };
 }

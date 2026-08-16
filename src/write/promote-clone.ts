@@ -49,6 +49,7 @@ import {
 import { deriveWeeklyWeekdays, isIsoDate } from "./repeat-anchor.ts";
 import { assertRepeatRule, ruleToInverseParams } from "./repeat-rule.ts";
 import { createDbReader, type PreModDates, type RepeatingDiscovery } from "./verify/delta.ts";
+import { H_UI_SESSION_UNREACHABLE } from "./vectors/session-reachability.ts";
 
 type PromoteOp =
   | "todo.make-repeating"
@@ -103,6 +104,37 @@ function blockedUiDrive(op: PromoteOp): MutationResult {
     remediation:
       "pass dangerouslyDriveGui (--dangerously-drive-gui) to proceed; the vector also requires " +
       "`things config set ui-enabled true` and Accessibility granted to this process (see docs/setup.md)",
+  };
+}
+
+/**
+ * SESSGATE (#480) pre-seed reachability gate. A promote composite is NOT atomic:
+ * it SEEDS a row (clone / add) before the GUI promote leg drives the dialog. If
+ * the Mac's session is AX-blind (screen locked / full-screen Space), the dialog
+ * would open on an unreachable window and the drive would fail — leaving an
+ * orphan seed. So probe the live session BEFORE seeding and refuse fast (zero
+ * mutation) on the certain-failure LOCKED signature. Only "session" scope refuses
+ * here: a window merely on another Space is left for the in-drive relocation (the
+ * reveal has not run yet, so refusing before the seed would be a false positive).
+ * No ui vector (simulator / bench), ui disabled, or a fail-open probe → proceed
+ * (the promote leg's own gate + cleanup remain the backstop).
+ */
+async function gateSessionReachability(
+  deps: WriteDeps,
+  op: PromoteOp,
+): Promise<MutationResult | null> {
+  if (!deps.config.ui.enabled) return null;
+  const ui = deps.vectors.find((v) => v.probeReachability !== undefined);
+  if (ui?.probeReachability === undefined) return null;
+  const verdict = await ui.probeReachability();
+  if (verdict.reachable || verdict.scope !== "session") return null;
+  return {
+    kind: "blocked",
+    op,
+    reason: "hazard",
+    hazard: H_UI_SESSION_UNREACHABLE,
+    detail: verdict.detail,
+    remediation: verdict.remediation,
   };
 }
 
@@ -386,6 +418,12 @@ async function makeRepeatingViaClone(
     };
   }
 
+  // SESSGATE (#480): refuse a locked / full-screen session BEFORE minting a clone
+  // — otherwise the promote's dialog opens on an unreachable window and the whole
+  // compound fails, stranding a disposable clone. Zero mutation on refusal.
+  const gate = await gateSessionReachability(deps, op);
+  if (gate !== null) return gate;
+
   const startedAt = now;
   const txnId = newTxnId(startedAt);
 
@@ -619,6 +657,12 @@ async function addRepeatingViaCreate(
       },
     };
   }
+
+  // SESSGATE (#480): refuse a locked / full-screen session BEFORE seeding the row
+  // (the two legs are not atomic — a doomed promote would strand the seed). Zero
+  // mutation on refusal; a window merely on another Space is relocated in-drive.
+  const gate = await gateSessionReachability(deps, op);
+  if (gate !== null) return gate;
 
   const startedAt = deps.now?.() ?? new Date();
   const txnId = newTxnId(startedAt);
@@ -899,6 +943,11 @@ export async function cloneTemplateViaRepromote(
       },
     };
   }
+
+  // SESSGATE (#480): refuse a locked / full-screen session BEFORE minting the
+  // plain clone (a doomed promote would strand it). Zero mutation on refusal.
+  const gate = await gateSessionReachability(deps, op);
+  if (gate !== null) return gate;
 
   const startedAt = deps.now?.() ?? new Date();
   const txnId = newTxnId(startedAt);
