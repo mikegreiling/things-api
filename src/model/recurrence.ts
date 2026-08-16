@@ -28,8 +28,16 @@
  *       discriminator.
  *   of  occurrence offsets: dy (0-based day; -1 = last day of month),
  *       mo (0-based month), wd (weekday, 0=Sunday), wdo (nth weekday, -1=last)
- *   ed  end date (unix seconds; distant-future sentinel = no end)
- *   rc  remaining repeat count (0 = unlimited)
+ *   ed  end date (unix seconds; distant-future sentinel = no end). An
+ *       ends-after rule OMITS this key entirely (RRX1); an ends-on rule sets
+ *       it to the chosen date.
+ *   rc  the configured "ends after N times" TOTAL occurrence count. IMMUTABLE:
+ *       it does NOT decrement as instances spawn (RRX1 — a daily ends-after-3
+ *       series held rc=3 through all three spawns and past exhaustion; the app
+ *       counts spawns in the template's rt1_instanceCreationCount column and
+ *       stops by clearing the cursor rt1_nextInstanceStartDate, never by
+ *       touching rc). 0/absent = unlimited. NOT "remaining" — it never counts
+ *       down, so it is decoded as `occurrenceCount`, not a remaining tally.
  *   rrv rule schema version (4 observed)
  *   sr/ia anchor timestamps (not needed for reads)
  */
@@ -61,7 +69,17 @@ export interface RepeatRule {
   startOffsetDays: number;
   offsets: RepeatOffset[];
   endDate: IsoDate | null;
-  remainingCount: number | null;
+  /**
+   * The rule's "ends after N times" TOTAL occurrence count (`null` when the
+   * series is unlimited). This is the CONFIGURED bound, NOT a live tally: it
+   * never decrements as instances spawn (RRX1). The app tracks progress in the
+   * template's `rt1_instanceCreationCount` column (not in this rule blob) and
+   * ends the series by clearing its next-occurrence cursor once that count
+   * reaches this total — so an exhausted ends-after series still decodes with
+   * `occurrenceCount` = its original N. Reading how MANY remain therefore
+   * requires the template's icCount, which is outside this rule.
+   */
+  occurrenceCount: number | null;
   version: number;
 }
 
@@ -76,22 +94,39 @@ const UNITS: Record<number, RepeatRule["unit"]> = {
 const DISTANT_FUTURE_EPOCH = 32503680000;
 
 /**
- * The GUI's status word for a repeating template with no set next
- * occurrence: `paused` (instance creation paused), `ended` (the rule's end
- * date has passed or its repeat count is exhausted), else `waiting` (an
- * after-completion rule between instances). Live-verified 2026-07-11:
- * Ended = fixed rule with endDate 2025-02-24; Waiting = after-completion
- * rule — otherwise column-identical rows.
+ * The GUI's status word for a repeating template with no set next occurrence:
+ * `paused` (instance creation paused), `ended` (the series will spawn no more
+ * instances — its end date has passed or its occurrence count is exhausted),
+ * else `waiting` (an after-completion rule between instances).
+ *
+ * Exhaustion is read from the CURSOR, not the rule's count. A FIXED series
+ * always carries a next-occurrence cursor while live; the app clears it
+ * (`rt1_nextInstanceStartDate` → NULL) the moment the series ends — whether by
+ * an ends-ON date passing OR an ends-AFTER count being reached (RRX1: a daily
+ * ends-after-3 series went cursor-NULL after its 3rd spawn with rc still 3, and
+ * a past ends-on template was born cursor-NULL). So a fixed rule with no next
+ * occurrence has ended. The rule's occurrence count is NOT the signal — it is
+ * the immutable configured total (never 0 at exhaustion), which is why the old
+ * `remainingCount === 0` test was unreachable. After-completion rules rest with
+ * no next occurrence BETWEEN instances (that is `waiting`, not `ended`), so the
+ * cursor test is gated on fixed rules. Live-verified 2026-07-11 (Ended = fixed
+ * rule with a past endDate; Waiting = after-completion rule) + RRX1 2026-08-15
+ * (ends-after / ends-on exhaustion end-states, golden-v2 / 3.22.12).
  */
 export function templateStatus(
-  repeating: { paused?: boolean; rule?: RepeatRule },
+  repeating: { paused?: boolean; rule?: RepeatRule; nextOccurrence?: IsoDate | null },
   todayIso: string,
 ): "waiting" | "paused" | "ended" {
   if (repeating.paused === true) return "paused";
   const rule = repeating.rule;
   if (rule !== undefined) {
+    // An ends-on rule whose end date has passed is ended — an authoritative
+    // signal that also covers a "born already ended" past ends-on template.
     if (rule.endDate !== null && rule.endDate < todayIso) return "ended";
-    if (rule.remainingCount === 0) return "ended";
+    // A fixed series with no next occurrence has exhausted its bound (count OR
+    // date) — the app cleared the cursor. (After-completion cursor-NULL is a
+    // normal resting state, so this is fixed-only.)
+    if (rule.type === "fixed" && repeating.nextOccurrence == null) return "ended";
   }
   return "waiting";
 }
@@ -151,7 +186,9 @@ export function decodeRecurrenceRule(blob: unknown): RepeatRule {
     startOffsetDays: typeof dict["ts"] === "number" ? dict["ts"] : 0,
     offsets,
     endDate: ed === null || ed >= DISTANT_FUTURE_EPOCH ? null : epochToIso(ed),
-    remainingCount: rc === 0 ? null : rc,
+    // rc = the "ends after N" TOTAL (immutable, never decrements — RRX1);
+    // 0/absent = unlimited. See RepeatRule.occurrenceCount.
+    occurrenceCount: rc === 0 ? null : rc,
     version: rrv,
   };
 }

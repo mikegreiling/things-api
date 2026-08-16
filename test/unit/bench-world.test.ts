@@ -97,7 +97,7 @@ describe("bench world profile", () => {
     expect(rule.unit).toBe("yearly");
     expect(rule.offsets).toEqual([{ month: 12, weekday: 0, weekdayOrdinal: -1 }]);
     expect(rule.endDate).toBeNull(); // forever sentinel
-    expect(rule.remainingCount).toBeNull();
+    expect(rule.occurrenceCount).toBeNull();
 
     const after = decodeRecurrenceRule(
       ruleXml({ tp: 1, fu: 8, fa: 1, of: [{ dy: -1 }], anchor: 1_780_000_000 }),

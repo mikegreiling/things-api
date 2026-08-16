@@ -248,10 +248,10 @@ export type InverseRuleFields = Omit<RepeatRuleParams, "uuid">;
 /** The mutually-exclusive Ends bound of a decoded rule, or null if inexpressible. */
 function endsOf(rule: RepeatRule): { ends: RepeatEnds } | null {
   const hasDate = rule.endDate !== null;
-  const hasCount = rule.remainingCount !== null;
+  const hasCount = rule.occurrenceCount !== null;
   if (hasDate && hasCount) return null; // dialog's Ends is single-choice
   if (hasDate) return { ends: { kind: "on-date", date: rule.endDate as IsoDate } };
-  if (hasCount) return { ends: { kind: "after", count: rule.remainingCount as number } };
+  if (hasCount) return { ends: { kind: "after", count: rule.occurrenceCount as number } };
   return { ends: { kind: "never" } };
 }
 

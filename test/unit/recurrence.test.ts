@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
+import { decodeRecurrenceRule, templateStatus } from "../../src/model/recurrence.ts";
 import { byUuid } from "../../src/read/detail.ts";
 import { upcomingView } from "../../src/read/views.ts";
 import { buildFixtureDb } from "../fixtures/build-db.ts";
@@ -57,6 +57,42 @@ const AFTER_COMPLETION_DAILY = ruleXml(`
   <key>tp</key><integer>1</integer>
   <key>ts</key><integer>0</integer>`);
 
+// RRX1 (golden-v2 / 3.22.12, 2026-08-15) captured blobs, verbatim byte shapes:
+// an --ends-after 3 daily rule writes rc=3 and OMITS the ed key entirely (the
+// count is the configured total; it never decrements — rc stayed 3 through all
+// three spawns AND past exhaustion).
+const ENDS_AFTER_3_DAILY = ruleXml(`
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array><dict><key>dy</key><integer>0</integer></dict></array>
+  <key>rc</key><integer>3</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>`);
+
+// --ends-on 2026-07-08 (ed=1783468800), rc=0 (no count bound).
+const ENDS_ON_DAILY = ruleXml(`
+  <key>ed</key><real>1783468800</real>
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array><dict><key>dy</key><integer>0</integer></dict></array>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>`);
+
+// --ends-on 2026-07-03 (ed=1783036800), a PAST date — a "born already ended"
+// series (RRX1 EP: cursor NULL from creation, zero instances).
+const ENDS_ON_PAST_DAILY = ruleXml(`
+  <key>ed</key><real>1783036800</real>
+  <key>fa</key><integer>1</integer>
+  <key>fu</key><integer>16</integer>
+  <key>of</key><array><dict><key>dy</key><integer>0</integer></dict></array>
+  <key>rc</key><integer>0</integer>
+  <key>rrv</key><integer>4</integer>
+  <key>tp</key><integer>0</integer>
+  <key>ts</key><integer>0</integer>`);
+
 describe("decodeRecurrenceRule", () => {
   it("decodes every-2-weeks-on-Sunday with a 4-day-early start", () => {
     const rule = decodeRecurrenceRule(BIWEEKLY_SUNDAY);
@@ -67,7 +103,7 @@ describe("decodeRecurrenceRule", () => {
       startOffsetDays: -4,
       offsets: [{ weekday: 0 }],
       endDate: null,
-      remainingCount: null,
+      occurrenceCount: null,
       version: 4,
     });
   });
@@ -94,6 +130,28 @@ describe("decodeRecurrenceRule", () => {
     expect(() => decodeRecurrenceRule(new Uint8Array([0x62, 0x70]))).toThrow();
   });
 
+  it("decodes an --ends-after count as the immutable total occurrenceCount (RRX1)", () => {
+    const rule = decodeRecurrenceRule(ENDS_AFTER_3_DAILY);
+    expect(rule).toMatchObject({
+      type: "fixed",
+      unit: "daily",
+      endDate: null, // ends-after omits the ed key
+      occurrenceCount: 3, // the configured total, NOT a remaining tally
+    });
+  });
+
+  it("decodes an --ends-on date as endDate with no count bound (RRX1)", () => {
+    expect(decodeRecurrenceRule(ENDS_ON_DAILY)).toMatchObject({
+      endDate: "2026-07-08",
+      occurrenceCount: null,
+    });
+    // A past ends-on ("born already ended") decodes its date faithfully.
+    expect(decodeRecurrenceRule(ENDS_ON_PAST_DAILY)).toMatchObject({
+      endDate: "2026-07-03",
+      occurrenceCount: null,
+    });
+  });
+
   it("fails loudly on a rule-format version bump (rrv != 4) — the Things-update canary", () => {
     const V5 = ruleXml(`
       <key>fa</key><integer>1</integer>
@@ -111,6 +169,60 @@ describe("decodeRecurrenceRule", () => {
       <key>tp</key><integer>0</integer>
       <key>ts</key><integer>0</integer>`);
     expect(() => decodeRecurrenceRule(NO_VERSION)).toThrow(/rrv=0/);
+  });
+});
+
+describe("templateStatus — exhaustion is read from the cursor (RRX1)", () => {
+  const endsAfter = decodeRecurrenceRule(ENDS_AFTER_3_DAILY);
+  const endsOn = decodeRecurrenceRule(ENDS_ON_DAILY);
+  const endsOnPast = decodeRecurrenceRule(ENDS_ON_PAST_DAILY);
+  const afterCompletion = decodeRecurrenceRule(AFTER_COMPLETION_DAILY);
+  const unlimited = decodeRecurrenceRule(BIWEEKLY_SUNDAY);
+
+  it("an EXHAUSTED ends-after series (fixed, cursor cleared) is ended", () => {
+    // The app stops an ends-after series by clearing the cursor once icCount
+    // reaches the total; rc stays at the total (3), so the status MUST come from
+    // the null cursor, not the count. This is the case the old
+    // remainingCount===0 branch could never catch.
+    expect(templateStatus({ rule: endsAfter, nextOccurrence: null }, "2026-07-08")).toBe("ended");
+  });
+
+  it("an ACTIVE ends-after series (cursor still set) is waiting", () => {
+    expect(templateStatus({ rule: endsAfter, nextOccurrence: "2026-07-07" }, "2026-07-06")).toBe(
+      "waiting",
+    );
+  });
+
+  it("a past ends-on series is ended by its endDate even before the cursor clears", () => {
+    expect(templateStatus({ rule: endsOnPast, nextOccurrence: "2026-07-04" }, "2026-07-05")).toBe(
+      "ended",
+    );
+    // and once exhausted (cursor cleared) it is still ended
+    expect(templateStatus({ rule: endsOnPast, nextOccurrence: null }, "2026-07-05")).toBe("ended");
+  });
+
+  it("an ACTIVE ends-on series (end date still ahead, cursor set) is waiting", () => {
+    expect(templateStatus({ rule: endsOn, nextOccurrence: "2026-07-06" }, "2026-07-06")).toBe(
+      "waiting",
+    );
+  });
+
+  it("an after-completion rule resting with no next occurrence is waiting, NOT ended", () => {
+    // A cleared cursor is a NORMAL resting state for after-completion rules
+    // (the next date is unknown until the prior instance resolves), so the
+    // cursor-exhaustion test is gated on fixed rules only.
+    expect(templateStatus({ rule: afterCompletion, nextOccurrence: null }, "2026-07-08")).toBe(
+      "waiting",
+    );
+  });
+
+  it("paused wins over everything; an active unlimited fixed rule is waiting", () => {
+    expect(
+      templateStatus({ paused: true, rule: endsAfter, nextOccurrence: null }, "2026-07-08"),
+    ).toBe("paused");
+    expect(templateStatus({ rule: unlimited, nextOccurrence: "2026-07-19" }, "2026-07-06")).toBe(
+      "waiting",
+    );
   });
 });
 

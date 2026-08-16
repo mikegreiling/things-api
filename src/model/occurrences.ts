@@ -86,8 +86,21 @@ function dayInMonth(year: number, month1: number, offset: RepeatOffset): IsoDate
 
 /**
  * Event dates of a FIXED rule from `anchor` (an app-materialized event date,
- * INCLUDED as the first result), honoring the rule's endDate/remainingCount
+ * INCLUDED as the first result), honoring the rule's endDate/occurrenceCount
  * bounds and the window's count/until. Throws on after-completion rules.
+ *
+ * ⚠ occurrenceCount is the CONFIGURED TOTAL "ends after N", not a remaining
+ * tally (RRX1) — and the anchor is the app cursor, i.e. an occurrence PARTWAY
+ * through the series (the app has already spawned `rt1_instanceCreationCount` of
+ * them). Capping the from-anchor projection at the total therefore OVER-counts
+ * the tail by the already-spawned count for a partway ends-after series; the
+ * true remaining = occurrenceCount − icCount, and icCount is a template-column
+ * value not carried by the (rule-only) RepeatRule, so it cannot be applied
+ * here. This is a bounded, benign over-estimate (extra dates are still valid
+ * rule dates that simply will not spawn), consistent with this file's
+ * best-effort-extrapolation contract; only reachable for horizon > 1 on a
+ * count-bounded series. A tight fix would thread the template's icCount into
+ * the projection (a read-model addition — see docs/lab/rrx1-rc-and-reminder.md).
  */
 export function generateEventDates(
   rule: RepeatRule,
@@ -100,11 +113,14 @@ export function generateEventDates(
         "prior instance resolves",
     );
   }
-  // remainingCount counts occurrences the rule will still produce; the
-  // anchor is the first of them.
+  // Bound the projection by the rule's configured total (a safety ceiling for a
+  // count-bounded series). NB occurrenceCount is the TOTAL, not the remaining —
+  // see the header caveat: this over-counts the tail by icCount for a partway
+  // ends-after series (the pure rule math has no access to the template's
+  // spawned count).
   const cap = Math.min(
     Math.max(1, window.count),
-    rule.remainingCount === null ? Number.POSITIVE_INFINITY : rule.remainingCount,
+    rule.occurrenceCount === null ? Number.POSITIVE_INFINITY : rule.occurrenceCount,
   );
   const inBounds = (iso: IsoDate): boolean =>
     (window.until === undefined || iso <= window.until) &&
