@@ -46,6 +46,14 @@ export interface RepeatDialogRule {
   reminder?: string;
   deadline?: boolean;
   startDaysEarlier?: number;
+  /**
+   * The requested FIRST occurrence (ISO `YYYY-MM-DD`), driven into the dialog's
+   * "Next:" date field (ANCH2, issue #476). The default value of Next is the
+   * app's today-anchored first match; overwriting it makes the series start on
+   * the requested date verbatim (subsequent occurrences follow the rule). Omit
+   * to accept the app default. Not applicable to after-completion (no calendar).
+   */
+  next?: string;
 }
 
 const ITEMS_MENU = `menu "Items" of menu bar 1`;
@@ -374,13 +382,22 @@ function pressControl(label: string, pathCandidates: string[]): UiStep {
   return { primitive: "press", label, pathCandidates, dynamic: true, addressing: "title" };
 }
 /**
- * Set the dialog's date/time picker (reminder time / end-date bound). The
- * control is an `AXDateTimeArea` located by role within the front dialog (UIC6),
- * so it carries no element path — the driver's set-datetime primitive finds it.
- * `spec` is `time:HH:mm` or `date:YYYY-MM-DD`.
+ * Set ONE of the dialog's date/time pickers (Next first-occurrence / end-date
+ * bound / reminder time). Each is an `AXDateTimeArea` located by role within the
+ * front dialog, so it carries no element path — the driver's set-datetime
+ * primitive selects DETERMINISTICALLY by `target` (ANCH2: reminder = the
+ * time-bearing area; next = top midnight picker; ends = bottom midnight picker),
+ * never "the first area by role". `spec` is `time:HH:mm` or `date:YYYY-MM-DD`.
  */
-function setDateTime(label: string, spec: string): UiStep {
-  return { primitive: "set-datetime", label, value: spec, dynamic: true, addressing: "title" };
+function setDateTime(label: string, spec: string, target: "next" | "ends" | "reminder"): UiStep {
+  return {
+    primitive: "set-datetime",
+    label,
+    value: spec,
+    dtTarget: target,
+    dynamic: true,
+    addressing: "title",
+  };
 }
 
 /** Steps that drive the day anchor of a monthly rule into the mode + ordinal pop-ups. */
@@ -479,21 +496,34 @@ function repeatDialogEntry(rule: RepeatDialogRule): UiStep[] {
     steps.push(...monthlyAnchorSteps(y, DIALOG_YEAR_MODE, DIALOG_YEAR_ORDINAL));
   }
 
-  if (rule.ends !== undefined && rule.ends.kind !== "never") {
-    if (rule.ends.kind === "after") {
-      steps.push(selectPopup("ends = after", DIALOG_ENDS, "after"));
-      steps.push(
-        setField(`ends after = ${rule.ends.count}`, DIALOG_ENDS_COUNT, String(rule.ends.count)),
-      );
-    } else {
-      steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
-      steps.push(setDateTime(`ends on = ${rule.ends.date}`, `date:${rule.ends.date}`));
-    }
+  // Ends bound + "Next:" first-occurrence field (ANCH2, issue #476). ORDER MATTERS:
+  // select "Ends: on date" FIRST (revealing its date area) BEFORE driving Next, so
+  // both date areas already exist when each is set through its own deterministic
+  // target. Driving Next while it is the SOLE date area and THEN adding the ends
+  // area collapses the whole series to the ends date (ANCH2 RC4); selecting the
+  // ends bound first — the proven-clean order (cell d) — keeps them distinct.
+  const endsOnDate = rule.ends !== undefined && rule.ends.kind === "on-date" ? rule.ends : null;
+  if (rule.ends !== undefined && rule.ends.kind === "after") {
+    steps.push(selectPopup("ends = after", DIALOG_ENDS, "after"));
+    steps.push(
+      setField(`ends after = ${rule.ends.count}`, DIALOG_ENDS_COUNT, String(rule.ends.count)),
+    );
+  } else if (endsOnDate !== null) {
+    steps.push(selectPopup("ends = on date", DIALOG_ENDS, "on date"));
+  }
+
+  // After-completion has no calendar, so no Next.
+  if (rule.next !== undefined && rule.afterCompletion !== true) {
+    steps.push(setDateTime(`Next (first occurrence) = ${rule.next}`, `date:${rule.next}`, "next"));
+  }
+
+  if (endsOnDate !== null) {
+    steps.push(setDateTime(`ends on = ${endsOnDate.date}`, `date:${endsOnDate.date}`, "ends"));
   }
 
   if (rule.reminder !== undefined) {
     steps.push(pressControl("check Add reminders", DIALOG_ADD_REMINDERS));
-    steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`));
+    steps.push(setDateTime(`reminder = ${rule.reminder}`, `time:${rule.reminder}`, "reminder"));
   }
 
   if (rule.deadline === true || (rule.startDaysEarlier ?? 0) > 0) {

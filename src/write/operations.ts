@@ -751,6 +751,15 @@ export interface RepeatRuleParams {
    * implies `deadline` (a start offset only exists on a deadlined template).
    */
   startDaysEarlier?: number;
+  /**
+   * The requested FIRST occurrence (ISO `YYYY-MM-DD`), driven into the Repeat
+   * dialog's "Next:" date field (ANCH2, issue #476). Overwrites the app's
+   * today-anchored default so the series starts on this date verbatim (later
+   * occurrences follow the rule). The promote verbs set this from the item's
+   * scheduled date; reschedule-repeat sets it from `--when`. Not applicable to
+   * after-completion (no calendar).
+   */
+  next?: IsoDate;
 }
 
 /**
@@ -758,9 +767,9 @@ export interface RepeatRuleParams {
  * add-repeating composites carry on their PROMOTE leg (frequency/interval plus
  * the after-completion + weekly/monthly/yearly/ends anchors). The deadline-
  * coupled rule fields (rule `deadline`, `startDaysEarlier`) and the rule-level
- * `reminder` (which the GUI vector refuses, UIC6-g) are intentionally EXCLUDED
- * here — they collide with the base add's own concrete `deadline`/`reminder`,
- * and a deadlined repeat is set with a follow-up `reschedule-repeat`.
+ * `reminder` are intentionally EXCLUDED here — they collide with the base add's
+ * own concrete `deadline`/`reminder` (the created item owns those), and a
+ * deadlined repeat is set with a follow-up `reschedule-repeat`.
  */
 export interface AddRepeatingRuleFields {
   frequency: RepeatFrequency;

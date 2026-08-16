@@ -1,34 +1,28 @@
 /**
- * The FIXED-recurrence anchor law + the phase-honour check the promote verbs use
- * (issue #476, evidence: docs/lab/anch1-repeat-anchor.md, golden-v2 / Things
- * 3.22.12).
+ * The FIXED-recurrence DEFAULT-anchor law + the weekly-weekday derivation the
+ * promote verbs use (issue #476; evidence: docs/lab/anch2-next-field.md +
+ * anch1-repeat-anchor.md, golden-v2 / Things 3.22.12).
  *
- * PROVEN LAW (ANCH1). When the Repeat dialog turns an item into a FIXED series it
- * anchors the FIRST occurrence to the next calendar match ON OR AFTER TODAY and
- * IGNORES the item's own scheduled `when` entirely (5/5 anchor-matrix cells:
- * when ∈ {today, aligned future weekday, misaligned weekday, someday} all landed
- * the same). It is INTERVAL-INDEPENDENT (interval 1 and 2 place the first
- * occurrence identically). With no explicit weekday the dialog defaults the
- * weekly weekday to SUNDAY (wd 0, the start of the week) — constant, independent
- * of today AND of the item's scheduled weekday (3/3 cells incl. a Monday probe).
- * There is NO first-occurrence control in the dialog (UIC6 field map) and no
- * post-promote vector that re-anchors the cursor to a requested phase (AS
- * `schedule` on the template → error 302; moving the instance leaves the cursor;
- * reschedule re-anchors to the current cursor — A5). So a requested first
- * occurrence that the app would drop cannot be honoured programmatically.
+ * DEFAULT LAW (ANCH1, still valid as the DEFAULT). Left untouched, the Repeat
+ * dialog's "Next:" field defaults the first occurrence to the next calendar match
+ * ON OR AFTER TODAY (interval-independent), and a weekday-less weekly rule
+ * defaults to SUNDAY. ANCH2 then showed the "Next:" field is EDITABLE and honored
+ * (docs/lab/anch2-next-field.md) — so the promote verbs DRIVE it with the item's
+ * scheduled date rather than refuse a wrong-phase series. This module no longer
+ * carries a phase-refusal (the ANCH1 `H-REPEAT-ANCHOR` premise — "no drivable
+ * first-occurrence control" — was false).
  *
- * Two consequences this module encodes:
+ * What it still provides:
  *  1. {@link deriveWeeklyWeekdays} — when a weekly rule omits `weekdays` but a
- *     concrete anchor date is known, derive the weekday FROM that date so the
- *     series fires on the intended weekday (not the app's Sunday default).
- *  2. {@link requestedPhaseHonored} — whether the app-anchored series would
- *     actually CONTAIN the requested first-occurrence date. For interval > 1 a
- *     mismatched phase silently drops the user's date; the promote verbs refuse
- *     fail-closed rather than create a wrong-phase series.
+ *     concrete anchor date is known, derive the recurring weekday FROM that date
+ *     so the series fires on the intended weekday (not the app's Sunday default).
+ *     Driving "Next:" fixes the FIRST occurrence; this fixes the recurring day.
+ *  2. {@link fixedSpawnPlan} — the DEFAULT spawn shape (used by the simulator
+ *     when no explicit first occurrence is requested): first occurrence = next
+ *     match ≥ today, an instance spawns only when today is itself an occurrence.
  *
- * Guarded frequencies: DAILY and WEEKLY (the ANCH1-probed law). MONTHLY/YEARLY
- * phase is NOT guarded here (their default anchor law is unprobed) — documented
- * residual in the campaign doc.
+ * Daily/weekly follow the probed default law; monthly/yearly keep the caller's
+ * today+interval model for the default (their default-anchor law is unprobed).
  */
 import { addDaysIso, type IsoDate } from "../model/dates.ts";
 import type { RepeatRuleParams, Weekday } from "./operations.ts";
@@ -182,54 +176,4 @@ export function fixedSpawnPlan(
     cursorIso: cursor,
     instanceCount: isToday ? 1 : 0,
   };
-}
-
-/**
- * Whether the FIXED series the app WILL create (anchored at today, cadence
- * `interval` units) would actually CONTAIN the requested first-occurrence date.
- * Returns `true` (nothing to refuse) whenever the phase is irrelevant or cannot
- * be judged: after-completion, interval 1 (every match is an occurrence), a
- * monthly/yearly rule (unguarded), no concrete `requestedIso`, or a
- * `requestedIso` that isn't even a match of the rule's calendar pattern (the
- * item's own date is not a declaration of THIS rule's phase). Returns `false`
- * ONLY when a concrete, pattern-matching requested date would be DROPPED by the
- * app's today-anchored phase (daily/weekly, interval > 1) — the wrong-phase bug.
- */
-export function requestedPhaseHonored(
-  rule: Pick<RepeatRuleParams, "frequency" | "interval" | "weekdays" | "afterCompletion">,
-  todayIso: IsoDate,
-  requestedIso: IsoDate | null | undefined,
-): boolean {
-  if (rule.afterCompletion === true) return true;
-  if (rule.interval <= 1) return true; // every match is an occurrence — phase is irrelevant
-  if (!isIsoDate(requestedIso)) return true;
-  if (rule.frequency === "daily") {
-    const gap = daysBetweenIso(todayIso, requestedIso);
-    if (gap < 0) return false; // a fixed series can't start in the past
-    return mod(gap, rule.interval) === 0;
-  }
-  if (rule.frequency === "weekly") {
-    if (!effectiveWds(rule).includes(weekdayOfIso(requestedIso))) return true; // not a pattern match
-    const first = fixedFirstOccurrence(rule, todayIso);
-    if (first === null) return true;
-    return weeklyActiveWeek(first, requestedIso, rule.interval);
-  }
-  return true; // monthly/yearly: unguarded
-}
-
-/**
- * A one-line, human description of where the app WILL place the first occurrence
- * of this fixed rule (for the refusal message). Empty string when it can't be
- * described (monthly/yearly/after-completion).
- */
-export function appAnchorDescription(
-  rule: Pick<RepeatRuleParams, "frequency" | "interval" | "weekdays" | "afterCompletion">,
-  todayIso: IsoDate,
-): string {
-  const first = fixedFirstOccurrence(rule, todayIso);
-  if (first === null) return "";
-  if (rule.frequency === "daily") return `${first} (today)`;
-  const wd = weekdayOfIso(first);
-  const name = WD_TO_WEEKDAY[wd] as Weekday;
-  return `${first} (the next ${name} on or after today)`;
 }

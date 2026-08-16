@@ -2161,6 +2161,7 @@ function ruleExtras(params: RepeatRuleParams): RepeatRuleExtras {
     ...(params.reminder !== undefined && { reminder: params.reminder }),
     ...(params.deadline !== undefined && { deadline: params.deadline }),
     ...(params.startDaysEarlier !== undefined && { startDaysEarlier: params.startDaysEarlier }),
+    ...(params.next !== undefined && { next: params.next }),
   };
 }
 

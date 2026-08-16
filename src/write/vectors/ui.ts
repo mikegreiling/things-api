@@ -388,39 +388,62 @@ function clickPointCommand(x: number, y: number, label: string): UiCommand {
 }
 
 /**
- * set-datetime: set the Repeat dialog's `AXDateTimeArea` (reminder time / "ends
- * on date" bound) via the ObjC AX bridge. Things' date/time control holds an
- * NSDate, and System Events cannot write it (`set value … to <date>` → -10000,
- * UIC6), so — like the mouse-synthesis primitive — this runs in JXA and calls
- * `AXUIElementSetAttributeValue(…, AXValue, <NSDate>)` directly. The control is
- * found by ROLE within Things' front dialog (there is exactly one during a
- * reminder/end-date step; the matrix never sets both at once), polled briefly
- * so it is caught right after the checkbox/pop-up that reveals it, and the
- * script THROWS when absent so the driver fails closed. `spec` is
- * `time:HH:mm` (keep the control's date, overwrite the time-of-day) or
- * `date:YYYY-MM-DD` (overwrite the date at midnight). One stable JXA shape.
+ * set-datetime: set ONE of the Repeat dialog's `AXDateTimeArea` controls via the
+ * ObjC AX bridge. Things' date/time controls hold an NSDate, and System Events
+ * cannot write them (`set value … to <date>` → -10000, UIC6), so — like the
+ * mouse-synthesis primitive — this runs in JXA and calls
+ * `AXUIElementSetAttributeValue(…, AXValue, <NSDate>)` directly.
+ *
+ * A fixed rule can expose up to THREE date areas at once — "Next:" (first
+ * occurrence), "Ends: on date", and the reminder time (ANCH2 census). Targeting
+ * "the first AXDateTimeArea by role" is therefore AMBIGUOUS — that ambiguity
+ * collapsed the series when `--ends-on` added a second area (oddities §8v, now
+ * retracted) and made the reminder look undrivable (UIC6-g, now retracted). This
+ * driver selects DETERMINISTICALLY by `target` (ANCH2, docs/lab/anch2-next-field.md):
+ *   - `reminder` — the only area carrying a time-of-day (the date pickers sit at
+ *     midnight); falls back to the bottom-most area if none carry a time.
+ *   - `next` — the TOP (smallest-y) midnight date picker.
+ *   - `ends` — the BOTTOM (largest-y) midnight date picker (present only once
+ *     "Ends: on date" is selected).
+ * The areas are polled briefly (revealed a beat after the checkbox/pop-up), and
+ * the script THROWS when the addressed control is absent so the driver fails
+ * closed. `spec` is `time:HH:mm` (keep the date, set the time-of-day) or
+ * `date:YYYY-MM-DD` (set the calendar date at midnight). One stable JXA shape.
  */
-export function axSetDateTimeScript(spec: string): string {
+export function axSetDateTimeScript(spec: string, target: "next" | "ends" | "reminder"): string {
   return `ObjC.import('Foundation'); ObjC.import('AppKit'); ObjC.import('ApplicationServices');
 function attr(el,name){ var out=Ref(); if($.AXUIElementCopyAttributeValue(el,$(name),out)!==0) return null; return ObjC.castRefToObject(out[0]); }
 function rolestr(el){ var v=attr(el,'AXRole'); return v? v.js : ''; }
 function kids(el){ var c=attr(el,'AXChildren'); if(!c) return []; var a=[]; for(var i=0;i<c.count;i++) a.push(c.objectAtIndex(i)); return a; }
-function find(el,role,depth){ if(depth<0) return null; if(rolestr(el)===role) return el; var ks=kids(el); for(var i=0;i<ks.length;i++){ var r=find(ks[i],role,depth-1); if(r) return r;} return null; }
+function collect(el,role,depth,out){ if(depth<0) return; if(rolestr(el)===role) out.push(el); var ks=kids(el); for(var i=0;i<ks.length;i++) collect(ks[i],role,depth-1,out); }
+function posY(el){ var p=attr(el,'AXPosition'); if(!p) return 0; var d=ObjC.castRefToObject($.CFCopyDescription(p)).js; var m=String(d).match(/y:([-0-9.]+)/); return m? +m[1] : 0; }
+function timeOfDay(el){ var v=attr(el,'AXValue'); if(!v) return -1; var cal=$.NSCalendar.currentCalendar; return cal.componentFromDate($.NSCalendarUnitHour,v)*60 + cal.componentFromDate($.NSCalendarUnitMinute,v); }
+function pick(areas,target){
+  if(areas.length===0) return null;
+  var sorted=areas.slice().sort(function(a,b){ return posY(a)-posY(b); });
+  if(target==='reminder'){
+    var timed=sorted.filter(function(a){ return timeOfDay(a)>0; });
+    return timed.length? timed[timed.length-1] : sorted[sorted.length-1];
+  }
+  var midnight=sorted.filter(function(a){ return timeOfDay(a)===0; });
+  if(midnight.length===0) midnight=sorted;
+  return target==='ends' ? midnight[midnight.length-1] : midnight[0];
+}
 function run(){
   var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.culturedcode.ThingsMac');
   if(!apps || apps.count===0) throw new Error('Things not running');
-  var pid=apps.objectAtIndex(0).processIdentifier;
-  var app=$.AXUIElementCreateApplication(pid);
+  var app=$.AXUIElementCreateApplication(apps.objectAtIndex(0).processIdentifier);
+  var target=${JSON.stringify(target)};
   var dt=null;
-  for(var t=0;t<20 && !dt;t++){ dt=find(app,'AXDateTimeArea',16); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
-  if(!dt) throw new Error('no AXDateTimeArea in the Repeat dialog');
+  for(var t=0;t<20 && !dt;t++){ var areas=[]; collect(app,'AXDateTimeArea',16,areas); dt=pick(areas,target); if(!dt) $.NSThread.sleepForTimeInterval(0.1); }
+  if(!dt) throw new Error('no '+target+' AXDateTimeArea in the Repeat dialog');
   var spec=${JSON.stringify(spec)};
   var cal=$.NSCalendar.currentCalendar;
   var d;
   if(spec.indexOf('time:')===0){
-    // Set the time-of-day on the control's own (today's) date via the purpose-
-    // built calendar API — component-bag mutation via JXA silently drops the
-    // hour, leaking the current wall-clock hour into the reminder (UIC6).
+    // Set the time-of-day on the control's own date via the purpose-built
+    // calendar API — component-bag mutation via JXA silently drops the hour,
+    // leaking the current wall-clock hour into the reminder (UIC6).
     var cur=attr(dt,'AXValue'); if(!cur) throw new Error('date/time control has no value');
     var hm=spec.slice(5).split(':');
     d=cal.dateBySettingHourMinuteSecondOfDateOptions(+hm[0], +hm[1], 0, cur, 0);
@@ -563,7 +586,7 @@ export function commandForStep(step: UiStep, targetUuid: string): UiCommand {
         primitive: "set-datetime",
         label: step.label,
         lang: "javascript",
-        script: axSetDateTimeScript(step.value ?? ""),
+        script: axSetDateTimeScript(step.value ?? "", step.dtTarget ?? "next"),
       };
     case "wait":
       return { primitive: "wait", label: step.label, script: axResolveScript(step.path ?? "") };

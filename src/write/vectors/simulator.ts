@@ -50,7 +50,7 @@ import {
   resolveProject,
   resolveTag,
 } from "../pre-state.ts";
-import { fixedSpawnPlan } from "../repeat-anchor.ts";
+import { fixedSpawnPlan, isIsoDate } from "../repeat-anchor.ts";
 import { composeRepeatRuleSpec, ruleXml } from "../recurrence-rule-blob.ts";
 import { resolveTagRefs } from "../tag-refs.ts";
 import type {
@@ -1096,21 +1096,29 @@ function applyMakeRepeatingFixed(
   const deadlined = params.deadline === true || (params.startDaysEarlier ?? 0) > 0;
   const startEarlier = params.startDaysEarlier ?? 0;
 
-  // ANCH1 (issue #476, docs/lab/anch1-repeat-anchor.md): the app anchors a FIXED
-  // rule's first occurrence to the next calendar match ON OR AFTER today (NOT
-  // today+interval), materializes an instance ONLY when today is itself an
-  // occurrence, and defaults a weekday-less weekly rule to SUNDAY. Daily/weekly
-  // follow this plan; monthly/yearly keep the prior today+interval model (their
-  // default-anchor law is unprobed).
+  // ANCH2 (issue #476, docs/lab/anch2-next-field.md): the app's "Next:" field
+  // fixes the first occurrence. When the promote drives it (params.next), the
+  // series anchors there verbatim — the instance materializes only when that date
+  // is today. Left to its DEFAULT (no params.next), a FIXED rule anchors to the
+  // next calendar match ≥ today (ANCH1 fixedSpawnPlan for daily/weekly; monthly/
+  // yearly keep the today+interval model, their default-anchor law being unprobed).
+  const nextIso = isIsoDate(params.next) ? params.next : null;
   const plan =
-    params.frequency === "daily" || params.frequency === "weekly"
-      ? fixedSpawnPlan(params, todayIso)
-      : {
-          refIso: todayIso,
-          instanceStartIso: todayIso as string | null,
-          cursorIso: addUnitsIso(todayIso, params.frequency, params.interval),
-          instanceCount: 1 as 0 | 1,
-        };
+    nextIso !== null
+      ? {
+          refIso: nextIso,
+          instanceStartIso: (nextIso === todayIso ? todayIso : null) as string | null,
+          cursorIso: nextIso,
+          instanceCount: (nextIso === todayIso ? 1 : 0) as 0 | 1,
+        }
+      : params.frequency === "daily" || params.frequency === "weekly"
+        ? fixedSpawnPlan(params, todayIso)
+        : {
+            refIso: todayIso,
+            instanceStartIso: todayIso as string | null,
+            cursorIso: addUnitsIso(todayIso, params.frequency, params.interval),
+            instanceCount: 1 as 0 | 1,
+          };
 
   // A PRESERVED source is relinked as the current-occurrence instance (count 1); a
   // DELETE-fate source spawns a fresh instance only when today is an occurrence.

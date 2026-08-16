@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AuditRecord } from "../../src/audit/schema.ts";
 import type { ThingsApiConfig } from "../../src/config.ts";
 import type { FingerprintStatus } from "../../src/db/fingerprint.ts";
+import { decodePackedDate } from "../../src/model/dates.ts";
 import { decodeRecurrenceRule } from "../../src/model/recurrence.ts";
 import { runCloneProject, runCloneTodo } from "../../src/write/clone.ts";
 import type { RepeatRuleParams } from "../../src/write/operations.ts";
@@ -394,18 +395,18 @@ describe("add-repeating — add → native promote", () => {
   });
 });
 
-// =================================================== ANCH1 anchor law (issue #476)
+// ============================================ ANCH2 first-occurrence Next drive (issue #476)
 //
-// The app anchors a FIXED repeat's first occurrence from TODAY (next calendar
-// match), ignoring the item's scheduled `when`, and defaults a weekday-less weekly
-// rule to Sunday (docs/lab/anch1-repeat-anchor.md, golden-v2/3.22.12). NOW here is
-// Sunday 2026-07-05. The promote verbs (a) derive the weekday from the item's date
-// when --weekdays is omitted, and (b) refuse fail-closed BEFORE any mutation when
-// interval > 1 and the app's phase would drop the requested first occurrence.
-describe("ANCH1 fixed-recurrence anchor (issue #476)", () => {
-  it("make-repeating REFUSES a wrong-phase interval-2 series (source date the app would drop)", async () => {
-    // Source scheduled Wed 2026-07-15; app anchors weekly/2 to Wed 2026-07-08 (next
-    // Wed ≥ Sun 07-05), whose interval-2 grid {07-08, 07-22, …} SKIPS 07-15.
+// The Repeat dialog's "Next:" field is drivable and honored (docs/lab/anch2-next-field.md,
+// golden-v2/3.22.12). The promote verbs DRIVE it with the requested first occurrence —
+// an explicit --when, else the item's scheduled date — so the series starts THERE
+// (verbatim), then post-drive VERIFY the landed first occurrence fail-closed. The
+// weekly weekday is still derived from that date so the recurring day is intended
+// (not the app's Sunday default). NOW here is Sunday 2026-07-05.
+describe("ANCH2 first-occurrence Next drive (issue #476)", () => {
+  it("make-repeating drives the source date as the first occurrence (not the app default)", async () => {
+    // Source scheduled Wed 2026-07-15; the app default would anchor weekly/2 to
+    // Wed 07-08 — but the Next drive makes the series start on 07-15 verbatim.
     const src = seedTodo(fixture.db, {
       title: "Alt Wed",
       start: "active",
@@ -416,34 +417,26 @@ describe("ANCH1 fixed-recurrence anchor (issue #476)", () => {
       { uuid: src, frequency: "weekly", interval: 2, weekdays: ["wednesday"] },
       GUI,
     );
-    expect(res).toMatchObject({ kind: "blocked", hazard: "H-REPEAT-ANCHOR" });
-    if (res.kind !== "blocked") throw new Error("expected blocked");
-    expect(res.detail).toContain("2026-07-08");
-    expect(res.detail).toContain("2026-07-15");
-    // ZERO mutation: X untouched (not trashed), no clone/template minted.
-    expect(row(src)?.["trashed"]).toBe(0);
-    expect(auditRecords.some((r) => r.txn?.role === "leg")).toBe(false);
-  });
-
-  it("make-repeating ALLOWS interval-2 when the source date IS the app's anchor phase", async () => {
-    // Wed 2026-07-08 is exactly the app's first occurrence → the requested phase
-    // is honoured; the series proceeds.
-    const src = seedTodo(fixture.db, {
-      title: "On phase",
-      start: "active",
-      startDate: "2026-07-08",
-    });
-    const res = await runMakeRepeatingTodo(
-      deps(vector),
-      { uuid: src, frequency: "weekly", interval: 2, weekdays: ["wednesday"] },
-      GUI,
-    );
     expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    // First occurrence honored (cursor == requested), rule offsets = Wednesday.
+    expect(decodePackedDate(row(res.uuid)?.["rt1_nextInstanceStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
+    expect(decodeRecurrenceRule(row(res.uuid)?.["rt1_recurrenceRule"] as Uint8Array)).toMatchObject(
+      {
+        unit: "weekly",
+        offsets: [{ weekday: 3 }],
+      },
+    );
+    // The original was moved to the Trash (clone → promote → trash), recoverable.
+    expect(row(src)?.["trashed"]).toBe(1);
   });
 
   it("make-repeating derives the weekday from the source date when --weekdays is omitted", async () => {
     // Source on a Wednesday, weekly/1, no --weekdays: the app would default to
-    // Sunday; the promote instead drives Wednesday (wd 3) derived from the date.
+    // Sunday; the promote instead drives Wednesday (wd 3) derived from the date,
+    // and Next = the source date.
     const src = seedTodo(fixture.db, {
       title: "Weekly Wed",
       start: "active",
@@ -462,10 +455,30 @@ describe("ANCH1 fixed-recurrence anchor (issue #476)", () => {
         offsets: [{ weekday: 3 }],
       },
     );
-    // interval 1 → the phase is irrelevant (every Wednesday), so it is NOT refused.
+    expect(decodePackedDate(row(res.uuid)?.["rt1_nextInstanceStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
   });
 
-  it("make-repeating: an unscheduled source carries no phase claim (no refusal)", async () => {
+  it("make-repeating: an explicit --when overrides the item's scheduled date", async () => {
+    const src = seedTodo(fixture.db, {
+      title: "Overridden",
+      start: "active",
+      startDate: "2026-07-15",
+    });
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 2, weekdays: ["wednesday"], next: "2026-07-22" },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(decodePackedDate(row(res.uuid)?.["rt1_nextInstanceStartDate"] as number)).toBe(
+      "2026-07-22",
+    );
+  });
+
+  it("make-repeating: an unscheduled source leaves Next at the app default (no drive)", async () => {
     const src = seedTodo(fixture.db, { title: "Someday habit", start: "someday" });
     const res = await runMakeRepeatingTodo(
       deps(vector),
@@ -475,7 +488,7 @@ describe("ANCH1 fixed-recurrence anchor (issue #476)", () => {
     expect(res.kind).toBe("ok");
   });
 
-  it("add-repeating REFUSES a wrong-phase --when, before creating anything", async () => {
+  it("add-repeating drives --when as the first occurrence", async () => {
     const res = await runAddRepeatingTodo(
       deps(vector),
       {
@@ -487,26 +500,25 @@ describe("ANCH1 fixed-recurrence anchor (issue #476)", () => {
       },
       GUI,
     );
-    expect(res).toMatchObject({ kind: "blocked", hazard: "H-REPEAT-ANCHOR" });
-    expect(auditRecords.some((r) => r.op === "todo.add")).toBe(false);
+    expect(res.kind).toBe("ok");
+    if (res.kind !== "ok" || res.uuid === null) throw new Error("expected ok");
+    expect(decodePackedDate(row(res.uuid)?.["rt1_nextInstanceStartDate"] as number)).toBe(
+      "2026-07-15",
+    );
   });
 
-  it("--reminder refuses BEFORE any mutation (no clone/trash) — locked", async () => {
+  it("--reminder is accepted (ANCH2: the repeat reminder picker is drivable)", async () => {
     const src = seedTodo(fixture.db, {
       title: "Remind me",
       start: "active",
       startDate: "2026-07-08",
     });
-    await expect(
-      runMakeRepeatingTodo(
-        deps(vector),
-        { uuid: src, frequency: "weekly", interval: 1, reminder: "18:00" },
-        GUI,
-      ),
-    ).rejects.toThrow(/reminder time cannot be set/);
-    // Params are validated before the clone leg: X is untouched, nothing minted.
-    expect(row(src)?.["trashed"]).toBe(0);
-    expect(auditRecords).toHaveLength(0);
+    const res = await runMakeRepeatingTodo(
+      deps(vector),
+      { uuid: src, frequency: "weekly", interval: 1, reminder: "18:00" },
+      GUI,
+    );
+    expect(res.kind).toBe("ok");
   });
 });
 

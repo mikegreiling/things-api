@@ -106,15 +106,21 @@ export type UiPrimitive =
    */
   | "select-heading-row"
   /**
-   * Set the Repeat dialog's date/time control (the reminder time, the "ends on
-   * date" bound) — an `AXDateTimeArea` whose value is an NSDate, NOT a text
-   * field (UIC6). System Events cannot set it (`set value … to <date>` errors
-   * -10000), so the driver sets `AXValue` to an NSDate through the ObjC bridge
-   * (JXA), the same bridge the mouse-synthesis primitive rides. `value` is the
-   * spec: `time:HH:mm` (keep the control's date, set the time-of-day, for the
-   * reminder) or `date:YYYY-MM-DD` (set the calendar date, for the end bound).
-   * The control is located by role within the open dialog and fails closed if
-   * it is absent.
+   * Set one of the Repeat dialog's date/time controls — each an `AXDateTimeArea`
+   * whose value is an NSDate, NOT a text field (UIC6). System Events cannot set
+   * it (`set value … to <date>` errors -10000), so the driver sets `AXValue` to
+   * an NSDate through the ObjC bridge (JXA), the same bridge the mouse-synthesis
+   * primitive rides. `value` is the spec: `time:HH:mm` (keep the control's date,
+   * set the time-of-day) or `date:YYYY-MM-DD` (set the calendar date).
+   *
+   * A fixed rule can expose up to THREE date areas at once — "Next:" (the first
+   * occurrence), the "Ends: on date" bound, and the reminder time (ANCH2 census,
+   * docs/lab/anch2-next-field.md) — so the target is chosen DETERMINISTICALLY by
+   * {@link UiStep.dtTarget}, never "the first AXDateTimeArea by role" (that
+   * ambiguity was the §8v collapse + the UIC6-g reminder mis-verdict). The
+   * reminder is the only time-bearing area; among the midnight date pickers the
+   * "Next" field is the top row and the "Ends" field the bottom row. Fails
+   * closed if the addressed control is absent.
    */
   | "set-datetime";
 
@@ -186,6 +192,13 @@ export interface UiStep {
   activateFallback?: boolean;
   /** drag-reorder only: the sidebar move the drag driver performs. */
   drag?: import("./ui-drag.ts").SidebarDragSpec;
+  /**
+   * set-datetime only: WHICH of the dialog's date areas to drive (ANCH2). The
+   * driver selects deterministically — `reminder` = the only time-bearing area;
+   * `next` = the top (smaller-y) midnight date picker; `ends` = the bottom
+   * (larger-y) midnight date picker. Required for every set-datetime step.
+   */
+  dtTarget?: "next" | "ends" | "reminder";
 }
 
 export interface VectorSupport {
